@@ -51,14 +51,32 @@ CODEX_PAYLOAD_SID = "019a7c3e-0000-7000-8000-000000000954"
 #: The mark every rendering of the confirm nudge opens with, attended or not.
 _NUDGE_MARK = "⬢ "
 
-#: A promise of a lock, in any of the nudge's spellings: "locks", "locked", "lock it".
+#: A promise of a lock, in any of the nudge's spellings: "locks", "locked", "lock it". Only
+#: ever asserted ABSENT. Present, it proves nothing: each nudge carries two lock phrases, so
+#: a search for either survived the deletion sweep collapsing the other (#1025, CI on
+#: 6ff8c10) — every clause below is asserted by its own literal instead.
 _PROMISES_A_LOCK = re.compile(r"\block", re.IGNORECASE)
+
+#: The sentences a session that locks is told, spelled here and not read off `hooks`, so a
+#: nudge that dropped any one of them cannot agree with itself. Attended, then unattended.
+_ATTENDED_LOCKED = ("No workspace is locked for this session yet",
+                    "That **locks** the workspace for the session — it can't be switched "
+                    "mid-session")
+_UNATTENDED_LOCKED = ("with no workspace locked and none pinned",
+                      "and lock it for the session.")
+#: And what a session that cannot lock is told in their place.
+_ATTENDED_UNLOCKED = ("No workspace is confirmed for this session (",)
+_UNATTENDED_UNLOCKED = ("with no workspace confirmed and none pinned",)
 
 
 def _nudge(ctx: str) -> str:
     """The confirm nudge out of a briefing, or ``""``. Parts are joined by a blank line and
     this one holds none of its own."""
     return next((p for p in ctx.split("\n\n") if p.startswith(_NUDGE_MARK)), "")
+
+
+def _is_unattended(nudge: str) -> bool:
+    return nudge.startswith("⬢ **STOP")
 
 
 class TheConfirmNudgePromisesOnlyTheLockConfirmingTakes(PlaneIso):
@@ -78,6 +96,17 @@ class TheConfirmNudgePromisesOnlyTheLockConfirmingTakes(PlaneIso):
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             return commands_workspace.cmd_workspace_use(
                 SimpleNamespace(name=name, force=False, create=False))
+
+    def assertPromisesTheLock(self, nudge: str) -> None:
+        """Every lock clause of this rendering, each by its literal."""
+        for clause in (_UNATTENDED_LOCKED if _is_unattended(nudge) else _ATTENDED_LOCKED):
+            self.assertIn(clause, nudge)
+
+    def assertPromisesNoLock(self, nudge: str) -> None:
+        """No lock word anywhere, and the sentence that stands in for it is there."""
+        self.assertIsNone(_PROMISES_A_LOCK.search(nudge), nudge)
+        for clause in (_UNATTENDED_UNLOCKED if _is_unattended(nudge) else _ATTENDED_UNLOCKED):
+            self.assertIn(clause, nudge)
 
     def _told_then_did(self, env: dict, payload: dict) -> tuple[str, bool]:
         """What the briefing promised, and whether confirming as told then refused a switch.
@@ -100,7 +129,8 @@ class TheConfirmNudgePromisesOnlyTheLockConfirmingTakes(PlaneIso):
         nudge, refused = self._told_then_did({"CHARTER_HARNESS": "codex"},
                                              {"session_id": CODEX_PAYLOAD_SID})
         self.assertFalse(refused, "the fixture has a lock after all, so this measures nothing")
-        self.assertIsNone(_PROMISES_A_LOCK.search(nudge), nudge)
+        self.assertFalse(_is_unattended(nudge))
+        self.assertPromisesNoLock(nudge)
 
     def test_an_unattended_codex_run_is_not_told_a_guess_would_lock(self):
         """The unattended variant said a guessed workspace would be locked for the session.
@@ -108,9 +138,9 @@ class TheConfirmNudgePromisesOnlyTheLockConfirmingTakes(PlaneIso):
         nudge, refused = self._told_then_did(
             {"CHARTER_HARNESS": "codex"},
             {"session_id": CODEX_PAYLOAD_SID, "permission_mode": hooks.UNATTENDED_MODE})
-        self.assertIn("STOP", nudge)
+        self.assertTrue(_is_unattended(nudge))
         self.assertFalse(refused)
-        self.assertIsNone(_PROMISES_A_LOCK.search(nudge), nudge)
+        self.assertPromisesNoLock(nudge)
 
     def test_a_claude_code_session_outside_a_frame_is_still_promised_its_lock(self):
         """The other side, green before the fix and kept green by it. Claude Code puts its
@@ -121,7 +151,8 @@ class TheConfirmNudgePromisesOnlyTheLockConfirmingTakes(PlaneIso):
             {"CHARTER_HARNESS": "claude-code", "CLAUDE_CODE_SESSION_ID": sid},
             {"session_id": sid})
         self.assertTrue(refused)
-        self.assertIsNotNone(_PROMISES_A_LOCK.search(nudge), nudge)
+        self.assertFalse(_is_unattended(nudge))
+        self.assertPromisesTheLock(nudge)
 
     def test_an_unattended_claude_code_run_is_still_told_a_guess_would_lock(self):
         sid = "cc-954-unattended"
@@ -129,7 +160,8 @@ class TheConfirmNudgePromisesOnlyTheLockConfirmingTakes(PlaneIso):
             {"CHARTER_HARNESS": "claude-code", "CLAUDE_CODE_SESSION_ID": sid},
             {"session_id": sid, "permission_mode": hooks.UNATTENDED_MODE})
         self.assertTrue(refused)
-        self.assertIn("lock it for the session", nudge)
+        self.assertTrue(_is_unattended(nudge))
+        self.assertPromisesTheLock(nudge)
 
     def test_a_claude_code_hook_that_sees_no_session_id_still_promises_the_lock(self):
         """The hook's environment is not the shell's, and a missing id in it is not
@@ -148,7 +180,8 @@ class TheConfirmNudgePromisesOnlyTheLockConfirmingTakes(PlaneIso):
                                           "CLAUDE_CODE_SESSION_ID": sid}):
             self.assertEqual(self._use("north"), 0)
             self.assertEqual(self._use("south"), 2)
-        self.assertIsNotNone(_PROMISES_A_LOCK.search(nudge), nudge)
+        self.assertFalse(_is_unattended(nudge))
+        self.assertPromisesTheLock(nudge)
 
     def test_a_context_file_rendered_with_no_harness_and_no_id_keeps_the_sentence(self):
         """opencode reads this briefing from a file `charter init` renders, in whatever
@@ -158,10 +191,10 @@ class TheConfirmNudgePromisesOnlyTheLockConfirmingTakes(PlaneIso):
         file keeps the sentence."""
         nudge = _nudge(hooks.context_block())
         self.assertTrue(nudge, "the context block carried no confirm nudge")
-        self.assertIsNotNone(_PROMISES_A_LOCK.search(nudge), nudge)
+        self.assertPromisesTheLock(nudge)
         with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "opencode"}):
             nudge = _nudge(hooks.context_block())
-        self.assertIsNotNone(_PROMISES_A_LOCK.search(nudge), nudge)
+        self.assertPromisesTheLock(nudge)
 
 
 class TheCodexDeficitDescribesTheLockACodexShellGets(PersonaIso):
