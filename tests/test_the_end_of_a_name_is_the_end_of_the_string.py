@@ -632,7 +632,9 @@ class TestALineScannerNeedsTheNewline(unittest.TestCase):
         """End to end, so the paragraph above is load-bearing rather than decorative."""
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         (root / "charter.toml").write_text('schema = 1\n[workspace]\ndefault = "a"\n')
-        self.assertTrue(instance._set_key(root, "workspace", "default", "b"))
+        # `_set_key` raises on a failed read or write rather than answering False (#1010);
+        # what it wrote is the assertion.
+        instance._set_key(root, "workspace", "default", "b")
         self.assertIn('default = "b"', (root / "charter.toml").read_text())
 
 
