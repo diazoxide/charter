@@ -153,6 +153,35 @@ class ProcError(RuntimeError):
         )
 
 
+#: What no git charter runs inherits (#964): every variable ``git rev-parse --local-env-vars``
+#: prints on git 2.50.1 — the ones git itself clears when it moves into another repository —
+#: except the ``GIT_CONFIG*`` ones. git obeys these whatever ``-C`` or ``cwd=`` says. With
+#: ``GIT_DIR=<repoA>/.git`` exported, ``git -C <repoB> branch --show-current`` answers repoA's
+#: branch while ``rev-parse --show-toplevel`` still answers repoB, so the call looks right and
+#: is not; the status line called a clean clone dirty, reading repoA's index against repoB's
+#: files. git exports ``GIT_DIR`` inside every hook it runs, and ``GIT_OBJECT_DIRECTORY`` in a
+#: pre-receive hook, where ``git -C <repoB> log -1`` failed with "bad object HEAD" while the
+#: first four were already withheld. A caller that means another repository says so on the
+#: argv, with ``--git-dir``.
+#:
+#: Git's whole list rather than the variables somebody has measured, because naming them one
+#: at a time is how #942 missed ``GIT_COMMON_DIR`` and this list first missed
+#: ``GIT_OBJECT_DIRECTORY``. A literal rather than asked of git at import, which would be a
+#: spawn on every charter start; `test_what_is_withheld_is_every_repository_local_variable_
+#: the_running_git_names` holds every variable the running git names to be in it, so a git
+#: that adds one fails the suite, while a runner's older git, which names fewer, does not.
+#:
+#: Not ``GIT_CONFIG``, ``GIT_CONFIG_PARAMETERS`` or ``GIT_CONFIG_COUNT``, which name
+#: configuration rather than a repository: ``GIT_CONFIG_COUNT`` is how CONTRIBUTING hands the
+#: suite a runner's config, and a ``git -c`` reaches a git that git spawns through
+#: ``GIT_CONFIG_PARAMETERS``. (``GIT_CONFIG_GLOBAL``, how the suite keeps the operator's own
+#: ``~/.gitconfig`` out, is not on git's list at all.)
+GIT_REPOSITORY_ENV = ("GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_OBJECT_DIRECTORY", "GIT_DIR",
+                      "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE",
+                      "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE",
+                      "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR")
+
+
 def run(
     cmd: Sequence[str], cwd=None, check: bool = True, capture: bool = True,
     input: str | None = None, env: dict | None = None, timeout: float | None = None,
@@ -183,7 +212,9 @@ def run(
     ``unset`` names variables the child must NOT inherit, which an overlay cannot say: it can
     only add. ``GIT_DIR`` exported by a git hook points every git the child runs at that hook's
     repository whatever ``-C`` says — measured in #942's review round 3, where
-    ``git worktree list`` answered for the plane and a clone's exclude line was dropped.
+    ``git worktree list`` answered for the plane and a clone's exclude line was dropped. A git
+    child never inherits :data:`GIT_REPOSITORY_ENV` whatever *unset* says (#964); *unset* is
+    for withholding more than that.
     """
     overlay = dict(env or {})
     if cmd and cmd[0] == "git":
@@ -203,6 +234,11 @@ def run(
         # Covers git's own prompts only — not a GUI credential manager, and not an SSH
         # signing agent, which is a separate way for a captured git call to hang.
         overlay.setdefault("GIT_TERMINAL_PROMPT", "0")
+        # For EVERY git, not for the callers that ask: #942 added `unset=` for this and one
+        # call site of twenty used it, so `worktree`, `freshness`, the forge refresh and the
+        # status line all went on answering for whatever repository the caller's environment
+        # named. See `GIT_REPOSITORY_ENV` for what that costs.
+        unset = (*GIT_REPOSITORY_ENV, *unset)
     child_env = None
     if overlay:
         child_env = {**os.environ, **{k: v for k, v in overlay.items() if v is not None}}
