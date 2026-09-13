@@ -168,8 +168,8 @@ class ProcError(RuntimeError):
 #: at a time is how #942 missed ``GIT_COMMON_DIR`` and this list first missed
 #: ``GIT_OBJECT_DIRECTORY``. A literal rather than asked of git at import, which would be a
 #: spawn on every charter start; `test_what_is_withheld_is_every_repository_local_variable_
-#: the_running_git_names` holds it equal to the running git's answer, so a git that adds one
-#: fails the suite.
+#: the_running_git_names` holds every variable the running git names to be in it, so a git
+#: that adds one fails the suite, while a runner's older git, which names fewer, does not.
 #:
 #: Not ``GIT_CONFIG``, ``GIT_CONFIG_PARAMETERS`` or ``GIT_CONFIG_COUNT``, which name
 #: configuration rather than a repository: ``GIT_CONFIG_COUNT`` is how CONTRIBUTING hands the
