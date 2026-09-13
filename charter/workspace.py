@@ -2110,7 +2110,9 @@ def _marker_key_ok(key: str) -> bool:
     key makes the whole marker untrusted (:func:`_read_marker_at`), for `contain`'s reason:
     a record charter did not write is not evidence about any path.
     """
-    if not isinstance(key, str) or not key or "\x00" in key:
+    # No `isinstance(key, str)`: the one caller hands keys of a `json.loads` object, and JSON
+    # object keys are strings — the check could never refuse one.
+    if not key or "\x00" in key:
         return False
     if os.path.isabs(key) or os.path.splitdrive(key)[0]:
         return False
@@ -2414,9 +2416,12 @@ def _generated_roots(extra=()) -> set[str]:
     """
     from .harness import registry as _registry
     # `getattr`, like `_cowritten`: a stand-in harness that declares no `inherited_paths` must
-    # mean none, not an `AttributeError` out of every withdraw.
+    # mean none, not an `AttributeError` out of every withdraw. No `or ()` after it: the
+    # attribute is a tuple on `Harness` and every harness, and `registry.inherited_paths()`
+    # iterates it with no fallback, so a harness declaring `None` is one the layer already
+    # cannot wire.
     roots = {p.split("/", 1)[0]
-             for h in _registry.all() for p in (getattr(h, "inherited_paths", ()) or ())}
+             for h in _registry.all() for p in getattr(h, "inherited_paths", ())}
     roots |= {rel.split("/", 1)[0] for rel in extra}
     return roots
 
@@ -3518,14 +3523,17 @@ def _prune_empty(d: Path, stop: Path) -> None:
     A `.claude/agents/` left standing after its last generated file is removed is charter
     still visible in a repo it no longer has anything in.
 
-    :func:`_inside` as well as `stop in d.parents`: the lexical `parents` test says the
-    spelling is under *stop*, and the resolve says the directory that spelling reaches is —
-    the pair every removal charter performs passes, so a directory a committed link points
-    outside *stop* is never removed even when *d* was reached through one.
+    :func:`_inside`, the test every removal charter performs passes, so a directory a
+    committed link points outside *stop* is never removed even when *d* was reached through
+    one.
     """
-    # `stop in d.parents` alone: a path is never in its own parents, so it is also what
-    # stops the walk AT the checkout root.
-    while stop in d.parents and _inside(stop, d):
+    # `_inside` alone, and it also stops the walk AT the checkout root. *d* starts at
+    # `(stop / rel).parent` for a relative `rel`, so every `d` the walk visits is spelled under
+    # *stop* until it reaches *stop* itself — and there `_inside` is false, because a real
+    # directory's parent never resolves inside it, or *stop* is a link, which `rmdir` refuses
+    # (ENOTDIR). A lexical `stop in d.parents` beside it decided nothing this does not: the
+    # deletion sweep found it unpinned, and no input can pin it.
+    while _inside(stop, d):
         try:
             d.rmdir()
         except OSError:
