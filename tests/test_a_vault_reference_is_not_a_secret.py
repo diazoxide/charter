@@ -9,17 +9,25 @@ reads the value (``token: `charter secret get forge token` ``). Measured on main
 refusal that forbids its own remedy teaches the reader to route around it.
 
 The exemption is the classifier's, so every caller gets the same answer, and it is narrow:
-the WHOLE value, to the end of its line, must be a reference in one of the two spellings
-charter writes — `vault:<vault>/<key>` (ADR 0022) or `charter secret get <vault> <key>` (the
-CLI) — with at most a quote or backtick on either side. What stays refused, and is pinned
-below as refused on main too:
+the WHOLE value, to the end of its line, must be a reference in a spelling charter uses —
+`vault:<vault>/<key>` (ADR 0022), `charter secret get <vault> <key>` (the CLI), or one of the
+two URIs a reference vault stores, `op://<vault>/<item>/<field>` and `vault://<path>#<field>`
+— with at most a quote or backtick on either side. Every NAME in it must also look like a
+name: at most 32 characters, starting with no known credential prefix. The first cut had no
+such rule, and review measured what that let through: a live token typed into a reference
+(`vault:forge/ghp_…`) passed where main refused it. What stays refused, and is pinned below
+as refused on main too:
 
 * a bare `word/word`, because a secret can contain a slash;
 * a real value beside a reference, appended to it, or in a second assignment on the line
   or the next;
-* every near-miss of the two spellings, so the grammar is anchored at both ends;
+* a token in any slot of any spelling, by its length or by its prefix;
+* every near-miss of the four spellings, so the grammar is anchored at both ends;
 * every other rule in the table, which the exemption never reaches: `vault:forge/xAKIA…` is
   an AWS access key whatever it is assigned to.
+
+The rule's own ceiling is stated rather than tested around: a token of 32 characters or
+fewer that starts with no listed prefix still reads as a name.
 """
 
 from __future__ import annotations
@@ -48,10 +56,60 @@ REFERENCES = [
     "token: vault:forge/token   ",
     "token:vault:forge/token\r",
     "# Deploy notes\n\ntoken: vault:forge/token\nThe runner reads it at start.\n",
+    "token: op://Eng/deploy/token",
+    "password: 'op://Private/db-prod/password'",
+    "token: vault://secret/data/app#TOKEN",
+    "api_key = `vault://kv/forge#api-token`",
 ]
 
 AWS = "AKIA" + "Q7VZ3RJHT2LMNPQR"
 GITHUB = "ghp_" + "Zq81LmVw03RkT7yPqa9XcB2nD4sFhJ6uWe0i"
+
+#: Every spelling the exemption reads, with `{}` in turn standing for each of its slots and
+#: the other slots filled with ordinary names. A token is dropped into the `{}`.
+SLOTS = [
+    "vault:{}/token", "vault:forge/{}",
+    "charter secret get {} token", "charter secret get forge {}",
+    "op://{}/deploy/token", "op://Eng/{}/token", "op://Eng/deploy/{}",
+    "vault://{}/data/app#TOKEN", "vault://secret/{}/app#TOKEN", "vault://secret/data/{}#TOKEN",
+    "vault://secret/data/app#{}",
+]
+
+#: The live-token shapes the review measured refused on main and let through by the first cut
+#: of this exemption. Built at runtime, split inside the prefix, so no specimen is a literal a
+#: secret scanner would read as a real token.
+LIVE_TOKENS = {
+    "a GitHub classic token": "gh" + "p_" + "Zq81LmVw03RkT7yPqa9XcB2nD4sFhJ6uWe0i",
+    "a GitHub fine-grained token": "github" + "_pat_" + "11AAAAAAA0" + "b1" * 30,
+    "a Google API key": "AI" + "za" + "SyD" + "x9" * 16,
+    "a Stripe live key": "sk_" + "live_" + "4eC39HqLyjWDarjtT1zdp7dc",
+    "an OpenAI project key": "sk-" + "proj-" + "abc" * 16,
+    "a Slack bot token": "xo" + "xb-" + "2400000000-1111111111-" + "a" * 24,
+    "a PyPI token": "py" + "pi-" + "AgEIcHlwaS5vcmc" + "Q" * 50,
+    "a 40-character hex key": "0123456789abcdef" * 2 + "01234567",
+}
+
+#: One SHORT specimen per credential prefix — 32 characters or fewer, so length alone never
+#: refuses it and only the prefix can. Spelled out here rather than built from the tuple, and
+#: the tuple is asked to match this table's keys, so a prefix added without a specimen, or
+#: removed from the tuple, fails.
+SHORT_PREFIXED = {
+    "ghp_": "gh" + "p_" + "a1b2c3d4e5", "gho_": "gh" + "o_" + "a1b2c3d4e5",
+    "ghu_": "gh" + "u_" + "a1b2c3d4e5", "ghs_": "gh" + "s_" + "a1b2c3d4e5",
+    "ghr_": "gh" + "r_" + "a1b2c3d4e5", "github_pat_": "github" + "_pat_" + "a1b2c3",
+    "glpat-": "gl" + "pat-" + "a1b2c3d4e5", "sk_live_": "sk_" + "live_" + "a1b2c3",
+    "sk_test_": "sk_" + "test_" + "a1b2c3", "rk_live_": "rk_" + "live_" + "a1b2c3",
+    "sk-": "sk" + "-a1b2c3d4e5", "xoxa-": "xo" + "xa-" + "a1b2c3",
+    "xoxb-": "xo" + "xb-" + "a1b2c3", "xoxp-": "xo" + "xp-" + "a1b2c3",
+    "xoxr-": "xo" + "xr-" + "a1b2c3", "xoxs-": "xo" + "xs-" + "a1b2c3",
+    "AIza": "AI" + "za" + "a1b2c3d4", "pypi-": "py" + "pi-" + "a1b2c3",
+    "npm_": "np" + "m_" + "a1b2c3d4", "hf_": "h" + "f_" + "a1b2c3d4",
+    "AKIA": "AK" + "IA" + "a1b2", "ASIA": "AS" + "IA" + "a1b2",
+}
+
+#: The length rule's two sides: an ordinary key name of exactly 32 characters, and one more.
+KEY_32 = "GITHUB_RELEASES_DEPLOY_TOKEN_V02"
+KEY_33 = KEY_32 + "X"
 
 #: Still refused, and refused on main too. Each names the clause that refuses it.
 REFUSED = {
@@ -71,7 +129,16 @@ REFUSED = {
     "the CLI with no key": "token: charter secret get forge",
     "the CLI with an extra word": "token: charter secret get forge token --reveal",
     "the CLI inside a substitution": "token: $(charter secret get forge token)",
-    "another provider's URI, which charter does not write here": "token: op://Eng/deploy/token",
+    "op: with one slash": "token: op:/Eng/deploy/token",
+    "another scheme ending in op": "token: opx://Eng/deploy/token",
+    "op:// with a segment missing": "token: op://Eng/deploy",
+    "op:// with an extra segment": "token: op://Eng/deploy/token/extra",
+    "op:// with an empty segment": "token: op://Eng//token",
+    "vault:// with no field": "token: vault://secret/data/app",
+    "vault:// with two fields": "token: vault://secret/data/app#A#B",
+    "vault:// with no path": "token: vault://#TOKEN",
+    "vault:/ with one slash": "token: vault:/secret/data/app#TOKEN",
+    "another scheme ending in vault": "token: xvault://secret/data/app#TOKEN",
 }
 
 
@@ -89,17 +156,54 @@ class TheClassifierReadsAReferenceAsAReference(unittest.TestCase):
     def test_the_exemption_never_reaches_another_rule(self):
         self.assertEqual("AWS access key", hooks._secret_kind(f"token: vault:forge/x{AWS}"))
 
+    def test_every_slot_holds_an_ordinary_name(self):
+        """The other half of every row below: the slot template itself is a reference."""
+        for slot in SLOTS:
+            with self.subTest(slot=slot):
+                self.assertIsNone(hooks._secret_kind("token: " + slot.format("deploy")))
+
+    def test_a_live_token_in_any_slot_is_refused(self):
+        """The review's regression. Each is `credential assignment` on main, and each was
+        let through by a reference that had no rule for its slots."""
+        for shape, tok in LIVE_TOKENS.items():
+            for slot in SLOTS:
+                text = "token: " + slot.format(tok)
+                with self.subTest(shape, slot=slot):
+                    self.assertEqual("credential assignment", hooks._secret_kind(text))
+
+    def test_a_short_token_with_a_credential_prefix_is_refused_in_any_slot(self):
+        self.assertEqual(set(SHORT_PREFIXED), set(hooks._CREDENTIAL_PREFIXES))
+        for prefix, tok in SHORT_PREFIXED.items():
+            self.assertLessEqual(len(tok), 32, prefix)
+            self.assertTrue(tok.startswith(prefix), prefix)
+            for slot in SLOTS:
+                text = "token: " + slot.format(tok)
+                with self.subTest(prefix=prefix, slot=slot):
+                    self.assertIsNotNone(hooks._secret_kind(text), text)
+
+    def test_a_slot_of_32_characters_is_a_name_and_33_is_not(self):
+        self.assertEqual((32, 33), (len(KEY_32), len(KEY_33)))
+        for slot in SLOTS:
+            with self.subTest(slot=slot):
+                self.assertIsNone(hooks._secret_kind("token: " + slot.format(KEY_32)))
+                self.assertEqual("credential assignment",
+                                 hooks._secret_kind("token: " + slot.format(KEY_33)))
+
     def test_the_remedy_the_brief_refusal_names_is_accepted(self):
         """The refusal and the exemption have to agree, or the refusal sends its reader
         straight back into itself: #985's whole defect. Every backticked spelling the text
-        recommends, filled in, is read as a reference."""
-        spellings = re.findall(r"`([^`]*<vault>[^`]*)`", commands_handoff.SECRET_BRIEF)
+        recommends, its placeholders filled with ordinary names, is read as a reference —
+        and the same spelling with a token in a placeholder is not."""
+        spellings = re.findall(r"`([^`]*<[a-z]+>[^`]*)`", commands_handoff.SECRET_BRIEF)
         self.assertGreaterEqual(len(spellings), 2, commands_handoff.SECRET_BRIEF)
         for spelling in spellings:
-            filled = spelling.replace("<vault>", "forge").replace("<key>", "token")
+            filled = re.sub(r"<([a-z]+)>", r"\1", spelling)
+            tokened = re.sub(r"<[a-z]+>", LIVE_TOKENS["a GitHub classic token"], spelling,
+                             count=1)
             with self.subTest(spelling=spelling):
                 self.assertIsNone(hooks._secret_kind(f"token: {filled}"))
                 self.assertIsNone(hooks._secret_kind(f"token: `{filled}`"))
+                self.assertIsNotNone(hooks._secret_kind(f"token: {tokened}"))
 
 
 class TheMemoryWarningAgrees(PersonaIso):

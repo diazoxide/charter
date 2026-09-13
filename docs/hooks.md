@@ -645,22 +645,30 @@ non-blank characters.
 you to do exactly that, and the rule used to refuse the answer whenever it was one word:
 `api_key = vault:forge/api-token` and ``token: `charter secret get forge token` `` were both
 refused as credentials ([#985](https://github.com/diazoxide/charter/issues/985)). A value in
-either of the two spellings charter uses, `vault:<vault>/<key>` or
-`charter secret get <vault> <key>`, is now let through, with at most a quote or backtick on
-each side. Because that happens in the one classifier, all four places give the same
-answer. **The whole value, to the end of its line, has to be the reference**, so all of these
-are still refused:
+one of the four spellings charter uses is now let through, with at most a quote or backtick
+on each side: `vault:<vault>/<key>`, `charter secret get <vault> <key>`, and the two URIs a
+`reference` vault stores, `op://<vault>/<item>/<field>` and `vault://<path>#<field>`.
+Because that happens in the one classifier, all four places give the same answer. **The
+whole value, to the end of its line, has to be the reference, and every name in it has to
+look like a name**: at most 32 characters, and not starting with a prefix a credential
+issuer puts on its tokens (`ghp_`, `github_pat_`, `glpat-`, `sk_live_`, `sk-`, `xoxb-`,
+`AIza`, `pypi-`, `npm_`, `hf_`, `AKIA` and the rest of `hooks._CREDENTIAL_PREFIXES`). So all
+of these are still refused:
 
 - a bare `forge/token`, because a secret can contain a slash;
+- a token typed into any slot of a reference — `vault:forge/ghp_…`,
+  `charter secret get forge <40 hex>`, `op://<token>/item/field` — by its length or its
+  prefix, which is the accident this rule exists for;
 - a real value beside the reference, glued onto it, or in a second assignment on that line
   or the next;
 - prose after the reference on the same line;
-- any other spelling, including `$(charter secret get …)` and an `op://` URI.
+- any other spelling, including `$(charter secret get …)`, `op:/…`, an `op://` with more or
+  fewer than three names, and a `vault://` with no `#<field>`.
 
 The four other kinds are checked on the whole text whatever the assignment says:
-`vault:forge/xAKIA…` is still an AWS access key. A token pasted into the key slot,
-`vault:forge/ghp_…`, passes as a reference: that is the same text as a bare token in prose,
-which this classifier has no rule for.
+`vault:forge/xAKIA…` is still an AWS access key. **The length and prefix rule has a ceiling
+of its own:** a token of 32 characters or fewer that starts with none of those prefixes
+reads as a name and passes, and a real key name longer than 32 characters is refused.
 
 ## When a guard is wrong
 

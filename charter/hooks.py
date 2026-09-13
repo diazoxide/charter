@@ -376,24 +376,76 @@ _SECRET_CHECKS = (
                 r"(?=['\"]?\S{6,})(?P<value>[^\n]*)")),
 )
 
-#: A value that names WHERE a credential lives, in the two spellings charter's own text uses:
-#: a `vault:<vault>/<key>` reference (ADR 0022's spelling) and the command that reads one,
-#: `charter secret get <vault> <key>`. At most one quote or backtick on either side, for
-#: `token: "vault:forge/token"` and a Markdown span that closes after the value.
+#: One NAME inside a vault reference: a vault, a key, an item, a field, a path segment.
+_REFERENCE_SLOT = r"[A-Za-z0-9_][A-Za-z0-9._-]*"
+
+#: A value that names WHERE a credential lives, in the four spellings charter's own text
+#: uses: a `vault:<vault>/<key>` reference (ADR 0022's spelling), the command that reads one,
+#: `charter secret get <vault> <key>`, and the two URIs a `reference` vault stores and
+#: `docs/secrets.md` documents, `op://<vault>/<item>/<field>` and `vault://<path>#<field>`.
+#: At most one quote or backtick on either side, for `token: "vault:forge/token"` and a
+#: Markdown span that closes after the value. Every slot is a named group, so
+#: :func:`_names_where_a_credential_lives` can ask each one whether it is a name at all.
 #:
-#: The credential-assignment rule refused both, and so refused the remedy the handoff brief
-#: refusal names (#985). **Matched against the whole value, never searched within it**, so a
-#: real value beside, after or glued to a reference is still a hit, and so is a second
+#: The credential-assignment rule refused all four, and so refused the remedy the handoff
+#: brief refusal names (#985). **Matched against the whole value, never searched within it**,
+#: so a real value beside, after or glued to a reference is still a hit, and so is a second
 #: assignment on the same line. A bare `forge/token` is not a reference here — a secret can
-#: hold a slash — and neither is `$(charter secret get …)`, `op://…` or any spelling charter
-#: does not use. What this cannot tell apart is a token placed in the key slot
-#: (`vault:forge/ghp_…`); that is the same text as a bare token in prose, which no rule of
-#: this table reads either, so the exemption opens no new shape.
+#: hold a slash — and neither is `$(charter secret get …)` or any spelling charter does not
+#: use.
 _VAULT_REFERENCE_RE = re.compile(
-    r"['\"`]?"
-    r"(?:vault:[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9_][A-Za-z0-9._-]*"
-    r"|charter secret get [A-Za-z0-9][A-Za-z0-9._-]* [A-Za-z0-9_][A-Za-z0-9._-]*)"
-    r"['\"`]?")
+    r"['\"`]?(?:"
+    rf"vault:(?P<vault>{_REFERENCE_SLOT})/(?P<key>{_REFERENCE_SLOT})"
+    rf"|charter secret get (?P<cli_vault>{_REFERENCE_SLOT}) (?P<cli_key>{_REFERENCE_SLOT})"
+    rf"|op://(?P<op_vault>{_REFERENCE_SLOT})/(?P<op_item>{_REFERENCE_SLOT})"
+    rf"/(?P<op_field>{_REFERENCE_SLOT})"
+    rf"|vault://(?P<path>{_REFERENCE_SLOT}(?:/{_REFERENCE_SLOT})*)#(?P<field>{_REFERENCE_SLOT})"
+    r")['\"`]?")
+
+#: The longest slot a reference may hold and still be read as a NAME. Vault, key, item and
+#: field names are short words (`forge`, `DEPLOY_TOKEN`); the credentials this rule exists
+#: for are long random runs — a GitHub token is 40 characters, a hex API key 40, a PyPI
+#: token over a hundred. Without it, a live token typed into a reference (`vault:forge/<40
+#: hex>`) passed where the rule had refused it (#985's review). The cost, stated: a key name
+#: longer than 32 characters is refused as a credential.
+_REFERENCE_SLOT_MAX = 32
+
+#: Prefixes that mark a slot as a credential whatever its length, so a short or truncated
+#: token cannot pass as a name. Each is the fixed prefix its issuer puts on every token of
+#: that kind, which is why a real vault or key name does not start with one:
+_CREDENTIAL_PREFIXES = (
+    "ghp_", "gho_", "ghu_", "ghs_", "ghr_",     # GitHub: classic PAT, OAuth, user, server, refresh
+    "github_pat_",                              # GitHub fine-grained PAT
+    "glpat-",                                   # GitLab personal access token
+    "sk_live_", "sk_test_", "rk_live_",         # Stripe secret and restricted keys
+    "sk-",                                      # OpenAI and Anthropic API keys (`sk-proj-`, `sk-ant-`)
+    "xoxa-", "xoxb-", "xoxp-", "xoxr-", "xoxs-",  # Slack app, bot, user, refresh, session tokens
+    "AIza",                                     # Google API key
+    "pypi-",                                    # PyPI upload token
+    "npm_",                                     # npm access token
+    "hf_",                                      # Hugging Face token
+    "AKIA", "ASIA",                             # AWS access key ids, long-term and temporary
+)
+
+
+def _names_where_a_credential_lives(value: str) -> bool:
+    """Whether *value* is exactly a vault reference whose every slot is a name.
+
+    The shape alone was the first cut, and it let a token through in any slot — `vault:forge/
+    ghp_…`, `charter secret get forge <40 hex>` — which is the accident this rule is for: an
+    agent inlining a live token where a reference was meant. So a slot longer than
+    :data:`_REFERENCE_SLOT_MAX` or starting with one of :data:`_CREDENTIAL_PREFIXES` makes the
+    whole value an ordinary assignment again. **The ceiling of that, stated:** a token of 32
+    characters or fewer that starts with no listed prefix still reads as a name.
+    """
+    m = _VAULT_REFERENCE_RE.fullmatch(value)
+    if not m:
+        return False
+    slots = [s for g, s in m.groupdict().items() if s is not None and g != "path"]
+    if m.group("path") is not None:
+        slots += m.group("path").split("/")
+    return all(len(s) <= _REFERENCE_SLOT_MAX and not s.startswith(_CREDENTIAL_PREFIXES)
+               for s in slots)
 
 
 def _secret_kind(text: str) -> str | None:
@@ -403,13 +455,14 @@ def _secret_kind(text: str) -> str | None:
     Shared by every caller that refuses one, so the brief `charter handoff` refuses, the
     memory file PostToolUse warns about and the file `charter save` and `memory-sync` will
     not commit are one set of shapes. A match that carries a `value` is let through only
-    when that value is exactly a vault reference (:data:`_VAULT_REFERENCE_RE`); every match
-    is asked, so one exempt assignment does not excuse the next.
+    when that value is exactly a vault reference whose slots are names
+    (:func:`_names_where_a_credential_lives`); every match is asked, so one exempt
+    assignment does not excuse the next.
     """
     for label, rx in _SECRET_CHECKS:
         for m in rx.finditer(text):
             value = m.groupdict().get("value")
-            if value is not None and _VAULT_REFERENCE_RE.fullmatch(value.rstrip()):
+            if value is not None and _names_where_a_credential_lives(value.rstrip()):
                 continue
             return label
     return None
