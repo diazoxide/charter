@@ -79,8 +79,9 @@ session, after `init` and `--fix` alike, so restart any session that was already
 
 **The recording stops before `charter claude`**, because the frame is a full-screen tmux
 client and `capture-demo.sh` records a line transcript; the picture at the top of this page
-is what that step opens. `charter claude` needs `claude` on your `PATH`: without it no frame
-is drawn, and charter says the binary is not installed and exits 127. The frame also needs
+is what that step opens. `charter claude` needs `claude` on your `PATH` — a profile needs
+whatever its command names, a wrapper like `ccs work` included: without it no frame is
+drawn, and charter says the program is not installed and exits 127. The frame also needs
 tmux, and of tmux only its absence stops a launch — below 3.2, the version charter checks
 its requirements against, the frame still starts. `charter opencode` and `charter codex`
 need their own binaries the same way, and `charter claude --probe` says whether a frame can
