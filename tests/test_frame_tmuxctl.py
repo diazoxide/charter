@@ -92,7 +92,7 @@ class RunArgv(unittest.TestCase):
         """The same rule on the other door out of this module — a guard on one of two
         entry points is not a guard."""
         with self.assertRaises(TypeError):
-            tmuxctl.interact("tmux attach -t x")
+            tmuxctl.interact("charter", "attach -t x")
 
 
 class RunGuardsTheTimeout(unittest.TestCase):
@@ -155,11 +155,30 @@ class RunGuardsTheTimeout(unittest.TestCase):
         of being used."""
         with mock.patch("subprocess.run",
                         return_value=subprocess.CompletedProcess(["tmux"], 0)) as run:
-            tmuxctl.interact(["tmux", "attach"], env={"A": "b"})
+            tmuxctl.interact("charter", ["attach"], env={"A": "b"})
         _, kwargs = run.call_args
         self.assertNotIn("timeout", kwargs)
         self.assertNotIn("capture_output", kwargs)
         self.assertEqual(kwargs["env"], {"A": "b"})
+
+    def test_the_terminal_keeps_its_locale_and_a_reading_does_not(self):
+        """#984's two halves, at the two doors out of this module. What a CAPTURED reader
+        sends carries `-u`, because charter parses the answer and the client's locale would
+        turn its TABs into `_`. What `interact` runs does not, because there the answer is
+        drawn on the operator's terminal, and `-u` sent an attach's pane borders as UTF-8
+        whatever the locale said a Latin-1 terminal could draw (see `server_argv`). Neither
+        command carries a `-u` of its own, so the whole argv is the question."""
+        ran: list[list[str]] = []
+        answered = subprocess.CompletedProcess(["tmux"], 0, stdout="", stderr="")
+        with mock.patch("subprocess.run",
+                        side_effect=lambda argv, **kw: (ran.append(argv), answered)[1]):
+            tmuxctl.interact("charter", ["attach", "-t", "s"])
+            tmuxctl.live_pane_by_pid("charter", 1)
+        attach, reading = ran
+        self.assertIn("attach", attach)
+        self.assertNotIn("-u", attach)
+        self.assertIn("list-panes", reading)
+        self.assertIn("-u", reading)
 
 
 #: A child that writes one byte no UTF-8 decoder can read, between two markers that survive
@@ -337,10 +356,11 @@ class ServerArgv(unittest.TestCase):
     """
 
     def test_a_plain_name_selects_charters_own_private_server(self):
-        """**The one literal of `server_argv`'s whole output in this suite**, with its
-        sibling for `-S` below. Every other test that asserts what charter sends builds its
-        expected argv through `server_argv`, so the next flag here changes these two lines
-        and not ninety-five copies of them across the suite (#984)."""
+        """**The literals of `server_argv`'s whole output in this suite** — this, its
+        sibling for `-S` below, and the interactive form after them. Every other test that
+        asserts what charter sends builds its expected argv through `server_argv`, so the
+        next flag here changes these lines and not ninety-five copies of them across the
+        suite (#984)."""
         self.assertEqual(tmuxctl.server_argv("charter", "list-sessions"),
                          ["tmux", "-u", "-L", "charter", "list-sessions"])
 
@@ -349,7 +369,15 @@ class ServerArgv(unittest.TestCase):
             tmuxctl.server_argv(OPERATOR_SOCKET, "list-windows", "-a"),
             ["tmux", "-u", "-S", OPERATOR_SOCKET, "list-windows", "-a"])
 
-    def test_every_command_is_sent_as_a_utf8_client_whatever_the_locale_says(self):
+    def test_the_interactive_form_is_the_same_command_without_utf8(self):
+        """What `interact` runs: the attach that hands the operator's terminal to tmux, where
+        the client's locale is the only word on what that terminal can draw (#984)."""
+        self.assertEqual(tmuxctl.server_argv("charter", "attach", "-t", "s", interactive=True),
+                         ["tmux", "-L", "charter", "attach", "-t", "s"])
+        self.assertEqual(tmuxctl.server_argv(OPERATOR_SOCKET, "attach", interactive=True),
+                         ["tmux", "-S", OPERATOR_SOCKET, "attach"])
+
+    def test_every_captured_command_is_sent_as_a_utf8_client_whatever_the_locale_says(self):
         """`-u`, on both spellings, because tmux decides what it may print from the CLIENT's
         locale and charter reads what it prints (#984).
 

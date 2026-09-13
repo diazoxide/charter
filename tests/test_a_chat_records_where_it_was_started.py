@@ -206,7 +206,7 @@ class _DrivesTheLauncher:
         calls = {"attached": False, "focused": False, "said": []}
         asked: list[int] = []
 
-        def _interact(argv, **kw):
+        def _interact(_server, _args, **kw):
             calls["attached"] = True
             return _Answered(stdout="", returncode=0)
 

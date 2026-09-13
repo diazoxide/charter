@@ -45,7 +45,7 @@ def head(argv: list[str]) -> list[str]:
     **Found by tmux's grammar, not counted.** The suite read this as `argv[:3]`, the length
     `server_argv` happened to build, until `-u` (#984) made it four — and a count copied
     into a test goes on answering after it stops being true: a verb read at `[3]` became
-    the server's name, and `"-u" in argv` became true of every command charter sends,
+    the server's name, and `"-u" in argv` became true of every command charter captures,
     because `-u` is also `set-option`'s and `set-hook`'s own flag for a removal. Reading
     the head off the flags keeps a test asking what tmux would, and keeps it from agreeing
     with `chain` by sharing `chain`'s own count.

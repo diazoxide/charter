@@ -10,10 +10,10 @@ non-ASCII value came back mangled the same way — `@charter_plane` holding `/tm
 read as `/tmp/plan__x` — so a plane whose path is not ASCII would have been refused even
 once the fields split. Only the client's environment mattered; the server's did not.
 
-`-u` on every tmux command charter sends (`tmuxctl.server_argv`) restored both, and so did
-a UTF-8 `$LANG`, `$LC_ALL` or `$LC_CTYPE` in the client's environment — but a locale forced
-that way was copied into the server's global environment and every pane started after it,
-and `-u` touches nothing but the client that carries it.
+`-u` on every tmux command whose output charter reads (`tmuxctl.server_argv`) restored both,
+and so did a UTF-8 `$LANG`, `$LC_ALL` or `$LC_CTYPE` in the client's environment — but a
+locale forced that way was copied into the server's global environment and every pane
+started after it, and `-u` touches nothing but the client that carries it.
 
 **Red on `main` whatever locale the developer runs the suite in**, because the case removes
 all three variables itself rather than relying on a runner that happens not to set them —

@@ -600,9 +600,9 @@ class TheMarkClearsWhenSomeoneLooks(_OpensBeta):
         the far side of it would drop the mark as they left rather than as they arrived."""
         seen = []
 
-        def attaching(argv, **kw):
+        def attaching(_server, args, **kw):
             seen.append(workspace.arrivals())
-            return subprocess.CompletedProcess(argv, 0, "", "")
+            return subprocess.CompletedProcess(args, 0, "", "")
 
         with mock.patch.object(commands_frame.tmuxctl, "interact",
                                side_effect=attaching) as interact:
