@@ -1,7 +1,8 @@
 """#964 — a git charter runs answers for the repository its argv names, not the caller's.
 
-git reads four variables that name a repository whatever the command line says:
-``GIT_DIR``, ``GIT_WORK_TREE``, ``GIT_INDEX_FILE`` and ``GIT_COMMON_DIR``. ``-C <path>`` and
+git reads variables that decide which repository it reads whatever the command line says —
+``GIT_DIR``, ``GIT_WORK_TREE``, ``GIT_INDEX_FILE``, ``GIT_COMMON_DIR``, ``GIT_OBJECT_DIRECTORY``
+and the rest of ``git rev-parse --local-env-vars``. ``-C <path>`` and
 ``cwd=`` only move where git starts, so with ``GIT_DIR=<repoA>/.git`` exported,
 ``git -C <repoB> branch --show-current`` answers repoA's branch — while
 ``rev-parse --show-toplevel`` still says repoB, so the call looks right. git exports
@@ -103,6 +104,30 @@ class UtilRunAnswersForTheRepositoryItNames(TwoRepositories):
                 said = util.run(["git", "-C", str(self.b), *question]).stdout.strip()
                 self.assertTrue(_same(self.b / said, answer),
                                 f"with {name} exported git answered {said!r}, not {answer}")
+
+    def test_an_exported_object_directory_does_not_decide_which_commits_minus_c_reads(self):
+        """git exports ``GIT_OBJECT_DIRECTORY`` in a pre-receive hook, pointing at the objects it
+        has quarantined. Measured with the first four variables withheld and this one not:
+        ``git -C <repoB> log -1`` failed with "fatal: bad object HEAD"."""
+        with self.exported(GIT_OBJECT_DIRECTORY=str(self.a / ".git" / "objects")):
+            said = util.run(["git", "-C", str(self.b), "log", "-1", "--format=%s"],
+                            check=False)
+        self.assertEqual((said.stdout.strip(), said.returncode), ("bravo starts", 0), said.stderr)
+
+    def test_what_is_withheld_is_every_repository_local_variable_the_running_git_names(self):
+        """`git rev-parse --local-env-vars` is git's own list of the variables it clears when it
+        moves into another repository — a submodule, say. Held equal rather than as a subset,
+        so a git that adds one fails here instead of passing it through to every child. The
+        ``GIT_CONFIG*`` variables on that list name configuration, and stay (see the test
+        below)."""
+        git = shutil.which("git")
+        if git is None:
+            self.skipTest("git is not installed")
+        listed = subprocess.run([git, "rev-parse", "--local-env-vars"], capture_output=True,
+                                text=True, check=True).stdout.split()
+        self.assertIn("GIT_DIR", listed, "fixture: git printed no repository-local variables")
+        self.assertEqual(sorted(util.GIT_REPOSITORY_ENV),
+                         sorted(v for v in listed if not v.startswith("GIT_CONFIG")))
 
     def test_a_config_handed_to_git_in_the_environment_still_reaches_it(self):
         """``GIT_CONFIG_COUNT`` is how CONTRIBUTING hands the suite the runner's git config, and

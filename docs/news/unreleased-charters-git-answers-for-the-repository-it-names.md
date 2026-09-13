@@ -15,5 +15,13 @@ charter asked about another:
 - a workspace worktree's base branch, the plane's HEAD for the session nudge, and the
   `origin` the CI column asks a forge about all came from the other repository.
 
-Charter now withholds those four variables from every git it runs. `GIT_CONFIG_*` still
-reaches git, so `GIT_CONFIG_COUNT` and `GIT_CONFIG_GLOBAL` keep working. Nothing to adopt.
+Those four are not the only ones. In a pre-receive hook git also exports
+`GIT_OBJECT_DIRECTORY`, and with it `git -C <repoB> log -1` failed with `bad object HEAD`.
+
+Charter now withholds from every git it runs every variable git itself lists as
+repository-local (`git rev-parse --local-env-vars`) except the configuration ones:
+`GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_COMMON_DIR`, `GIT_OBJECT_DIRECTORY`,
+`GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_IMPLICIT_WORK_TREE`, `GIT_GRAFT_FILE`,
+`GIT_NO_REPLACE_OBJECTS`, `GIT_REPLACE_REF_BASE`, `GIT_PREFIX` and `GIT_SHALLOW_FILE`.
+`GIT_CONFIG`, `GIT_CONFIG_PARAMETERS`, `GIT_CONFIG_COUNT` and `GIT_CONFIG_GLOBAL` still reach
+git, so a `git -c` and CONTRIBUTING's `GIT_CONFIG_COUNT` recipe keep working. Nothing to adopt.

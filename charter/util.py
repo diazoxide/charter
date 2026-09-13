@@ -153,19 +153,33 @@ class ProcError(RuntimeError):
         )
 
 
-#: What no git charter runs inherits (#964): the four variables that name a repository, which
-#: git obeys whatever ``-C`` or ``cwd=`` says. With ``GIT_DIR=<repoA>/.git`` exported,
-#: ``git -C <repoB> branch --show-current`` answers repoA's branch while
-#: ``rev-parse --show-toplevel`` still answers repoB, so the call looks right and is not; the
-#: status line called a clean clone dirty, reading repoA's index against repoB's files. git
-#: exports ``GIT_DIR`` inside every hook it runs, so a charter started from one gets it. A
-#: caller that means another repository says so on the argv, with ``--git-dir``.
+#: What no git charter runs inherits (#964): every variable ``git rev-parse --local-env-vars``
+#: prints on git 2.50.1 — the ones git itself clears when it moves into another repository —
+#: except the ``GIT_CONFIG*`` ones. git obeys these whatever ``-C`` or ``cwd=`` says. With
+#: ``GIT_DIR=<repoA>/.git`` exported, ``git -C <repoB> branch --show-current`` answers repoA's
+#: branch while ``rev-parse --show-toplevel`` still answers repoB, so the call looks right and
+#: is not; the status line called a clean clone dirty, reading repoA's index against repoB's
+#: files. git exports ``GIT_DIR`` inside every hook it runs, and ``GIT_OBJECT_DIRECTORY`` in a
+#: pre-receive hook, where ``git -C <repoB> log -1`` failed with "bad object HEAD" while the
+#: first four were already withheld. A caller that means another repository says so on the
+#: argv, with ``--git-dir``.
 #:
-#: Not the ``GIT_CONFIG_*`` family, which names configuration rather than a repository:
-#: ``GIT_CONFIG_GLOBAL`` is how the test suite keeps the operator's own ``~/.gitconfig`` out
-#: of every git it spawns, and ``GIT_CONFIG_COUNT`` is how CONTRIBUTING hands the suite a
-#: runner's config.
-GIT_REPOSITORY_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
+#: Git's whole list rather than the variables somebody has measured, because naming them one
+#: at a time is how #942 missed ``GIT_COMMON_DIR`` and this list first missed
+#: ``GIT_OBJECT_DIRECTORY``. A literal rather than asked of git at import, which would be a
+#: spawn on every charter start; `test_what_is_withheld_is_every_repository_local_variable_
+#: the_running_git_names` holds it equal to the running git's answer, so a git that adds one
+#: fails the suite.
+#:
+#: Not ``GIT_CONFIG``, ``GIT_CONFIG_PARAMETERS`` or ``GIT_CONFIG_COUNT``, which name
+#: configuration rather than a repository: ``GIT_CONFIG_COUNT`` is how CONTRIBUTING hands the
+#: suite a runner's config, and a ``git -c`` reaches a git that git spawns through
+#: ``GIT_CONFIG_PARAMETERS``. (``GIT_CONFIG_GLOBAL``, how the suite keeps the operator's own
+#: ``~/.gitconfig`` out, is not on git's list at all.)
+GIT_REPOSITORY_ENV = ("GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_OBJECT_DIRECTORY", "GIT_DIR",
+                      "GIT_WORK_TREE", "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE",
+                      "GIT_INDEX_FILE", "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE",
+                      "GIT_PREFIX", "GIT_SHALLOW_FILE", "GIT_COMMON_DIR")
 
 
 def run(

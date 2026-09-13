@@ -2708,15 +2708,13 @@ _GIT_TIMEOUT = 5.0
 #: `test_every_variable_git_treats_as_repository_local_is_withheld` runs that command and holds
 #: this list to it. Charter run from a git hook has them exported, `-C <checkout>` does not
 #: override them, and the listing answered for the hook's repository; naming them one by one
-#: (review round 3's `GIT_DIR`, `GIT_WORK_TREE`) missed `GIT_COMMON_DIR` (round 4). Every git
-#: `util.run` spawns goes without `util.GIT_REPOSITORY_ENV` since #964; this call withholds the
-#: rest of git's list too, and repeats those four so this stays git's whole list, which that
-#: test holds it to.
-_GIT_ENV = ("GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_CONFIG", "GIT_CONFIG_PARAMETERS",
-            "GIT_CONFIG_COUNT", "GIT_OBJECT_DIRECTORY", "GIT_DIR", "GIT_WORK_TREE",
-            "GIT_IMPLICIT_WORK_TREE", "GIT_GRAFT_FILE", "GIT_INDEX_FILE",
-            "GIT_NO_REPLACE_OBJECTS", "GIT_REPLACE_REF_BASE", "GIT_PREFIX",
-            "GIT_SHALLOW_FILE", "GIT_COMMON_DIR")
+#: (review round 3's `GIT_DIR`, `GIT_WORK_TREE`) missed `GIT_COMMON_DIR` (round 4).
+#:
+#: Since #964 every git `util.run` spawns goes without all of that list but its `GIT_CONFIG*`
+#: variables, so this adds back only those three — ruling G(a) withheld the whole list here,
+#: and #964 did not revisit that. Built on `util.GIT_REPOSITORY_ENV` rather than spelled twice,
+#: so the two cannot drift apart.
+_GIT_ENV = (*util.GIT_REPOSITORY_ENV, "GIT_CONFIG", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT")
 
 #: The worktree listings asked for so far in this thread's current :func:`worktree_answers`
 #: block, by common git directory — ``None`` outside one.
