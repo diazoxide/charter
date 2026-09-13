@@ -22,12 +22,13 @@ without first working out whether there is anything to do.
 `update` proposes `charter update --bump` and stops. Moving the pin moves every teammate on
 their next session, so get an explicit yes before running it.
 
-**PyPI.** With no `--to` and no pin to conform to, the target is the latest published
-version, and `update` asks PyPI for it. When it ends up with no version to check against,
-it says so and exits 1 without moving anything. It has not checked, so do not report
-charter as current. It names two possible causes and does not say which one happened, so do
-not pick one for the person either. To install a version you already know, run
-`charter update --to X.Y.Z`.
+**PyPI.** When `update` ends up with no version from PyPI to check against, it says so. It
+names two possible causes and does not say which one happened, so do not pick one for the
+person either. On a plane with no pin, or with `--bump`, it exits 1 without moving
+anything. To install a version you already know, run `charter update --to X.Y.Z`. On a
+machine already on its pin it exits 0 and says whether a newer release is published could
+not be checked. Relay exactly that: the machine is on the pin. Do not call charter current
+or up to date.
 
 **A host's command.** Claude Code's plugin and Codex's belong to the host, so charter names
 the command rather than running it. Hand that command to the person and let them run it.

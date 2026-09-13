@@ -401,8 +401,15 @@ def _resolve_target(args, installed: str, locked: str | None) -> tuple[str | Non
         return locked, False, None    # conforming to a pin somebody chose affects nobody
     latest = _latest()
     if not latest:
-        # From here on every answer is a comparison with *latest*, so without one there is
-        # no target — and saying so is `cmd_update`'s. This returned *installed* instead,
+        if locked and installed == locked and not getattr(args, "bump", False):
+            # Already on the pin, so there is nothing to conform. PyPI would only have
+            # decided whether to PROPOSE moving past it, and `cmd_update` says that went
+            # unchecked rather than failing a team machine for being offline (#950). NOT
+            # with `--bump`: that asks to move past the pin, and to what is the question
+            # nothing answered.
+            return locked, False, None
+        # Every other answer from here is a comparison with *latest*, so without one there
+        # is no target — and saying so is `cmd_update`'s. This returned *installed* instead,
         # which ran the rest of the update over a check nobody made and exited 0: the exact
         # output of a plane that IS current (#950).
         return None, False, None
@@ -592,6 +599,13 @@ def cmd_update(args) -> int:
                  "answer, or its answer could not be cached. "
                  "Pass one explicitly: charter update --to X.Y.Z")
         return 1
+    if latest is None and not explicit and target == installed == locked:
+        # Only the pin was checked, so only the pin is claimed. No "latest" and no "up to
+        # date": whether a newer release exists is the question nothing answered, and the
+        # two candidates are the refusal's above, so neither names a cause (ADR 0009).
+        util.info(f"this machine is on the plane's pin {locked}; whether a newer release "
+                  f"is published could not be checked: no version came back from PyPI, "
+                  f"either it did not answer, or its answer could not be cached.")
 
     # BEFORE anything moves, so an interrupted update still knows where it started.
     _stamp_baseline(installed)

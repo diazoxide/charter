@@ -3,21 +3,29 @@ version: unreleased
 headline: `charter update` says when PyPI gave it nothing to check against, instead of exiting as if you were current
 ---
 
-With no `--to` and no pin to conform to, `charter update` takes the latest published version
-as its target. When it ended up with no version to check against, it used the charter you
-are already running as the target. It then moved the harness artifact, ran the news phase and exited 0.
-That is exactly what a plane on the newest release sees, but nothing had been checked. The
-refusal written for this case was one line below and could never fire.
+On a plane with no pin, `charter update` with no `--to` targets the newest published
+release. If it ended up with no version to check against, it used the charter already
+running as the target. It then moved the harness artifact, ran the news phase and exited 0.
+That is what a plane on the newest release sees, but nothing had been checked. The refusal
+written for this case was one line below and could never fire.
 
-Now it refuses, installs nothing and exits 1:
+Now, with no pin, it installs nothing and exits 1:
 
 ```
 ✗ no version came back from PyPI to check against: either it did not answer, or its answer could not be cached. Pass one explicitly: charter update --to X.Y.Z
 ```
 
-The refusal gives the same two causes `charter version bump` gives for the same condition,
-and like bump it does not say which one happened. The old wording guessed "offline?", but an
-answer from PyPI that could not be cached ends the same way. A plane already on its
-pin gets the same refusal, with or without `--bump`, because whether to stay or to propose
-a bump is the question PyPI's answer decides. A plane behind its pin still conforms to it,
-because PyPI has no say in that target.
+`--bump` on a machine already on the plane's pin gets the same refusal. It asks to move the
+pin past that version, and nothing says to what.
+
+Without `--bump`, a machine already on its pin has nothing to conform, so it still succeeds.
+It no longer passes over the check it did not make:
+
+```
+• this machine is on the plane's pin 0.61.0; whether a newer release is published could not be checked: no version came back from PyPI, either it did not answer, or its answer could not be cached.
+```
+
+Both messages give the same two causes `charter version bump` gives for the same condition,
+and like bump neither says which one happened. The old wording guessed "offline?", but an
+answer from PyPI that could not be cached ends the same way. A machine behind its pin still
+conforms to it, because PyPI has no say in that target.

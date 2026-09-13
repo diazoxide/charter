@@ -236,12 +236,30 @@ class NothingToCheckAgainstIsSaidNotSwallowed(UpdateCase):
         self.assertSaidNothingWasChecked(code, out)
         bump.assert_not_called()
 
-    def test_a_plane_on_its_pin_is_not_left_to_read_silence_as_current(self):
-        """Without `--bump` the answer on a pin is "stay", or "something newer is out,
-        ask". Which of the two is exactly what nothing came back to decide."""
+    def test_a_machine_on_its_pin_succeeds_and_says_only_what_it_checked(self):
+        """Without `--bump`, a machine already on its pin has nothing to conform: the pin
+        is the plane's answer and it is met, so an offline `charter update` on a team
+        machine is not a failure. What PyPI would have decided is only whether to PROPOSE a
+        bump, and that is the one thing the line owns up to not knowing — with no word
+        that reads as "latest", which nothing here established."""
         self.pin(INSTALLED)
         code, out = self.update()
-        self.assertSaidNothingWasChecked(code, out)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.moved, [])
+        self.assertIn(f"this machine is on the plane's pin {INSTALLED}", out)
+        self.assertIn("whether a newer release is published could not be checked", out)
+        self.assertIn("either it did not answer, or its answer could not be cached", out)
+        self.assertNotIn("latest", out.lower())
+        self.assertNotIn("offline", out)
+        self.assertNotIn("charter update --to", out)
+
+    def test_an_explicit_target_on_the_pin_claims_no_check_it_never_asked_for(self):
+        """`--to` never asks PyPI, so a line about what PyPI did not answer would describe
+        a request this run did not make."""
+        self.pin(INSTALLED)
+        code, out = self.update(to=INSTALLED)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("could not be checked", out)
 
     def test_a_plane_behind_its_pin_still_conforms_without_pypi(self):
         """The pin is a target PyPI has no say in, so the refusal waits until the answer
