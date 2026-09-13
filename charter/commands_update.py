@@ -600,10 +600,12 @@ def cmd_update(args) -> int:
                  "answer, or its answer could not be cached. "
                  "Pass one explicitly: charter update --to X.Y.Z")
         return 1
-    if latest is None and not explicit and locked and target == installed:
+    if latest is None and not explicit and target == installed:
         # Only the pin was checked, so only the pin is claimed. No "latest" and no "up to
         # date": whether a newer release exists is the question nothing answered, and the
         # two candidates are the refusal's above, so neither names a cause (ADR 0009).
+        # A pin is implied, not tested: without `--to`, no answer from PyPI and no pin,
+        # `_resolve_target` has no target and the refusal above has already returned.
         where = (f"this machine is on the plane's pin {locked}" if installed == locked else
                  f"this machine runs {installed}, ahead of the plane's pin {locked}")
         util.info(f"{where}; whether a newer release is published could not be checked: "

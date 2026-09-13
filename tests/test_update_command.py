@@ -291,6 +291,54 @@ class NothingToCheckAgainstIsSaidNotSwallowed(UpdateCase):
         self.assertNotIn("no version came back", out)
 
 
+class APinnedMachineWithAnAnswerFromPyPI(UpdateCase):
+    """The other side of both #950 conditions: PyPI DID answer, with nothing newer than
+    this machine.
+
+    Only a STRICTLY newer release moves past the pin. Equal is the machine already on the
+    newest one, and proposing a bump there asks the team to move to where it already is.
+    And a line saying the check could not be made belongs to runs where it was not: here
+    it was, so printing it would be the ADR 0013 failure in the other direction.
+    """
+
+    def setUp(self):
+        super().setUp()
+        pt = mock.patch("charter.commands_update._move_harness")
+        pt.start(); self.addCleanup(pt.stop)
+
+    def answer(self, latest: str) -> None:
+        pt = mock.patch("charter.commands_update._latest", lambda live=True: latest)
+        pt.start(); self.addCleanup(pt.stop)
+
+    def test_on_its_pin_with_that_release_newest_nothing_is_proposed(self):
+        self.pin(INSTALLED)
+        self.answer(INSTALLED)
+        code, out = self.update()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.moved, [])
+        self.assertNotIn("charter update --bump", out)
+        self.assertNotIn("is published", out)
+
+    def test_bump_on_its_pin_with_that_release_newest_moves_nothing(self):
+        self.pin(INSTALLED)
+        self.answer(INSTALLED)
+        with mock.patch("charter.commands_update._bump_pin", return_value=True) as bump:
+            code, out = self.update(bump=True)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.moved, [])
+        bump.assert_not_called()
+
+    def test_a_check_that_was_made_is_not_reported_as_missing(self):
+        for latest in (INSTALLED, "0.44.0"):
+            with self.subTest(latest=latest):
+                self.pin(INSTALLED)
+                self.answer(latest)
+                code, out = self.update()
+                self.assertEqual(code, 0, out)
+                self.assertNotIn("could not be checked", out)
+                self.assertNotIn("no version came back", out)
+
+
 class TheBaselineIsStampedBeforeAnythingMoves(UpdateCase):
     def test_an_interrupted_update_still_knows_where_it_started(self):
         self.update()
