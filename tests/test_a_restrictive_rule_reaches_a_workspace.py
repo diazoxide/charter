@@ -3325,11 +3325,11 @@ class TheTwoSurvivorsCIsSweepNamed(PlaneWithRestrictions):
         but one: a parent symlink whose destination is GONE.
 
         There `realpath` names the destination, so charter would CREATE the missing directory the
-        link points at — INSIDE the checkout, which is as far as this reaches: `_harness_files`
-        drops any rel resolving outside it, so a link that leaves the checkout produces no write
-        and no row either way (the test below measures that). As written, the mkdir meets the
-        dangling link, the row reads `blocked`, and charter invents nothing: ADR 0015's restraint,
-        and this plane's "fail toward no change"."""
+        link points at. When the link stays INSIDE the checkout that is a contained write charter
+        still declines — the `mkdir` meets the dangling link and the row reads `blocked` — and when
+        it LEAVES the checkout `_inside` refuses the write outright (the test below measures that).
+        Either way charter invents nothing: ADR 0015's restraint, and this plane's "fail toward no
+        change"."""
         clone = self.checkout()
         gone = clone / "elsewhere"
         (clone / ".claude").symlink_to(gone)
@@ -3338,16 +3338,18 @@ class TheTwoSurvivorsCIsSweepNamed(PlaneWithRestrictions):
         self.assertFalse(gone.exists(), "charter built the destination of a dangling symlink")
         self.assertFalse(os.path.lexists(clone / "elsewhere"))
 
-    def test_a_layer_path_that_leaves_the_checkout_is_neither_written_nor_reported(self):
-        """The measurement behind the correction above, and the bound on the case: containment in
-        `_harness_files` drops every rel whose resolved target is not inside the checkout, so a
-        `.claude` pointing anywhere else is not a write charter refuses — it is a path charter
-        never has. No row, nothing created, with the `_write_whole` conditional or without it."""
+    def test_a_layer_path_that_leaves_the_checkout_is_refused_and_named(self):
+        """A `.claude` committed as a symlink OUT of the checkout. It is a path charter is a
+        guest to, not one it may write: `_inside` refuses the write (`_write_whole`), so the row
+        reads `blocked` and nothing is created out there. **Named, not silently dropped** — a
+        dropped settings file keeps the plane's ask/deny rules out of a chat rooted here with no
+        row to say so, which is the downgrade the containment fix set out to end."""
         clone = self.checkout("away")
         outside = self.tmp / "not-the-checkout"
         (clone / ".claude").symlink_to(outside)
         rows = dict(workspace.wire_harnesses(self.ws))
-        self.assertEqual([rel for rel in rows if rel.startswith("away/.claude/")], [])
+        self.assertEqual(rows.get(f"away/{SHARED}"), "blocked",
+                         "the escaping settings file was dropped with no row to name it")
         self.assertFalse(outside.exists(), "charter wrote outside the checkout")
 
 

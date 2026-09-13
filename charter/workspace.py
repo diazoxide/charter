@@ -1794,7 +1794,16 @@ def scaffold_memory(name: str) -> Path:
 def scaffold(name: str) -> None:
     """Create a workspace's baseline structure: memory/ (per-file DB + index), refs/, the
     workspace.md charter, the harness layer, and the structure-version marker. Idempotent
-    + additive."""
+    + additive.
+
+    Writes nothing when the workspace directory itself resolves outside the plane — a
+    `workspaces/<ws>` committed as a symlink out of the plane would otherwise plant the whole
+    baseline wherever it points. The plane-data writes below are already contained one file
+    at a time (`contain.writable` in `scaffold_memory`/`scaffold_charter`); this refuses the
+    directory as a whole so the refusal is one decision and not a race between several.
+    """
+    if not _inside(config.WORKSPACES_DIR, workspace_dir(name)):
+        return
     scaffold_memory(name)
     refs = refs_dir(name)
     rr = refs / "README.md"
@@ -1816,7 +1825,12 @@ def scaffold(name: str) -> None:
     scaffold_charter(name)  # workspace.md — the living vision/context/glossary charter
     scaffold_manifest(name)  # workspace.json — the committed manifest (#884)
     wire_harnesses(name)    # the harness layer — see `harness_layer`
-    _structure_marker(name).write_text(str(STRUCTURE_VERSION) + "\n")  # stamp the layout version
+    # Stamp the layout version, but never through a committed link that leaves the plane: the
+    # marker is local, so a refused write costs only the stamp (the workspace re-flags stale)
+    # and never writes charter's version file into somebody else's tree.
+    marker = _structure_marker(name)
+    if not contain.write_refusal(marker):
+        marker.write_text(str(STRUCTURE_VERSION) + "\n")
 
 
 # --------------------------------------------------------------------------- #
@@ -1971,18 +1985,22 @@ def _harness_files(base: Path, which: str = "workspace_files") -> dict[str, str]
     for h in _registry.all():
         member = getattr(h, which, None)
         for rel, text in ((member() if member else None) or {}).items():
-            target = (base / rel).resolve()
-            # ONE clause, not two. `target == base.resolve()` was here to drop a `rel`
-            # naming the target directory itself, and it can never be the clause
-            # that decides: a path is never in its own `.parents`, so whenever the
-            # equality holds the containment test has already fired. The deletion
-            # sweep found it as a survivor and it was masked, not unpinned.
+            # The HARNESS CONTRACT, and only it: a declared relative path may not escape the
+            # tree it is joined onto. LEXICAL on purpose — `normpath` collapses `..` without
+            # touching the disk, so `../svc/x.json` from `svc/` (which lands back inside) is
+            # kept while `../escaped.json` is dropped, and a plane reached through a symlink is
+            # judged by the name `config.use` was handed, not one charter resolved
+            # (`AWorkspaceRootReachedThroughASymlink`).
             #
-            # The `.resolve()` that remains is load-bearing and is pinned by
-            # `AWorkspaceRootReachedThroughASymlink`: `config.use` hands its root
-            # through unresolved, so under a symlinked plane `base` is not among the
-            # resolved `target`'s parents and every file would be dropped.
-            if base.resolve() not in target.parents:
+            # It deliberately does NOT decide where a committed LINK at a clean name points:
+            # a `.claude/settings.json` symlinked out of the checkout has a clean `rel`, so it
+            # passes here and is named downstream — `foreign` by `_layer_status`, refused by
+            # `_write_whole` — rather than dropped with no row, which once let a guest keep the
+            # plane's ask/deny rules out of a chat silently. That containment is `_inside`'s,
+            # asked where the path is actually written and read.
+            joined = os.path.normpath(os.path.join(str(base), rel))
+            nbase = os.path.normpath(str(base))
+            if joined != nbase and not joined.startswith(nbase + os.sep):
                 continue
             out[rel] = text
     return out
@@ -2082,21 +2100,91 @@ def _guest_files(tree: Path) -> dict[str, str]:
     return out
 
 
+def _marker_key_ok(key: str) -> bool:
+    """Whether *key* is a name charter could have recorded — a relative path that names a
+    file inside the checkout, and nothing else.
+
+    Charter's own keys are relative paths built from a checkout root, so a key that is
+    absolute, drive-qualified, or carries a `..` segment could only have come from a hand-
+    written or committed marker, and joining it onto the checkout reaches OUTSIDE. One such
+    key makes the whole marker untrusted (:func:`_read_marker_at`), for `contain`'s reason:
+    a record charter did not write is not evidence about any path.
+    """
+    if not isinstance(key, str) or not key or "\x00" in key:
+        return False
+    if os.path.isabs(key) or os.path.splitdrive(key)[0]:
+        return False
+    # Backslash as well as `/`: the marker travels in a committed tree, so the machine that
+    # wrote a key is not necessarily the one that resolves it (`contain._SEPARATORS`).
+    return ".." not in key.replace("\\", "/").split("/")
+
+
+def _marker_untrusted(base: Path) -> bool:
+    """Whether git TRACKS `base/.charter-generated` in the guest checkout *base* — a marker
+    charter did not write.
+
+    Charter never writes a marker git tracks — its own is per-checkout and gitignored in
+    `info/exclude`, and stays charter's even when that exclude is emptied (still untracked).
+    So a TRACKED marker is committed content whose digests are not charter's word about which
+    files are charter's: its whole record is dropped. This is the clone-delivered boundary — a
+    marker committed in a repository the operator clones arrives TRACKED — and the destructive
+    side is defended independently by :func:`_generated_roots`, so a marker that is merely
+    present-but-untracked (a `git rm --cached` left in the source tree, which no clone carries)
+    still cannot withdraw a file charter never generated.
+
+    Asked of git the way `util.git_path_state` asks it, and only of a checkout with a git root
+    of its own — a workspace directory's marker is charter's, gitignored by the plane, and
+    needs no git spawn. Memoised per :func:`worktree_answers` block, so a launch or a doctor
+    run asks at most once per checkout. `doctor` names it (:func:`guest_layer`).
+    """
+    if git_dir(base) is None:
+        return False
+    # Only ask about a marker that is actually there: `git status -- <absent path>` prints
+    # nothing and exits 0, which `git_path_state` reads as TRACKED — so an absent marker would
+    # answer "tracked" for a checkout that has none. `_exists` is lstat, so a hostile marker
+    # LINK counts as there (its node exists) and is asked about.
+    if _exists(base / GENERATED_MARKER) is not True:
+        return False
+    key = os.path.realpath(base)
+    cache = getattr(_SCOPE, "tracked", None)
+    if cache is not None and key in cache:
+        return cache[key]
+    answer = util.git_path_state(base, GENERATED_MARKER)[0] == util.TRACKED
+    if cache is not None:
+        cache[key] = answer
+    return answer
+
+
 def _read_marker_at(base: Path) -> dict:
-    """The marker at *base*: ``{}`` when there is none, or one charter cannot read — empty, torn,
-    not a JSON object, or refused.
+    """The marker at *base*: ``{}`` when there is none, one charter cannot read — empty, torn,
+    not a JSON object, or refused — one git TRACKS, or one holding a key that leaves *base*.
 
     One answer again since #942 review round 5 (R2). `_marker_or_none` told a record charter had
     lost from one that did not exist, for `_shared_rels`, which let a line go once a record it
     could READ said the path was not charter's. Hiding follows the files that are there now, and
     no record takes a line away, so every caller left asks only what charter may write, withdraw
     or add a line for — where "nothing is charter's" alters nothing.
+
+    **A marker charter cannot have written is not charter's record.** A `.charter-generated`
+    git tracks (:func:`_marker_untrusted`), or one whose keys are not the relative in-checkout
+    names charter records (:func:`_marker_key_ok`), is committed content: trusting its digests
+    is how a guest names a file — its own, or one a link redirects out of the tree — as
+    charter's to rewrite or unlink. The whole marker is dropped; charter writes a fresh one
+    through the containment check, so nothing is lost that was really charter's. The destructive
+    side is defended once more by :func:`_generated_roots`, so even a marker charter does trust
+    withdraws only files under charter's own generated tree.
     """
     try:
         doc = json.loads((base / GENERATED_MARKER).read_text())
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return {}
-    return doc if isinstance(doc, dict) else {}
+    if not isinstance(doc, dict):
+        return {}
+    if not all(_marker_key_ok(k) for k in doc):
+        return {}
+    if _marker_untrusted(base):
+        return {}
+    return doc
 
 
 def _read_marker(name: str) -> dict:
@@ -2239,6 +2327,11 @@ def harness_layer(name: str) -> list[tuple[str, str]]:
     existed from one somebody rewrote, and guessing wrong in that direction destroys work.
     """
     with worktree_answers():
+        if not _inside(config.WORKSPACES_DIR, workspace_dir(name)):
+            # The workspace directory itself resolves outside the plane (a `workspaces/<ws>`
+            # committed as a symlink out). Charter reads no layer through it and writes none —
+            # doctor names the directory rather than reporting the tree behind the link.
+            return [(GENERATED_MARKER, "foreign")]
         rows = _layer_status(workspace_dir(name), _layer_files(name), _read_marker(name))
         for tree in guest_trees(name):
             rows.extend((f"{tree.name}/{rel}", status) for rel, status in guest_layer(tree))
@@ -2274,6 +2367,13 @@ def _layer_status(base: Path, want_all: dict[str, str],
         if _exists(p) is False:
             rows.append((rel, "missing"))
             continue
+        if not _inside(base, p):
+            # A committed link whose target, or whose parent, leaves the base. Charter
+            # neither reads through it (the digest on the far end is not evidence the file
+            # is charter's) nor writes through it — `foreign`, the state that is left exactly
+            # as it is. `_materialise` will not rewrite it and `_write_whole` would refuse it.
+            rows.append((rel, "foreign"))
+            continue
         try:
             have = p.read_text()
         except (OSError, UnicodeDecodeError):
@@ -2300,11 +2400,38 @@ def _layer_status(base: Path, want_all: dict[str, str],
     return rows
 
 
+def _generated_roots(extra=()) -> set[str]:
+    """The top-level directory segments charter may generate a file under — the boundary the
+    DESTRUCTIVE side of the layer answers to, independent of any marker's digests.
+
+    Charter's own layer always lives under a harness root (`.claude`, `.opencode`, `.codex`),
+    so a marker key naming a path outside these — `README.md`, `keep.txt`, `.git/info/exclude`
+    — names a file charter never wrote and must never withdraw, whatever digest a committed or
+    planted marker records for it. Registry-driven from every harness's
+    :attr:`harness.base.Harness.inherited_paths`, plus the root of any currently wanted rel
+    (*extra*), so a harness added to the registry is covered the day it declares a surface and
+    a plane that declares nothing still recognises `.claude` and its siblings.
+    """
+    from .harness import registry as _registry
+    # `getattr`, like `_cowritten`: a stand-in harness that declares no `inherited_paths` must
+    # mean none, not an `AttributeError` out of every withdraw.
+    roots = {p.split("/", 1)[0]
+             for h in _registry.all() for p in (getattr(h, "inherited_paths", ()) or ())}
+    roots |= {rel.split("/", 1)[0] for rel in extra}
+    return roots
+
+
 def _unwanted(base: Path, want_all: dict[str, str], marker: dict) -> list[str]:
     """Files charter generated here, still exactly as written, that nothing generates now.
 
     READ ONLY — :func:`_withdraw` removes them and :func:`_layer_status` reports them, and
     both ask here so the two cannot disagree about which files those are.
+
+    **Only a path under one of charter's generated roots** (:func:`_generated_roots`): a marker
+    charter trusts can still name a file charter never wrote — a `git rm --cached` marker left
+    in a source tree reads as untracked, a committed `.gitignore` can hide a planted one — and
+    withdrawing on its word deletes the guest's own file. The withdraw only ever reaches
+    charter's own generated tree, whatever the digests say.
 
     **Only while the file still matches the digest charter recorded**, :func:`unwire_guest`'s
     rule verbatim: a file the operator or the harness has since edited is not charter's to
@@ -2314,6 +2441,7 @@ def _unwanted(base: Path, want_all: dict[str, str], marker: dict) -> list[str]:
     `env` and `deny` away over a typo.
     """
     held = _held_files()
+    roots = _generated_roots(want_all)
     out: list[str] = []
     # Sorted over the MARKER's own order, never over a set. A set iterates in hash order,
     # which for two short paths can happen to be path order, so no test could tell `sorted`
@@ -2321,6 +2449,8 @@ def _unwanted(base: Path, want_all: dict[str, str], marker: dict) -> list[str]:
     # the file on disk says (an older charter or a hand edit can write any), and that is
     # the order `cmd_workspace_reinit`'s report must not inherit.
     for rel in sorted(r for r in marker if r not in want_all and r not in held):
+        if rel.split("/", 1)[0] not in roots:
+            continue
         try:
             if content_digest((base / rel).read_text()) in _recorded(marker, rel):
                 out.append(rel)
@@ -2352,6 +2482,11 @@ def wire_harnesses(name: str) -> list[tuple[str, str]]:
     the command that already exists.
     """
     with worktree_answers():
+        if not _inside(config.WORKSPACES_DIR, workspace_dir(name)):
+            # A `workspaces/<ws>` that resolves out of the plane (committed as a symlink):
+            # writing the layer through it would land the whole thing outside. Refused as one
+            # decision, reported `blocked`, and no guest tree behind the link is descended.
+            return [(GENERATED_MARKER, "blocked")]
         rows = _materialise(workspace_dir(name), _layer_files(name))
         for tree in guest_trees(name):
             rows.extend((f"{tree.name}/{rel}", status) for rel, status in wire_guest(tree))
@@ -2377,6 +2512,13 @@ def _withdraw(base: Path, want_all: dict[str, str], marker: dict) -> list[tuple[
     rows: list[tuple[str, str]] = []
     for rel in _unwanted(base, want_all, marker):
         p = base / rel
+        if not _inside(base, p):
+            # A marker charter did not write can name a path outside the tree — an absolute
+            # key, one that climbs out with `..`, or one a committed link redirects. Charter
+            # withdraws only what is inside the checkout it wires; the entry is left on the
+            # marker (`_read_marker_at` already treats such a marker as untrusted) and never
+            # unlinks a file out there.
+            continue
         try:
             p.unlink()
         except OSError:
@@ -2490,7 +2632,7 @@ def _materialise(base: Path, want_all: dict[str, str],
     for rel, status in writes:
         want = want_all[rel]
         try:
-            _write_whole(base / rel, want)
+            _write_whole(base / rel, want, base)
         except OSError:
             # The entry stays pending and the file holds what it held — whole writes (review
             # round 5, R1) — and the next wire writes it again.
@@ -2514,7 +2656,33 @@ def _materialise(base: Path, want_all: dict[str, str],
     return rows
 
 
-def _write_whole(path: Path, text: str) -> None:
+def _inside(base, p) -> bool:
+    """True when *p* **and its parent** both RESOLVE inside *base* — the one containment test
+    every write, replace, unlink and directory prune charter performs in a checkout or a
+    workspace passes through.
+
+    Both are resolved, because a committed tree charter is a guest in decides what its own
+    symlinks point at: a `.charter-generated` that is a link, a `.claude/` that is a directory
+    link with `settings.json` an ordinary name beneath it, a marker key spelled `../../victim`.
+    Resolving *p* alone would still follow a link whose PARENT leaves the base; resolving the
+    parent alone would follow a leaf link. :func:`contain.file_refusal` draws the same pair one
+    module over, for the read side of the same class (#336, #349).
+
+    Never raises: a path the filesystem cannot resolve is not inside. ``realpath`` resolves a
+    tail that is not there lexically, so a link a file is about to be created through is judged
+    by where it points, not by whether the file exists yet. `base` itself counts as inside.
+    """
+    try:
+        root = os.path.realpath(base)
+        for q in (os.path.realpath(p), os.path.realpath(os.path.dirname(os.fspath(p)) or ".")):
+            if q != root and not q.startswith(root + os.sep):
+                return False
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _write_whole(path: Path, text: str, base: Path | None = None) -> None:
     """Replace the file at *path* with *text* whole — a temp beside it, fsynced, then one
     ``os.replace`` — or raise and leave it exactly as it was.
 
@@ -2525,6 +2693,17 @@ def _write_whole(path: Path, text: str) -> None:
     harness's edit — the plane's new `deny` never arrived there, and `doctor` said all current —
     and an `info/exclude` killed after its truncate lost the operator's own lines.
 
+    **The write stays inside *base* or is refused.** *base* is the checkout or workspace this
+    write belongs to; a *path* whose resolved target, or whose resolved parent, leaves it
+    (:func:`_inside`) is refused with `OSError`, which every caller already renders as
+    ``blocked``. Charter is a guest in the tree it wires, and a committed `.charter-generated`
+    that is a symlink, or a committed `.claude/` that is a directory link, would otherwise send
+    this write wherever the link points — creating a file (and its parents) out there, or
+    replacing the file that is there with charter's own. *base* is ``None`` only for
+    `info/exclude`, which git's `commondir` puts outside a linked worktree by design and which
+    no committed working-tree content can redirect; there a link contained inside the git
+    directory is still followed, as `Path.write_text` wrote, and never replaced by a copy.
+
     The temp is `.charter-generated.<pid>.<rand>.tmp`: beside the target, so the rename is a
     rename; private to this writer, for `config.temp_beside`'s reason (#893); and, in a checkout,
     matching :data:`_TEMP_PATTERN`, which :func:`wire_guest`'s first pass puts in charter's block
@@ -2533,9 +2712,13 @@ def _write_whole(path: Path, text: str) -> None:
 
     Fsynced before the rename: without it a crash just after the rename can publish a file whose
     content never reached the disk. The mode of the file replaced is kept, since `os.replace`
-    carries the temp's; a symlink is written through, as `Path.write_text` wrote, and never
-    replaced by a copy. The temp is removed when the rename does not happen.
+    carries the temp's. The temp is removed when the rename does not happen.
     """
+    if base is not None and not _inside(base, path):
+        # Refused, not followed: a path that leaves the tree charter may write in is the
+        # exploit this guard exists for, and a raise here is `blocked` at every call site.
+        raise OSError(errno.EACCES,
+                      "refusing to write through a path that leaves the checkout", str(path))
     target = Path(os.path.realpath(path)) if os.path.islink(path) else Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f"{GENERATED_MARKER}.{os.getpid()}.{os.urandom(6).hex()}"
@@ -2571,8 +2754,10 @@ def _publish_marker(base: Path, marker: dict) -> OSError | None:
     path = base / GENERATED_MARKER
     try:
         if marker:
-            _write_whole(path, json.dumps(marker, indent=2) + "\n")
+            _write_whole(path, json.dumps(marker, indent=2) + "\n", base)
         else:
+            # `unlink` never follows a symlink, so a hostile marker LINK is removed at the
+            # link node, never through it — no containment needed on this branch.
             path.unlink(missing_ok=True)
     except OSError as e:
         return e
@@ -2701,6 +2886,21 @@ def guest_trees(name: str) -> list[Path]:
     # `.git` join raises `NotADirectoryError` — so a predicate here would be one more
     # spelling of the same question, and the deletion sweep would be right to take it.
     return [d for d in entries if git_dir(d) is not None]
+
+
+def _wired_tree_ok(tree: Path) -> bool:
+    """Whether *tree* is a guest checkout charter may wire — one that itself resolves inside
+    this plane's ``workspaces/``.
+
+    :func:`guest_trees` lists the children of a workspace directory and follows a symlink, so
+    a `workspaces/<ws>/<name>` linked at a repository OUTSIDE the plane is a tree whose own
+    root has already escaped. The per-file :func:`_inside` guard inside :func:`_write_whole`
+    is relative to *that* root and would pass, so containment has to be asked of the tree
+    ROOT as well: charter wires, unwires and reports only a tree genuinely under
+    ``workspaces/``. A tree that is not is NAMED by its caller (a wire and a doctor row) and
+    never written to.
+    """
+    return _inside(config.WORKSPACES_DIR, tree)
 
 
 def _charter_owned(base: Path, marker: dict) -> list[str]:
@@ -2853,10 +3053,15 @@ def worktree_answers():
         yield
         return
     _SCOPE.answers = {}
+    # The marker's trust verdict is memoised here too (:func:`_marker_untrusted`):
+    # it does not change while charter wires, and asking git once per checkout per block is
+    # the same budget the worktree listing already holds itself to.
+    _SCOPE.tracked = {}
     try:
         yield
     finally:
         _SCOPE.answers = None
+        _SCOPE.tracked = None
 
 
 def _live_trees(tree: Path, exclude: Path) -> tuple[list[Path] | None, str]:
@@ -3143,8 +3348,19 @@ def guest_layer(tree: Path) -> list[tuple[str, str]]:
     The exclude row is omitted when charter has generated nothing here — there is then
     nothing to hide, and reporting `missing` would demand a block naming no files.
     """
+    if not _wired_tree_ok(tree):
+        # A workspace child that resolves out of the plane (a symlink to an outside repo).
+        # Named as `foreign` so doctor reports it, and read no further — charter looks into
+        # only a tree that is genuinely under `workspaces/`.
+        return [(GENERATED_MARKER, "foreign")]
     marker = _read_marker_at(tree)
     rows = _layer_status(tree, _guest_files(tree), marker)
+    if _marker_untrusted(tree):
+        # `_read_marker_at` has already dropped a tracked marker as untrusted, so `marker` above
+        # is `{}` and the files read against it as `foreign`/`missing`. Name the marker itself
+        # too, so a reader sees WHY: charter never writes a `.charter-generated` git tracks, so a
+        # tracked one is committed content whose digests charter will not act on.
+        rows.append((GENERATED_MARKER, "tracked"))
     if (any(s in ("missing", "stale", "unwanted") for _rel, s in rows)
             and unrecorded_reason(tree)):
         # Ruling H (review round 4): a launch cannot publish the record a write needs first, so
@@ -3258,7 +3474,15 @@ def wire_guest(tree: Path) -> list[tuple[str, str]]:
     (review round 2): a clone and its linked worktrees share the file, so it holds what
     every one of them needs and keeps a co-written line while the file exists in any of
     them — :func:`_shared_rels`.
+
+    A tree that itself resolves out of the plane (a `workspaces/<ws>/<name>` symlinked to an
+    outside repository) is not one charter may write to: :func:`_wired_tree_ok`. It is named
+    `blocked` — the wire output and `reinit` report it — and nothing is written or hidden in
+    it. Charter's per-file guard cannot answer this: it is relative to the tree root, which has
+    already escaped.
     """
+    if not _wired_tree_ok(tree):
+        return [(GENERATED_MARKER, "blocked")]
     want = _guest_files(tree)
     marker = _read_marker_at(tree)
     cowritten = _cowritten()
@@ -3288,19 +3512,20 @@ def wire_guest(tree: Path) -> list[tuple[str, str]]:
 
 
 def _prune_empty(d: Path, stop: Path) -> None:
-    """Remove *d* and its parents up to (never including) *stop*, while they are empty.
+    """Remove *d* and its parents up to (never including) *stop*, while they are empty AND
+    resolve inside *stop*.
 
     A `.claude/agents/` left standing after its last generated file is removed is charter
     still visible in a repo it no longer has anything in.
 
-    No `.resolve()` on either side, and unlike `_harness_files` that is safe here rather
-    than an oversight: both paths are built from the SAME checkout root in
-    :func:`unwire_guest`, out of relative paths the layer already refused to let escape
-    it, so the comparison is between two spellings that cannot disagree.
+    :func:`_inside` as well as `stop in d.parents`: the lexical `parents` test says the
+    spelling is under *stop*, and the resolve says the directory that spelling reaches is —
+    the pair every removal charter performs passes, so a directory a committed link points
+    outside *stop* is never removed even when *d* was reached through one.
     """
     # `stop in d.parents` alone: a path is never in its own parents, so it is also what
     # stops the walk AT the checkout root.
-    while stop in d.parents:
+    while stop in d.parents and _inside(stop, d):
         try:
             d.rmdir()
         except OSError:
@@ -3322,11 +3547,30 @@ def unwire_guest(tree: Path) -> list[str]:
     line another tree of the same repository still needs** (review round 2): a linked
     worktree's `info/exclude` is its clone's, and removing a workspace that held one emptied
     the clone's block.
+
+    A tree that resolves out of the plane (:func:`_wired_tree_ok`) is one charter never wrote
+    to, so there is nothing of charter's to take out of it — and following it would delete
+    from a repository outside the plane. Nothing removed.
     """
+    if not _wired_tree_ok(tree):
+        return []
     marker = _read_marker_at(tree)
+    roots = _generated_roots(_guest_files(tree))
     removed: list[str] = []
     for rel in sorted(marker):
         p = tree / rel
+        if rel.split("/", 1)[0] not in roots:
+            # Charter removes only what it could have generated — a path under a harness root
+            # (:func:`_generated_roots`). A marker naming a file outside those names one charter
+            # never wrote, so unwire never unlinks it, whatever digest the marker records.
+            continue
+        if not _inside(tree, p):
+            # The removal side of `_write_whole`'s rule (`_inside`): a marker naming a path
+            # a committed directory link redirects out of the checkout would have this
+            # `unlink` follow it and delete the file out there. `_read_marker_at` already
+            # drops a marker with an absolute or `..` key, so this closes the one a clean key
+            # under a directory symlink leaves open.
+            continue
         try:
             # No `is_file()` in front of the read, for `_inherited_files`' reason: a path
             # already gone and a path that is a directory both raise here, and both mean

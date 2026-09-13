@@ -2757,6 +2757,15 @@ def _workspace_harness_result(_config, _workspace) -> Result:
         first.append("An 'unaccounted' exclude block is still hiding a path charter cannot prove "
                      "it no longer needs, and keeps hiding it until it can: " + "; ".join(why) + ".")
     rest: list[str] = []
+    if "tracked" in statuses:
+        # Charter never writes a `.charter-generated` git tracks — its own is per-checkout and
+        # gitignored — so a tracked one is committed content, and its digests are not charter's
+        # word about which files are charter's. Charter ignores it and keeps its own record; the
+        # committed one is the checkout owner's to remove.
+        rest.append("A 'tracked' marker is a `.charter-generated` git tracks in that checkout. "
+                    "Charter never writes one git tracks, so it is not charter's record: charter "
+                    "ignores its contents and keeps its own. Remove it from that checkout if it "
+                    "is not meant to be committed there.")
     if "harness-behind" in statuses:
         # Its own sentence, and never "remove it": the approvals in that file are the
         # harness's, and the advice that suits a file somebody else wrote destroys them.
