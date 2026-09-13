@@ -801,15 +801,18 @@ def _is_executor(name: str) -> bool:
 
 
 def _line_pipelines(line: str):
-    """*line* as its pipelines: ``[(programs, has_executor, heredoc_counts)]``, or ``None``
+    """*line* as its pipelines: ``[(argvs, has_executor, heredoc_counts)]``, or ``None``
     when the line cannot be attributed safely.
 
     Split on the control operators that separate pipelines (`;`, `&&`, `||`, `&`, `;;`) but
     NOT on `|`, because a pipeline shares one execution fate: a body a reader opens is run
     all the same if any command downstream of it in the pipe is a shell — in `zsh`'s
     ``MULTIOS`` even a body a single pipe appears to discard (`cat <<A | bash <<B`) reaches
-    both. `has_executor` is therefore per PIPELINE, `programs` and `heredoc_counts` per
-    command within it (`programs[k]` opened `heredoc_counts[k]` of the `<<` on this line).
+    both. `has_executor` is therefore per PIPELINE, `argvs` and `heredoc_counts` per
+    command within it (`argvs[k]` opened `heredoc_counts[k]` of the `<<` on this line). Each
+    argv is :func:`_split_env`'s, program first, so the program is `argvs[k][0]` and the
+    words after it are there for a caller whose answer depends on more than the name — a
+    `git commit -F -` is data where `git commit -e -F -` is not (#997).
 
     Reuses the module's own lexer, so quoting is honoured rather than re-derived — a `;` or
     `<<` inside quotes is a word here as it is to a shell. A **group, subshell or command
@@ -849,11 +852,11 @@ def _line_pipelines(line: str):
     pipelines.append(current)
     out = []
     for cmds in pipelines:
-        progs = [_split_env(c)[0] for c in cmds]
+        split = [_split_env(c) for c in cmds]
         hcounts = [sum(1 for tk in c if tk == "<<") for c in cmds]
-        executor = any(_is_executor(c[0]) or _is_executor(p)
-                       for c, p in zip(cmds, progs) if c)
-        out.append((progs, executor, hcounts))
+        executor = any(_is_executor(c[0]) or _is_executor(prog)
+                       for c, (prog, _env, _argv) in zip(cmds, split) if c)
+        out.append(([argv for _prog, _env, argv in split], executor, hcounts))
     return out
 
 
@@ -1250,6 +1253,63 @@ def _brief_heredocs(line: str) -> set[int]:
     return briefs
 
 
+def _commit_message_on_stdin(argv: list[str]) -> bool:
+    """Whether *argv* is a `git commit` that takes its message from stdin and opens no editor
+    on it — so a heredoc it opens is a MESSAGE, which git stores and never runs (#997).
+
+    Without this, `git commit -F - <<'MSG'` had its body read as commands, because `git` is not
+    a reader: a message holding one apostrophe beside a vault path stopped the call lexing and
+    the raw scan refused it, and a message line opening `cat <vault>` was refused as that read.
+    The same body fed to `cat` passed. A7 already calls this body data, since no executor runs
+    it (:func:`_lines_a_command_could_run`); this is the leak guard's half of the same fact.
+
+    **Narrow, and every miss keeps the body visible.** The spellings read are `-F -`, `-F-`,
+    `--file=-` and `--file -` after a literal `commit`, with git's global options before it
+    skipped by :func:`_git_globals`. Not read: another subcommand that takes `-F -` (`tag`,
+    `notes`, `merge`), an alias, a short cluster (`-aF -`), an abbreviation (`--fil=-`), a
+    redirection between `git` and `commit`. An alias cannot shadow `commit` — measured on git
+    2.50, `-c alias.commit='!sh'` is ignored — so a literal `commit` is git's own.
+
+    **An editor is the one way git runs a message**, so any spelling of `--edit` refuses the
+    answer: git reads the message from stdin, writes it to `COMMIT_EDITMSG` and hands that file
+    to the editor, and with `core.editor=sh` the message runs. Measured on git 2.50: `-e`,
+    `--edit`, the abbreviations `--e`/`--edi`, and a short cluster holding `e` (`-ae`) all open
+    it; nothing else `commit` accepts beside `-F -` does, and neither pre-commit nor commit-msg
+    hooks receive stdin. A cluster whose `e` is a value (`-mfixe`) is refused along with them,
+    which is a missed allow and the cheap direction.
+
+    **Redirections come out first, targets with them**, because a target is not an option:
+    `git commit > -F- <<'MSG'` writes to a file named `-F-`, reads no message from stdin, and
+    opens the editor with the heredoc as ITS stdin — which `core.editor='sh -s'` runs.
+    """
+    if not argv or os.path.basename(argv[0]).lower() != "git":
+        return False
+    words: list[str] = []
+    skip = False
+    for w in argv:
+        if skip:
+            skip = False
+        elif _REDIRECT_RE.match(w):
+            skip = True
+        else:
+            words.append(w)
+    _globals, rest = _git_globals(words)
+    if not rest or rest[0] != "commit":
+        return False
+    opts = rest[1:]
+    stdin = False
+    for k, w in enumerate(opts):
+        if w == "--":
+            break                              # pathspecs from here: `-F -` is two paths
+        if w in ("-F-", "--file=-") or (w in ("-F", "--file") and opts[k + 1:k + 2] == ["-"]):
+            stdin = True
+        elif len(w) >= 3 and "--edit".startswith(w):
+            return False
+        elif w.startswith("-") and not w.startswith("--") and "e" in w:
+            return False
+    return stdin
+
+
 def _heredoc_strip_plan(line: str):
     """``[(delimiter, strip?)]`` for the heredocs opened on *line*, in the order their bodies
     follow — or ``None`` when nothing on the line may be stripped.
@@ -1260,7 +1320,8 @@ def _heredoc_strip_plan(line: str):
     * *quoted* — an unquoted `<<EOF` is expanded before the reader sees it, so a `$( … )` in
       the body RUNS (`cat <<EOF\\n$(cat <vault>)\\nEOF`). Only `<<'EOF'` / `<<"EOF"` are inert.
     * *reader* — the program that OPENS the `<<` (its segment's, via :func:`_split_env`), so
-      `env cat <<'X'` is a reader behind a wrapper and its body is still data.
+      `env cat <<'X'` is a reader behind a wrapper and its body is still data. A `git commit`
+      that takes its message from stdin counts as one (:func:`_commit_message_on_stdin`).
     * *no executor in the pipeline* — the defect this replaces (#973): the old pre-pass asked
       only whether the LINE began with a reader, so `cat x && bash <<'EOF'`, `… | bash`,
       `… || bash`, `… & bash` and `cat x; bash <<'EOF'` each dropped a body a shell ran.
@@ -1298,14 +1359,18 @@ def _heredoc_strip_plan(line: str):
     pipelines = _line_pipelines(line)
     if pipelines is None:
         return None
-    if sum(hc for _progs, _ex, hcounts in pipelines for hc in hcounts) != len(headers):
+    if sum(hc for _argvs, _ex, hcounts in pipelines for hc in hcounts) != len(headers):
         return None
     briefs = _brief_heredocs(line)
     plan: list[tuple[str, bool, tuple | None, bool]] = []
     k = 0
-    for progs, executor, hcounts in pipelines:
-        for prog, hc in zip(progs, hcounts):
-            reader = os.path.basename(prog).lower() in _READERS
+    for argvs, executor, hcounts in pipelines:
+        for argv, hc in zip(argvs, hcounts):
+            prog = argv[0] if argv else ""
+            # A commit message on stdin is a reader's body by another name: git stores it and
+            # runs none of it, so it earns the same two clauses and nothing more (#997).
+            reader = (os.path.basename(prog).lower() in _READERS
+                      or _commit_message_on_stdin(argv))
             for _ in range(hc):
                 m = headers[k]
                 quoted = bool(m.group("q"))
