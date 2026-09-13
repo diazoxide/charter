@@ -1798,39 +1798,57 @@ def scaffold(name: str) -> None:
 
     Writes nothing when the workspace directory itself resolves outside the plane — a
     `workspaces/<ws>` committed as a symlink out of the plane would otherwise plant the whole
-    baseline wherever it points. The plane-data writes below are already contained one file
-    at a time (`contain.writable` in `scaffold_memory`/`scaffold_charter`); this refuses the
-    directory as a whole so the refusal is one decision and not a race between several.
+    baseline wherever it points. This refuses the directory as a whole so the refusal is one
+    decision and not a race between several; `_in_the_way` answers for the same directory by
+    the same `_inside` test, so `reinit` names what this refuses. Below it, each baseline path
+    is judged by `_baseline_answers` (#1037), and the stamp by the kernel.
     """
     if not _inside(config.WORKSPACES_DIR, workspace_dir(name)):
         return
-    scaffold_memory(name)
-    refs = refs_dir(name)
-    rr = refs / "README.md"
-    # Never over a `refs/` the filesystem will not answer for (#980), nor one that answers and is
-    # no directory (#1028). `exist_ok` forgives a directory that is there; a symlink loop, a link
-    # whose target is gone and a file are all names that are there and resolve to no directory,
-    # so the `mkdir` raised `FileExistsError` out of `workspace reinit` after `structure_status`
-    # had already classified each one for `reinit` to name. The README is under the same guard,
-    # because a create beneath a link to nowhere, or beneath a file, raises as well.
-    if _exists(refs, follow=True) is not None and _in_the_way(rr) is None:
+    # Nothing is written for a baseline path that could not be checked or has something in the
+    # way — `_baseline_answers`, the one classification `structure_status` hands `reinit` to
+    # name each path and this reads to leave it alone, so the two cannot disagree about one path. A `refs/` the
+    # filesystem will not answer for (#980) or that is no directory (#1028) made the `mkdir`
+    # raise `FileExistsError`; a `memory` that is a file (#1037) made the index write raise
+    # `contain.Refused`; and a baseline name that is a symlink (#1037) was written THROUGH,
+    # which created a file wherever a committed link pointed.
+    clear = {rel: there is not None and blocker is None
+             for rel, (_path, there, _code, blocker) in _baseline_answers(name).items()}
+    if clear["memory/MEMORY.md"]:
+        scaffold_memory(name)
+    if clear["refs/README.md"]:
+        refs = refs_dir(name)
         refs.mkdir(parents=True, exist_ok=True)
+        rr = refs / "README.md"
         # `_exists`, never `Path.exists` (#942 final review): with the workspace's `refs/` at mode
         # 000 that raised on 3.11–3.13, and on 3.14 answered False so the write below raised
         # instead — a traceback out of `workspace reinit` on every interpreter, for a file charter
         # only creates where it is certainly absent. `reinit` names what could not be checked.
         if _exists(rr, follow=True) is False:
-            rr.write_text(f"# {name} — task references\n\nDrop docs, links, and snippets for "
-                          f"this task here (local, gitignored).\n")
-    scaffold_charter(name)  # workspace.md — the living vision/context/glossary charter
-    scaffold_manifest(name)  # workspace.json — the committed manifest (#884)
+            # `create_for`, never `write_text` (#1037): the check above is `lstat` and then this,
+            # and a link planted between the two is followed by a plain write.
+            config.create_for(rr, f"# {name} — task references\n\nDrop docs, links, and "
+                                  f"snippets for this task here (local, gitignored).\n")
+    if clear["workspace.md"]:
+        scaffold_charter(name)  # workspace.md — the living vision/context/glossary charter
+    if clear["workspace.json"]:
+        scaffold_manifest(name)  # workspace.json — the committed manifest (#884)
     wire_harnesses(name)    # the harness layer — see `harness_layer`
-    # Stamp the layout version, but never through a committed link that leaves the plane: the
-    # marker is local, so a refused write costs only the stamp (the workspace re-flags stale)
-    # and never writes charter's version file into somebody else's tree.
-    marker = _structure_marker(name)
-    if not contain.write_refusal(marker):
-        marker.write_text(str(STRUCTURE_VERSION) + "\n")
+    # Stamp the layout version, never through a link — the rule every baseline file has
+    # (#1037), asked of the open itself rather than of a check before it. `contain.write_refusal`
+    # (#1062) refused a link out of the plane and followed one that stays inside it, dangling or
+    # not, which `write_text` then created or overwrote. ``O_NOFOLLOW`` refuses a link wherever
+    # it points (ELOOP), ``O_NONBLOCK`` a FIFO nobody reads (ENXIO) instead of hanging the
+    # launch, and a directory refuses itself (EISDIR); the directory above is the `_inside`
+    # test at the top. The marker is local, so a refused stamp costs only the stamp: the
+    # workspace re-flags stale, and nothing is written into a tree charter did not choose.
+    try:
+        fd = os.open(_structure_marker(name),
+                     os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_NONBLOCK, 0o666)
+    except OSError:
+        return
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(str(STRUCTURE_VERSION) + "\n")
 
 
 # --------------------------------------------------------------------------- #
@@ -2241,21 +2259,50 @@ def _stopped_at(p: Path, code: int) -> Path:
     return p
 
 
-def _in_the_way(p: Path) -> tuple[Path, int] | None:
-    """The directory above *p* that is there and is no directory, with the errno a create
-    under it meets — ``ENOENT`` for a symlink whose target is gone, ``ENOTDIR`` for anything
-    else — or ``None`` when every directory above *p* is one, or is simply absent.
+def _in_the_way(p: Path, base: Path) -> tuple[Path, int] | None:
+    """The path from *base* down to *p* that stands where the layout needs something else, with
+    the errno a create there meets — ``ENOENT`` for a directory that is a symlink whose target
+    is gone, ``ENOTDIR`` for a directory that is anything else that is no directory, ``ELOOP``
+    for a symlink charter will not follow — or ``None`` when nothing is.
 
-    `_existence` calls *p* gone for both (#1028), and truthfully: nothing is at *p*. But
-    "gone" is read as "create it", and a create through a link to nowhere or under a file
+    `_existence` calls *p* gone for the first two (#1028), and truthfully: nothing is at *p*.
+    But "gone" is read as "create it", and a create through a link to nowhere or under a file
     raises out of `workspace reinit` — `mkdir(exist_ok=True)` forgives a directory, not a
     name that is there and is none. So "gone because something stands where its directory
     goes" is told apart here, once, for `structure_status` to name and `scaffold` to write
     nothing under. A directory the filesystem will not answer for is not this function's:
-    that is `_existence`'s ``None``, and `_stopped_at` names it."""
-    for q in reversed(p.parents):
-        if _exists(q) is not True:
-            return None  # absent, which a create makes, or not answered for
+    that is `_existence`'s ``None``, and `_stopped_at` names it.
+
+    ``ELOOP`` is #1037, and it is asked with `lstat` because every other question here
+    follows the link it is about. A workspace's tree is committed, and git stores a symlink as
+    a symlink, so a link in it is something a teammate's commit can put there: `_existence`
+    called a link to nowhere at ``refs/README.md`` gone, and `scaffold` wrote the README
+    through it, creating a file wherever the link pointed. So a link where a FILE belongs is in
+    the way wherever it points, and so is one where a DIRECTORY belongs unless it lands on a
+    directory inside the plane's data, which is the link `contain` has always followed and the
+    repointed ``refs`` #1028's sentence sends an operator to. *base*, the workspace directory,
+    is a directory of the layout too, and a link there must resolve inside ``workspaces/`` —
+    `_inside`, the test `scaffold` and the harness layer refuse the whole directory by (#1062),
+    so what they refuse is what `reinit` names. ``ELOOP`` because it is what the kernel answers
+    an ``O_NOFOLLOW`` open at a link.
+
+    Nothing above *base* is asked. The plane root and the temp directory above it may be links
+    for reasons nobody committed (``/var`` is one on macOS), and every caller has already
+    reached *base* through them. Walking from the filesystem root also cost a `lstat` and a
+    `stat` per component per baseline path, and `structure_status` runs for every workspace on
+    each status line render."""
+    walk = [base]
+    for part in p.parts[len(base.parts):-1]:
+        walk.append(walk[-1] / part)
+    for q in (*walk, p):
+        try:
+            link = stat.S_ISLNK(os.lstat(q).st_mode)
+        except (FileNotFoundError, NotADirectoryError):
+            return None  # absent, which a create makes
+        except OSError:
+            return None  # not answered for
+        if q is p:
+            return (p, errno.ELOOP) if link else None
         try:
             st = os.stat(q)
         except (FileNotFoundError, NotADirectoryError):
@@ -2263,7 +2310,13 @@ def _in_the_way(p: Path) -> tuple[Path, int] | None:
         except OSError:
             return None
         if not stat.S_ISDIR(st.st_mode):
-            return q, errno.ENOTDIR
+            return q, errno.ELOOP if link else errno.ENOTDIR
+        # The workspace directory answers to the test `scaffold` and the harness layer refuse it
+        # by (#1062): it must resolve inside `workspaces/`. A directory beneath it follows
+        # `contain`'s rule for plane data, so a `refs` repointed at another workspace's still is.
+        if link and (not _inside(config.WORKSPACES_DIR, q) if q is base
+                     else contain.dir_refusal(q, "write")):
+            return q, errno.ELOOP
     return None
 
 
@@ -3744,7 +3797,9 @@ def scaffold_charter(name: str, vision: str | None = None) -> None:
     cf = contain.writable(charter_file(name))
     if not cf.exists():
         cf.parent.mkdir(parents=True, exist_ok=True)
-        cf.write_text(_CHARTER_TEMPLATE.format(
+        # `create_for` (#1037): `exists()` is False for a dangling link, `writable` follows one
+        # that lands inside the plane, and `write_text` then created whatever it named.
+        config.create_for(cf, _CHARTER_TEMPLATE.format(
             name=name, vision=(vision.strip() if vision else _VISION_PLACEHOLDER)))
     elif vision:
         set_vision(name, vision)
@@ -3918,24 +3973,47 @@ def structure_status(name: str) -> dict:
     (:func:`_stopped_at`), which is the rel's own path unless a directory above it is what fails.
 
     ``in_the_way`` is a rel that is not there because something that is no directory stands where
-    its directory goes (:func:`_in_the_way`, #1028). Not ``missing``, for the reason a loop is not:
-    `scaffold` writes nothing beneath it, so "missing" would flag a workspace for a `reinit` that
-    cannot add the file, and have `reinit` report it added."""
+    its directory goes (:func:`_in_the_way`, #1028), or whose own name, or a directory's above it,
+    is a symlink charter will not follow (#1037). Not ``missing``, for the reason a loop is not:
+    `scaffold` writes nothing at it or beneath it, so "missing" would flag a workspace for a
+    `reinit` that cannot add the file, and have `reinit` report it added. `scaffold` reads this
+    same list to decide what to leave alone."""
     # `_exists`, through symlinks (#942 review round 4): `Path.exists` raised on 3.11–3.13 for a
     # component that cannot be checked, crashing `workspace reinit` before it could say so. A
     # component that cannot be checked is not called missing — scaffolding over it is a write
     # into something charter cannot see — and is listed apart, for `reinit` to name with what
     # clears it (ADR 0009, #942 final review).
-    seen = {rel: (p, *_existence(p, follow=True))
-            for rel, p in _required_components(name).items()}
-    gone = {rel: _in_the_way(p) for rel, (p, there, _code) in seen.items() if there is False}
-    missing = [rel for rel, blocker in gone.items() if blocker is None]
+    seen = _baseline_answers(name)
+    missing = [rel for rel, (_p, there, _code, blocker) in seen.items()
+               if there is False and blocker is None]
     ver = structure_version(name)
     return {"ok": (not missing) and ver >= STRUCTURE_VERSION, "missing": missing,
             "unreadable": [(rel, _stopped_at(p, code), code)
-                           for rel, (p, there, code) in seen.items() if there is None],
-            "in_the_way": [(rel, *blocker) for rel, blocker in gone.items() if blocker],
+                           for rel, (p, there, code, _blocker) in seen.items() if there is None],
+            "in_the_way": [(rel, *blocker) for rel, (_p, _there, _code, blocker) in seen.items()
+                           if blocker],
             "version": ver, "target": STRUCTURE_VERSION}
+
+
+def _baseline_answers(name: str) -> dict[str, tuple[Path, bool | None, int | None,
+                                                   tuple[Path, int] | None]]:
+    """``{rel: (path, there, errno, blocker)}`` for every baseline path — the one
+    classification :func:`structure_status` reports and :func:`scaffold` writes by.
+
+    Apart from `structure_status` because that also reads the structure marker, and `scaffold`
+    runs from `ensure` on a launch: a `.charter-structure` that is a FIFO blocks that read for
+    ever, and `scaffold` had never read it before #1037 gave it this classification to ask.
+    """
+    wd = workspace_dir(name)
+    out = {}
+    for rel, p in _required_components(name).items():
+        there, code = _existence(p, follow=True)
+        # Asked of what answered "there" as well as of what answered "gone" (#1037): a link at
+        # a baseline name to a file that IS there answers "there" through the link, and is in
+        # the way all the same — nothing is written through it, and a link out of the plane
+        # there took `scaffold` down with `contain.Refused`.
+        out[rel] = (p, there, code, _in_the_way(p, wd) if there is not None else None)
+    return out
 
 
 def needs_reinit(name: str) -> bool:

@@ -2491,7 +2491,8 @@ class ARefsDirectoryAtModeZeroIsNamedNotRaised(RoundFiveCheckout):
         refs = workspace.refs_dir(self.ws)
         shutil.rmtree(refs)
         refs.symlink_to(refs)
-        self.assertIsNone(workspace._in_the_way(refs / "README.md"))
+        self.assertIsNone(workspace._in_the_way(refs / "README.md",
+                                                workspace.workspace_dir(self.ws)))
 
     def test_a_baseline_file_it_may_not_read_is_told_to_restore_read_access(self):
         """The other half of the same split, at mode 000 — a refusal, and read access is what

@@ -35,6 +35,7 @@ including the wording this file exists to have replaced.
 
 from __future__ import annotations
 
+import errno
 import io
 import json
 import os
@@ -43,6 +44,7 @@ import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 from charter import config, workspace
 from charter import commands_workspace as cw
@@ -254,15 +256,23 @@ class AWorkspaceCharterCouldNotRepairIsNotCurrent(BulkRepairCase):
     workspaces NOT repaired, and a blocked one is not current either."""
 
     def blocked(self, name: str) -> None:
-        """A manifest path charter refuses to write, and a stale structure besides.
+        """A manifest charter could not write, and a stale structure besides.
 
-        A dangling symlink out of the plane: `contain.writable` refuses the write (#328)
-        and `Path.exists` answers False through it, so the manifest is reported blocked
-        while everything else in the workspace stays repairable.
+        Its publish is refused the way a full disk refuses it, so the manifest is reported
+        blocked while everything else in the workspace stays repairable. Not a dangling symlink
+        at the manifest's name, which this used to be: `reinit` names a link where a baseline
+        file belongs in a sentence of its own and never tries the write (#1037).
         """
         workspace.ensure(name)
         workspace.manifest_path(name).unlink()
-        workspace.manifest_path(name).symlink_to(self.tmp / "nowhere.json")
+        manifest, real = os.fspath(workspace.manifest_path(name)), os.replace
+
+        def full_disk(src, dst, *args, **kwargs):
+            if os.fspath(dst) == manifest:
+                raise OSError(errno.ENOSPC, "No space left on device", manifest)
+            return real(src, dst, *args, **kwargs)
+
+        self.enterContext(mock.patch("os.replace", full_disk))
 
     def test_a_blocked_workspace_is_called_out_rather_than_counted_current(self):
         self.two_repairs("alpha")

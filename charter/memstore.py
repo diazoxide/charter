@@ -91,7 +91,10 @@ def ensure_index(mem_dir: Path, header: str) -> Path:
     idx = writable(index_path(mem_dir))
     mkdir_for(mem_dir)
     if not idx.exists():
-        config.write_for(idx, header if header.endswith("\n") else header + "\n")
+        # `create_for`, not `write_for` (#1037): `exists()` is False for a dangling link too, and
+        # `writable` above follows one that lands inside the plane, so a plain write created the
+        # file the link named. Exclusive, so the kernel refuses the link however it got there.
+        config.create_for(idx, header if header.endswith("\n") else header + "\n")
     return idx
 
 
