@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 from . import (change, config, contain, gitpolicy, gitstate, planegit, session, tui, util,
@@ -370,13 +371,105 @@ def cmd_workspace_remove(args) -> int:
     return 0
 
 
+def _relink_worktrees(old_dir: Path, new: str) -> tuple[int, list[tuple[Path, Path | None]]]:
+    """Tell git where the linked worktrees of *new*'s clones are after a rename moved them.
+
+    Answers ``(relinked, left)``: how many worktrees git reads as linked both ways after the
+    repair, and ``(clone, tree)`` for each one it does not — ``tree`` is ``None`` when git could
+    not even list the clone's worktrees, so nobody knows which there are.
+
+    A rename is a directory move, and both halves of a linked worktree's link are absolute
+    paths: the tree's `.git` file names the clone's admin directory, and that directory's
+    `gitdir` names the tree back. Moved together, neither was rewritten, so git called a live
+    worktree prunable — `git worktree prune` or `gc` would then delete its admin directory
+    while it held uncommitted work — and `worktree.list_for` answered "No worktrees." (#963).
+
+    One `git worktree repair <trees…>`, run from the clone at its new place, rewrites both files
+    of every moved tree it names. A tree outside the workspace did not move, but its `.git` file
+    still names the clone's OLD admin directory, so git inside it fails; the same call mends
+    that file too, named or not (measured, git 2.50.1). So every tree the clone links is named,
+    and `git -C <clone> worktree repair <tree>` is the one command to print for either kind.
+
+    *old_dir* is the workspace directory resolved BEFORE the move: git records a worktree's
+    real path, and the old directory is gone by the time it is compared.
+    """
+    new_dir = workspace.workspace_dir(new).resolve()
+    relinked, left = 0, []
+    for clone in workspace.clones(new):
+        # Resolved like every tree git lists, so a printed command names both in one spelling.
+        clone = clone.resolve()
+        # Git keeps every linked worktree's admin directory here, so without one there is
+        # nothing to relink and no reason to spawn — `workspace._live_trees`' same shortcut.
+        if not (clone / ".git" / "worktrees").is_dir():
+            continue
+        listed = _worktrees_of(clone)
+        if listed is None:
+            left.append((clone, None))
+            continue
+        trees = []
+        for row in listed:
+            tree = Path(row["path"])
+            try:
+                tree = new_dir / tree.relative_to(old_dir)
+            except ValueError:
+                pass                     # outside the workspace: it stayed where git has it
+            # A tree git still lists but that is not on disk was gone before this rename. It is
+            # not this rename's to repair, and git would only answer "not a valid path" for it.
+            if (tree / ".git").is_file():
+                trees.append(tree)
+        util.run(["git", "-C", str(clone), "worktree", "repair", *map(str, trees)],
+                 check=False, unset=workspace._GIT_ENV)
+        # Read back rather than trusting the exit code: a repair that reports success over a
+        # link git still cannot follow is exactly the success line ADR 0013 forbids.
+        # A listing that failed confirms nothing, so every tree is named rather than counted.
+        #
+        # No `prunable` filter, and that is not an oversight: git prints a linked tree's path
+        # from its `gitdir` file and calls it prunable when that file is missing or names a
+        # `.git` that is not there. A path it prints that matches a tree whose `.git` file was
+        # just seen is therefore never prunable — deleting the filter was measured green on Linux
+        # and macOS, and a half-repaired tree is listed at its OLD path, which never matches.
+        after = _worktrees_of(clone) or []
+        linked_back = {os.path.realpath(r["path"]) for r in after}
+        common = os.path.realpath(clone / ".git")
+        for tree in trees:
+            if (os.path.realpath(tree) in linked_back
+                    and _common_dir_of(tree) == common):
+                relinked += 1
+            else:
+                left.append((clone, tree))
+    return relinked, left
+
+
+def _worktrees_of(clone: Path) -> list[dict] | None:
+    """Every worktree git lists for *clone*, or ``None`` when git did not answer.
+
+    The clone's own checkout is among them, and is left out by the caller's `.git` FILE test:
+    a clone's `.git` is a directory (`workspace.is_clone`'s own line).
+    """
+    proc = util.run(["git", "-C", str(clone), "worktree", "list", "--porcelain"],
+                    check=False, unset=workspace._GIT_ENV)
+    return worktree.parse_porcelain(proc.stdout) if proc.returncode == 0 else None
+
+
+def _common_dir_of(tree: Path) -> str:
+    """The object store git inside *tree* reads, as a real path.
+
+    Relative to *tree* when git answers relatively. A git that finds no repository prints
+    nothing, which makes this *tree* itself — never a clone's `.git`, so it cannot pass for one.
+    """
+    proc = util.run(["git", "-C", str(tree), "rev-parse", "--git-common-dir"],
+                    check=False, unset=workspace._GIT_ENV)
+    return os.path.realpath(tree / proc.stdout.strip())
+
+
 def cmd_workspace_rename(args) -> int:
     """Rename a workspace: move workspaces/<old>/ → workspaces/<new>/ (clones, memory,
     refs, and manifest come along), fix the manifest name + liveness block, repoint
     the active session/terminal pointer + lock so a renamed active workspace stays
-    active, and repoint every chat that says it is in the workspace (#795) so none of
-    them is orphaned. For a LIVE workspace, commit the tracked move (manifest + memory)
-    so the rename propagates to the team."""
+    active, repoint every chat that says it is in the workspace (#795) so none of
+    them is orphaned, and relink every linked worktree of a moved clone (#963). For a LIVE
+    workspace, commit the tracked move (manifest + memory) so the rename propagates to the
+    team."""
     old, new = args.old, args.new
     if not workspace.valid_name(new):
         util.err(f"invalid workspace name '{new}' (use lowercase letters, digits, . _ -)")
@@ -399,8 +492,24 @@ def cmd_workspace_rename(args) -> int:
         r = _git(["ls-files", "-z", "--", f"workspaces/{old}"], cwd=config.ROOT)
         tracked_old = [p for p in r.stdout.split("\0") if p]
 
+    old_dir = workspace.workspace_dir(old).resolve()
     moved = workspace.rename(old, new)
     util.ok(f"Renamed workspace '{old}' → '{new}' (clones, memory, and manifest moved).")
+    relinked, left = _relink_worktrees(old_dir, new)
+    if relinked:
+        util.info(f"git reads {relinked} linked worktree(s) as linked to their clone at its "
+                  f"new place.")
+    for clone, tree in left:
+        # Named one by one with the command that finishes the job, and the rename is not rolled
+        # back: the move itself worked, and undoing it would only put the same links at risk
+        # again. What must not happen is the success line above standing for this tree too.
+        if tree is None:
+            util.warn(f"git could not list the worktrees of {clone}, so none of them was "
+                      f"relinked — repair each one that moved: "
+                      f"git -C {clone} worktree repair <its new path>")
+        else:
+            util.warn(f"git does not read {tree} as a worktree of {clone} after the rename "
+                      f"— repair it: git -C {clone} worktree repair {tree}")
     if moved:
         # #795: the chats came too. A rename that silently re-labels running conversations
         # is one the operator finds out about from a panel; this is the sibling of the
