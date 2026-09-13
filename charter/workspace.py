@@ -2753,8 +2753,9 @@ def _live_trees(tree: Path, exclude: Path) -> tuple[list[Path] | None, str]:
     in time with no `GIT_DIR` of the caller's; every entry but a bare repository's names a
     directory holding a `.git`; and none is marked prunable. Git 2.50.1 lists a
     `--separate-git-dir` clone's GIT DIRECTORY as its main worktree, so that clone never
-    entered the union; and `charter workspace rename` leaves git listing the old path as
-    prunable, so every launch of another workspace unhid the moved worktree's local file.
+    entered the union; and `charter workspace rename` left git listing the old path as
+    prunable, so every launch of another workspace unhid the moved worktree's local file. The
+    rename relinks its worktrees now (#963), but one whose relink failed still reads this way.
 
     **Git is not asked when the common directory has no `worktrees/`.** Git keeps every
     linked worktree's administrative directory there, so without one the only tree is

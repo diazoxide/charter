@@ -337,7 +337,14 @@ workspace has and no branches.
 - **`restore <name>`** — rebuild from that manifest on another machine: clone each repo,
   check out each branch.
 - **`rename <old> <new>`** — moves the clones and the memory, and commits the move if the
-  workspace is LIVE.
+  workspace is LIVE. A linked worktree records its clone by absolute path, and the clone
+  records it back the same way, so after the move charter runs `git worktree repair` from
+  each moved clone and reads both links back. That covers pieces under `.worktrees/`, a
+  worktree you made by hand inside the workspace, and one outside it that did not move. A
+  worktree git still cannot follow is named with the command that repairs it, `git -C
+  <clone> worktree repair <tree>`, and the rename is not undone. Until then git calls that
+  worktree prunable, and `git worktree prune` deletes its record while it may hold
+  uncommitted work.
 - **`remove <name>`** — deletes the workspace and its clones, and refuses if that would
   lose unpushed work.
 
