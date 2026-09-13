@@ -400,9 +400,23 @@ def _resolve_target(args, installed: str, locked: str | None) -> tuple[str | Non
     if locked and _parse(installed) < _parse(locked):
         return locked, False, None    # conforming to a pin somebody chose affects nobody
     latest = _latest()
+    if not latest:
+        if locked and not getattr(args, "bump", False):
+            # On or ahead of the pin (behind it returned above), so there is nothing to
+            # conform: this command never moved an ahead machine, and that drift is `charter
+            # version`'s to report. PyPI would only have decided whether to PROPOSE moving
+            # the pin, and `cmd_update` says that went unchecked rather than failing a team
+            # machine for being offline (#950). NOT with `--bump`: that asks to move past the
+            # pin, and to what is the question nothing answered.
+            return installed, False, None
+        # Every other answer from here is a comparison with *latest*, so without one there
+        # is no target — and saying so is `cmd_update`'s. This returned *installed* instead,
+        # which ran the rest of the update over a check nobody made and exited 0: the exact
+        # output of a plane that IS current (#950).
+        return None, False, None
     if not locked:
-        return latest or installed, False, latest
-    if latest and _parse(latest) > _parse(installed):
+        return latest, False, latest
+    if _parse(latest) > _parse(installed):
         if not getattr(args, "bump", False):
             return None, True, latest  # moving past the pin moves the TEAM
         return latest, False, latest
@@ -577,9 +591,26 @@ def cmd_update(args) -> int:
         util.info("  do it:  charter update --bump")
         return 0
     if target is None:
-        util.err("could not determine a target version (offline?). "
+        # NOT "(offline?)", and the same two candidates `version bump` names for the same
+        # condition (#941). `_latest` also comes back empty when PyPI DID reply and its
+        # answer could not be cached, so naming the network is a cause charter has not
+        # verified — ADR 0009. Exit 1 like bump's: no check was made, and exit 0 is what an
+        # agent reads as "current".
+        util.err("no version came back from PyPI to check against: either it did not "
+                 "answer, or its answer could not be cached. "
                  "Pass one explicitly: charter update --to X.Y.Z")
         return 1
+    if latest is None and not explicit and target == installed:
+        # Only the pin was checked, so only the pin is claimed. No "latest" and no "up to
+        # date": whether a newer release exists is the question nothing answered, and the
+        # two candidates are the refusal's above, so neither names a cause (ADR 0009).
+        # A pin is implied, not tested: without `--to`, no answer from PyPI and no pin,
+        # `_resolve_target` has no target and the refusal above has already returned.
+        where = (f"this machine is on the plane's pin {locked}" if installed == locked else
+                 f"this machine runs {installed}, ahead of the plane's pin {locked}")
+        util.info(f"{where}; whether a newer release is published could not be checked: "
+                  f"no version came back from PyPI, either it did not answer, or its "
+                  f"answer could not be cached.")
 
     # BEFORE anything moves, so an interrupted update still knows where it started.
     _stamp_baseline(installed)
