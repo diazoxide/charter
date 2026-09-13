@@ -2382,6 +2382,28 @@ class ARefsDirectoryAtModeZeroIsNamedNotRaised(RoundFiveCheckout):
                       f"cannot see; fix the symlink loop at {readme}", said)
         self.assertNotIn("read access", said)
 
+    def test_a_workspace_refs_directory_that_is_a_symlink_loop_is_named_where_doctor_names_it(self):
+        """#980: `structure_status` classified the workspace's own `refs/` as a loop, and then
+        `scaffold`'s `mkdir(exist_ok=True)` met the link — `exist_ok` forgives a directory, not a
+        link that resolves to none — so `reinit` ended in a `FileExistsError` instead of the
+        sentence the classification was gathered for.
+
+        The loop is `refs/` itself, and the sentence says so: `doctor` names that path, and
+        pointing at `refs/README.md` would send the reader to a file that is no link at all. The
+        link is left exactly as it was, and nothing is reported written there (ADR 0013)."""
+        refs = workspace.refs_dir(self.ws)
+        shutil.rmtree(refs)
+        refs.symlink_to(refs)
+        rc, said = self.reinit()
+        self.assertEqual(rc, 0, said)
+        self.assertIn(f"refs/README.md cannot be checked — charter writes nothing there it "
+                      f"cannot see; fix the symlink loop at {refs}.", said)
+        self.assertIn(f"{self.ws}/refs cannot be checked — fix the symlink loop at {refs}",
+                      doctor.check_ssh().hint)
+        for claim in ("read access", "Up to date", "Reinitialized"):
+            self.assertNotIn(claim, said)
+        self.assertEqual(os.readlink(refs), str(refs), "charter touched the link it cannot see")
+
     def test_a_baseline_file_it_may_not_read_is_told_to_restore_read_access(self):
         """The other half of the same split, at mode 000 — a refusal, and read access is what
         clears it. Never "fix the symlink loop", which there is none of."""

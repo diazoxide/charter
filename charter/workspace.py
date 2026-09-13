@@ -1729,7 +1729,13 @@ def scaffold(name: str) -> None:
     + additive."""
     scaffold_memory(name)
     refs = refs_dir(name)
-    refs.mkdir(parents=True, exist_ok=True)
+    # Never over a `refs/` the filesystem will not answer for (#980). `exist_ok` forgives a
+    # directory that is there; a symlink loop is a name that is there and resolves to no directory,
+    # so the `mkdir` raised `FileExistsError` out of `workspace reinit` after `structure_status` had
+    # already classified the loop for `reinit` to name. The README below is skipped by the same
+    # answer, so nothing is written into a path charter cannot see.
+    if _exists(refs, follow=True) is not None:
+        refs.mkdir(parents=True, exist_ok=True)
     rr = refs / "README.md"
     # `_exists`, never `Path.exists` (#942 final review): with the workspace's `refs/` at mode 000
     # that raised on 3.11–3.13, and on 3.14 answered False so the write below raised instead — a
@@ -2058,6 +2064,22 @@ def _existence(p: Path, follow: bool = False) -> tuple[bool | None, int | None]:
     except OSError as e:
         return None, e.errno
     return True, None
+
+
+def _stopped_at(p: Path, code: int) -> Path:
+    """The shallowest directory above *p* whose own `stat` meets *code* — else *p* itself, whose
+    check already met it.
+
+    A check through a symlink fails at the first component that fails, not at the path it asked
+    about (#980): with a workspace's `refs/` a loop, `refs/README.md` answers ELOOP, and "fix the
+    symlink loop at refs/README.md" sends the reader to a file that is no link at all, while
+    `doctor` names `refs/`, where the loop is. A directory that answers anything but *code* is not
+    taken for the cause, so a filesystem that changed in between costs precision and never names a
+    path that did not fail that way."""
+    for q in reversed(p.parents):
+        if _existence(q, follow=True) == (None, code):
+            return q
+    return p
 
 
 def _recorded(marker: dict, rel: str) -> tuple[str, ...]:
@@ -3543,7 +3565,8 @@ def structure_status(name: str) -> dict:
 
     ``unreadable`` carries the path and the errno the check met, not the rel alone: `reinit` words
     what clears each one (:func:`uncheckable_fix`), and a second `stat` to ask why would be a
-    different answer from the one this dict reports."""
+    different answer from the one this dict reports. The path is where that errno was met
+    (:func:`_stopped_at`), which is the rel's own path unless a directory above it is what fails."""
     # `_exists`, through symlinks (#942 review round 4): `Path.exists` raised on 3.11–3.13 for a
     # component that cannot be checked, crashing `workspace reinit` before it could say so. A
     # component that cannot be checked is not called missing — scaffolding over it is a write
@@ -3554,8 +3577,8 @@ def structure_status(name: str) -> dict:
     missing = [rel for rel, (_p, there, _code) in seen.items() if there is False]
     ver = structure_version(name)
     return {"ok": (not missing) and ver >= STRUCTURE_VERSION, "missing": missing,
-            "unreadable": [(rel, p, code) for rel, (p, there, code) in seen.items()
-                           if there is None],
+            "unreadable": [(rel, _stopped_at(p, code), code)
+                           for rel, (p, there, code) in seen.items() if there is None],
             "version": ver, "target": STRUCTURE_VERSION}
 
 
