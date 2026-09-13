@@ -2297,10 +2297,13 @@ def _in_the_way(p: Path, base: Path) -> tuple[Path, int] | None:
     for q in (*walk, p):
         try:
             link = stat.S_ISLNK(os.lstat(q).st_mode)
-        except (FileNotFoundError, NotADirectoryError):
-            return None  # absent, which a create makes
         except OSError:
-            return None  # not answered for
+            # ONE clause. Absent (ENOENT) is what a create makes, and unanswered (EACCES) is
+            # `_existence`'s `None` for `_stopped_at` to name; neither is in the way. The two
+            # clauses this was returned the same `None`, so CI's sweep narrowed either with the
+            # suite green: an equivalent pair is one clause. (A file above *q* beneath *base* is
+            # returned by the `stat` below one step earlier, so its ENOTDIR never reaches here.)
+            return None
         if q is p:
             return (p, errno.ELOOP) if link else None
         try:

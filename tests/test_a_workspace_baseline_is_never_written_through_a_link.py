@@ -234,6 +234,73 @@ class ALinkOrAFileWhereABaselineDirectoryBelongs(AWorkspaceWithABaseline):
         self.assertTrue((shared / "README.md").is_file(), "the README was not written through")
         self.assertFalse(any("cannot be created" in s for s in said), said)
 
+    def test_a_refs_linked_to_plane_data_outside_workspaces_is_still_followed(self):
+        """The other arm of the one conditional: `workspaces/` is the WORKSPACE DIRECTORY's
+        bound (#1062), and a directory beneath it answers to `contain`'s plane-data rule. A
+        `refs` shared with a persona's references lands in `personas/`, inside the plane's data
+        and outside `workspaces/`, so only this input tells the two rules apart for `refs`."""
+        refs = workspace.refs_dir(self.ws)
+        shared = config.PERSONAS_DIR / "steward" / "refs"
+        shared.mkdir(parents=True)
+        self.replaced_by_link(refs, shared)
+        self.assertEqual(workspace.structure_status(self.ws)["in_the_way"], [])
+        rc, said = self.reinit()
+        self.assertEqual(rc, 0, said)
+        self.assertTrue((shared / "README.md").is_file(), "the README was not written through")
+
+    def test_a_memory_linked_to_nothing_is_named_with_the_link_to_fix(self):
+        """`FileNotFoundError` from the `stat` of a directory whose `lstat` answered: a link to a
+        target that is gone. #1028's sentence, for `memory` from the same check as `refs`."""
+        memory = workspace.memory_dir(self.ws)
+        self.replaced_by_link(memory, self.outside / "gone")
+        rc, said = self.reinit()
+        self.assertEqual(rc, 0, said)
+        self.assertIn(f"'{self.ws}': memory/MEMORY.md cannot be created — {memory} is a symlink "
+                      f"whose target is not there, and charter writes nothing through it; "
+                      f"removing or repointing that link clears this.", said)
+        self.assertFalse(os.path.lexists(self.outside / "gone"))
+
+    def test_a_refs_linked_beneath_a_file_is_named_as_a_link_to_nothing(self):
+        """`NotADirectoryError` from that same `stat`: the link's target runs through a file, so
+        the name is there and resolves to nothing — the dangling link's answer, not a crash out
+        of the `mkdir` and not "added"."""
+        refs = workspace.refs_dir(self.ws)
+        (self.outside / "a-file").write_text("kept\n")
+        self.replaced_by_link(refs, self.outside / "a-file" / "sub")
+        with self.assertRaises(NotADirectoryError, msg="fixture: the target must raise ENOTDIR"):
+            os.stat(refs)
+        rc, said = self.reinit()
+        self.assertEqual(rc, 0, said)
+        self.assertIn(f"'{self.ws}': refs/README.md cannot be created — {refs} is a symlink whose "
+                      f"target is not there, and charter writes nothing through it; removing or "
+                      f"repointing that link clears this.", said)
+        self.assertEqual((self.outside / "a-file").read_text(), "kept\n")
+
+    def test_a_path_beneath_a_directory_it_may_not_search_is_never_called_in_the_way(self):
+        """The `lstat` that is refused rather than answered. `structure_status` asks this only of a
+        rel that answered, so no command reaches it but a race; asked of the function directly,
+        as #1028 asks its loop, because a refusal must come back as "not mine to name", never
+        raise out of `reinit`."""
+        if os.geteuid() == 0:
+            self.skipTest("root ignores the mode, so this says nothing about the clause")
+        refs = workspace.refs_dir(self.ws)
+        refs.chmod(0o000)
+        self.addCleanup(refs.chmod, 0o755)
+        with self.assertRaises(PermissionError, msg="fixture: the lstat must be refused"):
+            os.lstat(refs / "README.md")
+        self.assertIsNone(workspace._in_the_way(refs / "README.md", self.wd))
+
+    def test_a_directory_link_that_loops_is_never_called_in_the_way(self):
+        """The `stat` that is refused after its `lstat` answered: a `memory` link that loops raises
+        ELOOP, which is neither "resolves to nothing" nor "no directory". It is the uncheckable
+        kind, `_stopped_at`'s to name with "fix the symlink loop", so here it is `None`."""
+        memory = workspace.memory_dir(self.ws)
+        self.replaced_by_link(memory, memory)
+        with self.assertRaises(OSError, msg="fixture: the stat must loop") as caught:
+            os.stat(memory)
+        self.assertEqual(caught.exception.errno, errno.ELOOP)
+        self.assertIsNone(workspace._in_the_way(workspace.memory_index(self.ws), self.wd))
+
     def test_a_memory_linked_to_a_directory_inside_the_plane_is_still_followed(self):
         memory = workspace.memory_dir(self.ws)
         shared = self.wd / "shared-memory"
@@ -373,6 +440,28 @@ class TheStructureStampNeverFollowsALink(AWorkspaceWithABaseline):
         self.replaced_by_link(marker, target)
         workspace.scaffold(self.ws)
         self.assertEqual(target.read_text(), "kept\n", "the stamp wrote through the link")
+
+    def test_the_stamp_is_created_readable_and_not_executable_under_the_umask(self):
+        """The stamp is created by `os.open`, so its mode is the one spelled there: ``0o666`` less
+        the umask, as `write_text` created it. Pinned under two fixed umasks, so a mode that is
+        executable fails the first and one narrower than `write_text`'s — which would decide the
+        operator's umask for them — fails the second."""
+        marker = self.wd / ".charter-structure"
+        marker.unlink()
+        old = os.umask(0o022)
+        try:
+            workspace.scaffold(self.ws)
+        finally:
+            os.umask(old)
+        self.assertEqual(stat.S_IMODE(os.lstat(marker).st_mode), 0o644)
+        self.assertEqual(marker.read_text(), f"{workspace.STRUCTURE_VERSION}\n")
+        old = os.umask(0o000)
+        try:
+            marker.unlink()
+            workspace.scaffold(self.ws)
+        finally:
+            os.umask(old)
+        self.assertEqual(stat.S_IMODE(os.lstat(marker).st_mode), 0o666)
 
     def test_a_marker_that_is_a_fifo_does_not_hang_the_scaffold(self):
         """`scaffold` runs from `ensure` on a launch. `write_refusal` refused a FIFO by its mode;
