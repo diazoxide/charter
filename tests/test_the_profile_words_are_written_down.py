@@ -153,7 +153,15 @@ class TestTheNewsEntryKeepsItsShape(unittest.TestCase):
         self.assertLessEqual(set(keys), {"version", "headline", "check", "adopt",
                                          "lead", "security"},
                              "a key charter does not read renders as nothing at all")
-        self.assertEqual("unreleased", keys.get("version"))
+        # Staged or stamped, and nothing else. This asserted `unreleased` alone, which is
+        # true only until the release this entry exists to ship: `charter news stamp`
+        # rewrites the field to the version, and 0.61.0's own release PR went red on it.
+        # The class docstring already knew the stamp renames the file; the field moves in
+        # the same step. Not `{"unreleased", charter.__version__}`: that holds for exactly
+        # one release too, and goes red at the next bump, when this entry stays 0.61.0 and
+        # the tree does not.
+        self.assertRegex(keys.get("version", ""), r"^(unreleased|\d+\.\d+\.\d+)$",
+                         "version: is neither staged nor a release")
         self.assertEqual("reinit", keys.get("adopt"),
                          "the ignore line is what a plane adopts")
 
