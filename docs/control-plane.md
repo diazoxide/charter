@@ -452,7 +452,9 @@ charter only ever *shows* you that command — it never bumps on its own.
 refuses and asks for `--to`. It does not fall back to the cached reading `charter version`
 shows, which can be days old and older than the charter you are running. Before #937 it
 did fall back, and a failed request installed that older release over the running one and
-pushed it to the team as the pin.
+pushed it to the team as the pin. If PyPI answers with a release older than the charter you
+are running, it refuses too, before installing or writing anything. To pin a team back to an
+older release, name it: `charter version bump --to X.Y.Z`.
 
 On a plane that declares the [dev channel](install.md#4-the-dev-channel--trying-main-without-cutting-a-release),
 `charter version` never suggests this command, because a pin and the dev channel cannot

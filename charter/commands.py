@@ -3655,6 +3655,23 @@ def cmd_version_bump(args) -> int:
                      "or its answer could not be cached. "
                      "Pass one explicitly: charter version bump --to X.Y.Z")
             return 1
+        installed = _installed_version()
+        if update._parse(target) < update._parse(installed):
+            # BEFORE the install and the pin. A fresh answer can be older than what runs, and
+            # nothing compared the two: it was installed over the running build and written
+            # as the pin, so with `--push` every teammate conformed to it on their next
+            # session and a security fix they already had could go with it (#1017, the rule
+            # `charter update` follows for the same answer). Only inside the no-`--to`
+            # branch: pinning a fleet back to a known-good release is a real case, and it
+            # is asked for by naming the version. The remedy names none, because an agent
+            # handed `--to <that number>` would run the move this stops. No cause for the
+            # older answer either, because none was checked (ADR 0009). Equal is the
+            # charter already running, and pinning the team to it is what bump is for.
+            util.err(f"PyPI reported {target} as the newest release, which is older than "
+                     f"the {installed} this machine runs, so nothing was installed or "
+                     f"pinned. charter version bump pins an older version only when that "
+                     f"version is named: charter version bump --to X.Y.Z")
+            return 1
     if target != _installed_version():
         util.info(f"installing {target} to verify it before pinning the team to it …")
         ok, detail = sync_to(target)
