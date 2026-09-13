@@ -69,21 +69,27 @@ _SGR = re.compile(r"\x1b\[([0-9;]*)m")
 def _NOT_OPEN(ws: str) -> str:
     """What a click on a not-open workspace's tab puts on this fixture's attention row.
 
-    **This used to be a flat refusal and is now as far as an OPEN gets here.** A tab for a
-    workspace with no session opens it (`commands_frame._open_workspace`); what stops it in
-    *this* module is the next question along — which harness to open it with. The chats
-    these cases build record no `$CHARTER_HARNESS` and the isolated plane declares no
-    `[harness] default`, so the open refuses by name rather than starting something nobody
-    chose. That is deliberate and load-bearing for a test suite: **no case in this file may
-    ever start a real harness process**, and the assertion below is what would notice if
-    one became reachable.
+    **This is as far as an OPEN gets here, and the fixture arranges which stop it hits.**
+    A tab for a workspace with no session of this plane's opens it
+    (`commands_frame._open_workspace`), and letting that run to the end would build a whole
+    frame — a chat window, its panels, and a charter process in each — for every case in
+    this file. So :meth:`_ARealFrameWithBars._block_the_open` starts an UNMARKED session of
+    that workspace's name on this fixture's own server, and #793's cross-plane guard stops
+    the open there: charter cannot prove a session of that name is this plane's, so it
+    refuses rather than adding a window to what is probably another project's frame.
+
+    **It used to be the harness question that stopped it**, and that stop is gone: a chat
+    recording no profile now opens at the profile selector like any other. The promise the
+    old one carried is kept by the selector itself rather than by an accident of the
+    fixture — **no case in this file starts a harness process**, because the selector is
+    what a chat's pane runs until somebody picks one.
 
     Spelled here rather than imported, deliberately: it is the operator-visible sentence
     and this module's whole subject is that a click PRODUCES one. A constant read out of
     the module under test would follow a reworded sentence silently, and the wording is
     the thing. It carries the name, so a click that landed on the wrong tab fails here.
     """
-    return f"cannot open '{ws}': this chat records no profile"
+    return f"cannot open '{ws}': a session of that name is already running"
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -207,6 +213,15 @@ class _ARealFrameWithBars(PersonaIso):
                         env=self.env)
         self.assertEqual(started.returncode, 0, started.stderr)
         return started.stdout.strip()
+
+    def _block_the_open(self, ws: str) -> None:
+        """Stop a click on *ws*'s tab short of building a whole frame — see :func:`_NOT_OPEN`.
+
+        An unmarked session of that name on this fixture's own server: `_plane_session`
+        cannot prove it is this plane's, so the tab still reads as "not open" and the open
+        still runs, and #793's guard is what it lands on.
+        """
+        self.assertEqual(self._start_session(ws)[:1], "%")
 
     def _source_conf(self, fid: str) -> None:
         """charter's OWN frame config, `mouse = true`, and its own menu-button bind.
@@ -434,6 +449,7 @@ class ARealClickOnTheWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
         state.record_harness_pane(self.fid, self.harness)
         self._source_conf(self.fid)
         self.bar = self._split_bar(self.harness, "workspaces", self.fid)
+        self._block_the_open(self.THERE)
         # **The harness is put back in front, and that is the regime, not tidiness.**
         # `split-window` selects the pane it made, and a frame whose bar was the ACTIVE
         # pane would be reporting the mouse because THAT pane asked — the `mouse = false`
@@ -910,6 +926,7 @@ class ARealClickOnAWINDOWEDWorkspaceBarReachesTheSwitch(_ARealFrameWithBars,
         state.record_harness_pane(self.fid, self.harness)
         self._source_conf(self.fid)
         self.bar = self._split_bar(self.harness, "workspaces", self.fid)
+        self._block_the_open(self.THERE)
         self.assertEqual(self._tmux("select-pane", "-t", self.harness).returncode, 0)
         self.fd = self._attach(self.fid)
         self.assertTrue(
@@ -1049,40 +1066,32 @@ class ARealPressOnThePlusReachesTheCommandBehindIt(_ARealFrameWithBars,
     painted by a `charter panel chats` child, the report is decoded there, and
     `charter frame-new-chat` is started detached by that child.
 
-    **What this can and cannot say, stated rather than left to be discovered.**
-    `commands_frame.SOCKET` is a module constant — `"charter"`, the one shared server every
-    frame on this machine runs on — and `cmd_launch` uses it rather than the server the
-    frame recorded. So a case that let the launch RUN would build a session on the
-    operator's own live charter server, from a suite. That is the one thing no test in this
-    repository may do, so no test here does it: the launcher itself is asserted against a
-    stand-in by `tests/test_the_chat_bars_plus_makes_a_chat.py`, and what is real here is
-    everything up to it.
-
-    Everything is a great deal: the affordance is at the column the paint put it in, tmux
-    routes the report to a pane that is not active, the panel decodes it and tells a `+`
-    from a tab, the child resolves which frame it belongs to out of its own environment,
-    it establishes that this is charter's own server, it proves the workspace's session is
+    Every link is real: the affordance is at the column the paint put it in, tmux routes
+    the report to a pane that is not active, the panel decodes it and tells a `+` from a
+    tab, the child resolves which frame it belongs to out of its own environment, it
+    establishes that this is charter's own server, it proves the workspace's session is
     this plane's (`_plane_session` — a real `list-panes` against a real server), and it
-    reports on the frame's own attention row, which is the only surface a detached process
-    with `/dev/null` for stdout has. Every one of those is a link that was not there
-    before this change.
+    builds the chat.
 
-    **The stop this fixture reaches is the harness one, and it is reached honestly rather
-    than arranged.** The plane declares no `[harness] default` and the chats this fixture
-    plants record none, which is the migration state of every chat launched by a charter
-    that predates `state.record_identity`. So the last link — "which harness does the new
-    chat run" — has no answer, and the command says so instead of guessing. A case that
-    passed this by faking a harness would have to let the launch happen.
+    **It builds it HERE, and that is measured rather than assumed.** `commands_frame.SOCKET`
+    is a module constant — `"charter"`, the one shared server every frame on this machine
+    runs on — so a launch that took the private-server path would build a session on the
+    operator's own live charter server, from a suite, which is the one thing no test in this
+    repository may do. It does not: the detached child is started from a pane on THIS
+    fixture's server, so its `$TMUX` names this socket, `tmuxctl.is_operator_socket` answers
+    yes, and `_launch_in_operator_tmux` adds a window to the session the press came from.
+    Measured 2026-09-12 while the profile selector was wired to the `+`: the new window and
+    the new chat directory appear here, and `tmux -L charter list-sessions` is byte-identical
+    before and after.
+
+    **Until the selector, this fixture stopped one link earlier and could not say any of
+    that.** The plane declares no `[harness] default` and the chats it plants record none,
+    so "which harness does the new chat run" had no answer and the press refused by name —
+    which is exactly the stop the selector took away: a chat that records no profile opens
+    at the selector like any other.
     """
 
     WS = "alpha"
-
-    #: A word out of :data:`commands_frame.cmd_new_chat`'s harness refusal, spelled by hand
-    #: rather than imported: a constant read out of the module under test follows a
-    #: reworded sentence into a green run, which is the survivor this repository's sweep
-    #: reports. Short enough to survive a rewording that keeps the meaning, specific enough
-    #: that no other refusal on this path says it.
-    _NO_HARNESS = "records no profile this charter can launch"
 
     def setUp(self) -> None:
         super().setUp()
@@ -1137,40 +1146,44 @@ class ARealPressOnThePlusReachesTheCommandBehindIt(_ARealFrameWithBars,
         last cell of the row."""
         return self._tail_at() + len(self.TAIL) - 1
 
+    def _windows(self) -> list[str]:
+        return self._tmux("list-windows", "-t", self.WS,
+                          "-F", "#{window_id}").stdout.split()
+
     def test_a_press_on_the_plus_reaches_the_command_behind_it(self):
-        """The whole chain, end to end, with the answer coming back on the frame's own
-        row — which is where every outcome of a detached charter has to land."""
+        """The whole chain, end to end: the press really makes a chat, in this workspace,
+        on this server."""
+        before = self._windows()
         self._click(self.bar, col=self._plus())
         self.assertTrue(
-            _await(lambda: self._NO_HARNESS in state.notice(self.here)),
-            f"the press never reached the command: {state.notice(self.here)!r} — "
-            f"row {self._bar_row(self.bar)!r}")
+            _await(lambda: len(self._windows()) > len(before)),
+            f"the press never reached the command: windows {self._windows()}, "
+            f"chats {chats.of_workspace(self.WS)}, notice "
+            f"{state.notice(self.here)!r} — row {self._bar_row(self.bar)!r}")
+        self.assertEqual(chats.of_workspace(self.WS), [self.here, f"{self.WS}.2"])
 
-    def test_the_press_leaves_the_keyboard_on_the_harness(self):
+    def test_the_press_leaves_the_keyboard_on_a_harness_pane(self):
         """`docs/frame.md`'s promise, kept for the third gesture as well as the first two:
-        a click on a PANEL acts where it points and does not move the keyboard. Nothing
-        about making a chat changes that — the new chat's own window is what a successful
-        press would select, and that is tmux moving a client, not a pointer moving focus.
+        a click on a PANEL acts where it points and does not move the keyboard onto the
+        panel it was aimed at. The client does move — to the new chat's own window, which
+        is `select-window` and not a pointer moving focus — so what is asserted is the
+        panel it was clicked in, which is where a pointer-driven focus would have left it.
         """
         self._click(self.bar, col=self._plus())
-        self.assertTrue(_await(lambda: self._NO_HARNESS in state.notice(self.here)),
+        self.assertTrue(_await(lambda: len(chats.of_workspace(self.WS)) > 1),
                         "the press never arrived, so this proves nothing about focus")
-        self.assertEqual(self._active(), self.harness,
-                         "a press on the `+` took the keyboard off the harness")
+        self.assertNotEqual(self._active(), self.bar,
+                            "a press on the `+` took the keyboard onto the bar")
 
-    def test_a_press_that_could_not_finish_created_nothing(self):
-        """The negative that makes the refusal worth having: it stopped, and it stopped
-        BEFORE anything existed. One window on the server and one chat on the plane, after
-        a press that reached the command and declined."""
-        before = self._tmux("list-windows", "-t", self.WS, "-F", "#{window_id}").stdout
+    def test_the_press_makes_exactly_one_chat(self):
+        """One press, one chat — the property a press repeated by a stray release, or a
+        report decoded twice, would break. Waiting first, then reading again after a beat,
+        is what makes it a count rather than a race."""
         self._click(self.bar, col=self._plus())
-        self.assertTrue(_await(lambda: self._NO_HARNESS in state.notice(self.here)))
+        self.assertTrue(_await(lambda: len(chats.of_workspace(self.WS)) > 1))
         time.sleep(1.5)
-        self.assertEqual(
-            self._tmux("list-windows", "-t", self.WS, "-F", "#{window_id}").stdout,
-            before, "a refused press still added a window")
-        self.assertEqual(chats.of_workspace(self.WS), [self.here],
-                         "a refused press still made a chat directory")
+        self.assertEqual(chats.of_workspace(self.WS), [self.here, f"{self.WS}.2"])
+        self.assertEqual(len(self._windows()), 2, self._windows())
 
     def test_the_strip_really_draws_both_affordances(self):
         """**What #921 is about, on a real pane.** The strip advertising `+` and nothing

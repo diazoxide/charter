@@ -979,12 +979,14 @@ class FreshIsARunThatDoesNotParticipate(PersonaIso, unittest.TestCase):
             f'schema = 1\n\n[harness]\ndefault = "{harness}"\n')
         config.use(self.tmp)
 
-    def test_bare_charter_fresh_becomes_the_planes_harness_carrying_the_flag(self):
+    def test_bare_charter_fresh_becomes_the_selector_carrying_the_flag(self):
+        """The flag rides after the name the rewrite puts in front of it, which is the one
+        position `_split_frame_argv` reads charter's own flags in."""
         self._plane_defaults_to("claude")
         with mock.patch.object(cli.sys.stdout, "isatty", return_value=True):
             argv, rc = cli._bare_launch(["--fresh"])
         self.assertIsNone(rc)
-        self.assertEqual(argv, ["claude", "--fresh"])
+        self.assertEqual(argv, ["frame", "--select", "--fresh"])
 
     def test_a_word_that_is_not_charters_own_flag_is_still_a_subcommand(self):
         """The rewrite widens by exactly one token and no further: anything else in `argv`
@@ -995,14 +997,15 @@ class FreshIsARunThatDoesNotParticipate(PersonaIso, unittest.TestCase):
             self.assertEqual(cli._bare_launch(["--fresh", "doctor"]),
                              (["--fresh", "doctor"], None))
 
-    def test_a_plane_that_names_no_harness_is_still_a_usage_error(self):
-        """The rewrite is gated on a declared `[harness] default` exactly as bare `charter`
-        is: charter does not guess a harness for somebody who never named one, and adding a
-        flag does not make it start guessing."""
+    def test_a_plane_that_names_no_harness_still_opens_the_selector(self):
+        """The rewrite is gated on a terminal and on nothing else now: charter still does
+        not guess a harness for somebody who never named one — it opens the selector and
+        asks — and adding a flag changes neither half."""
         (self.tmp / "charter.toml").write_text("schema = 1\n")
         config.use(self.tmp)
         with mock.patch.object(cli.sys.stdout, "isatty", return_value=True):
-            self.assertEqual(cli._bare_launch(["--fresh"]), (["--fresh"], None))
+            self.assertEqual(cli._bare_launch(["--fresh"]),
+                             (["frame", "--select", "--fresh"], None))
 
     def test_the_flag_reaches_the_launcher_rather_than_the_harness(self):
         parser = cli.build_parser()

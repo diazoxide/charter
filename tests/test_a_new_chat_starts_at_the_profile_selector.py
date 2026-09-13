@@ -31,20 +31,31 @@ module drives `launcher.start`.
 
 from __future__ import annotations
 
+import inspect
+import itertools
+import json
 import os
+import shutil
+import subprocess
+import sys
+import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
 import re
-import threading
 
-from charter import config, contain, doctor, profiles, profiletrust, tui, util, wiring
-from charter.frame import chats, launcher, leave, overlay, palette, selector, state
-from tests import _gitguard
+from charter import (commands_frame, config, contain, doctor, profiles, profiletrust, tui,
+                     util, wiring)
+from charter.frame import (chats, launcher, leave, overlay, palette, selector, state,
+                           tmuxctl)
+from charter.frame import reopen as reopen_state
+from tests import _gitguard, _tmuxreap, _tmuxsocket, _ttyguard
 from tests._isolation import (APipe, ATerminal, PersonaIso, Typed, approve_every_profile,
-                              approve_profile, declare_profiles, make_plane, wired_as_today)
+                              approve_profile, declare_profiles, make_plane,
+                              no_background_refresh, no_update_check_in, wired_as_today)
 from tests.test_a_profile_is_wired_or_refuses import entry, listing, spawns
 
 #: A profile whose row can run: on `PATH`, approved and wired. The fixture's `which` says
@@ -1290,6 +1301,694 @@ class TheSurfaceDrawsTheFooterItWasGiven(unittest.TestCase):
         self.assertNotIn("\n", line)
         self.assertNotIn("\x1b[31m", line)
         self.assertIn(contain.one_line("\x1b[31m"), line)
+
+
+
+def _completed(argv, rc=0, out="", err=""):
+    return subprocess.CompletedProcess(argv, rc, stdout=out, stderr=err)
+
+
+class _AServerWithOneWorkspaceRunning:
+    """The four answers a selector launch reads off tmux, and a log of everything it asked.
+
+    Deliberately small: what every case in `WhereItAppears` is about is which question was
+    asked and what charter did with the answer, not what a real server would do next.
+    """
+
+    def __init__(self, *, clients=(), sessions=("beta",), chats=("beta.1",), dead=None):
+        #: What `#{pane_dead}:#{pane_dead_status}` answers, or ``None`` for a pane that is
+        #: still running. The one tmux question whose answer decides what a launch SAYS
+        #: on its way out, which is why it is a knob rather than a constant.
+        self.dead = dead
+        self.clients = list(clients)
+        self.sessions = list(sessions)
+        self.chats = list(chats)
+        self.calls: list[list[str]] = []
+        #: Run inside the `new-window` answer, where `state.record_waiting` has happened
+        #: and tmux has not: the one moment "before tmux" can be read.
+        self.at_new_window = lambda: None
+
+    @staticmethod
+    def _lines(rows) -> str:
+        # One per line and NOTHING at all for none — a bare newline reads as one client
+        # with a blank name, which is the opposite answer.
+        return "".join(f"{r}\n" for r in rows)
+
+    def __call__(self, cmd, **kw):
+        self.calls.append(list(cmd))
+        if "list-panes" in cmd:
+            return _completed(cmd, 0, f"$3\t%0\t{config.STATE_DIR}\n")
+        if "list-clients" in cmd:
+            return _completed(cmd, 0, self._lines(self.clients))
+        if "list-sessions" in cmd:
+            return _completed(cmd, 0, self._lines(self.sessions))
+        if "list-windows" in cmd:
+            return _completed(cmd, 0, self._lines(self.chats))
+        if "new-window" in cmd or "new-session" in cmd:
+            self.at_new_window()
+            # And the server now HAS what was just created. `_launch` reaps again on its
+            # way out, against this same listing — so a fake that kept answering "nothing
+            # is running" would have charter collect the chat directory it had just
+            # written, and every case reading that chat's state would read an empty one.
+            self.sessions.append("beta")
+            self.chats.append("beta.1")
+            return _completed(cmd, 0, "%9\n")
+        if "kill-window" in cmd and self.dead is not None:
+            # A dead pane's window is closed by the launch, and a server that went on
+            # listing it would tell the launch the chat is still running — which is what
+            # keeps its directory from the closing reap, and reality does not.
+            self.chats = [c for c in self.chats if c != "beta.1"]
+            return _completed(cmd, 0)
+        if "display-message" in cmd:
+            if "pane_dead" in cmd[-1] and self.dead is not None:
+                return _completed(cmd, 0, self.dead)
+            return _completed(cmd, 0, "132:43")
+        return _completed(cmd, 0)
+
+    def asked(self, verb: str) -> int:
+        return sum(1 for c in self.calls if verb in c)
+
+    def argv_of(self, verb: str) -> list[str]:
+        return next(c for c in self.calls if verb in c)
+
+
+class WhereItAppears(_APlaneWithProfiles, unittest.TestCase):
+    """Which opens reach the selector, and which name their profile and skip it.
+
+    Bare `charter`, `+`, a workspace tab and the palette's new chat all open at it. Every
+    open nobody is at — reopen, a restored plane, a handoff — names its profile, because a
+    selector is a question and there is nobody there to answer one.
+    """
+
+    #: The id a launch allocates here. `state.reap` takes the cold `beta.1` this fixture
+    #: leaves behind before `new_chat_id` walks upward from 1, so the new chat gets that
+    #: ordinal back — spelled out rather than inferred, because a case reading the wrong
+    #: chat's state is a case that passes for the wrong reason.
+    NEW = "beta.1"
+
+    def setUp(self) -> None:
+        super().setUp()
+        (config.WORKSPACES_DIR / "beta").mkdir(parents=True, exist_ok=True)
+        state.frame_dir("beta.1", create=True)
+        state.record_workspace("beta.1", "beta")
+        state.record_server("beta.1", commands_frame.SOCKET)
+        state.record_harness_pane("beta.1", "%0")
+        self.enterContext(mock.patch.object(commands_frame, "_spawn_gather"))
+        self.enterContext(mock.patch.object(commands_frame, "_drawable_slots",
+                                            return_value=[]))
+        self.focused: list = []
+        self.enterContext(mock.patch.object(
+            commands_frame, "_focus_workspace",
+            side_effect=lambda *a, **kw: self.focused.append((a, kw)) or 0))
+        # The controls here name a profile, and a launch that names one probes its wiring
+        # before tmux (ruling 10): stated, as Task 4's modules state it, because no case in
+        # this class is about wiring and each would otherwise be refused "could not tell".
+        wired_as_today(self)
+
+    def _launch(self, fake, **ns) -> int:
+        args = SimpleNamespace(**{"harness": "", "rest": [], "no_frame": False,
+                                 "workspace": "beta", "pick": False, "select": True,
+                                 "start": "", "profile": None, **ns})
+        stripped = {k: v for k, v in os.environ.items()
+                    if k not in ("TMUX", "TMUX_PANE")}
+        with mock.patch.dict(os.environ, stripped, clear=True), \
+                mock.patch("charter.commands_frame.subprocess.run", side_effect=fake), \
+                mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
+                mock.patch("sys.stdout.isatty", return_value=True), \
+                mock.patch("sys.stdin.isatty", return_value=False):
+            return commands_frame._launch(args)
+
+    def test_bare_charter_on_a_workspace_nobody_is_attached_to_attaches(self):
+        """Ruling 17. `_workspace_to_focus` answers `None` for a live workspace with no
+        client on it — rightly, for a launch that NAMES something: with nobody to drag, it
+        should add its chat and run it. A bare `charter` names nothing, so opening a second
+        selector beside chats that are already running would be charter adding a chat
+        nobody asked for. `+` is how you add one."""
+        fake = _AServerWithOneWorkspaceRunning(clients=[])
+        self.assertEqual(self._launch(fake), 0)
+        self.assertEqual(len(self.focused), 1)
+        self.assertEqual(fake.asked("new-window"), 0)
+        self.assertEqual(fake.asked("new-session"), 0)
+
+    def test_a_named_profile_on_that_workspace_still_opens_a_chat(self):
+        """The other half of ruling 17, and the control for the case above: `charter
+        <profile>` keeps today's open-a-chat-where-nobody-is behaviour."""
+        fake = _AServerWithOneWorkspaceRunning(clients=[])
+        self._launch(fake, harness="claude", select=False, profile="claude")
+        self.assertEqual(self.focused, [])
+        self.assertEqual(fake.asked("new-window"), 1)
+
+    def test_a_workspace_somebody_is_on_is_attached_to_either_way(self):
+        fake = _AServerWithOneWorkspaceRunning(clients=["/dev/ttys001"])
+        self._launch(fake)
+        self.assertEqual(len(self.focused), 1)
+
+    def test_a_workspace_with_nothing_running_opens_the_selector(self):
+        """The negative control: with no live session there is nothing to attach to, so
+        the launch opens a chat — at the selector."""
+        fake = _AServerWithOneWorkspaceRunning(sessions=[], chats=[])
+        self._launch(fake)
+        self.assertEqual(self.focused, [])
+        self.assertEqual(fake.asked("new-session"), 1)
+
+    def test_the_selector_launch_records_the_chat_as_waiting_before_tmux(self):
+        """Before, and not after: a quit landing between the window and the pick must not
+        record a chat that is a question on a screen."""
+        fake = _AServerWithOneWorkspaceRunning(sessions=[], chats=[])
+        seen: list[bool] = []
+        fake.at_new_window = lambda: seen.append(state.is_waiting(self.NEW))
+        self._launch(fake)
+        self.assertEqual(seen, [True])
+
+    def test_a_launch_that_names_its_profile_records_no_waiting_pane(self):
+        fake = _AServerWithOneWorkspaceRunning(sessions=[], chats=[])
+        seen: list[bool] = []
+        fake.at_new_window = lambda: seen.append(state.is_waiting(self.NEW))
+        self._launch(fake, harness="claude", select=False, profile="claude")
+        self.assertEqual(seen, [False])
+
+    def test_the_window_starts_on_the_launcher_with_no_inherited_kind(self):
+        """Review 12. `_frame_env` keeps `$CHARTER_HARNESS` from this process where no
+        harness was resolved, and the process that presses `+` is a panel of a chat that
+        HAS one — so without the clear, the pressing chat's kind rides onto the new
+        window's `-e` and into its identity record, and `chats.harness_of` then answers for
+        a chat that has picked nothing."""
+        fake = _AServerWithOneWorkspaceRunning(sessions=[], chats=[])
+        with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "codex"}):
+            self._launch(fake, start="claude-work")
+        argv = fake.argv_of("new-session")
+        self.assertEqual(argv[-4:], ["--select", "--attended", "--start", "claude-work"])
+        self.assertIn("CHARTER_HARNESS=", argv)
+        self.assertEqual(state.identity(self.NEW).get("CHARTER_HARNESS"), "")
+
+    def test_no_start_puts_no_name_on_the_launchers_argv(self):
+        fake = _AServerWithOneWorkspaceRunning(sessions=[], chats=[])
+        self._launch(fake)
+        argv = fake.argv_of("new-session")
+        self.assertEqual(argv[-2:], ["--select", "--attended"])
+        self.assertNotIn("--start", argv)
+
+    def test_the_planes_default_is_the_row_a_bare_launch_opens_on(self):
+        self.local.write_text(self.local.read_text()
+                              + '\n[harness]\ndefault = "claude-work"\n')
+        fake = _AServerWithOneWorkspaceRunning(sessions=[], chats=[])
+        self._launch(fake)
+        self.assertEqual(fake.argv_of("new-session")[-2:], ["--start", "claude-work"])
+
+    def test_select_with_no_frame_is_refused_rather_than_execd(self):
+        """`--no-frame` reaches `bypass`, which `os.execvp`s the launcher — a whole modal
+        surface over the operator's own terminal and then a harness with no frame around
+        it. Two launches asked for at once."""
+        said: list[str] = []
+        fake = _AServerWithOneWorkspaceRunning()
+        with mock.patch.object(commands_frame.util, "err", side_effect=said.append):
+            rc = self._launch(fake, no_frame=True)
+        self.assertEqual(rc, 2)
+        self.assertEqual(fake.calls, [])
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("--no-frame", said[0])
+
+    def test_select_with_a_command_is_refused_rather_than_swallowing_it(self):
+        """`charter frame -- <cmd>` is the escape hatch for a command charter has never
+        met. A selector cannot run it and cannot ask about it, so asking for both is
+        refused — a launcher that swallowed a command would be wrong in the one direction
+        this module refuses everywhere else, silently."""
+        said: list[str] = []
+        fake = _AServerWithOneWorkspaceRunning()
+        with mock.patch.object(commands_frame.util, "err", side_effect=said.append):
+            rc = self._launch(fake, rest=["--", "htop"])
+        self.assertEqual(rc, 2)
+        self.assertEqual(fake.calls, [])
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("htop", said[0])
+
+    def test_the_command_it_refuses_is_repeated_back_escaped(self):
+        """Ruling 35's reason through another door: this is the operator's own word, and
+        it goes to a terminal."""
+        said: list[str] = []
+        fake = _AServerWithOneWorkspaceRunning()
+        with mock.patch.object(commands_frame.util, "err", side_effect=said.append):
+            self._launch(fake, rest=["--", "ht\rop\x1b[2K"])
+        self.assertNotIn("\r", said[0])
+        self.assertNotIn("\x1b", said[0])
+        self.assertIn("\\u000d", said[0])
+
+    def _closing_pane(self, *, waiting: bool, code: int, recorded: bool = False,
+                      picked: bool = False, **ns) -> str:
+        """A launch whose pane is already dead with *code*, said the way tmux says it.
+
+        The two sentences this is about are written after the pane has gone: charter asks
+        `#{pane_dead_status}` eagerly, kills the window and then reports. So the fixture
+        answers that question and lets `_launch` run to its end.
+
+        *recorded* puts the new chat in the plane's record first, which is the premise of
+        the recorded-plane sentence at all: without it that sentence says nothing whatever
+        else is true, and a case about it would pass for the wrong reason. *picked* clears
+        the waiting marker as the window opens — a selector whose pane picked a profile and
+        whose harness then died before the frame was drawn.
+        """
+        if recorded:
+            reopen_state.write([reopen_state.Frame(workspace="beta", chats=(
+                reopen_state.Chat(chat=self.NEW, workspace="beta", persona="",
+                                  harness="claude-code", cwd="", resume="conv-1",
+                                  transcript="", active=True),))], focus="beta")
+        said: list[str] = []
+        fake = _AServerWithOneWorkspaceRunning(sessions=[], chats=[], dead=f"1:{code}")
+        if picked:
+            fake.at_new_window = lambda: state.clear_waiting(self.NEW)
+        with mock.patch.object(commands_frame.util, "err", side_effect=said.append), \
+                mock.patch.object(commands_frame.util, "info", side_effect=said.append):
+            # `fresh`: a plane with a record and nothing running RESTORES that record on
+            # an open (#845), and these cases are about the tail of an open, not a restore.
+            self._launch(fake, harness="" if waiting else "claude", fresh=recorded,
+                         select=waiting, profile=None if waiting else "claude", **ns)
+        return " ".join(said)
+
+    def test_a_cancelled_selector_says_nothing_about_a_death_or_a_recorded_plane(self):
+        """The pane started nothing, so neither sentence can be true of it: one names a
+        command that died and the other offers `charter reopen` for a chat the record does
+        not hold (`leave.plan` passes over a waiting pane).
+
+        *recorded*, so the second half is a measurement: the record DOES name this chat
+        here, and only the waiting marker keeps the sentence back."""
+        said = self._closing_pane(waiting=True, code=selector.CANCELLED_EXIT, recorded=True)
+        self.assertNotIn("before the frame was drawn", said)
+        self.assertNotIn(commands_frame.SELECTOR_DISPLAY, said)
+        self.assertNotIn("reopen", said)
+
+    def test_a_pane_that_picked_and_then_died_still_says_so(self):
+        """The control, and the reason the suppression reads the marker rather than the
+        exit code: a harness that exits 130 because somebody pressed Ctrl-C at its own
+        prompt cleared the marker when it was picked, so it reads as the death it is —
+        the SAME number the case above suppresses, which is what makes this a control
+        rather than a second case about a different input. And the record naming it is
+        said, which is what shows the case above was held back by the marker alone."""
+        said = self._closing_pane(waiting=False, code=selector.CANCELLED_EXIT, recorded=True)
+        self.assertIn("before the frame was drawn", said)
+        self.assertIn("claude", said)
+        self.assertIn("charter reopen", said)
+
+    def test_a_launch_that_is_nobodys_terminal_never_says_the_plane_is_recorded(self):
+        """`_wants_attach`, the other half of that gate: a launch that never became the
+        operator's terminal — a detached tab open, a reopen building chats — hands nobody a
+        shell to read the sentence on, and a reopen would be naming `charter reopen` while
+        `charter reopen` was putting the chat back."""
+        said = self._closing_pane(waiting=False, code=7, recorded=True, attach=False)
+        self.assertNotIn("reopen", said)
+
+    def test_a_selector_whose_pick_died_before_the_frame_names_the_selector(self):
+        """What an early death names for a pane that opened at the selector: the selector,
+        in words — never `python -P -m charter frame-launch --select`, an answer to a
+        question nobody asked, and never a profile, because which one was picked is known
+        only inside that pane."""
+        said = self._closing_pane(waiting=True, code=7, picked=True)
+        self.assertIn("before the frame was drawn", said)
+        self.assertIn("the profile selector", said)
+        self.assertNotIn("frame-launch", said)
+
+    def test_the_operators_own_tmux_records_the_same_two_things(self):
+        """The other launch path, and it needs its own case because it writes its own
+        records: a frame built as a window in the tmux the operator already had goes
+        through `_launch_in_operator_tmux`, not through the private-server branch above.
+        Both halves — the waiting marker before tmux, and no kind on the window — are what
+        `launcher._picked` fills in at the pick, so a path that skipped either would leave
+        a chat claiming a harness it has not started."""
+        def answer(cmd, **kw):
+            if not cmd or cmd[0] != "tmux":
+                return _completed(cmd, 0)
+            return _completed(cmd, 0, "%7\n")
+
+        with mock.patch("charter.commands_frame.subprocess.run", side_effect=answer), \
+                mock.patch.object(commands_frame, "_wait_for_harness", return_value=130), \
+                mock.patch.dict(os.environ, {"CHARTER_HARNESS": "codex"}):
+            commands_frame._launch_in_operator_tmux(
+                "op", "$1", ws="beta", argv=launcher.argv_select("claude"),
+                display=[commands_frame.SELECTOR_DISPLAY], profile="", h=None,
+                v=(3, 7), picked=False, selecting=True)
+        self.assertTrue(state.is_waiting("beta.2"))
+        self.assertEqual(state.identity("beta.2").get("CHARTER_HARNESS"), "")
+
+    def _in_the_operators_tmux(self, *states, select: bool = True) -> tuple[int, str]:
+        """`_launch_in_operator_tmux` to its end, with the pane answering *states* in turn.
+
+        `_pane_state` is what both of that path's reads of the pane go through — the eager
+        one after the start and `_wait_for_harness`'s loop — so answering it, rather than
+        `_wait_for_harness`, is what lets the case see what the path does with a pane that
+        VANISHED: which is how a cancelled selector ends there, because its launcher closes
+        its own window (`launcher._close_the_cancelled_chat`) and nothing sets
+        `remain-on-exit` on a window that is gone.
+        """
+        def answer(cmd, **kw):
+            if not cmd or cmd[0] != "tmux":
+                return _completed(cmd, 0)
+            # `new-window -P` answers the window AND the pane, and a path that could not
+            # read both would stop long before the pane is asked anything.
+            return _completed(cmd, 0, "@1 %7\n" if "new-window" in cmd else "%7\n")
+
+        queue = list(states)
+        said: list[str] = []
+        with mock.patch("charter.commands_frame.subprocess.run", side_effect=answer), \
+                mock.patch.object(commands_frame, "_pane_state",
+                                  side_effect=lambda *a: queue.pop(0) if len(queue) > 1
+                                  else queue[0]), \
+                mock.patch.object(commands_frame.util, "err", side_effect=said.append), \
+                mock.patch.object(commands_frame.util, "warn", side_effect=said.append):
+            rc = commands_frame._launch_in_operator_tmux(
+                "op", "$1", ws="beta",
+                argv=(launcher.argv_select("claude") if select
+                      else launcher.argv("claude", [], attended=True)),
+                display=([commands_frame.SELECTOR_DISPLAY] if select else ["claude"]),
+                profile="" if select else "claude", h=None, v=(3, 7), picked=False,
+                selecting=select)
+        return rc, " ".join(said)
+
+    def test_esc_at_the_selector_in_the_operators_tmux_is_a_cancel_not_a_dead_harness(self):
+        """S2 on the other server, and the plan expects 130 on BOTH. The pane was alive when
+        the frame was drawn and is simply gone afterwards — Esc closed its own window — and
+        the waiting marker is what says no harness ever ran there: nothing is printed about
+        a harness's exit code nobody can know, and the launch ends on the cancel's own
+        number. Found by the coordinator in an exported tree, where it said "the frame's
+        window is gone" and exited 1."""
+        rc, said = self._in_the_operators_tmux((commands_frame._ALIVE, None),
+                                               (commands_frame._GONE, None))
+        self.assertEqual(rc, selector.CANCELLED_EXIT)
+        self.assertEqual(said, "")
+
+    def test_a_selector_gone_before_the_frame_was_drawn_is_a_cancel_too(self):
+        """The eager read's branch: the pane vanished before anything was drawn around it.
+        Still a pane no harness ran in, so still the cancel's number and nothing said."""
+        rc, said = self._in_the_operators_tmux((commands_frame._GONE, None))
+        self.assertEqual(rc, selector.CANCELLED_EXIT)
+        self.assertEqual(said, "")
+
+    def test_a_selector_pane_tmux_kept_dead_is_closed_and_still_ends_on_the_cancel(self):
+        """The launcher could not close its window, so `remain-on-exit` kept the dead pane —
+        here with the EMPTY status a pane leaving raw mode on Linux reads as, which tmux
+        reports as `_UNKNOWN_DEATH_CODE`. Still a cancel: nothing said, the cancel's own
+        number rather than tmux's, and the window charter opened taken back rather than
+        left in the operator's session."""
+        closed: list = []
+        real = commands_frame.tmuxctl.run
+
+        def run(what, argv, **kw):
+            if "kill-window" in argv:
+                closed.append(argv)
+            return real(what, argv, **kw)
+
+        with mock.patch.object(commands_frame.tmuxctl, "run", side_effect=run):
+            rc, said = self._in_the_operators_tmux((commands_frame._ALIVE, None),
+                                                   (commands_frame._DEAD,
+                                                    commands_frame._UNKNOWN_DEATH_CODE))
+        self.assertEqual((rc, said), (selector.CANCELLED_EXIT, ""))
+        self.assertEqual(len(closed), 1, closed)
+        self.assertEqual(state.exit_code("beta.2"), selector.CANCELLED_EXIT)
+
+    def test_a_harness_whose_window_vanished_in_the_operators_tmux_still_says_so(self):
+        """The control: a pane that picked — or never waited — is a harness, and a harness
+        whose window is gone has an exit code charter cannot know, which it says."""
+        with mock.patch.object(commands_frame, "_await_the_launcher",
+                               return_value=(None, "")):
+            rc, said = self._in_the_operators_tmux((commands_frame._ALIVE, None),
+                                                   (commands_frame._GONE, None),
+                                                   select=False)
+        self.assertEqual(rc, commands_frame._UNKNOWN_DEATH_CODE)
+        self.assertIn("the frame's window is gone", said)
+
+    def test_the_waiting_marker_is_read_before_the_claim_that_protects_it_is_released(self):
+        """`state.reap` spares a chat directory only while its launch still holds the claim
+        (#685), and a cancelled selector's window is gone — so the instant `clear_claim`
+        runs, ANOTHER launch's reap may take the directory and the marker with it. Read
+        after that, the marker says "a harness ran here" and the cancel is reported as a
+        plane to reopen. Stood in as exactly that reap, at exactly that instant."""
+        real = state.clear_claim
+
+        def released_and_reaped(fid):
+            real(fid)
+            state.clear_waiting(fid)
+
+        with mock.patch.object(commands_frame.state, "clear_claim",
+                               side_effect=released_and_reaped):
+            said = self._closing_pane(waiting=True, code=selector.CANCELLED_EXIT,
+                                      recorded=True)
+        self.assertNotIn("reopen", said)
+
+    def test_a_reopen_never_opens_the_selector(self):
+        """An open nobody is at names its profile: there is no one there to pick."""
+        args = commands_frame._reopen_args(
+            SimpleNamespace(workspace="beta", persona="", cwd="", resume="", brief=""),
+            harness_name="claude", profile="claude-work", rest=[], reopening=None)
+        self.assertFalse(getattr(args, "select", False))
+        self.assertEqual(args.profile, "claude-work")
+
+    def test_a_handoff_never_opens_the_selector(self):
+        """#956's own rule read through profiles: the chat opened in the background takes
+        the calling chat's profile, and a selector would stop it before it started —
+        nobody is at a background open to answer a question."""
+        state.record_profile("beta.1", "claude")
+        (config.WORKSPACES_DIR / "gamma").mkdir(parents=True, exist_ok=True)
+        seen: list = []
+        # The launcher's own `PATH` check runs before a background open, and `claude` is
+        # not on CI's — `charter.commands_frame.shutil` is the module, so this is the
+        # answer that check gets.
+        with mock.patch("charter.commands_frame.shutil.which", return_value="/nowhere/x"), \
+                mock.patch.object(commands_frame, "cmd_launch",
+                               side_effect=lambda a: seen.append(a) or 0), \
+                mock.patch.object(commands_frame, "_plane_session",
+                                  return_value=("$3", "beta.1")), \
+                mock.patch.object(commands_frame, "_window_size", return_value=(120, 40)), \
+                mock.patch.object(commands_frame, "_live_sessions", return_value=set()):
+            commands_frame.open_in_background(
+                "gamma", caller="beta.1",
+                first_message="pick up the review notes in gamma")
+        self.assertEqual(len(seen), 1, seen)
+        self.assertFalse(getattr(seen[0], "select", False))
+        self.assertEqual(seen[0].profile, "claude")
+
+_HAS_TMUX = shutil.which("tmux") is not None
+
+#: A fresh socket per CASE, never per class — a server told to exit is still accepting on
+#: its socket for a few milliseconds, and the next case's `new-session` draws that race.
+_SERVERS = itertools.count()
+
+#: This checkout, for the `$PYTHONPATH` the pane's own launcher needs. `python -P -m
+#: charter` keeps the child's cwd off `sys.path` (#390) and its cwd is a workspace
+#: directory, so without this the pane cannot import the charter under test.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _eventually(predicate, timeout: float = 20.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.05)
+    return bool(predicate())
+
+
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class TheSelectorOnARealServer(PersonaIso, unittest.TestCase):
+    """The selector in a REAL chat pane, driven by real keystrokes through a real tmux.
+
+    **Nothing here is patched inside the pane.** The keys go in with `send-keys`, which is
+    what makes this the measurement the plan asks for rather than a second unit test: the
+    pane really puts its terminal into raw mode (`palette.own_the_tty`), really paints the
+    alternate screen, and really `exec`s the profile's command on Enter. That raw-mode call
+    is the one thing ADR 0018's previous amendment deliberately avoided after a `tcsetattr`
+    from a launcher pane was measured leaving the process killed by a signal on a Linux
+    runner — so this is where that stops being an argument.
+
+    The launch runs on a WORKER, because `_launch` owns this thread until the pane is gone.
+    The recorder standing in for `claude` is first on the client's `PATH`: the launcher
+    resolves the profile in the PANE, so patching `Harness.binary` in this process would
+    reach nothing.
+    """
+
+    WS = "beta"
+
+    def setUp(self) -> None:
+        super().setUp()
+        v = tmuxctl.version()
+        if v is None or v < tmuxctl.FLOOR:
+            self.skipTest(f"the frame's floor is tmux {tmuxctl.FLOOR[0]}.{tmuxctl.FLOOR[1]}"
+                          f"; this machine has {v}")
+        make_plane(self)
+        no_background_refresh(self)
+        no_update_check_in(config.ROOT)
+        _ttyguard.no_terminal()
+        self.tmux = shutil.which("tmux")
+        self.socket = _tmuxreap.name(f"the-selector-{next(_SERVERS)}")
+        self.enterContext(mock.patch.object(commands_frame, "SOCKET", self.socket))
+        self.addCleanup(self._reap_the_server)
+        self.enterContext(mock.patch.object(commands_frame, "_spawn_gather"))
+        self.enterContext(mock.patch.object(commands_frame, "_drawable_slots",
+                                            return_value=[]))
+        (config.WORKSPACES_DIR / self.WS).mkdir(parents=True, exist_ok=True)
+        self.records = self.tmp / "records"
+        self.records.mkdir()
+        bindir = self.tmp / "bin"
+        bindir.mkdir()
+        (bindir / "claude").write_text(
+            f"#!{sys.executable}\n"
+            "import json, os, sys, time\n"
+            # **The wiring probe is answered first** (ruling 10), as Task 4's real-tmux
+            # recorders answer it: the selector's rows and the launch both ask this binary
+            # `plugin list --json`, and a recorder that recorded THAT call would take a probe
+            # for a harness starting. `user` scope covers every directory.
+            "if sys.argv[1:3] == ['plugin', 'list']:\n"
+            "    json.dump([{'id': 'charter@charter', 'scope': 'user', 'enabled': True,\n"
+            "                'installedAt': '2026-09-12T00:00:00Z'}], sys.stdout)\n"
+            "    sys.exit(0)\n"
+            "out = os.path.join(os.environ['RECORD_DIR'], 'harness.json')\n"
+            "with open(out + '.tmp', 'w') as f:\n"
+            "    json.dump({'argv': sys.argv[1:], 'pid': os.getpid()}, f)\n"
+            "os.replace(out + '.tmp', out)\n"
+            "time.sleep(300)\n")
+        (bindir / "claude").chmod(0o755)
+        self.enterContext(mock.patch.dict(os.environ, {
+            "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+            "RECORD_DIR": str(self.records),
+            "CHARTER_ROOT": str(config.ROOT),
+            "PYTHONPATH": os.pathsep.join(
+                [str(_REPO_ROOT), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep),
+            **_gitguard.environment(),
+        }, clear=True))
+
+    def _reap_the_server(self) -> None:
+        subprocess.run([self.tmux, "-L", self.socket, "kill-server"],
+                       capture_output=True, timeout=20)
+        try:
+            os.unlink(_tmuxsocket.socket_path(self.socket))
+        except OSError:
+            pass
+
+    def _tmux(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run([self.tmux, "-L", self.socket, *args], capture_output=True,
+                              text=True, timeout=20)
+
+    def _in_the_background(self):
+        """Run the selector launch on a worker and hand back the thread and its answer.
+
+        `_launch` holds its thread until the pane is gone (`_wait_for_harness`), and the
+        keystroke that ends the selector has to come from somewhere else.
+        """
+        out: list = []
+
+        def work() -> None:
+            args = SimpleNamespace(harness="", rest=[], no_frame=False, workspace=self.WS,
+                                   pick=False, select=True, start="claude", profile=None,
+                                   attach=False, size=(120, 40))
+            try:
+                out.append(commands_frame._launch(args))
+            except BaseException as e:                    # noqa: BLE001 — reported
+                out.append(e)
+
+        t = threading.Thread(target=work, daemon=True)
+        t.start()
+        return t, out
+
+    def _pane_showing_the_selector(self) -> str:
+        """The harness pane of `beta.1`, once the selector has painted in it."""
+        self.assertTrue(_eventually(lambda: bool(state.harness_pane("beta.1"))),
+                        "the launch never recorded a harness pane")
+        pane = state.harness_pane("beta.1")
+        self.assertTrue(
+            _eventually(lambda: "which profile" in self._text(pane)),
+            f"the selector never painted: {self._text(pane)!r}")
+        return pane
+
+    def _text(self, pane: str) -> str:
+        return "".join(self._tmux("capture-pane", "-p", "-t", pane).stdout.splitlines())
+
+    def _status(self, pane: str) -> str:
+        """`#{pane_dead}:#{pane_dead_status}` for *pane*, or what tmux said instead.
+
+        A pane tmux no longer lists at all is gone, which is the same answer as dead for
+        every claim here — the window went with it.
+        """
+        out = self._tmux("display-message", "-p", "-t", pane,
+                         "#{pane_dead}:#{pane_dead_status}:#{pane_dead_signal}")
+        return out.stdout.strip() if out.returncode == 0 else f"(gone: {out.stderr.strip()})"
+
+    def _dead(self, pane: str) -> bool:
+        """Whether *pane*'s own process has ended — an empty `#{pane_dead_status}` included.
+
+        Measured on the CI runner, 2026-09-12: a pane that exits out of raw mode on Linux
+        comes back dead with an EMPTY status where the same pane on macOS carries the
+        number (`commands_frame._UNKNOWN_DEATH_CODE`, and ruling 42). So the question is
+        whether the process ended, never what it ended with — and `#{pane_dead_signal}` is
+        read into the message beside it, because an empty status is tmux's own spelling for
+        *killed by a signal* and the signal is the thing a reader would want next.
+        """
+        return self._status(pane).startswith(("1:", "(gone"))
+
+    def test_a_cancelled_only_window_takes_the_session_with_it(self):
+        """S2, and the frame's own rule for its last chat: Esc closes that chat having
+        started nothing, and the workspace's session goes with its last window."""
+        t, out = self._in_the_background()
+        pane = self._pane_showing_the_selector()
+        self._tmux("send-keys", "-t", pane, "Escape")
+        t.join(timeout=40)
+        self.assertFalse(t.is_alive(), "the launch never returned")
+        # **The pane first, the session second**, so a failure says which link broke. A lone
+        # ESC is the one key `overlay.decode` cannot resolve from its own bytes — it waits
+        # for a tick with nothing behind it (`palette.TICK`) — so "the surface left" and
+        # "the window went" are two claims, and reading them as one would blame tmux for a
+        # keystroke that never arrived.
+        self.assertTrue(
+            _eventually(lambda: self._dead(pane), timeout=30.0),
+            f"the selector never left on Escape: pane {self._status(pane)}, "
+            f"screen {self._text(pane)!r}")
+        # **The exit NUMBER is deliberately not asserted, and that is measured rather than
+        # conceded.** A pane that exits out of raw mode on the Linux runner comes back with
+        # an empty `#{pane_dead_status}` — `commands_frame._UNKNOWN_DEATH_CODE`'s own
+        # measurement, and ruling 42's — so 130 reaches the chat's `exit` record here and
+        # not there. What S2 is about survives that on both: the window went, the session
+        # went with it, nothing was started, and the pane is still a waiting one. It is
+        # also why `_launch` suppresses its early-death sentence on the MARKER rather than
+        # on the code (`nothing_ever_ran_here`).
+        #
+        # `out == [0]` because a launch that will never attach returns as soon as the
+        # window exists (`_wants_attach`) — long before anybody presses anything.
+        self.assertEqual(out, [0])
+        # **A minute, and the number is measured rather than chosen.** What is left here is
+        # tmux's own work: charter's `pane-died[1] kill-window` is installed before the pane
+        # can die (the message below reads it back), and the window going is that hook
+        # firing. On CI the same commit was green on one Python and red at 30 s on another,
+        # with the hooks present, `remain-on-exit on` and the pane dead — a runner busy with
+        # six sweep shards, not a rule about the platform. Doubling the margin is the honest
+        # fix for a claim about somebody else's queue.
+        self.assertTrue(
+            _eventually(lambda: self.WS not in self._tmux("list-sessions").stdout,
+                        timeout=60.0),
+            f"the cancelled chat's session outlived its only window: "
+            f"windows {self._tmux('list-windows', '-a', '-F', '#{session_name}:#{window_id}').stdout!r}, "
+            f"pane {self._status(pane)!r}, "
+            f"remain-on-exit "
+            f"{self._tmux('show-options', '-g', 'remain-on-exit').stdout.strip()!r}, "
+            f"hooks {self._tmux('show-hooks', '-p', '-t', pane).stdout.strip()!r}")
+        self.assertFalse((self.records / "harness.json").exists(),
+                         "a cancelled selector started a harness")
+        self.assertTrue(state.is_waiting("beta.1"),
+                        "a cancelled pane stopped being a waiting pane, so a quit would "
+                        "record a chat that never started")
+
+    def test_a_pick_leaves_the_same_pane_running_the_harness(self):
+        """L1 for the selector: the pane charter recorded is the pane the harness is in,
+        because `exec` kept the launcher's pid — and the pick is a real Enter on a real
+        raw-mode surface."""
+        t, out = self._in_the_background()
+        pane = self._pane_showing_the_selector()
+        self._tmux("send-keys", "-t", pane, "Enter")
+        record = self.records / "harness.json"
+        self.assertTrue(_eventually(record.is_file),
+                        f"the harness never started: {self._text(pane)!r}")
+        harness = json.loads(record.read_text())
+        pid = self._tmux("display-message", "-p", "-t", pane, "#{pane_pid}").stdout.strip()
+        self.assertEqual(pid, str(harness["pid"]),
+                         "the exec did not keep the launcher's pid for the harness")
+        self.assertTrue(_eventually(lambda: not state.is_waiting("beta.1")),
+                        "the pick left the pane recorded as still waiting")
+        self.assertEqual(state.profile("beta.1"), "claude")
 
 
 if __name__ == "__main__":

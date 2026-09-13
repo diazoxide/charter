@@ -371,23 +371,26 @@ class AnOpenNeverLandsInAnotherPlanesSession(_OpensBeta):
         self.assertEqual(len(self.launched), 1)
 
 
-class TheOpenUsesTheHarnessTheOperatorIsAlreadyIn(_OpensBeta):
-    """Which harness a tab opens with — the one question a click cannot carry.
+class TheOpenStartsOnTheProfileTheOperatorIsAlreadyIn(_OpensBeta):
+    """Which profile a tab opens ON — the one question a click cannot carry, and no longer
+    one it has to answer.
 
     A tab names a workspace and nothing else. The chat it was clicked FROM recorded its own
-    harness, and using that makes the click mean "another workspace, same tool" — the only
-    answer available that the operator actually expressed.
+    profile, and that is now the row the SELECTOR opens on: "another workspace, same tool"
+    is the only answer available that the operator actually expressed, and it is a
+    preference rather than a requirement, because the new chat asks.
     """
 
-    def test_it_is_the_harness_this_chat_records(self):
+    def test_it_starts_on_the_profile_this_chat_records(self):
         _a_chat(self.FID, ws="alpha", pane="%1", harness="codex")
         self._run()
-        self.assertEqual(self.launched[0].harness, "codex")
+        self.assertTrue(self.launched[0].select)
+        self.assertEqual(self.launched[0].start, "codex")
 
-    def test_a_chat_with_no_recorded_harness_falls_back_to_the_planes_default(self):
+    def test_a_chat_with_no_recorded_harness_starts_on_the_planes_default(self):
         """A chat launched by a charter that predates `state.record_identity`. The plane's
-        `[harness] default` is a thing somebody chose, so it is a better answer than
-        refusing.
+        `[harness] default` is a thing somebody chose, so it is a better row to open on
+        than none.
 
         Declared in the FILE, not patched onto `config.HARNESS`: the effective default is
         `profiles.current()`'s since ruling 43 — `charter.local.toml`'s where it names one
@@ -395,8 +398,8 @@ class TheOpenUsesTheHarnessTheOperatorIsAlreadyIn(_OpensBeta):
         _a_chat(self.FID, ws="alpha", pane="%1", harness="")
         (config.ROOT / "charter.local.toml").write_text('[harness]\ndefault = "codex"\n')
         self._run()
-        self.assertEqual(self.launched[0].harness, "codex")
-        self.assertEqual(self.launched[0].profile, "codex")
+        self.assertTrue(self.launched[0].select)
+        self.assertEqual(self.launched[0].start, "codex")
 
     def test_the_launch_runs_in_the_workspaces_own_directory(self):
         """Where `charter --workspace beta` typed in it would have run, and what
@@ -514,18 +517,24 @@ class TheOpenUsesTheHarnessTheOperatorIsAlreadyIn(_OpensBeta):
 
         That read is gone — the default is `profiles.current()`'s now (ruling 43) — so this
         case holds the stronger promise in its place: the click reads that setting nowhere,
-        so whatever it holds, a chat with nothing recorded is refused by name."""
+        so whatever it holds, the tab opens and says nothing about it."""
         _a_chat(self.FID, ws="alpha", pane="%1", harness="")
         with mock.patch.object(config, "HARNESS", None):
             self._run()
-        self.assertEqual(self.launched, [])
-        self.assertIn("no profile", self.said.call_args[0][1])
+        self.assertTrue(self.launched[0].select)
+        self.assertNotIn("cannot open", str(self.said.call_args_list))
 
-    def test_with_neither_it_refuses_by_name_rather_than_guessing(self):
+    def test_with_neither_it_opens_the_selector_on_no_row_rather_than_refusing(self):
+        """**The stop that is gone.** A chat recording no profile, on a plane declaring no
+        default, used to refuse the tab by name — a click that did nothing. The selector
+        answers that case: it lists what this machine has, and `palette.aim` puts the cursor
+        on the first row that can run (ruling 18), so Enter always does something."""
         _a_chat(self.FID, ws="alpha", pane="%1", harness="")
         self._run()
-        self.assertEqual(self.launched, [])
-        self.assertIn("no profile", self.said.call_args[0][1])
+        self.assertEqual(len(self.launched), 1)
+        self.assertTrue(self.launched[0].select)
+        self.assertEqual(self.launched[0].start, "")
+        self.assertNotIn("cannot open", str(self.said.call_args_list))
 
 
 class TheLauncherCanBuildAFrameWithNoTerminalOfItsOwn(PersonaIso, unittest.TestCase):

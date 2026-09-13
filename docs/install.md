@@ -344,9 +344,10 @@ need their own binaries the same way. `charter claude --probe` says whether a fr
 here without starting one; [frame.md](frame.md) is the rest. If you ran `charter init` from
 inside a Claude Code session, restart that session first — the plugin loads at the next one.
 
-`init` writes no `[harness] default`, so bare `charter` prints its usage until the plane
-names a profile — one key in `charter.toml`, and `claude` is the built-in profile of Claude
-Code ([control-plane.md](control-plane.md#default--bare-charter)):
+Bare `charter` opens a chat at the profile selector and starts nothing until you pick a
+row. `init` writes no `[harness] default`; it is optional, and it chooses which row the
+cursor starts on — one key in `charter.toml`, and `claude` is the built-in profile of
+Claude Code ([control-plane.md](control-plane.md#default--bare-charter)):
 
 ```toml
 [harness]

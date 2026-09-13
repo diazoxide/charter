@@ -173,13 +173,16 @@ class ThePressRunsTheLauncherForThisWorkspace(_APlusOnAFrameInAlpha):
         self.assertFalse(self.launched[0].pick)
         self.assertFalse(self.launched[0].no_frame)
 
-    def test_the_launch_uses_the_harness_this_chat_records(self):
-        """The one question a `+` cannot carry, answered the only way the operator has
-        expressed: the tool they are already in."""
+    def test_the_launch_opens_the_selector_on_the_profile_this_chat_records(self):
+        """The one question a `+` cannot carry is no longer one it has to answer: the new
+        chat opens at the selector, and the tool the operator is already in is the row the
+        cursor OPENS on — the only answer the press actually expressed."""
         self._press()
-        self.assertEqual(self.launched[0].harness, "claude")
+        self.assertTrue(self.launched[0].select)
+        self.assertEqual(self.launched[0].start, "claude")
+        self.assertEqual(self.launched[0].harness, "frame")
 
-    def test_a_chat_with_no_recorded_harness_falls_back_to_the_planes_default(self):
+    def test_a_chat_with_no_recorded_harness_opens_on_the_planes_default(self):
         """The migration case — a chat launched by a charter that predates
         `state.record_identity`, which is the one rung where nothing about the chat itself
         is left to go on.
@@ -191,8 +194,8 @@ class ThePressRunsTheLauncherForThisWorkspace(_APlusOnAFrameInAlpha):
         state.record_identity(self.FID, {"CHARTER_HARNESS": ""})
         (config.ROOT / "charter.local.toml").write_text('[harness]\ndefault = "claude"\n')
         self._press()
-        self.assertEqual(self.launched[0].harness, "claude")
-        self.assertEqual(self.launched[0].profile, "claude")
+        self.assertTrue(self.launched[0].select)
+        self.assertEqual(self.launched[0].start, "claude")
 
     def test_the_launch_is_sized_for_the_window_the_chat_is_on(self):
         """A launcher with no terminal of its own measures nothing, and `cmd_launch`'s own
@@ -359,18 +362,20 @@ class ThePressSaysWhyWhenItWillNotMakeAChat(_APlusOnAFrameInAlpha):
         self.assertEqual(said, [commands_frame.NO_SESSION_HERE],
                          "the constant and the sentence have come apart")
 
-    def test_a_chat_recording_no_launchable_harness_is_refused_by_name(self):
+    def test_a_chat_recording_no_launchable_harness_opens_the_selector_anyway(self):
+        """**The stop that is gone.** A chat recording no profile charter can launch, on a
+        plane declaring no `[harness] default`, used to refuse the press by name — a `+`
+        that did nothing, with a sentence on the attention row. The selector answers that
+        case: it lists what this machine has and says on each row why it cannot start, so
+        there is nothing left for the press to fail to answer. The cursor opens on no row
+        of its own and `palette.aim` places it (ruling 18)."""
         with mock.patch.dict(config.HARNESS, {"default": "nothing-installed"}):
             state.record_identity(self.FID, {"CHARTER_HARNESS": "also-nothing"})
             self.assertEqual(self._press(), 0)
-        self.assertEqual(self.launched, [])
-        said = self._sentences()
-        self.assertEqual(len(said), 1, said)
-        self.assertIn("records no profile this charter can launch", said[0])
-        self.assertIn("[harness] default", said[0],
-                      "the refusal does not name the key that would fix it")
-        self.assertTrue(said[0].startswith("cannot open another chat:"),
-                        f"the refusal does not name its own subject: {said[0]!r}")
+        self.assertEqual(len(self.launched), 1)
+        self.assertTrue(self.launched[0].select)
+        self.assertEqual(self.launched[0].start, "")
+        self.assertEqual(self._sentences(), [], self._sentences())
 
     def test_a_workspace_directory_charter_cannot_enter_is_refused_by_name(self):
         with mock.patch("charter.commands_frame.os.chdir", side_effect=OSError("nope")):

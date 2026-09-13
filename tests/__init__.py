@@ -103,6 +103,15 @@ from . import _claudeguard      # noqa: E402
 
 _claudeguard.install()
 
+# A test that reaches a REAL exec replaces the process running the suite: no summary and no
+# exit code of its own — the same no-verdict a hang is. Measured on #998's deletion sweep,
+# where one mutant sent a launch test through `commands_frame.bypass` into a real
+# `python -m charter frame-launch --select` and the mutation came back unresolved. See
+# `tests/_execguard.py`: an exec that would run now fails the test that made it, by name.
+from . import _execguard      # noqa: E402
+
+_execguard.install()
+
 # And the one thing no guard can prevent, only clean up after: a run that was KILLED.
 # Measured — a `kill -9` two seconds into `test_frame_overlay_escape_hatch` leaves a live
 # tmux server and its socket file behind, because the signal skips every `addCleanup`

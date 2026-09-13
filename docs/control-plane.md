@@ -89,8 +89,8 @@ share = "local"                  # "local" | "commit" | "push". Default: "local"
 [workspace]
 default = "default"              # Default: "default".
 
-# What bare `charter` opens. Opt-in; absent, `charter` on its own prints the usage list.
-# `default` is the only key read here. Harness profiles — a command and an environment
+# Which row bare `charter`'s profile selector starts on. Opt-in; absent, it starts on the
+# first row that can run. `default` is the only key read here. Harness profiles — a command and an environment
 # each — live in charter.local.toml, which is never committed, and a [harness.<name>]
 # table in this file is refused. See "[harness] — profiles, and the default" below.
 [harness]
@@ -679,14 +679,16 @@ does about it, and the measured cost of each probe are in
 
 ### `default` — bare `charter`
 
-**Opt-in.** Absent, `charter` on its own prints the usage list, exactly as it always has.
+**Opt-in, and it launches nothing.** Bare `charter` opens a chat at the **profile
+selector** and starts a harness only once you pick a row; this key chooses which row the
+cursor starts on, and marks it. Absent, the selector opens on the first row that can run.
 
 ```toml
 [harness]
 default = "claude"
 ```
 
-With it, `charter` is `charter claude`. Not "like" it — charter rewrites the command into
+`charter` is `charter frame --select`. Not "like" it — charter rewrites the command into
 that one and runs it, so the workspace picker, `--no-frame`, `--probe`, `--workspace` and
 everything else the launcher does are the same behaviours, not a second set of them. Every
 subcommand keeps working untouched, `charter claude` included.
@@ -697,34 +699,36 @@ of charter's own registry rather than a list in this page — or the name of a p
 `charter.local.toml` declares. A `default` in the local file wins over the committed one,
 which is how a machine chooses its own without touching what everybody else pulls.
 
-**A declared profile is a legal value here**: bare `charter` on a plane whose default names
-one is `charter <that profile>`, question and all — the first open shows its command and
-asks (*A new or changed command asks once*). A built-in default starts exactly as it did.
+**A declared profile is a legal value here**: it is the row the selector starts on, and
+Enter on it starts that profile, question and all — the first open shows its command and asks
+(*A new or changed command asks once*).
 
-**Charter does not pick one for you.** No default and you get the usage message, not
+**Charter does not pick one for you — it asks.** No default and the selector opens on the
+first row that can run. Charter still does not guess *which* harness you meant: not
 "whatever is installed" (a machine with two of them has no answer, and the answer would
 change the day a colleague installed a third) and not "the one you ran last" (a
-machine-local memory deciding what a committed command does). Naming it is one line.
+machine-local memory deciding what a committed command does). What changed is that the
+question is now asked on screen instead of answered by a key.
 
-**A name charter cannot launch is reported, not ignored.**
+**A name this machine does not have marks no row, and `doctor` says so.**
 
 ```
-$ charter
-✗ charter: [harness] default = "clyde" names no profile this machine has — one of:
+$ charter doctor
+! charter.toml: [harness] default = "clyde" names no profile this machine has — one of:
   claude, codex, opencode.
 ```
 
-That is the whole reason this key is checked where it is read rather than where it is
-used. A refused value falls back to *no default*, and no default renders as the usage
-message — the same output a plane that declared nothing gets. Silently, you could not tell
-a typo from a key you never wrote. `charter doctor` carries the same warning on its
-`charter.toml` row, for the plane where somebody else committed the typo.
+The launch itself no longer refuses over it: the selector lists what this machine actually
+has, so a typo shows up as a list with nothing marked rather than as a command that will
+not run. `doctor` is where it is named, because that is the reader that can say it without
+taking a launch away.
 
-**`charter | head` still prints usage.** Bare `charter` starts a harness only when stdout
-is a terminal. Piped or redirected, it prints the usage message and exits 2, which is what
-it did before this key existed — so a script that runs `charter 2>&1 | head` to find out
-whether charter is installed gets an answer instead of an agent session. `charter claude`
-into a pipe is unaffected: it runs the harness bare, as it always did.
+**`charter | head` still prints usage.** Bare `charter` opens a frame only when stdout is
+a terminal. Piped or redirected, it prints the usage message and exits 2, which is what it
+did before this key existed — so a script that runs `charter 2>&1 | head` to find out
+whether charter is installed gets an answer instead of an agent session, and a pipe is no
+place to draw a selector either. `charter claude` into a pipe is unaffected: it runs the
+harness bare, as it always did.
 
 ## `[update].channel` — the dev channel
 

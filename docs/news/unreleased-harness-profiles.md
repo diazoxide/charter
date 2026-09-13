@@ -1,6 +1,6 @@
 ---
 version: unreleased
-headline: A chat starts on the harness profile you name — its own command and config folder, never through tmux
+headline: A new chat asks which harness profile to start — no harness runs until you pick one
 adopt: reinit
 ---
 
@@ -38,6 +38,39 @@ exit code and everything charter reads off it stay exactly what they were. The c
 the profile it runs: the `+`, a workspace tab and a chat handed off by another chat all
 open on that same profile rather than merely on the same kind of harness, because two chats
 of one harness may be two accounts.
+
+**And no harness starts until you pick a profile.** Before any harness has run in it, a
+chat's pane draws the **profile selector** — the `F2` palette's own picker, so you type to
+narrow it and press Enter to start. Every profile you declared is a row; a built-in is a row
+where its program is installed; a profile that cannot start — not on `PATH`, not wired,
+refused by the file — is listed with the reason on it, and Enter there shows the reason and
+leaves the list open rather than closing the chat. A new or changed profile says it is not
+approved yet, and Enter on it asks `run this? [y/N]` in that pane over its whole command. A
+row too wide for the pane says how much it could not show. Esc closes that chat having started
+nothing — a pane at the selector has a tab, but it is not a chat: `charter: quit` does not
+record it and `charter reopen` never brings it back. It always shows, even where one profile
+can run: one profile costs one Enter, and skipping it would bring back the harness nobody
+picked.
+
+**Where it appears:** bare `charter` on a workspace with no running chat, the `+` on the
+chat strip, the palette's `chat: new`, and a workspace tab whose workspace has nothing
+running. **Where it does not:** `charter <profile>` names the profile, and so does every
+open nobody is at — `charter reopen`, a restored plane, and a chat handed off by another
+chat. A selector is a question, and those have nobody there to answer one.
+
+Two stops went with it. **`[harness] default` no longer launches anything** — it chooses
+which row the cursor starts on, and a value naming a profile this machine does not have
+marks no row instead of refusing the command; `charter doctor` is where that typo is now
+reported. And the `+` no longer refuses a chat whose profile the plane no longer declares,
+or a plane that declares no default: it opens the selector, which says on each row why
+anything cannot start. Bare `charter` on a plane that declares nothing opens it too, rather
+than printing the usage list.
+
+**Bare `charter` on a workspace that is already running attaches to it** whether or not
+anybody else is, instead of adding a chat. It names nothing — it means *put me in this
+plane* — and the workspace already has chats. `+` is how you add one, and `charter
+<profile>` or `charter frame -- <cmd>` still opens a chat and runs what it names. Piped
+anywhere, bare `charter` still prints its usage: a pipe is no place to draw a selector.
 
 `charter reopen` brings each chat back on its own profile, and a chat whose profile is gone
 is **skipped by name** rather than moved onto another one — another profile may be another

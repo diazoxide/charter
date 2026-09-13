@@ -904,6 +904,25 @@ def _add_frame_parsers(sub) -> None:
     fr = sub.add_parser("frame",
                         help="Run any command inside charter's frame — `charter frame -- <cmd>`.")
     _wire(fr, "")
+    # **Open a chat at the profile selector** — what bare `charter` rewrites to, and the
+    # only launch that starts no harness of its own. Suppressed from the help for
+    # `--profile`'s reason: an operator types `charter`, and this is the shape that rewrite
+    # produces, so every splitter and branch below runs on one set of tokens.
+    #
+    # On `frame` alone, and never on a harness's parser: `charter claude --select` would be
+    # asking charter to open a picker for a profile the operator has just named. It is
+    # listed in :data:`_OWN_FLAGS` so `_split_frame_argv` hands it to argparse instead of
+    # grafting it onto the command's verbatim argv, and argparse then refuses it by name on
+    # any parser but this one.
+    #
+    # **No `--start` here**, and that asymmetry with `frame-launch` is deliberate. The row
+    # the cursor opens on is a fact about the press — the profile of the chat `+` was
+    # pressed in — and `cmd_new_chat` and `_open_workspace` call `cmd_launch` in-process
+    # with it on the namespace, so it never has to survive a command line. A bare `charter`
+    # has no press behind it and takes the plane's `[harness] default` instead. Adding a
+    # flag nothing types would mean teaching `_OWN_VALUE_FLAGS` about a second value flag
+    # for a spelling with no caller.
+    fr.add_argument("--select", action="store_true", help=argparse.SUPPRESS)
 
     # Internal: one pane of a running frame, spawned by `layout.panel_argvs` — never
     # typed by an operator. The argv shape here (`panel <component> --session <fid>`)
@@ -1819,7 +1838,11 @@ def _frame_command_names() -> set[str]:
 #: harness named `""`, bare `frame`) hands `["--probe"]` to `bypass`, which
 #: `os.execvp("--probe", ...)` turns into a `FileNotFoundError` — confirmed by running
 #: `charter frame --probe` with this entry left out before adding it.
-_OWN_FLAGS = ("--no-frame", "--probe", "--pick", "--fresh", "-h", "--help")
+#: `--select` joined for the same reason, and it is what bare `charter` becomes: without it
+#: `charter frame --select` never reaches argparse as a flag at all — `_split_frame_argv`
+#: grafts it onto `args.rest`, `cmd_launch` finds no harness named `""` and hands
+#: `["--select"]` to `bypass`, which is an `os.execvp("--select", …)`.
+_OWN_FLAGS = ("--no-frame", "--probe", "--pick", "--fresh", "--select", "-h", "--help")
 
 #: The launcher flags bare ``charter`` may carry — the ones that are about the LAUNCH
 #: rather than about a harness that has not been named yet (#845). `_bare_launch` rewrites
@@ -1952,12 +1975,12 @@ def _record_crash(exc: BaseException, subcommand: str) -> None:
 
 
 def _bare_launch(argv: list[str]) -> tuple[list[str], int | None]:
-    """Bare ``charter``: the plane's ``[harness] default``, or today's usage error.
+    """Bare ``charter``: the profile selector, or today's usage error off a terminal.
 
     Returns the argv to parse and, when charter is finished here, a return code. Expressed
-    as a REWRITE of argv rather than as a dispatch of its own — bare ``charter`` on a plane
-    that defaults to Claude Code becomes exactly `["claude"]`, and every splitter, flag and
-    branch below it then runs on the same tokens a typed `charter claude` produces. A
+    as a REWRITE of argv rather than as a dispatch of its own — bare ``charter`` on a
+    terminal becomes exactly `["frame", "--select"]`, and every splitter, flag and branch
+    below it then runs on the same tokens a typed `charter frame --select` produces. A
     second path into `cmd_launch` would be a second set of answers about the workspace
     picker, `$CHARTER_HARNESS`, `--probe` and the frame, all of which are already settled
     for the typed form.
@@ -1969,39 +1992,36 @@ def _bare_launch(argv: list[str]) -> tuple[list[str], int | None]:
     whole widening: an argv holding anything else, `--fresh` alongside a subcommand
     included, is a command the operator typed and is returned untouched.
 
-    **Four things stop it, and each is reachable on its own.**
+    **Three things stop it, and each is reachable on its own.**
 
     *A subcommand was typed.* Nothing here runs, `--version` included. It is a flag on the
     root parser (`_VersionAction`), so ``charter --version`` is a non-empty argv and never
     reaches this function at all — the version action still exits 0 from inside
     `parse_args`, which is what `commands_update._handoff` reads back.
 
-    *The plane declared a value charter cannot launch.* Reported here, loudly, naming the
-    value and the profiles that would work. `profiles.current()` resolves the default —
-    `charter.local.toml`'s where it names one, `charter.toml`'s otherwise — and this is the
-    reader that can say so on the command the key is *for*. Silence
-    would be the whole defect: a refused default degrades to no default, which renders as
-    argparse's usage message — byte-identical to what a plane that declared nothing gets,
-    so the operator who committed ``default = "clyde"`` would watch charter behave exactly
-    as though their key were not there. Checked BEFORE the tty rule below, because a
-    committed file being wrong is not a fact about anybody's terminal.
+    *Charter refused this plane's format version.* A plane charter cannot place declares
+    nothing charter can read, so falling through would hand the operator argparse's usage
+    message for a plane charter had in fact refused. The gate in `main` cannot cover it:
+    that reads the typed subcommand and a bare argv has none.
 
-    *The plane declared nothing.* Today's behaviour, unchanged: argparse's own usage error
-    on exit 2. Charter does not guess a harness for somebody who never named one — not
-    "whatever is installed" (a plane with two of them has no answer, and the answer would
-    change when a colleague installed a third) and not "the one last used" (a machine-local
-    memory deciding what a committed command runs).
+    **What is no longer here: the default, and its refusal.** Until the selector, this
+    function read `[harness] default` and launched it, and refused loudly when the plane
+    named a profile this machine lacks. A bare `charter` now opens the selector, which
+    lists what this machine has, marks the default where there is one and says on the row
+    why anything cannot start — so there is no value left here to refuse and nothing left
+    to guess. A plane that declared no default is no longer a usage error either.
 
     *Stdout is not a terminal.* Also today's behaviour, and this is the one that has to be
     a test rather than a comment. `commands_frame.cmd_launch` returns `bypass(argv)` when
-    stdout is not a tty — it `os.execvp`s the harness in place of charter. Today bare
-    `charter` is argparse's usage error, exit 2 with no side effect, so ``charter 2>&1 |
-    head`` is a probe that costs nothing. Rewrite argv unconditionally and, on a plane that
-    sets a default, that pipeline execs Claude Code — correct against every config anyone
-    tested, wrong the first time a script asks whether charter is installed (#687, #690).
-    Stdout, and stdout alone, because that is the exact stream `cmd_launch` branches on: a
-    second, looser condition here is how the two come to disagree about what "interactive"
-    means.
+    stdout is not a tty — it `os.execvp`s the harness in place of charter. Bare `charter`
+    off a terminal is argparse's usage error, exit 2 with no side effect, so ``charter 2>&1
+    | head`` is a probe that costs nothing. Rewrite argv unconditionally and that pipeline
+    execs a harness — correct against every config anyone tested, wrong the first time a
+    script asks whether charter is installed (#687, #690). It matters MORE with a selector
+    than it did with a default: a pane with no terminal cannot draw one and cannot be asked
+    anything, so there is nothing for the rewrite to lead to. Stdout, and stdout alone,
+    because that is the exact stream `cmd_launch` branches on: a second, looser condition
+    here is how the two come to disagree about what "interactive" means.
     """
     # `all` over an empty iterable is True, so bare `charter` falls through this without
     # an `argv and` in front of it — and the deletion sweep found that conjunct as a
@@ -2009,54 +2029,38 @@ def _bare_launch(argv: list[str]) -> tuple[list[str], int | None]:
     # already says is the shape this repository deletes.
     if not all(tok in _BARE_FLAGS for tok in argv):
         return argv, None
-    from . import config
 
-    # *The plane's format version is one charter cannot place.* Reported here for the same
-    # reason the refused-default arm below is: a plane charter has refused declares nothing
-    # charter can read, `[harness] default` included — `config.HARNESS` derives from the
-    # empty config every time — so falling through hands the operator argparse's usage
-    # message, byte-identical to what a plane that declared no default gets. Bare `charter`
-    # would then look like a plane with no harness rather than one charter refused. The
-    # gate in `main` cannot cover this: it reads the typed subcommand, and a bare argv has
-    # none. Both call the same :func:`_plane_refusal`, so there is one message and one
-    # exemption rule between them.
+    # *The plane's format version is one charter cannot place.* A plane charter has refused
+    # declares nothing charter can read, so falling through would open a selector over a
+    # plane charter had already refused — every row read out of a config it will not use.
+    # Bare `charter` would look like a plane with no profiles rather than one charter
+    # refused. The gate in `main` cannot cover this: it reads the typed subcommand, and a
+    # bare argv has none. Both call the same :func:`_plane_refusal`, so there is one
+    # message and one exemption rule between them.
     refusal = _plane_refusal(None)
     if refusal:
         util.err(refusal)
         return argv, 1
 
-    # **The profiles, and not `config.HARNESS`** (ruling 43). The default a launch means is
-    # the one `charter.local.toml` names where it names one and `charter.toml`'s where it
-    # does not, and `profiles.current()` is the only thing that resolves that: `config`
-    # reads nothing from the local file, because every hook process derives config and a
-    # profile read there is the cost ruling 43 measured. A bare launch is a launch, which is
-    # exactly where the read belongs.
-    from . import profiles
-
-    read = profiles.current()
-    # Truthiness, not `is not None`, and the same test `doctor` makes of the same answer.
-    # `contain.readable` never returns a blank string, so on anything `derive` produced the
-    # two are the same question — but a planted empty value would otherwise print a refusal
-    # naming nothing at all instead of falling through to the usage message.
-    if read.default_refused:
-        util.err("charter: " + profiles.DEFAULT_REFUSED.format(
-            value=read.default_refused, names=", ".join(read.profiles)))
-        return argv, 2
-    # Two conditions, two statements, and deliberately not one `or`. They are different
-    # facts — a plane that named nothing, and a terminal that is not one — with different
-    # reasons in the docstring above, and an arm two inputs can both satisfy is an arm
-    # neither of them ends up testing.
-    if not read.default:
-        return argv, None
-    if not sys.stdout.isatty():
-        return argv, None
+    # **It no longer reads a default, and that is the whole of what the selector changes
+    # here.** Bare `charter` used to resolve `[harness] default` and launch it — a harness
+    # session started before anybody said which one they wanted — and to refuse loudly when
+    # the plane named one this machine does not have. Both go: the launch opens the profile
+    # SELECTOR, which lists what this machine actually has, marks the default where there is
+    # one, and says why any row cannot start. A default naming nothing simply marks no row
+    # (ruling 18), and `charter doctor` is where that is reported.
+    #
+    # So a plane that declared no default is no longer a usage error either: every machine
+    # has at least the built-in profile of whichever harness is installed, and the selector
+    # is how charter asks rather than guesses.
+    #
     # The flags the operator typed ride along, after the name rather than before it:
     # `_split_frame_argv` recognises `_OWN_FLAGS` only in the run immediately following
-    # `charter <name>`, which is the same position a typed `charter claude --fresh` puts
-    # them in. :func:`_profile_launch` then turns a declared profile's name into its kind's
-    # launcher, so what comes out is indistinguishable from the typed form either way —
-    # which is this function's whole contract.
-    return [read.default, *argv], None
+    # `charter <name>`, which is the same position a typed `charter frame --fresh` puts them
+    # in.
+    if not sys.stdout.isatty():
+        return argv, None
+    return ["frame", "--select", *argv], None
 
 
 def _profile_launch(argv: list[str],
