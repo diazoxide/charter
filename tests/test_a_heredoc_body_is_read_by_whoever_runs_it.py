@@ -350,6 +350,23 @@ class ASplitQuoteDelimiterEndsTheBodyWhereBashDoes(PlaneIso):
                 with self.subTest(opener=opener, spelling=spell):
                     self.assertFalse(_deny(cmd, str(self.tmp)), cmd)
 
+    def test_a_delimiter_bash_cannot_read_still_gets_a_decision(self):
+        """`<<EO'F` opens a quote nothing closes. The regex still finds an opener (`EO`), and
+        `_heredoc_header` answers ``None`` — so the walk falls back to the regex's delimiter
+        rather than indexing a header it does not have. bash, zsh and dash all refuse the
+        script as a syntax error and run nothing; the guard must still DECIDE, and keeping the
+        unterminated body visible is the direction this file errs in. Found as a sweep survivor
+        on #975's own PR: with the fallback deleted the guard raised TypeError."""
+        for spell in ("EO'F", 'EO"F', "EOF'"):
+            cmd = f"cat <<{spell}\nbody\nEOF\n{READ}"
+            with self.subTest(spelling=spell):
+                self.assertIsNone(hooks._heredoc_header(cmd, cmd.index("<<")), "the premise")
+                try:
+                    decided = _deny(cmd, str(self.tmp))
+                except Exception as exc:                   # noqa: BLE001 — the point of the pin
+                    self.fail(f"the leak guard raised instead of deciding: {exc!r}")
+                self.assertTrue(decided, cmd)
+
     def test_every_line_a_real_shell_runs_after_the_body_is_seen(self):
         """The source of truth is the shell. For each spelling, a shell is handed the same
         heredoc with `echo RAN` where the read would be; wherever the shell runs that line,
