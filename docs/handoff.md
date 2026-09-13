@@ -444,12 +444,26 @@ fixes it — in a workspace directory or a checkout inside one, for a harness wh
 `reinit` carries there. Whether the plane holds the rule is the row's own reading one directory
 over, so the two halves of this row cannot disagree.
 
+`reinit` carries the plane's two settings files to different places, and the hint follows
+that. The shared `.claude/settings.json` goes into a workspace directory and into each
+checkout in it. The local `.claude/settings.local.json` goes into checkouts only: a workspace
+directory inside the plane's repository already reads the plane's own local file at the git
+root. So when the plane holds the rule only in its local file, a chat in a checkout, at its
+root or in any directory below it, is sent to `charter workspace reinit <workspace>`. Claude
+Code reads the checkout's local copy at its git root, so that command puts the rule in force
+there. At the checkout's root `charter guard ask` would work too, but it writes the rule into the
+shared file, which changes the settings of everyone on the plane's repository when you chose a
+local rule. Before
+[#1031](https://github.com/diazoxide/charter/issues/1031) the row named `guard ask` at a
+checkout's root, and said deeper in that the rule could not be put in force.
+
 **Where charter writes these settings, and where it does not.** The plane root, a workspace
 directory, and a checkout's own root — nowhere else. `charter guard ask` reaches workspaces by
 mirroring into each one, not by writing where you happen to be standing. So for a chat rooted
-in `docs/`, in `personas/<p>/`, or in a deep directory inside a checkout, **nothing puts the
-rule in force for that chat**, and the row says so rather than pretending otherwise. The warning
-itself is right: the rule really is not in force there.
+in `docs/`, in `personas/<p>/`, or in a deep directory inside a checkout, **nothing puts a
+shared rule in force for that chat**, and the row says so rather than pretending otherwise. The
+warning itself is right: the rule really is not in force there. The one exception is the
+local rule above, which reaches a whole checkout from its root.
 
 What the row offers depends on whether the rule exists at all, because the two are different
 problems. If the plane already holds it, there is no command to give — a chat started in the

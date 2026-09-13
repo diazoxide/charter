@@ -2084,9 +2084,10 @@ def check_ask_rules() -> Result:
                        "want — this names it so the prompts are not a mystery.")
 
 
-def _reinit_target(root: Path) -> str | None:
+def _reinit_target(root: Path | None) -> str | None:
     """The workspace `charter workspace reinit` would repair to fix *root*'s layer — or
-    ``None`` when no `reinit` writes this directory at all.
+    ``None`` when no `reinit` writes this directory at all. A *root* of ``None`` — no git
+    root, for :func:`_local_layer_clause` — is no directory, so it matches none.
 
     `reinit(name)` writes `workspaces/<name>` and each guest checkout inside it
     (`workspace.wire_harnesses`), and nothing else. So a session in `docs/`, in
@@ -2119,9 +2120,13 @@ def _reinit_target(root: Path) -> str | None:
     return None
 
 
-def _how_to_fix(missing: list, plane: dict) -> str:
+def _how_to_fix(missing: list, plane: dict, plane_local: dict) -> str:
     """The middle sentence of this row's hint: what would actually put the rule in force for a
     chat rooted here. One of three, and the third names no command at all.
+
+    *plane* is the plane's shared file and *plane_local* its local one, each as the row's own
+    dry run reads it. They are kept apart because `reinit` carries them to different
+    directories — see :func:`_local_layer_clause`.
 
     Charter writes these settings in exactly two kinds of place — the plane root, and a
     workspace's or checkout's own root — while Claude Code reads them from the session's
@@ -2156,6 +2161,12 @@ def _how_to_fix(missing: list, plane: dict) -> str:
     stale = _stale_layer_clause(missing, plane)
     if stale:
         return stale
+    # Before `guard ask` below, and before the sentence that says nothing can put the rule in
+    # force: inside a checkout, a rule the plane holds only locally is one `reinit` puts in
+    # force, and `guard ask` would write it into the shared file everybody gets (#1031).
+    local = _local_layer_clause(missing, plane_local)
+    if local:
+        return local
     if _reinit_target(root) is not None:
         return "Add it: charter guard ask 'charter handoff *'"
     # Unwired, and the two states read differently. A sentence here makes a claim about a
@@ -2228,6 +2239,45 @@ def _stale_layer_clause(missing: list, plane: dict) -> str:
     return ""
 
 
+def _local_layer_clause(missing: list, plane_local: dict) -> str:
+    """The sentence naming `charter workspace reinit` when the plane's LOCAL file holds the rule
+    and the checkout this chat is in has not been given a copy of it — or ``""``.
+
+    :func:`_stale_layer_clause`'s question about the other file, and a different question,
+    because `reinit` carries the two files to different places (`workspace.wire_harnesses`):
+
+    * the shared file (:meth:`Harness.workspace_files`) into a workspace directory and each
+      checkout in it, read by Claude Code from the session's own directory only;
+    * the local file (:meth:`Harness.checkout_files`) into a checkout ONLY, read at the git
+      root as well — so a copy at a checkout's root is in force for a chat anywhere inside it.
+
+    So this asks about the session's GIT ROOT, not its own directory. Before #1031 the row
+    named `charter guard ask` at a checkout's root, which writes the SHARED file and changes
+    what everybody on the repository gets when the operator chose a local rule; and deeper in,
+    it said the rule could not be put in force at all, when one `reinit` does.
+
+    The git root is matched against :func:`_reinit_target` as it is, workspace directories
+    included, and can only ever match a checkout: a directory under `workspaces/` that is its
+    own git root is a stray clone, not a workspace (`workspace.list_workspaces`). That is also
+    why #1024's plane-side reading stays shared-only for :func:`_stale_layer_clause` — a
+    workspace directory gets no local file — while this one reads the local file apart.
+
+    The two conditions per harness are the same pair as the shared clause's, for its reasons:
+    `reinit` must carry a local file for that harness at all, and the plane's local file must
+    hold the rule by the row's own dry run, not merely exist.
+    """
+    held = [h.name for h in missing
+            if h.checkout_files() and plane_local.get(h.name) == "present"]
+    if not held:
+        return ""
+    target = _reinit_target(_local_settings_root(session_root()))
+    if target is None:
+        return ""
+    return (f"The plane's local settings already hold it for {', '.join(held)}, so this "
+            f"checkout's copy of them is behind — nothing to add, only to refresh: charter "
+            f"workspace reinit {target}")
+
+
 def _local_ask_rule(h, root: Path, pattern: str) -> tuple[str, str] | None:
     """Claude Code's answer from the `.claude/settings.local.json` files it reads for a session
     at *root* — ``("present" | "malformed", detail)``, or ``None`` when neither decides.
@@ -2291,6 +2341,7 @@ def check_handoff_gate() -> Result:
     name = "handoff gate"
     rows = []
     plane: dict[str, str] = {}
+    plane_local: dict[str, str] = {}
     for h in _harness.all():
         root = session_root() if h.name == _harness.CLAUDE_CODE else _config.ROOT
         try:
@@ -2312,6 +2363,12 @@ def check_handoff_gate() -> Result:
             # directory where it writes nothing that prompts.
             plane[h.name] = h.apply_ask_rule(
                 _config.ROOT, HANDOFF_ASK_PATTERN, dry_run=True)[0]
+            # The local file, read apart for that reason, for the clause that asks about a
+            # checkout's copy of it (#1031). Inside this `try` for the one above's: the only
+            # raise is `Path.exists` under a `.claude/` charter cannot enter, and the shared
+            # reading beside it is under that directory too.
+            plane_local[h.name] = h.apply_ask_rule(
+                _config.ROOT, HANDOFF_ASK_PATTERN, local=True, dry_run=True)[0]
         except OSError as e:
             # The settings loaders test `Path.exists` outside their own `try`, and on a file
             # under a directory charter may not enter that raises on Python 3.11-3.13 (3.14
@@ -2334,7 +2391,7 @@ def check_handoff_gate() -> Result:
         # add a rule and then that they already have it is a sentence that cannot be acted on
         # (#982 review round 1). And in a directory charter does not wire, neither — see
         # :func:`_how_to_fix`.
-        how = _how_to_fix(missing, plane)
+        how = _how_to_fix(missing, plane, plane_local)
         return Result(name, WARN,
                       detail="no ask rule for `charter handoff` under "
                              f"{', '.join(h.name for h in missing)}",

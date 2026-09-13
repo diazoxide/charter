@@ -1808,6 +1808,90 @@ class DoctorNamesTheGate(SessionRootCase):
         self.assertEqual(doctor._NOT_CHECKED_HINT, r.hint)
         self.assertIn(str(shared), r.detail)
 
+    # #1031. The row has counted the plane's local rule since #986, and its hints still spoke as
+    # if a rule could only live in the shared file. `reinit` carries the two files to different
+    # places (`workspace.wire_harnesses`): the shared one into a workspace directory and each
+    # checkout in it, the local one into a checkout only, where Claude Code reads it at the git
+    # root for a chat anywhere inside. So inside a checkout, a rule the plane holds locally is one
+    # `reinit` puts in force. The row called it impossible from deeper in, and at the root it
+    # named `charter guard ask`, which writes the shared file everybody gets.
+
+    #: A checkout, at its root or deeper, whose copy of the plane's local settings is behind.
+    LOCAL_REFRESH = (_LEAD + "The plane's local settings already hold it for claude-code, so this "
+                     "checkout's copy of them is behind — nothing to add, only to refresh: "
+                     "charter workspace reinit fleet." + _TAIL)
+
+    def _checkout(self, name: str) -> Path:
+        repo = self.workspace / name
+        repo.mkdir(parents=True, exist_ok=True)
+        # env=None: the suite has already redirected git's config (#641).
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        return repo.resolve()
+
+    def test_a_checkout_behind_the_planes_local_rule_is_sent_to_reinit(self):
+        """Both reported hints, and the walk that proves the new one: run what it names, then
+        read the row in the same directory."""
+        self._claude_local_rule(config.ROOT)
+        self._opencode_rule()
+        for where in ("the checkout's root", "a directory deep inside it"):
+            with self.subTest(rooted_in=where):
+                repo = self._checkout("root" if where == "the checkout's root" else "deep")
+                here = repo if where == "the checkout's root" else repo / "src" / "deep"
+                here.mkdir(parents=True, exist_ok=True)
+                self.rooted_at(here)
+                r = doctor.check_handoff_gate()
+                self.assertEqual(WARN, r.status, r)
+                self.assertEqual(self.LOCAL_REFRESH, r.hint)
+                workspace.wire_harnesses("fleet")
+                self.assertEqual(OK, doctor.check_handoff_gate().status,
+                                 "the command the hint named did not put the rule in force")
+                self.assertFalse((config.ROOT / ".claude" / "settings.json").exists(),
+                                 "the fix wrote the shared file the operator did not choose")
+
+    def test_a_rule_the_plane_holds_in_both_files_is_in_reach_deep_inside_a_checkout(self):
+        """"It cannot be put in force" was said here too. The shared copy `reinit` writes at the
+        checkout's root does not reach a chat deeper in, but the local copy beside it does."""
+        self._claude_rule(config.ROOT)
+        self._claude_local_rule(config.ROOT)
+        self._opencode_rule()
+        deep = self._checkout("repo") / "src" / "deep"
+        deep.mkdir(parents=True, exist_ok=True)
+        self.rooted_at(deep)
+        self.assertEqual(self.LOCAL_REFRESH, doctor.check_handoff_gate().hint)
+
+    def test_deep_inside_a_checkout_a_shared_only_rule_still_cannot_be_put_in_force(self):
+        """The boundary on the other side. A shared rule reaches a checkout only at its root,
+        and no file charter writes puts it in force deeper in, so the sentence stays. The plane's
+        local file holds a DIFFERENT rule, so `reinit` does carry a local file here, just not one
+        holding this rule: the local file's existence is not the test."""
+        self._claude_rule(config.ROOT)
+        self._claude_local_rule(config.ROOT,
+                                text=json.dumps({"permissions": {"ask": ["Bash(git push *)"]}}))
+        self._opencode_rule()
+        deep = self._checkout("repo") / "src" / "deep"
+        deep.mkdir(parents=True, exist_ok=True)
+        self.rooted_at(deep)
+        self.assertEqual(self.NOWHERE, doctor.check_handoff_gate().hint)
+
+    def test_a_checkout_whose_plane_holds_the_rule_nowhere_is_told_to_add_it(self):
+        """`reinit` copies only what the plane holds, so with nothing held there is nothing
+        for it to refresh."""
+        self._opencode_rule()
+        self.rooted_at(self._checkout("repo"))
+        self.assertEqual(self.ADD, doctor.check_handoff_gate().hint)
+
+    def test_a_harness_reinit_carries_no_local_file_for_is_not_sent_to_reinit(self):
+        """The local layer's twin of `test_a_harness_reinit_writes_nothing_for_is_not_sent_to_reinit`,
+        and CONSTRUCTED the same way: Claude Code with its `checkout_files` patched empty."""
+        self._claude_local_rule(config.ROOT)
+        self._opencode_rule()
+        self.rooted_at(self._checkout("repo"))
+        h = registry.get(registry.CLAUDE_CODE)
+        with mock.patch.object(type(h), "checkout_files", return_value={}):
+            r = doctor.check_handoff_gate()
+        self.assertEqual(WARN, r.status, r)
+        self.assertEqual(self.ADD, r.hint)
+
     def test_the_harnesses_that_cannot_refuse_are_named(self):
         self._claude_rule(config.ROOT)
         self._opencode_rule()
