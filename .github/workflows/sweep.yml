@@ -316,7 +316,7 @@ jobs:
       # finish, which has two causes and only two: a newer push cancelled this run, or
       # `plan` hit its own `timeout-minutes: 30`. #626's own case is untouched: a SHARD that
       # exceeds its `timeout-minutes` leaves `plan` SUCCEEDED, so `no verdict: N of M shards
-      # did not report` still means what it meant and still blocks nothing.
+      # did not report` still means what it meant and still fails nothing.
       #
       # **The sentence names the cancellation and not the sizing, and run 99 is why.** A
       # cancelled `plan` may or may not have got as far as writing its outputs: run 86
@@ -385,7 +385,8 @@ jobs:
   # the top of this file for why `neutral` is not available to a job like this one.
   #
   # It stays green in all three cases. Distinguishing the states is not the same as
-  # failing on them, and this workflow still blocks nothing.
+  # failing on them, and this workflow still fails on nothing it finds. It is still a
+  # check a pull request waits for, like any other (#988).
   #
   # **This job is not the one to make required, later.** Branch protection matches a check
   # by NAME, and this one's name is the answer — it is different on every branch, which is
@@ -409,4 +410,7 @@ jobs:
         run: |
           set -euo pipefail
           printf 'deletion sweep: %s (%s)\n' "$HEADLINE" "$CONCLUSION"
-          printf 'This check reports and blocks nothing. The run summary has the table.\n'
+          # Two facts, stated apart (#988). "This check reports and blocks nothing" was true
+          # of the verdict and false of the merge: the branch policy waits for every check
+          # to complete, and PR #982's merge was refused while a shard was still running.
+          printf 'This check never fails on survivors — but it must COMPLETE before the branch policy will let a pull request merge. The run summary has the table.\n'

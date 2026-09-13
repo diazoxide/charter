@@ -2741,5 +2741,48 @@ class TheSweepsAbsenceIsSomethingOnlyARequiredCheckCanSay(unittest.TestCase):
         self.assertNotIn("sweep", names)
 
 
+class TheSweepCheckSaysItIsAWaitAndNotAFailureRisk(unittest.TestCase):
+    """#988: the `verdict` step's own body said "This check reports and blocks nothing".
+
+    True about the verdict: no `tools/sweep.py` step in `sweep.yml` passes `--enforce`, so
+    survivors never fail the run. False about merging, which is what the sentence is read
+    for: the base branch policy requires every check to COMPLETE. Measured on PR #982 — with
+    `Sweep shard 1 of 1` still running and every other check green, the merge was refused,
+    and it went through once the shard finished, verdict unchanged.
+
+    So the two facts are stated apart, and the first is pinned to the file that makes it
+    true: the day a step gains `--enforce`, "never fails on survivors" goes red here rather
+    than going on being printed.
+    """
+
+    @staticmethod
+    def _code(step: dict) -> str:
+        """What a step's shell RUNS: comment lines dropped, continuations joined. Both
+        steps this reads carry a comment that quotes what is not so — `collect`'s names
+        `--enforce` to say it is absent, `verdict`'s quotes the sentence #988 retired."""
+        code = [ln for ln in str(step.get("run", "")).splitlines()
+                if not ln.strip().startswith("#")]
+        return "\n".join(code).replace("\\\n", " ")
+
+    def _jobs(self) -> dict:
+        return load((GITHUB / "workflows" / "sweep.yml").read_text())["jobs"]
+
+    def test_the_check_says_it_never_fails_on_survivors_only_while_nothing_enforces(self):
+        jobs = self._jobs()
+        invocations = [ln for job in jobs.values() for step in job.get("steps") or []
+                       for ln in self._code(step).splitlines() if "tools/sweep.py" in ln]
+        self.assertTrue(any("--verdict" in ln for ln in invocations),
+                        "found no `sweep.py --verdict` step, so nothing here is measured")
+        enforced = any("--enforce" in ln for ln in invocations)
+        said = self._code(jobs["verdict"]["steps"][0])
+        self.assertEqual("never fails on survivors" in said, not enforced, said)
+
+    def test_the_check_says_it_must_complete_before_a_pull_request_merges(self):
+        said = self._code(self._jobs()["verdict"]["steps"][0])
+        self.assertIn("must COMPLETE before the branch policy will let a pull request merge",
+                      said)
+        self.assertNotIn("blocks nothing", said)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -6004,10 +6004,37 @@ class TheMergeStepHoldsItsOwnEdges(unittest.TestCase):
                                "--gate", "--github-output", str(out)])
         self.assertEqual(code, 0)
         self.assertIn("merged 1 result(s) from 1 of 3 shard(s)", said.getvalue())
-        self.assertIn("gate: reporting only — nothing here blocks.", said.getvalue())
+        self.assertIn("gate: survivors do not fail this run.", said.getvalue())
         self.assertIn("conclusion=no-verdict", out.read_text())
         self.assertIn("headline=no verdict: 1 survivor so far, 2 of 3 shards did not "
                       "report", out.read_text())
+
+    def test_the_reporting_line_says_what_enforce_changes_and_enforce_changes_it(self):
+        """#988: this line said "gate: reporting only — nothing here blocks". True about the
+        verdict, and false where it is read: a pull request's branch policy waits for every
+        check to COMPLETE, so a sweep still running blocks the merge whatever it will find
+        (measured on PR #982). The line now names the one thing `--enforce` changes, and
+        that is what is asserted beside it: the same survivor, the same shards, exit 0
+        without the flag and a failure with it."""
+        self._shard("s1.json", [_result("survived")])
+
+        def run(*extra: str) -> tuple[int, str]:
+            said = io.StringIO()
+            with contextlib.redirect_stdout(said):
+                code = sweep.main(["--verdict", str(self.shards), "--shards", "1",
+                                   "--gate", *extra])
+            return code, said.getvalue()
+
+        code, said = run()
+        self.assertEqual(code, 0, said)
+        self.assertIn("gate: survivors do not fail this run. Pass --enforce to make them.",
+                      said)
+        self.assertNotIn("nothing here blocks", said)
+
+        code, said = run("--enforce")
+        self.assertNotEqual(code, 0, "the survivor did not fail an enforcing run, so the "
+                                     "line above names a change the flag does not make")
+        self.assertNotIn("survivors do not fail", said)
 
     def test_a_sweep_that_never_sized_itself_is_missing_a_shard_it_cannot_count(self):
         """An empty `--shards` is the plan job failing before it sized anything, and that
