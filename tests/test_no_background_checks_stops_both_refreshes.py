@@ -38,7 +38,7 @@ from unittest import mock
 
 from pathlib import Path
 
-from charter import commands, config, glstate, root, update
+from charter import __version__, commands, config, glstate, root, update
 from tests import _planeguard
 from tests._isolation import PersonaIso, make_plane, pin_update_channel
 
@@ -252,6 +252,21 @@ class NothingCheckedIsNotCalledUpToDate(PersonaIso):
             said = self._version()
         self.assertNotIn("up to date", said)
         self.assertIn("not checked", said)
+
+    def test_a_pinned_plane_keeps_its_lock_line_when_nothing_was_checked(self):
+        """The pin decides, and "not checked" must not stand in for it. A plane pinned to the
+        charter that is running is in sync with its lock whatever PyPI would say, so that
+        line is the verdict with the switch on and with it off; nothing about PyPI is
+        claimed by it, so there is nothing unchecked for it to qualify."""
+        pin_update_channel(self, "stable")
+        (self.tmp / root.MARKER).write_text(
+            f'schema = 1\n[charter]\nversion = "{__version__}"\n')
+        for value in ("1", None):
+            with self.subTest(switch=value), _variable(value):
+                said = self._version()
+                self.assertIn(f"in sync with the lock ({__version__})", said)
+                self.assertNotIn("not checked", said)
+                self.assertNotIn(NAME, said)
 
     def test_a_cached_answer_is_still_up_to_date(self):
         """The control, switch on: the cache someone filled by hand, or before they set it,
