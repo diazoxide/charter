@@ -21,9 +21,10 @@ charter persona show <name>    # its charter — the role to actually adopt
 ```
 
 Resolution, first rung that names a persona wins: `--persona` → `$CHARTER_PERSONA` (pinned
-at launch) → this session's selection → this terminal's selection (both written by
-`charter persona use`) → the plane-wide `.charter/active-persona` (a shell with no session
-or pane id) → `charter.toml` `[persona] default` → `personas/.default` → none.
+at launch; empty or only whitespace counts as unset) → this session's selection → this
+terminal's selection (both written by `charter persona use`) → the plane-wide
+`.charter/active-persona` (a shell with no session or pane id) → `charter.toml` `[persona]
+default` → `personas/.default` → none.
 
 A selection naming a persona that no longer exists (left by `charter persona remove`) still
 wins, and resolves to **no persona**, not to the default. SessionStart and

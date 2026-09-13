@@ -24,7 +24,8 @@ The active persona is resolved by precedence, mirroring workspaces (:func:`_reso
 ``personas/.default`` → none. The first rung naming anything wins. The two committed rungs
 name only a persona that exists; a rung above them naming one that does not — a pointer
 ``persona remove`` left behind — still wins, and the session has no persona rather than the
-default. :func:`selection` says which case it is (#1045).
+default. :func:`selection` says which case it is (#1045). A ``$CHARTER_PERSONA`` holding only
+whitespace names nothing and is unset, not a rung (:func:`from_environment`, #1048).
 
 The legacy flat layout ``personas/<name>.md`` still resolves for read, so old
 checkouts keep working until migrated (``charter persona migrate``).
@@ -1181,6 +1182,39 @@ def for_session(sid: str) -> str | None:
     return val if val and valid_name(val) else None
 
 
+def from_environment() -> str | None:
+    """The persona ``$CHARTER_PERSONA`` names, or ``None`` when it names none (#1048).
+
+    **Stripped, and what is left empty is unset.** The variable used to be taken as the top
+    rung whenever it was set and stripped only after that, so a value of whitespace resolved
+    to ``""`` and hid every rung below it: the session pointer, the terminal pointer, the
+    plane-wide file and the plane's declared default. `export CHARTER_PERSONA=$(…)` over a
+    command that printed only a space or a tab leaves exactly that — the shell strips the
+    trailing newlines of a substitution and nothing else — and nobody chose it. Empty was
+    already unset — `commands_frame._frame_identity_env` launches every chat with
+    ``CHARTER_PERSONA=`` — and this is that rule one character further, the one
+    `session.current` applies to ``$CHARTER_SESSION_ID`` and `frame.switch._pin` to a launch
+    pin. A name inside the whitespace is that name, as a pointer file's content is.
+
+    The one reading of the variable: :func:`_resolved` ranks it, `commands_persona._warn_env`
+    says it outranks a `use`, and a second copy is how those two came to disagree about
+    ``" "``.
+    """
+    return os.environ.get("CHARTER_PERSONA", "").strip() or None
+
+
+def blank_in_environment() -> bool:
+    """``$CHARTER_PERSONA`` is set to whitespace and nothing else, so :func:`from_environment`
+    ignored it (#1048).
+
+    Worth saying because the operator's export is broken, and resolution going on through the
+    rungs below hides that from them. Empty is not reported: it is what a frame launches every
+    chat with when the launch pinned nothing, so it would be said in every chat about an
+    export nobody wrote.
+    """
+    return bool(os.environ.get("CHARTER_PERSONA")) and from_environment() is None
+
+
 def _resolved(explicit: str | None = None) -> tuple[str | None, str]:
     """``(persona, where it came from)`` — the whole precedence, decided ONCE.
 
@@ -1191,9 +1225,9 @@ def _resolved(explicit: str | None = None) -> tuple[str | None, str]:
     """
     if explicit:
         return explicit, "--persona"
-    env = os.environ.get("CHARTER_PERSONA")
+    env = from_environment()
     if env:
-        return env.strip(), "$CHARTER_PERSONA"
+        return env, "$CHARTER_PERSONA"
     sf, tf = _pointer_files()
     val = _read_pointer(sf)
     if val:

@@ -344,6 +344,22 @@ Seven rungs, highest first. The first one that names a persona wins:
 The two committed rungs name a persona only if it exists. The five above them win even when
 the persona they name does not; see *When a selection names a persona that does not exist*.
 
+`$CHARTER_PERSONA` is stripped of surrounding whitespace, so `" forge "` selects `forge`. A
+value that is empty or holds only whitespace names nothing and counts as unset: the rungs
+below it decide (#1048). That is what `export CHARTER_PERSONA=$(…)` leaves when the
+command prints only a space or a tab, and before, it hid every rung below it and left the
+session with no persona. `charter persona current` says when it ignored one, after the
+rung that decided:
+
+```
+steward
+• resolved via charter.toml
+! $CHARTER_PERSONA is set but holds only whitespace, so charter ignored it and the rungs below it decided. Unset it, or set it to the persona you meant.
+```
+
+An empty `$CHARTER_PERSONA` is not reported, because a frame starts every chat with the
+variable set and empty when the launch pinned no persona.
+
 `charter persona use <name>` writes the session *and* terminal pointers, so two panes hold
 two personas and neither moves the other. Only the terminal pointer survives closing and
 reopening Claude, and only when your terminal reports a pane id — `use` says which of the

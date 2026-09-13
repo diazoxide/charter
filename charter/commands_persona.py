@@ -429,8 +429,15 @@ def cmd_persona_current(args) -> int:
         util.warn(f"resolved via {sel.source} — {_MISSING}, and the plane's default does not "
                   "stand in for it.")
         util.info(f"Ways out: {persona.ways_out(sel.source)}.")
-        return 0
-    util.info(f"resolved via {sel.source}")
+    else:
+        util.info(f"resolved via {sel.source}")
+    # After the rung, and on both branches: resolution went on past the variable without a
+    # word, so the rung that decided reads as the operator's choice while their export is
+    # what broke (#1048). The value is not echoed; it is whitespace, and a line separator
+    # among it would start a line of its own.
+    if persona.blank_in_environment():
+        util.warn("$CHARTER_PERSONA is set but holds only whitespace, so charter ignored it and "
+                  "the rungs below it decided. Unset it, or set it to the persona you meant.")
     return 0
 
 
@@ -695,8 +702,11 @@ cmd_persona_secret_audit = _proxy(commands_secrets.cmd_secret_audit)
 
 
 def _warn_env(name: str) -> None:
-    env = os.environ.get("CHARTER_PERSONA")
-    if env and env.strip() != name:
+    # The name resolution ranks, not the raw variable: a blank one outranks nothing, and
+    # warning that `' '` takes precedence sent the operator to a variable that was not
+    # deciding (#1048).
+    env = persona.from_environment()
+    if env and env != name:
         util.warn(f"$CHARTER_PERSONA='{env}' is set and takes precedence — commands use "
                   f"'{env}', not '{name}'.")
 
