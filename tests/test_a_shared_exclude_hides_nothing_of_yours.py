@@ -67,6 +67,23 @@ class YourFileInTheClone(WorktreeLayer):
         # The announcement's promise is two claims, and one of them no longer holds.
         self.assertNotIn("`git status` there is unaffected", said)
 
+    def test_the_sentence_says_charters_shared_file_shows_and_reinit_hides_it(self):
+        wt = self.added()
+        exclude = os.path.realpath(workspace.git_exclude_file(wt))
+        self.assertEqual(workspace.unhidden(wt), [
+            f"charter's {SHARED} is not hidden there, because {self.yours} is an untracked file "
+            f"charter did not write and the line hiding charter's would hide it too, through the "
+            f"{exclude} both checkouts read — commit or move {self.yours}, and the next "
+            f"`charter workspace reinit` hides charter's"])
+
+    def test_doctor_names_it_beside_a_finding_of_the_workspace_directorys_own(self):
+        """A row of the workspace directory belongs to no checkout, and asking it for a file of
+        yours must neither fail nor cost the piece's sentence."""
+        self.added()
+        (workspace.workspace_dir(self.ws) / SHARED).unlink()
+        hint = doctor.check_workspace_harness().hint
+        self.assertIn(f"commit or move {self.yours}", hint)
+
     def test_doctors_row_names_your_file_and_what_clears_it(self):
         self.added()
         rows = dict(workspace.harness_layer(self.ws))
@@ -147,6 +164,20 @@ class YourFileInTheClone(WorktreeLayer):
 
 
 class CharterFilesStillHiddenEverywhere(WorktreeLayer):
+    def test_doctor_says_nothing_of_your_files_where_none_is_in_the_way(self):
+        self.by_hand()
+        self.assertNotIn("'unhidden'", doctor.check_workspace_harness().hint)
+
+    def test_unwiring_the_clone_lets_the_line_for_your_rewrite_of_its_file_go(self):
+        """#942's *leaving*: a file charter wrote and you rewrote is yours to see once charter
+        leaves. Git lists the clone itself among the trees reading the exclude, spelled its own
+        way, and taken for another checkout it kept that line for the clone's own file."""
+        self.by_hand()
+        (self.clone / SHARED).write_text(YOURS)
+        workspace.unwire_guest(self.clone)
+        self.assertNotIn(f"/{SHARED}\n", workspace.git_exclude_file(self.clone).read_text())
+        self.assertIn(f"?? {SHARED}\n", _status(self.clone))
+
     def test_a_piece_wired_before_its_clone_hides_charters_files_in_both(self):
         """Charter's own file at the path in another checkout is no reason to leave a line out. A
         block somebody emptied is written again by the next piece cut, before the clone is wired."""
@@ -242,6 +273,14 @@ class AGitThatFailsNamesTheClone(WorktreeLayer):
         named = [rel for rel, status in self.rows_with(failed).items() if status == "unlisted"]
         self.assertEqual(named, ["svc/.git/worktrees"])
 
+    def test_clones_are_named_in_the_order_doctor_and_reinit_list_the_workspace(self):
+        alpha = _repo(workspace.workspace_dir(self.ws) / "alpha")
+        _git(alpha, "worktree", "add", "-q", "-b", "a1",
+             str(workspace.workspace_dir(self.ws) / ".worktrees" / "alpha" / "a1"))
+        failed = subprocess.CompletedProcess([], 128, stdout="", stderr="fatal: nope")
+        named = [rel for rel, status in self.rows_with(failed).items() if status == "unlisted"]
+        self.assertEqual(named, ["alpha/.git/worktrees", "svc/.git/worktrees"])
+
     def test_a_clone_whose_listing_git_gives_is_not_named(self):
         self.by_hand()
         self.assertNotIn("svc/.git/worktrees", dict(workspace.harness_layer(self.ws)))
@@ -270,6 +309,22 @@ class AGitThatFailsNamesTheClone(WorktreeLayer):
 
 
 class GitIsAskedAboutAPathOnlyWhereAFileIsThere(WorktreeLayer):
+    def test_a_chat_in_a_piece_with_nothing_withheld_lists_no_worktrees(self):
+        """The banner runs for a chat's every start: with no machine-local file missing, there is
+        nothing a file of yours could withhold, and no reason to ask git whose trees share the
+        exclude."""
+        wt = self.added()
+        calls: list[list[str]] = []
+        real = workspace.util.run
+
+        def _record(cmd, *a, **k):
+            calls.append(list(cmd))
+            return real(cmd, *a, **k)
+
+        with mock.patch.object(workspace.util, "run", _record):
+            self.assertEqual(workspace.rules_not_in_force(wt), "")
+        self.assertEqual([c for c in calls if "worktree" in c], [])
+
     def git_status_of(self, paths) -> list[list[str]]:
         asked: list[list[str]] = []
         real = workspace.util.run
@@ -354,6 +409,16 @@ class YourLocalFileInTheClone(WorktreeLayer):
         self.assertNotIn("`git status` there is unaffected", said)
         # Named once, with what clears it — not also as an exclude charter could not write.
         self.assertNotIn("could not hide it in that checkout's .git/info/exclude", said)
+
+    def test_the_sentence_says_charters_local_file_is_not_written_and_reinit_writes_it(self):
+        wt = self.added()
+        exclude = os.path.realpath(workspace.git_exclude_file(wt))
+        self.assertEqual(workspace.unhidden(wt), [
+            f"charter's {LOCAL} is not written there, because {self.yours} is an untracked file "
+            f"charter did not write and the line hiding charter's would hide it too, through the "
+            f"{exclude} both checkouts read — and a machine-local file charter cannot hide is one "
+            f"`git add` from being committed — commit or move {self.yours}, and the next "
+            f"`charter workspace reinit` writes and hides charter's"])
 
     def test_doctor_names_it_withheld_and_what_clears_it(self):
         self.added()
@@ -445,3 +510,29 @@ class BothOfYourFilesInTheClone(WorktreeLayer):
         # Charter's own shared file is stale, and `reinit` brings it up to date, shown or not.
         self.assertIn(f"({SHARED}, stale) — `charter workspace reinit api` writes them", said)
         self.assertIn(f"({LOCAL}, withheld) — charter's {LOCAL} is not written there", said)
+
+
+@unittest.skipIf(os.geteuid() == 0, "root reads a mode-000 directory")
+class ABlockBothUnaccountedAndUnhidden(WorktreeLayer):
+    def test_the_row_reads_unaccounted_and_doctor_names_both(self):
+        """One row, one status: a line kept without proof is the one `reinit` can never clear, so
+        it leads — and the file of yours behind the line left out is named all the same."""
+        workspace.unwire_guest(self.clone)
+        (self.clone / ".claude").mkdir(exist_ok=True)
+        (self.clone / SHARED).write_text(YOURS)
+        workspace.wire_harnesses(self.ws)
+        wt = self.added()
+        exclude = workspace.git_exclude_file(self.clone)
+        # A line charter's block keeps for a path it cannot check in the clone.
+        exclude.write_text(exclude.read_text().replace(
+            f"/{AGENT}\n", f"/{AGENT}\n/.claude/kept/gone.md\n"))
+        kept = self.clone / ".claude" / "kept"
+        kept.mkdir()
+        kept.chmod(0)
+        self.addCleanup(kept.chmod, 0o755)
+        self.assertIn("/.claude/kept/gone.md", exclude.read_text(), "fixture: no line kept")
+        rows = dict(workspace.harness_layer(self.ws))
+        self.assertEqual(rows[".worktrees/svc/p1/.git/info/exclude"], "unaccounted")
+        hint = doctor.check_workspace_harness().hint
+        self.assertIn("gone.md cannot be checked", hint)
+        self.assertIn(f"commit or move {os.path.realpath(self.clone / SHARED)}", hint)

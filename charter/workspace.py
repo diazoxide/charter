@@ -3004,7 +3004,9 @@ def _pieces(name: str, checkouts: list[Path]) -> tuple[list[Path], list[Path]]:
             # Keyed by where it is, because two checkouts of one repository — a clone and a
             # worktree of it at the workspace's top level — list the same pieces.
             found[os.path.realpath(at[0])] = at[0]
-    return sorted(found.values()), sorted(unlisted_at.values())
+    # Unlisted in *checkouts*' order, and no `sorted`: `guest_trees` hands them over sorted, and a
+    # dict keeps the order its first keys arrived in, so a sort here decided nothing (CI's sweep).
+    return sorted(found.values()), list(unlisted_at.values())
 
 
 def _piece_at(name: str, path) -> tuple[Path, tuple[str, ...]] | None:

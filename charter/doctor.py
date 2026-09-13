@@ -2804,18 +2804,20 @@ def _workspace_harness_result(_config, _workspace) -> Result:
         first.append("An 'unlisted' .git/worktrees is a clone whose worktrees git could not list, "
                      "so none of them was checked or given charter's layer. What clears it: "
                      + "; ".join(cannot) + ".")
-    if "unhidden" in statuses:
-        # #1072: the opposite failure, and only the operator can clear it. A clone and its
-        # worktrees share one exclude, so the line for one checkout's file would hide an untracked
-        # file of yours at that path in another. Charter keeps its file written — the plane's
-        # ask/deny rules stay in force there — and leaves it showing rather than hide yours.
-        # Deduped for `unaccounted`'s reason: checkouts sharing one exclude can share a reason.
-        shown = dict.fromkeys(reason for ws, rel, status in findings if status == "unhidden"
-                              for row in [_workspace.checkout_row(ws, rel)] if row
-                              for reason in _workspace.unhidden(row[0]))
-        first.append("An 'unhidden' exclude block leaves out a line that would also hide a file of "
-                     "yours, so a shared file charter wrote shows in that checkout's `git status` "
-                     "and a machine-local one ('withheld') is not written at all: "
+    # #1072: the opposite failure, and only the operator can clear it. A clone and its worktrees
+    # share one exclude, so the line for one checkout's file would hide an untracked file of yours
+    # at that path in another. Charter leaves the line out: a shared file it wrote shows, and a
+    # machine-local one is not written. Asked of every finding's checkout, as `unaccounted` is,
+    # and printed whenever one has a reason rather than only beside an `unhidden` row: one row
+    # carries one status, and a block both `unaccounted` and `unhidden` reads `unaccounted` — its
+    # file of yours must still be named. Deduped: checkouts sharing one exclude share a reason.
+    shown = dict.fromkeys(reason for ws, rel, _status in findings
+                          for row in [_workspace.checkout_row(ws, rel)] if row
+                          for reason in _workspace.unhidden(row[0]))
+    if shown:
+        first.append("An exclude line left out because it would also hide a file of yours "
+                     "('unhidden') leaves a shared file charter wrote showing in that checkout's "
+                     "`git status`, and a machine-local one ('withheld') unwritten: "
                      + "; ".join(shown) + ".")
     rest: list[str] = []
     if "tracked" in statuses:
