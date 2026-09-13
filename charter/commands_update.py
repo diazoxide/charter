@@ -403,7 +403,9 @@ def _resolve_target(args, installed: str, locked: str | None) -> tuple[str | Non
     explicit = (getattr(args, "to", None) or "").strip()
     if explicit:
         return explicit, False, None
-    if locked and version_key(installed) < version_key(locked):
+    # No `locked and` in front: an absent pin keys as not a version, `()`, and nothing is
+    # below that, so this is never true without a pin. The conjunct changed no answer.
+    if version_key(installed) < version_key(locked):
         return locked, False, None    # conforming to a pin somebody chose affects nobody
     latest = _latest()
     if not latest:

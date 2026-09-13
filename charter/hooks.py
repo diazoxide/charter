@@ -6779,7 +6779,14 @@ def _autosync_version_lock() -> str | None:
         # match that stood here read a running ``5.0.0.post1`` as ``5.0.0``, so a pin on
         # ``5.0.0`` was not older and got installed: a downgrade of the guard's own binary,
         # let through by a suffix (#1050). The pin cannot be a non-version by this line.
-        if update.version_key(locked) < update.version_key(__version__):
+        there, here = update.version_key(locked), update.version_key(__version__)
+        if there <= here:
+            if there == here:
+                # The running release under another spelling, which the string equality
+                # above cannot see: ``5.0.00`` passes `version_ok` and PEP 440 reads it as
+                # ``5.0.0``. Installing it reinstalls what runs at every session start and
+                # calls that an update; calling it older sends someone to downgrade to it.
+                return None
             return (f"⬢ charter: this control plane pins {locked}, which is OLDER than "
                     f"the {__version__} you are running. charter did not install it: a "
                     f"downgrade replaces the binary that enforces the credential guard "

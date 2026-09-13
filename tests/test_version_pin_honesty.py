@@ -45,8 +45,16 @@ class TestLatestIsNotPresentedAsFactWhenStale(PersonaIso):
         self.assertIn("0.28.0", update.latest_display("0.27.2"))
 
     def test_a_cache_equal_to_you_shows_the_version(self):
+        """Exactly the version. `assertIn` passed on the stale sentence too, which carries
+        the number twice."""
         self._cache("0.27.2")
-        self.assertIn("0.27.2", update.latest_display("0.27.2"))
+        self.assertEqual(update.latest_display("0.27.2"), "0.27.2")
+
+    def test_a_cache_of_the_release_you_run_under_a_label_is_not_stale(self):
+        """#1050: ``0.27.2+local`` is the release ``0.27.2`` built from a checkout, so a
+        cached 0.27.2 is equal to it and does not predate it."""
+        self._cache("0.27.2")
+        self.assertEqual(update.latest_display("0.27.2+local"), "0.27.2")
 
     def test_a_cache_behind_you_is_not_offered_as_the_latest(self):
         """`installed 0.27.2 / latest 0.26.0` is a self-contradiction on the same screen.
