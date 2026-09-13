@@ -182,8 +182,16 @@ def cmd_worktree_add(args) -> int:
     # ing in and running the build. Imported here rather than at module scope: `commands`
     # imports a good deal of the package, and this module is on the import path of the CLI
     # for every subcommand.
-    from .commands import report_submodule_drift
+    from .commands import announce_layer, report_submodule_drift
     report_submodule_drift(path, f"{args.repo} · {args.piece}")
+
+    # The directory the `enter:` line below sends a worker into is a git root of its own, so a
+    # session there reads none of what charter wrote into the clone beside it: no plugin, no
+    # `$CHARTER_HARNESS`, no persona agents, none of the plane's ask/deny rules (#951). Wired
+    # here, before that line, rather than left to the next launch or `reinit` — the worker is
+    # told to start a session in it now. One worktree listing for both of the wire's passes.
+    with workspace.worktree_answers():
+        announce_layer(f"{args.repo} · {args.piece}", workspace.wire_guest(path))
 
     # An untracked charter.toml is worth knowing about on its own: nobody else cloning that
     # repo gets the plane at all. It is asked of the repo the worktree was CUT FROM, never

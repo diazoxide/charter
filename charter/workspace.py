@@ -2336,7 +2336,8 @@ def harness_layer(name: str) -> list[tuple[str, str]]:
             return [(GENERATED_MARKER, "foreign")]
         rows = _layer_status(workspace_dir(name), _layer_files(name), _read_marker(name))
         for tree in guest_trees(name):
-            rows.extend((f"{tree.name}/{rel}", status) for rel, status in guest_layer(tree))
+            rows.extend((f"{checkout_label(name, tree)}/{rel}", status)
+                        for rel, status in guest_layer(tree))
     return rows
 
 
@@ -2494,7 +2495,8 @@ def wire_harnesses(name: str) -> list[tuple[str, str]]:
             return [(GENERATED_MARKER, "blocked")]
         rows = _materialise(workspace_dir(name), _layer_files(name))
         for tree in guest_trees(name):
-            rows.extend((f"{tree.name}/{rel}", status) for rel, status in wire_guest(tree))
+            rows.extend((f"{checkout_label(name, tree)}/{rel}", status)
+                        for rel, status in wire_guest(tree))
     return rows
 
 
@@ -2890,22 +2892,150 @@ def guest_trees(name: str) -> list[Path]:
     # No `is_dir()` filter: `git_dir` already answers `None` for a plain file — its
     # `.git` join raises `NotADirectoryError` — so a predicate here would be one more
     # spelling of the same question, and the deletion sweep would be right to take it.
-    return [d for d in entries if git_dir(d) is not None]
+    children = [d for d in entries if git_dir(d) is not None]
+    return children + _pieces(name, children)
+
+
+def _pieces(name: str, checkouts: list[Path]) -> list[Path]:
+    """Every piece's worktree of workspace *name*: a worktree of one of *checkouts*' repositories
+    that git lists at ``<root>/<repo>/<piece>``, spelled under the root it was found in.
+
+    **The half of :func:`guest_trees` its docstring promised and its scan never had (#951).** A
+    piece sits two levels below its workspace, at `.worktrees/<repo>/<piece>`, and `.worktrees`
+    holds no `.git` of its own; under `[plane] worktrees` or `$CHARTER_WORKTREES` it is outside the
+    workspace altogether. So every piece `charter wt add` cut — the directory it tells the worker
+    to start a session in — got no layer from a launch, `reinit` or `clone`, and no `doctor` row.
+
+    **Asked of git, the only registry** (`worktree.py`, ADR 0011): a worktree made by hand at the
+    layout's path counts, and one removed by hand does not. Not a walk of the root, which would
+    take a directory somebody copied for a live worktree. Through :func:`_worktree_list`, so a
+    launch or a `doctor` run asks each repository once however many readers want the answer, and
+    not at all where the common directory has no `worktrees/` — :func:`_live_trees`' rule, and the
+    same ~7 ms a spawn on every launch of a workspace with no pieces.
+
+    A listing git cannot give, and an entry git calls prunable, bare or gone, is passed over —
+    nothing is wired there, and the clone's own rows still say what they say.
+    """
+    from . import worktree as _worktree
+
+    found: dict[str, Path] = {}
+    for tree in checkouts:
+        # Never `None`: every one of *checkouts* has a git directory, which is all the exclude's
+        # answer needs — a test for it here decided nothing (the hand deletion sweep said so).
+        common = git_exclude_file(tree).parent.parent
+        try:
+            os.scandir(common / "worktrees").close()
+        except (FileNotFoundError, NotADirectoryError):
+            continue
+        except OSError:
+            pass
+        listed = _worktree_list(tree, common)
+        if isinstance(listed, Exception):
+            continue
+        # No exit-code test: a git that fails prints its `fatal:` to stderr and nothing here.
+        for entry in _worktree.parse_porcelain(listed.stdout):
+            # Under THIS workspace's roots only: another workspace's piece of the same repository is
+            # that workspace's to wire and to take away, and `workspace remove` of this one must not
+            # strip it.
+            at = _piece_at(name, entry["path"])
+            # No `prunable` or `bare` test: a worktree git calls prunable has no `.git` that points
+            # anywhere, and a bare repository's entry is a git directory with none, so `git_dir`
+            # answers both.
+            if at is None or git_dir(at[0]) is None:
+                continue
+            # Keyed by where it is, because two checkouts of one repository — a clone and a
+            # worktree of it at the workspace's top level — list the same pieces.
+            found[os.path.realpath(at[0])] = at[0]
+    return sorted(found.values())
+
+
+def _piece_at(name: str, path) -> tuple[Path, tuple[str, ...]] | None:
+    """``(worktree, the parts below it)`` when *path* is one of workspace *name*'s pieces or lies
+    inside one — ``None`` otherwise. Path arithmetic only; whether a checkout is there is the
+    caller's question.
+
+    The worktree comes back spelled under the ROOT it matched, never as *path* spells it. Git
+    records a worktree by its resolved path (measured, git 2.50.1: a piece cut through a linked
+    `.worktrees` is listed where the link points), while charter spells a plane as `config.use`
+    was handed it — so each root is tried as spelled and then resolved, and the answer is always
+    the root's own spelling. That spelling is what :func:`_wired_tree_ok` judges: a piece whose
+    root resolves out of its base is found here, and named rather than wired there.
+
+    Per workspace, because only a workspace's own root can be resolved: a `.worktrees` linked out
+    of the plane puts the piece's resolved path under no base a plane-wide parse could start from.
+    The layout is `worktree.py`'s — ``<root>/<ws>/<repo>/<piece>`` relocated, and
+    ``workspaces/<ws>/.worktrees/<repo>/<piece>`` in the plane — and both roots are tried, for
+    `worktree.locate`'s reason: a plane that has just declared a relocated root still has
+    yesterday's pieces under `.worktrees/`.
+    """
+    from . import worktree as _worktree
+
+    roots = [workspace_dir(name) / _worktree.DIR_NAME]
+    if config.WORKTREES_ROOT is not None:
+        roots.insert(0, config.WORKTREES_ROOT / name)
+    for root in roots:
+        for here, there in ((os.path.normpath(path), os.path.normpath(root)),
+                            (os.path.realpath(path), os.path.realpath(root))):
+            # `relative_to`, never a string prefix: `.worktrees-old/…` begins with `.worktrees`, and
+            # so does another workspace's `<root>/api-old/…` with `<root>/api`.
+            try:
+                parts = Path(here).relative_to(there).parts
+            except ValueError:
+                continue
+            if len(parts) >= 2:
+                return root / parts[0] / parts[1], parts[2:]
+    return None
+
+
+def checkout_label(name: str, tree: Path) -> str:
+    """How a row of workspace *name* names its guest checkout *tree*: the path from the workspace
+    directory when *tree* is inside it — `svc`, `.worktrees/svc/p1` — and the absolute path of a
+    piece under a relocated root, which no path from the workspace spells readably.
+
+    `tree.name` was the label while every guest was a direct child. A piece's name is its own
+    directory's alone, so two repositories' `p1` would read as one checkout, and a piece named
+    like a clone as that clone. Callers join it with `os.path.join(workspace, label)`, which keeps
+    an absolute label as it is. :func:`checkout_row` reads a row back to its checkout.
+    """
+    inside = os.path.normpath(workspace_dir(name))
+    spelled = os.path.normpath(tree)
+    if spelled.startswith(inside + os.sep):
+        return spelled[len(inside) + 1:]
+    return spelled
 
 
 def _wired_tree_ok(tree: Path) -> bool:
     """Whether *tree* is a guest checkout charter may wire — one that itself resolves inside
-    this plane's ``workspaces/``.
+    the directory it belongs under: this plane's ``workspaces/``, or the relocated worktree root
+    for a piece spelled under that root.
 
     :func:`guest_trees` lists the children of a workspace directory and follows a symlink, so
     a `workspaces/<ws>/<name>` linked at a repository OUTSIDE the plane is a tree whose own
     root has already escaped. The per-file :func:`_inside` guard inside :func:`_write_whole`
     is relative to *that* root and would pass, so containment has to be asked of the tree
     ROOT as well: charter wires, unwires and reports only a tree genuinely under
-    ``workspaces/``. A tree that is not is NAMED by its caller (a wire and a doctor row) and
+    its base. A tree that is not is NAMED by its caller (a wire and a doctor row) and
     never written to.
+
+    **A piece under `$CHARTER_WORKTREES` or `[plane] worktrees` answers to that root (#951)**, which
+    is outside `workspaces/` by design. The root and not `<root>/<ws>`, for the reason the plane's
+    base is `workspaces/` and not `workspaces/<ws>/.worktrees`: it is the one directory somebody
+    vouched for — the person at the machine for the variable, :func:`contain.plane_adjacent` for
+    the committed setting, and `config.worktrees_root_for` resolved it — while everything below it
+    is directories charter or git made and a link anyone can plant. So a `<root>/<ws>` linked out of
+    the root is named, not wired.
+
+    Chosen by how *tree* is SPELLED, and only for a tree spelled outside `workspaces/` — which,
+    from every caller, is a piece spelled under the root (:func:`_piece_at`, `worktree.path_for`).
+    A root that contains the plane — `$CHARTER_WORKTREES` takes anything, `/` included — must not
+    become the base a workspace's own child answers to: a `workspaces/<ws>/<name>` linked out of the
+    plane would resolve inside `/` and be wired.
     """
-    return _inside(config.WORKSPACES_DIR, tree)
+    base = config.WORKSPACES_DIR
+    if (config.WORKTREES_ROOT is not None
+            and not os.path.normpath(tree).startswith(os.path.normpath(base) + os.sep)):
+        base = config.WORKTREES_ROOT
+    return _inside(base, tree)
 
 
 def _charter_owned(base: Path, marker: dict) -> list[str]:
@@ -3058,6 +3188,9 @@ def worktree_answers():
         yield
         return
     _SCOPE.answers = {}
+    # Git's own listing, per repository, for its two readers: which trees share an exclude
+    # (:func:`_listed_trees`) and which pieces a workspace holds (:func:`_pieces`, #951).
+    _SCOPE.listed = {}
     # The marker's trust verdict is memoised here too (:func:`_marker_untrusted`):
     # it does not change while charter wires, and asking git once per checkout per block is
     # the same budget the worktree listing already holds itself to.
@@ -3066,6 +3199,7 @@ def worktree_answers():
         yield
     finally:
         _SCOPE.answers = None
+        _SCOPE.listed = None
         _SCOPE.tracked = None
 
 
@@ -3136,14 +3270,12 @@ def _listed_trees(tree: Path, exclude: Path, common: Path) -> tuple[list[Path] |
     from . import worktree as _worktree
 
     asked = f"listing the worktrees that share {exclude}"
-    try:
-        proc = util.run(["git", "-C", str(tree), "worktree", "list", "--porcelain"],
-                        check=False, timeout=_GIT_TIMEOUT, unset=_GIT_ENV)
-    except OSError as e:
-        return None, f"git could not be run {asked} ({e}) — a git that runs there clears this"
-    except util.ProcTimeout:
+    proc = _worktree_list(tree, common)
+    if isinstance(proc, util.ProcTimeout):
         return None, (f"git timed out after {_GIT_TIMEOUT:g}s {asked} — a git that answers "
                       f"there in time clears this")
+    if isinstance(proc, OSError):
+        return None, f"git could not be run {asked} ({proc}) — a git that runs there clears this"
     if proc.returncode != 0:
         return None, f"git exited {proc.returncode} {asked} — a git that answers there clears this"
     trees: list[Path] = []
@@ -3173,6 +3305,30 @@ def _listed_trees(tree: Path, exclude: Path, common: Path) -> tuple[list[Path] |
                           f"restoring that checkout, or read access to it, clears this")
         trees.append(path)
     return trees, ""
+
+
+def _worktree_list(tree: Path, common: Path):
+    """``git worktree list --porcelain`` for the repository whose common git directory is
+    *common*, asked from *tree* — the finished process, or the `OSError` or `util.ProcTimeout`
+    running it raised. Asked at most ONCE per repository per :func:`worktree_answers` block.
+
+    One spawn for two readers (#951): :func:`_listed_trees` asks which trees share an exclude,
+    :func:`_pieces` which pieces a workspace holds, and a launch asks both of every repository
+    with a worktree — so a copy of this per reader was a second 5 s budget on a hung git, the
+    cost review round 4 took out of the first. What either does with a failure is its own.
+    """
+    listed = getattr(_SCOPE, "listed", None)
+    key = os.path.realpath(common)
+    if listed is not None and key in listed:
+        return listed[key]
+    try:
+        answer = util.run(["git", "-C", str(tree), "worktree", "list", "--porcelain"],
+                          check=False, timeout=_GIT_TIMEOUT, unset=_GIT_ENV)
+    except (OSError, util.ProcTimeout) as e:
+        answer = e
+    if listed is not None:
+        listed[key] = answer
+    return answer
 
 
 class _Block(NamedTuple):
@@ -3394,6 +3550,14 @@ def checkout_row(name: str, rel: str) -> tuple[Path, str] | None:
     One answer for `doctor`, `reinit` and `guard ask`, which word a checkout's file differently
     from the workspace's (review round 5): only a checkout is somebody else's repository, where a
     file charter did not write is committed with `git add -f`."""
+    at = _piece_at(name, os.path.join(workspace_dir(name), rel))
+    if at is not None:
+        # A piece's row (#951): `.worktrees/<repo>/<piece>/…`, or the absolute path under a
+        # relocated root — :func:`checkout_label`'s two spellings, read back by path arithmetic
+        # rather than by asking git again for every row a command prints. No `git_dir` test, which
+        # the clone's spelling below needs and this one does not: a row of the workspace
+        # directory's own never lies under a piece's root.
+        return at[0], "/".join(at[1])
     head, _, inner = rel.partition("/")
     tree = workspace_dir(name) / head
     return (tree, inner) if inner and git_dir(tree) is not None else None
@@ -3410,24 +3574,35 @@ def rules_not_in_force(cwd) -> str:
     not writable ran without the plane's newest rule and said nothing where the command gets
     typed. The rules are read out of the file the harness reads, never inferred from a status.
     """
+    from . import worktree as _worktree
     from .harness import registry as _registry
 
-    try:
-        parts = Path(os.path.realpath(cwd)).relative_to(
-            os.path.realpath(config.WORKSPACES_DIR)).parts
-    except ValueError:
-        return ""
-    if not parts or not valid_name(parts[0]):
-        return ""
-    base = workspace_dir(parts[0])
-    if len(parts) > 1 and git_dir(base / parts[1]) is not None:
-        tree, where = base / parts[1], "this checkout"
+    # A chat in a piece's worktree (#951) — the directory `charter wt add` sends a worker into, and
+    # under a relocated root not inside `workspaces/` at all. `worktree.locate` names the workspace;
+    # :func:`_piece_at` spells the checkout the way every other reader of that piece does.
+    located = _worktree.locate(cwd)
+    piece = _piece_at(located[0], cwd) if located else None
+    if piece is not None and git_dir(piece[0]) is not None:
+        ws, tree, where = located[0], piece[0], "this checkout"
         want, marker, refused = _guest_files(tree), _read_marker_at(tree), unrecorded_fix(tree, where)
-    elif len(parts) == 1:
-        tree, where = base, "this workspace"
-        want, marker, refused = _layer_files(parts[0]), _read_marker(parts[0]), ""
     else:
-        return ""
+        try:
+            parts = Path(os.path.realpath(cwd)).relative_to(
+                os.path.realpath(config.WORKSPACES_DIR)).parts
+        except ValueError:
+            return ""
+        if not parts or not valid_name(parts[0]):
+            return ""
+        ws, base = parts[0], workspace_dir(parts[0])
+        if len(parts) > 1 and git_dir(base / parts[1]) is not None:
+            tree, where = base / parts[1], "this checkout"
+            want, marker, refused = (_guest_files(tree), _read_marker_at(tree),
+                                     unrecorded_fix(tree, where))
+        elif len(parts) == 1:
+            tree, where = base, "this workspace"
+            want, marker, refused = _layer_files(ws), _read_marker(ws), ""
+        else:
+            return ""
     riding: dict[str, tuple[str, ...]] = {}
     for h in _registry.all():
         riding.update(h.restrictive_rules())
@@ -3445,7 +3620,7 @@ def rules_not_in_force(cwd) -> str:
         if status in ("missing", "stale") and refused:
             fix = refused
         elif status in ("missing", "stale"):
-            fix = f"`charter workspace reinit {parts[0]}` writes them"
+            fix = f"`charter workspace reinit {ws}` writes them"
         elif status == "unreadable":
             fix = f"restore read access to {rel}"
         else:
@@ -3616,8 +3791,11 @@ def unwire_guests(name: str) -> list[str]:
     charter added" true for both shapes.
     """
     out: list[str] = []
-    for tree in guest_trees(name):
-        out += [f"{tree.name}/{rel}" for rel in unwire_guest(tree)]
+    # Every tree listed before any is unwired, in one block: the listing asks git once per
+    # repository, and the unwiring changes nothing git lists.
+    with worktree_answers():
+        for tree in guest_trees(name):
+            out += [f"{checkout_label(name, tree)}/{rel}" for rel in unwire_guest(tree)]
     return out
 
 

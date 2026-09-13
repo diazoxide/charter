@@ -2109,14 +2109,17 @@ def _reinit_target(root: Path | None) -> str | None:
         # loop, so an unreadable `workspaces/` raised straight past it, out of this function
         # and out of `charter doctor` — the whole command, not one row (#982 review round 2b).
         return None
-    for name in names:
-        try:
-            if root == _workspace.workspace_dir(name).resolve():
-                return name
-            if any(root == tree.resolve() for tree in _workspace.guest_trees(name)):
-                return name
-        except OSError:
-            continue
+    # One worktree listing per repository across every workspace: `guest_trees` asks git for a
+    # workspace's pieces (#951), which is what lets a chat in one be told `reinit` reaches it.
+    with _workspace.worktree_answers():
+        for name in names:
+            try:
+                if root == _workspace.workspace_dir(name).resolve():
+                    return name
+                if any(root == tree.resolve() for tree in _workspace.guest_trees(name)):
+                    return name
+            except OSError:
+                continue
     return None
 
 
@@ -2748,9 +2751,13 @@ def _workspace_harness_result(_config, _workspace) -> Result:
     # the tick that stops a reader. It clears a missing, stale or unwanted file — but not one in a
     # checkout whose record cannot be published, where it writes nothing either.
     def tree_of(ws: str, rel: str) -> tuple[str, str]:
-        # One split for both sets. On an `unrecorded` row — always `<tree>/.charter-generated` —
-        # `partition` and `rpartition` agree, so a spelling of its own there could not be pinned.
-        return ws, rel.partition("/")[0]
+        # One reading for both sets, and `checkout_row`'s: a piece's row is
+        # `.worktrees/<repo>/<piece>/…` or an absolute path (#951), so its first segment names no
+        # checkout, and every piece in a workspace read as one — an unrecorded marker in one kept
+        # `reinit` from leading the hint over a missing file in another. A row of the workspace
+        # directory's own belongs to no checkout.
+        row = _workspace.checkout_row(ws, rel)
+        return ws, str(row[0]) if row else ""
 
     stuck = {tree_of(ws, rel) for ws, rel, status in findings if status == "unrecorded"}
     reinit_clears = any(status in ("missing", "stale", "unwanted") and tree_of(ws, rel) not in stuck
@@ -2763,7 +2770,8 @@ def _workspace_harness_result(_config, _workspace) -> Result:
         # What clears it follows that errno (#942 final review): a full disk or a read-only mount
         # has no write access to restore.
         refused = dict.fromkeys(
-            f"{ws}/{row[0].name}: {_workspace.unrecorded_fix(row[0], 'that checkout')}"
+            f"{os.path.join(ws, _workspace.checkout_label(ws, row[0]))}: "
+            f"{_workspace.unrecorded_fix(row[0], 'that checkout')}"
             for ws, rel, status in findings if status == "unrecorded"
             for row in [_workspace.checkout_row(ws, rel)])
         first.append("An 'unrecorded' marker is one charter could not publish, so it writes "
@@ -2780,8 +2788,8 @@ def _workspace_harness_result(_config, _workspace) -> Result:
         # exclude share its reasons, and a filter to the `unaccounted` rows only was a way of
         # not printing them twice that the dedupe now is.
         why = dict.fromkeys(reason for ws, rel, _status in findings
-                            for reason in _workspace.unaccounted(
-                                _workspace.workspace_dir(ws) / rel.split("/", 1)[0]))
+                            for row in [_workspace.checkout_row(ws, rel)] if row
+                            for reason in _workspace.unaccounted(row[0]))
         first.append("An 'unaccounted' exclude block is still hiding a path charter cannot prove "
                      "it no longer needs, and keeps hiding it until it can: " + "; ".join(why) + ".")
     rest: list[str] = []
@@ -2841,7 +2849,7 @@ def _workspace_harness_result(_config, _workspace) -> Result:
         if reinit_clears:
             first.append("charter workspace reinit --all clears the rest.")
         hint = "   ".join([*first, *rest]) + aside
-    detail = [f"{ws}/{rel} ({status})" for ws, rel, status in findings]
+    detail = [f"{os.path.join(ws, rel)} ({status})" for ws, rel, status in findings]
     return Result(name, WARN,
                   detail=", ".join(detail[:4]) + (", …" if len(detail) > 4 else ""),
                   hint=hint)

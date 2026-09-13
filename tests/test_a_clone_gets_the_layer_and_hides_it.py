@@ -33,7 +33,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands, config, doctor, workspace
+from charter import commands, commands_worktree, config, doctor, workspace, worktree
 from charter import commands_workspace as cw
 from charter.harness import claude_code, registry
 
@@ -540,6 +540,18 @@ class TheExcludeIsReported(CloneLayer):
         self.assertIn("api/svc/.claude/settings.json", r.detail)
 
 
+def _wt_add(ws: str, repo: str, piece: str) -> Path:
+    """A piece's worktree cut the way charter cuts one — `charter wt add <repo> <piece> -w <ws>`,
+    at `.worktrees/<repo>/<piece>`. These cases once cut theirs with plain git at
+    `workspaces/<ws>/svc-wt`, a layout `wt add` never makes, and pinned a guest scan that could not
+    see the pieces charter does make (#951)."""
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+        rc = commands_worktree.cmd_worktree_add(SimpleNamespace(
+            workspace=ws, repo=repo, piece=piece, branch=None))
+    assert rc == 0, f"wt add {repo} {piece} exited {rc}"
+    return worktree.path_for(ws, repo, piece)
+
+
 class AWorktreeIsAGuestToo(CloneLayer):
     """`.git` is a FILE, and `info/exclude` is the MAIN repo's — measured, not assumed.
 
@@ -552,22 +564,18 @@ class AWorktreeIsAGuestToo(CloneLayer):
 
     def setUp(self) -> None:
         super().setUp()
-        self.main = Path(tempfile.mkdtemp(prefix="edm-test-main-"))
-        self.addCleanup(shutil.rmtree, self.main, ignore_errors=True)
-        _repo(self.main / "svc-main")
-        self.tree = workspace.workspace_dir(self.ws) / "svc-wt"
-        _git(self.main / "svc-main", "worktree", "add", "-q", str(self.tree), "-b", "side")
+        self.tree = _wt_add(self.ws, "svc", "side")
 
     def test_the_git_dir_is_resolved_through_the_pointer_file(self):
         self.assertFalse((self.tree / ".git").is_dir())
         # `.resolve()` on both sides: git writes the RESOLVED path into the pointer file,
         # and a macOS temp dir reaches the test as `/var/...` for git's `/private/var/...`.
         self.assertEqual(workspace.git_dir(self.tree).resolve(),
-                         (self.main / "svc-main" / ".git" / "worktrees" / "svc-wt").resolve())
+                         (self.clone / ".git" / "worktrees" / "side").resolve())
 
     def test_the_exclude_file_is_the_main_repos(self):
         self.assertEqual(workspace.git_exclude_file(self.tree).resolve(),
-                         (self.main / "svc-main" / ".git" / "info" / "exclude").resolve())
+                         (self.clone / ".git" / "info" / "exclude").resolve())
 
     def test_the_worktrees_status_really_is_clean(self):
         """The end-to-end claim, against real git rather than against charter's model of
@@ -795,11 +803,32 @@ class RemovingTheWorkspaceRemovesWhatCharterAdded(CloneLayer):
 
 
 class RemovingAWorkspaceWithAWorktree(CloneLayer):
+    """A piece `wt add` cut reads its clone's `info/exclude`, so unwiring the workspace has to
+    take the piece's files out AND leave no block for either checkout."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.tree = _wt_add(self.ws, "svc", "side")
+
+    def test_the_pieces_files_and_the_block_are_gone(self):
+        main_exclude = self.clone / ".git" / "info" / "exclude"
+        self.assertIn(workspace._EXCLUDE_BEGIN, main_exclude.read_text())
+        self.assertTrue((self.tree / ".claude" / "settings.json").is_file(),
+                        "fixture: wt add wrote nothing to take away")
+        workspace.unwire_guests(self.ws)
+        self.assertFalse((self.tree / ".claude").exists())
+        self.assertNotIn(workspace._EXCLUDE_BEGIN, main_exclude.read_text())
+
+
+class RemovingAWorkspaceWithAWorktreeCutByHandFromElsewhere(CloneLayer):
     """The case `shutil.rmtree` cannot answer: the exclude file is not in the directory.
 
-    A linked worktree's `info/exclude` belongs to a main repo somewhere else on disk, so
-    removing the workspace would leave charter's block sitting in a repo that is still
-    there, naming paths that no longer exist, in a file the operator did not write.
+    NOT a layout `charter wt add` makes — a worktree somebody cut with plain git into the top
+    level of a workspace, from a repository outside the plane. Its `info/exclude` belongs to that
+    repository, so removing the workspace would leave charter's block sitting in a repo that is
+    still there, naming paths that no longer exist, in a file the operator did not write. The
+    piece `wt add` cuts is `RemovingAWorkspaceWithAWorktree`'s, and a piece that outlives the
+    workspace is `test_a_worktree_gets_the_layer`'s.
     """
 
     def setUp(self) -> None:

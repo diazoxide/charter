@@ -136,9 +136,10 @@ committed, not itself tracked, and the one file a guest may write. Charter never
 clone's `.gitignore`, hides only the exact paths it wrote (never a `.claude/` glob, which
 would take your own untracked files with it), never touches a file it did not generate, and
 removes its files and its exclude block when the workspace goes. `git status` in your repo
-is unaffected. Linked worktrees included — their `info/exclude` is the main repo's, which is
-also why removal is not just a `rm -rf`, and why removing a workspace takes away only the
-lines no other checkout of that repository still needs. **`CLAUDE.md` is deliberately left behind**: a guest
+is unaffected. Linked worktrees included — a piece `charter wt add` cut as well as a clone (see
+*A session in a piece gets the layer a clone gets* below) — and their `info/exclude` is the main
+repo's, which is also why removal is not just a `rm -rf`, and why removing a workspace takes away
+only the lines no other checkout of that repository still needs. **`CLAUDE.md` is deliberately left behind**: a guest
 hides its own files, it does not narrate the host's.
 
 **And it is every harness's layer, not Claude Code's.** What a clone cuts off is spelled by
@@ -345,6 +346,42 @@ the *same* repo without re-cloning it:
 
 Each is a **piece** — one unit of work whose creation *is* the claim, because git already
 arbitrates who wins the path. See [adr/0011](adr/0011-the-record-holds-only-what-git-cannot-know.md).
+
+### A session in a piece gets the layer a clone gets
+
+A piece is a git root of its own, so a session started in it — where `charter wt add` tells you
+to start one — reads none of what charter wrote into the clone beside it. Charter writes the same
+layer into the piece: the plane's `enabledPlugins`, `env` and `ask`/`deny` rules in
+`.claude/settings.json`, the plane's `--local` rules in `.claude/settings.local.json`, and its
+agents and skills. Every path goes in the clone's `.git/info/exclude`, which the piece reads too,
+so `git status` stays clean in both.
+
+- **`charter wt add`** writes it before printing the `enter:` line.
+- **A launch and `charter workspace reinit`** write it into every worktree git lists for the
+  workspace's clones at `<root>/<repo>/<piece>`. That covers a worktree made with plain git at
+  that path and one an older charter cut. `<root>` is `.worktrees/`, or `<root>/<ws>/` under
+  `[plane] worktrees` or `$CHARTER_WORKTREES`, and pieces cut under `.worktrees/` before the root
+  moved are still covered. A worktree git no longer lists, or one of another workspace's roots,
+  is not.
+- **`charter doctor`'s `workspace layer` row** lists a piece's files as
+  `<ws>/.worktrees/<repo>/<piece>/<file>`, or by absolute path under a relocated root. A chat
+  started in a piece is told which of the plane's ask/deny rules are not in force there.
+- **`charter workspace remove`** takes charter's files out of every piece first. Under a
+  relocated root the piece directory outlives the workspace, and it keeps nothing of charter's.
+
+The local file is written for the same reason a clone gets one, and one reading of it is not
+measured. The table above shows a linked worktree reads its main checkout's
+`.claude/settings.local.json`. Whether it also reads the one at its own root has not been
+measured. The piece's copy holds the same rules as the clone's, so neither answer puts a rule in
+force that the plane does not declare. `doctor` and the chat line judge a piece by its own copy.
+
+**A piece whose path leads out of its base is named and gets nothing written.** For a piece
+under `.worktrees/`, the base is `workspaces/`. For a piece under a relocated root, the base is
+that root itself, not `<root>/<ws>`. The root is the directory you set, or that charter checked
+against the plane before using it, while `<root>/<ws>` is a directory anyone can replace with a
+link. A `.worktrees` or a `<root>/<ws>` linked elsewhere makes `wt add` warn that the layer was
+not written. `reinit` then reports the piece `blocked`, `doctor` reports it `foreign`, and
+`workspace remove` takes nothing out of it.
 
 ## Structure versioning, and `reinit`
 
