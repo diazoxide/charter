@@ -663,7 +663,7 @@ refused:
 - a token typed into any slot of a reference — `vault:forge/ghp_…`,
   `charter secret get forge <40 hex>`, `op://<token>/item/field` — by its prefix or by the
   length it adds, which is the accident this rule exists for;
-- a secret longer than 32 characters however it is split across names, including a
+- a secret of more than 32 name characters however it is split across names, including a
   `vault://` path of many short segments;
 - a real value beside the reference, glued onto it, or in a second assignment on that line
   or the next;
@@ -673,8 +673,10 @@ refused:
 
 The four other kinds are checked on the whole text whatever the assignment says:
 `vault:forge/xAKIA…` is still an AWS access key. **The length and prefix rule has a ceiling
-of its own:** a secret of 32 characters or fewer that starts with none of those prefixes
-reads as names and passes. And it costs the other way: an ordinary reference whose names add
+of its own:** a secret of at most 32 name characters, not counting the `/`, `#` or single
+spaces that separate them, that starts with none of those prefixes reads as names and
+passes — so a secret holding k separators passes at up to 32 + k characters, and
+`vault:<16>/<16>` is a 33-character value that passes. And it costs the other way: an ordinary reference whose names add
 up to more than 32 characters, `vault://secret/data/production/payments#stripe_api_key`, is
 refused as a credential.
 

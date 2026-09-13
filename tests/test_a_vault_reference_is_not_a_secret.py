@@ -18,8 +18,8 @@ item, field and path segment, without the scheme or the separators — come to a
 characters. Two reviews shaped that. The first cut had no rule, and a live token typed into a
 reference (`vault:forge/ghp_…`) passed where main refused it. The second capped each name at
 32, and a longer secret that holds a `/` — AWS's documented example secret key is one — split
-into short names and passed. A cap on the total refuses a secret over 32 characters however
-it is split. What stays refused, and is pinned below as refused on main too:
+into short names and passed. A cap on the total refuses a secret of more than 32 name
+characters however it is split. What stays refused, and is pinned below as refused on main too:
 
 * a bare `word/word`, because a secret can contain a slash;
 * a real value beside a reference, appended to it, or in a second assignment on the line
@@ -30,8 +30,9 @@ it is split. What stays refused, and is pinned below as refused on main too:
 * every other rule in the table, which the exemption never reaches: `vault:forge/xAKIA…` is
   an AWS access key whatever it is assigned to.
 
-The rule's own ceiling is stated rather than tested around: a token of 32 characters or
-fewer that starts with no listed prefix still reads as a name.
+The rule's own ceiling is pinned as a measured fact rather than tested around: a secret of at
+most 32 name characters, not counting the `/`, `#` or single spaces that separate them, that
+starts with no listed prefix still reads as names — `vault:<16>/<16>` passes at 33.
 """
 
 from __future__ import annotations
@@ -225,6 +226,14 @@ class TheClassifierReadsAReferenceAsAReference(unittest.TestCase):
         for ref in ORDINARY:
             with self.subTest(ref=ref):
                 self.assertIsNone(hooks._secret_kind(f"token: {ref}"))
+
+    def test_the_separators_are_not_counted(self):
+        """The documented ceiling, measured: sixteen name characters either side of one `/` is
+        a 33-character value, and it passes, because the cap counts names and not the text
+        between them. A secret carrying k separators can be 32 + k characters."""
+        value = "vault:" + "a" * 16 + "/" + "b" * 16
+        self.assertEqual(33, len(value) - len("vault:"))
+        self.assertIsNone(hooks._secret_kind(f"secret: {value}"))
 
     def test_names_totalling_32_are_a_reference_and_33_are_not(self):
         """The boundary, spread across every slot of every spelling."""

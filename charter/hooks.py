@@ -412,15 +412,17 @@ _VAULT_REFERENCE_RE = re.compile(
 #: cap, a live token typed into a reference (`vault:forge/<40 hex>`) passed where the rule had
 #: refused it. With a cap of 32 per name, a longer secret that holds a `/` split into short
 #: names and passed: `vault://<AWS's documented example secret key>#x`, or six 30-character
-#: segments of a `vault://` path (#985's reviews). A total refuses a secret over 32 characters
-#: however it is split. The cost, stated: an ordinary reference whose names add up to more
-#: than 32 — `vault://secret/data/production/payments#stripe_api_key` — is refused as a
-#: credential.
+#: segments of a `vault://` path (#985's reviews). A total refuses a secret of more than 32
+#: name characters however it is split. The separators are not counted, so a secret holding
+#: k of them passes at up to 32 + k characters: `vault:<16>/<16>` is a 33-character value that
+#: passes. The cost, stated: an ordinary reference whose names add up to more than 32 —
+#: `vault://secret/data/production/payments#stripe_api_key` — is refused as a credential.
 _REFERENCE_NAMES_MAX = 32
 
 #: Prefixes that mark a name as a credential whatever the length, so a short or truncated
-#: token cannot pass as one. Checked on EACH name, since a prefix starts a name. Each is the fixed prefix its issuer puts on every token of
-#: that kind, which is why a real vault or key name does not start with one:
+#: token cannot pass as one. Checked on EACH name, since a prefix starts a name. Each is the
+#: fixed prefix its issuer puts on every token of that kind, which is why a real vault or key
+#: name does not start with one:
 _CREDENTIAL_PREFIXES = (
     "ghp_", "gho_", "ghu_", "ghs_", "ghr_",     # GitHub: classic PAT, OAuth, user, server, refresh
     "github_pat_",                              # GitHub fine-grained PAT
@@ -444,7 +446,8 @@ def _names_where_a_credential_lives(value: str) -> bool:
     agent inlining a live token where a reference was meant. So the value is an ordinary
     assignment again when any name starts with one of :data:`_CREDENTIAL_PREFIXES`, or when
     the names together run past :data:`_REFERENCE_NAMES_MAX`. **The ceiling of that, stated:**
-    a secret of 32 characters or fewer that starts with no listed prefix still reads as names.
+    a secret of at most 32 name characters, not counting the `/`, `#` or single spaces that
+    separate them, that starts with no listed prefix still reads as names.
     """
     m = _VAULT_REFERENCE_RE.fullmatch(value)
     if not m:

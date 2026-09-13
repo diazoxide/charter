@@ -13,13 +13,14 @@ the same way.
 A value written as `vault:<vault>/<key>`, `charter secret get <vault> <key>`,
 `op://<vault>/<item>/<field>` or `vault://<path>#<field>` now passes all four checks. It may
 have a quote or a backtick on either side, but it has to be the whole value on its line. Its
-names (vault, key, item, field and path segments) must add up to 32 characters or fewer, and
-none may start with a known token prefix such as `ghp_`, `sk-`, `xoxb-` or `AIza`. So a live
-token typed into a reference is still refused, and so is a longer secret split into short
-names at its slashes. So is a real value beside or glued onto the reference, and a second
-assignment on that line or the next. A bare `forge/token` is still refused too, because a
-secret can contain a slash. One gap remains: a secret of 32 characters or fewer that has none
-of the listed prefixes reads as names. The cost runs the other way too: a reference whose
+names (vault, key, item, field and path segments) must add up to at most 32 characters, not
+counting the `/`, `#` or single spaces that separate them, and none may start with a known
+token prefix such as `ghp_`, `sk-`, `xoxb-` or `AIza`. So a live token typed into a reference
+is still refused, and so is a longer secret split into short names at its slashes. So is a
+real value beside or glued onto the reference, and a second assignment on that line or the
+next. A bare `forge/token` is still refused too, because a secret can contain a slash. One
+gap remains: a secret of at most 32 name characters with none of the listed prefixes reads as
+names, and since separators are not counted, `vault:<16>/<16>` passes at 33 characters. The cost runs the other way too: a reference whose
 names add up to more than 32 characters is refused. The brief refusal now spells out the
 accepted forms.
 
