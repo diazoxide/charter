@@ -1091,6 +1091,12 @@ def _terminal_for_selection() -> str | None:
     :func:`_scope_note`'s "this chat only" true. `frame/switch.py` hands `persona.set_active`
     the same empty string, for #411's reason: a process inside a frame cannot trust the
     terminal id it inherited.
+
+    **And `persona use` and `persona create --use` ask this too** (#953), through
+    `commands_persona._terminal_for_selection`. The persona pointer is keyed on the same
+    `session.terminal()`, so a chat wrote it for a recycled pane number or for its launcher,
+    and a new chat met it with no launch-record rung to outrank it. Whether this process is a
+    chat is one question, and two copies of its answer could drift apart.
     """
     return "" if workspace.launch_lock() else None
 
