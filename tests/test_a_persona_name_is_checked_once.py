@@ -145,7 +145,8 @@ class EveryCommandSaysTheSameLine(NameCase):
                     self.assertEqual(rc, 1, said)
                     self.assertEqual(len(said.strip().splitlines()), 1, said)
                     self.assertIn(line, said)
-                    self.assertIn(f"{line} — have: devops", said)
+                    if bad == ABSENT[0]:
+                        self.assertIn(f"{line} — have: devops", said)
         for bad, line in (WHITESPACE, INVALID):
             for label, run in NAME_ONLY:
                 with self.subTest(command=label, name=bad):

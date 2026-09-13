@@ -21,6 +21,6 @@ one of three lines:
 A name no persona could have gets no create hint. `persona create` still creates a name
 nothing defines yet, `persona lint <name>` still says why a persona does not load, and `charter
 handoff --persona` and `charter frame-switch --persona` print the same line inside their own
-refusal, followed by the personas there are.
+refusal. When they name the personas there are, the list comes after that line.
 
 Nothing to adopt ([#1059](https://github.com/diazoxide/charter/issues/1059)).

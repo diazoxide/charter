@@ -384,8 +384,9 @@ misspelling. Three commands differ on purpose:
 - `persona create <name>` checks the name but not that it exists, since it creates it.
 - `persona lint <name>` checks the name but not that it loads, since saying why a persona
   does not load is its job.
-- `charter handoff --persona` and `charter frame-switch --persona` wrap the same line in
-  their own refusal and list the personas there are after it.
+- `charter handoff --persona` wraps the same line in its own refusal and lists the personas
+  there are after it. `charter frame-switch --persona` shows the same line on the frame, and
+  lists the personas after it when the name is valid but not one of them.
 
 `stats _shared` and `optimize _shared` still read the shared namespace.
 
