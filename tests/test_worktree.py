@@ -299,6 +299,87 @@ class TestAdd(WorktreeIso):
         self.assertIn("detached head", (out + err).lower())
 
 
+class TestMarkerWarning(WorktreeIso):
+    """`wt add` names an uncommitted `charter.toml` only in the repo it cut from (#952).
+
+    The warning used to ask the PLANE whether it had a marker, and every healthy plane has
+    one, so a worktree of any repo that never carried a `charter.toml` — every guest repo —
+    was told to `git add` a file that does not exist there.
+    """
+
+    WARNING = "is not committed, so it is absent from this worktree"
+
+    def setUp(self) -> None:
+        super().setUp()
+        # The healthy plane every one of these cases runs under: the marker is where a
+        # plane keeps it. Without it the old check could never fire, and a test of its
+        # silence would pass for the wrong reason.
+        (self.tmp / "charter.toml").write_text("schema = 1\n")
+
+    def _add(self, **kw) -> str:
+        rc, out, err = TestAdd._run(_Args(workspace=self.ws, repo="iam-service", **kw))
+        self.assertEqual(rc, 0, out + err)
+        return out + err
+
+    def test_a_guest_repo_without_a_marker_of_its_own_gets_no_marker_warning(self):
+        said = self._add(piece="spi-schema")
+        self.assertNotIn(self.WARNING, said)
+        self.assertNotIn("git add charter.toml", said)
+
+    def test_a_clone_holding_an_uncommitted_marker_is_told_to_commit_it_there(self):
+        # The case the warning was written for (#33): the repo the worktree was cut from
+        # has a `charter.toml` git does not track, so the worktree has none.
+        (self.clone / "charter.toml").write_text("schema = 1\n")
+        said = self._add(piece="spi-schema")
+        self.assertIn(self.WARNING, said)
+        # The remedy has to run in the clone — `git add` from anywhere else has nothing
+        # to add, which is the other half of what #952 reported.
+        self.assertIn("git -C workspaces/demo/iam-service add charter.toml", said)
+
+    def test_a_branch_that_predates_a_committed_marker_gets_no_marker_warning(self):
+        # `--branch` checks out a branch cut before the marker was committed. The file is
+        # absent from this worktree, but it IS committed — "is not committed" would be
+        # false, and `git add` would have nothing to add.
+        git(self.clone, "branch", "old")
+        (self.clone / "charter.toml").write_text("schema = 1\n")
+        git(self.clone, "add", "charter.toml")
+        git(self.clone, "-c", "commit.gpgsign=false", "commit", "-qm", "plane")
+        said = self._add(piece="slice", branch="old")
+        self.assertFalse((worktree.path_for(self.ws, "iam-service", "slice")
+                          / "charter.toml").exists())
+        self.assertNotIn(self.WARNING, said)
+
+    def test_a_worktree_whose_branch_commits_the_marker_gets_no_marker_warning(self):
+        # The mirror image: the clone's HEAD leaves its marker untracked, but the branch
+        # this worktree checks out commits one, so the worktree has it and nothing is absent.
+        git(self.clone, "checkout", "-q", "-b", "plane")
+        (self.clone / "charter.toml").write_text("schema = 1\n")
+        git(self.clone, "add", "charter.toml")
+        git(self.clone, "-c", "commit.gpgsign=false", "commit", "-qm", "plane")
+        git(self.clone, "checkout", "-q", "main")
+        self._with_marker()
+        said = self._add(piece="slice", branch="plane")
+        self.assertNotIn(self.WARNING, said)
+
+    def test_a_clone_git_cannot_read_is_not_called_uncommitted(self):
+        # `git ls-tree` in a tree whose repository is gone prints nothing and fails — the
+        # same empty stdout an uncommitted marker gives. Only the exit code tells them
+        # apart, and a warning that tells someone to `git add` must not rest on a guess.
+        # A dangling `.git` file rather than a bare directory, so a temp dir that happens
+        # to sit inside some repository cannot answer for it.
+        from charter import commands_worktree
+        stranger = self.tmp / "not-a-repo"
+        stranger.mkdir()
+        (stranger / ".git").write_text(f"gitdir: {self.tmp / 'gone'}\n")
+        (stranger / "charter.toml").write_text("schema = 1\n")
+        self.assertFalse(commands_worktree._uncommitted_marker(stranger))
+        self.assertTrue(commands_worktree._uncommitted_marker(self._with_marker()))
+
+    def _with_marker(self) -> Path:
+        (self.clone / "charter.toml").write_text("schema = 1\n")
+        return self.clone
+
+
 class TestList(WorktreeIso):
     def setUp(self) -> None:
         super().setUp()
