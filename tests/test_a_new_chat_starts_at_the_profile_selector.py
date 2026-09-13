@@ -46,12 +46,12 @@ from types import SimpleNamespace
 from unittest import mock
 
 import re
-import threading
 
 from charter import (commands_frame, config, contain, doctor, profiles, profiletrust, tui,
                      util, wiring)
 from charter.frame import (chats, launcher, leave, overlay, palette, selector, state,
                            tmuxctl)
+from charter.frame import reopen as reopen_state
 from tests import _gitguard, _tmuxreap, _tmuxsocket, _ttyguard
 from tests._isolation import (APipe, ATerminal, PersonaIso, Typed, approve_every_profile,
                               approve_profile, declare_profiles, make_plane,
@@ -1353,6 +1353,12 @@ class _AServerWithOneWorkspaceRunning:
             self.sessions.append("beta")
             self.chats.append("beta.1")
             return _completed(cmd, 0, "%9\n")
+        if "kill-window" in cmd and self.dead is not None:
+            # A dead pane's window is closed by the launch, and a server that went on
+            # listing it would tell the launch the chat is still running — which is what
+            # keeps its directory from the closing reap, and reality does not.
+            self.chats = [c for c in self.chats if c != "beta.1"]
+            return _completed(cmd, 0)
         if "display-message" in cmd:
             if "pane_dead" in cmd[-1] and self.dead is not None:
                 return _completed(cmd, 0, self.dead)
@@ -1394,6 +1400,10 @@ class WhereItAppears(_APlaneWithProfiles, unittest.TestCase):
         self.enterContext(mock.patch.object(
             commands_frame, "_focus_workspace",
             side_effect=lambda *a, **kw: self.focused.append((a, kw)) or 0))
+        # The controls here name a profile, and a launch that names one probes its wiring
+        # before tmux (ruling 10): stated, as Task 4's modules state it, because no case in
+        # this class is about wiring and each would otherwise be refused "could not tell".
+        wired_as_today(self)
 
     def _launch(self, fake, **ns) -> int:
         args = SimpleNamespace(**{"harness": "", "rest": [], "no_frame": False,
@@ -1523,26 +1533,45 @@ class WhereItAppears(_APlaneWithProfiles, unittest.TestCase):
         self.assertNotIn("\x1b", said[0])
         self.assertIn("\\u000d", said[0])
 
-    def _closing_pane(self, *, waiting: bool, code: int):
+    def _closing_pane(self, *, waiting: bool, code: int, recorded: bool = False,
+                      picked: bool = False, **ns) -> str:
         """A launch whose pane is already dead with *code*, said the way tmux says it.
 
         The two sentences this is about are written after the pane has gone: charter asks
         `#{pane_dead_status}` eagerly, kills the window and then reports. So the fixture
         answers that question and lets `_launch` run to its end.
+
+        *recorded* puts the new chat in the plane's record first, which is the premise of
+        the recorded-plane sentence at all: without it that sentence says nothing whatever
+        else is true, and a case about it would pass for the wrong reason. *picked* clears
+        the waiting marker as the window opens — a selector whose pane picked a profile and
+        whose harness then died before the frame was drawn.
         """
+        if recorded:
+            reopen_state.write([reopen_state.Frame(workspace="beta", chats=(
+                reopen_state.Chat(chat=self.NEW, workspace="beta", persona="",
+                                  harness="claude-code", cwd="", resume="conv-1",
+                                  transcript="", active=True),))], focus="beta")
         said: list[str] = []
         fake = _AServerWithOneWorkspaceRunning(sessions=[], chats=[], dead=f"1:{code}")
+        if picked:
+            fake.at_new_window = lambda: state.clear_waiting(self.NEW)
         with mock.patch.object(commands_frame.util, "err", side_effect=said.append), \
                 mock.patch.object(commands_frame.util, "info", side_effect=said.append):
-            self._launch(fake, harness="" if waiting else "claude",
-                         select=waiting, profile=None if waiting else "claude")
+            # `fresh`: a plane with a record and nothing running RESTORES that record on
+            # an open (#845), and these cases are about the tail of an open, not a restore.
+            self._launch(fake, harness="" if waiting else "claude", fresh=recorded,
+                         select=waiting, profile=None if waiting else "claude", **ns)
         return " ".join(said)
 
     def test_a_cancelled_selector_says_nothing_about_a_death_or_a_recorded_plane(self):
         """The pane started nothing, so neither sentence can be true of it: one names a
         command that died and the other offers `charter reopen` for a chat the record does
-        not hold (`leave.plan` passes over a waiting pane)."""
-        said = self._closing_pane(waiting=True, code=selector.CANCELLED_EXIT)
+        not hold (`leave.plan` passes over a waiting pane).
+
+        *recorded*, so the second half is a measurement: the record DOES name this chat
+        here, and only the waiting marker keeps the sentence back."""
+        said = self._closing_pane(waiting=True, code=selector.CANCELLED_EXIT, recorded=True)
         self.assertNotIn("before the frame was drawn", said)
         self.assertNotIn(commands_frame.SELECTOR_DISPLAY, said)
         self.assertNotIn("reopen", said)
@@ -1552,10 +1581,30 @@ class WhereItAppears(_APlaneWithProfiles, unittest.TestCase):
         exit code: a harness that exits 130 because somebody pressed Ctrl-C at its own
         prompt cleared the marker when it was picked, so it reads as the death it is —
         the SAME number the case above suppresses, which is what makes this a control
-        rather than a second case about a different input."""
-        said = self._closing_pane(waiting=False, code=selector.CANCELLED_EXIT)
+        rather than a second case about a different input. And the record naming it is
+        said, which is what shows the case above was held back by the marker alone."""
+        said = self._closing_pane(waiting=False, code=selector.CANCELLED_EXIT, recorded=True)
         self.assertIn("before the frame was drawn", said)
         self.assertIn("claude", said)
+        self.assertIn("charter reopen", said)
+
+    def test_a_launch_that_is_nobodys_terminal_never_says_the_plane_is_recorded(self):
+        """`_wants_attach`, the other half of that gate: a launch that never became the
+        operator's terminal — a detached tab open, a reopen building chats — hands nobody a
+        shell to read the sentence on, and a reopen would be naming `charter reopen` while
+        `charter reopen` was putting the chat back."""
+        said = self._closing_pane(waiting=False, code=7, recorded=True, attach=False)
+        self.assertNotIn("reopen", said)
+
+    def test_a_selector_whose_pick_died_before_the_frame_names_the_selector(self):
+        """What an early death names for a pane that opened at the selector: the selector,
+        in words — never `python -P -m charter frame-launch --select`, an answer to a
+        question nobody asked, and never a profile, because which one was picked is known
+        only inside that pane."""
+        said = self._closing_pane(waiting=True, code=7, picked=True)
+        self.assertIn("before the frame was drawn", said)
+        self.assertIn("the profile selector", said)
+        self.assertNotIn("frame-launch", said)
 
     def test_the_operators_own_tmux_records_the_same_two_things(self):
         """The other launch path, and it needs its own case because it writes its own
@@ -1677,6 +1726,14 @@ class TheSelectorOnARealServer(PersonaIso, unittest.TestCase):
         (bindir / "claude").write_text(
             f"#!{sys.executable}\n"
             "import json, os, sys, time\n"
+            # **The wiring probe is answered first** (ruling 10), as Task 4's real-tmux
+            # recorders answer it: the selector's rows and the launch both ask this binary
+            # `plugin list --json`, and a recorder that recorded THAT call would take a probe
+            # for a harness starting. `user` scope covers every directory.
+            "if sys.argv[1:3] == ['plugin', 'list']:\n"
+            "    json.dump([{'id': 'charter@charter', 'scope': 'user', 'enabled': True,\n"
+            "                'installedAt': '2026-09-12T00:00:00Z'}], sys.stdout)\n"
+            "    sys.exit(0)\n"
             "out = os.path.join(os.environ['RECORD_DIR'], 'harness.json')\n"
             "with open(out + '.tmp', 'w') as f:\n"
             "    json.dump({'argv': sys.argv[1:], 'pid': os.getpid()}, f)\n"

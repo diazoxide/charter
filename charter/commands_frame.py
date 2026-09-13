@@ -6260,6 +6260,12 @@ def _launch(args) -> int:
     # only the CLOSING reap can do — remove this frame's own directory — by naming a
     # process that is, necessarily, still alive.
     state.clear_claim(fid)
+    # **Read before the reap, which takes this chat's directory — the marker with it — the
+    # moment its window is gone.** A cancelled selector's window IS gone by now (Esc closes
+    # it), so asked after the reap this answered "a harness ran here" for every one of them,
+    # and the recorded-plane sentence below was held back for none. CI's sweep reported the
+    # conjunct as indistinguishable from its absence, which on the real flow it was.
+    started_nothing = nothing_ever_ran_here()
     after_sessions = _live_sessions(SOCKET)
     after_chats = _live_chats(SOCKET)
     live_after = after_sessions | (after_chats or set())
@@ -6291,7 +6297,7 @@ def _launch(args) -> int:
     # nothing recorded it (`leave.plan` passes over a waiting pane), so naming `charter
     # reopen` would offer to bring back a chat the record does not hold. See
     # `nothing_ever_ran_here` above for why this reads the marker and not the number.
-    if _wants_attach(args) and not nothing_ever_ran_here():
+    if _wants_attach(args) and not started_nothing:
         _say_the_plane_is_recorded(fid, over=fid not in live_after)
     if code is not None:
         return code

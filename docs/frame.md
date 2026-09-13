@@ -3167,11 +3167,26 @@ harness.
 **Every profile you declared is a row.** A built-in — `claude`, `codex`, `opencode` — is a
 row only where its program is installed, because a harness this machine does not have is not
 an option you were offered. A profile that **cannot** start is still listed, with the reason
-on the row: its command is not on `PATH`, git would carry `charter.local.toml`, or
-`charter.local.toml` itself refused it. **Enter on such a row shows the reason in the footer
-and leaves the selector open.** The palette does the opposite — a refused Enter closes it —
+on the row: its command is not on `PATH`, git would carry `charter.local.toml`,
+`charter.local.toml` itself refused it, or it is **not wired** — its config folder does not
+carry charter's guard, said in the same sentence a launch refuses with, fix included. **Enter
+on such a row shows the reason in the footer and leaves the selector open.** The palette does the opposite — a refused Enter closes it —
 and that is right there, where the surface is a pane over a running harness. Here the
 surface is the chat, so closing it would close the chat.
+
+**A new or changed profile is not refused — it asks.** Its row says `not approved yet (new)`
+or `(changed)` and nothing about wiring, because finding out means running the command you
+have not approved. Enter on it hands the pane back to an ordinary terminal and shows the same
+question `charter <profile>` shows — the command and its environment, whole, then `run this?
+[y/N]` ([control-plane.md](control-plane.md#a-new-or-changed-command-asks-once)). A no puts
+the list back with the cursor on that row. A yes charter could not write down comes back as
+that row's reason and is never asked twice, and a yes runs every check again, wiring last,
+before anything starts.
+
+**A row says how much it could not fit.** A command or a reason too wide for the pane ends in
+`… +N not shown` rather than a bare ellipsis, the way `charter doctor`'s rows do — a
+clipped command looks exactly like a whole one otherwise. `charter harness list` prints it
+whole.
 
 **The cursor opens on the row that can run.** `[harness] default` marks its row and the
 cursor starts there; a `default` naming a profile this machine does not have marks nothing,
@@ -3198,8 +3213,17 @@ none: **a median of 145 ms on tmux 3.7c and 137 ms at the 3.2 floor**, over 12 r
 slowest was under a sixth of a second, with the count of declared profiles making no
 difference anybody could see. That is the
 whole open — the tmux session, the window, charter starting in the pane, the profiles read,
-the one `git status` that says whether `charter.local.toml` is ignored, and the paint.
-Nothing here runs a profile's own command.
+the one `git status` that says whether `charter.local.toml` is ignored, and the paint — and
+it was measured before the rows asked about wiring.
+
+**The wiring answer adds its own half, measured separately.** A row that is approved asks
+its harness whether it is wired, and that runs the profile's own command (`claude plugin
+list --json`, `opencode debug config`; Codex's is a file read). Every row's probe runs at
+once, and the answer is remembered in a cache stamped with the files that can change it. On
+macOS, with claude 2.1.270 and opencode 1.18.23 installed beside codex, four Claude profiles
+and throwaway config folders, the rows took **a median of 611 ms cold** (990 ms on the very
+first run) and **15 ms warm**, over five of each. A launch never trusts that cache — a chat can write the
+file — so picking a row asks again, fresh, in the pane.
 
 Charter drawing in a chat's pane at all is [ADR
 0018](adr/0018-charter-may-run-the-harness-but-never-draws-it.md) as its later amendments

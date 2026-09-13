@@ -42,9 +42,11 @@ of one harness may be two accounts.
 **And no harness starts until you pick a profile.** Before any harness has run in it, a
 chat's pane draws the **profile selector** — the `F2` palette's own picker, so you type to
 narrow it and press Enter to start. Every profile you declared is a row; a built-in is a row
-where its program is installed; a profile that cannot start is listed with the reason on it,
-and Enter there shows the reason and leaves the list open rather than closing the chat. A new
-or changed profile shows its command and asks in place. Esc closes that chat having started
+where its program is installed; a profile that cannot start — not on `PATH`, not wired,
+refused by the file — is listed with the reason on it, and Enter there shows the reason and
+leaves the list open rather than closing the chat. A new or changed profile says it is not
+approved yet, and Enter on it asks `run this? [y/N]` in that pane over its whole command. A
+row too wide for the pane says how much it could not show. Esc closes that chat having started
 nothing — a pane at the selector has a tab, but it is not a chat: `charter: quit` does not
 record it and `charter reopen` never brings it back. It always shows, even where one profile
 can run: one profile costs one Enter, and skipping it would bring back the harness nobody

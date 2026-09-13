@@ -216,17 +216,22 @@ class APressRunsNoGuardForAProfileNobodyHasPicked(_APressInAlpha, unittest.TestC
     """The `+` used to run the launcher's whole refusal chain before it launched, so its
     reason could reach the frame's attention row rather than `/dev/null`. Nothing is being
     launched now: the pane runs that chain, fresh, for whichever profile is picked minutes
-    from now — so asking here would be asking about a profile nobody has chosen.
-
-    Review B1 is what makes this visible: every declared profile is refused until Task 3,
-    and the press opens a chat regardless.
+    from now — so asking here would be asking about a profile nobody has chosen, and a
+    refusal here would take away a list whose rows already say why.
     """
 
     def test_the_press_opens_a_chat_over_a_profile_the_launcher_would_refuse(self):
-        self._press()
+        """The pressing chat's profile is not on `PATH` and has never been approved, so the
+        launcher refuses it twice over — and the press opens the selector on it anyway,
+        says nothing, and asks the chain nothing."""
+        with mock.patch("charter.commands_frame.shutil.which", return_value=None), \
+                mock.patch.object(commands_frame, "_launch_refusal",
+                                  side_effect=AssertionError("the press asked the chain")):
+            self._press()
         self.assertEqual(len(self.launched), 1, self._sentences())
         self.assertTrue(self.launched[0].select)
-        self.assertNotIn("cannot yet ask", " ".join(self._sentences()))
+        self.assertEqual(self.launched[0].start, "claude-work")
+        self.assertEqual(self._sentences(), [], self._sentences())
 
 
 class AWorkspaceTabStartsOnTheSameProfile(_APressInAlpha, unittest.TestCase):
