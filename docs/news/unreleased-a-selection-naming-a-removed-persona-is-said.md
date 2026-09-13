@@ -12,7 +12,9 @@ those pointers select the new persona without a word.
 
 Now SessionStart tells the session that `forge` is selected (and through which rung) and
 that no persona by that name exists, with the ways out. `charter persona current`, `list`
-and `clear` say the same beside the name. `charter persona create forge` says how many
+and `clear` say the same beside the name. The status line's persona row, which drew `◆ forge`
+as if it were active, now reads `◆ forge missing · charter persona current`, on the footer
+and on a frame's top strip. `charter persona create forge` says how many
 selections already named it and now select it, by rung. The ways out depend on the rung:
 `charter persona use <persona>` or `charter persona clear` for a pointer, unsetting
 `$CHARTER_PERSONA` for the variable. Inside a chat, `clear` is not offered for a pointer the
@@ -28,7 +30,8 @@ shell resolves to:
 • This shell now resolves to 'steward' (via charter.toml).
 ```
 
-and, when `$CHARTER_PERSONA` is set, says the variable still decides rather than calling the
-persona cleared.
+When `$CHARTER_PERSONA` is set, it says the variable still decides rather than calling the
+persona cleared. When the shell held no selection at all, it says `This shell had no persona
+selection of its own, so nothing was cleared.`, as a chat's `clear` already did.
 
 Nothing to adopt ([#1045](https://github.com/diazoxide/charter/issues/1045)).

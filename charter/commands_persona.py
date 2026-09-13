@@ -445,9 +445,12 @@ def cmd_persona_clear(args) -> int:
         return _say_cleared_in_a_chat(held)
     # Read back, not predicted (ADR 0013, #1045). This used to name `personas/.default` as
     # what the shell fell to, a rung it never compared with `charter.toml`'s declaration
-    # above it, and to say "cleared" beside a `$CHARTER_PERSONA` that no pointer outranks.
+    # above it, and to say "cleared" beside a `$CHARTER_PERSONA` that no pointer outranks —
+    # and over a shell that held no selection at all, which is a removal that did not happen.
     now = persona.selection()
-    if now.source == "$CHARTER_PERSONA":
+    if not held:
+        util.info("This shell had no persona selection of its own, so nothing was cleared.")
+    elif now.source == "$CHARTER_PERSONA":
         util.warn("Persona selection cleared, but $CHARTER_PERSONA outranks every selection "
                   "and still decides in this shell.")
     else:

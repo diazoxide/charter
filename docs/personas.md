@@ -389,6 +389,8 @@ naming a default it did not compare with the rungs above it (#1045):
 pointers but does not call the persona cleared:
 `Persona selection cleared, but $CHARTER_PERSONA outranks every selection and still decides
 in this shell.`, followed by the same readback. Unset the variable to reach the rungs below.
+A shell with no session pointer, no terminal pointer and no plane-wide file is told `This
+shell had no persona selection of its own, so nothing was cleared.`
 
 A shell with neither a session id nor a pane id (a bare script, say) has nothing to key a
 pointer on. There `use` writes `.charter/active-persona`, the plane-wide local file, which
@@ -427,6 +429,8 @@ What charter does is say so (#1045):
   and on stderr adds `resolved via session — no persona by that name exists, so no persona is
   active, and the plane's default does not stand in for it.` with the ways out.
   **`charter persona list`** says the same on its `Active persona:` line.
+- **The status line** draws `◆ forge missing · charter persona current` where it would draw
+  an active persona's `◆ forge`, on the footer and on a frame's top strip.
 - **`charter persona clear`** reads back a missing persona the same way.
 - **`charter persona create forge`** says how many selections already named `forge` and now
   select the new persona, by rung: `2 selection(s) already named 'forge' before it existed,

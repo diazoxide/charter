@@ -17,8 +17,14 @@ Two more stores live **per-developer** under ``.charter/persona-state/`` (gitign
 So a persona has a 2×2 memory: *own vs shared* × *persistent vs ephemeral*. The
 persona decides which quadrant a note belongs in (see :func:`remember`).
 
-The active persona is resolved by precedence, mirroring workspaces:
-``--persona`` flag → ``$CHARTER_PERSONA`` env → ``.charter/active-persona`` file → none.
+The active persona is resolved by precedence, mirroring workspaces (:func:`_resolved`):
+``--persona`` flag → ``$CHARTER_PERSONA`` env → session pointer
+(``.charter/sessions/<id>.persona``) → terminal pointer (``.charter/terminals/<id>.persona``)
+→ plane-wide ``.charter/active-persona`` → ``charter.toml`` ``[persona] default`` →
+``personas/.default`` → none. The first rung naming anything wins. The two committed rungs
+name only a persona that exists; a rung above them naming one that does not — a pointer
+``persona remove`` left behind — still wins, and the session has no persona rather than the
+default. :func:`selection` says which case it is (#1045).
 
 The legacy flat layout ``personas/<name>.md`` still resolves for read, so old
 checkouts keep working until migrated (``charter persona migrate``).
@@ -1339,7 +1345,9 @@ def set_active(name: str, session_id: str | None = None,
 
 def clear_active(terminal_id: str | None = None) -> bool:
     """Drop this session's and this pane's selection, and the plane-wide file with them.
-    Returns whether this SESSION's pointer held a selection, which is all a chat has to clear.
+    Returns whether any pointer it dropped held a selection — in a chat, only the session's,
+    which is all a chat has to clear; anywhere else, any of the three, because each of them
+    is a selection `clear` removed (#1045: "cleared" was printed over a shell that held none).
 
     All three, because they are rungs of one ladder: clearing only the top rung would hand
     the session straight back to a lower one, and "cleared" would be a lie the very next
@@ -1357,10 +1365,11 @@ def clear_active(terminal_id: str | None = None) -> bool:
     and the caller says what it now resolves to rather than calling them cleared.
     """
     sf, tf = _pointer_files(terminal_id=terminal_id)
-    # Read before the unlink, through the reader `_resolved` uses, so "held a selection" means
-    # what the session rung would have answered rather than "a file was there".
-    held = _read_pointer(sf) is not None
     plane = () if terminal_id == "" else (config.ACTIVE_PERSONA_FILE,)
+    # Read before the unlink, through the reader `_resolved` uses, so "held a selection" means
+    # what those rungs would have answered rather than "a file was there". In a chat `tf` is
+    # None and `plane` is empty, so this is the session pointer alone there.
+    held = any(_read_pointer(f) is not None for f in (sf, tf, *plane))
     for f in (sf, tf, *plane):
         try:
             if f is not None and f.exists():

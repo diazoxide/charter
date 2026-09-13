@@ -20,8 +20,15 @@ charter persona list           # all of them; * marks active; shows vault state
 charter persona show <name>    # its charter — the role to actually adopt
 ```
 
-Resolution: `--persona` → `$CHARTER_PERSONA` (pinned at launch) → local selection
-(`charter persona use`) → the committed default (`personas/.default`) → none.
+Resolution, first rung that names a persona wins: `--persona` → `$CHARTER_PERSONA` (pinned
+at launch) → this session's selection → this terminal's selection (both written by
+`charter persona use`) → the plane-wide `.charter/active-persona` (a shell with no session
+or pane id) → `charter.toml` `[persona] default` → `personas/.default` → none.
+
+A selection naming a persona that no longer exists (left by `charter persona remove`) still
+wins, and resolves to **no persona**, not to the default. SessionStart and
+`charter persona current` say so and name the way out: `charter persona use <name>` or
+`charter persona clear` for a selection, unsetting `$CHARTER_PERSONA` for the variable.
 
 ## Adopt one
 

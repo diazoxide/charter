@@ -318,6 +318,90 @@ class TestClearOutsideAChatReadsBack(SelectionScopeIso):
         self.assertIn(f"Ways out: {UNSET_THE_VARIABLE}.", err)
 
 
+class TestClearOutsideAChatWithNothingSelected(SelectionScopeIso):
+    """Measured before: `clear` in a shell with no session pointer, no terminal pointer and no
+    `.charter/active-persona` printed "Active persona cleared." about a removal that did not
+    happen. A chat's clear already says so (#1044); outside a chat the dropped rungs are
+    three, and any one of them holding a name is something cleared."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.persona_("forge")
+
+    def _clear(self) -> str:
+        from charter import commands_persona
+        rc, _out, err = _run(commands_persona.cmd_persona_clear)
+        self.assertEqual(rc, 0, err)
+        return err
+
+    def test_nothing_selected_is_told_nothing_was_cleared(self):
+        with self.env(CHARTER_SESSION_ID="s1", TMUX_PANE="%7"):
+            err = self._clear()
+        self.assertIn("This shell had no persona selection of its own, so nothing was "
+                      "cleared.", err)
+        self.assertNotIn("Active persona cleared.", err)
+        self.assertIn("This shell now resolves to no persona.", err)
+
+    def test_nothing_selected_under_charter_persona_does_not_claim_a_clear_either(self):
+        with self.env(CHARTER_PERSONA="forge", CHARTER_SESSION_ID="s1"):
+            err = self._clear()
+        self.assertIn("This shell had no persona selection of its own, so nothing was "
+                      "cleared.", err)
+        self.assertNotIn("Persona selection cleared", err)
+        self.assertIn("This shell now resolves to 'forge' (via $CHARTER_PERSONA).", err)
+
+    def test_a_terminal_pointer_alone_is_a_selection_cleared(self):
+        with self.env(CHARTER_SESSION_ID="s1", TMUX_PANE="%7"):
+            persona.set_active("forge")
+        with self.env(CHARTER_SESSION_ID="s2", TMUX_PANE="%7"):
+            err = self._clear()
+        self.assertIn("Active persona cleared.", err)
+        self.assertNotIn("nothing was cleared", err)
+
+    def test_the_plane_wide_file_alone_is_a_selection_cleared(self):
+        with self.env():
+            persona.set_active("forge")
+            err = self._clear()
+        self.assertIn("Active persona cleared.", err)
+        self.assertNotIn("nothing was cleared", err)
+
+
+class TestTheStatusLineSaysItIsMissing(StaleIso):
+    """Measured before: the persona row drew `◆ forge` in the active persona's style for a
+    `forge` that had been removed, beside a roster with no `forge` in it. That row is the
+    status line's footer and the identity half of a frame's `top` strip (`slots._top`)."""
+
+    def _parts(self):
+        from charter import statusline, tui
+        line = statusline._persona_line_parts()
+        self.assertIsNotNone(line, "no persona row was drawn at all")
+        return tuple(tui.strip_ansi(p) for p in line)
+
+    def test_a_removed_persona_is_drawn_as_missing_with_where_to_read_why(self):
+        self.select_then_remove(CHARTER_SESSION_ID="s1")
+        with self.env(CHARTER_SESSION_ID="s1"):
+            head, roster, tail = self._parts()
+        self.assertEqual(head, "◆ forge missing")
+        self.assertEqual(roster, " · ◇ personas steward")
+        self.assertEqual(tail, " · charter persona current")
+
+    def test_a_persona_that_exists_is_drawn_as_before(self):
+        self.persona_("forge")
+        with self.env(CHARTER_SESSION_ID="s1"):
+            persona.set_active("forge")
+            head, roster, tail = self._parts()
+        self.assertEqual((head, roster, tail), ("◆ forge", " · ◇ personas steward", ""))
+
+    def test_a_name_from_the_environment_is_kept_to_one_line(self):
+        """`$CHARTER_PERSONA` is the operator's, and no committed-name check has seen it; a
+        separator in it would start a second row wearing this one's layout."""
+        from charter import statusline
+        with self.env(CHARTER_PERSONA="ghost\nsecond row", CHARTER_SESSION_ID="s1"):
+            raw = statusline._persona_line_parts().head   # before `strip_ansi` sanitises it
+        self.assertNotIn("\n", raw)
+        self.assertIn("missing", raw)
+
+
 class TestClearInAChatReadsBackAMissingPersona(InAChatIso):
     def test_the_launcher_s_pointer_to_a_removed_persona_is_read_back_as_missing(self):
         """#1044's readback, one case further: the chat's clear leaves the launcher's pointer,
