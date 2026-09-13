@@ -6775,8 +6775,18 @@ def _autosync_version_lock() -> str | None:
                     f"version, so nothing was installed. "
                     f"{_instance.NOT_A_VERSION.format(version=locked)}. Working on "
                     f"{__version__}; fix the pin in the plane's `charter.toml`.")
-        here, there = _parse_version(__version__), _parse_version(locked)
-        if here is not None and there is not None and there < here:
+        # `update.version_key`, the one order every charter comparison uses. The prefix
+        # match that stood here read a running ``5.0.0.post1`` as ``5.0.0``, so a pin on
+        # ``5.0.0`` was not older and got installed: a downgrade of the guard's own binary,
+        # let through by a suffix (#1050). The pin cannot be a non-version by this line.
+        there, here = update.version_key(locked), update.version_key(__version__)
+        if there <= here:
+            if there == here:
+                # The running release under another spelling, which the string equality
+                # above cannot see: ``5.0.00`` passes `version_ok` and PEP 440 reads it as
+                # ``5.0.0``. Installing it reinstalls what runs at every session start and
+                # calls that an update; calling it older sends someone to downgrade to it.
+                return None
             return (f"⬢ charter: this control plane pins {locked}, which is OLDER than "
                     f"the {__version__} you are running. charter did not install it: a "
                     f"downgrade replaces the binary that enforces the credential guard "
@@ -8267,20 +8277,6 @@ def stop() -> int:
 #: enforced rather than merely written down.
 MIN_PLUGIN_VERSION = __version__
 
-_VERSION_RE = re.compile(r"^(\d+)\.(\d+)\.(\d+)")
-
-
-def _parse_version(v: str | None) -> tuple[int, int, int] | None:
-    """A numeric ``(major, minor, patch)`` tuple, or ``None`` for anything that isn't
-    one — absent, malformed, or hand-typed. Never raises."""
-    if not v:
-        return None
-    m = _VERSION_RE.match(v.strip())
-    if not m:
-        return None
-    return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
-
-
 def skew_message(plugin_version: str | None) -> str | None:
     """A loud message when the plugin is newer than this CLI, else None.
 
@@ -8288,9 +8284,14 @@ def skew_message(plugin_version: str | None) -> str | None:
     swallows its errors so it can never break a turn — but that same discipline is what
     would make version skew invisible, so here it must speak.
     """
-    plugin = _parse_version(plugin_version)
-    cli = _parse_version(MIN_PLUGIN_VERSION)
-    if plugin is None or cli is None or plugin <= cli:
+    from . import update
+
+    # Through `update.version_key`, so a plugin version that is absent, malformed or
+    # hand-typed keys below every CLI and stays silent, as it always has. The prefix match
+    # that stood here read ``5.0.0rc1`` as ``5.0.0``, so a plugin on a release beside a CLI
+    # on its candidate was never said, and ``99.0.0-CANARY``, which is no version, was
+    # loud against every CLI (#1050).
+    if update.version_key(plugin_version) <= update.version_key(MIN_PLUGIN_VERSION):
         return None
     # The command here has to actually work: this is the one place a hook interrupts,
     # so wrong advice costs more than silence. `uv tool upgrade` is deliberately NOT

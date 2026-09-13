@@ -434,29 +434,35 @@ class TheCommandsPrintWhatTheModuleAssembled(NewsDir):
                          f"{said['hostile']!r}")
         self.assertNotIn("\x1b", said["hostile"])
 
-    def test_the_version_a_file_can_really_carry_into_the_range_view(self):
+    def test_a_version_that_carries_an_escape_reaches_no_range_view(self):
         """`version:` is printed in that view's own left column, and it is frontmatter.
 
-        A line break cannot reach it — `persona.parse` would make a second key of it — but
-        an escape sequence can, and `update._parse` is deliberately lenient about junk
-        ("anything non-numeric sorts low rather than raising"), so the entry passes the
-        range filter and gets printed. That is the whole path, from a committed file to a
-        repainted terminal, with no step that had to be mocked.
+        A line break cannot reach it — `persona.parse` would make a second key of it. An
+        escape sequence could, until #1050: `update._parse` kept the digits of each
+        dot-separated part, so ``0.60.0\\x1b[31m`` read as ``(0, 60, 31)``, passed the range
+        filter and was printed. `update.version_key` reads PEP 440 instead, which has no
+        escape in it anywhere, so that entry names no version, falls in no range, and nothing
+        of it reaches the column. The containment on the column stays, for the version
+        spellings PEP 440 does accept.
+
+        Rendered twice, the same entry with a clean version first, so an empty report is a
+        refusal of THIS version and not a range that could hold nothing.
         """
-        self.write(f"{_V}-a-one.md", _entry(version=f"{_V}{_ESC}", headline="h"))
-        out, err = io.StringIO(), io.StringIO()
-        # `until` is above this version, because `_parse` reads the escape's own digits as
-        # part of the last component ("0\x1b[31m" → 31) and the entry sorts a little high.
-        # That is the leniency doing exactly what its docstring says, and the entry is
-        # still in a range a reader would ask for.
         args = SimpleNamespace(for_version=None, pending=False,
                                since="0.59.0", until="0.61.0")
-        with mock.patch.object(news, "probe", return_value=(news.INFORMATIONAL, "")), \
-             redirect_stdout(out), redirect_stderr(err):
-            commands.cmd_news(args)
-        said = out.getvalue()
-        self.assertIn("h", said, "the entry never reached the range view")
-        self.assertNotIn("\x1b", said)
+        said = {}
+        for label, version in (("benign", _V), ("hostile", f"{_V}{_ESC}")):
+            self.setUp()
+            self.write(f"{_V}-a-one.md", _entry(version=version, headline="the-headline"))
+            out, err = io.StringIO(), io.StringIO()
+            with mock.patch.object(news, "probe", return_value=(news.INFORMATIONAL, "")), \
+                 redirect_stdout(out), redirect_stderr(err):
+                commands.cmd_news(args)
+            said[label] = out.getvalue() + err.getvalue()
+        self.assertIn("the-headline", said["benign"], "the range could not hold the entry")
+        self.assertNotIn("the-headline", said["hostile"],
+                         "an entry whose version is not a version was put in a range")
+        self.assertNotIn("\x1b", said["hostile"])
 
 
 class TheGuardIsAtTheAssemblyNotAtTheSpans(unittest.TestCase):

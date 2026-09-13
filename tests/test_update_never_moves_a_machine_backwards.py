@@ -189,6 +189,54 @@ class NothingMovesAMachineBackwardsUnasked(UpdateRun):
         self.assertNotIn("older than", out)
 
 
+class APreReleaseIsOlderThanTheReleaseItPrecedes(UpdateRun):
+    """#1050, through `cmd_update`. `update._parse` read ``0.60.0rc1`` as ``(0, 60, 1)``, so
+    every comparison above saw a release candidate as the newer of the two. Each case is one
+    of `_resolve_target`'s comparisons meeting a pre-release on the side it got backwards;
+    the order itself is pinned in `tests/test_versions_compare_in_pep_440_order.py`."""
+
+    CANDIDATE = f"{RUNNING}rc1"
+
+    def running(self, version: str) -> None:
+        self.enterContext(mock.patch.object(cu, "_installed_version", lambda: version))
+
+    def test_a_candidate_for_the_running_release_is_refused_as_older(self):
+        """The move #1017 refuses, reached by a number that looked newer. Installed, it
+        takes a machine back from the release to the candidate that preceded it."""
+        code, out = self.update(pypi=self.CANDIDATE)
+        self.assertEqual(code, 1, out)
+        self.assertNothingRan()
+        self.assertIn(f"PyPI reported {self.CANDIDATE} as the newest release, which is older "
+                      f"than the {RUNNING} this machine runs, so nothing was installed", out)
+
+    def test_a_post_release_of_the_running_release_is_newer_and_installs(self):
+        """The other side of the release, so the refusal above is about direction and not
+        about any suffix at all."""
+        code, out = self.update(pypi=f"{RUNNING}.post1")
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.moved, [f"{RUNNING}.post1"])
+
+    def test_a_machine_on_the_candidate_conforms_to_a_pin_on_the_release(self):
+        """Behind the pin, so it conforms. Read as newer, it was left on the candidate."""
+        self.running(self.CANDIDATE)
+        self.pin(RUNNING)
+        code, out = self.update(pypi=RUNNING)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.moved, [RUNNING])
+
+    def test_a_candidate_on_pypi_is_not_proposed_past_a_pin_on_its_release(self):
+        """Proposing it asks the team to move to a version older than the pin. On the pin
+        with nothing newer published, the machine is current: nothing installs, and the
+        run carries on to the harness and the handoff as `update` always has."""
+        self.pin(RUNNING)
+        code, out = self.update(pypi=self.CANDIDATE)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.moved, [])
+        self.bump_pin.assert_not_called()
+        self.assertNotIn("is published", out)
+        self.assertNotIn("--bump", out)
+
+
 class VersionBumpDoesNotPinTheTeamBackwards(NoNetwork, PersonaIso):
     """The same rule, where it costs more. `version bump` with no `--to` takes the version
     its own GET returned (#941), and until #1017 nothing compared that with the charter
@@ -231,6 +279,16 @@ class VersionBumpDoesNotPinTheTeamBackwards(NoNetwork, PersonaIso):
         self.assertNotIn(f"--to {OLDER}", out)
         self.assertNotIn("no version came back", out)
         self.assertNotIn("offline", out)
+
+    def test_a_fetched_candidate_for_the_running_release_is_neither_installed_nor_pinned(self):
+        """#1050: ``0.60.0rc1`` read as ``(0, 60, 1)`` passed the comparison above as newer,
+        and with `--push` the whole team was pinned back to the candidate."""
+        candidate = f"{RUNNING}rc1"
+        code, out = self.bump(pypi=candidate)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.calls, [], "bump installed or pinned a pre-release of running")
+        self.assertIn(f"PyPI reported {candidate} as the newest release, which is older than "
+                      f"the {RUNNING} this machine runs", out)
 
     def test_a_fetched_answer_equal_to_the_running_charter_is_pinned(self):
         """The boundary: pinning the team to the charter this machine already runs is what

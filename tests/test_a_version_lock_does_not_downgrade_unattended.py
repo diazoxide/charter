@@ -44,6 +44,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 from charter import __version__, commands, config, hooks, instance
 from tests._isolation import PersonaIso, PlaneIso, no_background_refresh, run_hook
@@ -65,8 +66,8 @@ _NOT_A_VERSION = (
     "latest",           # a name, not a version
     "0.47.2 ; python_version < '4'",   # an environment marker rides along
     "0.47.2[extra]",
-    "0.47.2-CANARY",    # `hooks._parse_version` PREFIX-matches this to (0,47,2)
-    "0.47",             # not orderable against a three-part installed version
+    "0.47.2-CANARY",    # a prefix match reads this as 0.47.2, and installs something else
+    "0.47",             # not the three-part shape every charter release has had
     "v0.47.2",          # the tag, not the version it carries
     "0.47.2 --index-url",
 )
@@ -186,6 +187,60 @@ class SessionStartConformance(PlaneIso):
         rc = commands.cmd_version_sync(type("A", (), {"cli": True})())
         self.assertEqual(self.installs, [_OLDER])
         self.assertEqual(rc, 0)
+
+    # -- a suffix on the running version (#1050) ---------------------------- #
+
+    def test_a_candidate_running_still_upgrades_to_the_pinned_release(self):
+        """PRECONDITION for the case below, on the same pin: a suffix alone is not what
+        refuses. The release is newer than its candidate, so it installs."""
+        self._lock("5.0.0")
+        with mock.patch("charter.__version__", "5.0.0rc1"):
+            self._context()
+        self.assertEqual(self.installs, ["5.0.0"])
+
+    def test_a_post_release_running_is_not_downgraded_to_the_release_it_follows(self):
+        """`_parse_version` matched the ``X.Y.Z`` prefix and dropped the rest, so a running
+        ``5.0.0.post1`` and a pin on ``5.0.0`` were one version, and not being older, the
+        pin was installed: the downgrade this class refuses, let through by a suffix."""
+        self._lock("5.0.0")
+        with mock.patch("charter.__version__", "5.0.0.post1"):
+            ctx = self._context()
+        self.assertEqual(self.installs, [], "a downgrade was installed unattended")
+        self.assertIn("older", ctx.lower())
+
+    # -- the same release, spelled another way (#1050) ----------------------- #
+
+    def test_a_pin_on_the_running_release_spelled_another_way_installs_nothing(self):
+        """`instance.version_ok` takes ``5.0.00``, three runs of digits, and PEP 440 reads
+        it as ``5.0.0``. It is not the running version's STRING, so the equality above lets
+        it by, and it is not older, so it was installed: the running release reinstalled at
+        every session start and announced as "auto-updated". It is the release running, so
+        nothing is installed and nothing is said. Called directly, because silence is the
+        answer and `_context` asserts the hook said something."""
+        self._lock("5.0.00")
+        with mock.patch("charter.__version__", "5.0.0"):
+            said = hooks._autosync_version_lock()
+        self.assertEqual(self.installs, [], "the running release was reinstalled")
+        self.assertIsNone(said)
+
+    def test_a_running_build_labelled_as_its_release_is_on_a_pin_of_that_release(self):
+        """A local label names where a build came from, not a later release, so a pin on
+        the release it labels is neither a move nor a downgrade."""
+        self._lock("5.0.0")
+        with mock.patch("charter.__version__", "5.0.0+dev"):
+            said = hooks._autosync_version_lock()
+        self.assertEqual(self.installs, [], "the running release was reinstalled")
+        self.assertIsNone(said)
+
+    def test_a_two_part_pin_is_refused_on_shape_before_any_order_is_asked(self):
+        """``5.0`` IS ``5.0.0`` to PEP 440, and still not a pin: `version_ok` wants three
+        parts, and says so, rather than the order calling it the running release."""
+        self._lock("5.0")
+        with mock.patch("charter.__version__", "5.0.0"):
+            said = hooks._autosync_version_lock()
+        self.assertEqual(self.installs, [])
+        self.assertIn("is not a version", said)
+        self.assertNotIn("older", said.lower())
 
     # -- shape -------------------------------------------------------------- #
 

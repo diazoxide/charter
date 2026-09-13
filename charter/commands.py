@@ -3656,7 +3656,7 @@ def cmd_version_bump(args) -> int:
                      "Pass one explicitly: charter version bump --to X.Y.Z")
             return 1
         installed = _installed_version()
-        if update._parse(target) < update._parse(installed):
+        if update.version_key(target) < update.version_key(installed):
             # BEFORE the install and the pin. A fresh answer can be older than what runs, and
             # nothing compared the two: it was installed over the running build and written
             # as the pin, so with `--push` every teammate conformed to it on their next

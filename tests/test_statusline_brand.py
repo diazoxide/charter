@@ -128,6 +128,25 @@ class UpdateIndicator(PersonaIso):
                 self._cache(bad)
                 self.assertIsNone(update.newer_than("0.6.0"))
 
+    def test_a_string_with_digits_in_it_is_still_not_a_version(self):
+        """#1050. The rule above held only for strings with no digits: ``build7`` read as
+        ``(7,)`` and ``99.0.0-CANARY`` as ``(99, 0, 0)``, both newer than 0.6.0, so the arrow
+        offered an update to something that is not a version at all."""
+        for bad in ("build7", "99.0.0-CANARY"):
+            with self.subTest(latest=bad):
+                self._cache(bad)
+                self.assertIsNone(update.newer_than("0.6.0"))
+
+    def test_a_release_candidate_is_not_newer_than_its_release(self):
+        """#1050: ``0.7.0rc1`` read as ``(0, 7, 1)``, so a machine already on 0.7.0 was told
+        its own release's candidate was the newer charter."""
+        self._cache("0.7.0rc1")
+        self.assertIsNone(update.newer_than("0.7.0"))
+
+    def test_and_the_release_is_newer_than_the_candidate_you_run(self):
+        self._cache("0.7.0")
+        self.assertEqual(update.newer_than("0.7.0rc1"), "0.7.0")
+
     def test_brand_carries_the_indicator_only_when_newer(self):
         import charter
         self._cache("9.9.9")

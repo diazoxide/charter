@@ -77,11 +77,29 @@ class Unreleased(NewsDir):
 
 class Ordering(NewsDir):
     def test_versions_sort_numerically_not_lexically(self):
-        """0.10.0 is newer than 0.2.0. `update._parse` already knows this; a second
+        """0.10.0 is newer than 0.2.0. `update.version_key` already knows this; a second
         comparator here would be a second answer to one question."""
         for v in ("0.2.0", "0.10.0"):
             self.write(f"{v}-x.md", f"---\nversion: {v}\nheadline: v{v}\n---\n")
         self.assertEqual([e.version for e in news.released()], ["0.2.0", "0.10.0"])
+
+    def test_a_pre_release_sorts_below_the_release_it_precedes(self):
+        """#1050: ``0.45.0rc1`` read as ``(0, 45, 1)`` and printed after 0.45.0. The
+        filenames sort the wrong way too (``-`` before ``r``), so this cannot pass by the
+        glob's order alone."""
+        for v in ("0.45.0", "0.45.0rc1", "0.44.0"):
+            self.write(f"{v}-x.md", f"---\nversion: {v}\nheadline: v{v}\n---\n")
+        self.assertEqual([e.version for e in news.released()],
+                         ["0.44.0", "0.45.0rc1", "0.45.0"])
+
+    def test_landing_on_a_candidate_is_not_landing_on_its_release(self):
+        """The candidate's notes are news on the candidate; the release's are not yet."""
+        for v in ("0.44.0", "0.45.0rc1", "0.45.0"):
+            self.write(f"{v}-x.md", f"---\nversion: {v}\nheadline: v{v}\n---\n")
+        self.assertEqual([e.version for e in news.between("0.44.0", "0.45.0rc1")],
+                         ["0.45.0rc1"])
+        self.assertEqual([e.version for e in news.between("0.45.0rc1", "0.45.0")],
+                         ["0.45.0"])
 
     def test_between_is_exclusive_of_where_you_were_and_inclusive_of_where_you_land(self):
         for v in ("0.43.0", "0.44.0", "0.45.0"):

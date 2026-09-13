@@ -281,14 +281,12 @@ SHARE_MODES = ("local", "commit", "push")
 #: a lock exists to prevent — and, because it is not a version, no comparison of the two
 #: versions can speak for it either. This is #332's finding one file over.
 #:
-#: **Anchored, and exactly three parts.** ``hooks._parse_version`` deliberately PREFIX-
-#: matches (it orders a plugin version it does not control, and ``0.47.2-CANARY`` orders
-#: fine as ``(0, 47, 2)``); a gate cannot, or ``0.47.2-CANARY`` passes shape and then
-#: installs something else. Three parts because the *direction* check has to be decidable
-#: against a three-part installed version, and ``0.47`` is not orderable against ``0.47.2``.
-#: Every charter release has had this shape. If one ever ships a pre-release, this is the
-#: line to widen — and widening it means making :func:`hooks._parse_version` able to ORDER
-#: the new shape, not merely accept it.
+#: **Anchored, and exactly three parts.** A gate cannot match a prefix, or ``0.47.2-CANARY``
+#: passes shape and then installs something else. Every charter release has had this shape.
+#: If one ever ships a pre-release, this is the line to widen. The *direction* check behind
+#: it already orders one, because :func:`update.version_key` reads PEP 440 (#1050), so what
+#: widening has to decide is which of those shapes a pin may name, not whether it can be
+#: ordered.
 _VERSION = re.compile(r"^\d+\.\d+\.\d+$")
 
 NOT_A_VERSION = ("'{version}' is not a version. It is interpolated into the pip "
