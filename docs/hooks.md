@@ -649,16 +649,22 @@ one of the four spellings charter uses is now let through, with at most a quote 
 on each side: `vault:<vault>/<key>`, `charter secret get <vault> <key>`, and the two URIs a
 `reference` vault stores, `op://<vault>/<item>/<field>` and `vault://<path>#<field>`.
 Because that happens in the one classifier, all four places give the same answer. **The
-whole value, to the end of its line, has to be the reference, and every name in it has to
-look like a name**: at most 32 characters, and not starting with a prefix a credential
-issuer puts on its tokens (`ghp_`, `github_pat_`, `glpat-`, `sk_live_`, `sk-`, `xoxb-`,
-`AIza`, `pypi-`, `npm_`, `hf_`, `AKIA` and the rest of `hooks._CREDENTIAL_PREFIXES`). So all
-of these are still refused:
+whole value, to the end of its line, has to be the reference, and its names have to look
+like names**. No name may start with a prefix a credential issuer puts on its tokens (`ghp_`,
+`github_pat_`, `glpat-`, `sk_live_`, `sk-`, `xoxb-`, `AIza`, `pypi-`, `npm_`, `hf_`, `AKIA`
+and the rest of `hooks._CREDENTIAL_PREFIXES`). And all the names together — every vault, key,
+item, field and path segment, counted without the scheme or the `/`, `#` and space between
+them — come to **at most 32 characters**. The cap is on the total rather than on each name
+because a secret can hold a `/`: capped per name, AWS's documented example secret key
+written as a `vault://` path split into short segments and passed. So all of these are still
+refused:
 
 - a bare `forge/token`, because a secret can contain a slash;
 - a token typed into any slot of a reference — `vault:forge/ghp_…`,
-  `charter secret get forge <40 hex>`, `op://<token>/item/field` — by its length or its
-  prefix, which is the accident this rule exists for;
+  `charter secret get forge <40 hex>`, `op://<token>/item/field` — by its prefix or by the
+  length it adds, which is the accident this rule exists for;
+- a secret longer than 32 characters however it is split across names, including a
+  `vault://` path of many short segments;
 - a real value beside the reference, glued onto it, or in a second assignment on that line
   or the next;
 - prose after the reference on the same line;
@@ -667,8 +673,10 @@ of these are still refused:
 
 The four other kinds are checked on the whole text whatever the assignment says:
 `vault:forge/xAKIA…` is still an AWS access key. **The length and prefix rule has a ceiling
-of its own:** a token of 32 characters or fewer that starts with none of those prefixes
-reads as a name and passes, and a real key name longer than 32 characters is refused.
+of its own:** a secret of 32 characters or fewer that starts with none of those prefixes
+reads as names and passes. And it costs the other way: an ordinary reference whose names add
+up to more than 32 characters, `vault://secret/data/production/payments#stripe_api_key`, is
+refused as a credential.
 
 ## When a guard is wrong
 

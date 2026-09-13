@@ -402,16 +402,24 @@ _VAULT_REFERENCE_RE = re.compile(
     rf"|vault://(?P<path>{_REFERENCE_SLOT}(?:/{_REFERENCE_SLOT})*)#(?P<field>{_REFERENCE_SLOT})"
     r")['\"`]?")
 
-#: The longest slot a reference may hold and still be read as a NAME. Vault, key, item and
-#: field names are short words (`forge`, `DEPLOY_TOKEN`); the credentials this rule exists
-#: for are long random runs — a GitHub token is 40 characters, a hex API key 40, a PyPI
-#: token over a hundred. Without it, a live token typed into a reference (`vault:forge/<40
-#: hex>`) passed where the rule had refused it (#985's review). The cost, stated: a key name
-#: longer than 32 characters is refused as a credential.
-_REFERENCE_SLOT_MAX = 32
+#: The most characters ALL the names of one reference may hold together — every vault, key,
+#: item, field and path segment, without the scheme or the `/`, `#` and space between them —
+#: and still be read as names. Vault, key, item and field names are short words (`forge`,
+#: `DEPLOY_TOKEN`); the credentials this rule exists for are long random runs, a GitHub token
+#: 40 characters, a hex API key 40, a PyPI token over a hundred.
+#:
+#: **On the whole reference, not on each name**, and both halves of that were measured. With no
+#: cap, a live token typed into a reference (`vault:forge/<40 hex>`) passed where the rule had
+#: refused it. With a cap of 32 per name, a longer secret that holds a `/` split into short
+#: names and passed: `vault://<AWS's documented example secret key>#x`, or six 30-character
+#: segments of a `vault://` path (#985's reviews). A total refuses a secret over 32 characters
+#: however it is split. The cost, stated: an ordinary reference whose names add up to more
+#: than 32 — `vault://secret/data/production/payments#stripe_api_key` — is refused as a
+#: credential.
+_REFERENCE_NAMES_MAX = 32
 
-#: Prefixes that mark a slot as a credential whatever its length, so a short or truncated
-#: token cannot pass as a name. Each is the fixed prefix its issuer puts on every token of
+#: Prefixes that mark a name as a credential whatever the length, so a short or truncated
+#: token cannot pass as one. Checked on EACH name, since a prefix starts a name. Each is the fixed prefix its issuer puts on every token of
 #: that kind, which is why a real vault or key name does not start with one:
 _CREDENTIAL_PREFIXES = (
     "ghp_", "gho_", "ghu_", "ghs_", "ghr_",     # GitHub: classic PAT, OAuth, user, server, refresh
@@ -429,14 +437,14 @@ _CREDENTIAL_PREFIXES = (
 
 
 def _names_where_a_credential_lives(value: str) -> bool:
-    """Whether *value* is exactly a vault reference whose every slot is a name.
+    """Whether *value* is exactly a vault reference whose slots hold names, not a credential.
 
     The shape alone was the first cut, and it let a token through in any slot — `vault:forge/
     ghp_…`, `charter secret get forge <40 hex>` — which is the accident this rule is for: an
-    agent inlining a live token where a reference was meant. So a slot longer than
-    :data:`_REFERENCE_SLOT_MAX` or starting with one of :data:`_CREDENTIAL_PREFIXES` makes the
-    whole value an ordinary assignment again. **The ceiling of that, stated:** a token of 32
-    characters or fewer that starts with no listed prefix still reads as a name.
+    agent inlining a live token where a reference was meant. So the value is an ordinary
+    assignment again when any name starts with one of :data:`_CREDENTIAL_PREFIXES`, or when
+    the names together run past :data:`_REFERENCE_NAMES_MAX`. **The ceiling of that, stated:**
+    a secret of 32 characters or fewer that starts with no listed prefix still reads as names.
     """
     m = _VAULT_REFERENCE_RE.fullmatch(value)
     if not m:
@@ -444,8 +452,8 @@ def _names_where_a_credential_lives(value: str) -> bool:
     slots = [s for g, s in m.groupdict().items() if s is not None and g != "path"]
     if m.group("path") is not None:
         slots += m.group("path").split("/")
-    return all(len(s) <= _REFERENCE_SLOT_MAX and not s.startswith(_CREDENTIAL_PREFIXES)
-               for s in slots)
+    return (sum(len(s) for s in slots) <= _REFERENCE_NAMES_MAX
+            and not any(s.startswith(_CREDENTIAL_PREFIXES) for s in slots))
 
 
 def _secret_kind(text: str) -> str | None:

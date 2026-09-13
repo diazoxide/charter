@@ -12,16 +12,20 @@ The exemption is the classifier's, so every caller gets the same answer, and it 
 the WHOLE value, to the end of its line, must be a reference in a spelling charter uses —
 `vault:<vault>/<key>` (ADR 0022), `charter secret get <vault> <key>` (the CLI), or one of the
 two URIs a reference vault stores, `op://<vault>/<item>/<field>` and `vault://<path>#<field>`
-— with at most a quote or backtick on either side. Every NAME in it must also look like a
-name: at most 32 characters, starting with no known credential prefix. The first cut had no
-such rule, and review measured what that let through: a live token typed into a reference
-(`vault:forge/ghp_…`) passed where main refused it. What stays refused, and is pinned below
-as refused on main too:
+— with at most a quote or backtick on either side. Its names must also look like names: no
+name starts with a known credential prefix, and ALL the names together — every vault, key,
+item, field and path segment, without the scheme or the separators — come to at most 32
+characters. Two reviews shaped that. The first cut had no rule, and a live token typed into a
+reference (`vault:forge/ghp_…`) passed where main refused it. The second capped each name at
+32, and a longer secret that holds a `/` — AWS's documented example secret key is one — split
+into short names and passed. A cap on the total refuses a secret over 32 characters however
+it is split. What stays refused, and is pinned below as refused on main too:
 
 * a bare `word/word`, because a secret can contain a slash;
 * a real value beside a reference, appended to it, or in a second assignment on the line
   or the next;
-* a token in any slot of any spelling, by its length or by its prefix;
+* a token in any slot of any spelling, by its length or by its prefix, and a long secret
+  split across several slots;
 * every near-miss of the four spellings, so the grammar is anchored at both ends;
 * every other rule in the table, which the exemption never reaches: `vault:forge/xAKIA…` is
   an AWS access key whatever it is assigned to.
@@ -107,9 +111,36 @@ SHORT_PREFIXED = {
     "AKIA": "AK" + "IA" + "a1b2", "ASIA": "AS" + "IA" + "a1b2",
 }
 
-#: The length rule's two sides: an ordinary key name of exactly 32 characters, and one more.
-KEY_32 = "GITHUB_RELEASES_DEPLOY_TOKEN_V02"
-KEY_33 = KEY_32 + "X"
+#: Every spelling with EVERY slot open, for the length rule, which is on all the names of a
+#: reference together rather than on any one of them.
+SPELLINGS = ["vault:{}/{}", "charter secret get {} {}", "op://{}/{}/{}", "vault://{}#{}",
+             "vault://{}/{}/{}#{}"]
+
+
+def _names_totalling(template: str, total: int) -> str:
+    """*template* with its slots filled by ordinary names whose lengths add up to *total*,
+    spread as evenly as the slots allow."""
+    n = template.count("{}")
+    sizes = [total // n + (1 if i < total % n else 0) for i in range(n)]
+    return template.format(*("deploy_token_name_for_the_ci_run"[:s] for s in sizes))
+
+
+#: A secret longer than 32 characters split into short names. Each was `credential
+#: assignment` on main and passed a per-name cap of 32 (review of 36e084d).
+AWS_EXAMPLE_SECRET = "wJalrXUtnFEMI/K7MDENG/" + "bPxRfiCYEXAMPLEKEY"
+HEX32 = "0123456789abcdef" * 2
+SPLIT_SECRETS = {
+    "AWS's example secret key as a vault:// path": f"vault://{AWS_EXAMPLE_SECRET}#x",
+    "AWS's example secret key as an op:// reference": f"op://{AWS_EXAMPLE_SECRET}",
+    "a random secret split by one slash": "vault:9sXk2LqPz7VbN4mR0tYw/" + "Hc8dJf3Ua6Ge1Ko5Ri",
+    "two 32-character hex names": f"vault:{HEX32}/{HEX32}",
+    "three 32-character names in a vault:// URI": f"vault://{HEX32}/{HEX32}#{HEX32}",
+    "six 30-character path segments": "vault://" + "/".join([HEX32[:30]] * 6) + "#field",
+}
+
+#: Ordinary references, which the length rule must leave alone.
+ORDINARY = ["op://Eng/deploy/token", "vault://secret/data/deploy#token",
+            "vault:forge/api-token", "charter secret get forge api-token"]
 
 #: Still refused, and refused on main too. Each names the clause that refuses it.
 REFUSED = {
@@ -172,6 +203,8 @@ class TheClassifierReadsAReferenceAsAReference(unittest.TestCase):
                     self.assertEqual("credential assignment", hooks._secret_kind(text))
 
     def test_a_short_token_with_a_credential_prefix_is_refused_in_any_slot(self):
+        """Only the prefix refuses these: the same slot holding an unprefixed name of the same
+        length is exempt, so the length rule cannot be what answers."""
         self.assertEqual(set(SHORT_PREFIXED), set(hooks._CREDENTIAL_PREFIXES))
         for prefix, tok in SHORT_PREFIXED.items():
             self.assertLessEqual(len(tok), 32, prefix)
@@ -179,15 +212,28 @@ class TheClassifierReadsAReferenceAsAReference(unittest.TestCase):
             for slot in SLOTS:
                 text = "token: " + slot.format(tok)
                 with self.subTest(prefix=prefix, slot=slot):
+                    self.assertIsNone(hooks._secret_kind("token: " + slot.format("n" * len(tok))))
                     self.assertIsNotNone(hooks._secret_kind(text), text)
 
-    def test_a_slot_of_32_characters_is_a_name_and_33_is_not(self):
-        self.assertEqual((32, 33), (len(KEY_32), len(KEY_33)))
-        for slot in SLOTS:
-            with self.subTest(slot=slot):
-                self.assertIsNone(hooks._secret_kind("token: " + slot.format(KEY_32)))
-                self.assertEqual("credential assignment",
-                                 hooks._secret_kind("token: " + slot.format(KEY_33)))
+    def test_a_long_secret_split_into_short_names_is_refused(self):
+        for shape, ref in SPLIT_SECRETS.items():
+            with self.subTest(shape):
+                self.assertEqual("credential assignment", hooks._secret_kind(f"secret: {ref}"))
+                self.assertEqual("credential assignment", hooks._secret_kind(f"password: {ref}"))
+
+    def test_ordinary_references_are_within_the_length_rule(self):
+        for ref in ORDINARY:
+            with self.subTest(ref=ref):
+                self.assertIsNone(hooks._secret_kind(f"token: {ref}"))
+
+    def test_names_totalling_32_are_a_reference_and_33_are_not(self):
+        """The boundary, spread across every slot of every spelling."""
+        for spelling in SPELLINGS:
+            at, over = _names_totalling(spelling, 32), _names_totalling(spelling, 33)
+            with self.subTest(spelling=spelling):
+                self.assertIsNone(hooks._secret_kind(f"token: {at}"), at)
+                self.assertEqual("credential assignment", hooks._secret_kind(f"token: {over}"),
+                                 over)
 
     def test_the_remedy_the_brief_refusal_names_is_accepted(self):
         """The refusal and the exemption have to agree, or the refusal sends its reader

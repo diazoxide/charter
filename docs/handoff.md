@@ -287,8 +287,8 @@ and the marker goes with the directory when that id is reaped.
   credential-shaped one is refused by kind before anything opens. Name where the credential
   lives instead, as the whole value on its line — `token: vault:forge/token`,
   ``token: `charter secret get forge token` ``, `token: op://Eng/deploy/token` or
-  `token: vault://secret/data/app#TOKEN` — which is not refused while each name in it is 32
-  characters or fewer and starts with no known token prefix
+  `token: vault://secret/data/app#TOKEN` — which is not refused while its names add up to 32
+  characters or fewer and none starts with a known token prefix
   ([#985](https://github.com/diazoxide/charter/issues/985)). A token typed into one of those
   names is refused like any other.
 - **12,288 bytes for the stamped message**, above. The cost, stated: a brief between roughly
