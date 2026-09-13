@@ -494,8 +494,25 @@ def display(p: Profile, limit: int = contain.DISPLAY_LIMIT) -> str:
     rows (ruling 45) — because a count taken after a fixed `...` is a count of the remainder.
     """
     pieces = [contain.readable(f"{name}={value}", limit) for name, value in p.env]
-    pieces.append(contain.readable(shlex.join(p.command), limit))
+    pieces.append(contain.readable(" ".join([_program(p.command[0]),
+                                             *map(shlex.quote, p.command[1:])]), limit))
     return " ".join(pieces)
+
+
+def _program(word: str) -> str:
+    """The command's first word as a shell would need it typed to reach the same program.
+
+    `shlex.quote` puts a leading `~` inside quotes, where a shell does not expand it, and
+    charter DOES expand it (:func:`expanded_command`) — so `'~/.local/bin/codex'` pasted into
+    a terminal named a directory called `~` (#1004's proof run). The `~` and its slash stay
+    bare and the rest is quoted. `~other/…` is another user's home and stays quoted whole: the
+    line shows what charter was given rather than guessing which home a shell would pick.
+    """
+    if word == "~":
+        return word
+    if word.startswith("~/"):
+        return "~/" + shlex.quote(word[2:]) if word[2:] else word
+    return shlex.quote(word)
 
 
 def ignore_check(root: Path) -> IgnoreCheck:
