@@ -400,9 +400,15 @@ def _resolve_target(args, installed: str, locked: str | None) -> tuple[str | Non
     if locked and _parse(installed) < _parse(locked):
         return locked, False, None    # conforming to a pin somebody chose affects nobody
     latest = _latest()
+    if not latest:
+        # From here on every answer is a comparison with *latest*, so without one there is
+        # no target — and saying so is `cmd_update`'s. This returned *installed* instead,
+        # which ran the rest of the update over a check nobody made and exited 0: the exact
+        # output of a plane that IS current (#950).
+        return None, False, None
     if not locked:
-        return latest or installed, False, latest
-    if latest and _parse(latest) > _parse(installed):
+        return latest, False, latest
+    if _parse(latest) > _parse(installed):
         if not getattr(args, "bump", False):
             return None, True, latest  # moving past the pin moves the TEAM
         return latest, False, latest
@@ -577,7 +583,13 @@ def cmd_update(args) -> int:
         util.info("  do it:  charter update --bump")
         return 0
     if target is None:
-        util.err("could not determine a target version (offline?). "
+        # NOT "(offline?)", and the same two candidates `version bump` names for the same
+        # condition (#941). `_latest` also comes back empty when PyPI DID reply and its
+        # answer could not be cached, so naming the network is a cause charter has not
+        # verified — ADR 0009. Exit 1 like bump's: no check was made, and exit 0 is what an
+        # agent reads as "current".
+        util.err("no version came back from PyPI to check against: either it did not "
+                 "answer, or its answer could not be cached. "
                  "Pass one explicitly: charter update --to X.Y.Z")
         return 1
 

@@ -187,6 +187,73 @@ class ThingsItRefusesOrDegrades(UpdateCase):
         self.assertIn("did not take", out)
 
 
+class NothingToCheckAgainstIsSaidNotSwallowed(UpdateCase):
+    """#950. With no `--to` and no pin to move to, the target is whatever PyPI says is
+    latest — and when nothing came back, there is no target.
+
+    `_resolve_target` used to answer the installed version there instead, so `charter
+    update` moved the harness, ran the news phase and exited 0 over a check it never made:
+    the same output as a plane that is current. The refusal written for this case sat one
+    line below and could not fire, because nothing ever handed it a missing target.
+
+    It names the same two candidates `version bump` names for the same condition (#941),
+    never "offline?": `_latest` also comes back empty when PyPI answered and the cache write
+    failed, and a cause charter did not verify tells the reader to stop looking (ADR 0009).
+    """
+
+    def setUp(self):
+        super().setUp()
+        pt = mock.patch("charter.commands_update._latest", lambda live=True: None)
+        pt.start(); self.addCleanup(pt.stop)
+        pt = mock.patch("charter.commands_update._move_harness")
+        self.harness = pt.start(); self.addCleanup(pt.stop)
+        pt = mock.patch("charter.commands_update._handoff", return_value=(True, ""))
+        self.handoff = pt.start(); self.addCleanup(pt.stop)
+
+    def assertSaidNothingWasChecked(self, code: int, out: str) -> None:
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.moved, [])
+        self.assertIn("no version came back from PyPI", out)
+        self.assertIn("either it did not answer, or its answer could not be cached", out)
+        self.assertIn("charter update --to X.Y.Z", out)
+        self.assertNotIn("offline", out)
+        # Nothing that follows a resolved target ran, so nothing printed that reads as
+        # "already current": no artifact "already on", no news phase.
+        self.harness.assert_not_called()
+        self.handoff.assert_not_called()
+
+    def test_a_plane_that_pins_nothing_is_told_nothing_was_checked(self):
+        code, out = self.update()
+        self.assertSaidNothingWasChecked(code, out)
+
+    def test_bump_on_its_pin_is_told_rather_than_left_where_it_was(self):
+        """`--bump` asks for the pin to move to what is published. Nothing came back, so
+        there is nothing to move it to — and exiting 0 with the pin unmoved is the reply a
+        plane already on the newest release gets."""
+        self.pin(INSTALLED)
+        with mock.patch("charter.commands_update._bump_pin", return_value=True) as bump:
+            code, out = self.update(bump=True)
+        self.assertSaidNothingWasChecked(code, out)
+        bump.assert_not_called()
+
+    def test_a_plane_on_its_pin_is_not_left_to_read_silence_as_current(self):
+        """Without `--bump` the answer on a pin is "stay", or "something newer is out,
+        ask". Which of the two is exactly what nothing came back to decide."""
+        self.pin(INSTALLED)
+        code, out = self.update()
+        self.assertSaidNothingWasChecked(code, out)
+
+    def test_a_plane_behind_its_pin_still_conforms_without_pypi(self):
+        """The pin is a target PyPI has no say in, so the refusal waits until the answer
+        actually depends on PyPI — conforming to what a teammate already chose must keep
+        working with nothing to check against."""
+        self.pin("0.45.0")
+        code, out = self.update()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.moved, ["0.45.0"])
+        self.assertNotIn("no version came back", out)
+
+
 class TheBaselineIsStampedBeforeAnythingMoves(UpdateCase):
     def test_an_interrupted_update_still_knows_where_it_started(self):
         self.update()
