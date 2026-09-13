@@ -291,7 +291,9 @@ hold a fix.
 
 **A plane cannot ask for both a pin and the dev channel.** `[charter] version` names a
 published release the whole team conforms to; `main` has no such number. Declare both and
-charter installs neither, and says so at session start.
+charter installs neither, and says so at session start. So on this channel `charter version
+bump` refuses and writes nothing, and `charter version sync` names `charter update` rather
+than offering a pin.
 
 **Going back** is one command — `charter update --to 0.51.0` installs the published release
 without editing anything — or delete the `[update]` block and run `charter update`.
