@@ -511,8 +511,8 @@ def announce_layer(label: str, rows: list[tuple[str, str]], tree: Path) -> None:
         # every wire that finds it, not only one that wrote: `wt add` of a second piece writes
         # the files and finds the block already as it stands. Whose file, and what clears it, is
         # `workspace.unhidden`'s sentence, the one `doctor` and `reinit` print.
-        util.warn(f"{label}: charter's layer written ({len(made)} file(s)), but not all of it is "
-                  f"hidden — " + "; ".join(workspace.unhidden(tree)) + ".")
+        util.warn(f"{label}: charter's layer written ({len(made)} file(s)), but not all of it — "
+                  + "; ".join(workspace.unhidden(tree)) + ".")
     elif made and (".git/info/exclude", "blocked") not in rows:
         util.info(f"{label}: charter's layer written ({len(made)} file(s)) and "
                   f"hidden in that repo's .git/info/exclude — `git status` there is "
@@ -523,7 +523,9 @@ def announce_layer(label: str, rows: list[tuple[str, str]], tree: Path) -> None:
                   f"repo's .git/info/exclude could not be updated — those files show in "
                   f"its `git status`.")
     for rel, status in rows:
-        if status == "withheld":
+        # A file withheld over a file of yours (#1072) is already named, with what clears it, in
+        # the sentence above; this one's "could not hide it" would send the reader to the exclude.
+        if status == "withheld" and (".git/info/exclude", "unhidden") not in rows:
             # A sentence of its own (#942): the one file charter refused to write, and
             # why — a machine-local rule it cannot hide would be committable there.
             util.warn(f"{label}/{rel} was not written: charter could not hide it in "

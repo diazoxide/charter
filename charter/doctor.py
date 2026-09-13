@@ -2813,9 +2813,10 @@ def _workspace_harness_result(_config, _workspace) -> Result:
         shown = dict.fromkeys(reason for ws, rel, status in findings if status == "unhidden"
                               for row in [_workspace.checkout_row(ws, rel)] if row
                               for reason in _workspace.unhidden(row[0]))
-        first.append("An 'unhidden' exclude block leaves a file charter wrote showing in that "
-                     "checkout's `git status`, because the line that hides it would also hide a "
-                     "file of yours: " + "; ".join(shown) + ".")
+        first.append("An 'unhidden' exclude block leaves out a line that would also hide a file of "
+                     "yours, so a shared file charter wrote shows in that checkout's `git status` "
+                     "and a machine-local one ('withheld') is not written at all: "
+                     + "; ".join(shown) + ".")
     rest: list[str] = []
     if "tracked" in statuses:
         # Charter never writes a `.charter-generated` git tracks — its own is per-checkout and

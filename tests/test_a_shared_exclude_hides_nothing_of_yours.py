@@ -22,10 +22,11 @@ from contextlib import redirect_stderr, redirect_stdout
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands, commands_workspace, commands_worktree, doctor, workspace
+from charter import commands, commands_workspace, commands_worktree, config, doctor, workspace
 
 from tests.test_a_clone_gets_the_layer_and_hides_it import _git, _repo
 from tests.test_a_restrictive_rule_reaches_a_workspace import _status
+from tests.test_a_workspace_carries_charters_layer import _plane_settings
 from tests.test_a_worktree_gets_the_layer import AGENT, LOCAL, MARKER, SHARED, WorktreeLayer
 
 #: Somebody's own settings, untracked in the clone.
@@ -70,12 +71,23 @@ class YourFileInTheClone(WorktreeLayer):
         self.added()
         rows = dict(workspace.harness_layer(self.ws))
         self.assertEqual(rows[".worktrees/svc/p1/.git/info/exclude"], "unhidden")
+        # The shared file is written, and current: only a machine-local file is withheld.
+        self.assertEqual(rows[f".worktrees/svc/p1/{SHARED}"], "ok")
         r = doctor.check_workspace_harness()
         self.assertEqual(r.status, doctor.WARN)
         self.assertIn("api/.worktrees/svc/p1/.git/info/exclude (unhidden)", r.detail)
         self.assertIn(f"{self.yours} is an untracked file charter did not write", r.hint)
         self.assertIn(f"commit or move {self.yours}", r.hint)
         self.assertNotIn("charter workspace reinit --all", r.hint.split("   ")[0])
+
+    def test_a_piece_not_wired_yet_is_told_reinit_writes_the_shared_file(self):
+        """Withheld is a machine-local file's state alone. The shared file `reinit` will write, and
+        a chat in the piece is told so."""
+        wt = self.by_hand()
+        self.assertEqual(dict(workspace.harness_layer(self.ws))[f".worktrees/svc/p1/{SHARED}"],
+                         "missing")
+        self.assertIn(f"({SHARED}, missing) — `charter workspace reinit api` writes them",
+                      workspace.rules_not_in_force(wt))
 
     def test_reinit_names_your_file_and_what_clears_it(self):
         self.by_hand()
@@ -306,3 +318,130 @@ class YourFileInAMainCheckoutCharterDoesNotWire(WorktreeLayer):
             self.assertIn(f"commit or move {os.path.realpath(outside / SHARED)}", said)
             self.assertNotIn("nothing to do", said)
         self.assertIn(f"?? {SHARED}\n", _status(outside))
+
+
+class YourLocalFileInTheClone(WorktreeLayer):
+    """The clone holds an untracked `.claude/settings.local.json` of the operator's own. That path
+    is machine-local — the plane's `--local` rules, and later the harness's own "don't ask again"
+    approvals — and charter never writes a machine-local file it cannot hide (#942): one unhidden
+    is one `git add .` from being committed. So in the piece it is withheld, not written."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        workspace.unwire_guest(self.clone)
+        (self.clone / ".claude").mkdir(exist_ok=True)
+        (self.clone / LOCAL).write_text(YOURS)
+        workspace.wire_harnesses(self.ws)
+        self.assertIn(f"?? {LOCAL}\n", _status(self.clone), "fixture: your file is not visible")
+        self.yours = os.path.realpath(self.clone / LOCAL)
+
+    def test_wt_add_writes_no_local_file_into_the_piece_and_hides_nothing_of_yours(self):
+        wt = self.added()
+        self.assertFalse(os.path.lexists(wt / LOCAL))
+        self.assertIn(f"?? {LOCAL}\n", _status(self.clone))
+        self.assertEqual(_status(wt), "", "the shared file and the rest are still hidden")
+
+    def test_the_shared_file_is_still_written(self):
+        wt = self.added()
+        self.assertEqual(json.loads((wt / SHARED).read_text())["permissions"]["deny"],
+                         ["Bash(rm -rf /)"])
+
+    def test_wt_add_names_the_withheld_file_and_what_clears_it(self):
+        _rc, said, _wt = self.add()
+        self.assertIn(f"charter's {LOCAL} is not written there, because {self.yours} is an "
+                      f"untracked file charter did not write", said)
+        self.assertIn(f"commit or move {self.yours}", said)
+        self.assertNotIn("`git status` there is unaffected", said)
+        # Named once, with what clears it — not also as an exclude charter could not write.
+        self.assertNotIn("could not hide it in that checkout's .git/info/exclude", said)
+
+    def test_doctor_names_it_withheld_and_what_clears_it(self):
+        self.added()
+        rows = dict(workspace.harness_layer(self.ws))
+        self.assertEqual(rows[f".worktrees/svc/p1/{LOCAL}"], "withheld")
+        self.assertEqual(rows[".worktrees/svc/p1/.git/info/exclude"], "unhidden")
+        r = doctor.check_workspace_harness()
+        self.assertIn(f"commit or move {self.yours}", r.hint)
+        self.assertNotIn("charter workspace reinit --all", r.hint)
+
+    def test_reinit_names_it_and_writes_nothing_there(self):
+        wt = self.by_hand()
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            commands_workspace.cmd_workspace_reinit(SimpleNamespace(name=self.ws, all=False))
+        said = out.getvalue() + err.getvalue()
+        self.assertIn(f"commit or move {self.yours}", said)
+        self.assertNotIn(f"wrote .worktrees/svc/p1/{LOCAL}", said)
+        self.assertFalse(os.path.lexists(wt / LOCAL))
+
+    def test_a_chat_in_the_piece_is_told_what_clears_it_rather_than_reinit(self):
+        wt = self.added()
+        said = workspace.rules_not_in_force(wt)
+        self.assertIn("Bash(charter change land *)", said)
+        self.assertIn(f"commit or move {self.yours}", said)
+        self.assertNotIn("reinit api` writes them", said)
+
+    def test_a_local_file_of_yours_in_the_piece_too_asks_charter_for_no_line(self):
+        """Charter lists no line for a file it did not write, in the piece as in the clone, so
+        there is no line to leave out and nothing to name."""
+        wt = self.by_hand()
+        (wt / ".claude").mkdir()
+        (wt / LOCAL).write_text(YOURS)
+        workspace.wire_harnesses(self.ws)
+        self.assertEqual(dict(workspace.harness_layer(self.ws))[
+            ".worktrees/svc/p1/.git/info/exclude"], "ok")
+
+    def test_once_you_commit_it_reinit_writes_and_hides_charters(self):
+        wt = self.added()
+        _git(self.clone, "add", LOCAL)
+        _git(self.clone, "commit", "-qm", "my local settings")
+        commands_workspace.cmd_workspace_reinit(SimpleNamespace(name=self.ws, all=False))
+        self.assertEqual(json.loads((wt / LOCAL).read_text())["permissions"],
+                         {"ask": ["Bash(charter change land *)"]})
+        self.assertEqual(_status(wt), "")
+
+
+class AWithheldLocalFileIsNamedWhereCharterOwnsNothingElse(WorktreeLayer):
+    def test_the_exclude_row_is_there_to_say_why(self):
+        """A piece whose repository commits the plane's shared file and agent gets nothing else
+        from charter, so charter owns nothing there and writes it no marker: without the exclude
+        row, `withheld` would stand in doctor with no word of whose file or what clears it."""
+        workspace.unwire_guest(self.clone)
+        (self.clone / ".claude" / "agents").mkdir(parents=True, exist_ok=True)
+        (self.clone / SHARED).write_text('{"env": {"TEAM": "1"}}\n')
+        (self.clone / AGENT).write_text("route the work\n")
+        _git(self.clone, "add", SHARED, AGENT)
+        _git(self.clone, "commit", "-qm", "the team's layer")
+        (self.clone / LOCAL).write_text(YOURS)
+        workspace.wire_harnesses(self.ws)
+        self.by_hand()
+        workspace.wire_harnesses(self.ws)
+        rows = dict(workspace.harness_layer(self.ws))
+        self.assertEqual(rows[f".worktrees/svc/p1/{LOCAL}"], "withheld")
+        self.assertEqual(rows[".worktrees/svc/p1/.git/info/exclude"], "unhidden")
+        self.assertIn(f"commit or move {os.path.realpath(self.clone / LOCAL)}",
+                      doctor.check_workspace_harness().hint)
+
+
+class BothOfYourFilesInTheClone(WorktreeLayer):
+    """Your shared and your local settings, both untracked in the clone: the piece gets charter's
+    shared file, left showing, and no local file."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        workspace.unwire_guest(self.clone)
+        (self.clone / ".claude").mkdir(exist_ok=True)
+        (self.clone / SHARED).write_text(YOURS)
+        (self.clone / LOCAL).write_text(YOURS)
+        workspace.wire_harnesses(self.ws)
+
+    def test_a_chat_is_told_reinit_for_the_stale_shared_file_and_your_file_for_the_local_one(self):
+        wt = self.added()
+        self.assertTrue((wt / SHARED).is_file())
+        self.assertFalse(os.path.lexists(wt / LOCAL))
+        _plane_settings(config.ROOT, permissions={"ask": ["Bash(terraform apply *)"],
+                                                  "deny": ["Bash(rm -rf /)", "Bash(curl *)"]})
+        said = workspace.rules_not_in_force(wt)
+        # Charter's own shared file is stale, and `reinit` brings it up to date, shown or not.
+        self.assertIn(f"({SHARED}, stale) — `charter workspace reinit api` writes them", said)
+        self.assertIn(f"({LOCAL}, withheld) — charter's {LOCAL} is not written there", said)

@@ -14,12 +14,18 @@ Now charter checks every checkout that reads the exclude before it adds a line. 
 holds an untracked file at that path that charter did not write, charter leaves the line out:
 
 - Your file stays in the clone's `git status`.
-- The piece still gets charter's file, so the plane's ask/deny rules are in force there. That file
+- If the path is a shared file (`.claude/settings.json`, a mirrored agent or skill), the piece
+  still gets charter's copy, so the plane's committed ask/deny rules are in force there. That copy
   shows in the piece's `git status`.
-- `charter wt add`, `charter workspace reinit` and `doctor`'s `workspace layer` row name your file,
-  and `doctor` marks the piece's `.git/info/exclude` as `unhidden`. Commit your file or move it,
-  and the next `charter workspace reinit` hides charter's.
-- Until then `charter wt remove` counts charter's file as uncommitted work in the piece and needs
+- If the path is the machine-local `.claude/settings.local.json`, charter does not write it into
+  the piece, and `doctor` shows it as `withheld`. A local file holds machine-local rules, and later
+  the harness's own approvals, so a copy charter cannot hide is one `git add` from being committed.
+  The plane's `--local` rules are not in force in that piece until it is written.
+- `charter wt add`, `charter workspace reinit`, `doctor`'s `workspace layer` row and a chat started
+  in the piece name your file. `doctor` marks the piece's `.git/info/exclude` as `unhidden`. Commit
+  your file or move it, and the next `charter workspace reinit` hides charter's files and writes
+  the local one.
+- Until then `charter wt remove` counts a shown file as uncommitted work in the piece and needs
   `--force`.
 
 A file charter wrote still counts as charter's in any checkout, and only a record charter trusts

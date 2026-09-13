@@ -369,11 +369,14 @@ so `git status` stays clean in both.
 - **A file of yours in the clone stays in its `git status`.** The line that hides a piece's
   `.claude/settings.json` hides that path in the clone too, because both read one exclude. Where
   the clone, or any other checkout reading that exclude, holds an untracked file at that path that
-  charter did not write, charter leaves the line out. The piece still gets charter's file and the
-  plane's rules in it, and that file shows in the piece's `git status`. `wt add`, `reinit` and
-  `doctor` (`.git/info/exclude (unhidden)`) name your file. Commit it or move it, and the next
-  `charter workspace reinit` hides charter's. Until then `charter wt remove` counts charter's
-  file as uncommitted work in the piece and needs `--force`.
+  charter did not write, charter leaves the line out. What happens to charter's file then depends
+  on the file. The shared `.claude/settings.json` and the mirrored agents and skills are still
+  written, so the plane's committed rules reach the piece, and they show in the piece's
+  `git status`. The machine-local `.claude/settings.local.json` is withheld (`doctor` shows
+  `withheld`), because an unhidden local file is one `git add` from being committed. `wt add`,
+  `reinit` and `doctor` (`.git/info/exclude (unhidden)`) name your file. Commit it or move it, and
+  the next `charter workspace reinit` hides charter's files and writes the local one. Until then
+  `charter wt remove` counts a shown file as uncommitted work in the piece and needs `--force`.
 - **A clone whose worktrees git cannot list is named.** When `.git/worktrees` cannot be read,
   or git fails to answer, none of those worktrees gets the layer. `doctor`
   (`<clone>/.git/worktrees (unlisted)`), `reinit` and `clone` name the clone and what clears it.
