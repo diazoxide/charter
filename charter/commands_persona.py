@@ -64,8 +64,12 @@ _TEMPLATE_DELEGATE = """
 # management                                                                   #
 # --------------------------------------------------------------------------- #
 def cmd_persona_create(args) -> int:
-    if not persona.valid_name(args.name):
-        util.err(persona.INVALID_NAME.format(name=args.name))
+    # `defined=False`, and only here: this is the command that defines a name nothing
+    # defines yet, so its absence is the point, not a refusal. Whether it already exists is
+    # the next question, and it has its own sentence.
+    refused = persona.name_refusal(args.name, defined=False)
+    if refused:
+        util.err(refused)
         return 1
     p = persona.path(args.name)
     if p.exists() and not args.force:
@@ -74,8 +78,11 @@ def cmd_persona_create(args) -> int:
         return 1
 
     extends = getattr(args, "extends", None)
-    if extends and not persona.load(extends):
-        util.err(f"--extends '{extends}': no such persona to inherit from (see `charter persona list`).")
+    # The parent, unlike the child, has to exist, and is told so in the words every other
+    # command uses (#1059).
+    refused = persona.undefined_flag(extends)
+    if refused:
+        util.err(refused)
         return 1
 
     # Routing intent is required up front — unlike the charter body, it is knowable at
@@ -256,10 +263,13 @@ def _vault_status(vault: str | None) -> str:
 
 
 def cmd_persona_show(args) -> int:
-    d = persona.resolve(args.name)  # effective persona (inheritance applied)
-    if not d:
-        util.err(f"no persona '{args.name}'")
+    refused = persona.name_refusal(args.name)
+    if refused:
+        util.err(refused)
         return 1
+    # Not None here: `resolve` builds its chain from `load`, and the check above has already
+    # had `load` answer for this name.
+    d = persona.resolve(args.name)  # effective persona (inheritance applied)
     m = d["meta"]
     print(f"{m.get('name', args.name)} — {m.get('role', '')}")
     chain = d.get("lineage") or [args.name]
@@ -344,8 +354,11 @@ def _terminal_for_selection() -> str | None:
 
 
 def cmd_persona_use(args) -> int:
-    if not persona.load(args.name):
-        util.err(persona.NO_SUCH_PERSONA.format(name=args.name))
+    # Not `load` alone: that answers None for `../x` too, and the create hint it led to is
+    # one `persona create` refuses (#1059).
+    refused = persona.name_refusal(args.name)
+    if refused:
+        util.err(refused)
         return 1
     scope = persona.set_active(args.name, terminal_id=_terminal_for_selection())
     util.ok(f"Active persona set to '{args.name}'{_scope_note(scope)}.")
@@ -557,8 +570,9 @@ def cmd_persona_default(args) -> int:
             util.info("No default persona was declared.")
         return 0
     if getattr(args, "name", None):
-        if not persona.load(args.name):
-            util.err(f"no persona '{args.name}' — create it first (`charter persona create {args.name}`).")
+        refused = persona.name_refusal(args.name)
+        if refused:
+            util.err(refused)
             return 1
         toml = config.ROOT / "charter.toml"
         try:
@@ -624,8 +638,9 @@ def _dependents_of(name: str) -> list[str]:
 
 def cmd_persona_remove(args) -> int:
     import shutil
-    if not persona.load(args.name):
-        util.err(f"no persona '{args.name}'")
+    refused = persona.name_refusal(args.name)
+    if refused:
+        util.err(refused)
         return 1
     deps = _dependents_of(args.name)
     if deps and not getattr(args, "force", False):
@@ -658,7 +673,10 @@ def cmd_persona_remove(args) -> int:
 # persona-scoped secrets (proxy to the persona's vault)                        #
 # --------------------------------------------------------------------------- #
 def _resolve_vault(args) -> str | None:
-    refused = persona.blank_flag(getattr(args, "persona", None))
+    # The whole check, not just the whitespace half (#1059). `vault_of` falls back to the
+    # vault TAGGED with the name, so a misspelled `--persona` that was never checked read
+    # whatever vault carried the misspelling, for a persona nobody defines.
+    refused = persona.undefined_flag(getattr(args, "persona", None))
     if refused:
         util.err(refused)
         return None
@@ -1136,8 +1154,9 @@ def _remove_agent(name: str) -> bool:
 # memory: persistent (committed) + ephemeral (session scratch) + activity log  #
 # --------------------------------------------------------------------------- #
 def _require(name: str) -> bool:
-    if not persona.load(name):
-        util.err(persona.NO_SUCH_PERSONA.format(name=name))
+    refused = persona.name_refusal(name)
+    if refused:
+        util.err(refused)
         return False
     return True
 
@@ -1382,6 +1401,13 @@ def _agent_sync_issues(name: str) -> list[tuple[str, str]]:
 
 
 def cmd_persona_lint(args) -> int:
+    # The name, and not whether it loads (#1059). Saying why a persona does not load is
+    # this command's own finding, `persona.md: <why>` for a definition that resolves out of
+    # the plane, and `no persona` would print in its place.
+    refused = getattr(args, "name", None) and persona.name_refusal(args.name, defined=False)
+    if refused:
+        util.err(refused)
+        return 1
     names = [args.name] if getattr(args, "name", None) else persona.list_personas()
     if not names:
         util.info("No personas to lint.")
@@ -1476,10 +1502,28 @@ def _stats_table(heads, body) -> list[str]:
     return [line([h for h, _ in heads] + ["STATUS"])] + [line(row) for row in body]
 
 
+def _roster_name_refusal(args) -> str | None:
+    """`stats` and `optimize`: the refusal for the one name they were given, if any (#1059).
+
+    A name nothing defines used to exit 0, with a `dormant` row or a tidy corpus for a
+    persona that is not there. `_shared` is let through: it is outside the alphabet so that
+    no persona can take it, and the shared namespace is the one thing besides a persona
+    that these two read.
+    """
+    name = getattr(args, "name", None)
+    if name == config.SHARED_PERSONA:
+        return None
+    return persona.undefined_flag(name)
+
+
 def cmd_persona_stats(args) -> int:
     """Roster health mined from committed memory — a persona's memory IS its activity
     trace, so this is the usage + (in-corpus) quality signal for the steward's observe
     loop. Read-only. Sorted by volume; flags idle/dormant personas as prune candidates."""
+    refused = _roster_name_refusal(args)
+    if refused:
+        util.err(refused)
+        return 1
     names = [args.name] if getattr(args, "name", None) else persona.list_personas()
     if not names:
         util.info("No personas yet.")
@@ -1662,6 +1706,10 @@ def cmd_persona_optimize(args) -> int:
     never a silent charter edit. Read-only without --apply. Mirrors steward's Hat 2 model."""
     from . import curate
     from .commands import commit_memory_reactive
+    refused = _roster_name_refusal(args)
+    if refused:
+        util.err(refused)
+        return 1
     names = [args.name] if getattr(args, "name", None) else persona.list_personas()
     if not names:
         util.info("No personas to optimize.")
@@ -1736,6 +1784,13 @@ def cmd_persona_log(args) -> int:
 
 
 def cmd_persona_migrate(args) -> int:
+    # Before the shared namespace is scaffolded, so a refused name writes nothing. A name
+    # nothing defines used to say "No personas to migrate." and exit 0 (#1059). `load`
+    # reads the legacy flat file too, so a persona waiting to be migrated passes.
+    refused = persona.undefined_flag(args.name)
+    if refused:
+        util.err(refused)
+        return 1
     persona.ensure_shared()  # make sure the cross-persona namespace exists
     names = [args.name] if args.name else persona.list_personas()
     migrated, already = [], []
@@ -1962,8 +2017,10 @@ def cmd_persona_sync_agents(args) -> int:
 
 def _sync_agents(args, plane=None) -> int:
     one = getattr(args, "persona", None)
-    if one and not persona.load(one):
-        util.err(f"no persona '{one}'")
+    # Asked inside `in_tree`, where the personas being generated are read from.
+    refused = persona.undefined_flag(one)
+    if refused:
+        util.err(refused)
         return 1
     names = [one] if one else persona.list_personas()
     if not names:

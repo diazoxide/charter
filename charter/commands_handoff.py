@@ -58,8 +58,9 @@ ALREADY_EXISTS = (
 NO_SUCH_WORKSPACE = (
     "charter handoff: no workspace '{ws}' on this plane — nothing was opened. Create it in "
     "the same call: charter handoff {ws} --create --vision \"<what it is for>\"")
-NO_SUCH_PERSONA = (
-    "charter handoff: no persona '{p}' — have: {have}. Nothing was opened.")
+#: `{refused}` is `persona.undefined_flag`'s sentence, the line every command that takes a
+#: persona name says (#1059); the frame and the roster are this command's.
+BAD_PERSONA = "charter handoff: {refused} — have: {have}. Nothing was opened."
 #: The kind, never the matched text — `hooks._secret_kind`'s own discipline, reused rather
 #: than a second classifier (plan Open question 20). The two spellings it recommends are the
 #: two that classifier reads as a reference rather than a value, on a line of their own; a
@@ -160,10 +161,12 @@ def cmd_handoff(args) -> int:
     if not args.create and not exists:
         util.err(NO_SUCH_WORKSPACE.format(ws=ws))
         return 1
-    if args.persona and (not persona.valid_name(args.persona)
-                         or args.persona not in persona.list_personas()):
-        util.err(NO_SUCH_PERSONA.format(p=contain.one_line(args.persona),
-                                        have=switch._some(persona.list_personas())))
+    # Existence is `load`'s answer, as it is for `persona use`, and not membership in the
+    # roster, which also lists a directory whose `persona.md` does not load.
+    refused = persona.undefined_flag(args.persona)
+    if refused:
+        util.err(BAD_PERSONA.format(refused=refused,
+                                    have=switch._some(persona.list_personas())))
         return 1
 
     brief, refusal = handoff.read_brief(sys.stdin, ws)

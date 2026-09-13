@@ -366,6 +366,29 @@ for one command and no rung below it is the persona you meant. `charter persona 
 (#1055). Before, `persona secret` said that persona has no vault, and `recall` searched a
 persona named `' '` and found nothing. An empty `--persona ""` still means no flag.
 
+Every command that takes a persona name checks it the same way, first, before it looks
+anything up, and says the same line for the same mistake (#1059):
+
+```
+✗ no persona 'devosp' (create it: charter persona create devosp)
+✗ invalid persona name '../x' (lowercase letters, digits, '.', '_', '-')
+✗ no persona ' ' (a persona name is never only whitespace)
+```
+
+That covers `persona use`, `show`, `default`, `remove`, `remember`, `recall`, `dedupe`,
+`log`, `forget`, `stats`, `optimize`, `migrate`, `sync-agents --persona`, `persona secret
+--persona`, `create --extends`, `vault add --persona` and `charter recall --persona`. A
+misspelled `persona secret --persona` used to read whichever vault was tagged with the
+misspelling. Three commands differ on purpose:
+
+- `persona create <name>` checks the name but not that it exists, since it creates it.
+- `persona lint <name>` checks the name but not that it loads, since saying why a persona
+  does not load is its job.
+- `charter handoff --persona` and `charter frame-switch --persona` wrap the same line in
+  their own refusal and list the personas there are after it.
+
+`stats _shared` and `optimize _shared` still read the shared namespace.
+
 `charter persona use <name>` writes the session *and* terminal pointers, so two panes hold
 two personas and neither moves the other. Only the terminal pointer survives closing and
 reopening Claude, and only when your terminal reports a pane id — `use` says which of the

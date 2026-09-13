@@ -3025,8 +3025,9 @@ def cmd_recall(args) -> int:
     namespace (+ ephemeral with --ephemeral) — with each hit labeled by its source."""
     from . import persona, recall as rc
     # Before anything is searched: a `--persona` of whitespace searched a persona named
-    # `' '` and reported no memories, over the persona that holds them (#1055).
-    refused = persona.blank_flag(getattr(args, "persona", None))
+    # `' '` and reported no memories, over the persona that holds them (#1055), and a
+    # misspelled one searched the other bases and answered as if it had searched it (#1059).
+    refused = persona.undefined_flag(getattr(args, "persona", None))
     if refused:
         util.err(refused)
         return 1

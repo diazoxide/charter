@@ -532,9 +532,14 @@ class RecallCase(TableCase):
                      if unicodedata.normalize("NFC", p.name) == want), name)
 
     def recall(self, name: str) -> list[str]:
-        return self.run_cmd(commands.cmd_recall, SimpleNamespace(
-            query=self.QUERY, scope=None, ephemeral=False, persona=name,
-            workspace=self.WS, all_workspaces=False, since=None, limit=8, full=False))
+        """The persona reaches `recall` as the ACTIVE one, not through `--persona`, which
+        refuses a name outside the alphabet before anything is searched (#1059). A directory
+        charter did not mint still gets searched and labelled that way, which is the label
+        this class measures."""
+        with mock.patch.dict(os.environ, {"CHARTER_PERSONA": name}):
+            return self.run_cmd(commands.cmd_recall, SimpleNamespace(
+                query=self.QUERY, scope=None, ephemeral=False, persona=None,
+                workspace=self.WS, all_workspaces=False, since=None, limit=8, full=False))
 
     @staticmethod
     def hit_rows_or_undated(rows: list[str]) -> list[str]:

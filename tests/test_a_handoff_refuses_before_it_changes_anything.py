@@ -209,7 +209,8 @@ class AHandoffRefusesBeforeItChangesAnything(_AHandoffFromAlpha):
         self.make_persona("forge")
         rc, _out, err = self._handoff("beta", persona="forj")
         self.assertEqual(rc, 1)
-        self.assertIn("no persona 'forj' — have: forge", err)
+        self.assertIn("no persona 'forj' (create it: charter persona create forj) — have: forge",
+                      err)
         self._nothing_changed()
 
     def test_a_persona_name_with_a_newline_cannot_write_a_second_line_either(self):
