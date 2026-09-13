@@ -95,6 +95,17 @@ rule while one who reads a bare refusal files an issue.
   delimiter is `EOF`, because quotes are removed per character and the pieces join. A body whose
   terminator never arrives is not dropped at all, since that is what a misread delimiter looks
   like ([#975](https://github.com/diazoxide/charter/issues/975)).
+  A **commit message on stdin** is the same data on the same terms: the quoted body of
+  `git commit -F -`, `-F-`, `--file=-` or `--file -`, git's global options before `commit`
+  included, is dropped when no executor is in its pipeline, so a message describing charter's
+  own layout is not refused ([#997](https://github.com/diazoxide/charter/issues/997)). Any
+  spelling of `--edit` keeps it visible, because git hands the message to the editor and
+  `core.editor=sh` runs it; so does a redirection target spelled like the flag (`> -F-`), which
+  leaves the heredoc to the editor's stdin. The recogniser is narrow on purpose, and each
+  spelling it does not read keeps the body visible rather than hiding one: `git tag -F -` and
+  other subcommands, an alias, a short cluster (`-aF -`), an abbreviation (`--fil=-`), `-F -`
+  after `--`. What git does with the message after storing it is outside the guard, as a
+  script file is: a `commit-msg` hook that runs the file it is handed runs the message.
   An *unquoted* body stays visible instead, because the shell expands it before the reader
   sees it and a `$( … )` in it would run. And `#` starts a comment only where a word starts. Position counts too: `{` and `}` are reserved words, so bash passes them as
   plain arguments anywhere but command position and `cat { <vault>` is one command that
@@ -446,10 +457,11 @@ rule while one who reads a bare refusal files an issue.
   body's content — which A7 must not use, since a brief is indistinguishable from prose naming
   the feature. Spelling the program out avoids the prompt.
   The look inside `eval` and `sh -c` strings reads the call with reader heredoc bodies removed,
-  so a body that is NOT a reader's — a `python3 - <<'PY'`, `git commit -F -` or `tee` body —
-  holding a lone `'` (as in `don't`) leaves the call unparseable and the look is skipped, so a
-  handoff in a later `eval '…'` or `bash -c '…'` is allowed; a `cat` body is stripped first and
-  costs nothing. Claude Code says the same of its rule:
+  so a body that is NOT a reader's — a `python3 - <<'PY'` or `tee` body, or a
+  `git commit -F -` spelling the leak guard does not read as a message — holding a lone `'` (as
+  in `don't`) leaves the call unparseable and the look is skipped, so a handoff in a later
+  `eval '…'` or `bash -c '…'` is allowed; a `cat` body or a quoted `git commit -F -` message is
+  stripped first and costs nothing. Claude Code says the same of its rule:
   a Bash rule "isn't a security boundary around the program"
   ([What a Bash rule doesn't match](https://code.claude.com/docs/en/permissions#bash-rule-limits)).
 
