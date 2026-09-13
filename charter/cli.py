@@ -1159,8 +1159,21 @@ def _add_frame_parsers(sub) -> None:
     # open must never stop on a question nobody can see, and a flag they would have to
     # remember to pass is a flag that gets forgotten — the failure would be a pane waiting
     # forever on a keypress that is never coming.
+    #
+    # **`--select` is the same pane with no profile named yet.** It draws the profile
+    # selector there and starts the harness in it once a row is picked, so a chat window
+    # can exist before anybody has said what it runs. `--start` is the row the cursor opens
+    # on and the row that is marked — a NAME, like `--profile`, because no profile's
+    # command or environment crosses tmux by any route.
+    #
+    # `--profile` is no longer `required`: the two flags are alternatives, and argparse has
+    # no way to say "one of these" that produces a sentence worth reading. The command says
+    # it itself (`launcher.NOTHING_NAMED`), which is also the only spelling that can explain
+    # that this is not a command to type.
     fl = sub.add_parser("frame-launch")
-    fl.add_argument("--profile", dest="profile", required=True)
+    fl.add_argument("--profile", dest="profile", default="")
+    fl.add_argument("--select", action="store_true")
+    fl.add_argument("--start", dest="start", default="")
     fl.add_argument("--attended", action="store_true")
     fl.add_argument("rest", nargs=argparse.REMAINDER)
     fl.set_defaults(func=_frame_launch)

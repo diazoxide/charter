@@ -214,6 +214,61 @@ _HEADER_ROWS = 1
 _FOOTER_ROWS = 1
 _CHROME_ROWS = _HEADER_ROWS + _FOOTER_ROWS
 
+#: The bottom line every surface drew before :attr:`Surface.footer` existed, and still the
+#: answer for every surface that names none.
+#:
+#: ASCII, for `_MARK`'s reason: the arrows and the return symbol an overlay wants here
+#: (`↑↓`, `⏎`) are all East-Asian *Ambiguous*, which `statusline._persona_chips` records
+#: breaking a charter layout twice on a terminal that draws them two cells wide.
+_DEFAULT_FOOTER = ("  up/down move   enter choose   esc cancel   "
+                   f"{HATCH_KEY} back to the harness")
+
+
+def _clipped(text: str, width: int) -> str:
+    """*text* inside *width* cells, saying how many characters went when it does not fit.
+
+    **An ellipsis marks a cut and not its size, and on this surface the size is the whole
+    question** (ruling 45). The footer is the ONLY place a refusal's reason appears on the
+    profile selector (`frame/selector.py`: Enter on a refused row leaves the list up and
+    puts the reason here), and a selector row carries a command or a reason out of a file a
+    chat can write. Clipped silently, an operator reading `charter reinit` at the end of a
+    line cannot tell whether that was the fix or the middle of one. The marker is
+    `contain.counted`'s, which is `doctor`'s: one promise, one spelling.
+
+    Whole characters rather than cells, because that is what an operator would have to go
+    and read somewhere else: `charter harness list` and `charter doctor` both print the
+    same text unclipped, and the count is what says to go there.
+
+    The search walks down from the most a pane this wide could show rather than computing a
+    cut, because the marker's own width changes with the number in it — one more hidden
+    character can make it one cell wider and put the line back over the edge. **It starts
+    at `width` characters and not at the end of the text**, because a command a chat made a
+    megabyte long would otherwise cost a quadratic walk on every paint of every row that
+    carries it. What that start gives up is exact and harmless: a longer prefix can fit only
+    by holding characters narrower than a cell (a combining mark `contain` leaves alone),
+    and stopping short of those hides a few more characters than it had to — which the
+    count still says, exactly.
+
+    **In a narrow column the count gives way, and that is the rule rather than a gap.** The
+    marker is some sixteen cells on its own (`… +324 not shown`), so a column narrower than
+    that gets the ordinary bare `…` — a count that cannot fit cannot be shown — and just
+    above it the count can take nearly the whole line. The selector's footer is the line
+    that matters, which is why it puts `esc close this chat` first: measured and pinned, the
+    whole hint survives at 40 columns and wider and the key `esc` at 24 and wider, for any
+    reason under 100,000 characters (`tests/test_a_new_chat_starts_at_the_profile_selector
+    .EveryFooterSaysHowToLeave`). Narrower than that is narrower than this surface supports.
+    """
+    if tui.width(text) <= width:
+        return text
+    for keep in range(min(len(text), width), -1, -1):
+        line = contain.counted(text, keep)
+        if tui.width(line) <= width:
+            return line
+    # A pane too narrow for the marker itself: the ordinary clip, which is what every row
+    # of a surface that does not count already gets. Nothing is claimed about the size
+    # because nothing can be.
+    return tui.truncate(text, width)
+
 #: The two cells between the title column and the note column.
 _GAP = 2
 
@@ -676,6 +731,30 @@ class Surface:
     #: two, so the request and the handling cannot disagree.
     mouse: bool = False
 
+    #: The bottom line, in place of :data:`_DEFAULT_FOOTER`. ``None`` keeps that line,
+    #: which is what every surface on `main` wants.
+    #:
+    #: **A surface that is not reached BY the harness cannot promise a way back to it.**
+    #: The default line ends in `F12 back to the harness`, true of the palette and of the
+    #: tab menu because both are panes split off a running harness. `frame/selector.py` is
+    #: drawn in a chat's own pane before any harness has run in it, so that half of the
+    #: line names a key with nowhere to go — and the other half is where a refusal the
+    #: operator has to read goes, because closing the surface would close the chat
+    #: (ruling 30). One attribute rather than a `render` override per surface: the line is
+    #: this module's arithmetic, and a subclass rewriting it would be #749's shape.
+    footer: str | None = None
+
+    #: Whether a title or a note this pane is too narrow for SAYS how much it hid
+    #: (`… +N not shown`) rather than ending in a bare ellipsis — ruling 45: a row the
+    #: operator chooses or approves from counts what it kept back. ``False`` keeps every
+    #: row exactly as it was drawn, which is what the palette, the tab menu and the pickers
+    #: want: their rows are charter's own words, not a command out of a file a chat can
+    #: write. `frame/selector.Selector` is the surface that sets it.
+    #:
+    #: One attribute and not a `render` override, for :attr:`footer`'s reason: how a row
+    #: is cut is this module's arithmetic.
+    says_what_it_hid: bool = False
+
     _sel: int = field(default=0, init=False)
     _top: int = field(default=0, init=False)
 
@@ -723,7 +802,11 @@ class Surface:
         function rather than a convention each row source is trusted to keep (#749).
         """
         top, n = self._window(height)
-        shown = [(contain.one_line(r.title), contain.one_line(r.note), r.mark)
+        # Unclipped where the row COUNTS its cut: `contain.one_line`'s own budget ends in a
+        # fixed marker, and a count taken after that would be a count of what was left of
+        # a value somebody had already cut — a number that looks exact and is not.
+        limit = contain.NO_CLIP if self.says_what_it_hid else contain.DISPLAY_LIMIT
+        shown = [(contain.one_line(r.title, limit), contain.one_line(r.note, limit), r.mark)
                  for r in self.rows[top:top + n]]
         title_w = _title_width([(t, note) for t, note, _ in shown], width)
         out = [tui.truncate(f"{_BOLD}{contain.one_line(self.heading)}{_R}"
@@ -734,18 +817,24 @@ class Surface:
             on = i == self._sel
             mark = _MARK[0] if on else _MARK[1]
             here = ROW_MARK[0] if marked else ROW_MARK[1]
+            if self.says_what_it_hid:
+                # Each column cut to its OWN room, so the count lands inside the row rather
+                # than past the edge the whole-row cut below would take it off at.
+                room = width - tui.width(mark) - tui.width(here) - title_w - _GAP
+                title, note = _clipped(title, title_w), _clipped(note, room)
             body = (f"{mark}{here}{tui.pad(title, title_w)}{' ' * _GAP}"
                     f"{_DIM}{note}{_R}")
             out.append(tui.truncate(f"{_REV}{body}{_R}" if on else body, width))
         while len(out) < height - _FOOTER_ROWS:
             out.append("")
-        # ASCII, for `_MARK`'s reason: the arrows and the return symbol an overlay wants
-        # here (`↑↓`, `⏎`) are all East-Asian *Ambiguous*, which `statusline
-        # ._persona_chips` records breaking a charter layout twice on a terminal that
-        # draws them two cells wide.
-        out.append(tui.truncate(
-            f"{_DIM}  up/down move   enter choose   esc cancel   "
-            f"{HATCH_KEY} back to the harness{_R}", width))
+        # Contained before `tui.width` sees it, for every other display string's reason
+        # (#472): a footer carries a refusal, and a refusal quotes a profile's own command.
+        # Unclipped by `contain` and clipped by :func:`_clipped` alone, because a refusal is
+        # the one line here whose CUT has to say its own size, and a size counted after a
+        # fixed `...` would be the size of the remainder.
+        foot = contain.one_line(_DEFAULT_FOOTER if self.footer is None else self.footer,
+                                contain.NO_CLIP)
+        out.append(tui.truncate(f"{_DIM}{_clipped(foot, width)}{_R}", width))
         return out[:max(1, height)]
 
     def handle(self, ev: Event, height: int) -> str | None:

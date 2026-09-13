@@ -844,23 +844,12 @@ def _not_probed(p, ignored) -> tuple[str, str] | None:
     return None
 
 
-#: What a doctor row says about what it hid (ruling 45) — the selector's marker
-#: (`frame/overlay._HIDDEN`), because it is the same promise to the same operator. An
-#: ellipsis marks a cut and not its size, and on a row whose hint is a command to run, a
-#: reader cannot tell a clipped command from a whole one without the size.
-_HIDDEN = "… +{n} not shown"
-
-
-def _counted(text: str, limit: int = contain.DISPLAY_LIMIT) -> str:
-    """*text* — already escaped — within *limit* characters, saying how many it did not show.
-
-    Not `contain.readable`, which clips with a FIXED marker and would escape an escaped
-    value a second time: every caller here hands over text `contain` has already made safe
-    and left whole, so what is left to decide is only how much of it a row shows.
-    """
-    if len(text) <= limit:
-        return text
-    return text[:limit] + _HIDDEN.format(n=len(text) - limit)
+#: What a doctor row says about what it hid (ruling 45): `contain.counted`, the one helper
+#: for it — the profile selector's rows count with the same one, because it is the same
+#: promise to the same operator. An ellipsis marks a cut and not its size, and on a row
+#: whose hint is a command to run, a reader cannot tell a clipped command from a whole one
+#: without the size. Named here as well, so every row below still reads as one of doctor's.
+_counted = contain.counted
 
 
 def _profile_row_name(p) -> str:

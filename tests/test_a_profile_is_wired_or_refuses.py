@@ -1655,6 +1655,20 @@ class TheCache(PersonaIso, unittest.TestCase):
         wiring.remember(self.p, cwd=self.here, w=self.w)
         self.assertIsNone(wiring.cached(self.p, cwd=self.tmp))
 
+    def test_a_could_not_ask_answer_is_never_remembered(self):
+        """An UNKNOWN is a fact about one probe — a timeout, an unparseable answer — and not
+        about the folder. Remembered, it would refuse the selector's row for the cache's
+        whole day, and Enter on a refused row never reaches a fresh probe. So only a
+        definite answer is kept, and the next draw asks again."""
+        wiring.remember(self.p, cwd=self.here,
+                        w=wiring.Wiring(wiring.UNKNOWN_STATE, "timed out", "the fix"))
+        self.assertIsNone(wiring.cached(self.p, cwd=self.here))
+        for state in (wiring.WIRED, wiring.UNWIRED):
+            with self.subTest(state=state):
+                w = wiring.Wiring(state, "asked and answered", "")
+                wiring.remember(self.p, cwd=self.here, w=w)
+                self.assertEqual(wiring.cached(self.p, cwd=self.here), w)
+
     def test_an_old_entry_is_a_miss(self):
         wiring.remember(self.p, cwd=self.here, w=self.w)
         self.age(-25 * 3600)
@@ -2510,9 +2524,9 @@ class TheSeamsTheSweepAsksAbout(PersonaIso, unittest.TestCase):
         p = profiles.Profile(name="odd", kind="odd", harness="odd", command=("odd",),
                              env=(), source=profiles.BUILTIN)
         self.assertEqual(wiring._stamp(p, self.here), {})
-        wiring.remember(p, cwd=self.here, w=wiring.Wiring(wiring.UNKNOWN_STATE, "x", "y"))
+        wiring.remember(p, cwd=self.here, w=wiring.Wiring(wiring.UNWIRED, "x", "y"))
         self.assertEqual(wiring.cached(p, cwd=self.here),
-                         wiring.Wiring(wiring.UNKNOWN_STATE, "x", "y"))
+                         wiring.Wiring(wiring.UNWIRED, "x", "y"))
 
     def test_an_install_under_an_environment_exec_refuses_is_failed_not_raised(self):
         """`wiring.install`'s `ValueError`: a NUL byte in `CODEX_HOME` reaches `mkdir`."""

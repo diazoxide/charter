@@ -73,7 +73,7 @@ from pathlib import Path
 from typing import Callable, Mapping, NamedTuple
 
 from .. import config, contain, profiles, util, wiring
-from . import state, tmuxctl
+from . import pane, state, tmuxctl
 
 #: What a launcher that refused in the pane exits with, after printing why.
 REFUSED_EXIT = 3
@@ -144,6 +144,9 @@ EXEC_FAILED = ("profile '{name}' could not be started — {cmd} failed to run ({
                "is running here; fix the command in charter.local.toml.")
 UNPROVEN_CHAT = ("this launch was given chat '{chat}' but is not that chat's pane, so it "
                  "runs with no frame and records nothing for '{chat}'.")
+NOTHING_NAMED = ("charter frame-launch runs one chat's pane and was given neither a profile "
+                 "to run nor --select, so it ran nothing. It is not a command to type: "
+                 "`charter <profile>` is, and charter puts this in the pane itself.")
 
 #: What an attended pane says under its refusal. The pane is charter's while no harness has
 #: run in it, and the keypress is what keeps the window from closing over the sentence
@@ -199,6 +202,23 @@ def argv(profile: str, rest: list[str], *, attended: bool) -> list[str]:
     """
     return util.self_relaunch_argv("frame-launch", "--profile", profile,
                                    *(("--attended",) if attended else ()), "--", *rest)
+
+
+def argv_select(start: str | None) -> list[str]:
+    """What tmux is handed for a chat that has not picked a profile yet.
+
+    Always `--attended`, and that is not an oversight beside :func:`argv`'s rule: a selector
+    is a question, so the only open that may reach one is an open somebody is in front of.
+    Every open nobody is at — reopen, a restored plane, a handoff — names its profile and
+    gets :func:`argv` instead.
+
+    *start* is the row the cursor opens on and the row that is marked: the profile of the
+    chat `+` was pressed from, else the plane's `[harness] default`, else nothing. It is a
+    NAME and rides as an argument after the flag, like `--profile` — no profile's command
+    or environment crosses tmux by any route.
+    """
+    return util.self_relaunch_argv("frame-launch", "--select", "--attended",
+                                   *(("--start", start) if start else ()))
 
 
 def environment(p: profiles.Profile, base: Mapping[str, str], *,
@@ -576,15 +596,182 @@ def _refused_in_pane(text: str, code: int, *, fid: str | None, attended: bool) -
     return code
 
 
+def _picked(fid: str | None, p: profiles.Profile) -> Callable[[], None]:
+    """The pane stops being charter's at the pick — what that records, and its undo.
+
+    :func:`attempt`'s *on_exec* for the selector, and the three writes are in this order
+    because each is read by a different surface the instant it exists:
+
+    * the pane is no longer waiting, so a quit records this chat and a reopen brings it
+      back — it is a chat now (`state.is_waiting`, `leave.plan`);
+    * the KIND goes into the identity record, where `chats.harness_of`, the chat strip and
+      `_same_profile_as` read it (`state.record_picked_kind`);
+    * the PROFILE is :func:`attempt`'s own write, one line after this returns.
+
+    The undo puts all three back, because an `execvpe` that raises leaves a pane running
+    nothing at all and a pane running nothing must not also claim to be a chat (N7's nit).
+    The kind goes back to what the launch recorded rather than to a blank: for a selector
+    pane that IS blank (`_launch` clears it, so no launching shell's kind rides onto the
+    window), and restoring what was there says why in one line instead of two.
+
+    **No `fid is None` guard, and its absence is measured rather than forgotten.** A launch
+    with no frame proof is a `frame-launch` run by hand, and every write below and in the
+    undo goes through `state.frame_dir`, which answers ``None`` for an id it cannot name a
+    directory for — so each is already the no-op a guard would have made it. CI's deletion
+    sweep deleted that guard and nothing could tell (#996's survivors): a line no test can
+    tell from its absence says nothing a reader needs.
+    """
+    was = state.identity(fid).get("CHARTER_HARNESS", "")
+    state.clear_waiting(fid)
+    state.record_picked_kind(fid, p.harness)
+
+    def undo() -> None:
+        state.record_picked_kind(fid, was)
+        # `attempt` has already written the profile by the time an exec can raise, and an
+        # empty record is `state.profile`'s own "this chat runs no profile" (it answers
+        # `None`) rather than a name charter would have to invent to erase one.
+        state.record_profile(fid, "")
+        state.record_waiting(fid)
+
+    return undo
+
+
+def _close_the_cancelled_chat(fid: str | None) -> None:
+    """Close this pane's own window, because the operator cancelled — do not wait for
+    `pane-died` to notice.
+
+    **Measured, and the reason this exists at all.** On a Linux CI runner a chat pane that
+    exits at the selector is marked dead by tmux with BOTH `#{pane_dead_status}` and
+    `#{pane_dead_signal}` EMPTY, and the window is still listed a minute later — with
+    `remain-on-exit on` and both hooks read back present, `pane-died[0]` (the exit write)
+    and `pane-died[1] kill-window`. The same code on macOS takes the window and the session
+    with it, and a hand probe there fires that hook for a pane killed with `SIGKILL` and
+    fires it even when `pane-died[0]` fails. Two hypotheses fit — tmux declining to fire for
+    a pane it can name neither a code nor a signal for, and a launcher not exiting cleanly
+    from raw mode there (ruling 42's signature a third time) — and neither is settleable
+    from the machine this was written on.
+
+    **So charter stops depending on which is true.** Esc is charter's own keystroke on
+    charter's own surface in a pane no harness has ever run in: it knows the chat was
+    cancelled and does not need tmux to infer it. The hook is untouched and still the answer
+    for a harness that dies — this narrows nothing about it.
+
+    `tests/test_a_new_chat_starts_at_the_profile_selector` is the only case in the suite that
+    has ever watched a chat's session end after its pane died on a real server, which is why
+    this went unseen: every other real-tmux case asks whether a pane is alive, and a harness
+    that exits gives tmux a status to fire on.
+
+    `kill-window` with `-t <pane>` resolves to that pane's own window, and killing a
+    session's last window destroys the session — the frame's rule for its last chat, and
+    `commands_frame._pane_died_teardown_hook_argv` measures both. Best effort: a tmux that
+    will not answer leaves the window standing, which is where this started.
+
+    **Only the window of a pane tmux proves is THIS process — nothing else, ever.** On
+    2026-09-12 an earlier shape of this function, which targeted `state.harness_pane` or
+    `$TMUX_PANE`, lost its empty-target guard in an unfinished edit, and a test run from
+    inside a live chat sent `kill-window` to charter's own server and closed the operator's
+    session. Measured on tmux 3.7c: `kill-window -t ''` exits 0 and kills the ACTIVE window.
+    A record and an inherited variable each name a pane; neither proves it is this one — a
+    chat's own shell inherits `$TMUX_PANE` from the harness pane it runs in. `#{pane_pid}`
+    equal to this pid does (the same proof `framed_chat` stands on), so that is the only
+    target, and an empty one closes nothing.
+    """
+    if fid is None:
+        return
+    from ..commands_frame import SOCKET
+
+    server = state.frame_server(fid) or SOCKET
+    row = tmuxctl.live_pane_by_pid(server, os.getpid())
+    if row is None or not row.pane:
+        return
+    tmuxctl.run("closing the chat the operator cancelled",
+                tmuxctl.server_argv(server, "kill-window", "-t", row.pane),
+                report=False)
+
+
+def _select_in_pane(args, fid: str | None) -> int:
+    """Draw the selector in this pane until a profile starts, or Esc closes the chat.
+
+    `pane.claim()` inside a `try`/`finally`, which is `cmd_palette`'s shape and is what
+    makes the surface paint into the rectangle this process was GIVEN rather than into
+    whatever `sys.stdout` is bound to by then (#606, #611).
+
+    **The question for a new or changed profile is :func:`attempt`'s, asked here.** The
+    surface has handed the terminal back by the time a row comes out of it (`palette
+    .own_the_tty` restores the mode in a `finally`), so the pane is an ordinary terminal
+    again and :func:`answered` puts Task 3's own prompt on it — the profile's whole command
+    and environment, never clipped, then `run this? [y/N]` — exactly as `charter <profile>`
+    does in a terminal. Every answer comes back as a kind this function already handles:
+
+    * **no** is :func:`already_said` — the operator was told `charter: nothing started.`
+      where they answered, so the list comes back with nothing marked refused and the cursor
+      on the row they pressed;
+    * **a yes charter could not write down** is `KIND_RECORD`, and **a record that moved
+      while the question was up** is `KIND_MOVED`: each comes back on that row as a refusal,
+      so the pane never runs the command and never puts the same question a second time;
+    * **a yes** runs the whole chain again from the top, the wiring probe last (ruling 27),
+      before anything is exec'd.
+
+    **A refused pick comes back to the selector** (ruling 30) — with one exception, and it
+    is the exception because it is not a refusal at all: an `execvpe` that RAISED has
+    already handed the pane over and taken it back (`_picked`'s undo), and there is nothing
+    left in this process to draw with confidence. That one prints and exits with the
+    refusal's own number; every other kind redraws the list with the reason in its footer
+    and the picked row updated, and only Esc closes the window.
+    """
+    from . import selector
+
+    held = pane.claim()
+    try:
+        start = getattr(args, "start", "") or None
+        after: "selector.Refused | None" = None
+        while True:
+            choice = selector.pick(cwd=Path(os.getcwd()), root=Path(config.ROOT),
+                                   start=start, after=after)
+            if choice is None:
+                # Esc, or a stdin that ended. Nothing was started and the pane is still
+                # waiting — that marker stays, so a quit does not record this chat and
+                # `_launch` says nothing about an early death or a recorded plane.
+                #
+                # The window is closed HERE rather than left to the `pane-died` hook, which
+                # is measured not to fire for this pane on every platform — see
+                # `_close_the_cancelled_chat`. Charter knows the operator cancelled.
+                _close_the_cancelled_chat(fid)
+                return selector.CANCELLED_EXIT
+            start = choice.profile
+            p, why = resolve(choice.profile)
+            if p is None:
+                after = selector.Refused(choice.profile,
+                                         why or unknown_profile(choice.profile))
+                continue
+            r = attempt(p, [], fid=fid, attended=True, on_exec=lambda: _picked(fid, p))
+            if r is None:
+                return 0
+            if r.kind == KIND_EXEC:
+                return _refused_in_pane(r.text, r.exit, fid=fid, attended=True)
+            after = None if already_said(r) else selector.Refused(p.name, r.text)
+    finally:
+        pane.release(held)
+
+
 def cmd_frame_launch(args) -> int:
     """`charter frame-launch --profile <name> [--attended] -- <rest>` — a chat pane's own
     first process, and never a command an operator types.
 
     The frame proof runs FIRST (ruling 35): before the profile is resolved, before anything
     is claimed, and before a single byte is printed, because the proof holds only while the
-    pane has printed nothing.
+    pane has printed nothing. That holds for `--select` too, which claims the pane and then
+    paints into it — so the proof is above the claim and above the first paint alike.
     """
     fid = framed_chat()
+    if getattr(args, "select", False):
+        return _select_in_pane(args, fid)
+    if not getattr(args, "profile", ""):
+        # Neither a profile to run nor a selector to pick one in. Reachable only by hand,
+        # because both callers inside charter build this argv (`argv`, `argv_select`) — so
+        # it says what this command is for rather than what argparse would have said.
+        util.err(f"charter: {NOTHING_NAMED}")
+        return 2
     p, why = resolve(args.profile)
     if p is None:
         return _refused_in_pane(why or unknown_profile(args.profile), REFUSED_EXIT,
