@@ -341,6 +341,19 @@ def set_default_persona(root: Path, name: str | None) -> bool:
     return _try_set_key(root, "persona", "default", name)
 
 
+def declare_default_persona(root: Path, name: str) -> None:
+    """Declare ``[persona] default = name``, and let the ``OSError`` through when charter.toml
+    could not be read or rewritten.
+
+    The same reason :func:`clear_default_persona` exists: `persona default <name>` turned
+    ``set_default_persona``'s ``False`` into "is this a control plane?", which a read-only
+    charter.toml in a working plane also produced, with the OS's words gone (#1023). The
+    command owes the reader the file and what the system said (ADR 0009), and its two
+    branches owe one wording for one failure, which they can only share from one exception.
+    """
+    _set_key(root, "persona", "default", name)
+
+
 def clear_default_persona(root: Path) -> None:
     """Undeclare ``[persona] default``, and let the ``OSError`` through when charter.toml
     could not be rewritten.

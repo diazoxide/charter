@@ -451,8 +451,22 @@ def cmd_persona_default(args) -> int:
         if not persona.load(args.name):
             util.err(f"no persona '{args.name}' — create it first (`charter persona create {args.name}`).")
             return 1
-        if not _instance.set_default_persona(config.ROOT, args.name):
-            util.err(f"could not write {config.ROOT / 'charter.toml'} — is this a control plane?")
+        toml = config.ROOT / "charter.toml"
+        try:
+            _instance.declare_default_persona(config.ROOT, args.name)
+        except FileNotFoundError:
+            # Not the clear's "nothing declared": the declaration is a line in this file, and
+            # there is no file to put it in. That is what the OS answered, so it is said as a
+            # fact; "could not update" would send the reader after a permission.
+            util.err(f"could not declare the default persona: there is no {toml} "
+                     "to declare it in.")
+            return 1
+        except OSError as e:
+            # Worded as `--clear` words it, for the same reason: this said "is this a control
+            # plane?" to a read-only charter.toml in a plane that plainly was one (#1023), a
+            # cause nobody had checked (ADR 0009), and dropped the OS's own words.
+            util.err(f"could not declare the default persona: could not update {toml} "
+                     f"({e.strerror or e.__class__.__name__}).")
             return 1
         util.ok(f"Default persona declared: '{args.name}' → charter.toml [persona] default "
                 "(shared; commit with `charter save`).")
