@@ -199,6 +199,50 @@ teammate's `reviewer`.
 
 ---
 
+## Two accounts, a pinned version, a wrapper — and a harness nobody picked
+
+`charter claude` ran one program, one way: `claude` from your `PATH`, on whichever account
+its config folder held. A second subscription, a Codex pinned to an older release, or a
+wrapper like `ccs work` had no way in — and every new chat started a harness before you had
+said which one you wanted.
+
+A **harness profile** is that way in: a kind, a command and an environment, declared in
+`charter.local.toml` beside `charter.toml` — a file charter keeps out of git, because a
+profile's command runs on a click.
+
+```toml
+[harness.claude-work]
+kind = "claude"
+command = ["claude"]
+env = { CLAUDE_CONFIG_DIR = "~/.claude-work" }
+
+[harness.claude-ccs]
+kind = "claude"
+command = ["ccs", "work"]
+```
+
+- **Nothing starts until you pick.** A new chat — bare `charter`, the `+`, a workspace tab —
+  opens at the **profile selector** in its own pane: every profile, with why any cannot
+  start on its row. Enter runs it; Esc closes the chat, having started nothing.
+- **A new or changed command asks once.** The first time a profile you declared runs, and
+  again whenever its command or environment changes, charter shows exactly what will run
+  and asks `run this? [y/N]`. The file is one a chat can write; the question is what stands
+  for your approval. Built-ins never ask.
+- **A config folder without charter's guard refuses to start.** A second
+  `CLAUDE_CONFIG_DIR` has none of the first one's plugins, so a chat there would look
+  guarded and not be. charter asks the harness itself, refuses the launch, and prints the
+  one command that wires it: `charter harness install claude-work`. `charter doctor` gains a
+  row per profile.
+- **Every chat remembers its profile.** The `+`, a handoff and `charter reopen` bring a chat
+  back on the same profile — the same account — not merely the same harness.
+
+`charter harness list` shows every profile charter read, where each came from, and why any
+was refused.
+→ [docs/harnesses.md](docs/harnesses.md#two-accounts-of-one-harness-or-one-version-pinned) ·
+[docs/control-plane.md](docs/control-plane.md#harness--profiles-and-the-default)
+
+---
+
 ## You are always teaching the agent the same things
 
 `CLAUDE.md` holds what you sat down and wrote. It doesn't hold what the agent worked out at
