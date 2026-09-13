@@ -4,15 +4,18 @@ SSH→HTTPS rewrites), and the PreToolUse guard denies a deliberate bypass."""
 
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
-from charter import config, gitpolicy, hooks
+from charter import commands, config, doctor, gitpolicy, hooks
+from tests._isolation import PlaneIso
 
 _ENV = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}
 # built from parts so the literal never appears in a command this repo's own guard scans
@@ -559,6 +562,161 @@ class TheScopeScanIsExact(unittest.TestCase):
                                lambda self: iter(sorted(real(self), reverse=True))):
             found = gitpolicy.repos(root, root / "workspaces")
         self.assertEqual(found, [root, eta, zeta, theta])
+
+    def refusing_to_list(self, *refused: Path):
+        """`Path.iterdir` refusing *refused* the way the kernel refuses a directory it may not
+        read — with the errno, which is what `uncheckable_fix` words its remedy from."""
+        real = Path.iterdir
+
+        def iterdir(self):
+            if self in refused:
+                raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(self))
+            return real(self)
+
+        return mock.patch.object(Path, "iterdir", iterdir)
+
+    def test_a_workspaces_directory_it_cannot_list_is_named_with_its_errno(self):
+        """#987: the listing of `workspaces/` was the one read in `scan` nothing guarded, so an
+        unreadable `workspaces/` raised out of `charter doctor` before a single later row."""
+        root = self.git_init(self.plane())
+        self.git_init(root / "workspaces" / "w" / "repoA")
+        with self.refusing_to_list(root / "workspaces"):
+            self.assertEqual(gitpolicy.scan(root, root / "workspaces"),
+                             ([root], [(root / "workspaces", errno.EACCES)]))
+
+    def test_one_workspace_it_cannot_list_is_named_and_hides_none_of_the_others(self):
+        """#976: the same unguarded listing one level down — a workspace directory at mode 000."""
+        root = self.git_init(self.plane())
+        (root / "workspaces" / "alpha").mkdir(parents=True)
+        eta = self.git_init(root / "workspaces" / "beta" / "eta")
+        theta = self.git_init(root / "workspaces" / "gamma" / "theta")
+        with self.refusing_to_list(root / "workspaces" / "alpha"):
+            self.assertEqual(gitpolicy.scan(root, root / "workspaces"),
+                             ([root, eta, theta], [(root / "workspaces" / "alpha", errno.EACCES)]))
+
+    def locked(self, path: Path, mode: int) -> None:
+        path.chmod(mode)
+        self.addCleanup(path.chmod, 0o755)
+
+    @unittest.skipIf(os.geteuid() == 0, "root lists a directory whatever its mode")
+    def test_a_real_workspaces_directory_at_mode_111_is_named(self):
+        """The mode #987 measured `charter doctor` crashing at: searchable, not readable."""
+        root = self.git_init(self.plane())
+        self.git_init(root / "workspaces" / "w" / "repoA")
+        self.locked(root / "workspaces", 0o111)
+        self.assertEqual(gitpolicy.scan(root, root / "workspaces"),
+                         ([root], [(root / "workspaces", errno.EACCES)]))
+
+    @unittest.skipIf(os.geteuid() == 0, "root lists a directory whatever its mode")
+    def test_a_real_workspace_at_mode_000_is_named_beside_the_clones_of_the_others(self):
+        root = self.git_init(self.plane())
+        self.git_init(root / "workspaces" / "alpha" / "api")
+        web = self.git_init(root / "workspaces" / "beta" / "web")
+        self.locked(root / "workspaces" / "alpha", 0o000)
+        self.assertEqual(gitpolicy.scan(root, root / "workspaces"),
+                         ([root, web], [(root / "workspaces" / "alpha", errno.EACCES)]))
+
+    def test_a_plane_with_no_workspaces_directory_has_nothing_to_name(self):
+        """No `workspaces/` is a plain answer — a plane before its first workspace — and not a
+        directory charter could not read."""
+        root = self.git_init(self.plane())
+        self.assertEqual(gitpolicy.scan(root, root / "workspaces"), ([root], []))
+
+    def test_a_file_among_the_workspaces_is_not_named_as_unreadable(self):
+        """Listing `.DS_Store` fails too, with ENOTDIR — which says it is no workspace, not that
+        charter could not look."""
+        root = self.git_init(self.plane())
+        (root / "workspaces").mkdir()
+        (root / "workspaces" / ".DS_Store").write_bytes(b"\0")
+        self.assertEqual(gitpolicy.scan(root, root / "workspaces"), ([root], []))
+
+    def test_a_workspace_that_is_a_symlink_loop_is_named_with_eloop(self):
+        """So `doctor` tells the operator to fix the loop, which no permission bit clears."""
+        root = self.git_init(self.plane())
+        (root / "workspaces").mkdir()
+        loop = root / "workspaces" / "loop"
+        loop.symlink_to(loop)
+        self.assertEqual(gitpolicy.scan(root, root / "workspaces"),
+                         ([root], [(loop, errno.ELOOP)]))
+
+
+class WhatTheScanCouldNotReadIsSaid(PlaneIso):
+    """`doctor`'s `git auth` row and `charter git-policy` both read `gitpolicy.scan`, and each
+    names what it could not read with what clears it (ADR 0009, #987, #976)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.workspaces = config.WORKSPACES_DIR
+        (self.workspaces / "alpha").mkdir(parents=True)
+
+    def refusing_to_list(self, *refused: Path):
+        return TheScopeScanIsExact.refusing_to_list(self, *refused)
+
+    def test_doctor_names_the_workspaces_directory_itself_as_workspaces(self):
+        """Named the way a clone is — `<parent>/<name>` — it read as the plane's own directory
+        name followed by `/workspaces`, which is no path an operator knows to look for."""
+        with self.refusing_to_list(self.workspaces):
+            r = doctor.check_ssh()
+        self.assertEqual(r.status, doctor.WARN)
+        self.assertEqual(r.detail, "token-only across 0 repo(s); workspaces/ cannot be checked")
+        self.assertEqual(r.hint,
+                         "workspaces/ cannot be checked — restoring read access to it clears this.")
+
+    def test_doctor_names_one_workspace_it_cannot_list(self):
+        with self.refusing_to_list(self.workspaces / "alpha"):
+            r = doctor.check_ssh()
+        self.assertEqual(r.status, doctor.WARN)
+        self.assertEqual(r.detail,
+                         "token-only across 0 repo(s); 1 director(ies) under workspaces/ cannot "
+                         "be checked")
+        self.assertEqual(
+            r.hint, "workspaces/alpha cannot be checked — restoring read access to it clears this.")
+
+    @unittest.skipIf(os.geteuid() == 0, "root lists a directory whatever its mode")
+    def test_doctor_runs_every_check_past_a_directory_it_cannot_list(self):
+        """Doctor's job is to report what is broken, so it has to outlive the states it exists
+        to describe. `check_ssh` runs fourth, and the traceback took every row after it."""
+        for locked, mode, named in ((self.workspaces, 0o111, "workspaces/"),
+                                    (self.workspaces / "alpha", 0o000, "workspaces/alpha")):
+            with self.subTest(named):
+                locked.chmod(mode)
+                try:
+                    rows = doctor.run_all()
+                finally:
+                    locked.chmod(0o755)
+                self.assertEqual([r.name for r in rows], doctor.check_names())
+                auth = next(r for r in rows if r.name == "git auth")
+                self.assertTrue(auth.hint.startswith(f"{named} cannot be checked"), auth.hint)
+
+    def git_policy(self, *, apply: bool = False) -> tuple[int, list[str]]:
+        """`charter git-policy`'s return code and its warnings."""
+        warned: list[str] = []
+        with mock.patch.object(commands.util, "warn", side_effect=warned.append), \
+             mock.patch.object(commands.util, "ok"), mock.patch.object(commands.util, "info"):
+            rc = commands.cmd_git_policy(SimpleNamespace(apply=apply))
+        return rc, warned
+
+    def test_git_policy_warns_about_a_workspaces_directory_it_cannot_list(self):
+        """With the crash gone it would otherwise report on the plane alone — or that it found
+        no repos at all — and say nothing of the clones it never reached."""
+        for apply in (False, True):
+            with self.subTest(apply=apply), self.refusing_to_list(self.workspaces):
+                self.assertEqual(self.git_policy(apply=apply), (0, [
+                    "workspaces/ cannot be checked — restoring read access to it clears this"]))
+
+    def test_git_policy_warns_about_each_workspace_it_cannot_list(self):
+        (self.workspaces / "beta").mkdir()
+        with self.refusing_to_list(self.workspaces / "alpha", self.workspaces / "beta"):
+            rc, warned = self.git_policy()
+        self.assertEqual((rc, warned), (0, [
+            "workspaces/alpha cannot be checked — restoring read access to it clears this",
+            "workspaces/beta cannot be checked — restoring read access to it clears this"]))
+
+    def test_git_policy_tells_a_symlink_loop_to_fix_the_loop(self):
+        loop = self.workspaces / "loop"
+        loop.symlink_to(loop)
+        self.assertEqual(self.git_policy(), (0, [
+            f"workspaces/loop cannot be checked — fix the symlink loop at {loop}"]))
 
 
 if __name__ == "__main__":
