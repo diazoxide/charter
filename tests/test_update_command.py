@@ -114,8 +114,7 @@ class TheNetworkIsReadOnce(PersonaIso):
         (self.tmp / "charter.toml").write_text(
             f'schema = 1\n\n[charter]\nversion = "{INSTALLED}"\n')
         with mock.patch("charter.commands_update._installed_version", return_value=INSTALLED), \
-             mock.patch("charter.update.fetch_and_store") as fetch, \
-             mock.patch("charter.update.load", return_value={"latest": "0.46.0"}), \
+             mock.patch("charter.update.fetch_and_store", return_value="0.46.0") as fetch, \
              redirect_stderr(io.StringIO()), redirect_stdout(io.StringIO()):
             cu.cmd_update(SimpleNamespace(to=None, bump=False))
         self.assertEqual(fetch.call_count, 1)

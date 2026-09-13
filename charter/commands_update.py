@@ -137,20 +137,26 @@ def _installed_version() -> str:
     return __version__
 
 
-def _latest(live: bool = True) -> str | None:
-    """The newest published version. A live read here, unlike every cached reader's.
+def _latest() -> str:
+    """The newest published version, as PyPI answered THIS call, or ``""``. Never the cache.
 
     `update.maybe_spawn` exists so that nothing on a hot path blocks on the network, and
     since #938 three callers are on one: the status line's render, the frame's gather and
     the SessionStart hook. Each of them only ever starts the detached child. This is an
-    explicit command a person typed and is waiting on, so it asks — and falls back to the
-    cache, saying so, rather than refusing to work offline.
+    explicit command a person typed and is waiting on, so it asks.
+
+    It used to ask and then re-read the cache, which `fetch_and_store` leaves untouched when
+    its GET fails. So an offline run took whatever an earlier fetch had left there for a
+    fresh answer, and on a plane with no pin that became the target — 0.58.0 installed over
+    a running 0.60.0 that `uv tool upgrade` had moved without touching the cache (#1017).
+    `version bump` had the same pattern and lost it in #941; this is the same fix. With no
+    answer this is empty, and `_resolve_target` decides what that means (#950). Empty and
+    not None, because its one caller asks `not latest` and a spelling that could be
+    deleted with nothing changing is dead code (CONTRIBUTING).
     """
     from . import update
 
-    if live:
-        update.fetch_and_store()
-    return (update.load().get("latest") or "").strip() or None
+    return (update.fetch_and_store() or "").strip()
 
 
 def _sync_to(version: str) -> tuple[bool, str]:
@@ -415,6 +421,16 @@ def _resolve_target(args, installed: str, locked: str | None) -> tuple[str | Non
         # output of a plane that IS current (#950).
         return None, False, None
     if not locked:
+        if _parse(latest) < _parse(installed):
+            # PyPI's newest is OLDER than what runs: nothing to move to, and saying so is
+            # `cmd_update`'s. This is the one place an unasked downgrade could come from:
+            # `--to` returned above because a person named the version, a pin only ever
+            # sends a machine that is behind it forward, and on a pinned plane *latest* only
+            # proposes or bumps when it is strictly newer. `charter update` is what somebody
+            # runs to get fixes, so moving them backwards can remove a security fix they
+            # already had, and nobody asked for it (#1017). Equal is a machine already on
+            # the newest release, which is not a move at all.
+            return None, False, latest
         return latest, False, latest
     if _parse(latest) > _parse(installed):
         if not getattr(args, "bump", False):
@@ -590,6 +606,17 @@ def cmd_update(args) -> int:
         util.info("  moving past the pin moves every teammate on their next session.")
         util.info("  do it:  charter update --bump")
         return 0
+    if target is None and latest is not None:
+        # PyPI answered, so #1013's sentence below would claim a check failed that succeeded.
+        # No cause is offered for an older answer, because charter checked none (ADR 0009).
+        # The remedy names no version: an agent handed `--to <that number>` would run the
+        # downgrade this refusal exists to stop. Exit 1, as the refusal below: nothing moved,
+        # and exit 0 is what an agent reads as "current".
+        util.err(f"PyPI reported {latest} as the newest release, which is older than the "
+                 f"{installed} this machine runs, so nothing was installed. charter update "
+                 f"moves a machine to an older version only when that version is named: "
+                 f"charter update --to X.Y.Z")
+        return 1
     if target is None:
         # NOT "(offline?)", and the same two candidates `version bump` names for the same
         # condition (#941). `_latest` also comes back empty when PyPI DID reply and its

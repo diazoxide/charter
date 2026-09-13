@@ -304,7 +304,8 @@ def build_parser() -> argparse.ArgumentParser:
                              "brings and what this plane has not adopted.")
     up.add_argument("--to", help="Install exactly this version instead of the default "
                                  "target (the pin, or the latest published, as PyPI "
-                                 "answers this command; refuses if it does not answer).")
+                                 "answers this command; refuses if it does not answer, or "
+                                 "answers a version older than the one running).")
     up.add_argument("--bump", action="store_true",
                     help="Also move this plane's pin, which moves every teammate on their "
                          "next session. Written only after the install is verified.")

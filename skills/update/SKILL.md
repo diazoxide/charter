@@ -23,12 +23,18 @@ without first working out whether there is anything to do.
 their next session, so get an explicit yes before running it.
 
 **PyPI.** When `update` ends up with no version from PyPI to check against, it says so. It
-names two possible causes and does not say which one happened, so do not pick one for the
-person either. On a plane with no pin, or with `--bump`, it exits 1 without moving
-anything. To install a version you already know, run `charter update --to X.Y.Z`. On a
-machine on or ahead of its pin it exits 0 and says whether a newer release is published
-could not be checked. Relay exactly what it says about the pin. Do not call charter current
-or up to date.
+does not fall back to a version an earlier check cached. It names two possible causes and
+does not say which one happened, so do not pick one for the person either. On a plane with
+no pin, or with `--bump`, it exits 1 without moving anything. To install a version you
+already know, run `charter update --to X.Y.Z`. On a machine on or ahead of its pin it exits
+0 and says whether a newer release is published could not be checked. Relay exactly what it
+says about the pin. Do not call charter current or up to date.
+
+**An older release.** On a plane with no pin, when the newest release PyPI reports is older
+than the charter running, `update` installs nothing and exits 1, naming both versions. Relay
+that. Do not run `charter update --to` with the older version to get past it: moving
+backwards can remove a fix this machine already has, so run it only when the person names
+that version and asks for it.
 
 **A host's command.** Claude Code's plugin and Codex's belong to the host, so charter names
 the command rather than running it. Hand that command to the person and let them run it.
