@@ -467,27 +467,10 @@ class APinAndTheDevChannelAreNotSettledSilently(PersonaIso):
         self._declare('schema = 1\n[update]\nchannel = "dev"\n')
         self.assertIsNone(hooks._autosync_version_lock())
 
-    def test_a_pin_equal_to_the_running_version_is_silent_on_dev_too(self):
-        """The common shape of the conflict — *pin the current release AND opt into dev* —
-        and the one case the guard deliberately does not speak up about.
-
-        The dev check sits BELOW `locked == __version__`, so a plane in this state says
-        nothing. That is correct rather than a gap: a dev build carries the same version
-        number as the release it was built from, so while the two agree there is nothing to
-        install and nothing to undo. The moment the pin moves — a teammate bumps it after
-        the next release — the equality breaks, the guard fires, and it fires at exactly
-        the moment it would otherwise have reinstalled the wheel over the dev build.
-
-        The test above uses `9.9.9`, so it never reached this case; without this one,
-        moving the guard ABOVE the equality return (turning a benign state into a message
-        on every single session) would have been invisible.
-        """
-        self._declare(f'schema = 1\n[charter]\nversion = "{__version__}"\n'
-                      f'[update]\nchannel = "dev"\n')
-        from charter import commands
-        with mock.patch.object(commands, "sync_to") as sync:
-            self.assertIsNone(hooks._autosync_version_lock())
-        sync.assert_not_called()
+    # A pin EQUAL to the running version on a dev plane used to be pinned here as silent.
+    # It is the same refused state as any other pin beside the channel, and session start
+    # now says so whatever the numbers are: `test_a_dev_plane_with_a_pin_is_one_refused_state`
+    # owns that case and the reason (#1018).
 
 
 class TheRefreshIsNeverFatal(PersonaIso):

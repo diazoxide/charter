@@ -6543,25 +6543,37 @@ def _autosync_version_lock() -> str | None:
     to prevent.
     """
     try:
-        from . import __version__, channel, commands, config, instance as _instance
+        from . import __version__, channel, commands, config, instance as _instance, update
         locked = _instance.locked_version(_instance.load(config.ROOT))
-        if not locked or locked == __version__:
+        if not locked:
             return None
         if channel.is_dev():
             # A pin and the dev channel ask for two different charters, and this site is
             # the one that would silently settle it — every session, in favour of the pin,
             # by installing the PyPI wheel over a git build. Nothing would say so either:
-            # a dev build carries the SAME version number, so the equality above never
-            # catches it and the plane is quietly returned to stable at every session
-            # start after its one `charter update`.
+            # a dev build carries the SAME version number as the release it was built
+            # from, so no comparison of numbers can tell the two apart, and once the wheel
+            # is installed the plane is quietly returned to stable at every session start
+            # after its one `charter update`.
             #
             # Reported, not resolved, for the reason this docstring already gives twice
             # over: the choice replaces the binary that enforces the credential guard, and
             # session start has nobody to ask.
-            return (f"⬢ charter: this control plane pins {locked} AND declares `[update] "
-                    f"channel = \"dev\"`. Those ask for two different charters, so nothing "
-                    f"was installed. Working on {__version__}; drop one of the two from "
-                    f"the plane's `charter.toml`.")
+            #
+            # ABOVE `locked == __version__`, and on the channel alone. This used to sit
+            # below that equality, so a pin equal to the running number said nothing, while
+            # the plane still carried the pair: `charter version` called it "in sync", and it
+            # surfaced only when the pin next moved (#1018). So nothing that follows may
+            # decide whether this fires, whether a comparison of numbers or a look at the
+            # install record. Every branch below either stays silent or treats the pin as the
+            # plane's only request, and the last of them installs it with `sync_to`. A dev
+            # plane let through to them gets that silence or that install.
+            conflict, *ways = update.pin_beside_dev()
+            return (f"⬢ charter: this control plane pins {locked} and follows "
+                    f"`{update.DEV_BRANCH}`: {conflict}, so nothing was installed. Working on "
+                    f"{__version__} — {'; '.join(ways)}")
+        if locked == __version__:
+            return None
         if not _instance.version_ok(locked):
             return (f"⬢ charter: this control plane's `[charter] version` is not a "
                     f"version, so nothing was installed. "

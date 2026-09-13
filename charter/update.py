@@ -192,6 +192,31 @@ def dev_remedy() -> str:
     return "charter update"
 
 
+def pin_beside_dev() -> tuple[str, str, str]:
+    """What every surface says about a pin beside ``[update] channel = "dev"``: the conflict,
+    then the way out toward a release, then the way out toward ``main``.
+
+    Beside :func:`dev_remedy`, and for the same reason. The pair is ONE refused state, and it
+    had four readers saying four things: session start refused it, `version bump` refused to
+    write it, `version sync` installed the pin over a plane following ``main``, and
+    `charter version` recommended that sync (#1018). Each caller says what IT did (nothing
+    installed, nothing written); what the state is and how to leave it comes from here, so
+    one surface cannot grow a third way out or quietly lose one.
+
+    **Neither way out is chosen for the operator.** Which charter the plane wants is theirs
+    to say, and each is one edit. The second is worded to hold whether or not the plane
+    already carries a pin, because `version bump` refuses on a pin-less dev plane too.
+    """
+    return (
+        "a `[charter] version` pin and `[update] channel = \"dev\"` ask for two different "
+        "charters",
+        "to follow a pinned release, drop `[update] channel = \"dev\"` from the plane's "
+        "`charter.toml`",
+        f"to stay on `{DEV_BRANCH}`, keep no `[charter] version` in the plane's `charter.toml` "
+        f"and move this charter onto it:  {dev_remedy()}",
+    )
+
+
 def newer_head() -> str | None:
     """The dev channel's answer to "is there anything newer?" — a short commit, or None.
 

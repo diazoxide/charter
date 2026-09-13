@@ -14,9 +14,9 @@ Now `version bump` on a dev plane refuses before it asks PyPI, installs anything
 the lock, with `--to` or without:
 
 ```
-✗ refusing to pin a control plane that declares `[update] channel = "dev"`: a pin and the dev channel ask for two different charters. Nothing was installed or written.
-•   to pin a release, drop `[update] channel = "dev"` from the plane's `charter.toml` and bump again
-•   to stay on `main`, pin nothing and move this charter onto it:  charter update
+✗ refusing to pin this control plane: a `[charter] version` pin and `[update] channel = "dev"` ask for two different charters. Nothing was installed or written.
+•   to follow a pinned release, drop `[update] channel = "dev"` from the plane's `charter.toml`
+•   to stay on `main`, keep no `[charter] version` in the plane's `charter.toml` and move this charter onto it:  charter update
 ```
 
 On a pin-less dev plane, `version sync` says the plane follows `main`. It then names the
