@@ -82,6 +82,23 @@ def _claim_holder(ws: str, clone: Path, path: Path, branch: str | None) -> str |
     return None
 
 
+def _uncommitted_marker(clone: Path) -> bool:
+    """Whether *clone* holds a ``charter.toml`` that its HEAD does not commit.
+
+    Both halves are needed. A clone with no marker on disk is a guest repo, and has nothing
+    to commit. A marker HEAD does commit can still be missing from a worktree — `--branch`
+    checks out a branch cut before it landed — and "is not committed" would then be false.
+
+    A git that could not answer is not an answer: ``ls-tree`` failing reads as "committed",
+    so an unreadable clone stays silent rather than being told to add a file (ADR 0009).
+    """
+    if not (clone / _root.MARKER).is_file():
+        return False
+    proc = util.run(["git", "-C", str(clone), "ls-tree", "--name-only", "HEAD", "--",
+                     _root.MARKER], check=False)
+    return proc.returncode == 0 and not proc.stdout.strip()
+
+
 def _refuse_taken(piece: str, held_by: str) -> int:
     util.err(f"'{piece}' is already claimed — held by {held_by}.")
     util.info("Take the next unclaimed piece from the plan, or work in the existing worktree.")
@@ -168,16 +185,16 @@ def cmd_worktree_add(args) -> int:
     from .commands import report_submodule_drift
     report_submodule_drift(path, f"{args.repo} · {args.piece}")
 
-    # `root.find_root` now resolves a plane-less worktree back to its main tree, so this
-    # is an invariant assertion rather than the fix — kept because it catches the same
-    # failure one step earlier, right beside the `enter:` line the user is about to run,
-    # and because an untracked charter.toml is worth knowing about on its own: nobody
-    # else on the team has the plane at all.
-    if not (path / _root.MARKER).is_file() and (config.ROOT / _root.MARKER).is_file():
-        util.warn(f"  {_root.MARKER} is not committed, so it is absent from this worktree. "
-                  f"charter resolves the plane from the repo it was cut from, but "
-                  f"teammates cloning this repo get no control plane — commit it: "
-                  f"git add {_root.MARKER}")
+    # An untracked charter.toml is worth knowing about on its own: nobody else cloning that
+    # repo gets the plane at all. It is asked of the repo the worktree was CUT FROM, never
+    # of `config.ROOT`. This used to test the plane's marker, which every healthy plane
+    # has, while `clone_for` above can only ever hand back a workspace's clone — so every
+    # worktree of a guest repo that never carried a charter.toml was told to `git add` a
+    # file that does not exist there (#952).
+    if not (path / _root.MARKER).is_file() and _uncommitted_marker(clone):
+        util.warn(f"  {_root.MARKER} is not committed, so it is absent from this worktree "
+                  f"— anyone cloning {args.repo} gets no control plane. Commit it there: "
+                  f"git -C {_rel(clone)} add {_root.MARKER}")
 
     util.info(f"  enter:  cd {_rel(path)} && claude    "
               "(or hand this path to EnterWorktree)")
