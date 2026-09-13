@@ -371,12 +371,14 @@ def cmd_workspace_remove(args) -> int:
     return 0
 
 
-def _relink_worktrees(old_dir: Path, new: str) -> tuple[int, list[tuple[Path, Path | None]]]:
+def _relink_worktrees(moves: list[tuple[Path, Path]], new: str
+                      ) -> tuple[int, list[tuple[Path, Path | None]], list[tuple[Path, Path]]]:
     """Tell git where the linked worktrees of *new*'s clones are after a rename moved them.
 
-    Answers ``(relinked, left)``: how many worktrees git reads as linked both ways after the
-    repair, and ``(clone, tree)`` for each one it does not — ``tree`` is ``None`` when git could
-    not even list the clone's worktrees, so nobody knows which there are.
+    Answers ``(relinked, left, named)``: how many worktrees git reads as linked both ways after
+    the repair, ``(clone, tree)`` for each one it does not — ``tree`` is ``None`` when git could
+    not even list the clone's worktrees, so nobody knows which there are — and ``(clone, tree)``
+    for every tree the repair named, wherever it is now.
 
     A rename is a directory move, and both halves of a linked worktree's link are absolute
     paths: the tree's `.git` file names the clone's admin directory, and that directory's
@@ -390,11 +392,12 @@ def _relink_worktrees(old_dir: Path, new: str) -> tuple[int, list[tuple[Path, Pa
     that file too, named or not (measured, git 2.50.1). So every tree the clone links is named,
     and `git -C <clone> worktree repair <tree>` is the one command to print for either kind.
 
-    *old_dir* is the workspace directory resolved BEFORE the move: git records a worktree's
-    real path, and the old directory is gone by the time it is compared.
+    *moves* is every ``(before, after)`` directory the rename moved: the workspace, and the
+    workspace's directory under a worktree root kept outside the plane when there was one
+    (#1027). Each *before* is a real path taken BEFORE its move: git records a worktree's real
+    path, and the old directory is gone by the time it is compared.
     """
-    new_dir = workspace.workspace_dir(new).resolve()
-    relinked, left = 0, []
+    relinked, left, named = 0, [], []
     for clone in workspace.clones(new):
         # Resolved like every tree git lists, so a printed command names both in one spelling.
         clone = clone.resolve()
@@ -409,10 +412,11 @@ def _relink_worktrees(old_dir: Path, new: str) -> tuple[int, list[tuple[Path, Pa
         trees = []
         for row in listed:
             tree = Path(row["path"])
-            try:
-                tree = new_dir / tree.relative_to(old_dir)
-            except ValueError:
-                pass                     # outside the workspace: it stayed where git has it
+            # Under none of the moved directories — a worktree outside the workspace, or a piece
+            # whose root could not be moved — it stayed where git has it.
+            for before, after in moves:
+                if tree.is_relative_to(before):
+                    tree = after / tree.relative_to(before)
             # A tree git still lists but that is not on disk was gone before this rename. It is
             # not this rename's to repair, and git would only answer "not a valid path" for it.
             if (tree / ".git").is_file():
@@ -437,7 +441,8 @@ def _relink_worktrees(old_dir: Path, new: str) -> tuple[int, list[tuple[Path, Pa
                 relinked += 1
             else:
                 left.append((clone, tree))
-    return relinked, left
+        named += [(clone, tree) for tree in trees]
+    return relinked, left, named
 
 
 def _worktrees_of(clone: Path) -> list[dict] | None:
@@ -467,7 +472,8 @@ def cmd_workspace_rename(args) -> int:
     refs, and manifest come along), fix the manifest name + liveness block, repoint
     the active session/terminal pointer + lock so a renamed active workspace stays
     active, repoint every chat that says it is in the workspace (#795) so none of
-    them is orphaned, and relink every linked worktree of a moved clone (#963). For a LIVE
+    them is orphaned, move the workspace's directory under a worktree root kept outside the
+    plane (#1027), and relink every linked worktree of a moved clone (#963). For a LIVE
     workspace, commit the tracked move (manifest + memory) so the rename propagates to the
     team."""
     old, new = args.old, args.new
@@ -483,6 +489,15 @@ def cmd_workspace_rename(args) -> int:
     if workspace.workspace_dir(new).exists():
         util.err(f"workspace '{new}' already exists — pick another name or remove it first.")
         return 1
+    # Asked here, before either directory moves, because a clash found after `workspaces/<old>`
+    # moved is a half-renamed workspace. Taken whether or not `<old>` has pieces there: what
+    # sits at `<root>/<new>` would read as the renamed workspace's own. `lexists`, because a
+    # dangling link is not `exists()` and a directory still cannot be renamed over it.
+    if config.WORKTREES_ROOT is not None and os.path.lexists(config.WORKTREES_ROOT / new):
+        util.err(f"{config.WORKTREES_ROOT / new} already exists, and it is where the worktrees "
+                 f"of a workspace named '{new}' live — pick another name or move it first; "
+                 f"nothing was renamed.")
+        return 1
 
     was_live = workspace.is_live(old)
     # Capture the tracked metadata paths BEFORE the move — after it, the old dir is gone
@@ -493,9 +508,38 @@ def cmd_workspace_rename(args) -> int:
         tracked_old = [p for p in r.stdout.split("\0") if p]
 
     old_dir = workspace.workspace_dir(old).resolve()
+    # A worktree root kept outside the plane names its directories after the workspace too
+    # (`worktree.root`), so moving `workspaces/<old>` alone left every piece at `<root>/<old>/…`,
+    # where nothing keyed on the new name looks: `wt list` found none and the next `wt add` cut
+    # a second worktree beside the first (#1027). Not resolved like `old_dir`, because
+    # `config.worktrees_root_for` already hands back a resolved root; and a `<root>/<old>` that is
+    # itself a link moves as a link, so git's real paths behind it do not change at all.
+    ext = config.WORKTREES_ROOT
+    ext_old = ext / old if ext is not None and (ext / old).exists() else None
     moved = workspace.rename(old, new)
-    util.ok(f"Renamed workspace '{old}' → '{new}' (clones, memory, and manifest moved).")
-    relinked, left = _relink_worktrees(old_dir, new)
+    moves = [(old_dir, workspace.workspace_dir(new).resolve())]
+    stranded: OSError | None = None
+    if ext_old is not None:
+        try:
+            ext_old.rename(ext / new)
+        except OSError as e:
+            # Not rolled back, for the reason a relink that did not take is not: the workspace
+            # move worked, and undoing it is a second move that can fail the same way. Its pieces
+            # stay where they are, and the relink below still follows the clone that moved.
+            stranded = e
+        else:
+            moves.append((ext_old, ext / new))
+    if stranded is None:
+        util.ok(f"Renamed workspace '{old}' → '{new}' (clones, memory, and manifest moved).")
+        if ext_old is not None:
+            util.info(f"Its worktrees moved with it: {ext_old} → {ext / new}.")
+    else:
+        # The OS's own words and no cause of charter's (ADR 0009): a mount point and a directory
+        # the operator cannot write both land here. And no ✓ — half a rename is not one (0013).
+        util.warn(f"Renamed workspace '{old}' → '{new}' (clones, memory, and manifest moved), "
+                  f"but not its worktrees: {ext_old} is still at the old name "
+                  f"({stranded.strerror}).")
+    relinked, left, named = _relink_worktrees(moves, new)
     if relinked:
         util.info(f"git reads {relinked} linked worktree(s) as linked to their clone at its "
                   f"new place.")
@@ -510,6 +554,22 @@ def cmd_workspace_rename(args) -> int:
         else:
             util.warn(f"git does not read {tree} as a worktree of {clone} after the rename "
                       f"— repair it: git -C {clone} worktree repair {tree}")
+    if stranded is not None:
+        # Moving the directory by hand unlinks every piece in it again, exactly as the rename did
+        # (#963), so the command that finishes it relinks each one at the path it will have.
+        # Measured, git 2.50.1: after the `mv`, a repair run from the clone naming the new path
+        # rewrites both halves of the link.
+        finish = [f"mv {ext_old} {ext / new}"]
+        by_clone: dict[Path, list[str]] = {}
+        for clone, tree in named:
+            try:
+                rest = tree.relative_to(ext_old)
+            except ValueError:
+                continue                 # not one of the pieces left behind
+            by_clone.setdefault(clone, []).append(str(ext / new / rest))
+        finish += [f"git -C {clone} worktree repair {' '.join(trees)}"
+                   for clone, trees in by_clone.items()]
+        util.warn("Finish the rename: " + " && ".join(finish))
     if moved:
         # #795: the chats came too. A rename that silently re-labels running conversations
         # is one the operator finds out about from a panel; this is the sibling of the
@@ -531,12 +591,17 @@ def cmd_workspace_rename(args) -> int:
         util.info(f"This session's active workspace followed the rename → '{new}' "
                   f"({_lock_words(new, workspace.is_locked())}).")
 
+    # Exit 1 while pieces are left under the old name, after everything else has run: a script
+    # that goes on to `wt add` in the renamed workspace would cut the second worktree #1027 is
+    # about, and the LIVE commit below is still owed for the move that did happen.
+    left_behind = 1 if stranded is not None else 0
     if not was_live:
         util.info(f"'{new}' is LOCAL (private) — nothing committed.")
-        return 0
+        return left_behind
     new_rel = _ws_meta_paths(new)
     msg = getattr(args, "message", None) or f"workspace: rename {old} → {new}"
-    return commit_push(config.ROOT, ["add", "-A", "--", *tracked_old, *new_rel, ".gitignore"], msg)
+    rc = commit_push(config.ROOT, ["add", "-A", "--", *tracked_old, *new_rel, ".gitignore"], msg)
+    return rc or left_behind
 
 
 def cmd_workspace_default(args) -> int:
