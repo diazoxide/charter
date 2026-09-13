@@ -246,6 +246,20 @@ class TheRows(_APlaneWithProfiles, unittest.TestCase):
         self.assertIn(f"… +{200 - kept} not shown", line)
         self.assertNotIn("...", line)
 
+    def test_a_name_with_an_escape_in_a_hand_built_profile_is_shown_escaped(self):
+        """`profiles.NAME_RE` keeps a control byte out of every name a FILE declares, so the
+        containment of a row's title is reachable only through a `ProfileSet` built by hand —
+        which is what `rows` takes, and what the next reader of it may hand over. The row
+        title is contained where it is made, not left to the surface (ruling 35)."""
+        name = "cl\x1b[2Kaude"
+        p = profiles.Profile(name=name, kind="claude", harness="claude-code",
+                             command=("claude",), env=(), source=profiles.BUILTIN)
+        have = profiles.ProfileSet(profiles={name: p}, refused=(), default=None,
+                                   default_from=None, default_refused=None)
+        (row,) = selector.rows(have, cwd=Path(config.ROOT))
+        self.assertNotIn("\x1b", row.title)
+        self.assertEqual(row.title, contain.readable(name, contain.NO_CLIP))
+
     def test_a_long_command_and_environment_reach_the_row_whole(self):
         """Ruling 45 at the row's source: `profiles.display` clips each piece at
         `contain.DISPLAY_LIMIT` with a fixed `...` unless told not to, and a row that then
@@ -410,6 +424,26 @@ class ARowSaysWhetherItIsWired(_APlaneWithProfiles, unittest.TestCase):
         self.assertNotIn(str(self.home / ".cw"),
                          [c.env.get("CLAUDE_CONFIG_DIR", "") for c in calls])
 
+    def test_a_row_whose_probe_could_not_tell_is_asked_again_next_draw(self):
+        """"Could not ask" is not remembered (the coordinator's ruling): one probe that hit
+        its timeout would otherwise refuse the row for the cache's whole day, and Enter on a
+        refused row never reaches the launch's fresh probe."""
+        answers = [wiring.Wiring(wiring.UNKNOWN_STATE, "timed out", "the fix"),
+                   wiring.Wiring(wiring.WIRED, "asked again", "")]
+        asked: list[str] = []
+
+        def once_unknown(p, *, cwd):
+            asked.append(p.name)
+            return answers[0] if asked.count(p.name) == 1 else answers[1]
+
+        with mock.patch.object(wiring, "detect", side_effect=once_unknown):
+            first = self._row(self._rows(), WORK)
+            second = self._row(self._rows(), WORK)
+        self.assertTrue(first.refused)
+        self.assertIn("could not ask", first.note)
+        self.assertFalse(second.refused, second.note)
+        self.assertEqual(asked.count(WORK), 2)
+
     def test_every_miss_is_probed_at_once(self):
         """The plan's stop rule for a cold open is priced with the probes CONCURRENT — one
         after another, a plane of four Claude profiles pays a second before the first row."""
@@ -560,6 +594,18 @@ class NothingTheOperatorMustReadIsCutWithoutAWord(_APlaneWithProfiles, unittest.
         self.assertEqual(overlay._clipped(text, 70), text)
         self.assertIn("not shown", overlay._clipped(text, 69))
 
+    def test_a_line_that_fits_in_cells_is_whole_however_many_characters_it_holds(self):
+        """The fit is measured in CELLS, and a combining mark is none: forty accented letters
+        spelled as letter plus U+0301 are eighty characters and forty cells. Exactly as wide
+        as the pane, the line is whole — no count, nothing cut — and one cell narrower it is
+        cut. Asked of the walk below instead, a line with more characters than cells would be
+        cut to half of itself with `… +40 not shown` when it fitted all along, which is the
+        early return and its boundary both, found by CI's sweep on `3184066`."""
+        text = "e\u0301" * 40
+        self.assertEqual((len(text), tui.width(text)), (80, 40))
+        self.assertEqual(overlay._clipped(text, 40), text)
+        self.assertIn("not shown", overlay._clipped(text, 39))
+
     def test_the_cut_line_keeps_every_cell_the_pane_has(self):
         """The search walks down from the end and stops at the FIRST length that fits, so
         the answer is the longest line this pane can hold — one cell short would be one more
@@ -674,6 +720,21 @@ class EveryFooterSaysHowToLeave(_APickedSelector, unittest.TestCase):
             footer=selector._footer((), selector.Refused(WORK, "y" * 400))).render(70, 8)[-1]
         self.assertIn(selector.ESC_HINT, line)
         self.assertIn("not shown", line)
+
+    def test_the_footer_keeps_esc_down_to_the_narrowest_supported_pane(self):
+        """How narrow a pane the selector supports, stated as a number and pinned: the whole
+        hint `esc close this chat` survives at **40 columns** and wider, and the key `esc`
+        at **24** and wider, for any reason shorter than 100,000 characters (a five-digit
+        count). Below that the count and the hint compete for the same cells, and a count
+        that cannot fit cannot be shown (`overlay._clipped`'s docstring) — measured: at 23
+        a 50,000-character reason leaves `  es… +50024 not shown`."""
+        foot = selector._footer((), selector.Refused(WORK, "y" * 99_000))
+        for width in range(40, 121):
+            with self.subTest(width=width):
+                self.assertIn(selector.ESC_HINT, overlay._clipped(foot, width))
+        for width in range(24, 40):
+            with self.subTest(width=width):
+                self.assertIn("  esc", overlay._clipped(foot, width))
 
     def test_a_list_with_something_to_start_says_only_the_keys(self):
         """The third state of this footer, and the one that says the other two are about

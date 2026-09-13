@@ -166,7 +166,7 @@ Created:
 | `charter/frame/launcher.py` | 2 | `argv()` for tmux, `environment()`, `refusal()` (the ordered guards), `start()` (records, `os.execvpe`), `cmd_frame_launch`. |
 | `charter/profiletrust.py` | 3 | The last-launched record under `.charter/`, `approval_needed`, `record_launched`, the in-terminal ask. |
 | `charter/wiring.py` | 4 | `Wiring`, per-kind `detect`, the stamped cache under `.charter/cache/`, `install(profile, root)`, the fix sentence. |
-| `charter/frame/selector.py` | 5 | Rows from profiles + trust + wiring, the `Selector` and `Confirm` surfaces, the pick loop. |
+| `charter/frame/selector.py` | 5 | Rows from profiles + trust + wiring, the `Selector` surface, the pick loop (a new or changed pick is asked in the pane by the launcher, with Task 3's prompt — no surface of its own). |
 | `docs/adr/0022-a-harness-profile-belongs-to-one-machine.md` | 6 | The profile decisions (number: Ruling 2). |
 | `docs/news/unreleased-harness-profiles.md` | 1 (extended by 2–5, reviewed in 6) | The news entry. |
 | `tests/test_harness_profiles_are_read_from_the_local_file.py` | 1 | derive, refusals, built-ins, default, the charter.toml pointer. |
@@ -2405,8 +2405,8 @@ def pick(*, cwd: Path, start: str | None, tty_fd: int | None = None) -> Choice |
 
 @dataclass
 class Selector(palette.Palette): ...     # label "charter · which profile?", footer FOOTER
-@dataclass
-class Confirm(overlay.Surface): ...      # "run this? [y/N]": `y` → CHOOSE, anything else → CANCEL
+# (No `Confirm` surface — amended in Task 5's own PR: a new or changed pick is asked in the
+#  pane by `launcher.attempt` with Task 3's prompt. See Behaviour, step 4.)
 
 # charter/frame/launcher.py
 def argv_select(start: str | None) -> list[str]: ...
@@ -2448,7 +2448,8 @@ def record_picked_kind(fid: str, harness_name: str) -> None: ...
    - **Each row** is `Row(id=f"profile:{name}", title=name, note=…, mark=(name == start), refused=…)`.
    - *Amended in Task 5's own PR:* `start` MIGRATES. It opens as the presser's profile (or
      `[harness] default`), and every round trip through the selector — a refused Enter, a
-     `no` at the confirm, a pick the launch refused — sets it to the row that was pressed.
+     `no` at the approval prompt, a pick the launch refused — sets it to the row that was
+     pressed.
      The mark follows the operator rather than staying on the row they have already moved
      off; the alternative is a marked row nobody is looking at any more.
 
@@ -2476,16 +2477,16 @@ def record_picked_kind(fid: str, harness_name: str) -> None: ...
 4. `palette.own_the_tty(Selector(...))` returns a row:
    - **Refused** → the surface re-opens with `footer = f"  {row.note}"`, the reason, and the
      cursor where it was.
-   - **New or changed** → `own_the_tty(Confirm(heading=f"run this? {display(p)}"))`; `y` →
-     `profiletrust.record_launched(p)`; anything else → back to the selector.
-   - *Amended in Task 5's own PR:* **there is no `Confirm`.** A new or changed row is a pick
-     like any other, and `launcher.attempt` asks — `answered`, then
-     `profiletrust.ask_in_terminal` — on the terminal the surface has just handed back. Three
-     reasons, each found against the code once Task 3 was merged: a one-line surface heading
-     cannot hold a command whole, and Ruling 45 says the approval prompt never clips; the
-     `Confirm` heading showed no `was` line for a CHANGED profile, which Task 3's prompt does;
-     and a record that moved between `Confirm`'s write and the launch's re-check made
-     `answered` put the same question a second time, which S1 forbids. The launch's answers
+   - **New or changed** → `Choice(name)`, like any other runnable row, and the launch asks:
+     `launcher.attempt` → `answered` → `profiletrust.ask_in_terminal`, on the terminal the
+     surface has just handed back, in Task 3's own prompt — the whole command and
+     environment, then `run this? [y/N]`.
+   - *Amended in Task 5's own PR — why this is not a `Confirm` surface, as first planned:* a
+     row, or a one-line surface heading, cannot show a command whole, and the approval prompt
+     never clips (Ruling 45); a `Confirm` heading also had no `was` line for a CHANGED profile,
+     which Task 3's prompt does; and a record that moved between a surface's write and the
+     launch's re-check made `answered` put the same question a second time, which S1
+     forbids. The launch's answers
      come back as kinds: a decline returns to the list with nothing refused and the cursor on
      that row; `KIND_RECORD` and `KIND_MOVED` return as that row's refusal, so the command
      never runs and the question is never put twice; a yes re-runs the whole chain, wiring
@@ -2526,7 +2527,7 @@ closes the window as today and never returns to the selector.
 - `_wait_for_harness` waits through the selection and returns 130 on Esc.
 
 **Refusals and texts.** Unchanged from Tasks 2–4. The selector adds only the footer, the
-`Confirm` heading (*amended:* no `Confirm` — see step 4) and:
+row notes (`NOT_APPROVED`, and Task 4's own sentence for a row that is not wired) and:
 
 ```python
 NOTHING_TO_PICK = ("charter: no profile can start here — every row above says why. Nothing "
@@ -2560,9 +2561,13 @@ Class `ThePick(PersonaIso, unittest.TestCase)` — `palette.own_the_tty` patched
 - `test_enter_on_a_refused_row_keeps_the_selector_open_and_shows_why`: queue refused then
   runnable → the second `own_the_tty` call's surface has `footer` containing the refused note;
   the result is the runnable choice.
-- `test_enter_on_a_new_profile_asks_in_place_and_yes_records_it`: queue new row, `Confirm` →
-  CHOOSE → `approval_needed == ""`, `Choice`.
-- `test_no_at_the_confirm_goes_back_to_the_list_and_records_nothing`.
+- `test_enter_on_a_new_profile_asks_in_place_and_yes_records_it` — *amended in Task 5's own
+  PR:* driven through `cmd_frame_launch --select` rather than `pick`, because the pane asks
+  with Task 3's prompt: a new row picked, `y` typed on a terminal → `approval_needed == ""`
+  and the exec, with the whole command on screen
+  (`ANewProfileIsAskedInThePane.test_yes_shows_the_whole_command_records_it_and_starts_it`).
+- `test_no_at_the_approval_prompt_goes_back_to_the_list_and_records_nothing` — the same
+  class, `…test_no_goes_back_to_the_list_with_nothing_refused_and_the_cursor_on_that_row`.
 - `test_escape_starts_nothing`: `own_the_tty` → None → `pick` returns None.
 - `test_the_selector_shows_even_with_one_profile`: only the built-in `claude` is installed →
   `own_the_tty` is called once, with a one-row `Selector`; nothing is picked for the operator

@@ -734,8 +734,8 @@ def _read_cache() -> dict:
 def cached(p: profiles.Profile, *, cwd) -> Wiring | None:
     """A remembered answer whose stamp still matches, or ``None``. **Display only.**
 
-    Nothing on `main` reads this yet: Task 5's selector will, drawing its rows from it and
-    probing on a miss, and picking a row probes again. A launch never reads it (ruling 21):
+    The profile selector draws its rows from it and probes on a miss
+    (`frame/selector.states`), and picking a row probes again. A launch never reads it (ruling 21):
     this file is as writable by a chat as `charter.local.toml` is, and a chat can compute
     the key, write the stamp and date the entry ahead — which is why the age test has two
     bounds, and why every field is checked for its type before it is believed (A1).
@@ -760,9 +760,17 @@ def cached(p: profiles.Profile, *, cwd) -> Wiring | None:
 def remember(p: profiles.Profile, *, cwd, w: Wiring) -> None:
     """Record *w* for *p* at *cwd*. Best effort: a display cache is never worth a row.
 
-    Task 5's selector will call this on the miss it probes; nothing on `main` does yet, and
+    The profile selector calls this on the miss it probes (`frame/selector.states`), and
     `doctor` deliberately does not (a suite reaching `run_all()` would write the cache).
+
+    **Only a definite answer is kept.** An UNKNOWN is a fact about one probe — a
+    `plugincache.LIST_TIMEOUT`, an answer that would not parse — and not about the folder: remembered,
+    it would refuse the selector's row for all of :data:`MAX_AGE`, and Enter on a refused
+    row never reaches the launch's fresh probe. So a row whose last probe could not tell is
+    asked again on the next draw.
     """
+    if w.state not in (WIRED, UNWIRED):
+        return
     doc = _read_cache()
     doc[_key(p, cwd)] = {"state": w.state, "detail": w.detail, "fix": w.fix,
                          "checked_at": time.time(), "stamp": _stamp(p, cwd)}

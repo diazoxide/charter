@@ -248,6 +248,15 @@ def _clipped(text: str, width: int) -> str:
     by holding characters narrower than a cell (a combining mark `contain` leaves alone),
     and stopping short of those hides a few more characters than it had to — which the
     count still says, exactly.
+
+    **In a narrow column the count gives way, and that is the rule rather than a gap.** The
+    marker is some sixteen cells on its own (`… +324 not shown`), so a column narrower than
+    that gets the ordinary bare `…` — a count that cannot fit cannot be shown — and just
+    above it the count can take nearly the whole line. The selector's footer is the line
+    that matters, which is why it puts `esc close this chat` first: measured and pinned, the
+    whole hint survives at 40 columns and wider and the key `esc` at 24 and wider, for any
+    reason under 100,000 characters (`tests/test_a_new_chat_starts_at_the_profile_selector
+    .EveryFooterSaysHowToLeave`). Narrower than that is narrower than this surface supports.
     """
     if tui.width(text) <= width:
         return text
