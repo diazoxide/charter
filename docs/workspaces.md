@@ -200,6 +200,13 @@ keeps working, in the wrong clones, against the wrong branches, and nothing look
 until the commits land somewhere unexpected. The lock is per **session**, so a second
 terminal picks its own workspace freely and neither disturbs the other.
 
+**A Codex session outside a frame has no lock.** The lock is written under the session's
+id, and no per-session id reaches a Codex shell, so `charter workspace use` there selects a
+workspace for the terminal and locks nothing: the next `use` switches. The session briefing
+still asks for a workspace, and where it sees no session id and `$CHARTER_HARNESS` names
+Codex, it does not say confirming locks it. Inside a frame the chat's
+id reaches the shell, and the chat is locked as described under *Inside a chat* (#954).
+
 Three ways past it, in the order you should reach for them:
 
 - **start a new session** — the honest one, and usually what you meant;

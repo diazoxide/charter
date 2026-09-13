@@ -147,11 +147,20 @@ class CodexHarness(Harness):
                 "(a string or bool is rejected, an array of strings is not) — so charter "
                 "cannot render into it, and `/charter` renders on demand instead.",
                 "charter statusline --watch"),
+        # **This named a fallback that does not exist** (#954): "the workspace lock falls
+        # back to the terminal-pane key". `session.current` reads no pane id, `is_locked`
+        # answers nothing without a session id, and the terminal pointer `workspace use`
+        # does write is a selection that refuses nothing — a second `use` switches. Nor
+        # were hooks "unaffected" in any sense a reader needs: the hook has a payload id,
+        # and no command in the shell can write a lock under it. A frame is the exception
+        # because the id arrives in Codex's own environment and its shell inherits it.
         Deficit("session-lock",
-                "`shell_environment_policy.set` holds constants, so no per-session "
-                "`$CHARTER_SESSION_ID` reaches a shell; the workspace lock falls back to "
-                "the terminal-pane key. Hooks are unaffected — their payload carries "
-                "`session_id` directly."),
+                "no workspace lock outside a frame: `shell_environment_policy.set` holds "
+                "constants, so no per-session `$CHARTER_SESSION_ID` reaches a shell, and "
+                "`charter workspace use` there writes only a terminal pointer, which "
+                "refuses nothing. Inside a frame the chat's id is in Codex's environment "
+                "and reaches the shell, so a chat is locked to the workspace it was "
+                "launched in."),
         # The sharpest of the three, and the one that is a fact about Codex rather than
         # about a widget: there is nowhere in a project for its CONFIG to live. A
         # `.codex/config.toml` or `codex.toml` beside a project is ignored — measured by

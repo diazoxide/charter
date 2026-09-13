@@ -6096,36 +6096,68 @@ def _workspace_confirm_nudge(session_id: str | None, unattended: bool = False) -
     """At session start, unless the workspace is hard-pinned via ``$CHARTER_WORKSPACE`` or
     already **locked** (confirmed) for this session, tell the agent to ask the user which
     workspace to use *before* any repo work — create a new one or use an existing one.
-    Confirming (``workspace use`` / ``create --use``) locks it for the whole session; it
-    can't be switched mid-session. Best-effort; never raises."""
+    Confirming (``workspace use`` / ``create --use``) locks it for the whole session where
+    the session's commands have an id to lock under; it can't be switched mid-session.
+    Best-effort; never raises.
+
+    **The lock is promised only where confirming takes one** (#954). `set_active` writes
+    the lock under `session.current()` read in the process that runs `charter workspace use`
+    — the session's shell — and never under the payload id this hook was handed. A Codex
+    session outside a frame has no id in that environment (`harness/codex.py`'s
+    `session-lock` deficit), so its `use` writes a terminal pointer and nothing refuses the
+    next one. This said "That **locks** the workspace" there anyway, and sent the agent to a
+    confirm step that locked nothing.
+
+    So the promise is withheld only where both of two things say no lock can be taken:
+    `session.current()` with no argument — the question the lock's writer asks — finds no
+    id in this hook's environment, AND the running harness declares the `session-lock`
+    deficit, read through the same registry `charter harness list` prints it from. Either
+    alone is not enough. An id here (a frame's `$CHARTER_SESSION_ID`) is one the shell has
+    too, so it locks whatever the harness. But no id here is not evidence of none in the
+    shell: whether Claude Code hands `$CLAUDE_CODE_SESSION_ID` to a hook as it does to a
+    Bash call has not been measured, and `use` demonstrably locks in its shell. Taking the
+    missing id alone as the answer would have cost every Claude Code session outside a frame
+    a sentence that is true there, on an unmeasured host fact. The deficit is the measured
+    one: it is what records that Codex's shell gets no per-session id. An unregistered or
+    undetected harness declares nothing, so it keeps the sentence it had."""
     try:
-        from . import workspace
+        from . import session, workspace
+        from .harness import registry
         if os.environ.get("CHARTER_WORKSPACE") or workspace.is_locked(session_id):
             return ""
+        locks = (session.current() is not None
+                 or not any(d.key == "session-lock"
+                            for d in registry.deficits(registry.current())))
         current = workspace.resolve(session_id=session_id)
         names = workspace.list_workspaces()
         existing = ", ".join(f"`{n}`" for n in names) if names else "none yet"
         if unattended:
             # The ONE block that does not get an "assume and continue" rewrite. Every other
             # nudge names a preference; this one names a missing input. An unattended run
-            # that picks a workspace for itself writes into somebody else's job and locks
-            # the choice for the whole session — the silent-move failure `session.terminal`
-            # was rewritten to prevent, with nobody watching to catch it.
+            # that picks a workspace for itself writes into somebody else's job, and where
+            # the session has an id, locks the choice for the whole session — the silent-move
+            # failure `session.terminal` was rewritten to prevent, with nobody watching to
+            # catch it. Claiming it is the reason to stop; the lock is only said where it
+            # would be taken.
             return (
                 "⬢ **STOP — this run has no workspace and nobody to ask.** It is running "
-                f"unattended (`permission_mode: {UNATTENDED_MODE}`) with no workspace locked "
-                f"and none pinned via `$CHARTER_WORKSPACE`. **Do not guess one** — it would "
-                f"silently claim `{current}` and lock it for the session. Do no repo work. "
-                f"Say plainly that the run is misconfigured and stop; whoever launched it "
+                f"unattended (`permission_mode: {UNATTENDED_MODE}`) with no workspace "
+                f"{'locked' if locks else 'confirmed'} and none pinned via "
+                f"`$CHARTER_WORKSPACE`. **Do not guess one** — it would silently claim "
+                f"`{current}`{' and lock it for the session' if locks else ''}. Do no repo "
+                f"work. Say plainly that the run is misconfigured and stop; whoever launched it "
                 f"should re-launch with `CHARTER_WORKSPACE=<name>` set (existing: {existing})."
             )
+        standing = ("No workspace is locked for this session yet" if locks else
+                    "No workspace is confirmed for this session")
+        lock = (" That **locks** the workspace for the session — it can't be switched "
+                "mid-session (only a new session can change it)." if locks else "")
         return (
-            "⬢ **Confirm the workspace before any repo work.** No workspace is locked for this "
-            f"session yet (it would otherwise default to `{current}`). Ask the user — via a quiz "
+            f"⬢ **Confirm the workspace before any repo work.** {standing} (it would otherwise "
+            f"default to `{current}`). Ask the user — via a quiz "
             "(AskUserQuestion) — whether to **create a new** workspace or **use an existing** one "
             f"(existing: {existing}), then run `charter workspace use <name>` (or `charter workspace "
-            "create <name> --use`). That **locks** the workspace for the session — it can't be "
-            "switched mid-session (only a new session can change it). If the user's first message "
+            f"create <name> --use`).{lock} If the user's first message "
             "already names or clearly implies a workspace, confirm that one instead of asking. "
             "**When creating a new workspace, also ask what it's for** — a one-line vision/goal — "
             'and pass it: `charter workspace create <name> --use --vision "<the goal>"` (it seeds the '
