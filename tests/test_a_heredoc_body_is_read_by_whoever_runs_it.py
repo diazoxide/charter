@@ -24,6 +24,8 @@ the #258 preservation and the terminator direction, which are unit facts about t
 
 from __future__ import annotations
 
+import shutil
+import subprocess
 import unittest
 
 from charter import hooks
@@ -261,14 +263,13 @@ class TheTerminatorMatchesBashExactly(PlaneIso):
 
 class ThePlanCarriesBashsOwnDelimiter(PlaneIso):
     """Each plan entry carries `_heredoc_header`'s answer as DATA, so a second caller has the
-    bash-accurate delimiter without re-parsing — and decides nothing here.
+    bash-accurate delimiter without re-parsing.
 
     Where quoting splits the delimiter word, the two readings differ: for `<<EO'F'` the
     pre-pass's regex reads `EO` while bash reads `EOF` (measured against bash, zsh and dash).
-    Acting on the shorter reading is the safe direction *here* — a terminator that is never
-    found leaves the body visible — so the verdicts stay keyed on it. A caller that would DROP
-    a body (a `charter handoff` brief, say) must use the carried header instead, or it would
-    drop to end of input and swallow the commands after the heredoc.
+    The plan's own delimiter stays the regex's, but where a body ENDS is bash's — see
+    :class:`ASplitQuoteDelimiterEndsTheBodyWhereBashDoes` for why the shorter reading was never
+    the safe direction for a body that gets dropped (#975).
     """
 
     SPLIT_QUOTED = ["EO'F'", "'EO'F", '"EO"F']
@@ -281,15 +282,6 @@ class ThePlanCarriesBashsOwnDelimiter(PlaneIso):
                 self.assertEqual(1, len(plan), header)
                 self.assertEqual("EOF", plan[0][2][0], "carried delimiter is bash's")
                 self.assertEqual("EO", plan[0][0], "the pre-pass still matches on its own")
-
-    def test_the_carried_header_decides_nothing(self):
-        """The verdicts of those spellings are exactly what they were before the facts were
-        carried — the data is inert."""
-        for spell, denied in (("EO'F'", True), ("'EO'F", False), ('"EO"F', False),
-                              ("\\EOF", True)):
-            cmd = f"cat <<{spell}\nbody\nEOF\n{READ}"
-            with self.subTest(spelling=spell):
-                self.assertEqual(denied, _deny(cmd, str(self.tmp)), cmd)
 
     def test_a_backslash_delimiter_gets_an_entry_that_is_still_never_stripped(self):
         """`<<\\EOF` used to be invisible to the pre-pass's header regex, which made every plan
@@ -309,6 +301,75 @@ class ThePlanCarriesBashsOwnDelimiter(PlaneIso):
         self.assertIs(False, plan[0][1], "never stripped")
         self.assertEqual("EOF", plan[0][2][0], "and bash's own reading is carried")
         self.assertEqual("EOF", hooks._heredoc_header(header, header.index("<<"))[0])
+
+
+class ASplitQuoteDelimiterEndsTheBodyWhereBashDoes(PlaneIso):
+    """A reader's quoted body is dropped from the guard's view, and it must be dropped to the
+    line BASH ends it on (#975).
+
+    `<<'EO'F` is a heredoc whose delimiter is `EOF`: quote removal is per character and the
+    fragments concatenate. The layout walk used to take that from `_HEREDOC_RE`, which reads
+    `EO`, for every heredoc except a handoff brief. No line reads `EO`, so the walk ran to the
+    end of the input and dropped the vault read placed after the real `EOF` along with the
+    body. #974's review pinned that verdict as allowed, on the reasoning that a terminator
+    never found "leaves the body visible" — true of a body the guard keeps, and the opposite of
+    true for one it drops.
+
+    The spellings are every way to split `EOF` across quotes and backslashes, in both the `<<`
+    and `<<-` forms. The shells below, not charter's parser, are what say where each ends.
+    """
+
+    SPELLINGS = ["'EO'F", '"EO"F', "EO'F'", 'EO"F"', "\\EOF", "E\\OF", "'E'O'F'", "E''OF",
+                 '"E""O"F']
+    #: The spellings whose FIRST character is the quote, which the pre-pass reads as quoted
+    #: and therefore strips when a reader opens them. The others are kept whole — a refusal of
+    #: documentation, but never a hidden read, and #977's to settle rather than this fix's.
+    STRIPPED = ["'EO'F", '"EO"F', "'E'O'F'", '"E""O"F']
+    SHELLS = {"bash": ["bash", "--norc", "--noprofile", "-c"], "zsh": ["zsh", "-f", "-c"],
+              "dash": ["dash", "-c"]}
+
+    @staticmethod
+    def _heredoc(opener: str, spelling: str, after: str) -> str:
+        tab = "\t" if opener == "<<-" else ""
+        return f"cat {opener}{spelling}\n{tab}body\n{tab}EOF\n{after}"
+
+    def test_a_read_after_the_real_terminator_is_denied(self):
+        for opener in ("<<", "<<-"):
+            for spell in self.SPELLINGS:
+                cmd = self._heredoc(opener, spell, READ)
+                with self.subTest(opener=opener, spelling=spell):
+                    self.assertTrue(_deny(cmd, str(self.tmp)), cmd)
+
+    def test_a_document_in_a_stripped_spelling_is_still_data(self):
+        """#258 on the split spellings: ending the body at the right line must not stop it
+        being dropped. The read is INSIDE the body here, so it is documentation."""
+        for opener in ("<<", "<<-"):
+            tab = "\t" if opener == "<<-" else ""
+            for spell in self.STRIPPED:
+                cmd = f"cat > notes.md {opener}{spell}\n{tab}{READ}\n{tab}EOF"
+                with self.subTest(opener=opener, spelling=spell):
+                    self.assertFalse(_deny(cmd, str(self.tmp)), cmd)
+
+    def test_every_line_a_real_shell_runs_after_the_body_is_seen(self):
+        """The source of truth is the shell. For each spelling, a shell is handed the same
+        heredoc with `echo RAN` where the read would be; wherever the shell runs that line,
+        the guard must deny the read in its place."""
+        ran = 0
+        for name, argv in self.SHELLS.items():
+            if not shutil.which(argv[0]):
+                continue
+            for opener in ("<<", "<<-"):
+                for spell in self.SPELLINGS:
+                    probe = self._heredoc(opener, spell, "echo RAN")
+                    out = subprocess.run(argv + [probe], capture_output=True, text=True,
+                                         cwd=str(self.tmp), timeout=10).stdout
+                    if out.splitlines()[-1:] != ["RAN"]:
+                        continue
+                    ran += 1
+                    cmd = self._heredoc(opener, spell, READ)
+                    with self.subTest(shell=name, opener=opener, spelling=spell):
+                        self.assertTrue(_deny(cmd, str(self.tmp)), cmd)
+        self.assertGreater(ran, 0, "no shell ran a line after any heredoc — nothing was compared")
 
 
 class EveryFallbackInTheAttributionGoesRedWhenDeleted(PlaneIso):
@@ -352,16 +413,22 @@ class EveryFallbackInTheAttributionGoesRedWhenDeleted(PlaneIso):
             self.fail(f"the leak guard raised instead of deciding: {exc!r}")
         self.assertFalse(decided, cmd)
 
-    def test_an_unterminated_body_stops_at_the_end_of_the_command(self):
+    def test_an_unterminated_reader_body_is_kept_in_view(self):
         """A heredoc whose delimiter never arrives runs to the end of the input — bash takes
-        the rest as body, so nothing after it executes. The bound on the terminator append is
-        what stops the walk reading past the last line."""
+        the rest as body. The bound on the terminator append is what stops the walk reading
+        past the last line, so this must decide rather than raise.
+
+        It is also **not dropped**, though bash would treat it as data (#975). A terminator
+        the guard cannot find is the symptom every bypass in this area has had — #973, #974's
+        round 3, and #975's `<<'EO'F` — so "not found" keeps the body visible rather than
+        trusting the parse that failed to find it. The cost is a refusal of a command that is
+        already broken: bash warns that the here-document ended at end of file."""
         cmd = f"cat > notes.md <<'DOC'\n{READ}"
         try:
             decided = self.denies(cmd)
         except Exception as exc:                       # noqa: BLE001
             self.fail(f"the leak guard raised instead of deciding: {exc!r}")
-        self.assertFalse(decided, cmd)
+        self.assertTrue(decided, cmd)
 
 
 class TheHeaderCountBailIsLoadBearing(PlaneIso):

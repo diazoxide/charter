@@ -1400,10 +1400,12 @@ def _heredoc_layout(cmd: str) -> list[tuple[str, bool, bool, bool]]:
     * it ends where BASH ends it, at :func:`_heredoc_header`'s delimiter rather than
       :data:`_HEREDOC_RE`'s. For `<<BRIEF'X'` bash's terminator is `BRIEFX`; dropping on `BRIEF`
       finds no terminator, runs to the end of the input, and takes the commands after the heredoc
-      with it — a vault read among them (review round 3, the Critical).
-    * a brief whose terminator never arrives is **not dropped at all**. Bash reads an unterminated
-      body to the end of the input, so a drop there would hide everything after it. Keeping it
-      shows the guard more text, which is the direction this file errs in.
+      with it — a vault read among them (review round 3, the Critical). That held for a brief
+      only until #975 measured the same drop through `cat <<'EO'F`; it holds for every heredoc.
+    * a body whose terminator never arrives is **not dropped at all**, whoever opened it. Bash
+      reads an unterminated body to the end of the input, so a drop there would hide everything
+      after it if the delimiter was misread. Keeping it shows the guard more text, which is the
+      direction this file errs in.
     """
     lines = cmd.split("\n")
     layout: list[tuple[str, bool, bool, bool]] = []
@@ -1415,7 +1417,6 @@ def _heredoc_layout(cmd: str) -> list[tuple[str, bool, bool, bool]]:
         # (body index, text); a command line carries -1, which is never a key of `drop`.
         chunks: list[tuple[int, str]] = []
         ended: dict[int, bool] = {}
-        briefs: set[int] = set()
         fallback: dict[int, bool] = {}            # per-heredoc verdict, for an unknown plan
         body_count = 0
         plan_text = ""
@@ -1437,7 +1438,6 @@ def _heredoc_layout(cmd: str) -> list[tuple[str, bool, bool, bool]]:
                 break
             plan_text = plan_text + join + folded      # `join` is "" until a stage continues
             # This command line's heredoc bodies follow, in order; buffer each.
-            brief_here = _brief_heredocs(folded)
             # When this line is one the whole-line pass cannot attribute, each heredoc is
             # judged on its own (:func:`_heredoc_could_run`) rather than all of them sharing
             # one default — the defect in review round 4, finding 1.
@@ -1452,12 +1452,13 @@ def _heredoc_layout(cmd: str) -> list[tuple[str, bool, bool, bool]]:
                 if unknown:
                     fallback[idx] = could_run
                 # The header is bash's own reading of the delimiter, and the ONLY safe source
-                # for a body that will be treated as data: the regex stops at the first quote
-                # (`<<EO'F'` reads as `EO`), so its terminator is never found and the "body"
-                # runs to the end of the input, taking real commands with it.
-                if header is not None and (h in brief_here or could_run is False):
-                    if h in brief_here:
-                        briefs.add(idx)
+                # for where a body ends: the regex stops at the first quote (`<<'EO'F` reads
+                # as `EO`), so its terminator is never found and the "body" runs to the end of
+                # the input, taking real commands with it. That was once reserved for a brief;
+                # a reader's quoted body is dropped just the same, and `cat <<'EO'F` hid a vault
+                # read placed after its real `EOF` (#975). The regex is the fallback only for a
+                # header bash's parser here cannot read.
+                if header is not None:
                     delim, expands, dash = header[0], header[1], header[2]
                 else:
                     delim = m.group("delim")
@@ -1501,9 +1502,12 @@ def _heredoc_layout(cmd: str) -> list[tuple[str, bool, bool, bool]]:
             # other verdict: which of those bodies a shell would RUN, which is what A7 reads.
             executed = fallback
         for idx, text in chunks:
-            unterminated_brief = idx in briefs and not ended.get(idx, True)
+            # A body whose terminator was never found is kept, whoever opened it: "not found"
+            # is what every delimiter disagreement in this walk has looked like (#973, #975),
+            # and keeping it only shows the guard more text.
+            unterminated = not ended.get(idx, True)
             layout.append((text, idx >= 0,
-                           drop.get(idx, False) and not unterminated_brief,
+                           drop.get(idx, False) and not unterminated,
                            executed.get(idx, False)))
     return layout
 
