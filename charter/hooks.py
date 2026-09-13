@@ -368,14 +368,49 @@ _SECRET_CHECKS = (
     ("JWT", re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")),
     ("private key (PEM)", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
     ("AWS access key", re.compile(r"AKIA[0-9A-Z]{12,}")),
+    # The lookahead is the rule as it always was — a name, `:` or `=`, six non-blank
+    # characters. `value` is the rest of that line, which is what `_secret_kind` holds up
+    # against a reference, so a real value anywhere after the `:` is still this rule's hit.
     ("credential assignment",
-     re.compile(r"(?i)\b(?:password|passwd|api[_-]?key|apikey|secret|token)\b\s*[:=]\s*['\"]?\S{6,}")),
+     re.compile(r"(?i)\b(?:password|passwd|api[_-]?key|apikey|secret|token)\b\s*[:=]\s*"
+                r"(?=['\"]?\S{6,})(?P<value>[^\n]*)")),
 )
+
+#: A value that names WHERE a credential lives, in the two spellings charter's own text uses:
+#: a `vault:<vault>/<key>` reference (ADR 0022's spelling) and the command that reads one,
+#: `charter secret get <vault> <key>`. At most one quote or backtick on either side, for
+#: `token: "vault:forge/token"` and a Markdown span that closes after the value.
+#:
+#: The credential-assignment rule refused both, and so refused the remedy the handoff brief
+#: refusal names (#985). **Matched against the whole value, never searched within it**, so a
+#: real value beside, after or glued to a reference is still a hit, and so is a second
+#: assignment on the same line. A bare `forge/token` is not a reference here — a secret can
+#: hold a slash — and neither is `$(charter secret get …)`, `op://…` or any spelling charter
+#: does not use. What this cannot tell apart is a token placed in the key slot
+#: (`vault:forge/ghp_…`); that is the same text as a bare token in prose, which no rule of
+#: this table reads either, so the exemption opens no new shape.
+_VAULT_REFERENCE_RE = re.compile(
+    r"['\"`]?"
+    r"(?:vault:[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9_][A-Za-z0-9._-]*"
+    r"|charter secret get [A-Za-z0-9][A-Za-z0-9._-]* [A-Za-z0-9_][A-Za-z0-9._-]*)"
+    r"['\"`]?")
 
 
 def _secret_kind(text: str) -> str | None:
+    """The KIND of secret *text* appears to hold — a label out of :data:`_SECRET_CHECKS` —
+    or ``None``.
+
+    Shared by every caller that refuses one, so the brief `charter handoff` refuses, the
+    memory file PostToolUse warns about and the file `charter save` and `memory-sync` will
+    not commit are one set of shapes. A match that carries a `value` is let through only
+    when that value is exactly a vault reference (:data:`_VAULT_REFERENCE_RE`); every match
+    is asked, so one exempt assignment does not excuse the next.
+    """
     for label, rx in _SECRET_CHECKS:
-        if rx.search(text):
+        for m in rx.finditer(text):
+            value = m.groupdict().get("value")
+            if value is not None and _VAULT_REFERENCE_RE.fullmatch(value.rstrip()):
+                continue
             return label
     return None
 

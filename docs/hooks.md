@@ -23,7 +23,7 @@ one thing a hook is allowed to shout about.
 | `PreToolUse` | `Bash` | every guard below except the vault read |
 | `PreToolUse` | `Read\|Grep` | keeps a vault file from being read into context |
 | `PreToolUse` | `Task\|Agent` | notes a dispatch about to happen |
-| `PostToolUse` | `Write\|Edit\|MultiEdit` | the record-memory nudge |
+| `PostToolUse` | `Write\|Edit\|MultiEdit` | the record-memory nudge, and a warning when a memory file looks like it holds a secret (below) |
 | `PostToolUse` | `Skill` | tallies which skills a persona actually invokes |
 | `PostToolUse` | `Task\|Agent` | tallies the dispatch |
 | `Stop`, `SubagentStop` | — | autosave a LIVE workspace |
@@ -630,6 +630,37 @@ There is no second line of defence behind it: nothing scans Bash *output*. What 
 makes a vault not worth reading is the provider — `1password` and `reference` keep the value
 in a system built for custody and resolve it on demand, so there is no plaintext on disk for
 any of the above to print. That is the control; the hook is the guard rail.
+
+## A line that looks like a secret, in memory or a brief
+
+A second guard reads text rather than commands, and four places ask it the same question:
+the `PostToolUse` warning after a write to persona or workspace memory, `charter save` and
+`charter persona memory-sync` before they commit a memory file, and `charter handoff` before
+it sends a brief. Each answer is a **kind**, never the text it matched: an AgentMail key, a
+JWT, a PEM private key, an AWS access key, or a **credential assignment**, which is a
+`password`, `passwd`, `api_key`, `apikey`, `secret` or `token` followed by `:` or `=` and six
+non-blank characters.
+
+**Naming where a credential lives is not a credential assignment.** The brief refusal tells
+you to do exactly that, and the rule used to refuse the answer whenever it was one word:
+`api_key = vault:forge/api-token` and ``token: `charter secret get forge token` `` were both
+refused as credentials ([#985](https://github.com/diazoxide/charter/issues/985)). A value in
+either of the two spellings charter uses, `vault:<vault>/<key>` or
+`charter secret get <vault> <key>`, is now let through, with at most a quote or backtick on
+each side. Because that happens in the one classifier, all four places give the same
+answer. **The whole value, to the end of its line, has to be the reference**, so all of these
+are still refused:
+
+- a bare `forge/token`, because a secret can contain a slash;
+- a real value beside the reference, glued onto it, or in a second assignment on that line
+  or the next;
+- prose after the reference on the same line;
+- any other spelling, including `$(charter secret get …)` and an `op://` URI.
+
+The four other kinds are checked on the whole text whatever the assignment says:
+`vault:forge/xAKIA…` is still an AWS access key. A token pasted into the key slot,
+`vault:forge/ghp_…`, passes as a reference: that is the same text as a bare token in prose,
+which this classifier has no rule for.
 
 ## When a guard is wrong
 
