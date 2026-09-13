@@ -181,7 +181,10 @@ are a few KB of text and `charter workspace live` exists precisely to un-ignore 
 team can commit them.
 
 Relocating an existing worktree means rewriting git's own `gitdir` pointer, and
-`git worktree move` is the command that does it correctly — charter never moves one for you.
+`git worktree move` is the command that does it correctly — changing this setting never moves
+one for you. The one move charter makes is `charter workspace rename`: the workspace's
+directory under the root is named after it, so the rename moves that directory too and
+relinks every worktree in it ([workspaces.md](workspaces.md)).
 
 ### What a workspace is
 

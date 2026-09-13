@@ -373,6 +373,25 @@ left out.
   <clone> worktree repair <tree>`, and the rename is not undone. Until then git calls that
   worktree prunable, and `git worktree prune` deletes its record while it may hold
   uncommitted work.
+
+  With `[plane] worktrees` or `$CHARTER_WORKTREES` set, a piece lives at
+  `<root>/<workspace>/<repo>/<piece>`, so that directory is named after the workspace too.
+  The rename moves `<root>/<old>` to `<root>/<new>` along with `workspaces/<old>`, then
+  relinks as above. Before either move, it checks that both `workspaces/<new>` and
+  `<root>/<new>` are free, and if either one is taken it refuses and renames nothing:
+
+  ```
+  ✗ <root>/<new> already exists, and it is where the worktrees of a workspace named '<new>' live — pick another name or move it first; nothing was renamed.
+  ```
+
+  If `workspaces/<old>` moved but `<root>/<old>` could not, the rename stays and the output
+  has no ✓. Charter names the directory it left behind with the OS's reason, prints the
+  command that finishes the job, and exits 1:
+
+  ```
+  ! Renamed workspace '<old>' → '<new>' (clones, memory, and manifest moved), but not its worktrees: <root>/<old> is still at the old name (Cross-device link).
+  ! Finish the rename: mv <root>/<old> <root>/<new> && git -C <clone> worktree repair <root>/<new>/<repo>/<piece>
+  ```
 - **`remove <name>`** — deletes the workspace and its clones, and refuses if that would
   lose unpushed work.
 
