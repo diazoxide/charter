@@ -3620,6 +3620,13 @@ def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
     # building a frame around, and switching the operator's client to it would park
     # them on a dead pane.
     status, code = _pane_state(socket, harness_pane)
+    if status != _ALIVE and state.is_waiting(fid):
+        # **A pane still at the selector is a cancel, however it ended** — the same marker
+        # `_launch`'s own `nothing_ever_ran_here` reads, and for its reason: no harness ran
+        # here, so there is no early death to report and no exit code to not know.
+        _close_window()
+        _reap_this_server(socket)
+        return _cancelled_selector(fid)
     if status != _ALIVE:
         # **Ruling 42 holds on this path too, and it is the path it holds HARDEST.** A
         # launcher that refused printed into a window this function closes a few lines
@@ -3680,6 +3687,21 @@ def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
         _drop_panels(socket, leaving)
 
     code = _wait_for_harness(socket, harness_pane)
+    # **Whether this pane was still the selector, read now** — while this launch still holds
+    # its claim, which is the only thing keeping another launch's reap off a directory whose
+    # window is gone (#685). A cancelled selector's window IS gone: its launcher closed it
+    # (`launcher._close_the_cancelled_chat`), so `_wait_for_harness` answers `None` exactly
+    # as it does for a harness whose window the operator closed — and only this marker tells
+    # the two apart. Measured by the coordinator in an exported tree: Esc at the selector
+    # here said "the frame's window is gone" and exited 1, where the plan's S2 expects 130.
+    if state.is_waiting(fid):
+        if code is not None:
+            # Still listed, dead: `remain-on-exit` kept it because the launcher could not
+            # close its own window. Taken back here, as every other ending on this path does.
+            _close_window()
+        state.clear_claim(fid)
+        _reap_this_server(socket)
+        return _cancelled_selector(fid)
     # **And the refusal a launcher recorded while this process was watching** (ruling 42).
     # This path stays awake for the whole life of the frame, so a pane that refused after
     # the checks above passed — the plane moved between them — ends up here: the window is
@@ -3723,6 +3745,24 @@ def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
     state.clear_claim(fid)
     _reap_this_server(socket)
     return code
+
+
+def _cancelled_selector(fid: str) -> int:
+    """What a launch in the operator's tmux ends on when its pane never left the selector.
+
+    **Nothing is said, and the number is the cancel's — whatever tmux read.** The operator
+    pressed Esc in a pane they were looking at; a sentence here about a harness's exit code
+    would be about a harness that never existed. And tmux's reading is not consulted even
+    where it has one (a dead pane `remain-on-exit` kept because its launcher could not close
+    the window): a pane that leaves raw mode on Linux comes back with an EMPTY
+    `#{pane_dead_status}`, read as `_UNKNOWN_DEATH_CODE` — the measurement that made
+    `_launch`'s `nothing_ever_ran_here` read the marker rather than the number. The marker
+    decides here for the same reason.
+    """
+    from .frame import selector
+
+    state.record_exit(fid, selector.CANCELLED_EXIT)
+    return selector.CANCELLED_EXIT
 
 
 def _reap_this_server(socket: str) -> None:
@@ -6259,13 +6299,16 @@ def _launch(args) -> int:
     # window the marker covers is behind it. Left in place it would refuse the one thing
     # only the CLOSING reap can do — remove this frame's own directory — by naming a
     # process that is, necessarily, still alive.
-    state.clear_claim(fid)
-    # **Read before the reap, which takes this chat's directory — the marker with it — the
-    # moment its window is gone.** A cancelled selector's window IS gone by now (Esc closes
-    # it), so asked after the reap this answered "a harness ran here" for every one of them,
-    # and the recorded-plane sentence below was held back for none. CI's sweep reported the
-    # conjunct as indistinguishable from its absence, which on the real flow it was.
+    # **Read before the claim is given up, and so before any reap — this launch's own below
+    # or another's — can take this chat's directory and the marker with it.** A cancelled
+    # selector's window IS gone by now (Esc closes it), and `state.reap` spares a directory
+    # whose window is gone only while its launch holds the claim. Asked after the reap this
+    # answered "a harness ran here" for every cancel, and the recorded-plane sentence below
+    # was held back for none; asked after the claim, a concurrent launch's reap could still
+    # win. CI's sweep reported the conjunct as indistinguishable from its absence, which on
+    # the real flow it was.
     started_nothing = nothing_ever_ran_here()
+    state.clear_claim(fid)
     after_sessions = _live_sessions(SOCKET)
     after_chats = _live_chats(SOCKET)
     live_after = after_sessions | (after_chats or set())

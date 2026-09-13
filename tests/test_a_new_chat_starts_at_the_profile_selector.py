@@ -1628,6 +1628,110 @@ class WhereItAppears(_APlaneWithProfiles, unittest.TestCase):
         self.assertTrue(state.is_waiting("beta.2"))
         self.assertEqual(state.identity("beta.2").get("CHARTER_HARNESS"), "")
 
+    def _in_the_operators_tmux(self, *states, select: bool = True) -> tuple[int, str]:
+        """`_launch_in_operator_tmux` to its end, with the pane answering *states* in turn.
+
+        `_pane_state` is what both of that path's reads of the pane go through — the eager
+        one after the start and `_wait_for_harness`'s loop — so answering it, rather than
+        `_wait_for_harness`, is what lets the case see what the path does with a pane that
+        VANISHED: which is how a cancelled selector ends there, because its launcher closes
+        its own window (`launcher._close_the_cancelled_chat`) and nothing sets
+        `remain-on-exit` on a window that is gone.
+        """
+        def answer(cmd, **kw):
+            if not cmd or cmd[0] != "tmux":
+                return _completed(cmd, 0)
+            # `new-window -P` answers the window AND the pane, and a path that could not
+            # read both would stop long before the pane is asked anything.
+            return _completed(cmd, 0, "@1 %7\n" if "new-window" in cmd else "%7\n")
+
+        queue = list(states)
+        said: list[str] = []
+        with mock.patch("charter.commands_frame.subprocess.run", side_effect=answer), \
+                mock.patch.object(commands_frame, "_pane_state",
+                                  side_effect=lambda *a: queue.pop(0) if len(queue) > 1
+                                  else queue[0]), \
+                mock.patch.object(commands_frame.util, "err", side_effect=said.append), \
+                mock.patch.object(commands_frame.util, "warn", side_effect=said.append):
+            rc = commands_frame._launch_in_operator_tmux(
+                "op", "$1", ws="beta",
+                argv=(launcher.argv_select("claude") if select
+                      else launcher.argv("claude", [], attended=True)),
+                display=([commands_frame.SELECTOR_DISPLAY] if select else ["claude"]),
+                profile="" if select else "claude", h=None, v=(3, 7), picked=False,
+                selecting=select)
+        return rc, " ".join(said)
+
+    def test_esc_at_the_selector_in_the_operators_tmux_is_a_cancel_not_a_dead_harness(self):
+        """S2 on the other server, and the plan expects 130 on BOTH. The pane was alive when
+        the frame was drawn and is simply gone afterwards — Esc closed its own window — and
+        the waiting marker is what says no harness ever ran there: nothing is printed about
+        a harness's exit code nobody can know, and the launch ends on the cancel's own
+        number. Found by the coordinator in an exported tree, where it said "the frame's
+        window is gone" and exited 1."""
+        rc, said = self._in_the_operators_tmux((commands_frame._ALIVE, None),
+                                               (commands_frame._GONE, None))
+        self.assertEqual(rc, selector.CANCELLED_EXIT)
+        self.assertEqual(said, "")
+
+    def test_a_selector_gone_before_the_frame_was_drawn_is_a_cancel_too(self):
+        """The eager read's branch: the pane vanished before anything was drawn around it.
+        Still a pane no harness ran in, so still the cancel's number and nothing said."""
+        rc, said = self._in_the_operators_tmux((commands_frame._GONE, None))
+        self.assertEqual(rc, selector.CANCELLED_EXIT)
+        self.assertEqual(said, "")
+
+    def test_a_selector_pane_tmux_kept_dead_is_closed_and_still_ends_on_the_cancel(self):
+        """The launcher could not close its window, so `remain-on-exit` kept the dead pane —
+        here with the EMPTY status a pane leaving raw mode on Linux reads as, which tmux
+        reports as `_UNKNOWN_DEATH_CODE`. Still a cancel: nothing said, the cancel's own
+        number rather than tmux's, and the window charter opened taken back rather than
+        left in the operator's session."""
+        closed: list = []
+        real = commands_frame.tmuxctl.run
+
+        def run(what, argv, **kw):
+            if "kill-window" in argv:
+                closed.append(argv)
+            return real(what, argv, **kw)
+
+        with mock.patch.object(commands_frame.tmuxctl, "run", side_effect=run):
+            rc, said = self._in_the_operators_tmux((commands_frame._ALIVE, None),
+                                                   (commands_frame._DEAD,
+                                                    commands_frame._UNKNOWN_DEATH_CODE))
+        self.assertEqual((rc, said), (selector.CANCELLED_EXIT, ""))
+        self.assertEqual(len(closed), 1, closed)
+        self.assertEqual(state.exit_code("beta.2"), selector.CANCELLED_EXIT)
+
+    def test_a_harness_whose_window_vanished_in_the_operators_tmux_still_says_so(self):
+        """The control: a pane that picked — or never waited — is a harness, and a harness
+        whose window is gone has an exit code charter cannot know, which it says."""
+        with mock.patch.object(commands_frame, "_await_the_launcher",
+                               return_value=(None, "")):
+            rc, said = self._in_the_operators_tmux((commands_frame._ALIVE, None),
+                                                   (commands_frame._GONE, None),
+                                                   select=False)
+        self.assertEqual(rc, commands_frame._UNKNOWN_DEATH_CODE)
+        self.assertIn("the frame's window is gone", said)
+
+    def test_the_waiting_marker_is_read_before_the_claim_that_protects_it_is_released(self):
+        """`state.reap` spares a chat directory only while its launch still holds the claim
+        (#685), and a cancelled selector's window is gone — so the instant `clear_claim`
+        runs, ANOTHER launch's reap may take the directory and the marker with it. Read
+        after that, the marker says "a harness ran here" and the cancel is reported as a
+        plane to reopen. Stood in as exactly that reap, at exactly that instant."""
+        real = state.clear_claim
+
+        def released_and_reaped(fid):
+            real(fid)
+            state.clear_waiting(fid)
+
+        with mock.patch.object(commands_frame.state, "clear_claim",
+                               side_effect=released_and_reaped):
+            said = self._closing_pane(waiting=True, code=selector.CANCELLED_EXIT,
+                                      recorded=True)
+        self.assertNotIn("reopen", said)
+
     def test_a_reopen_never_opens_the_selector(self):
         """An open nobody is at names its profile: there is no one there to pick."""
         args = commands_frame._reopen_args(

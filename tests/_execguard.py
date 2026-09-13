@@ -25,9 +25,11 @@ primitives every `os.exec*` spelling ends in — `os.execv` and `os.execve`, whi
   so that path is real behaviour and not a hazard: `bypass`'s own "not installed" sentence
   and exit 127 are tested exactly that way, and `os.execvp` walks `PATH` by trying each
   candidate and catching the first of those;
-* **a program that WOULD run raises :class:`ReplacedTheRunner`**, which is an
-  `AssertionError`: not an `OSError`, so no `except OSError` in charter and no candidate loop
-  in `os._execvpe` can take it for an ordinary failure to start;
+* **a program that WOULD run raises :class:`ReplacedTheRunner`**, a `BaseException` like
+  every tripwire in `tests/_planeguard.py`: not an `OSError`, so no `except OSError` in
+  charter and no candidate loop in `os._execvpe` can take it for an ordinary failure to
+  start — and not an `Exception` either, so no `except Exception` on the path between the
+  exec and the test (`cli.main` has one) can swallow it into a green;
 * **a forked child is never refused.** `pty.fork()` followed by `os.execvp("tmux", …)` is how
   a real-terminal case puts a real client on a server, and after the fork the process
   replaced is the child's own, not the suite's. Told apart by pid, recorded at install.
@@ -47,8 +49,12 @@ _RUNNER_PID: int | None = None
 _installed = False
 
 
-class ReplacedTheRunner(AssertionError):
-    """A test exec'd a real program from the process running the suite."""
+class ReplacedTheRunner(BaseException):
+    """A test exec'd a real program from the process running the suite.
+
+    `BaseException`, for `_planeguard.RealTmuxReach`'s reason: a tripwire an `except
+    Exception` can catch is a tripwire the code under test can turn into a pass.
+    """
 
 
 def _tripwire(name: str, real):

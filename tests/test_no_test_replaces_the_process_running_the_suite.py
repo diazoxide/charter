@@ -29,7 +29,18 @@ class AnExecThatWouldRunFailsTheTestThatMadeIt(unittest.TestCase):
         """`os._execvpe` walks `PATH` catching `OSError` per candidate; an `OSError` here
         would be swallowed and the NEXT candidate tried — which may be the real one."""
         self.assertFalse(issubclass(_execguard.ReplacedTheRunner, OSError))
-        self.assertTrue(issubclass(_execguard.ReplacedTheRunner, AssertionError))
+
+    def test_an_except_exception_on_the_way_out_does_not_swallow_it(self):
+        """The tripwires in `tests/_planeguard.py` are `BaseException`s for this reason:
+        `cli.main` wraps every command in `except Exception`, and a refusal that clause can
+        catch is a refusal the code under test turns into a crash report and a green."""
+        caught_by_exception = False
+        with self.assertRaises(_execguard.ReplacedTheRunner):
+            try:
+                commands_frame.bypass([sys.executable, "-c", "pass"])
+            except Exception:                              # noqa: BLE001 — the point
+                caught_by_exception = True
+        self.assertFalse(caught_by_exception)
 
     def test_the_environment_spelling_is_refused_too(self):
         with self.assertRaises(_execguard.ReplacedTheRunner):

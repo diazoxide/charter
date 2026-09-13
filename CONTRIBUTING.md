@@ -88,8 +88,12 @@ command.
   yours:** `tests._planeguard.RealTmuxReach` refuses a child whose socket is charter's
   (`-L charter`), your `default` server, or the one `$TMUX` named when the suite started —
   judged on the child's own `env=`, because a test that cleared its environment is the one
-  whose `kill-window` closed an operator's live session (2026-09-12). **Nor does it spend a
-  credential.**
+  whose `kill-window` closed an operator's live session (2026-09-12). **Nor may a test
+  replace the process running the suite:** `tests._execguard` refuses an `os.exec*` from
+  that process that would run (`ReplacedTheRunner`), because a `commands_frame.bypass` exec
+  left un-stubbed once replaced the test runner with `charter frame-launch --select` and
+  left no verdict at all — a program that could not run still raises what the kernel
+  would, and a forked child still execs. **Nor does it spend a credential.**
   `doctor`'s preflight asks a forge whether your token is still good, and eighteen modules
   reach that line — 28 authenticated round trips to github.com and gitlab.com per run, and
   the sweep gate spends that again per mutation. `tests/_forgeprobe.py` answers the probe
