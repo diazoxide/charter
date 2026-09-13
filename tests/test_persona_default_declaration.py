@@ -276,6 +276,19 @@ class TestClearingSaysWhatHappened(DeclaredDefaultIso):
         self.assertIn("Cleared the declared default persona", out)
         self.assertFalse(legacy.exists())
 
+    def test_a_charter_toml_with_no_persona_section_is_left_byte_for_byte(self):
+        """No `[persona]` header at all is the other "nothing to undeclare". `_set_key` returns
+        before its append for it; without that return a clear falls through to the branch that
+        adds a section, and writes `[persona]` with `default = "None"` into a plane that
+        declared nothing. The deletion sweep found that return unpinned on #1020."""
+        self._plane()
+        toml = config.ROOT / "charter.toml"
+        before = toml.read_bytes()
+        rc, out = self._clear()
+        self.assertEqual(rc, 0, out)
+        self.assertIn("No default persona was declared.", out)
+        self.assertEqual(before, toml.read_bytes())
+
     def test_with_no_charter_toml_there_is_nothing_to_clear_and_it_says_so(self):
         """A root with no charter.toml declares nothing in it. Before #1010 that answer came
         from a `False` nobody read; asking the OS for the file's words must not turn a
