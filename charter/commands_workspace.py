@@ -8,6 +8,7 @@ resolved. Agents must operate within a single workspace and never mix them.
 from __future__ import annotations
 
 import datetime
+import errno
 import json
 import os
 import shutil
@@ -1518,28 +1519,44 @@ def cmd_workspace_fork(args) -> int:
 _LIVE_SHARED_COMPONENTS = {"workspace.md", "workspace.json", "memory/MEMORY.md"}
 
 
+def _cannot_check_workspace(name: str, code: int | None) -> str:
+    """`reinit`'s sentence for a workspace directory it cannot look at — one spelling for the
+    named form and for `--all`, so the two cannot send a reader to different repairs."""
+    wd = workspace.workspace_dir(name)
+    return (f"workspace '{name}' cannot be checked — charter changes nothing it cannot see; "
+            f"{workspace.uncheckable_fix(code, wd, wd)}.")
+
+
 def cmd_workspace_reinit(args) -> int:
     """Bring a workspace's on-disk structure up to the current layout — create any missing
     baseline files (workspace.md charter, memory/, refs/) and stamp the structure version.
     A workspace created by an older version of charter is flagged (status line,
     `workspace list`) until this runs. Idempotent + additive: existing content is never
     touched. `--all` fixes every workspace at once (handy after a charter upgrade)."""
+    #: Workspaces `--all` could not look at, named here and counted in the closing line (#1028).
+    #: `list_workspaces` leaves a directory that is a symlink loop out, so the walk below never
+    #: met it and the line under it said "Up to date — nothing to do" about the whole plane.
+    unseen: list[tuple[str, int | None]] = []
     if getattr(args, "all", False):
         names = workspace.list_workspaces()
+        unseen = workspace.uncheckable_workspaces()
+        for n, code in unseen:
+            util.err(_cannot_check_workspace(n, code))
     else:
         name = getattr(args, "name", None) or workspace.resolve()
-        # Asked with `workspace._exists` (#942 review round 4, minor 2's class): `Path.exists`
-        # called an EIO "no workspace", and raised instead on 3.11–3.13.
-        there = workspace._exists(workspace.workspace_dir(name), follow=True)
+        # Asked with `workspace._existence` (#942 review round 4, minor 2's class): `Path.exists`
+        # called an EIO "no workspace", and raised instead on 3.11–3.13. The errno is kept (#1028):
+        # `_exists` dropped it, and this sentence told a workspace that is a symlink loop to
+        # restore read access, which clears no loop.
+        there, code = workspace._existence(workspace.workspace_dir(name), follow=True)
         if there is None:
-            util.err(f"workspace '{name}' cannot be checked — charter changes nothing it cannot "
-                     f"see; restoring read access to {workspace.workspace_dir(name)} clears this.")
+            util.err(_cannot_check_workspace(name, code))
             return 1
         if there is False:
             util.err(f"no workspace '{name}'")
             return 1
         names = [name]
-    if not names:
+    if not names and not unseen:
         util.info("No workspaces to reinitialize.")
         return 0
     #: How many individual repairs were applied, and WHICH workspaces got at least one.
@@ -1662,6 +1679,17 @@ def cmd_workspace_reinit(args) -> int:
             unresolved.add(n)
             util.warn(f"'{n}': {rel} cannot be checked — charter writes nothing there it cannot "
                       f"see; {workspace.uncheckable_fix(code, path, 'that path')}.")
+        for rel, path, code in before["in_the_way"]:
+            # #1028: the other shapes a directory of the layout takes when it is no directory. Each
+            # was a `FileExistsError` out of this command, and "added" would be as wrong: `scaffold`
+            # creates nothing beneath either, and removes neither, so the row says which one was
+            # found and the repair that is the operator's to make.
+            unresolved.add(n)
+            fix = ("is a symlink whose target is not there, and charter writes nothing through "
+                   "it; removing or repointing that link clears this" if code == errno.ENOENT
+                   else "is not a directory, and charter never moves existing content; moving "
+                        "it out of the way clears this")
+            util.warn(f"'{n}': {rel} cannot be created — {path} {fix}.")
         # The BACKFILL half of #884, and the reason it is checked after rather than read
         # off `before`: `workspace.scaffold_manifest` swallows its own failure, because it
         # runs from `ensure` on a launch path where raising would cost the operator their
@@ -1700,20 +1728,23 @@ def cmd_workspace_reinit(args) -> int:
         # command that prints "Nothing to save".
         if workspace.is_live(n) and set(before["missing"]) & _LIVE_SHARED_COMPONENTS:
             util.info(f"  '{n}' is LIVE — commit the restored files: charter workspace save {n}")
-    if not repaired and not blocked and not unresolved:
+    if not repaired and not blocked and not unresolved and not unseen:
         util.ok(f"Up to date (structure v{workspace.STRUCTURE_VERSION}) — nothing to do.")
-    elif len(names) > 1:
+    elif len(names) + len(unseen) > 1:
         # Two units, named as two. "Applied N repair(s)" is the number the per-workspace
         # rows above add up to; "across M of T workspace(s)" is the number an operator is
         # actually checking against the plane they know the size of. A workspace charter
         # could not repair is called out rather than swept into "the rest were current",
         # which would contradict the error it just printed — and so is one still holding a
-        # state a row above names (review round 5, R4).
+        # state a row above names (review round 5, R4), and one it could not look at, which
+        # is in T because the operator counts it there and is in none of "the rest" (#1028).
         stuck = f"{len(blocked)} could not be repaired; " if blocked else ""
         left = unresolved - repaired - blocked
         kept = f"{len(left)} still hold what the rows above name; " if left else ""
-        util.info(f"Applied {repairs} repair(s) across {len(repaired)} of {len(names)} "
-                  f"workspace(s); {stuck}{kept}the rest were current.")
+        unchecked = f"{len(unseen)} could not be checked; " if unseen else ""
+        util.info(f"Applied {repairs} repair(s) across {len(repaired)} of "
+                  f"{len(names) + len(unseen)} workspace(s); {stuck}{kept}{unchecked}the rest "
+                  f"were current.")
     return 0
 
 

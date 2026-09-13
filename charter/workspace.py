@@ -864,6 +864,30 @@ def list_workspaces() -> list[str]:
     return out
 
 
+def uncheckable_workspaces() -> list[tuple[str, int | None]]:
+    """The names under ``workspaces/`` that :func:`list_workspaces` leaves out because the
+    filesystem will not say whether they are directories at all, each with the errno the check
+    met.
+
+    `Path.is_dir` answers False for a symlink loop, so a workspace directory that is one is not
+    listed, and `workspace reinit --all` walked the rest and printed "Up to date — nothing to do"
+    about a plane it had not looked at all of (#1028, ADR 0013). A caller that reports on every
+    workspace names these; the listing itself stays as it is, because the status line and every
+    other reader of it are asking which workspaces they can open, and these cannot be."""
+    _ensure_layout()
+    root = config.WORKSPACES_DIR
+    if _exists(root, follow=True) is not True:
+        return []
+    out = []
+    for d in sorted(root.iterdir()):
+        if d.name.startswith("."):
+            continue  # charter's own (`.worktrees/`), never a workspace — as `list_workspaces`
+        there, code = _existence(d, follow=True)
+        if there is None:
+            out.append((d.name, code))
+    return out
+
+
 def _tab_order_file() -> Path:
     """Where this plane records the order its workspaces tab strip draws (#923).
 
@@ -1737,21 +1761,22 @@ def scaffold(name: str) -> None:
     + additive."""
     scaffold_memory(name)
     refs = refs_dir(name)
-    # Never over a `refs/` the filesystem will not answer for (#980). `exist_ok` forgives a
-    # directory that is there; a symlink loop is a name that is there and resolves to no directory,
-    # so the `mkdir` raised `FileExistsError` out of `workspace reinit` after `structure_status` had
-    # already classified the loop for `reinit` to name. The README below is skipped by the same
-    # answer, so nothing is written into a path charter cannot see.
-    if _exists(refs, follow=True) is not None:
-        refs.mkdir(parents=True, exist_ok=True)
     rr = refs / "README.md"
-    # `_exists`, never `Path.exists` (#942 final review): with the workspace's `refs/` at mode 000
-    # that raised on 3.11–3.13, and on 3.14 answered False so the write below raised instead — a
-    # traceback out of `workspace reinit` on every interpreter, for a file charter only creates
-    # where it is certainly absent. `reinit` names what could not be checked.
-    if _exists(rr, follow=True) is False:
-        rr.write_text(f"# {name} — task references\n\nDrop docs, links, and snippets for "
-                      f"this task here (local, gitignored).\n")
+    # Never over a `refs/` the filesystem will not answer for (#980), nor one that answers and is
+    # no directory (#1028). `exist_ok` forgives a directory that is there; a symlink loop, a link
+    # whose target is gone and a file are all names that are there and resolve to no directory,
+    # so the `mkdir` raised `FileExistsError` out of `workspace reinit` after `structure_status`
+    # had already classified each one for `reinit` to name. The README is under the same guard,
+    # because a create beneath a link to nowhere, or beneath a file, raises as well.
+    if _exists(refs, follow=True) is not None and _in_the_way(rr) is None:
+        refs.mkdir(parents=True, exist_ok=True)
+        # `_exists`, never `Path.exists` (#942 final review): with the workspace's `refs/` at mode
+        # 000 that raised on 3.11–3.13, and on 3.14 answered False so the write below raised
+        # instead — a traceback out of `workspace reinit` on every interpreter, for a file charter
+        # only creates where it is certainly absent. `reinit` names what could not be checked.
+        if _exists(rr, follow=True) is False:
+            rr.write_text(f"# {name} — task references\n\nDrop docs, links, and snippets for "
+                          f"this task here (local, gitignored).\n")
     scaffold_charter(name)  # workspace.md — the living vision/context/glossary charter
     scaffold_manifest(name)  # workspace.json — the committed manifest (#884)
     wire_harnesses(name)    # the harness layer — see `harness_layer`
@@ -2088,6 +2113,32 @@ def _stopped_at(p: Path, code: int) -> Path:
         if _existence(q, follow=True) == (None, code):
             return q
     return p
+
+
+def _in_the_way(p: Path) -> tuple[Path, int] | None:
+    """The directory above *p* that is there and is no directory, with the errno a create
+    under it meets — ``ENOENT`` for a symlink whose target is gone, ``ENOTDIR`` for anything
+    else — or ``None`` when every directory above *p* is one, or is simply absent.
+
+    `_existence` calls *p* gone for both (#1028), and truthfully: nothing is at *p*. But
+    "gone" is read as "create it", and a create through a link to nowhere or under a file
+    raises out of `workspace reinit` — `mkdir(exist_ok=True)` forgives a directory, not a
+    name that is there and is none. So "gone because something stands where its directory
+    goes" is told apart here, once, for `structure_status` to name and `scaffold` to write
+    nothing under. A directory the filesystem will not answer for is not this function's:
+    that is `_existence`'s ``None``, and `_stopped_at` names it."""
+    for q in reversed(p.parents):
+        if _exists(q) is not True:
+            return None  # absent, which a create makes, or not answered for
+        try:
+            st = os.stat(q)
+        except (FileNotFoundError, NotADirectoryError):
+            return q, errno.ENOENT  # the name is there (`lstat`) and resolves to nothing
+        except OSError:
+            return None
+        if not stat.S_ISDIR(st.st_mode):
+            return q, errno.ENOTDIR
+    return None
 
 
 def _recorded(marker: dict, rel: str) -> tuple[str, ...]:
@@ -3567,14 +3618,19 @@ def structure_version(name: str) -> int:
 
 
 def structure_status(name: str) -> dict:
-    """{'ok', 'missing': [rel…], 'unreadable': [(rel, path, errno)…], 'version', 'target'} — is
-    the workspace's on-disk layout current? ``ok`` iff no baseline file is missing AND the marker
-    is up to date.
+    """{'ok', 'missing': [rel…], 'unreadable': [(rel, path, errno)…], 'in_the_way': [(rel, path,
+    errno)…], 'version', 'target'} — is the workspace's on-disk layout current? ``ok`` iff no
+    baseline file is missing AND the marker is up to date.
 
     ``unreadable`` carries the path and the errno the check met, not the rel alone: `reinit` words
     what clears each one (:func:`uncheckable_fix`), and a second `stat` to ask why would be a
     different answer from the one this dict reports. The path is where that errno was met
-    (:func:`_stopped_at`), which is the rel's own path unless a directory above it is what fails."""
+    (:func:`_stopped_at`), which is the rel's own path unless a directory above it is what fails.
+
+    ``in_the_way`` is a rel that is not there because something that is no directory stands where
+    its directory goes (:func:`_in_the_way`, #1028). Not ``missing``, for the reason a loop is not:
+    `scaffold` writes nothing beneath it, so "missing" would flag a workspace for a `reinit` that
+    cannot add the file, and have `reinit` report it added."""
     # `_exists`, through symlinks (#942 review round 4): `Path.exists` raised on 3.11–3.13 for a
     # component that cannot be checked, crashing `workspace reinit` before it could say so. A
     # component that cannot be checked is not called missing — scaffolding over it is a write
@@ -3582,11 +3638,13 @@ def structure_status(name: str) -> dict:
     # clears it (ADR 0009, #942 final review).
     seen = {rel: (p, *_existence(p, follow=True))
             for rel, p in _required_components(name).items()}
-    missing = [rel for rel, (_p, there, _code) in seen.items() if there is False]
+    gone = {rel: _in_the_way(p) for rel, (p, there, _code) in seen.items() if there is False}
+    missing = [rel for rel, blocker in gone.items() if blocker is None]
     ver = structure_version(name)
     return {"ok": (not missing) and ver >= STRUCTURE_VERSION, "missing": missing,
             "unreadable": [(rel, _stopped_at(p, code), code)
                            for rel, (p, there, code) in seen.items() if there is None],
+            "in_the_way": [(rel, *blocker) for rel, blocker in gone.items() if blocker],
             "version": ver, "target": STRUCTURE_VERSION}
 
 
