@@ -483,14 +483,20 @@ def _wire_clones(ws: str) -> None:
     # workspace's pieces too (#951), which is the same question each wire's exclude block asks.
     with workspace.worktree_answers():
         for tree in workspace.guest_trees(ws):
-            announce_layer(workspace.checkout_label(ws, tree), workspace.wire_guest(tree))
+            announce_layer(workspace.checkout_label(ws, tree), workspace.wire_guest(tree), tree)
+        # #1072: a clone whose worktrees git could not list had none of them wired, and the
+        # announcements above say only what WAS written.
+        for tree in workspace.unlisted(ws):
+            util.warn(f"{workspace.checkout_label(ws, tree)}: git could not list the worktrees of "
+                      f"that clone, so none of them was given charter's layer — "
+                      f"{workspace.unlisted_fix(tree)}.")
 
 
-def announce_layer(label: str, rows: list[tuple[str, str]]) -> None:
-    """Say what :func:`workspace.wire_guest` just did to the checkout *label* names — once, and
-    only when it wrote something. `_wire_clones`' sentences, and `charter wt add`'s (#951):
-    both have just written into a repository the operator owns, and one wording for the two is
-    what keeps a worktree's announcement from promising what a clone's does not."""
+def announce_layer(label: str, rows: list[tuple[str, str]], tree: Path) -> None:
+    """Say what :func:`workspace.wire_guest` just did to the checkout *tree*, which *label*
+    names — once, and only when it wrote something. `_wire_clones`' sentences, and `charter wt
+    add`'s (#951): both have just written into a repository the operator owns, and one wording
+    for the two is what keeps a worktree's announcement from promising what a clone's does not."""
     if (workspace.GENERATED_MARKER, "blocked") in rows:
         # `wire_guest`'s refusal of the checkout as a whole (#1062): its root resolves outside the
         # directory it belongs under, so nothing was written. Said, because the worker `wt add`
@@ -499,7 +505,15 @@ def announce_layer(label: str, rows: list[tuple[str, str]]) -> None:
         util.warn(f"{label}: charter's layer was not written — that checkout resolves outside "
                   f"the directory it belongs under, and charter writes into none that does.")
     made = [rel for rel, status in rows if status in ("created", "refreshed")]
-    if made and (".git/info/exclude", "blocked") not in rows:
+    if (".git/info/exclude", "unhidden") in rows:
+        # #1072: a line that would hide a file of yours in a checkout sharing this exclude was left
+        # out, so "`git status` there is unaffected" is untrue of the file it was for. Said on
+        # every wire that finds it, not only one that wrote: `wt add` of a second piece writes
+        # the files and finds the block already as it stands. Whose file, and what clears it, is
+        # `workspace.unhidden`'s sentence, the one `doctor` and `reinit` print.
+        util.warn(f"{label}: charter's layer written ({len(made)} file(s)), but not all of it — "
+                  + "; ".join(workspace.unhidden(tree)) + ".")
+    elif made and (".git/info/exclude", "blocked") not in rows:
         util.info(f"{label}: charter's layer written ({len(made)} file(s)) and "
                   f"hidden in that repo's .git/info/exclude — `git status` there is "
                   f"unaffected, and nothing charter wrote can be committed.")
@@ -509,7 +523,9 @@ def announce_layer(label: str, rows: list[tuple[str, str]]) -> None:
                   f"repo's .git/info/exclude could not be updated — those files show in "
                   f"its `git status`.")
     for rel, status in rows:
-        if status == "withheld":
+        # A file withheld over a file of yours (#1072) is already named, with what clears it, in
+        # the sentence above; this one's "could not hide it" would send the reader to the exclude.
+        if status == "withheld" and (".git/info/exclude", "unhidden") not in rows:
             # A sentence of its own (#942): the one file charter refused to write, and
             # why — a machine-local rule it cannot hide would be committable there.
             util.warn(f"{label}/{rel} was not written: charter could not hide it in "

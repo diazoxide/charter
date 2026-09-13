@@ -2394,7 +2394,18 @@ def harness_layer(name: str) -> list[tuple[str, str]]:
         for tree in guest_trees(name):
             rows.extend((f"{checkout_label(name, tree)}/{rel}", status)
                         for rel, status in guest_layer(tree))
+        rows.extend(_unlisted_rows(name))
     return rows
+
+
+def _unlisted_rows(name: str) -> list[tuple[str, str]]:
+    """One ``unlisted`` row per checkout of workspace *name* whose worktrees git could not list
+    (:func:`unlisted`, #1072), for :func:`harness_layer` and :func:`wire_harnesses` alike.
+
+    Labelled ``<checkout>/.git/worktrees``, where git keeps that list, as a checkout's exclude row
+    is labelled ``.git/info/exclude``: a row of a checkout's own, so :func:`checkout_row` reads it
+    back to that checkout for `doctor` and `reinit` to word what clears it."""
+    return [(f"{checkout_label(name, tree)}/.git/worktrees", "unlisted") for tree in unlisted(name)]
 
 
 def _layer_status(base: Path, want_all: dict[str, str],
@@ -2553,6 +2564,7 @@ def wire_harnesses(name: str) -> list[tuple[str, str]]:
         for tree in guest_trees(name):
             rows.extend((f"{checkout_label(name, tree)}/{rel}", status)
                         for rel, status in wire_guest(tree))
+        rows.extend(_unlisted_rows(name))
     return rows
 
 
@@ -2941,6 +2953,12 @@ def guest_trees(name: str) -> list[Path]:
     "where would a chat's cwd be cut off from the plane's layer", and the answer is *any*
     checkout: a worktree's root is a git boundary exactly as a clone's is.
     """
+    children = _children(name)
+    return children + _pieces(name, children)[0]
+
+
+def _children(name: str) -> list[Path]:
+    """The checkouts directly inside workspace *name* — :func:`guest_trees` without the pieces."""
     try:
         entries = sorted(workspace_dir(name).iterdir())
     except OSError:
@@ -2948,13 +2966,43 @@ def guest_trees(name: str) -> list[Path]:
     # No `is_dir()` filter: `git_dir` already answers `None` for a plain file — its
     # `.git` join raises `NotADirectoryError` — so a predicate here would be one more
     # spelling of the same question, and the deletion sweep would be right to take it.
-    children = [d for d in entries if git_dir(d) is not None]
-    return children + _pieces(name, children)
+    return [d for d in entries if git_dir(d) is not None]
 
 
-def _pieces(name: str, checkouts: list[Path]) -> list[Path]:
-    """Every piece's worktree of workspace *name*: a worktree of one of *checkouts*' repositories
-    that git lists at ``<root>/<repo>/<piece>``, spelled under the root it was found in.
+def unlisted(name: str) -> list[Path]:
+    """The checkouts inside workspace *name* whose repository's worktrees git could not list —
+    one per repository — so none of those worktrees got charter's layer, a repair or a row (#1072).
+
+    :func:`guest_trees` passes over a listing git cannot give, and that is right for what it
+    answers: nothing can be wired where nothing is listed. But passed over in silence, a piece
+    `charter wt add` cut kept no plugin and none of the plane's ask/deny rules while `doctor` was
+    green and `reinit` said nothing to do — #951's failure, one unreadable directory later. So
+    `doctor`, `reinit` and `charter clone` name each of these, with :func:`unlisted_fix`.
+    """
+    return _pieces(name, _children(name))[1]
+
+
+def unlisted_fix(tree: Path) -> str:
+    """What clears :func:`unlisted`'s *tree*: :func:`uncheckable_fix`'s remedy for the directory
+    git keeps its worktrees in, worded for the errno reading it meets now — `gitpolicy.scan`'s
+    remedy for a clone it cannot read (#1012), so the commands cannot differ about one path."""
+    admin = git_exclude_file(tree).parent.parent / "worktrees"
+    # No errno when it reads now and git still gave no list — a git that failed, timed out or could
+    # not be run — and `uncheckable_fix` reads that as a refusal, as it reads any errno it has not
+    # measured.
+    code = None
+    try:
+        os.scandir(admin).close()
+    except OSError as e:
+        code = e.errno
+    return uncheckable_fix(code, admin, str(admin))
+
+
+def _pieces(name: str, checkouts: list[Path]) -> tuple[list[Path], list[Path]]:
+    """``(pieces, unlisted)``. Every piece's worktree of workspace *name*: a worktree of one of
+    *checkouts*' repositories that git lists at ``<root>/<repo>/<piece>``, spelled under the root
+    it was found in — and one of *checkouts* per repository whose list git could not give
+    (:func:`unlisted`).
 
     **The half of :func:`guest_trees` its docstring promised and its scan never had (#951).** A
     piece sits two levels below its workspace, at `.worktrees/<repo>/<piece>`, and `.worktrees`
@@ -2970,25 +3018,35 @@ def _pieces(name: str, checkouts: list[Path]) -> list[Path]:
     same ~7 ms a spawn on every launch of a workspace with no pieces.
 
     A listing git cannot give, and an entry git calls prunable, bare or gone, is passed over —
-    nothing is wired there, and the clone's own rows still say what they say.
+    nothing is wired there, and the clone's own rows still say what they say. The listing is
+    NAMED, though (#1072): a worktree nobody can see is not a worktree that is fine.
     """
     from . import worktree as _worktree
 
     found: dict[str, Path] = {}
+    unlisted_at: dict[str, Path] = {}
     for tree in checkouts:
         # Never `None`: every one of *checkouts* has a git directory, which is all the exclude's
         # answer needs — a test for it here decided nothing (the hand deletion sweep said so).
         common = git_exclude_file(tree).parent.parent
+        refused = False
         try:
             os.scandir(common / "worktrees").close()
         except (FileNotFoundError, NotADirectoryError):
             continue
         except OSError:
-            pass
+            # Still asked of git, which may read what charter cannot. But measured on git 2.50.1,
+            # a git that cannot read `worktrees/` lists the clone alone and exits 0, so its answer
+            # is no evidence the list is whole.
+            refused = True
         listed = _worktree_list(tree, common)
+        # Exit code too: a git that fails prints its `fatal:` to stderr and nothing to parse, which
+        # read as a repository with no pieces. Once per repository, under the first checkout of it:
+        # a clone and a worktree of it at the workspace's top level share the one list.
+        if refused or isinstance(listed, Exception) or listed.returncode != 0:
+            unlisted_at.setdefault(os.path.realpath(common), tree)
         if isinstance(listed, Exception):
             continue
-        # No exit-code test: a git that fails prints its `fatal:` to stderr and nothing here.
         for entry in _worktree.parse_porcelain(listed.stdout):
             # Under THIS workspace's roots only: another workspace's piece of the same repository is
             # that workspace's to wire and to take away, and `workspace remove` of this one must not
@@ -3002,7 +3060,9 @@ def _pieces(name: str, checkouts: list[Path]) -> list[Path]:
             # Keyed by where it is, because two checkouts of one repository — a clone and a
             # worktree of it at the workspace's top level — list the same pieces.
             found[os.path.realpath(at[0])] = at[0]
-    return sorted(found.values())
+    # Unlisted in *checkouts*' order, and no `sorted`: `guest_trees` hands them over sorted, and a
+    # dict keeps the order its first keys arrived in, so a sort here decided nothing (CI's sweep).
+    return sorted(found.values()), list(unlisted_at.values())
 
 
 def _piece_at(name: str, path) -> tuple[Path, tuple[str, ...]] | None:
@@ -3251,12 +3311,15 @@ def worktree_answers():
     # it does not change while charter wires, and asking git once per checkout per block is
     # the same budget the worktree listing already holds itself to.
     _SCOPE.tracked = {}
+    # And whether a file at a path is somebody's untracked one (:func:`_yours_untracked`, #1072).
+    _SCOPE.untracked = {}
     try:
         yield
     finally:
         _SCOPE.answers = None
         _SCOPE.listed = None
         _SCOPE.tracked = None
+        _SCOPE.untracked = None
 
 
 def _live_trees(tree: Path, exclude: Path) -> tuple[list[Path] | None, str]:
@@ -3388,10 +3451,13 @@ def _worktree_list(tree: Path, common: Path):
 
 
 class _Block(NamedTuple):
-    """What charter's block must list, and why any line in it could not be let go."""
+    """What charter's block must list, why any line in it could not be let go, and why any line
+    *tree* needs was left out (:func:`_yours_untracked`)."""
 
     rels: list[str]
     unaccounted: list[str]
+    #: ``{rel: why}`` for each line left out (#1072): whose file stopped it, and what clears it.
+    shown: dict[str, str]
 
 
 def _wired(t: Path) -> bool:
@@ -3445,6 +3511,15 @@ def _shared_rels(tree: Path, rels: list[str], text: str, exclude: Path,
 
     :data:`_TEMP_PATTERN` is listed whenever *rels* are, so it is in the block before the first
     temp exists (:func:`_write_whole`), and otherwise while a temp is left beside a listed path.
+
+    **A line is never ADDED over a file of yours** (#1072). The line for *tree*'s file hides that
+    path in every tree reading this exclude, so where another of them holds an untracked file there
+    that charter did not write (:func:`_yours_untracked`), the line is left out: *tree* keeps
+    charter's file, showing in its own `git status`, and ``shown`` says whose file stopped it and
+    what clears it — or, for a machine-local file (:func:`_cowritten`), :func:`wire_guest` does not
+    write it at all, #942's rule for a machine-local file charter cannot hide. Added only — a line
+    already in the block is not re-asked, because git answers "ignored" for a path that line
+    hides, whoever's file it is.
     """
     current = _block_rels(text)
     need = set(rels)
@@ -3452,11 +3527,35 @@ def _shared_rels(tree: Path, rels: list[str], text: str, exclude: Path,
         need.add(_TEMP_PATTERN)
     trees, doubt = _live_trees(tree, exclude)
     here = os.path.realpath(tree)
-    wired = [tree, *(t for t in trees or () if os.path.realpath(t) != here and _wired(t))]
+    others = [t for t in trees or () if os.path.realpath(t) != here]
+    wired = [tree, *(t for t in others if _wired(t))]
+    cowritten = _cowritten()
+    shown: dict[str, str] = {}
+    # Every other tree git lists, wired or not: a main checkout outside the plane reads this
+    # exclude as surely as a piece does. Never the marker: an untracked `.charter-generated` is
+    # charter's even where charter cannot read it (#1062), and `_charter_owned` vouches for none
+    # there. The temp pattern names no file `_exists` finds. While the list cannot be trusted there
+    # is no tree to ask, and a line is added as before — `unaccounted` already names that doubt.
+    for rel in sorted(need - current - {GENERATED_MARKER}):
+        mine = next((t for t in others if _yours_untracked(t, rel)), None)
+        if mine is not None:
+            need.discard(rel)
+            # Git's spelling of the other checkout, which is resolved: it is the path git lists,
+            # and the one a reader's `git -C` reaches. The checkout wired is named by its caller.
+            # A machine-local file is withheld rather than left showing (`wire_guest`), so its
+            # sentence says "not written", and what the next `reinit` then does is write it.
+            local = rel in cowritten
+            shown[rel] = (f"charter's {rel} is not {'written' if local else 'hidden'} there, "
+                          f"because {mine / rel} is an untracked file charter did not write and "
+                          f"the line hiding charter's would hide it too, through the {exclude} "
+                          f"both checkouts read"
+                          + (" — and a machine-local file charter cannot hide is one `git add` "
+                             "from being committed" if local else "")
+                          + f" — commit or move {mine / rel}, and the next `charter workspace "
+                            f"reinit` {'writes and hides' if local else 'hides'} charter's")
     # The temp pattern's own parent is the checkout root, and the root is scanned with the rest:
     # leaving that line out of this set left the root unscanned whenever it was the block's last.
     beside = {Path(r).parent for r in current}
-    cowritten = _cowritten()
     why: list[str] = []
     for rel in sorted(current - need):
         for t in wired:
@@ -3480,37 +3579,73 @@ def _shared_rels(tree: Path, rels: list[str], text: str, exclude: Path,
         ordered.append(GENERATED_MARKER)
     if _TEMP_PATTERN in need:
         ordered.append(_TEMP_PATTERN)
-    return _Block(ordered, why)
+    return _Block(ordered, why, shown)
 
 
-def _exclude_state(tree: Path, rels: list[str]) -> tuple[str, list[str]]:
-    """``(status, why)`` for the block in *tree*'s exclude — READ ONLY.
+def _yours_untracked(t: Path, rel: str) -> bool:
+    """Whether checkout *t* holds a file at *rel* that charter did not write and git would show
+    as untracked there — one a line for *rel* in the exclude *t* reads would hide (#1072).
 
-    One reading for :func:`_exclude_status` and :func:`unaccounted`, so a row and the reasons
-    printed beside it cannot disagree. Compared against :func:`_shared_rels`, the block
-    :func:`_register_excludes` writes: against *rels* alone, a block that rightly holds a
+    Charter's own is what *t*'s TRUSTED marker vouches for (:func:`_charter_owned` over
+    :func:`_read_marker_at`), so a marker git tracks — committed content, #1062 — makes no file
+    charter's. Only untracked counts: a tracked file stays in `git status` whatever the exclude
+    lists, and one git already ignores is hidden with or without charter's line. A git that cannot
+    answer is not taken for "untracked", for the same reason a path that cannot be checked is not
+    taken for "there": a git that cannot read *t* shows nothing there to lose from view.
+    """
+    if _exists(t / rel) is not True:
+        return False
+    if rel in _charter_owned(t, _read_marker_at(t)):
+        return False
+    key = (os.path.realpath(t), rel)
+    cache = getattr(_SCOPE, "untracked", None)
+    if cache is not None and key in cache:
+        return cache[key]
+    # One `git status` per path per `worktree_answers` block, as the marker's trust verdict is
+    # asked: a launch wires every checkout twice over, and each pass would ask again.
+    answer = util.git_path_state(t, rel)[0] == util.COMMITTABLE
+    if cache is not None:
+        cache[key] = answer
+    return answer
+
+
+def _exclude_state(tree: Path, rels: list[str], local=()) -> tuple[str, _Block]:
+    """``(status, block)`` for the block in *tree*'s exclude — READ ONLY. Status is ``ok`` ·
+    ``missing`` · ``stale`` · ``unreadable`` · ``unaccounted`` — current, and still keeping a line
+    charter could not prove unneeded (:func:`unaccounted` says why) — or ``unhidden``: current, and
+    leaving out a line *tree* needs because it would hide a file of yours (:func:`unhidden` says
+    whose).
+
+    *local* is the machine-local files charter would write into *tree* and has not
+    (:func:`_withheld_local`): asked only whether their lines would be left out, so a line that
+    would be is named in ``shown``. Never compared, because charter lists no line for a file it has
+    not written, and a piece not wired yet must not read `stale` for a line it does not need.
+
+    One reading for :func:`guest_layer`, :func:`unaccounted` and :func:`unhidden`, so a row
+    and the reasons printed beside it cannot disagree. Compared against :func:`_shared_rels`, the
+    block :func:`_register_excludes` writes: against *rels* alone, a block that rightly holds a
     sibling worktree's line reads `stale` for ever.
     """
     p = git_exclude_file(tree)
     if p is None:
-        return "unreadable", []
+        return "unreadable", _Block([], [], {})
     try:
         text = p.read_text()
     except FileNotFoundError:
         text = ""
     except (OSError, UnicodeDecodeError):
-        return "unreadable", []
+        return "unreadable", _Block([], [], {})
     block = _shared_rels(tree, rels, text, p)
+    if local:
+        block = block._replace(shown=_shared_rels(tree, [*rels, *local], text, p).shown)
     if _replace_block(text, _exclude_block(block.rels)) != text:
-        return ("stale" if _EXCLUDE_BEGIN in text.splitlines() else "missing"), block.unaccounted
-    return ("unaccounted" if block.unaccounted else "ok"), block.unaccounted
-
-
-def _exclude_status(tree: Path, rels: list[str]) -> str:
-    """``ok`` · ``missing`` · ``stale`` · ``unreadable`` · ``unaccounted`` for the block in
-    *tree*'s exclude — ``unaccounted`` when it is current and still keeps a line charter could
-    not prove unneeded (:func:`unaccounted` says why)."""
-    return _exclude_state(tree, rels)[0]
+        return ("stale" if _EXCLUDE_BEGIN in text.splitlines() else "missing"), block
+    # `unaccounted` first when a current block is both: one row carries one status, and a line kept
+    # without proof is the one `reinit` can never clear, while an `unhidden` one clears the moment
+    # the operator commits or moves their file.
+    if block.unaccounted:
+        return "unaccounted", block
+    return ("unhidden" if block.shown else "ok"), block
 
 
 def unaccounted(tree: Path) -> list[str]:
@@ -3520,12 +3655,51 @@ def unaccounted(tree: Path) -> list[str]:
     Ruling G's second half (review round 3): keep every line, and let doctor say what could not
     be accounted for. A block kept silently is a block nobody can tell from one that is right.
     """
-    return _exclude_state(tree, _charter_owned(tree, _read_marker_at(tree)))[1]
+    return _exclude_state(tree, _charter_owned(tree, _read_marker_at(tree)))[1].unaccounted
 
 
-def _register_excludes(tree: Path, rels: list[str], leaving: bool = False) -> str:
-    """Write charter's block into *tree*'s `info/exclude`. ``created``/``refreshed``/
-    ``present``/``blocked``.
+def unhidden(tree: Path) -> list[str]:
+    """Which of guest checkout *tree*'s files charter left out of its `info/exclude` block, whose
+    file of yours stopped each, and what clears it — READ ONLY, empty when nothing was (#1072).
+
+    :func:`unaccounted`'s other half. That one names a line kept without proof; this names a
+    line charter would not add, because a clone and its worktrees share the file and the line
+    would hide an untracked file of yours in one of the others. Charter's own file stays written
+    and shows in *tree*'s `git status` — the plane's ask/deny rules stay in force there — and
+    `doctor`, `reinit` and `wt add` say so through this.
+    """
+    marker = _read_marker_at(tree)
+    local = _missing_local(tree, _layer_status(tree, _guest_files(tree), marker))
+    return list(_exclude_state(tree, _charter_owned(tree, marker), local)[1].shown.values())
+
+
+def _missing_local(tree: Path, rows: list[tuple[str, str]]) -> list[str]:
+    """The machine-local files (:func:`_cowritten`) *rows* — :func:`_layer_status` for guest
+    checkout *tree* — call ``missing``: the ones charter would write there next."""
+    cowritten = _cowritten()
+    return [rel for rel, status in rows if status == "missing" and rel in cowritten]
+
+
+def _withheld_local(tree: Path, rows: list[tuple[str, str]], marker: dict) -> dict[str, str]:
+    """``{rel: why}`` for each machine-local file charter would write into guest checkout *tree*
+    and will not, because its exclude line would hide a file of yours (#1072) — READ ONLY.
+
+    One answer for `doctor`'s row and a chat's banner, so a file :func:`wire_guest` withholds is
+    never called ``missing`` there, which reads as "`reinit` writes it" — the one thing `reinit`
+    will not do while your file is there."""
+    local = _missing_local(tree, rows)
+    if not local:
+        return {}
+    shown = _exclude_state(tree, _charter_owned(tree, marker), local)[1].shown
+    return {rel: shown[rel] for rel in local if rel in shown}
+
+
+def _register_excludes(tree: Path, rels: list[str],
+                       leaving: bool = False) -> tuple[str, frozenset[str]]:
+    """Write charter's block into *tree*'s `info/exclude`. ``(status, left out)``: status is
+    ``created``/``refreshed``/``present``/``blocked``, or ``unhidden`` when the block it wrote or
+    found current leaves out a line *tree* needs, and *left out* names those lines' paths
+    (:func:`unhidden`), for :func:`wire_guest` to withhold a machine-local one.
 
     *rels* is what *tree* needs; the block written is :func:`_shared_rels`' — never one
     tree's list alone, for the sibling worktrees reading the same file. *leaving* is passed
@@ -3535,22 +3709,27 @@ def _register_excludes(tree: Path, rels: list[str], leaving: bool = False) -> st
     in-place write lost every line of the operator's own."""
     p = git_exclude_file(tree)
     if p is None:
-        return "blocked"
+        return "blocked", frozenset()
     try:
         text = p.read_text()
     except FileNotFoundError:
         text = ""
     except (OSError, UnicodeDecodeError):
-        return "blocked"
-    new = _replace_block(text, _exclude_block(_shared_rels(tree, rels, text, p, leaving).rels))
+        return "blocked", frozenset()
+    block = _shared_rels(tree, rels, text, p, leaving)
+    left = frozenset(block.shown)
+    new = _replace_block(text, _exclude_block(block.rels))
+    # `unhidden` over `created`, `refreshed` and `present`, never over `blocked`: those three all
+    # mean "charter's files are hidden now", which is the one thing a line left out makes untrue.
+    done = "unhidden" if block.shown else None
     if new == text:
-        return "present"
+        return done or "present", left
     had = _EXCLUDE_BEGIN in text.splitlines()
     try:
         _write_whole(p, new)
     except OSError:
-        return "blocked"
-    return "refreshed" if had else "created"
+        return "blocked", left
+    return done or ("refreshed" if had else "created"), left
 
 
 def guest_layer(tree: Path) -> list[tuple[str, str]]:
@@ -3589,11 +3768,15 @@ def guest_layer(tree: Path) -> list[tuple[str, str]]:
         # neither.
         rows.append((GENERATED_MARKER, "unrecorded"))
     owned = _charter_owned(tree, marker)
-    status = _exclude_status(tree, owned)
+    status, block = _exclude_state(tree, owned, _missing_local(tree, rows))
+    # A machine-local file `wire_guest` withholds over a file of yours (#1072) is not `missing`:
+    # that reads as "`reinit` writes it", which it will not while your file is there. The exclude
+    # row reads `unhidden` and `unhidden` names whose file, and what clears it.
+    rows = [(rel, "withheld" if s == "missing" and rel in block.shown else s) for rel, s in rows]
     # Also where charter owns nothing now but still keeps a line it cannot account for — a
     # marker deleted by hand leaves exactly that, and a row nothing reports is a guarantee
-    # nothing keeps (review round 3).
-    if owned or status == "unaccounted":
+    # nothing keeps (review round 3). And where it owns nothing but withheld its local file.
+    if owned or status in ("unaccounted", "unhidden"):
         rows.append((".git/info/exclude", status))
     return rows
 
@@ -3663,7 +3846,11 @@ def rules_not_in_force(cwd) -> str:
     for h in _registry.all():
         riding.update(h.restrictive_rules())
     gaps: list[str] = []
-    for rel, status in _layer_status(tree, want, marker):
+    rows = _layer_status(tree, want, marker)
+    # A machine-local file withheld over a file of yours (#1072). A workspace directory has no
+    # exclude, so nothing there is ever withheld and this answers `{}`.
+    withheld = _withheld_local(tree, rows, marker)
+    for rel, status in rows:
         rules = riding.get(rel, ())
         try:
             text = (tree / rel).read_text()
@@ -3673,7 +3860,9 @@ def rules_not_in_force(cwd) -> str:
         missing = [r for r in rules if r not in held]
         if not missing:
             continue
-        if status in ("missing", "stale") and refused:
+        if rel in withheld:
+            status, fix = "withheld", withheld[rel]
+        elif status in ("missing", "stale") and refused:
             fix = refused
         elif status in ("missing", "stale"):
             fix = f"`charter workspace reinit {ws}` writes them"
@@ -3731,17 +3920,22 @@ def wire_guest(tree: Path) -> list[tuple[str, str]]:
     # Unordered on purpose: `_shared_rels` sorts every block it writes, so an order here would
     # decide nothing — review round 2's sweep charged the `sorted` this line carried.
     planned = list(ours | (set(_charter_owned(tree, marker)) - {GENERATED_MARKER}))
-    first = _register_excludes(tree, planned + [GENERATED_MARKER]) if planned else "present"
-    withhold = frozenset(cowritten) if first == "blocked" else frozenset()
+    first, left = (_register_excludes(tree, planned + [GENERATED_MARKER]) if planned
+                   else ("present", frozenset()))
+    # A machine-local file whose line was left out over a file of yours is withheld too (#1072):
+    # the same rule as an exclude that cannot be written, one path at a time. The shared file and
+    # the mirrored agents are still written, so the plane's committed rules reach the piece.
+    withhold = frozenset(cowritten) if first == "blocked" else frozenset(cowritten) & left
     rows = _materialise(tree, want, withhold, record_first=True)
     owned = _charter_owned(tree, _read_marker_at(tree))
     # Asked again even after a blocked first pass: an exclude that refused one write refuses
     # the next, so skipping it decided nothing a case could see (the sweep said so).
-    second = _register_excludes(tree, owned)
-    # One row for the two passes, worst first: `blocked` whichever pass hit it, then the
-    # pass that actually wrote. Two rows would report one file twice.
-    status = next((s for s in ("blocked", "created", "refreshed") if s in (first, second)),
-                  "present")
+    second, _left = _register_excludes(tree, owned)
+    # One row for the two passes, worst first: `blocked` whichever pass hit it, then a line left
+    # out over a file of yours (#1072), then the pass that actually wrote. Two rows would report
+    # one file twice.
+    status = next((s for s in ("blocked", "unhidden", "created", "refreshed")
+                   if s in (first, second)), "present")
     if owned or status != "present":
         rows.append((".git/info/exclude", status))
     return rows

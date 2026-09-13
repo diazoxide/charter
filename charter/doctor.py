@@ -2792,6 +2792,33 @@ def _workspace_harness_result(_config, _workspace) -> Result:
                             for reason in _workspace.unaccounted(row[0]))
         first.append("An 'unaccounted' exclude block is still hiding a path charter cannot prove "
                      "it no longer needs, and keeps hiding it until it can: " + "; ".join(why) + ".")
+    if "unlisted" in statuses:
+        # #1072: a clone whose worktrees git could not list, so every piece of it went unchecked —
+        # no layer, no repair, no row — and this check was green over them. `reinit` clears none of
+        # it, so it leads with what does, `gitpolicy.scan`'s remedy for a path it cannot read.
+        cannot = dict.fromkeys(
+            f"{os.path.join(ws, _workspace.checkout_label(ws, row[0]))}: "
+            f"{_workspace.unlisted_fix(row[0])}"
+            for ws, rel, status in findings if status == "unlisted"
+            for row in [_workspace.checkout_row(ws, rel)] if row)
+        first.append("An 'unlisted' .git/worktrees is a clone whose worktrees git could not list, "
+                     "so none of them was checked or given charter's layer. What clears it: "
+                     + "; ".join(cannot) + ".")
+    # #1072: the opposite failure, and only the operator can clear it. A clone and its worktrees
+    # share one exclude, so the line for one checkout's file would hide an untracked file of yours
+    # at that path in another. Charter leaves the line out: a shared file it wrote shows, and a
+    # machine-local one is not written. Asked of every finding's checkout, as `unaccounted` is,
+    # and printed whenever one has a reason rather than only beside an `unhidden` row: one row
+    # carries one status, and a block both `unaccounted` and `unhidden` reads `unaccounted` — its
+    # file of yours must still be named. Deduped: checkouts sharing one exclude share a reason.
+    shown = dict.fromkeys(reason for ws, rel, _status in findings
+                          for row in [_workspace.checkout_row(ws, rel)] if row
+                          for reason in _workspace.unhidden(row[0]))
+    if shown:
+        first.append("An exclude line left out because it would also hide a file of yours "
+                     "('unhidden') leaves a shared file charter wrote showing in that checkout's "
+                     "`git status`, and a machine-local one ('withheld') unwritten: "
+                     + "; ".join(shown) + ".")
     rest: list[str] = []
     if "tracked" in statuses:
         # Charter never writes a `.charter-generated` git tracks — its own is per-checkout and
