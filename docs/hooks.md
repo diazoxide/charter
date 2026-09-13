@@ -648,7 +648,7 @@ the harness's tools — they govern what an agent does with your authority insid
 Your own shell is on the other side of that boundary and always was. Open a terminal and run
 it. Nothing is being worked around: the rule never applied to you.
 
-Six guards name a narrower move first, and it is usually the one you want:
+Some guards name a narrower move first, and it is usually the one you want:
 
 - **Forge body substitution** — `--body-file <path>`, or `--body-file -` with a quoted
   heredoc. This one is rarely wrong about the shape and often wrong about the intent: the

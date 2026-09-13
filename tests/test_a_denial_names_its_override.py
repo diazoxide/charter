@@ -389,11 +389,22 @@ class TestTheDocumentationExists(unittest.TestCase):
         self.assertIn("terminal", body)
 
     def test_the_section_names_the_narrower_moves_that_come_first(self):
-        """Two guards have a real, narrower answer. Sending someone to a terminal when
+        """Some guards have a real, narrower answer. Sending someone to a terminal when
         `--apply` or an attended re-run is the actual fix would be a worse doc than none."""
         body = self.text.split(SECTION, 1)[1].split("\n## ", 1)[0]
         self.assertIn("attended", body)
         self.assertIn("git-policy --apply", body)
+
+    def test_the_narrower_moves_are_introduced_without_a_count(self):
+        """#1000. "Six guards name a narrower move first" was a count nothing measures. No row
+        and no denial carries whether a guard HAS a narrower move — every denial names a remedy,
+        and which of those this section promotes is the page's own choice — so unlike the
+        README's count of the guards there is no source to hold the number to. A number that
+        cannot be held to anything lags the list under it, so the sentence states none."""
+        body = self.text.split(SECTION, 1)[1].split("\n## ", 1)[0]
+        intro = next(p for p in body.split("\n\n") if "narrower move" in p)
+        counts = "|".join([r"\d+", *_NUMBER_WORDS])
+        self.assertNotRegex(intro, rf"(?i)\b({counts})\s+guards\b")
 
     def test_the_section_names_the_nuclear_option_as_not_an_override(self):
         body = self.text.split(SECTION, 1)[1].split("\n## ", 1)[0]
