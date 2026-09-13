@@ -1058,8 +1058,8 @@ def _lock_words(name: str, locked: str | None, *, after_switch: bool = False) ->
     `harness/codex.py`'s `session-lock` deficit says a Codex shell outside a frame, which no
     per-session id reaches, has no lock at all (it once named a terminal-pane fallback that
     does not exist, #954). `cli.py`'s help and the SessionStart nudge say what confirming a
-    workspace does, not what a command just did; the nudge promises the lock only where
-    `session.current()` answers, the same id this function's lock was written under.
+    workspace does, not what a command just did; the nudge withholds the lock only where
+    `session.current()` finds no id AND the harness declares that `session-lock` deficit.
 
     *after_switch* is for the sentence after a selection that did NOT move the lock (a
     forced pointer inside a chat): there the elsewhere case says what the switch did and did

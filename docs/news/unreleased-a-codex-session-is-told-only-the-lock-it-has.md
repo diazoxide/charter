@@ -24,9 +24,10 @@ itself from printing "🔒 locked for this session" there.
 - **The gap says what it is:** *no workspace lock outside a frame*. Inside a frame the chat's
   id reaches the Codex shell, so a Codex chat is locked to the workspace it was launched in,
   like any other chat.
-- **The briefing still asks for a workspace**, and promises a lock only where confirming
-  takes one. It asks the same question the lock's writer asks: whether the session has an
-  id charter's commands can see.
+- **The briefing still asks for a workspace**, and leaves out the lock only where two
+  things agree: it sees no session id, and the harness it is running under is one charter
+  records as passing no session id to its shell. Today that is Codex.
 
-Claude Code sessions, in a frame or not, are unaffected: their briefing still says
-confirming locks the workspace, because it does.
+Claude Code and opencode sessions, in a frame or not, are unaffected: their briefing still
+says confirming locks the workspace, because it does. That holds even when the briefing
+itself sees no session id, as in the context file `charter init` writes for opencode.

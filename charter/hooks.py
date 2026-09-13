@@ -6039,19 +6039,26 @@ def _workspace_confirm_nudge(session_id: str | None, unattended: bool = False) -
     next one. This said "That **locks** the workspace" there anyway, and sent the agent to a
     confirm step that locked nothing.
 
-    So the promise asks `session.current()` with no argument — the question the lock's
-    writer asks — of this hook's environment, which the harness hands down from the same
-    process as the shell's. Inside a frame that is where `$CHARTER_SESSION_ID` comes from,
-    for both. On Claude Code it is `$CLAUDE_CODE_SESSION_ID`: 2.1.270 builds it into the
-    same per-spawn environment as `CLAUDE_CODE_CHILD_SESSION`, which its docs say a hook
-    command receives (read off the binary, not measured through a hook). Where that reading
-    is wrong the sentence goes missing rather than false, which is ADR 0009's direction: the
-    nudge still asks for a workspace, and says nothing about a lock."""
+    So the promise is withheld only where both of two things say no lock can be taken:
+    `session.current()` with no argument — the question the lock's writer asks — finds no
+    id in this hook's environment, AND the running harness declares the `session-lock`
+    deficit, read through the same registry `charter harness list` prints it from. Either
+    alone is not enough. An id here (a frame's `$CHARTER_SESSION_ID`) is one the shell has
+    too, so it locks whatever the harness. But no id here is not evidence of none in the
+    shell: whether Claude Code hands `$CLAUDE_CODE_SESSION_ID` to a hook as it does to a
+    Bash call has not been measured, and `use` demonstrably locks in its shell. Taking the
+    missing id alone as the answer would have cost every Claude Code session outside a frame
+    a sentence that is true there, on an unmeasured host fact. The deficit is the measured
+    one: it is what records that Codex's shell gets no per-session id. An unregistered or
+    undetected harness declares nothing, so it keeps the sentence it had."""
     try:
         from . import session, workspace
+        from .harness import registry
         if os.environ.get("CHARTER_WORKSPACE") or workspace.is_locked(session_id):
             return ""
-        locks = session.current() is not None
+        locks = (session.current() is not None
+                 or not any(d.key == "session-lock"
+                            for d in registry.deficits(registry.current())))
         current = workspace.resolve(session_id=session_id)
         names = workspace.list_workspaces()
         existing = ", ".join(f"`{n}`" for n in names) if names else "none yet"

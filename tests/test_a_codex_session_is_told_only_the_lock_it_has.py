@@ -22,6 +22,10 @@ cases stage, since nothing here runs Codex.
 promises a lock exactly when a second `use` is refused, and the deficit's two claims are
 each asserted beside the refusal (or its absence) that makes them true. A fix that dropped
 the promise everywhere fails the Claude Code case; one that kept it fails the Codex case.
+
+**The promise is withheld only where two things agree**: the hook sees no session id, and
+the harness declares the `session-lock` deficit. A hook's environment is not its shell's,
+so a Claude Code hook that sees no id still promises the lock its shell takes.
 """
 
 from __future__ import annotations
@@ -126,6 +130,38 @@ class TheConfirmNudgePromisesOnlyTheLockConfirmingTakes(PlaneIso):
             {"session_id": sid, "permission_mode": hooks.UNATTENDED_MODE})
         self.assertTrue(refused)
         self.assertIn("lock it for the session", nudge)
+
+    def test_a_claude_code_hook_that_sees_no_session_id_still_promises_the_lock(self):
+        """The hook's environment is not the shell's, and a missing id in it is not
+        evidence of none in the shell. Whether Claude Code hands `$CLAUDE_CODE_SESSION_ID` to
+        a hook has not been measured; that its Bash shell has it, and that `use` locks
+        there, has. So Claude Code, which declares no `session-lock` deficit, keeps the
+        sentence whatever the hook sees. Red against a promise keyed on the hook's id alone,
+        which dropped it here."""
+        sid = "cc-954-hook-without-id"
+        with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "claude-code"}):
+            said = run_hook(hooks.sessionstart, {"session_id": sid}) or {}
+            nudge = _nudge(said.get("hookSpecificOutput", {}).get("additionalContext", ""))
+        self.assertTrue(nudge, "the briefing carried no confirm nudge")
+        # The session's shell, where the id is: confirming there is what the sentence says.
+        with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "claude-code",
+                                          "CLAUDE_CODE_SESSION_ID": sid}):
+            self.assertEqual(self._use("north"), 0)
+            self.assertEqual(self._use("south"), 2)
+        self.assertIsNotNone(_PROMISES_A_LOCK.search(nudge), nudge)
+
+    def test_a_context_file_rendered_with_no_harness_and_no_id_keeps_the_sentence(self):
+        """opencode reads this briefing from a file `charter init` renders, in whatever
+        process ran `init` — often a shell with no session id and no harness at all. The
+        opencode session that reads it does lock (its plugin sets `$CHARTER_SESSION_ID` per
+        shell), and neither an unknown harness nor opencode declares `session-lock`, so the
+        file keeps the sentence."""
+        nudge = _nudge(hooks.context_block())
+        self.assertTrue(nudge, "the context block carried no confirm nudge")
+        self.assertIsNotNone(_PROMISES_A_LOCK.search(nudge), nudge)
+        with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "opencode"}):
+            nudge = _nudge(hooks.context_block())
+        self.assertIsNotNone(_PROMISES_A_LOCK.search(nudge), nudge)
 
 
 class TheCodexDeficitDescribesTheLockACodexShellGets(PersonaIso):
