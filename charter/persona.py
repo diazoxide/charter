@@ -1236,47 +1236,59 @@ def blank_flag(value: str | None) -> str | None:
     return None
 
 
-#: What `persona use` and the memory commands say to a valid name that defines nothing here.
-#: One spelling, formatted by each of them, so the command that binds a vault to a persona
-#: cannot come to describe the same absence in different words (#1057).
+#: What every command says to a valid name that defines nothing here. One spelling, so no
+#: command can come to describe the same absence in different words (#1057, #1059).
 NO_SUCH_PERSONA = "no persona '{name}' (create it: charter persona create {name})"
 
-#: What `persona create` says to a name outside the alphabet. No create hint, because this
-#: is the refusal that hint would lead to.
+#: What every command says to a name outside the alphabet. No create hint, because this is
+#: the refusal `persona create` gives and that hint would lead to.
 INVALID_NAME = "invalid persona name '{name}' (lowercase letters, digits, '.', '_', '-')"
 
 
-def undefined_flag(value: str | None) -> str | None:
-    """The refusal for a ``--persona`` that names no persona this plane defines, or ``None``
-    when it names one or is not given (#1057).
+def name_refusal(name: str, *, defined: bool = True) -> str | None:
+    """The refusal for a persona name a command was given, or ``None`` when it names a
+    persona this plane defines (#1059). With ``defined=False``, when it is a name a persona
+    could have.
 
-    For a flag whose value is *recorded* rather than resolved on the spot. `vault add
-    --persona` stored whatever it was given as the vault's owner, and `" "`, `../x` and a
-    misspelling each reported success. Nothing reads the label as a path, so none of them
-    escaped anything. The label is the binding: `vault_of` falls back to the vault tagged
-    with a persona's name, so a vault tagged `devosp` is found for no persona this plane
-    defines, and `devops` goes on asking for a vault it does not have. The typo surfaced as a
-    failed secret read later, in whichever session tried it.
+    **Every command that takes a persona name asks this, first, before it looks anything
+    up.** Each used to check in its own way, and the ways disagreed. `persona use ../x`
+    offered `charter persona create ../x`, which `persona create` refuses. `persona secret
+    --persona devosp` never checked at all, so `vault_of`'s fallback read the vault tagged
+    `devosp` for a persona nobody defines. `persona stats devosp` exited 0 over a row for
+    it. `vault add --persona` stored whatever it was given as the vault's owner (#1057).
 
-    Three sentences for three fixes, each one a command already says. Whitespace is
-    :func:`blank_flag`'s; a name outside the alphabet is `persona create`'s, and gets no
-    create hint, because `persona create` would refuse it; a valid name is `persona use`'s,
-    hint included. Existence is :func:`load`'s answer, as it is for `persona use`, so a
-    persona that command would refuse is refused here too.
+    Three sentences for three fixes. Whitespace is :func:`blank_flag`'s. A name outside the
+    alphabet is :data:`INVALID_NAME`, with no create hint, because `persona create` would
+    refuse it. A valid name nothing defines is :data:`NO_SUCH_PERSONA`, hint included.
+    Existence is :func:`load`'s answer, so every command refuses the persona `persona use`
+    refuses. ``defined=False`` is for the callers that answer existence themselves: `persona
+    create`, which makes the persona, and the ones that say more about a missing persona
+    than "no persona" can.
 
-    Empty is no flag, as it is for :func:`blank_flag`.
+    An empty name is refused as outside the alphabet. A *flag* reads empty as not given,
+    and :func:`undefined_flag` is that reading.
     """
-    if not value:
-        return None
-    refused = blank_flag(value)
+    refused = blank_flag(name)
     if refused:
         return refused
     # Before `load`, which answers None for this too and would reach the create hint.
-    if not valid_name(value):
-        return INVALID_NAME.format(name=contain.one_line(value))
-    if load(value) is None:
-        return NO_SUCH_PERSONA.format(name=value)
+    if not valid_name(name):
+        return INVALID_NAME.format(name=contain.one_line(name))
+    if defined and load(name) is None:
+        return NO_SUCH_PERSONA.format(name=name)
     return None
+
+
+def undefined_flag(value: str | None) -> str | None:
+    """:func:`name_refusal` for a ``--persona``-shaped flag, or ``None`` when the flag was
+    not given (#1057).
+
+    Empty is no flag, as it is for :func:`blank_flag`. Every reader of such a flag tests it
+    for truth, and ``""`` is how charter's own records spell "no persona".
+    """
+    if not value:
+        return None
+    return name_refusal(value)
 
 
 def _resolved(explicit: str | None = None) -> tuple[str | None, str]:

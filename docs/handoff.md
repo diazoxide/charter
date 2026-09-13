@@ -185,7 +185,7 @@ nothing is created, nothing is recorded, and no chat is opened.
 | `--create` without `--vision` | that a visionless workspace would be created unfindable |
 | `--create` on a workspace that exists (`default` included) | to drop `--create` |
 | an unknown workspace without `--create` | the same call with `--create --vision` |
-| `--persona` naming one that does not exist | the personas there are |
+| `--persona` naming one that does not exist, or a name no persona could have | the line every persona command says to that name, then the personas there are |
 | stdin is a terminal — asked before any read, so it never blocks | the heredoc form |
 | an empty brief | the heredoc form |
 | bytes on stdin that are not UTF-8 | that they are not text |

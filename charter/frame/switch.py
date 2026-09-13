@@ -337,7 +337,7 @@ def to_persona(fid: str, name: str) -> Outcome:
     """Adopt persona *name* in frame *fid*, or say why it did not.
 
     Three refusals, each a thing the operator can act on: a name that cannot name a
-    persona (`persona.valid_name`, the one rule), an unknown name — a question, never an
+    persona (`persona.name_refusal`, the one rule), an unknown name — a question, never an
     implicit create, with the existing names beside it — and a `$CHARTER_PERSONA` pin
     carried from the launch, which is in every panel pane's environment and outranks
     anything written here. There is no lock: personas have never had one
@@ -361,11 +361,19 @@ def to_persona(fid: str, name: str) -> Outcome:
     """
     from .. import persona as p_mod
     shown = contain.one_line(name)
-    if not p_mod.valid_name(name):
-        return Outcome(False, f"'{shown}' cannot name a persona")
+    # In the words every command that takes a persona name uses (#1059). The name first,
+    # before the roster is read: `personas` spends a dispatch tally and memory reads on its
+    # ordering, and a name no persona could have is not one it could list.
+    refused = p_mod.name_refusal(name, defined=False)
+    if refused:
+        return Outcome(False, refused)
     known = personas()
-    if name not in known:
-        return Outcome(False, f"no persona '{shown}' — have: {_some(known)}")
+    # Existence is `load`'s answer, as it is for `persona use`, so a listed directory whose
+    # `persona.md` does not load is refused too. The roster is asked as well, because a
+    # picker's row is a name off it and this is what catches one removed since it was drawn.
+    if name not in known or p_mod.load(name) is None:
+        return Outcome(False, f"{p_mod.NO_SUCH_PERSONA.format(name=name)} — have: "
+                              f"{_some(known)}")
     pinned = _pin(fid, "CHARTER_PERSONA")
     if pinned:
         return Outcome(False, "cannot switch: $CHARTER_PERSONA pins this frame to "

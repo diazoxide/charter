@@ -643,7 +643,8 @@ already in.
 
 **On the attention row — the frame's own last row, not tmux's message line.** Whatever you
 choose off `F2`, the outcome appears there for a few seconds and then gives the row back:
-`charter: persona → forge`, or `charter: no persona 'forg' — have: forge, scribe`. A
+`charter: persona → forge`, or `charter: no persona 'forg' (create it: charter persona create
+forg) — have: forge, scribe`. A
 refusal stays up longer than a success, because a refusal is the only one of the two with
 nothing else confirming it — when a switch takes, the identity row above has already
 changed to say so.

@@ -319,6 +319,11 @@ without `--force` and `--share`, and says what `persona use` and `persona create
 ✗ no persona ' ' (a persona name is never only whitespace)
 ```
 
+`charter persona secret --persona <name>` checks the name the same way before it looks for a
+vault, so a misspelling is refused with the first line above instead of reading a vault that
+happens to be tagged with the misspelling
+([#1059](https://github.com/diazoxide/charter/issues/1059)).
+
 A registration bound before this check existed, or whose persona was removed later, still
 lists. `charter vault list` marks its persona as `ghost (no such persona)` and exits 0
 ([#1057](https://github.com/diazoxide/charter/issues/1057)).
