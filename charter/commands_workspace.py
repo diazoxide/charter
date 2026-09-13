@@ -1794,7 +1794,8 @@ def cmd_workspace_reinit(args) -> int:
         # return anything at all.
         for rel, did in before["layer"]:
             inside = workspace.checkout_row(n, rel)
-            if did in ("foreign", "blocked", "harness-behind", "unreadable", "unrecorded"):
+            if did in ("foreign", "blocked", "harness-behind", "unreadable", "unrecorded",
+                       "unhidden", "unlisted"):
                 unresolved.add(n)
             if did == "foreign" and inside:
                 # Never "remove it" in a checkout (review round 5, R2 and R5): the file is
@@ -1843,6 +1844,19 @@ def cmd_workspace_reinit(args) -> int:
                 util.warn(f"'{n}': {rel} cannot be read — left exactly as it is; charter writes "
                           f"there again only if that file turns out to be exactly what charter "
                           f"last wrote.")
+            elif did == "unlisted":
+                # #1072: every worktree of that clone went unchecked, and "nothing to do" printed
+                # over them. Not a repair either, and not one `reinit` can make.
+                util.warn(f"'{n}': git could not list the worktrees of "
+                          f"{workspace.checkout_label(n, inside[0])}, so none of them was checked "
+                          f"or given charter's layer; {workspace.unlisted_fix(inside[0])}.")
+            elif did == "unhidden":
+                # #1072: a line left out of a shared exclude because it would hide a file of yours
+                # in another checkout reading it. Not a repair — the fall-through below would call
+                # it "wrote .git/info/exclude" — and not one `reinit` can make: the file is yours
+                # to commit or move, and `workspace.unhidden` names it.
+                util.warn(f"'{n}': {rel} does not hide all of charter's files in that checkout — "
+                          + "; ".join(workspace.unhidden(inside[0])) + ".")
             elif did == "unrecorded":
                 # Ruling H (#942 review round 4): a write charter could not record first is not
                 # made, and the lines stay. Not `blocked`: nothing is in the way at that path. With

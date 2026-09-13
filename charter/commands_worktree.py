@@ -191,7 +191,7 @@ def cmd_worktree_add(args) -> int:
     # here, before that line, rather than left to the next launch or `reinit` — the worker is
     # told to start a session in it now. One worktree listing for both of the wire's passes.
     with workspace.worktree_answers():
-        announce_layer(f"{args.repo} · {args.piece}", workspace.wire_guest(path))
+        announce_layer(f"{args.repo} · {args.piece}", workspace.wire_guest(path), path)
 
     # An untracked charter.toml is worth knowing about on its own: nobody else cloning that
     # repo gets the plane at all. It is asked of the repo the worktree was CUT FROM, never
