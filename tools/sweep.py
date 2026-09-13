@@ -4539,7 +4539,11 @@ def _say(args, gate: Gate, log, missing: int = 0, shards: int = 1) -> None:
         f"{gate.pinned} pinned, {len(gate.refused)} shard(s) refused")
     log(f"gate: {headline(gate, missing, shards)}")
     if not args.enforce:
-        log("gate: reporting only — nothing here blocks. Pass --enforce to make it.")
+        # What `--enforce` changes, and nothing wider (#988). This said "reporting only —
+        # nothing here blocks", which is true of the verdict and false of the merge it is
+        # read beside: the branch policy waits for every check to complete, so a sweep
+        # still running blocked PR #982's merge whatever it was going to find.
+        log("gate: survivors do not fail this run. Pass --enforce to make them.")
     if args.annotate:
         for line in annotations(gate):
             log(line)

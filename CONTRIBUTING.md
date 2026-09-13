@@ -261,10 +261,14 @@ together), *platform-deferred* (a catch the runner's kernel may never reach), *u
 (the run timed out, so there is no verdict) and *not applied* (a bug in the sweep, not a
 finding about your branch).
 
-**It blocks nothing yet, on purpose.** A gate whose numbers nobody has read gets switched
-off the first time it is inconvenient, so it reports first. Adding `--enforce` to that
-workflow's step is what makes it blocking, and that is a decision to take once the numbers
-on real branches have been looked at and believed.
+**Survivors do not fail it yet, on purpose.** A gate whose numbers nobody has read gets
+switched off the first time it is inconvenient, so it reports first. Adding `--enforce` to
+that workflow's step is what makes survivors fail the check, and that is a decision to take
+once the numbers on real branches have been looked at and believed.
+
+**It still has to finish before your pull request can merge.** The branch policy waits for
+every check to complete, whatever it will conclude, so a sweep that is still running holds
+the merge. That is a wait, not a failure risk (#988).
 
 ## Architecture decisions
 
