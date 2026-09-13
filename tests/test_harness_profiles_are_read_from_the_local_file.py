@@ -173,6 +173,34 @@ class WhatALaunchWillBeHanded(_LocalFile):
         p = self._local(_WORK).profiles["claude-work"]
         self.assertEqual(profiles.display(p), "CLAUDE_CONFIG_DIR=~/.claude-work claude")
 
+    def test_display_leaves_the_programs_leading_tilde_where_a_shell_would_expand_it(self):
+        """`charter harness list` showed `'~/.local/bin/codex'` (found on the #1004 proof
+        run): `shlex.join` quotes the `~`, and a shell does not expand a quoted one, so the
+        line pasted into a terminal named a directory called `~`. Charter expands the
+        program's leading `~` itself (`expanded_command`), so the line shows it bare and
+        quotes what follows. An ARGUMENT's `~` is not expanded — it reaches the harness as
+        written — so it stays quoted, and the line still means what charter runs."""
+        cases = {
+            '["~/.local/bin/codex"]': "~/.local/bin/codex",
+            '["~/my tools/codex", "--flag"]': "~/'my tools/codex' --flag",
+            '["~"]': "~",
+            '["~/"]': "~/",
+            '["~/bin/claude", "~/not-expanded"]': "~/bin/claude '~/not-expanded'",
+            '["/abs/claude"]': "/abs/claude",
+        }
+        for command, shown in cases.items():
+            with self.subTest(command=command):
+                p = self._local(f'[harness.w]\nkind = "claude"\ncommand = {command}\n'
+                                ).profiles["w"]
+                self.assertEqual(profiles.display(p), shown)
+
+    def test_a_tilde_that_names_another_users_home_stays_quoted(self):
+        """`~other/bin` is a different home, and the line shows what charter was given
+        rather than guessing which one a shell would reach."""
+        p = self._local('[harness.w]\nkind = "claude"\ncommand = ["~other/bin/claude"]\n'
+                        ).profiles["w"]
+        self.assertEqual(profiles.display(p), "'~other/bin/claude'")
+
     def test_display_escapes_control_bytes_in_an_env_value_too(self):
         """Ruling 35: a value from a file a chat can write is shown, never interpreted."""
         p = self._local('[harness.w]\nkind = "claude"\ncommand = ["claude"]\n'
