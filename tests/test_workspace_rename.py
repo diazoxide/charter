@@ -115,6 +115,16 @@ class RenameRelinksWorktrees(RenameCase):
 
     def setUp(self) -> None:
         super().setUp()
+        # The plane is reached through a symlink, so every path charter builds from `config`
+        # is a spelling git never writes: git records a worktree's REAL path. Without this the
+        # suite only normalised on macOS, where the temp dir itself sits behind `/var` ->
+        # `/private/var`; on a Linux runner every `.resolve()` below could be deleted green.
+        real = self.tmp / "real"
+        real.mkdir()
+        via = self.tmp / "via-link"
+        via.symlink_to(real, target_is_directory=True)
+        config.use(via)
+        config.PERSONAS_DIR.mkdir(parents=True, exist_ok=True)
         self.clone = workspace.workspace_dir("old") / "api"
         self.clone.mkdir(parents=True)
         subprocess.run(["git", "init", "-q", "-b", "main", str(self.clone)],
@@ -150,6 +160,15 @@ class RenameRelinksWorktrees(RenameCase):
         self.assertEqual(len(mine), 1, rows)
         self.assertFalse(mine[0]["prunable"], mine[0])
 
+    def assertRelinked(self, said: str, count: int) -> None:
+        """The command's own account agrees with git's: every tree counted, none named.
+
+        Asserting git's state alone passed with every tree reported unrepaired — the success
+        path has to be seen being recognised as one."""
+        self.assertIn(f"git reads {count} linked worktree(s) as linked to their clone", said)
+        self.assertNotIn("git does not read", said)
+        self.assertNotIn("could not list", said)
+
     def test_a_piece_is_still_a_worktree_of_its_clone_after_the_rename(self):
         self._link(worktree.path_for("old", "api", "piece"), "piece")
         rc, said = self._rename()
@@ -157,6 +176,7 @@ class RenameRelinksWorktrees(RenameCase):
         clone = workspace.workspace_dir("new") / "api"
         self.assertLinked(worktree.path_for("new", "api", "piece"), clone)
         self.assertEqual([r["piece"] for r in worktree.list_for(clone, "new")], ["piece"])
+        self.assertRelinked(said, 1)
 
     def test_a_worktree_made_by_hand_inside_the_workspace_is_relinked_too(self):
         # Not under `.worktrees/`, so charter did not make it — but it moved all the same.
@@ -165,6 +185,7 @@ class RenameRelinksWorktrees(RenameCase):
         self.assertEqual(rc, 0, said)
         self.assertLinked(workspace.workspace_dir("new") / "by-hand",
                           workspace.workspace_dir("new") / "api")
+        self.assertRelinked(said, 1)
 
     def test_a_worktree_outside_the_workspace_follows_its_clone(self):
         # It did not move, but its `.git` file names the clone's OLD admin directory, so git
@@ -175,6 +196,7 @@ class RenameRelinksWorktrees(RenameCase):
         rc, said = self._rename()
         self.assertEqual(rc, 0, said)
         self.assertLinked(far, workspace.workspace_dir("new") / "api")
+        self.assertRelinked(said, 1)
 
     def test_a_worktree_gone_before_the_rename_is_not_blamed_on_it(self):
         gone = self._link(worktree.path_for("old", "api", "gone"), "gone")
@@ -185,6 +207,7 @@ class RenameRelinksWorktrees(RenameCase):
         self.assertNotIn("/gone", said)
         self.assertLinked(worktree.path_for("new", "api", "piece"),
                           workspace.workspace_dir("new") / "api")
+        self.assertRelinked(said, 1)
 
     def _run_with(self, fake) -> tuple[int, str]:
         real = cw.util.run
@@ -267,6 +290,26 @@ class RenameRelinksWorktrees(RenameCase):
         self.assertEqual(rc, 0, said)
         self.assertLinked(worktree.path_for("new", "api", "piece"),
                           workspace.workspace_dir("new") / "api")
+        self.assertRelinked(said, 1)
+
+    def test_a_read_back_git_could_not_answer_confirms_nothing(self):
+        # The repair runs; the listing asked afterwards fails. Nothing was read back, so no tree
+        # may be counted as relinked — each is named, even though git did in fact mend it.
+        self._link(worktree.path_for("old", "api", "piece"), "piece")
+        clone = (workspace.workspace_dir("new") / "api").resolve()
+        moved = worktree.path_for("new", "api", "piece").resolve()
+        lists = []
+
+        def second_list_fails(cmd):
+            if cmd[3:5] != ["worktree", "list"]:
+                return None
+            lists.append(cmd)
+            return subprocess.CompletedProcess(cmd, 128, "", "boom") if len(lists) > 1 else None
+        rc, said = self._run_with(second_list_fails)
+        self.assertEqual(rc, 0, said)
+        self.assertEqual(len(lists), 2)
+        self.assertIn(f"git -C {clone} worktree repair {moved}", said)
+        self.assertNotIn("linked to their clone", said)
 
 
 if __name__ == "__main__":

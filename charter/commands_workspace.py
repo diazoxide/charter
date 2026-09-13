@@ -420,8 +420,15 @@ def _relink_worktrees(old_dir: Path, new: str) -> tuple[int, list[tuple[Path, Pa
                  check=False, unset=workspace._GIT_ENV)
         # Read back rather than trusting the exit code: a repair that reports success over a
         # link git still cannot follow is exactly the success line ADR 0013 forbids.
+        # A listing that failed confirms nothing, so every tree is named rather than counted.
+        #
+        # No `prunable` filter, and that is not an oversight: git prints a linked tree's path
+        # from its `gitdir` file and calls it prunable when that file is missing or names a
+        # `.git` that is not there. A path it prints that matches a tree whose `.git` file was
+        # just seen is therefore never prunable — deleting the filter was measured green on Linux
+        # and macOS, and a half-repaired tree is listed at its OLD path, which never matches.
         after = _worktrees_of(clone) or []
-        linked_back = {os.path.realpath(r["path"]) for r in after if not r["prunable"]}
+        linked_back = {os.path.realpath(r["path"]) for r in after}
         common = os.path.realpath(clone / ".git")
         for tree in trees:
             if (os.path.realpath(tree) in linked_back
@@ -459,8 +466,9 @@ def cmd_workspace_rename(args) -> int:
     refs, and manifest come along), fix the manifest name + liveness block, repoint
     the active session/terminal pointer + lock so a renamed active workspace stays
     active, repoint every chat that says it is in the workspace (#795) so none of
-    them is orphaned, and relink every linked worktree of a moved clone (#963). For a LIVE workspace, commit the tracked move (manifest + memory)
-    so the rename propagates to the team."""
+    them is orphaned, and relink every linked worktree of a moved clone (#963). For a LIVE
+    workspace, commit the tracked move (manifest + memory) so the rename propagates to the
+    team."""
     old, new = args.old, args.new
     if not workspace.valid_name(new):
         util.err(f"invalid workspace name '{new}' (use lowercase letters, digits, . _ -)")
