@@ -17,6 +17,8 @@ Two things were wrong, and each class below pins one of them on its own:
   what a person runs to get fixes, so moving them backwards can take a security fix away
   from a machine that already had it. Now it installs nothing, says the two versions, and
   exits 1 like #1013's refusal. A version asked for by number with `--to` still installs.
+  `charter version bump` had the same gap with more reach, because it also writes the pin
+  the whole team conforms to, and it now refuses the same answer the same way.
 
 ADR 0009: the refusal names no cause for PyPI's older answer, because charter checked none.
 ADR 0013: the stale cache's number is never printed as something PyPI said.
@@ -185,6 +187,73 @@ class NothingMovesAMachineBackwardsUnasked(UpdateRun):
         self.assertEqual(code, 0, out)
         self.assertEqual(self.moved, [NEWER])
         self.assertNotIn("older than", out)
+
+
+class VersionBumpDoesNotPinTheTeamBackwards(NoNetwork, PersonaIso):
+    """The same rule, where it costs more. `version bump` with no `--to` takes the version
+    its own GET returned (#941), and until #1017 nothing compared that with the charter
+    running. So an older answer was installed over it AND written as the pin, and with
+    `--push` every teammate conformed to it on their next session."""
+
+    def setUp(self):
+        super().setUp()
+        pin_update_channel(self, "stable")
+        self.enterContext(mock.patch("charter.commands._installed_version", lambda: RUNNING))
+        self.calls: list[tuple] = []
+        self.enterContext(mock.patch(
+            "charter.commands.sync_to",
+            side_effect=lambda v: (self.calls.append(("sync_to", v)), (True, v))[1]))
+        self.enterContext(mock.patch(
+            "charter.instance.set_locked_version",
+            side_effect=lambda root, v: (self.calls.append(("set_locked_version", v)), True)[1]))
+        self.enterContext(mock.patch(
+            "charter.commands.commit_push",
+            side_effect=lambda root, add, msg: (self.calls.append(("commit_push", msg)), 0)[1]))
+
+    def bump(self, pypi: str | None, **kw) -> tuple[int, str]:
+        from charter import commands
+
+        args = SimpleNamespace(**{"to": None, "push": True, **kw})
+        out = io.StringIO()
+        with mock.patch.object(update, "_fetch_latest", return_value=pypi) as fetch, \
+                redirect_stderr(out), redirect_stdout(out):
+            code = commands.cmd_version_bump(args)
+        self.fetches = fetch.call_count
+        return code, out.getvalue()
+
+    def test_a_fetched_answer_older_than_the_running_charter_is_neither_installed_nor_pinned(self):
+        code, out = self.bump(pypi=OLDER)
+        self.assertEqual(code, 1, out)
+        self.assertEqual(self.calls, [], "bump installed or pinned a version older than running")
+        self.assertIn(f"PyPI reported {OLDER} as the newest release, which is older than the "
+                      f"{RUNNING} this machine runs, so nothing was installed or pinned", out)
+        self.assertIn("charter version bump --to X.Y.Z", out)
+        self.assertNotIn(f"--to {OLDER}", out)
+        self.assertNotIn("no version came back", out)
+        self.assertNotIn("offline", out)
+
+    def test_a_fetched_answer_equal_to_the_running_charter_is_pinned(self):
+        """The boundary: pinning the team to the charter this machine already runs is what
+        bump is for, and nothing needs installing to verify it."""
+        code, out = self.bump(pypi=RUNNING)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.calls, [("set_locked_version", RUNNING),
+                                      ("commit_push", f"charter: pin to {RUNNING}")])
+
+    def test_a_fetched_answer_newer_than_the_running_charter_is_installed_and_pinned(self):
+        code, out = self.bump(pypi=NEWER)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.calls, [("sync_to", NEWER), ("set_locked_version", NEWER),
+                                      ("commit_push", f"charter: pin to {NEWER}")])
+
+    def test_to_an_older_version_pins_it_because_it_was_named(self):
+        """Pinning a fleet back to a known-good release is a real case, and `--to` is how it
+        is asked for. It asks PyPI nothing, so no answer from PyPI can refuse it."""
+        code, out = self.bump(pypi=NEWER, to=OLDER)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.fetches, 0)
+        self.assertEqual(self.calls, [("sync_to", OLDER), ("set_locked_version", OLDER),
+                                      ("commit_push", f"charter: pin to {OLDER}")])
 
 
 if __name__ == "__main__":
