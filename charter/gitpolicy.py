@@ -202,7 +202,8 @@ def repos(root: Path, workspaces_dir: Path) -> list[Path]:
     return scan(root, workspaces_dir)[0]
 
 
-def scan(root: Path, workspaces_dir: Path) -> tuple[list[Path], list[Path]]:
+def scan(root: Path, workspaces_dir: Path
+         ) -> tuple[list[Path], list[tuple[Path, int | None]]]:
     """:func:`repos`, and beside it every directory under ``workspaces/<ws>/`` whose ``.git``
     charter cannot check.
 
@@ -212,20 +213,41 @@ def scan(root: Path, workspaces_dir: Path) -> tuple[list[Path], list[Path]]:
     `check_ssh` names the second kind (ADR 0009).
 
     Each such directory comes with the errno the check failed with (#942 closing verification):
-    a symlink loop is cleared at the loop, and only a refusal by restoring read access."""
+    a symlink loop is cleared at the loop, and only a refusal by restoring read access.
+
+    A level charter cannot LIST is one of them too — `workspaces/` itself (#987), which is then
+    the only entry, or one workspace (#976), beside the clones of every other."""
     out = [Path(root)] if is_git_repo(root) else []
     unseen: list[tuple[Path, int | None]] = []
-    if Path(workspaces_dir).exists():
-        for ws in sorted(Path(workspaces_dir).iterdir()):
-            if not ws.is_dir():
+    try:
+        workspaces = sorted(Path(workspaces_dir).iterdir())
+    except (FileNotFoundError, NotADirectoryError):
+        return out, unseen
+    except OSError as e:
+        # The LISTING, guarded apart from each workspace below (#987). Its per-entry guard sat
+        # inside the loop, so an unreadable `workspaces/` raised straight past it and out of
+        # `charter doctor` — the whole command, not the `git auth` row. Nothing under it can be
+        # counted, so it is named on its own, and every clone in it is out of the count.
+        return out, [(Path(workspaces_dir), e.errno)]
+    for ws in workspaces:
+        try:
+            clones = sorted(ws.iterdir())
+        except (FileNotFoundError, NotADirectoryError):
+            continue  # not a directory — Finder's `.DS_Store`, or a link to nothing
+        except OSError as e:
+            # One workspace charter cannot list (#976) is named, and the rest are still read:
+            # raising here hid every other workspace's clones along with it. Asked of the
+            # listing rather than of `Path.is_dir`, which raised for a refusal on 3.11–3.13 and
+            # answered False on 3.14 — the same split the clones below are guarded against.
+            unseen.append((ws, e.errno))
+            continue
+        for clone in clones:
+            try:
+                os.stat(clone / ".git")
+            except (FileNotFoundError, NotADirectoryError):
                 continue
-            for clone in sorted(ws.iterdir()):
-                try:
-                    os.stat(clone / ".git")
-                except (FileNotFoundError, NotADirectoryError):
-                    continue
-                except OSError as e:
-                    unseen.append((clone, e.errno))
-                    continue
-                out.append(clone)
+            except OSError as e:
+                unseen.append((clone, e.errno))
+                continue
+            out.append(clone)
     return out, unseen

@@ -13,6 +13,10 @@ charter git-policy --apply    # write it into each repo's local git config
 into a repo's *local* git config, so even a repo whose remote is an SSH URL still
 transports over HTTPS. `charter clone` applies it automatically to everything it clones.
 
+A directory charter cannot read — `workspaces/` itself, one workspace, or a clone's `.git` —
+is named rather than skipped. `charter git-policy` warns about each one with what clears it,
+`charter doctor`'s `git auth` row says the same, and neither counts a repo it never reached.
+
 ## Why it is a rule and not a preference
 
 An **SSH key passphrase prompt or a GPG signer prompt hangs an autonomous agent** mid-run.

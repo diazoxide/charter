@@ -3122,7 +3122,17 @@ def cmd_git_policy(args) -> int:
     SSH→HTTPS URL rewrites so even an SSH remote transports over the token. Local config only —
     a developer's global git config is never touched."""
     from . import gitpolicy
-    targets = gitpolicy.repos(config.ROOT, config.WORKSPACES_DIR)
+    targets, unseen = gitpolicy.scan(config.ROOT, config.WORKSPACES_DIR)
+    # What the scan could not read, named first and with what clears it — the remedy doctor's
+    # `git auth` row gives (ADR 0009). Once the scan stopped raising over an unreadable
+    # `workspaces/` or workspace (#987, #976), reading `repos` alone reported on the clones it
+    # reached and skipped the rest without a word, down to "No git repos found".
+    for path, code in unseen:
+        # Every entry is `WORKSPACES_DIR` or under it, and that is derived from `ROOT`.
+        named = path.relative_to(config.ROOT).as_posix()
+        if path == config.WORKSPACES_DIR:
+            named += "/"
+        util.warn(f"{named} cannot be checked — {workspace.uncheckable_fix(code, path)}")
     if not targets:
         util.info("No git repos found (control plane + workspace clones).")
         return 0

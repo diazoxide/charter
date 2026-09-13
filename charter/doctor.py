@@ -228,14 +228,25 @@ def check_ssh() -> Result:
     # of doctor, as it was on 3.11–3.13, and never left out of the count without a word.
     # Worded for the cause the check actually met (#942 closing verification): restoring read
     # access does nothing for a symlink loop.
+    #
+    # `workspaces/` itself is among them when it could not be listed (#987), and is named as
+    # itself: `<parent>/<name>` is how a clone reads, and for this directory it put the plane's
+    # own folder name in front. It is then the only entry — nothing under it was reached.
+    listing = Path(_config.WORKSPACES_DIR)
+
+    def named(p: Path) -> str:
+        return f"{p.name}/" if p == listing else f"{p.parent.name}/{p.name}"
+
     cannot = ("   " + "; ".join(
-        f"{p.parent.name}/{p.name} cannot be checked — {_workspace.uncheckable_fix(code, p)}"
+        f"{named(p)} cannot be checked — {_workspace.uncheckable_fix(code, p)}"
         for p, code in unseen) + "." if unseen else "")
     if not bad:
         if unseen:
+            what = (named(listing) if [p for p, _ in unseen] == [listing]
+                    else f"{len(unseen)} director(ies) under workspaces/")
             return Result("git auth", WARN,
-                          detail=f"token-only across {len(scope)} repo(s); {len(unseen)} "
-                                 f"director(ies) under workspaces/ cannot be checked",
+                          detail=f"token-only across {len(scope)} repo(s); {what} cannot be "
+                                 f"checked",
                           hint=cannot.lstrip())
         return Result("git auth", OK,
                       detail=f"token-only across {len(scope)} repo(s) (each forge's own "
@@ -3123,8 +3134,16 @@ def check_memory_indexes() -> Result:
     large_kinds: set[str] = set()
     refused = []
     for label, mem_dir in bases:
-        if not mem_dir.exists():
-            continue
+        try:
+            if not mem_dir.exists():
+                continue
+        except OSError as e:
+            # The same tolerance as the listing above, one read later: `Path.exists` raises on
+            # 3.11–3.13 for a base inside a workspace at mode 000, and once `git auth` stopped
+            # raising over that workspace (#976) this was the line that took `charter doctor`
+            # down instead.
+            return Result("memory indexes", WARN, detail=f"not checked ({e})",
+                          hint=_NOT_CHECKED_HINT)
         # Asked FIRST, and reported on its own terms. A refused index answers "nothing is
         # listed", which is what an empty base answers too — so without this the drift
         # numbers below describe a store charter is declining to touch as though it were

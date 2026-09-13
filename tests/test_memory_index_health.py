@@ -15,9 +15,13 @@ from the SessionStart hook, which must never block a session.
 
 from __future__ import annotations
 
+import errno
+import os
 import unittest
+from pathlib import Path
+from unittest import mock
 
-from charter import doctor, memstore, persona
+from charter import config, doctor, memstore, persona
 from tests import _envguard
 from tests._isolation import PersonaIso, pin_update_channel
 
@@ -119,6 +123,26 @@ class DoctorRunsTheCheck(PersonaIso):
 
     def test_check_is_wired_into_run_all(self):
         self.assertIn("memory indexes", [r.name for r in doctor.run_all()])
+
+    def test_a_base_whose_existence_cannot_be_checked_is_not_checked_not_raised(self):
+        """#976 on 3.11–3.13: `Path.exists` RAISES for a workspace at mode 000 there, and it
+        raised out of `charter doctor` once the `git auth` row stopped doing so. Injected
+        rather than chmodded, so the guard is pinned on 3.14 too, where `exists` answers False
+        for that workspace instead of raising."""
+        memory = config.WORKSPACES_DIR / "alpha" / "memory"
+        memory.mkdir(parents=True)
+        real = Path.exists
+
+        def exists(self, *args, **kwargs):
+            if self == memory:
+                raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(self))
+            return real(self, *args, **kwargs)
+
+        with mock.patch.object(Path, "exists", exists):
+            r = doctor.check_memory_indexes()
+        self.assertEqual(r.status, doctor.WARN)
+        self.assertEqual(r.detail, f"not checked ([Errno 13] Permission denied: '{memory}')")
+        self.assertIn("silence means nothing", r.hint)
 
 
 
