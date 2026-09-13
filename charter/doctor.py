@@ -3072,7 +3072,19 @@ def check_version_lock() -> Result:
     if not locked:
         return Result("version lock", OK, detail="not pinned")
 
-    from . import update
+    from . import channel, update
+    if channel.is_dev():
+        # BEFORE either comparison below. On a plane following `main` both answer the wrong
+        # question: equal numbers said "plugin in sync" or "CLI in sync" for a plane session
+        # start refuses (a dev build prints the number of the release it was built from), and
+        # unequal ones named a plugin update or the shared-install note, both of which move
+        # the plane toward the pin (#1018). WARN, as drift is here, for this docstring's
+        # reason. The words are `pin_beside_dev`'s, which every other surface prints.
+        conflict, ways, _brief = update.pin_beside_dev()
+        return Result("version lock", WARN,
+                      detail=f"pinned {locked} on a plane following `{update.DEV_BRANCH}`: "
+                             f"{conflict}",
+                      hint="; ".join(ways))
     # The pin is measured against the PLUGIN, because the plugin is the only part of
     # charter that is genuinely per-plane: Claude Code installs it per project, out of a
     # cache holding every version side by side. Measuring it against the machine-global

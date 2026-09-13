@@ -459,8 +459,37 @@ On a plane that declares the [dev channel](install.md#4-the-dev-channel--trying-
 both be declared. It names `charter update` instead, and so does `charter version sync` on
 a plane there that pins nothing. `charter version bump` itself refuses on such a plane,
 `--to` or not. It refuses before asking PyPI, installing anything or writing the lock, and
-names the two ways out: drop `[update] channel = "dev"` and bump again, or pin nothing. Before
+names the two ways out: drop `[update] channel = "dev"`, or keep no `[charter] version`. Before
 #947 it wrote the pin, and with `--push` every teammate's session start then refused the plane.
+
+A plane there can still carry a pin: one written before #947, one typed by hand, one from an
+older charter. That is one refused state, and every command that reads it prints the same
+conflict and the same two ways out:
+
+```
+$ charter version sync --cli
+✗ refusing to sync this control plane: a `[charter] version` pin and `[update] channel = "dev"` ask for two different charters. Nothing was installed.
+•   to follow a pinned release, drop `[update] channel = "dev"` from the plane's `charter.toml`
+•   to stay on `main`, keep no `[charter] version` in the plane's `charter.toml` and move this charter onto it:  charter update
+```
+
+`charter version sync` refuses with or without `--cli`, before it installs anything or asks
+the harness to move this plane's artifact, and exits 1. `charter version` prints the conflict
+instead of `conform this machine: charter version sync`, and exits 1 as it does for drift.
+Session start installs nothing and says the same, **whether or not the pin equals the version
+you are running**. A dev build prints the version of the release it was built from, so equal
+numbers do not mean the plane is on the pinned release. `charter doctor`'s `version lock` row
+warns with the same conflict and puts both ways out in its hint. The status line has room for
+one row, so it prints a short form of the same words:
+
+```
+⚠ charter 0.61.0 pin + dev channel: two different charters · charter version
+```
+
+Before #1018, `version sync` installed the pinned release over a plane following `main`.
+`charter version` and the status line both sent you to that command, and `doctor` named a
+plugin update. A pin equal to the running number got nothing at session start, "in sync with
+the lock" from `charter version` and `plugin in sync` from `doctor`.
 
 ## `[harness]` — profiles, and the default
 

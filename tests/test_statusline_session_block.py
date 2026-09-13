@@ -37,6 +37,10 @@ class Silence(unittest.TestCase):
         config.ROOT, config.STATE_DIR = root, root / ".charter"
         (root / "charter.toml").write_text("schema = 1\n")
         self.addCleanup(self._td.cleanup)
+        # Stable, stated: `ROOT` alone moves where the pin is read from and not the channel,
+        # and the pinned-version row asks the channel first, because on a dev plane a pin is
+        # the conflict `update.pin_beside_dev` names rather than drift (#1018).
+        pin_update_channel(self, "stable")
 
         def _restore():
             config.ROOT, config.STATE_DIR = self._root, self._state

@@ -2101,9 +2101,19 @@ def _alerts(active: str) -> list[str]:
     """
     out: list[str] = []
     try:
-        from . import __version__, config, instance as _instance, workspace as _ws
+        from . import __version__, channel, config, instance as _instance, update, workspace as _ws
         locked = _instance.locked_version(_instance.load(config.ROOT))
-        if locked and locked != __version__:
+        if locked and channel.is_dev():
+            # Not the drift row: its `charter version sync` refuses on this plane, because
+            # on a plane following `main` it would install the pin (#1018). And whatever the
+            # numbers, since a dev build prints the number of the release it was built from.
+            # The words are `pin_beside_dev`'s brief form, so this row cannot describe the
+            # plane differently from the refusal it points at. Reading the channel costs a
+            # dict lookup, and the brief's remedy asks two paths to resolve, no subprocess
+            # and no network, on a row that only a pinned dev plane draws.
+            out.append(f"{accent('warn')}⚠{_R} {_DIM}charter{_R} {locked} "
+                       f"{_DIM}{update.pin_beside_dev().brief}{_R}")
+        elif locked and locked != __version__:
             out.append(f"{accent('warn')}⚠{_R} {_DIM}charter{_R} {__version__} {_DIM}→ pinned{_R} "
                        f"{locked}{_DIM} · charter version sync{_R}")
         # A declared front door that names nothing resolves to no persona at all, and

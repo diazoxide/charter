@@ -3476,6 +3476,19 @@ def cmd_version(args) -> int:
     print(f"  locked     {locked or '— (this control plane pins no version)'}")
     print(f"  latest     {update.latest_display(installed)}")
     print()
+    if locked and channel.is_dev():
+        # ABOVE the drift branch, which named `charter version sync`: on this plane that
+        # installs the pinned release over a charter following `main` (#1018). And not gated
+        # on the pin differing from the install, because a dev build prints the number of the
+        # release it was built from, so equal numbers here printed "in sync with the lock" for
+        # a plane session start refuses. Exit 1, as drift does: the plane is not in the state
+        # it asks for, because it asks for two.
+        conflict, ways, _brief = update.pin_beside_dev()
+        util.warn(f"this control plane pins {locked} and follows `{update.DEV_BRANCH}`: "
+                  f"{conflict}.")
+        for way in ways:
+            util.info(f"  {way}")
+        return 1
     if locked and locked != installed:
         util.warn(f"drift: this control plane pins {locked}, you are running {installed}.")
         util.info(f"  {update.SHARED_INSTALL_NOTE}")
@@ -3535,6 +3548,19 @@ def cmd_version_sync(args) -> int:
         util.info("This control plane pins no version — nothing to sync. "
                   "Pin one with: charter version bump --push")
         return 0
+    if channel.is_dev():
+        # BEFORE either branch below moves anything: `--cli` installs the pinned release
+        # over a plane that follows `main`, and the default asks the harness to move this
+        # plane's artifact in the pin's name. Both settle, by installing, the pair session
+        # start refuses to settle, and `charter version` sent operators here to do it
+        # (#1018). Before the `locked == installed` check too, because a dev build prints
+        # the number of the release it was built from, so "already on the locked version"
+        # would be a claim about a number and not about which charter this is.
+        conflict, ways, _brief = _update.pin_beside_dev()
+        util.err(f"refusing to sync this control plane: {conflict}. Nothing was installed.")
+        for way in ways:
+            util.info(f"  {way}")
+        return 1
 
     if not getattr(args, "cli", False):
         # ASK THE HARNESS. This branch used to read `$CLAUDE_PLUGIN_ROOT` and then print
@@ -3603,14 +3629,14 @@ def cmd_version_bump(args) -> int:
         # the shared dev plane met that refusal about a `charter.toml` they never edited
         # (#947). `--to` does not get past it: a pin typed by hand is still a pin beside
         # the channel. Refused rather than warned, because which of the two the plane
-        # wants is the operator's to say, and each way out is one step.
-        util.err("refusing to pin a control plane that declares `[update] channel = "
-                 "\"dev\"`: a pin and the dev channel ask for two different charters. "
-                 "Nothing was installed or written.")
-        util.info("  to pin a release, drop `[update] channel = \"dev\"` from the plane's "
-                  "`charter.toml` and bump again")
-        util.info(f"  to stay on `{update.DEV_BRANCH}`, pin nothing and move this charter "
-                  f"onto it:  {update.dev_remedy()}")
+        # wants is the operator's to say, and each way out is one step. The conflict and
+        # both ways out are `pin_beside_dev`'s, which `version sync`, `charter version` and
+        # session start print too (#1018).
+        conflict, ways, _brief = update.pin_beside_dev()
+        util.err(f"refusing to pin this control plane: {conflict}. "
+                 f"Nothing was installed or written.")
+        for way in ways:
+            util.info(f"  {way}")
         return 1
     target = (getattr(args, "to", None) or "").strip()
     if not target:

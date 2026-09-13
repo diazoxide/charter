@@ -26,6 +26,7 @@ import os
 import subprocess
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 from . import config, util
 
@@ -190,6 +191,55 @@ def dev_remedy() -> str:
     if channel.running_inside(config.ROOT):
         return f"git -C {channel.package_dir().parent} pull"
     return "charter update"
+
+
+#: What a pin beside the dev channel amounts to, spelled once. The long form and the brief
+#: one below both carry it, so a reader who meets the status line's row and then
+#: `charter version`'s refusal reads the same words in both.
+_TWO_CHARTERS = "two different charters"
+
+
+class PinBesideDev(NamedTuple):
+    """:func:`pin_beside_dev`'s answer, one field per kind of surface."""
+
+    #: The conflict itself, for a surface with room for a sentence.
+    conflict: str
+    #: The two ways out: toward a pinned release, then toward ``main``.
+    ways: tuple[str, str]
+    #: The conflict and where both ways out are printed, for a surface with one short row.
+    brief: str
+
+
+def pin_beside_dev() -> PinBesideDev:
+    """What every surface says about a pin beside ``[update] channel = "dev"``.
+
+    Beside :func:`dev_remedy`, and for the same reason. The pair is ONE refused state, and it
+    had six readers saying five things: session start refused it, `version bump` refused to
+    write it, `version sync` installed the pin over a plane following ``main``, `charter
+    version` and the status line recommended that sync, and `doctor` called it in sync or
+    named a plugin update (#1018). Each caller says what IT did (nothing installed, nothing
+    written); what the state is and how to leave it comes from here, so one surface cannot
+    grow a third way out or quietly lose one.
+
+    **The brief form is a field of this answer, not a sentence of the status line's.** A
+    status line row has no room for both ways out, and a short wording written where it is
+    drawn is exactly the second description of one state this function exists to prevent.
+    So it is built here, from the same :data:`_TWO_CHARTERS`, and names the command whose
+    output carries both ways out.
+
+    **Neither way out is chosen for the operator.** Which charter the plane wants is theirs
+    to say, and each is one edit. The second is worded to hold whether or not the plane
+    already carries a pin, because `version bump` refuses on a pin-less dev plane too.
+    """
+    return PinBesideDev(
+        conflict=(f"a `[charter] version` pin and `[update] channel = \"dev\"` ask for "
+                  f"{_TWO_CHARTERS}"),
+        ways=(f"to follow a pinned release, drop `[update] channel = \"dev\"` from the plane's "
+              f"`charter.toml`",
+              f"to stay on `{DEV_BRANCH}`, keep no `[charter] version` in the plane's "
+              f"`charter.toml` and move this charter onto it:  {dev_remedy()}"),
+        brief=f"pin + dev channel: {_TWO_CHARTERS} · charter version",
+    )
 
 
 def newer_head() -> str | None:

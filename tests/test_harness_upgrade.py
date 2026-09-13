@@ -28,7 +28,7 @@ from unittest import mock
 
 from charter import __version__, doctor, harness, update
 from charter.harness import codex, opencode
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, pin_update_channel
 
 STATUSES = {"moved", "current", "manual", "absent"}
 
@@ -139,6 +139,10 @@ class VersionSyncRoutesThroughTheHarness(unittest.TestCase):
     def _sync(self, env: dict) -> str:
         from charter import commands
 
+        # Stable, stated. `version sync` asks the channel before it asks the harness, because
+        # on a dev plane a pin is refused before anything moves (#1018), and a channel read
+        # off whoever runs the suite would decide which branch these cases test.
+        pin_update_channel(self, "stable")
         err = io.StringIO()
         with mock.patch.dict(os.environ, env, clear=True), \
              mock.patch("charter.instance.load", return_value={}), \
