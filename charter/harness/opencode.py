@@ -553,11 +553,14 @@ def unvouched(tree: Path, *, replaced: bool = False) -> tuple[str, ...]:
     `doctor` it is live — and it is the state where "→ charter reinit" was true all along,
     which is what made the invented hint plausible everywhere else.
 
-    ``replaced=True`` says :func:`refresh_shim` created or replaced the shim, or would have
-    in a dry run, so the file is not asked about: a writer finds charter's own bytes there
-    and a dry run must answer what the writer finds. Without it, `upgrade`'s dry run read
-    the older stamp the real call replaces and called a plane `manual` that `version sync`
-    moves (#1039). The realm is asked about either way, since no write changes it.
+    ``replaced=True`` says :func:`refresh_shim` replaced an older stamp, or would have in a
+    dry run, so the file is not asked about: a writer finds charter's own bytes there and a
+    dry run must answer what the writer finds. Without it, `upgrade`'s dry run read the older
+    stamp the real call replaces and called a plane `manual` that `version sync` moves
+    (#1039). Not for a shim `refresh_shim` would CREATE: a missing file is already no
+    sentence here (`p.is_file()`), and `wiring.detect` relies on that ``()``, so a second
+    spelling of the same case would only hide either one's deletion from the sweep. The
+    realm is asked about either way, since no write changes it.
     """
     g = Path(tree)
     out: list[str] = []
@@ -922,7 +925,7 @@ class OpenCodeHarness(Harness):
         """
         g = global_dir()
         got = refresh_shim(g, dry_run=dry_run)
-        blocked = unvouched(g, replaced=got in ("created", "refreshed"))
+        blocked = unvouched(g, replaced=got == "refreshed")
         if blocked:
             return "manual", "; ".join(blocked)
         if got == "current":

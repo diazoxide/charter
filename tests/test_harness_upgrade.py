@@ -201,6 +201,26 @@ class ADryRunIsTheSameAnswerWithoutTheMove(unittest.TestCase):
                                      f"{h.name}'s dry run wrote under its config dir")
                     self.assertEqual(would, h.upgrade(Path(tmp)))
 
+    def test_the_shim_writer_s_dry_run_answers_its_real_word_and_writes_nothing(self):
+        """`refresh_shim`'s own contract under the same flag, one layer down: `upgrade` tells
+        only `current` apart from the rest, so a dry-run word that drifted from the real one
+        would change no status there and still mislead the next caller that reads it."""
+        for state, arrange in SHIM_STATES.items():
+            with self.subTest(shim=state), tempfile.TemporaryDirectory() as tmp:
+                g = Path(tmp) / "opencode"
+                arrange(g)
+                before = _tree(Path(tmp))
+                would = opencode.refresh_shim(g, dry_run=True)
+                self.assertEqual(_tree(Path(tmp)), before, "the dry run wrote")
+                self.assertEqual(would, opencode.refresh_shim(g))
+
+    def test_a_missing_shim_is_not_described_as_a_file_charter_will_not_overwrite(self):
+        """`unvouched` answers ``()`` when there is no shim, and `wiring.detect` is written
+        against that. A sentence saying a file that is not there "carries no charter stamp"
+        would send somebody to move aside nothing."""
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(opencode.unvouched(Path(tmp) / "opencode"), ())
+
     def test_the_real_call_still_moves_opencode_s_shim(self):
         """The other side of the flag: `version sync` and `update` move the plane, and a
         dry run that leaked into them would leave every opencode shim where it was."""
@@ -271,6 +291,23 @@ class DoctorNamesTheRightHarnessToo(PersonaIso):
         with tempfile.TemporaryDirectory() as tmp:
             hint = self._hint({"CHARTER_HARNESS": "opencode", "XDG_CONFIG_HOME": tmp})
         self.assertIn("machine-global", hint)
+
+    def test_the_hint_carries_the_answer_of_the_harness_it_is_in(self):
+        """Asking without moving must still ask. Each harness's own way to move THIS plane,
+        from a known literal rather than from the harness under test, so a row that stopped
+        consulting the harness and printed only the shared-install note fails here."""
+        expected = {
+            "claude-code": f"To move THIS plane only: {update.PLUGIN_SYNC_CMD}",
+            "codex": "To move THIS plane only: codex plugin marketplace upgrade charter && "
+                     "codex plugin add charter@charter",
+            "opencode": "carries no charter stamp, so charter will not overwrite it",
+        }
+        for name, sentence in expected.items():
+            with self.subTest(harness=name), tempfile.TemporaryDirectory() as tmp:
+                env = {"CHARTER_HARNESS": name, **_config_dirs(tmp)}
+                with mock.patch.dict(os.environ, env, clear=True):
+                    _not_ours(opencode.global_dir())
+                self.assertIn(sentence, self._hint(env))
 
     def test_the_row_writes_nothing_under_any_harness_s_config_dir(self):
         """#1039: the row asked opencode how this plane moves by MOVING it — `upgrade`
