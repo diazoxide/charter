@@ -820,6 +820,15 @@ class CodexIsReadAtTheProfilesHome(PersonaIso, unittest.TestCase):
                    + f'\n[hooks.state."{TRUST_KEY}"]\ntrusted_hash = 1\n')
         self.assertEqual(wiring.detect(self.p, cwd=self.tmp).state, wiring.UNWIRED)
 
+    def test_an_empty_trusted_hash_is_not_trust(self):
+        """The other half of the same test: a string, and nothing in it. Codex approves a hook
+        by recording the hash it approved, so an empty one records no approval — and a chat
+        that wanted this home to read as guarded only has to write the key with `""`. The
+        sweep on `791c1e7` (#995) found the `and entry["trusted_hash"]` half unpinned."""
+        self.write(codex_config(trust=False)
+                   + f'\n[hooks.state."{TRUST_KEY}"]\ntrusted_hash = ""\n')
+        self.assertEqual(wiring.detect(self.p, cwd=self.tmp).state, wiring.UNWIRED)
+
     def test_a_nul_byte_in_the_home_is_unknown_and_never_a_traceback(self):
         """A1: `open` refuses a NUL in a path with `ValueError`."""
         p = approve_profile(self, make_profile("codex-nul", kind="codex",
