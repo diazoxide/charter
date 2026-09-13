@@ -76,9 +76,14 @@ command.
   green run. If your case renders a status line and does not care, call
   `tests._isolation.no_background_refresh(self)`; if it is *about* the child, call
   `tests._planeguard.allow_background_children(self)`. That guard only sees this process,
-  so a case that hands a plane to a real child charter that gathers or runs SessionStart —
-  a panel, `frame-gather`, `charter hook sessionstart` — gives that plane the cooldown lock
-  a real machine already has, with `tests._isolation.no_update_check_in(plane)` (#938).
+  and a real child charter handed a fresh plane — a panel, `frame-gather`, `charter hook
+  sessionstart` — forks its own. So the suite sets `$CHARTER_NO_BACKGROUND_CHECKS=1` once,
+  in `tests/_envguard.py` right after the scrub, and every child, grandchild and tmux pane
+  inherits it: both spawners return before touching anything. A charter or tmux child whose
+  `env=` drops it is refused by name (`BackgroundGrandchild`); carry `{**os.environ, …}`. A
+  case that is *about* a spawner takes the switch away with
+  `tests._planeguard.allow_background_checks(self)`, beside `allow_background_children`
+  if it really forks (#945).
   A test that starts a real tmux
   server names its socket with `tests._tmuxreap.name("<slug>")`, so the next run can reap
   it when this one is killed before its cleanup runs — **every** socket it starts, including

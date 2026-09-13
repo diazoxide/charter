@@ -41,6 +41,7 @@ from charter import glstate, planegit, update, util
 from charter import commands_workspace as cw
 
 from tests._isolation import PersonaIso, make_plane
+from tests._planeguard import allow_background_checks
 
 #: The package directory this test process actually imported, not a path guessed from
 #: `__file__`'s neighbours — whatever `charter` means to the rest of the suite is what
@@ -111,6 +112,7 @@ class GlstateMaybeSpawnUsesIt(PersonaIso):
     def setUp(self):
         super().setUp()
         make_plane(self)      # `maybe_spawn` refuses to fork without one (#527)
+        allow_background_checks(self)     # and returns first thing with the switch on (#945)
 
     def test_argv_carries_dash_p(self):
         d = self.tmp / "somerepo"
@@ -136,6 +138,7 @@ class UpdateMaybeSpawnUsesIt(PersonaIso):
     def setUp(self):
         super().setUp()
         make_plane(self)      # `maybe_spawn` refuses to fork without one (#527)
+        allow_background_checks(self)     # and returns first thing with the switch on (#945)
 
     def test_argv_carries_dash_p(self):
         captured = {}

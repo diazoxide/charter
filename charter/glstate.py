@@ -200,7 +200,14 @@ def maybe_spawn(dirs, workspace: str | None = None) -> None:
     environment and its own directory. A refresh keyed to a different workspace than the
     row it is refreshing is the defect; an environment variable was never what stood
     between them.
+
+    ``$CHARTER_NO_BACKGROUND_CHECKS`` stops this before the lock or the cache is touched, as
+    it stops `update.maybe_spawn` (#945). The render then draws whatever the cache already
+    holds, which on a plane that never refreshed is no change or CI state on any row. `charter gl-refresh`
+    run by hand calls :func:`refresh` directly and is not stopped.
     """
+    if util.background_checks_off():
+        return
     if not config.HAS_CONTROL_PLANE:
         # A third brake, and the one that is about WHERE rather than how often. Outside a
         # plane `config.STATE_DIR` is `<cwd>/.charter`, so a spawn here would scatter

@@ -221,6 +221,17 @@ leaves all of them running their throttle logic and asserting on it, and refuses
 part nobody was asserting about. `tests._isolation.no_background_refresh` is the way out
 for a case that never wanted a child, :func:`allow_background_children` for the one that
 did.
+
+**The eighth is the generation below the seventh: :class:`BackgroundGrandchild`.** Hand a
+fresh plane to a real `charter panel right`, `charter frame-gather` or `charter hook
+sessionstart` and that child forks its own `_version-check` and `gl-refresh`, in a process
+where nothing here is patched: 18 in one full run, found only because somebody instrumented
+it (#945). Ten fixtures then planted a cooldown lock by hand, and the next one would not
+have. So the suite switches both refreshes off for every child at once — `tests/_envguard`
+sets ``$CHARTER_NO_BACKGROUND_CHECKS``, a documented production setting, right after its
+scrub — and this refuses a charter or tmux child whose environment drops it, the way
+:class:`AmbientGitConfig` refuses a git child that drops the gitconfig redirect. A case
+about a spawner takes the switch away with :func:`allow_background_checks`.
 """
 
 from __future__ import annotations
@@ -737,6 +748,11 @@ class BackgroundCharterChild(BaseException):
     """A test forked a detached charter the test itself will never wait for."""
 
 
+class BackgroundGrandchild(BaseException):
+    """A test started a charter or tmux child whose environment lets it fork a background
+    refresh of its own, where no guard in this process can see it."""
+
+
 _VAULT_CLIS: frozenset[str] = frozenset()
 _FORGE_CLIS: frozenset[str] = frozenset()
 
@@ -854,6 +870,47 @@ def _tmux_socket(argv: list[str], env) -> str | None:
         return os.path.realpath(env["TMUX"].split(",")[0])
     return os.path.realpath(os.path.join(env.get("TMUX_TMPDIR") or "/tmp",
                                          f"tmux-{os.getuid()}", label or "default"))
+
+
+#: The tmux commands that start a server when none is running, each with the shortest
+#: prefix tmux 3.7c resolves to it alone (`cmd_find` takes a unique prefix, and ``ne`` could
+#: be `new-pane`, `new-window` or `next-window`) and its alias. Read off `tmux
+#: list-commands` rather than remembered.
+_TMUX_SERVER_STARTERS = (("new-session", "new-s", "new"), ("start-server", "st", "start"))
+
+
+def _starts_a_tmux_server(argv: list[str]) -> bool:
+    """Could the tmux command line *argv* start a server?
+
+    The only tmux children whose environment reaches a pane: a server copies the environment
+    of the client that started it and hands that copy to every pane it creates, while a
+    command sent to a server already running brings nothing of its own (``cmd_chrome``
+    styles a live frame from a cleared environment, and tmux answers "no server running"
+    rather than start one). A bare ``tmux`` runs `new-session`, and a command after a ``;``
+    counts as much as the first.
+    """
+    words = iter(argv[1:])
+    command: list[str] = []
+    for word in words:
+        if not word.startswith("-"):
+            command = [word, *words]
+            break
+        for i, letter in enumerate(word[1:], 1):
+            if letter in _TMUX_VALUED:
+                if not word[i + 1:]:
+                    next(words, "")
+                break
+    if not command:
+        return True
+    starts = True                         # the first word is a command name
+    for word in command:
+        name = word.rstrip(";") if word != ";" else ""
+        if starts and name and any(name == alias or (full.startswith(name)
+                                                     and len(name) >= len(shortest))
+                                   for full, shortest, alias in _TMUX_SERVER_STARTERS):
+            return True
+        starts = word.endswith(";")
+    return False
 
 
 def _explain_tmux(parts: list[str], socket: str) -> str:
@@ -1681,6 +1738,80 @@ def allow_background_children(case) -> None:
     case.addCleanup(restore)
 
 
+#: Whether the case now running has taken the suite's ``$CHARTER_NO_BACKGROUND_CHECKS``
+#: away to exercise a spawner. Set by :func:`allow_background_checks`.
+_BACKGROUND_CHECKS_ALLOWED = False
+
+
+def allow_background_checks(case) -> None:
+    """Take ``$CHARTER_NO_BACKGROUND_CHECKS`` out of this process for *case*, and let a child
+    without it through. Both come back on the case's cleanup.
+
+    For a case whose subject IS `update.maybe_spawn` or `glstate.maybe_spawn` — their
+    throttles, their argv, what a render or a gather starts. With the switch on, both
+    return on their first line (#945), and a case asserting on what they do would be
+    asserting on that return. A case that also forks through the real `Popen` still says
+    so with :func:`allow_background_children`; the two are separate declarations because
+    `test_frame_tmux_integration.FourEdgeIntegration` wants a real detached `frame-gather`
+    and no version check.
+    """
+    from charter import util
+
+    global _BACKGROUND_CHECKS_ALLOWED
+    previous = _BACKGROUND_CHECKS_ALLOWED
+    value = os.environ.pop(util.NO_BACKGROUND_CHECKS, None)
+    _BACKGROUND_CHECKS_ALLOWED = True
+
+    def restore() -> None:
+        global _BACKGROUND_CHECKS_ALLOWED
+        _BACKGROUND_CHECKS_ALLOWED = previous
+        os.environ.pop(util.NO_BACKGROUND_CHECKS, None)
+        if value is not None:
+            os.environ[util.NO_BACKGROUND_CHECKS] = value
+
+    case.addCleanup(restore)
+
+
+def _drops_the_switch(opts: dict) -> bool:
+    """Would this child run without the suite's ``$CHARTER_NO_BACKGROUND_CHECKS``?
+
+    Asked of the environment the CHILD will get — its ``env=``, or a copy of this process's
+    when it has none, which is how `Popen` resolves it and why an emptied `os.environ` counts
+    — and asked with `util.background_checks_off`, production's own reading. A second reading
+    here would be free to disagree with it about a blank value, which is exactly the value a
+    hand-built environment is likely to carry.
+    """
+    from charter import util
+
+    if _BACKGROUND_CHECKS_ALLOWED:
+        return False
+    env = opts.get("env")
+    try:
+        return not util.background_checks_off(dict(os.environ) if env is None else env)
+    except (TypeError, ValueError, AttributeError):
+        return True                   # not a mapping `Popen` could use; refuse, don't guess
+
+
+def _explain_grandchild(parts: list[str], what: str) -> str:
+    from charter import util
+    return (
+        f"REFUSED: starting {what} without ${util.NO_BACKGROUND_CHECKS}\n"
+        f"{_current_test()} is about to run `{' '.join(parts)}` in an environment that does "
+        f"not carry ${util.NO_BACKGROUND_CHECKS}, which this suite sets for every child "
+        f"(`tests/_envguard.py`). Without it that child — or, for a tmux that starts a "
+        f"server, every `charter panel` that server runs — forks `charter _version-check`, a GET to PyPI, and "
+        f"`charter gl-refresh`, the forge client, the moment it gathers, renders or starts a "
+        f"session on a plane with no cache yet. That fork happens in another process, where "
+        f"nothing this guard patched exists: one full run forked 18 of them before the "
+        f"switch existed, and nothing noticed (#945).\n"
+        f"  The way out is to stop building the environment by hand: `Popen(..., env=None)` "
+        f"inherits this process's, and `{{**os.environ, ...}}` carries it too, which is what "
+        f"`tests._isolation.child_plane_env` and `charter.util.child_env` both do. A child "
+        f"that really must state its whole environment — a `patch.dict(..., clear=True)` "
+        f"included — adds `tests._envguard.stated()` to it. A case whose subject IS a background "
+        f"refresh says so with `tests._planeguard.allow_background_checks(self)`.")
+
+
 def _explain_background(parts: list[str]) -> str:
     return (
         f"REFUSED: forking a detached charter child from a test\n"
@@ -1857,6 +1988,11 @@ def _guard_spawns() -> None:
             socket = _tmux_socket(_launcher_argv(reached[0])[0], opts.get("env"))
             if socket in _OPERATOR_TMUX:
                 raise RealTmuxReach(_explain_tmux(reached[0], socket))
+            # A tmux that could start a server hands that server this environment, and the
+            # server hands it to every `charter panel` it runs. `-V` starts nothing.
+            if (socket is not None and _starts_a_tmux_server(_launcher_argv(reached[0])[0])
+                    and _drops_the_switch(opts)):
+                raise BackgroundGrandchild(_explain_grandchild(reached[0], "tmux"))
         parts = _charter_argv(args, opts)
         if parts is not None:
             if _REAL_ROOT:
@@ -1871,6 +2007,10 @@ def _guard_spawns() -> None:
                         raise RealPlaneSpawn(_explain_spawn(parts, plane, source))
             if opts.get("start_new_session") and not _BACKGROUND_ALLOWED:
                 raise BackgroundCharterChild(_explain_background(parts))
+            # Last, because both refusals above name a worse child: one on the real plane,
+            # one detached in this process. This one is about the generation below it.
+            if _drops_the_switch(opts):
+                raise BackgroundGrandchild(_explain_grandchild(parts, "charter"))
         return original(self, args, *rest, **kw)
 
     __init__.__module__ = __name__

@@ -52,10 +52,10 @@ from charter import (commands_frame, config, contain, doctor, profiles, profilet
 from charter.frame import (chats, launcher, leave, overlay, palette, selector, state,
                            tmuxctl)
 from charter.frame import reopen as reopen_state
-from tests import _gitguard, _tmuxreap, _tmuxsocket, _ttyguard
+from tests import _envguard, _gitguard, _tmuxreap, _tmuxsocket, _ttyguard
 from tests._isolation import (APipe, ATerminal, PersonaIso, Typed, approve_every_profile,
                               approve_profile, declare_profiles, make_plane,
-                              no_background_refresh, no_update_check_in, wired_as_today)
+                              no_background_refresh, wired_as_today)
 from tests.test_a_profile_is_wired_or_refuses import entry, listing, spawns
 
 #: A profile whose row can run: on `PATH`, approved and wired. The fixture's `which` says
@@ -1813,7 +1813,6 @@ class TheSelectorOnARealServer(PersonaIso, unittest.TestCase):
                           f"; this machine has {v}")
         make_plane(self)
         no_background_refresh(self)
-        no_update_check_in(config.ROOT)
         _ttyguard.no_terminal()
         self.tmux = shutil.which("tmux")
         self.socket = _tmuxreap.name(f"the-selector-{next(_SERVERS)}")
@@ -1851,6 +1850,9 @@ class TheSelectorOnARealServer(PersonaIso, unittest.TestCase):
             "PYTHONPATH": os.pathsep.join(
                 [str(_REPO_ROOT), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep),
             **_gitguard.environment(),
+            # The server this case starts hands its environment to every `charter panel`
+            # in the frame, and a panel on a fresh plane forks a PyPI check without it (#945).
+            **_envguard.stated(),
         }, clear=True))
 
     def _reap_the_server(self) -> None:

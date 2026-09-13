@@ -375,6 +375,34 @@ def self_relaunch_argv(*args: str) -> list[str]:
     return [sys.executable, "-P", "-m", "charter", *args]
 
 
+#: The switch that stops charter's two detached refreshes — `update.maybe_spawn`'s
+#: `_version-check` and `glstate.maybe_spawn`'s `gl-refresh` — for an offline machine, a CI
+#: job, or anyone who does not want charter reaching PyPI and their forge on its own. Read
+#: through :func:`background_checks_off` and nowhere else.
+NO_BACKGROUND_CHECKS = "CHARTER_NO_BACKGROUND_CHECKS"
+
+
+def background_checks_off(env=None) -> bool:
+    """Whether :data:`NO_BACKGROUND_CHECKS` is on in *env* (this process's, by default).
+
+    **It is on whenever it holds more than whitespace — ``0``, ``false`` and ``no``
+    included.** This is a request not to phone home, so the two ways of misreading it are
+    not the same size. Reading an unintended value as "on" costs a stale version indicator
+    and a CI column that does not fill. Reading a value as "off" because it was not one of
+    a set of spellings sends a GET to PyPI and runs the forge client for somebody who
+    asked charter not to. `news._flag` makes the same refusal for the same reason: a list of the words
+    that mean yes is only ever as wide as whoever wrote it.
+
+    Blank is unset, as a blank `$CHARTER_WORKSPACE` is (#1055): ``export
+    CHARTER_NO_BACKGROUND_CHECKS=`` is how a shell spells taking a value away.
+
+    *env* is a parameter so `tests._planeguard` can ask the question of the environment a
+    CHILD will get, with this function rather than a second reading of the variable.
+    """
+    source = os.environ if env is None else env
+    return bool((source.get(NO_BACKGROUND_CHECKS) or "").strip())
+
+
 def child_env() -> dict:
     """This process's environment plus **the plane this process actually resolved**.
 

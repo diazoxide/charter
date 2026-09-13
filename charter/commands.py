@@ -3520,6 +3520,18 @@ def cmd_version(args) -> int:
         util.info(f"A newer charter is published ({newer}).")
         util.info(f"  update, commit and push the lock:  charter version bump --push")
         return 0
+    if not locked and not update.checked():
+        # "Up to date" is a claim about PyPI (or `main`), and nothing here asked either: this
+        # command reads the cache the background check fills. With that check switched off
+        # the cache never fills, so the old line would have said it forever (#945). A plane
+        # with a lock keeps its own line below, which compares the lock and says nothing of
+        # what is published.
+        if util.background_checks_off():
+            util.info(f"not checked: ${util.NO_BACKGROUND_CHECKS} is set, so charter does not "
+                      f"ask in the background. `charter update` asks when you run it.")
+        else:
+            util.info("not checked yet: the background check has not answered on this plane.")
+        return 0
     util.ok("up to date." if not locked else f"in sync with the lock ({locked}).")
     return 0
 

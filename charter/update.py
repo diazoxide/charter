@@ -357,6 +357,21 @@ def newer_than(current: str) -> str | None:
         return None
 
 
+def checked() -> bool:
+    """Whether the cache holds the answer :func:`newer_than` compares on this channel.
+
+    ``latest`` on the stable channel, ``head`` on dev, because a PyPI number is not what a
+    dev plane is compared against. Without it `newer_than` answers None for "nothing
+    newer" and for "nothing known" alike, and `charter version` read both as up to date.
+    That was true for the hour before a first background check landed. With
+    ``$CHARTER_NO_BACKGROUND_CHECKS`` set it is true for good, so the two are told apart
+    here (#945).
+    """
+    from . import channel
+
+    return bool((load().get("head" if channel.is_dev() else "latest") or "").strip())
+
+
 def latest_display(installed: str) -> str:
     """The `latest` line, honest about what it is.
 
@@ -385,12 +400,8 @@ def latest_display(installed: str) -> str:
 def _fetch_latest() -> str | None:
     """One unauthenticated GET of PyPI's JSON metadata endpoint.
 
-    Through `urlopen`'s DEFAULT opener, which honours ``$https_proxy``, and one test fixture
-    rests on that: `tests/test_the_state_directory_is_charters_to_choose.py` sweeps `charter
-    hook sessionstart` against a plane with no ``.charter/`` yet, so it cannot plant a
-    cooldown lock to stop the check this spawns, and its `child_env` points that child at
-    `_NO_NETWORK` instead. Swapping in an explicit `build_opener(...)` with no `ProxyHandler`
-    would leave that fixture quietly GETting PyPI from CI with nothing failing.
+    Through `urlopen`'s DEFAULT opener, which honours ``$https_proxy`` — the setting a
+    machine behind a proxy already has, and so the one this should keep reading.
     """
     import urllib.request
     try:
@@ -471,7 +482,14 @@ def maybe_spawn() -> None:
     repaint, and the SessionStart hook. Until #938 the render was the only one, and no
     Claude Code chat reached it any more, so the cache sat for days on the plane that
     reported it. A new caller gets both brakes for free and needs no throttle of its own.
+
+    ``$CHARTER_NO_BACKGROUND_CHECKS`` is the brake that does not wait for a cooldown, and it
+    comes first: before the lock is stat'ed, the cache read or ``.charter/cache/`` created
+    (#945). Somebody who said no to background checks gets no trace of one. `charter update`
+    and `charter version bump` call `fetch_and_store` themselves and are not stopped.
     """
+    if util.background_checks_off():
+        return
     if not config.HAS_CONTROL_PLANE:
         return                # see `glstate.maybe_spawn` — no plane, nowhere to cache
     now = time.time()

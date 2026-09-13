@@ -27,18 +27,15 @@ opencode's `/charter` still reach, and the issue's table lists both as surfaces 
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
-import tempfile
 import time
 import unittest
-from pathlib import Path
 from unittest import mock
 
-from charter import config, glstate, hooks, root, statusline, update
+from charter import config, glstate, hooks, statusline, update
 from charter.frame import gather
-from tests._isolation import (PersonaIso, PlaneIso, make_plane, no_update_check_in,
-                              pin_update_channel, point_config_at, run_hook)
+from tests import _planeguard
+from tests._isolation import PersonaIso, PlaneIso, make_plane, pin_update_channel, run_hook
 
 #: A chat id in the shape `state.new_chat_id` mints. Nothing creates its frame directory, so
 #: `gather.read` finds no cache under it and falls through to a live `scan` on every call,
@@ -57,7 +54,11 @@ def _record_version_checks(case) -> list[list[str]]:
     what happens, which is the point of the measurement. Only the fork is replaced. Every
     other `Popen` is handed to the one that was in place, so a `git` a scan runs still runs
     and `tests._planeguard` still sees it.
+
+    The suite's ``$CHARTER_NO_BACKGROUND_CHECKS`` is taken away for the case, or the real
+    `maybe_spawn` would return on its first line and every count below would be zero (#945).
     """
+    _planeguard.allow_background_checks(case)
     spawned: list[list[str]] = []
     real = subprocess.Popen
 
@@ -201,36 +202,6 @@ class SessionStartIsATrigger(PlaneIso):
         for n in range(4):
             run_hook(hooks.sessionstart, {"session_id": f"t{n}"})
         self.assertEqual(len(spawned), 1)
-
-
-class AChildHandedAHeldPlaneForksNothing(PersonaIso):
-    """`tests._isolation.no_update_check_in`, which the suite's real-child fixtures use.
-
-    A panel, a `frame-gather` or a `charter hook sessionstart` run as a subprocess is out of
-    `tests._planeguard`'s sight, so the only thing keeping it off PyPI is the lock that helper
-    plants in the plane the child is handed. These ask the same `update.maybe_spawn` a child
-    runs, against another plane the way a child resolves one, so a helper that planted the
-    lock anywhere else would show up here rather than as a GET nobody sees.
-    """
-
-    def setUp(self) -> None:
-        super().setUp()
-        self.spawned = _record_version_checks(self)
-        self.child_plane = Path(tempfile.mkdtemp(prefix="charter-child-held-"))
-        self.addCleanup(shutil.rmtree, self.child_plane, True)
-        (self.child_plane / root.MARKER).write_text("schema = 1\n")
-
-    def test_a_plane_it_held_forks_nothing(self):
-        no_update_check_in(self.child_plane)
-        point_config_at(self, self.child_plane)
-        update.maybe_spawn()
-        self.assertEqual(self.spawned, [])
-
-    def test_the_same_plane_unheld_forks(self):
-        """The control: without the helper, that plane is one a child would fork from."""
-        point_config_at(self, self.child_plane)
-        update.maybe_spawn()
-        self.assertEqual(len(self.spawned), 1)
 
 
 class TheRenderPathStillAsks(PersonaIso):

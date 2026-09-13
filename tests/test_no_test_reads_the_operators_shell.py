@@ -224,8 +224,13 @@ class WhatIsScrubbed(unittest.TestCase):
         """Install removes them, so the answer is the same in a frame and in CI — which is
         what makes the bulk reads above safe and the 108 `patch.dict` calls that omit
         `clear=True` harmless for the names that mattered (#528)."""
-        leaked = [k for k in os.environ.copy() if _envguard._in_namespace(k)]
+        # Except what the suite put back for itself, and only at the value it put back: a
+        # name alone would let the shell's own export of it through (#945).
+        env = os.environ.copy()
+        leaked = [k for k in env
+                  if _envguard._in_namespace(k) and _envguard.STATED.get(k) != env[k]]
         self.assertEqual(leaked, [], f"{leaked} reached the suite from the shell")
+        self.assertTrue(_envguard.STATED, "the suite stated nothing, so nothing was exempt")
 
     def test_a_subprocess_does_not_inherit_the_operators_session(self):
         """The half `_planeguard` says it cannot see. A spawned `charter` resolves its own
@@ -237,9 +242,10 @@ class WhatIsScrubbed(unittest.TestCase):
         it: the probe used to spell four names, and the three it did not spell were
         precisely the ones that reached `charter init`'s stderr through a subprocess and
         cost two failures (#540)."""
-        probe = (f"import os;print(' '.join(k for k in os.environ "
-                 f"if k.startswith({_envguard._PREFIXES!r}) "
-                 f"or k in {tuple(sorted(_envguard._SCRUB_NAMES))!r}))")
+        probe = (f"import os;print(' '.join(k for k, v in os.environ.items() "
+                 f"if (k.startswith({_envguard._PREFIXES!r}) "
+                 f"or k in {tuple(sorted(_envguard._SCRUB_NAMES))!r}) "
+                 f"and {dict(_envguard.STATED)!r}.get(k) != v))")
         out = subprocess.run([sys.executable, "-c", probe],
                              capture_output=True, text=True, check=True).stdout.split()
         self.assertEqual(out, [], f"{out} reached a child process")
@@ -275,8 +281,8 @@ class WhatIsScrubbed(unittest.TestCase):
         probe = ("import json, os, tests;"
                  "from tests import _envguard;"
                  "print(json.dumps({"
-                 "'left': sorted(k for k in os.environ.copy() "
-                 "if _envguard._in_namespace(k)),"
+                 "'left': sorted(k for k, v in os.environ.copy().items() "
+                 "if _envguard._in_namespace(k) and _envguard.STATED.get(k) != v),"
                  "'recovered': sorted(_envguard.scrubbed())}))")
         tree = pathlib.Path(__file__).resolve().parent.parent
         plane, _ = child_plane_env(self)

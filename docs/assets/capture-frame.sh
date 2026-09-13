@@ -72,6 +72,14 @@ command -v tmux >/dev/null 2>&1 || {
 unset $(env | grep -o '^CHARTER_[A-Z_]*' || true) 2>/dev/null || true
 unset TMUX TMUX_PANE
 
+# And one charter variable put back, after that line so it is not unset with the rest. A plane
+# made a moment ago has no cache, so every gather and every SessionStart in the capture would
+# fork `charter _version-check`, a GET to PyPI, and `charter gl-refresh`. This switch stops
+# both before they touch anything (#945), and the outer server below inherits it from this
+# shell, so every pane of the frame does too. The capture stays off the network, which is
+# what this recipe has always claimed.
+export CHARTER_NO_BACKGROUND_CHECKS=1
+
 rm -rf "$DIR"; mkdir -p "$DIR"
 DIR="$(cd "$DIR" && pwd -P)"
 [ -n "$DIR" ] || { echo "capture-frame.sh: could not make the scratch directory — captured nothing." >&2; exit 2; }
@@ -138,19 +146,6 @@ export PATH
 
 PLANE="$DIR/plane"
 "$HERE/demo-plane.sh" "$PLANE" >&2 || exit 1
-
-# The newer-charter check's cooldown lock, the one a real machine already holds. Since #938
-# every gather and every SessionStart may fork `charter _version-check`, a GET to PyPI, and a
-# plane made a moment ago has no lock to stop it — `tests._isolation.no_update_check_in`
-# measured one suite run forking 18 of them. This touches the file `update.maybe_spawn`
-# touches before it forks, so the child's own throttle answers "attempted within the hour"
-# and the capture stays off the network, which is what this recipe has always claimed.
-( cd "$PLANE" && python3 -P -c '
-from charter import config, update
-lock = update._lock_file()
-config.private_mkdir(lock.parent)
-config.touch_for(lock)
-' ) || exit 1
 
 # ── launching a chat ──────────────────────────────────────────────────────────
 # One chat per call: `charter frame` in a window of the outer terminal, so every launch is

@@ -30,6 +30,7 @@ from unittest import mock
 
 from charter import __version__, channel, config, instance, statusline, update
 from tests._isolation import PersonaIso, child_plane_env, make_plane
+from tests._planeguard import allow_background_checks
 
 
 @contextlib.contextmanager
@@ -635,6 +636,7 @@ class TheBackgroundFetchIsWhereTheNetworkLives(PersonaIso):
     def test_the_cooldown_still_bounds_a_dev_plane_to_one_spawn(self):
         """`maybe_spawn` is called from `_brand` on every render. The dev channel changed
         what the child fetches and must not have changed how often it is started."""
+        allow_background_checks(self)     # the cooldown is only reached with the switch off
         calls = []
         with mock.patch.object(config, "UPDATE", {"channel": "dev"}), \
                 mock.patch.object(update.subprocess, "Popen",

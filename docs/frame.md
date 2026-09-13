@@ -1633,7 +1633,9 @@ hook that reports the plane moved runs it too — the session start, each prompt
 tool call — as does a `charter` command that wrote plane state. Both refreshes are
 therefore left to the brakes they have always had, which live in `.charter/cache/`: at most
 one check a day, and at most one attempt an hour. A frame repainting with no cache to read
-still starts one check, not one per tick.
+still starts one check, not one per tick. `$CHARTER_NO_BACKGROUND_CHECKS` switches both
+refreshes off, for a machine that should not reach PyPI or its forge on its own; see
+[install.md](install.md#what-charter-reaches-on-its-own-and-how-to-stop-it).
 
 **Only Claude Code's footer goes quiet, because it is the only one being duplicated.**
 opencode has no status bar, so charter wires the plane in as an on-demand `/charter`
