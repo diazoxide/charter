@@ -314,6 +314,8 @@ Set it with `charter persona default <name>` (or edit the file — it is yours).
 persona a session adopts when nobody has chosen one, and it is the only thing charter knows
 about front doors: **no persona name appears anywhere in charter's own code.** The name is
 your plane's, and the persona is an ordinary file you can rename, rewrite or delete.
+When `charter.toml` cannot be written the command names it and the system's error and exits
+1; when there is no `charter.toml` at all it says there is no file to declare it in.
 
 `charter persona default --clear` removes the declaration from `charter.toml` and the
 legacy `personas/.default` with it (below), because either one left behind would go on

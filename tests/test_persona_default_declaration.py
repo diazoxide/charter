@@ -299,5 +299,64 @@ class TestClearingSaysWhatHappened(DeclaredDefaultIso):
         self.assertIn("No default persona was declared.", out)
         self.assertNotIn("could not", out)
 
+
+class TestDeclaringSaysWhatFailed(DeclaredDefaultIso):
+    """`persona default <name>` words a failed write the way `--clear` does (#1023, ADR 0009).
+
+    It answered every failure with "is this a control plane?", including a read-only
+    charter.toml on a plane that plainly is one, so the operator was sent to check the wrong
+    thing and the OS's own error was dropped. Two branches of one command wording one failure
+    two ways is how the second one keeps the guess.
+    """
+
+    _plane = TestWritingTheDeclaration._plane
+    _run = TestWritingTheDeclaration._run
+    _read_only = TestClearingSaysWhatHappened._read_only
+
+    def setUp(self) -> None:
+        super().setUp()
+        if os.geteuid() == 0:
+            self.skipTest("root ignores the mode, so a refused write cannot be staged")
+
+    def _declare(self, name: str) -> tuple[int, str]:
+        buf = io.StringIO()
+        with redirect_stderr(buf):
+            rc = self._run(name=name)
+        return rc, buf.getvalue()
+
+    def test_a_charter_toml_it_could_not_write_is_named_with_the_os_error(self):
+        """Measured on main (713fe4e) with `charter.toml` read-only: `could not write
+        …/charter.toml — is this a control plane?`, in a plane with a `[[forge]]`, a
+        `[workspace]` and the persona it was asked to declare."""
+        self._plane()
+        self.make_persona("steward", role="S", vault="none")
+        toml = config.ROOT / "charter.toml"
+        self._read_only(toml)
+        rc, out = self._declare("steward")
+        self.assertEqual(rc, 1, out)
+        self.assertNotIn("Default persona declared", out)
+        self.assertIn(f"could not declare the default persona: could not update {toml} "
+                      f"({os.strerror(errno.EACCES)}).", out)
+        self.assertNotIn("control plane?", out)
+        self.assertIsNone(persona.declared_default())
+
+    def test_with_no_charter_toml_it_says_there_is_no_file_to_declare_it_in(self):
+        """Unlike a clear, a declaration with no charter.toml has failed: the key lives in
+        that file and `_set_key` reads it before it writes, so there is nothing to add the
+        line to. That the file is absent is what the OS reported, not a guess, so it is
+        said plainly; "could not update" would send the reader looking for a permission."""
+        self.make_persona("steward", role="S", vault="none")
+        toml = config.ROOT / "charter.toml"
+        self.assertFalse(toml.exists())
+        rc, out = self._declare("steward")
+        self.assertEqual(rc, 1, out)
+        self.assertNotIn("Default persona declared", out)
+        self.assertIn(f"could not declare the default persona: there is no {toml} "
+                      "to declare it in.", out)
+        self.assertNotIn("could not update", out)
+        self.assertNotIn("control plane?", out)
+        self.assertFalse(toml.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
