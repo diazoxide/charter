@@ -1710,6 +1710,104 @@ class DoctorNamesTheGate(SessionRootCase):
         self.assertEqual(r.hint, doctor._NOT_CHECKED_HINT)
         self.assertIn("could not be read", r.detail)
 
+    # #986. Claude Code honours `.claude/settings.local.json` as well as the shared file, and
+    # charter itself writes the rule there — `charter guard ask --local` at the plane root,
+    # `reinit` into a checkout. The row read only the shared file, so it warned that a rule was
+    # missing in exactly the places charter had just put it. Where the host reads the local file
+    # is measured, not assumed (`claude_code.CHECKOUT_LOCAL_SETTINGS`, Claude Code 2.1.267): in
+    # the session's own directory, and at the git root.
+
+    def _claude_local_rule(self, where: Path, text: str | None = None) -> Path:
+        p = where / ".claude" / "settings.local.json"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps({"permissions": {"ask": [RULE]}}) if text is None else text)
+        return p
+
+    def test_a_checkout_reinit_gave_the_local_rule_is_ok(self):
+        """The report, reproduced through the writer that produced it: the plane holds the rule
+        only in its local file, `reinit` mirrors it into the checkout's local file, and a chat
+        rooted in that checkout is prompted — so the row has nothing to warn about."""
+        repo = self.workspace / "repo"
+        repo.mkdir(parents=True, exist_ok=True)
+        # env=None: the suite has already redirected git's config (#641).
+        subprocess.run(["git", "init", "-q", str(repo)], check=True)
+        self._claude_local_rule(config.ROOT)
+        self._opencode_rule()
+        workspace.wire_harnesses("fleet")
+        self.assertIn(RULE, (repo / ".claude" / "settings.local.json").read_text(),
+                      "fixture never mirrored the rule this case is about")
+        self.rooted_at(repo.resolve())
+        r = doctor.check_handoff_gate()
+        self.assertEqual(OK, r.status, r)
+        self.assertIn("asks first under claude-code", r.detail)
+
+    def test_a_rule_guard_ask_local_wrote_at_the_plane_root_is_ok(self):
+        """The same false warning at the plane root, where no mirror is involved at all: the
+        rule is in the session's own local file, which `charter guard ask --local` wrote."""
+        self._opencode_rule()
+        commands.cmd_guard_ask(SimpleNamespace(pattern="charter handoff *", local=True,
+                                               dry_run=False, yes=True))
+        self.assertFalse((config.ROOT / ".claude" / "settings.json").is_file()
+                         and RULE in (config.ROOT / ".claude" / "settings.json").read_text(),
+                         "fixture put the rule in the shared file, which is not this case")
+        self.rooted_at(config.ROOT.resolve())
+        self.assertEqual(OK, doctor.check_handoff_gate().status)
+
+    def test_a_workspace_directory_reads_the_planes_local_file_at_the_git_root(self):
+        """`workspaces/<ws>/` is inside the plane's repository, so the plane's local file is in
+        force there without any copy — which is why `reinit` generates none."""
+        subprocess.run(["git", "init", "-q", str(config.ROOT)], check=True)
+        self._claude_local_rule(config.ROOT)
+        self._opencode_rule()
+        self.rooted_at(self.workspace)
+        self.assertEqual(OK, doctor.check_handoff_gate().status)
+
+    def test_outside_a_repository_the_planes_local_file_does_not_reach_a_workspace(self):
+        """The boundary of the reading above. With no git root there is no second place the
+        host reads the local file from, so the plane's copy is not in force at
+        `workspaces/<ws>/` and the row still warns. Reading the plane's local file wherever the
+        session stands would print a tick over a chat that is not prompted."""
+        self._claude_local_rule(config.ROOT)
+        self._opencode_rule()
+        self.rooted_at(self.workspace)
+        r = doctor.check_handoff_gate()
+        self.assertEqual(WARN, r.status, r)
+        self.assertEqual(self.ADD, r.hint)
+
+    def test_a_local_file_charter_cannot_read_is_not_read_as_a_present_rule(self):
+        """Nor as a missing one. A local file that does not parse, or cannot be opened, may hold
+        the rule or may not, so the row says it could not check rather than either."""
+        self._opencode_rule()
+        self.rooted_at(config.ROOT)
+        for case in ("malformed", "unreadable"):
+            with self.subTest(case):
+                p = self._claude_local_rule(config.ROOT, text="{nope" if case == "malformed"
+                                            else None)
+                if case == "unreadable":
+                    p.chmod(0)
+                    self.addCleanup(p.chmod, 0o600)
+                    if os.access(p, os.R_OK):
+                        self.skipTest("this user reads a mode-000 file (root)")
+                r = doctor.check_handoff_gate()
+                self.assertEqual(WARN, r.status, r)
+                self.assertEqual(doctor._NOT_CHECKED_HINT, r.hint)
+                self.assertIn(str(p), r.detail)
+
+    def test_a_malformed_shared_file_is_not_rescued_by_a_local_rule(self):
+        """The shared file is read first and decides first. Charter cannot tell what a file it
+        cannot parse holds, so a rule in the local file beside it does not turn "could not
+        check" into a tick."""
+        shared = config.ROOT / ".claude" / "settings.json"
+        shared.parent.mkdir(parents=True, exist_ok=True)
+        shared.write_text("{nope")
+        self._claude_local_rule(config.ROOT)
+        self._opencode_rule()
+        self.rooted_at(config.ROOT)
+        r = doctor.check_handoff_gate()
+        self.assertEqual(WARN, r.status, r)
+        self.assertEqual(doctor._NOT_CHECKED_HINT, r.hint)
+        self.assertIn(str(shared), r.detail)
+
     def test_the_harnesses_that_cannot_refuse_are_named(self):
         self._claude_rule(config.ROOT)
         self._opencode_rule()
