@@ -1055,9 +1055,11 @@ def _lock_words(name: str, locked: str | None, *, after_switch: bool = False) ->
     `unlock` inside a chat, both read from `workspace.launch_lock` or `workspace.is_locked`);
     `unlock` outside a chat reports the file it just deleted or found absent;
     `commands_frame._pin_workspace` names the lock its own picked launch takes; and
-    `harness/codex.py`'s `session-lock` deficit says what the lock falls back to in a Codex
-    shell, which no per-session id reaches. `cli.py`'s help and the SessionStart nudge say
-    what confirming a workspace does, not what a command just did.
+    `harness/codex.py`'s `session-lock` deficit says a Codex shell outside a frame, which no
+    per-session id reaches, has no lock at all (it once named a terminal-pane fallback that
+    does not exist, #954). `cli.py`'s help and the SessionStart nudge say what confirming a
+    workspace does, not what a command just did; the nudge promises the lock only where
+    `session.current()` answers, the same id this function's lock was written under.
 
     *after_switch* is for the sentence after a selection that did NOT move the lock (a
     forced pointer inside a chat): there the elsewhere case says what the switch did and did
