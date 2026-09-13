@@ -116,8 +116,10 @@ class UtilRunAnswersForTheRepositoryItNames(TwoRepositories):
 
     def test_what_is_withheld_is_every_repository_local_variable_the_running_git_names(self):
         """`git rev-parse --local-env-vars` is git's own list of the variables it clears when it
-        moves into another repository — a submodule, say. Held equal rather than as a subset,
-        so a git that adds one fails here instead of passing it through to every child. The
+        moves into another repository — a submodule, say. Every one the running git prints must
+        be withheld, so a newer git that adds one fails here instead of passing it through to
+        every child. Containment and not equality: the tuple is 2.50.1's list, and an older git
+        — a CI runner's — prints fewer, which withholds nothing it would have read. The
         ``GIT_CONFIG*`` variables on that list name configuration, and stay (see the test
         below)."""
         git = shutil.which("git")
@@ -126,8 +128,8 @@ class UtilRunAnswersForTheRepositoryItNames(TwoRepositories):
         listed = subprocess.run([git, "rev-parse", "--local-env-vars"], capture_output=True,
                                 text=True, check=True).stdout.split()
         self.assertIn("GIT_DIR", listed, "fixture: git printed no repository-local variables")
-        self.assertEqual(sorted(util.GIT_REPOSITORY_ENV),
-                         sorted(v for v in listed if not v.startswith("GIT_CONFIG")))
+        self.assertLessEqual({v for v in listed if not v.startswith("GIT_CONFIG")},
+                             set(util.GIT_REPOSITORY_ENV))
 
     def test_a_config_handed_to_git_in_the_environment_still_reaches_it(self):
         """``GIT_CONFIG_COUNT`` is how CONTRIBUTING hands the suite the runner's git config, and
