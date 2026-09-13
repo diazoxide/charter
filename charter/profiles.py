@@ -483,14 +483,18 @@ def expanded_env(p: Profile) -> dict[str, str]:
     return {name: os.path.expanduser(value) for name, value in p.env}
 
 
-def display(p: Profile) -> str:
+def display(p: Profile, limit: int = contain.DISPLAY_LIMIT) -> str:
     """*p* as one line a person reads: `NAME=value` for each variable, then the command.
 
     Each piece through `contain.readable`, so a control byte is shown escaped and never
     interpreted (ruling 35): the file is one a chat can write.
+
+    *limit* is `contain.readable`'s, per piece. `contain.NO_CLIP` is for a surface that
+    bounds the whole line its own way and says how much it hid — the profile selector's
+    rows (ruling 45) — because a count taken after a fixed `...` is a count of the remainder.
     """
-    pieces = [contain.readable(f"{name}={value}") for name, value in p.env]
-    pieces.append(contain.readable(shlex.join(p.command)))
+    pieces = [contain.readable(f"{name}={value}", limit) for name, value in p.env]
+    pieces.append(contain.readable(shlex.join(p.command), limit))
     return " ".join(pieces)
 
 

@@ -613,9 +613,14 @@ def _picked(fid: str | None, p: profiles.Profile) -> Callable[[], None]:
     The kind goes back to what the launch recorded rather than to a blank: for a selector
     pane that IS blank (`_launch` clears it, so no launching shell's kind rides onto the
     window), and restoring what was there says why in one line instead of two.
+
+    **No `fid is None` guard, and its absence is measured rather than forgotten.** A launch
+    with no frame proof is a `frame-launch` run by hand, and every write below and in the
+    undo goes through `state.frame_dir`, which answers ``None`` for an id it cannot name a
+    directory for — so each is already the no-op a guard would have made it. CI's deletion
+    sweep deleted that guard and nothing could tell (#996's survivors): a line no test can
+    tell from its absence says nothing a reader needs.
     """
-    if fid is None:
-        return _nothing
     was = state.identity(fid).get("CHARTER_HARNESS", "")
     state.clear_waiting(fid)
     state.record_picked_kind(fid, p.harness)
@@ -691,6 +696,22 @@ def _select_in_pane(args, fid: str | None) -> int:
     makes the surface paint into the rectangle this process was GIVEN rather than into
     whatever `sys.stdout` is bound to by then (#606, #611).
 
+    **The question for a new or changed profile is :func:`attempt`'s, asked here.** The
+    surface has handed the terminal back by the time a row comes out of it (`palette
+    .own_the_tty` restores the mode in a `finally`), so the pane is an ordinary terminal
+    again and :func:`answered` puts Task 3's own prompt on it — the profile's whole command
+    and environment, never clipped, then `run this? [y/N]` — exactly as `charter <profile>`
+    does in a terminal. Every answer comes back as a kind this function already handles:
+
+    * **no** is :func:`already_said` — the operator was told `charter: nothing started.`
+      where they answered, so the list comes back with nothing marked refused and the cursor
+      on the row they pressed;
+    * **a yes charter could not write down** is `KIND_RECORD`, and **a record that moved
+      while the question was up** is `KIND_MOVED`: each comes back on that row as a refusal,
+      so the pane never runs the command and never puts the same question a second time;
+    * **a yes** runs the whole chain again from the top, the wiring probe last (ruling 27),
+      before anything is exec'd.
+
     **A refused pick comes back to the selector** (ruling 30) — with one exception, and it
     is the exception because it is not a refusal at all: an `execvpe` that RAISED has
     already handed the pane over and taken it back (`_picked`'s undo), and there is nothing
@@ -728,7 +749,7 @@ def _select_in_pane(args, fid: str | None) -> int:
                 return 0
             if r.kind == KIND_EXEC:
                 return _refused_in_pane(r.text, r.exit, fid=fid, attended=True)
-            after = selector.Refused(p.name, r.text)
+            after = None if already_said(r) else selector.Refused(p.name, r.text)
     finally:
         pane.release(held)
 

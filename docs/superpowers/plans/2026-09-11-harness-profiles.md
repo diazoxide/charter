@@ -2461,6 +2461,15 @@ def record_picked_kind(fid: str, harness_name: str) -> None: ...
    | `wiring.cached(...)` or, on a miss, `detect` (concurrent, then `remember`) is `UNWIRED`/`UNKNOWN_STATE` | True | `f"not wired — {w.fix}"`; display only, and a pick probes again (review B2) |
    | otherwise | False | `f"{p.kind} · {profiles.display(p)}"` |
 
+   - *Amended in Task 5's own PR, once Tasks 3 and 4 were on `main`:* a profile that is not
+     wired, or that charter could not ask, carries **Task 4's own sentence**
+     (`wiring.sentence`) rather than `not wired — {w.fix}` — the words the launch says when it
+     refuses the same profile a moment later, and an UNKNOWN is "could not ask", not "not
+     wired" (Ruling 12). The not-approved note is `selector.NOT_APPROVED` with
+     `profiletrust`'s own `new`/`changed`. And **nothing on a row is clipped by `contain`**:
+     values arrive whole and escaped, and the surface cuts each column to the pane and says
+     how much it hid with `contain.counted` — the helper `doctor`'s rows use (Ruling 45).
+
 3. **Cursor.** It opens on the `start` row when that row can run; otherwise where
    `palette.aim` puts it (the first runnable row). A `default` naming a profile this machine
    lacks marks no row (Ruling 18).
@@ -2469,6 +2478,18 @@ def record_picked_kind(fid: str, harness_name: str) -> None: ...
      cursor where it was.
    - **New or changed** → `own_the_tty(Confirm(heading=f"run this? {display(p)}"))`; `y` →
      `profiletrust.record_launched(p)`; anything else → back to the selector.
+   - *Amended in Task 5's own PR:* **there is no `Confirm`.** A new or changed row is a pick
+     like any other, and `launcher.attempt` asks — `answered`, then
+     `profiletrust.ask_in_terminal` — on the terminal the surface has just handed back. Three
+     reasons, each found against the code once Task 3 was merged: a one-line surface heading
+     cannot hold a command whole, and Ruling 45 says the approval prompt never clips; the
+     `Confirm` heading showed no `was` line for a CHANGED profile, which Task 3's prompt does;
+     and a record that moved between `Confirm`'s write and the launch's re-check made
+     `answered` put the same question a second time, which S1 forbids. The launch's answers
+     come back as kinds: a decline returns to the list with nothing refused and the cursor on
+     that row; `KIND_RECORD` and `KIND_MOVED` return as that row's refusal, so the command
+     never runs and the question is never put twice; a yes re-runs the whole chain, wiring
+     last (Ruling 27).
    - **Wired and approved** → `Choice(name)`.
    - This is the spec's "Enter on it only shows the reason". The palette closes on a refused
      Enter today (`commands_frame.py:8396-8456`), so the selector does not borrow that
@@ -2505,7 +2526,7 @@ closes the window as today and never returns to the selector.
 - `_wait_for_harness` waits through the selection and returns 130 on Esc.
 
 **Refusals and texts.** Unchanged from Tasks 2–4. The selector adds only the footer, the
-`Confirm` heading and:
+`Confirm` heading (*amended:* no `Confirm` — see step 4) and:
 
 ```python
 NOTHING_TO_PICK = ("charter: no profile can start here — every row above says why. Nothing "

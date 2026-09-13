@@ -223,37 +223,41 @@ _CHROME_ROWS = _HEADER_ROWS + _FOOTER_ROWS
 _DEFAULT_FOOTER = ("  up/down move   enter choose   esc cancel   "
                    f"{HATCH_KEY} back to the harness")
 
-#: What a footer that did not fit says about what it hid — ruling 35's clipping clause.
-#:
-#: **An ellipsis marks a cut and not its size, and here the size is the whole question.**
-#: The footer is the ONLY place a refusal's reason appears on this surface
-#: (`frame/selector.py`: Enter on a refused row leaves the list up and puts the reason
-#: here), and that reason is arbitrary-length profile-derived text out of a file a chat can
-#: write. Clipped silently, an operator reading `charter reinit` at the end of a sentence
-#: cannot tell whether that was the fix or the middle of one.
-_HIDDEN = "… +{n} not shown"
-
 
 def _clipped(text: str, width: int) -> str:
-    """*text* inside *width*, saying how many characters went when it does not fit.
+    """*text* inside *width* cells, saying how many characters went when it does not fit.
+
+    **An ellipsis marks a cut and not its size, and on this surface the size is the whole
+    question** (ruling 45). The footer is the ONLY place a refusal's reason appears on the
+    profile selector (`frame/selector.py`: Enter on a refused row leaves the list up and
+    puts the reason here), and a selector row carries a command or a reason out of a file a
+    chat can write. Clipped silently, an operator reading `charter reinit` at the end of a
+    line cannot tell whether that was the fix or the middle of one. The marker is
+    `contain.counted`'s, which is `doctor`'s: one promise, one spelling.
 
     Whole characters rather than cells, because that is what an operator would have to go
     and read somewhere else: `charter harness list` and `charter doctor` both print the
-    same sentence unclipped, and the count is what says to go there.
+    same text unclipped, and the count is what says to go there.
 
-    The search walks down from the end rather than computing a cut, because
-    :data:`_HIDDEN`'s own width changes with the number in it — one more hidden character
-    can make the marker one cell wider and put the line back over the edge. Bounded by the
-    length of a sentence, on a paint that already measures every row.
+    The search walks down from the most a pane this wide could show rather than computing a
+    cut, because the marker's own width changes with the number in it — one more hidden
+    character can make it one cell wider and put the line back over the edge. **It starts
+    at `width` characters and not at the end of the text**, because a command a chat made a
+    megabyte long would otherwise cost a quadratic walk on every paint of every row that
+    carries it. What that start gives up is exact and harmless: a longer prefix can fit only
+    by holding characters narrower than a cell (a combining mark `contain` leaves alone),
+    and stopping short of those hides a few more characters than it had to — which the
+    count still says, exactly.
     """
     if tui.width(text) <= width:
         return text
-    for keep in range(len(text), -1, -1):
-        line = text[:keep] + _HIDDEN.format(n=len(text) - keep)
+    for keep in range(min(len(text), width), -1, -1):
+        line = contain.counted(text, keep)
         if tui.width(line) <= width:
             return line
     # A pane too narrow for the marker itself: the ordinary clip, which is what every row
-    # above already gets. Nothing is claimed about the size because nothing can be.
+    # of a surface that does not count already gets. Nothing is claimed about the size
+    # because nothing can be.
     return tui.truncate(text, width)
 
 #: The two cells between the title column and the note column.
@@ -718,10 +722,6 @@ class Surface:
     #: two, so the request and the handling cannot disagree.
     mouse: bool = False
 
-    #: Whether the header says how many rows there are. A list somebody is choosing FROM
-    #: wants it; a surface that asks ONE question does not — see :meth:`render`.
-    counted: bool = True
-
     #: The bottom line, in place of :data:`_DEFAULT_FOOTER`. ``None`` keeps that line,
     #: which is what every surface on `main` wants.
     #:
@@ -734,6 +734,17 @@ class Surface:
     #: (ruling 30). One attribute rather than a `render` override per surface: the line is
     #: this module's arithmetic, and a subclass rewriting it would be #749's shape.
     footer: str | None = None
+
+    #: Whether a title or a note this pane is too narrow for SAYS how much it hid
+    #: (`… +N not shown`) rather than ending in a bare ellipsis — ruling 45: a row the
+    #: operator chooses or approves from counts what it kept back. ``False`` keeps every
+    #: row exactly as it was drawn, which is what the palette, the tab menu and the pickers
+    #: want: their rows are charter's own words, not a command out of a file a chat can
+    #: write. `frame/selector.Selector` is the surface that sets it.
+    #:
+    #: One attribute and not a `render` override, for :attr:`footer`'s reason: how a row
+    #: is cut is this module's arithmetic.
+    says_what_it_hid: bool = False
 
     _sel: int = field(default=0, init=False)
     _top: int = field(default=0, init=False)
@@ -782,28 +793,26 @@ class Surface:
         function rather than a convention each row source is trusted to keep (#749).
         """
         top, n = self._window(height)
-        shown = [(contain.one_line(r.title), contain.one_line(r.note), r.mark)
+        # Unclipped where the row COUNTS its cut: `contain.one_line`'s own budget ends in a
+        # fixed marker, and a count taken after that would be a count of what was left of
+        # a value somebody had already cut — a number that looks exact and is not.
+        limit = contain.NO_CLIP if self.says_what_it_hid else contain.DISPLAY_LIMIT
+        shown = [(contain.one_line(r.title, limit), contain.one_line(r.note, limit), r.mark)
                  for r in self.rows[top:top + n]]
         title_w = _title_width([(t, note) for t, note, _ in shown], width)
-        # **The count, and the two reasons a surface may not want one.** It answers *how
-        # much is there* for a list somebody is choosing FROM. A surface that asks one
-        # question is not that: `frame/selector.Confirm` reads "run this? <command>", and
-        # `· 1 to choose from` after it describes the shape of the widget rather than the
-        # thing being approved.
-        #
-        # And the heading is clipped by :func:`_clipped` for the footer's reason, which
-        # bites hardest here: an approval prompt holds the COMMAND, arbitrary-length text
-        # out of a file a chat can write, and a `y` given to a silently cut one approves
-        # something the operator did not see the end of (ruling 35's clipping clause).
-        suffix = f" · {len(self.rows)} to choose from" if self.counted else ""
-        head = _clipped(contain.one_line(self.heading), max(0, width - len(suffix)))
-        out = [tui.truncate(f"{_BOLD}{head}{_R}{_DIM}{suffix}{_R}", width)]
+        out = [tui.truncate(f"{_BOLD}{contain.one_line(self.heading)}{_R}"
+                            f"{_DIM} · {len(self.rows)} to choose from{_R}", width)]
         if not self.rows:
             out.append(tui.truncate(f"  {_DIM}{EMPTY}{_R}", width))
         for i, (title, note, marked) in enumerate(shown, start=top):
             on = i == self._sel
             mark = _MARK[0] if on else _MARK[1]
             here = ROW_MARK[0] if marked else ROW_MARK[1]
+            if self.says_what_it_hid:
+                # Each column cut to its OWN room, so the count lands inside the row rather
+                # than past the edge the whole-row cut below would take it off at.
+                room = width - tui.width(mark) - tui.width(here) - title_w - _GAP
+                title, note = _clipped(title, title_w), _clipped(note, room)
             body = (f"{mark}{here}{tui.pad(title, title_w)}{' ' * _GAP}"
                     f"{_DIM}{note}{_R}")
             out.append(tui.truncate(f"{_REV}{body}{_R}" if on else body, width))
@@ -811,9 +820,11 @@ class Surface:
             out.append("")
         # Contained before `tui.width` sees it, for every other display string's reason
         # (#472): a footer carries a refusal, and a refusal quotes a profile's own command.
-        # And clipped by :func:`_footer_line` rather than by `tui.truncate` alone, because
-        # a refusal is the one line here whose CUT has to say its own size (ruling 35).
-        foot = contain.one_line(_DEFAULT_FOOTER if self.footer is None else self.footer)
+        # Unclipped by `contain` and clipped by :func:`_clipped` alone, because a refusal is
+        # the one line here whose CUT has to say its own size, and a size counted after a
+        # fixed `...` would be the size of the remainder.
+        foot = contain.one_line(_DEFAULT_FOOTER if self.footer is None else self.footer,
+                                contain.NO_CLIP)
         out.append(tui.truncate(f"{_DIM}{_clipped(foot, width)}{_R}", width))
         return out[:max(1, height)]
 

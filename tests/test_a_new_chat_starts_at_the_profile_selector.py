@@ -15,11 +15,18 @@ not in the quit manifest and is never reopened; its kind and its profile are rec
 pick and not before, which is what makes Esc "nothing has happened yet" rather than #518's
 "a launch that half happened".
 
-**Where a row's state comes from Tasks 3 and 4, this drives the seam**
-(`selector.pending`): that function is what will ask `profiletrust.approval_needed` and
-`wiring.detect` once those land, and every case here about "not approved yet" or "not wired"
-states it through the seam rather than through either module, so the row rules are pinned
-before the answers exist.
+**A row's approval and wiring come from Tasks 3 and 4 themselves.** "Not approved yet" is
+`profiletrust.approval_needed` reading a real launch record, and "not wired" is `wiring`
+asking the harness through the same `util.run` seam Task 4's own module drives
+(`tests/test_a_profile_is_wired_or_refuses.spawns`). A case whose subject is something else
+says so the way Task 4's modules do: every declared profile approved, and wiring stated —
+`wiring.detect` answering WIRED for the rows, `tests._isolation.wired_as_today` for a launch,
+which is otherwise refused "could not tell" before it reaches anything.
+
+**The approval is asked in the pane, by the launch, in Task 3's words** — the selector draws
+no prompt of its own. So the cases about a new or changed profile drive
+`launcher.cmd_frame_launch --select` with a terminal on both ends, the way Task 3's own
+module drives `launcher.start`.
 """
 
 from __future__ import annotations
@@ -30,13 +37,19 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import config, contain, profiles, tui, util
+import re
+import threading
+
+from charter import config, contain, doctor, profiles, profiletrust, tui, util, wiring
 from charter.frame import chats, launcher, leave, overlay, palette, selector, state
 from tests import _gitguard
-from tests._isolation import PersonaIso, declare_profiles, make_plane
+from tests._isolation import (APipe, ATerminal, PersonaIso, Typed, approve_every_profile,
+                              approve_profile, declare_profiles, make_plane, wired_as_today)
+from tests.test_a_profile_is_wired_or_refuses import entry, listing, spawns
 
 #: A profile whose row can run: on `PATH`, approved and wired. The fixture's `which` says
-#: yes to everything, and `pending` answers `None` until Tasks 3 and 4 fill it in.
+#: yes to everything, every declared profile is approved, and `wiring.detect` answers WIRED
+#: unless a case says otherwise.
 WORK = "claude-work"
 
 
@@ -48,7 +61,15 @@ class _APlaneWithProfiles(PersonaIso):
     `shutil.which` answers a path for every program, so a built-in is listed and a declared
     profile is not refused for being absent from this machine's `PATH`. A case about either
     says so itself.
+
+    Every declared profile is APPROVED — a real launch record, `approve_every_profile` — and
+    `wiring.detect` answers WIRED, recording whom it was asked about in :attr:`detected`. A
+    case about either says so itself: `_unapprove` for the first, and :attr:`REAL_WIRING`
+    for a class that drives `wiring` through `util.run`.
     """
+
+    #: Leave `wiring.detect` alone, for the cases whose subject is what it answers.
+    REAL_WIRING = False
 
     def setUp(self) -> None:
         super().setUp()
@@ -56,6 +77,18 @@ class _APlaneWithProfiles(PersonaIso):
         self.local = declare_profiles(self)
         self.which = self.enterContext(mock.patch.object(
             selector.shutil, "which", side_effect=lambda cmd, **kw: f"/usr/bin/{cmd}"))
+        approve_every_profile(self)
+        self.detected: list[str] = []
+        if not self.REAL_WIRING:
+            self.enterContext(mock.patch.object(wiring, "detect", side_effect=self._wired))
+
+    def _wired(self, p, *, cwd):
+        self.detected.append(p.name)
+        return wiring.Wiring(wiring.WIRED, "stood in for the probe", "")
+
+    def _unapprove(self) -> None:
+        """No launch record for anything: every declared profile is new again."""
+        (config.STATE_DIR / profiletrust.RECORD).unlink()
 
     def _read(self) -> profiles.ProfileSet:
         return selector.read(config.ROOT)
@@ -188,6 +221,7 @@ class TheRows(_APlaneWithProfiles, unittest.TestCase):
         in a command could otherwise redraw the row to show a harmless command."""
         self.local.write_text('[harness.sneaky]\nkind = "claude"\n'
                               'command = ["cl\\raude\\u001b[2Kharmless"]\n')
+        approve_profile(self, "sneaky")
         row = self._row(self._rows(), "sneaky")
         line = "".join(selector.Selector(catalogue=(row,)).render(200, 6))
         for text in (row.note, line):
@@ -195,14 +229,44 @@ class TheRows(_APlaneWithProfiles, unittest.TestCase):
             self.assertNotIn("\x1b[2K", text)
         self.assertIn("\\u000d", row.note)
 
-    def test_a_long_profile_name_is_clipped_in_its_title(self):
+    def test_a_long_profile_name_is_whole_in_its_row_and_counted_where_it_is_cut(self):
         """`profiles.NAME_RE` bounds a name's shape and says nothing about its length, so
-        the title is the one value here that arrives printable and unbounded."""
+        the title is the one value here that arrives printable and unbounded — and ruling
+        45: a row the operator chooses from says how much it hid. So the ROW holds the name
+        whole, and the pane that cannot fit it says by how much, counted from the whole name
+        rather than from what a fixed `...` left of it."""
+        name = "w" * 200
         self.local.write_text('[harness.%s]\nkind = "claude"\ncommand = ["claude"]\n'
-                              % ("w" * 200))
-        row = self._row(self._rows(), "w" * 200)
-        self.assertTrue(row.title.endswith("..."))
-        self.assertLess(len(row.title), 200)
+                              % name)
+        approve_profile(self, name)
+        row = self._row(self._rows(), name)
+        self.assertEqual(row.title, name)
+        line = selector.Selector(catalogue=(row,)).render(80, 6)[1]
+        kept = len(re.search(r"(w+)…", line).group(1))
+        self.assertIn(f"… +{200 - kept} not shown", line)
+        self.assertNotIn("...", line)
+
+    def test_a_long_command_and_environment_reach_the_row_whole(self):
+        """Ruling 45 at the row's source: `profiles.display` clips each piece at
+        `contain.DISPLAY_LIMIT` with a fixed `...` unless told not to, and a row that then
+        counted its cut would be counting what that left. The row holds the value whole;
+        the surface says how much of it the pane took."""
+        home, arg = "h" * 300, "a" * 300
+        self.local.write_text('[harness.long]\nkind = "claude"\n'
+                              f'command = ["claude", "{arg}"]\n'
+                              f'env = {{ CLAUDE_CONFIG_DIR = "{home}" }}\n')
+        approve_profile(self, "long")
+        note = self._row(self._rows(), "long").note
+        self.assertIn(arg, note)
+        self.assertIn(f"CLAUDE_CONFIG_DIR={home}", note)
+        self.assertNotIn("...", note)
+
+    def test_a_long_command_a_machine_lacks_is_named_whole(self):
+        program = "p" * 300
+        self.local.write_text(f'[harness.long]\nkind = "claude"\ncommand = ["{program}"]\n')
+        self.which.side_effect = lambda cmd, **kw: None
+        note = self._row(self._rows(), "long").note
+        self.assertEqual(note, selector.NOT_ON_PATH.format(cmd=program))
 
     def test_a_refusal_at_the_launch_marks_the_row_it_names_and_no_other(self):
         """*after* is ONE profile's refusal — the one the launch just checked again. A list
@@ -245,52 +309,128 @@ class TheRows(_APlaneWithProfiles, unittest.TestCase):
         self.assertTrue(all(r.title for r in rows), self._names(rows))
 
 
-class TheSeamTasksThreeAndFourFill(_APlaneWithProfiles, unittest.TestCase):
-    """One function answers "is this profile approved, and is it wired" — `selector.pending`.
+class ARowSaysWhetherItIsApproved(_APlaneWithProfiles, unittest.TestCase):
+    """Task 3 on the rows: a new or changed profile is NOT refused — Enter starts the launch,
+    and the launch asks — and it is never probed, because a probe runs the profile's own
+    command and only a yes stands for the operator's approval of it (ruling 1)."""
 
-    Task 3's approval and Task 4's wiring both land in it, so the ROW rules are pinned here
-    and the two answers are filled in one place. Until then it answers `None`, which is what
-    makes this branch's selector list every installed profile as runnable.
-    """
+    def test_a_new_profile_is_not_refused_and_says_it_is_not_approved_yet(self):
+        self._unapprove()
+        row = self._row(self._rows(), WORK)
+        self.assertFalse(row.refused)
+        self.assertEqual(row.note, selector.NOT_APPROVED.format(state=profiletrust.NEW))
+        self.assertIn("not approved yet (new) — Enter shows its command", row.note)
 
-    def test_a_state_the_seam_refuses_makes_the_row_refused_with_its_fix(self):
-        with mock.patch.object(selector, "pending", return_value=selector.Pending(
-                refused=True, note="not wired — charter harness install claude-work",
-                ask=False)):
+    def test_a_changed_profile_says_changed(self):
+        self.local.write_text(self.local.read_text().replace(
+            'command = ["claude"]', 'command = ["claude", "--pinned"]'))
+        row = self._row(self._rows(), WORK)
+        self.assertFalse(row.refused)
+        self.assertIn("not approved yet (changed)", row.note)
+
+    def test_an_unapproved_profile_is_never_probed(self):
+        self._unapprove()
+        self._rows()
+        self.assertNotIn(WORK, self.detected)
+        self.assertIn("claude", self.detected, "a built-in never asks, so it is probed")
+
+    def test_a_built_in_never_says_it_is_not_approved(self):
+        self._unapprove()
+        self.assertNotIn("not approved", self._row(self._rows(), "claude").note)
+
+
+class ARowSaysWhetherItIsWired(_APlaneWithProfiles, unittest.TestCase):
+    """Task 4 on the rows, asked of the harness through `util.run` exactly as `wiring`'s own
+    module asks it (`spawns`). A profile that is not wired is refused with Task 4's own
+    sentence — the one the launch says a moment later — and the answer is remembered for
+    the next paint and never for a launch (ruling 21)."""
+
+    REAL_WIRING = True
+
+    def setUp(self) -> None:
+        super().setUp()
+        # `claude` and nothing else, so the rows that probe are the built-in and the one
+        # declared profile that runs it: `codex-pinned` runs `npx`, which is not "here".
+        self.which.side_effect = lambda cmd, **kw: "/usr/bin/claude" if cmd == "claude" else None
+
+    def test_an_unwired_profile_is_refused_with_task_fours_sentence_and_its_fix(self):
+        with spawns([], listing()):
             row = self._row(self._rows(), WORK)
         self.assertTrue(row.refused)
-        self.assertIn("charter harness install claude-work", row.note)
+        self.assertIn(f"profile '{WORK}' is not wired", row.note)
+        self.assertIn(f"charter harness install {WORK}", row.note)
+        self.assertIn("so a chat on it would run without charter's guard", row.note)
 
-    def test_a_profile_that_asks_is_not_refused_and_says_it_is_not_approved_yet(self):
-        """Task 3: a new or changed profile is not refused — Enter shows its command and
-        asks in place — so its row must stay runnable or Enter would only say why."""
-        with mock.patch.object(selector, "pending", return_value=selector.Pending(
-                refused=False, note="not approved yet (new) — Enter shows its command",
-                ask=True)):
+    def test_a_profile_charter_could_not_ask_is_refused_with_its_own_sentence(self):
+        """Ruling 12: an unknown is not a pass, and "could not look" is not "looked and the
+        guard is absent" — two sentences, and the row says the one that is true."""
+        with spawns([], "not json at all"):
+            row = self._row(self._rows(), WORK)
+        self.assertTrue(row.refused)
+        self.assertIn("charter could not ask", row.note)
+        self.assertNotIn("is not wired", row.note)
+
+    def test_a_wired_profile_shows_its_kind_and_command(self):
+        with spawns([], listing(entry(scope="user"))):
+            row = self._row(self._rows(), WORK)
+        self.assertFalse(row.refused, row.note)
+        self.assertIn("claude · CLAUDE_CONFIG_DIR=", row.note)
+
+    def test_each_profile_is_asked_under_its_own_environment(self):
+        calls: list = []
+        with spawns(calls, listing(entry(scope="user"))):
+            self._rows()
+        seen = sorted(c.env.get("CLAUDE_CONFIG_DIR", "") for c in calls)
+        self.assertEqual(seen, ["", str(self.home / ".cw")])
+
+    def test_a_miss_is_remembered_and_the_next_paint_spawns_nothing(self):
+        """The spec's *the selector reads a stamped cache to draw its rows*: a warm open is
+        a file read, and it is the same answer the probe gave."""
+        with spawns([], listing(entry(scope="user"))):
+            self._rows()
+        p = profiles.current().profiles[WORK]
+        self.assertEqual(wiring.cached(p, cwd=Path(config.ROOT)).state, wiring.WIRED)
+        again: list = []
+        with spawns(again, raises=AssertionError("probed again")):
             row = self._row(self._rows(), WORK)
         self.assertFalse(row.refused)
-        self.assertIn("not approved yet (new)", row.note)
+        self.assertEqual(again, [])
 
-    def test_the_seam_is_asked_for_every_listed_profile_and_no_refused_one(self):
-        """Ruling 1: a probe never runs for a profile whose launch record does not match,
-        and a profile the file itself refused has no command to probe at all."""
-        self.local.write_text('[harness.broken]\nkind = "claude"\ncommand = "x"\n'
-                              '[harness.%s]\nkind = "claude"\ncommand = ["claude"]\n' % WORK)
+    def test_a_remembered_answer_is_the_row_and_is_not_asked_again(self):
+        """A hit is DRAWN, and that is all it may do: the entry says unwired, the row says
+        so in the words Task 4 would, and the profile's own command is not run for it."""
+        p = profiles.current().profiles[WORK]
+        wiring.remember(p, cwd=Path(config.ROOT),
+                        w=wiring.Wiring(wiring.UNWIRED, "remembered as unwired", "the fix"))
+        calls: list = []
+        with spawns(calls, listing(entry(scope="user"))):
+            row = self._row(self._rows(), WORK)
+        self.assertTrue(row.refused)
+        self.assertIn("remembered as unwired", row.note)
+        self.assertNotIn(str(self.home / ".cw"),
+                         [c.env.get("CLAUDE_CONFIG_DIR", "") for c in calls])
+
+    def test_every_miss_is_probed_at_once(self):
+        """The plan's stop rule for a cold open is priced with the probes CONCURRENT — one
+        after another, a plane of four Claude profiles pays a second before the first row."""
+        both = threading.Barrier(2, timeout=10)
+
+        def meets_the_other(p, *, cwd):
+            both.wait()
+            return wiring.Wiring(wiring.WIRED, "met", "")
+
+        with mock.patch.object(wiring, "detect", side_effect=meets_the_other):
+            rows = self._rows()
+        self.assertFalse(self._row(rows, WORK).refused)
+        self.assertFalse(self._row(rows, "claude").refused)
+
+    def test_a_command_not_on_path_and_the_row_the_launch_refused_are_never_probed(self):
+        """Each is already saying why, and a probe runs the profile's own command."""
         asked: list[str] = []
-        with mock.patch.object(selector, "pending",
-                               side_effect=lambda p, **kw: asked.append(p.name)):
-            self._rows()
-        self.assertIn(WORK, asked)
-        self.assertNotIn("broken", asked)
-
-    def test_nothing_on_this_branch_spawns_a_probe(self):
-        """Ruling 11 and B2: drawing the rows runs no profile command. `util.run` is what
-        every probe will go through, so a `rows` that spawned one is a raise here — read
-        first, because the ignore check is the one subprocess profile code is allowed."""
-        have = self._read()
-        with mock.patch.object(util, "run", side_effect=AssertionError("spawned")):
-            self.assertTrue(selector.rows(have, cwd=Path(config.ROOT)))
-            self.assertIsNone(selector.pending(have.profiles[WORK], cwd=Path(config.ROOT)))
+        with mock.patch.object(wiring, "detect", side_effect=lambda p, *, cwd: asked.append(
+                p.name) or wiring.Wiring(wiring.WIRED, "", "")):
+            self._rows(after=selector.Refused(WORK, "the launch said no"))
+        self.assertEqual(asked, ["claude"])
 
 
 class _APickedSelector(_APlaneWithProfiles):
@@ -380,80 +520,15 @@ class ThePick(_APickedSelector, unittest.TestCase):
         self.assertTrue(self.surfaces[0].selected.refused)
 
 
-class TheConfirmAsksInPlace(_APickedSelector, unittest.TestCase):
-    """Task 3's ask, drawn in the selector's own pane: Enter on a new or changed profile
-    shows its command and asks `run this?` there rather than anywhere else."""
-
-    def setUp(self) -> None:
-        super().setUp()
-        self.approved: list[str] = []
-        self.enterContext(mock.patch.object(
-            selector, "approve", side_effect=lambda p: self.approved.append(p.name) or ""))
-        self.enterContext(mock.patch.object(selector, "pending", side_effect=self._pending))
-
-    def _pending(self, p, **kw):
-        if p.name in self.approved or p.source == profiles.BUILTIN:
-            return None
-        return selector.Pending(False, "not approved yet (new) — Enter shows its command",
-                                ask=True)
-
-    def test_yes_records_the_approval_and_is_the_choice(self):
-        self._queue(self._row_named(WORK), selector.CONFIRM_ROW)
-        self.assertEqual(self._pick(), selector.Choice(WORK))
-        self.assertEqual(self.approved, [WORK])
-        self.assertIn("run this?", self.surfaces[1].heading)
-        self.assertIn("CLAUDE_CONFIG_DIR=", self.surfaces[1].heading)
-
-    def test_no_at_the_confirm_goes_back_to_the_list_and_records_nothing(self):
-        self._queue(self._row_named(WORK), None, None)
-        self.assertIsNone(self._pick())
-        self.assertEqual(self.approved, [])
-        self.assertIsInstance(self.surfaces[2], selector.Selector)
-
-    def test_y_chooses_and_every_other_key_goes_back(self):
-        confirm = selector.Confirm()
-        self.assertEqual(confirm.handle(overlay.Event(overlay.KEY, "y"), 8), overlay.CHOOSE)
-        self.assertEqual(confirm.handle(overlay.Event(overlay.KEY, "n"), 8), overlay.CANCEL)
-        self.assertEqual(confirm.handle(overlay.Event(overlay.KEY, "escape"), 8),
-                         overlay.CANCEL)
-        self.assertIsNone(confirm.handle(overlay.Event(overlay.SCROLL, "up"), 8))
-
-    def test_a_confirm_that_is_chosen_answers_a_row(self):
-        """`overlay.Surface.run` answers `self.selected` for a CHOOSE, and `None` for a
-        surface with no rows — which reads as a cancel. So the confirm has a row."""
-        self.assertTrue(selector.Confirm().rows)
-        self.assertIsNotNone(selector.Confirm().selected)
-
-    def test_a_state_with_nothing_to_ask_is_not_asked_about(self):
-        """The `ask` half of the gate, and the two halves are different questions: `pending`
-        answers for every listed profile, and only a NEW or CHANGED one has anything to
-        approve. Task 4's answer for a wired profile that is already approved is a `Pending`
-        with a note and `ask=False`, and putting `run this?` in front of that is charter
-        asking an operator to approve what they approved last week.
-        """
-        with mock.patch.object(selector, "pending", return_value=selector.Pending(
-                refused=False, note="claude · claude", ask=False)):
-            self._queue(self._row_named(WORK))
-            self.assertEqual(self._pick(), selector.Choice(WORK))
-        self.assertEqual(self.approved, [])
-        self.assertEqual(len(self.surfaces), 1)
-        self.assertIsInstance(self.surfaces[0], selector.Selector)
-
-    def test_an_approval_that_could_not_be_written_returns_to_the_selector(self):
-        """The fourth review's nit: a launch record that fails to write refuses rather than
-        re-asking, so `approve` answers the write error and the pick does not proceed."""
-        with mock.patch.object(selector, "approve", return_value="could not write it"):
-            self._queue(self._row_named(WORK), selector.CONFIRM_ROW, None)
-            self.assertIsNone(self._pick())
-        self.assertIn("could not write it", self.surfaces[2].footer)
-
-
 class NothingTheOperatorMustReadIsCutWithoutAWord(_APlaneWithProfiles, unittest.TestCase):
-    """Ruling 35's clipping clause, on the three surfaces that carry profile-derived text.
+    """Ruling 45, on the two places this surface carries profile-derived text: its rows and
+    its footer.
 
-    An ellipsis marks a cut and not its size, and on all three the size is the question: a
-    refusal's reason appears in the footer and NOWHERE else on this surface, and an approval
-    prompt holds the very command a `y` is about to run.
+    An ellipsis marks a cut and not its size, and on both the size is the question: a
+    refusal's reason appears in the footer and NOWHERE else on this surface, and a row
+    holds the very command Enter is about to start. The approval prompt is not here because
+    it is not on this surface: Task 3's prompt is printed whole in the pane
+    (`ANewProfileIsAskedInThePane`).
     """
 
     #: A command far wider than any pane, and printable so nothing else clips it first.
@@ -478,20 +553,6 @@ class NothingTheOperatorMustReadIsCutWithoutAWord(_APlaneWithProfiles, unittest.
         kept = line.split("…")[0]
         self.assertIn(f"+{len(text) - len(kept)} not shown", line)
 
-    def test_an_approval_prompt_past_one_pane_says_how_much_it_hid(self):
-        """F4: a `y` given to a silently cut prompt approves a command the operator did not
-        see the end of."""
-        head = selector.Confirm(
-            heading=selector.CONFIRM.format(shown=self.LONG)).render(70, 8)[0]
-        self.assertIn("not shown", head)
-        self.assertIn("run this?", head)
-
-    def test_an_approval_prompt_never_says_how_many_rows_it_has(self):
-        """It asks one question. `· 1 to choose from` after a command describes the widget
-        rather than the thing being approved."""
-        head = selector.Confirm(heading="run this? claude --foo").render(120, 8)[0]
-        self.assertNotIn("to choose from", head)
-
     def test_a_sentence_exactly_as_wide_as_the_pane_is_left_whole(self):
         """The boundary, not just the direction: a line that FITS is not a line that was
         cut, so it says nothing about hiding. One cell narrower is the other side of it."""
@@ -508,17 +569,80 @@ class NothingTheOperatorMustReadIsCutWithoutAWord(_APlaneWithProfiles, unittest.
         self.assertIn(f"+{len(self.LONG) - 54} not shown", line)
 
     def test_a_pane_too_narrow_for_the_count_still_draws_a_line_that_fits(self):
-        """The heading's width is what is left after the `· n to choose from` suffix, and a
-        pane can be narrower than the suffix alone. Whatever that arithmetic answers, the
-        line that reaches the terminal is the pane's width and no wider."""
+        """A pane can be narrower than the `· n to choose from` suffix alone. Whatever the
+        heading's arithmetic answers, the line that reaches the terminal is the pane's width
+        and no wider."""
         head = selector.Selector(catalogue=self._rows()).render(8, 8)[0]
         self.assertLessEqual(tui.width(head), 8)
 
     def test_a_list_still_says_how_many_rows_it_has(self):
-        """The control: the count is right for a surface somebody is choosing FROM, and
-        `Confirm` opting out must not take it from the selector."""
+        """The control: the count is right for a surface somebody is choosing FROM."""
         self.assertIn("to choose from",
                       selector.Selector(catalogue=self._rows()).render(120, 8)[0])
+
+    def _row_line(self, note: str, width: int, *, counts: bool = True) -> str:
+        """The first row's line, on the selector — or, *counts* false, on a plain surface."""
+        row = overlay.Row(id=selector.ROW_PREFIX + WORK, title=WORK, note=note)
+        surface = (selector.Selector(catalogue=(row,)) if counts
+                   else overlay.Surface(rows=(row,)))
+        return surface.render(width, 6)[1]
+
+    def test_a_row_too_wide_for_the_pane_says_how_much_of_its_note_it_hid(self):
+        """A command out of a file a chat can write, cut to the pane: the count says it was
+        cut and by how much, so a reader can tell a clipped command from a whole one."""
+        line = self._row_line(self.LONG, 80)
+        kept = len(re.search(r"(x+)…", line).group(1))
+        self.assertIn(f"… +{len(self.LONG) - kept} not shown", line)
+        self.assertLessEqual(tui.width(line), 80)
+
+    def test_a_row_that_fits_says_nothing_about_hiding(self):
+        self.assertNotIn("not shown", self._row_line("claude · claude", 80))
+
+    def test_the_count_is_of_the_whole_note_and_not_of_a_fixed_cut(self):
+        """`contain.one_line`'s own budget ends in a fixed `...` at 160 characters, and a
+        count taken after it would count what was left — a number that looks exact and is
+        not. So a 400-character note in a pane wide enough for all of it is drawn whole."""
+        line = self._row_line(self.LONG, 500)
+        self.assertIn(self.LONG, line)
+        self.assertNotIn("…", line)
+
+    def test_a_surface_that_does_not_count_draws_its_rows_as_it_always_did(self):
+        """The palette, the tab menu and the pickers carry charter's own words, and their
+        rows are not this ruling's: a long note there keeps `contain`'s fixed budget and
+        says nothing about hiding."""
+        line = self._row_line(self.LONG, 500, counts=False)
+        self.assertIn("…", line)
+        self.assertNotIn("not shown", line)
+        self.assertNotIn(self.LONG, line)
+
+    def test_a_note_a_megabyte_long_costs_the_paint_what_the_pane_holds(self):
+        """A chat can write a command of any length, and this row is painted on every
+        keystroke. The cut searches down from what a pane this wide could show — never from
+        the end of the note — so measuring it is bounded by the pane, not by the file."""
+        real, measured = tui.width, []
+
+        def width(text):
+            measured.append(len(text))
+            if len(measured) > 400:
+                raise AssertionError("the cut walked the note rather than the pane")
+            return real(text)
+
+        with mock.patch.object(overlay.tui, "width", side_effect=width):
+            line = self._row_line("y" * 1_000_000, 80)
+        self.assertIn("not shown", line)
+
+    def test_a_footer_reason_longer_than_contains_budget_is_counted_from_all_of_it(self):
+        text = "  " + "z" * 300
+        line = selector.Selector(catalogue=self._rows(), footer=text).render(250, 8)[-1]
+        kept = len(re.search(r"(z+)…", line).group(1))
+        self.assertIn(f"… +{300 - kept} not shown", line)
+
+    def test_doctor_and_the_selector_say_it_with_one_helper(self):
+        """Ruling 45 names both surfaces and one promise, so there is one spelling of it."""
+        self.assertIs(doctor._counted, contain.counted)
+        self.assertEqual(overlay._clipped("q" * 100, 40),
+                         contain.counted("q" * 100, len(overlay._clipped("q" * 100, 40)
+                                                         .split("…")[0])))
 
 
 class EveryFooterSaysHowToLeave(_APickedSelector, unittest.TestCase):
@@ -541,9 +665,6 @@ class EveryFooterSaysHowToLeave(_APickedSelector, unittest.TestCase):
         self._pick()
         self.assertIn(selector.ESC_HINT, self.surfaces[0].footer)
         self.assertIn("no profile can start here", self.surfaces[0].footer)
-
-    def test_the_confirms_footer_names_esc_too(self):
-        self.assertIn(selector.ESC_HINT, selector.CONFIRM_FOOTER)
 
     def test_the_esc_hint_survives_a_reason_too_wide_for_the_pane(self):
         """Which is why the hint goes FIRST when there is a reason: whatever is last is what
@@ -625,16 +746,6 @@ class TheSweepsOwnFindings(_APlaneWithProfiles, unittest.TestCase):
         self.assertEqual(names[:len(order)], order)
         self.assertEqual(names[len(order):], sorted(names[len(order):]))
 
-    def test_a_capital_y_is_a_yes_as_well(self):
-        """`Confirm` reads the key an operator with caps lock on pressed. Anything but a
-        yes goes back to the list, so a `Y` read as *anything else* is an approval an
-        operator gave and charter did not take."""
-        for key in ("y", "Y"):
-            with self.subTest(key=key):
-                self.assertEqual(
-                    selector.Confirm().handle(overlay.Event(overlay.KEY, key), 8),
-                    overlay.CHOOSE)
-
     def test_the_waiting_marker_never_raises_over_a_chat_id_that_is_no_directory(self):
         """All three writers, and the same shape `state.record_closed` has: `frame_dir`
         REFUSES an id it cannot make a directory of rather than raising, so each of these
@@ -683,8 +794,10 @@ class TheSweepsOwnFindings(_APlaneWithProfiles, unittest.TestCase):
         self.assertTrue(state.is_waiting("beta.9"))
 
 
-class ThePaneWaitsThenBecomesTheHarness(_APlaneWithProfiles, unittest.TestCase):
-    """`charter frame-launch --select` — what a new chat's window runs before any harness."""
+class _ASelectorPane(_APlaneWithProfiles):
+    """`charter frame-launch --select` in-process: the frame proof, the claim, the exec and
+    `selector.pick` stood in, and wiring stated for the launch (`wired_as_today`) — without
+    it every pick here would be refused "could not tell" before it reached the exec."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -709,12 +822,7 @@ class ThePaneWaitsThenBecomesTheHarness(_APlaneWithProfiles, unittest.TestCase):
         self.execs: list[tuple] = []
         self.exec = self.enterContext(mock.patch.object(
             launcher.os, "execvpe", side_effect=lambda *a: self.execs.append(a)))
-        # Task 2 refuses every DECLARED profile until Task 3's approval lands (review B1),
-        # so without this stand-in every case here would be measuring that one sentence
-        # instead of the selector. `tests/test_the_launcher_becomes_the_profile.py` stands
-        # in for it the same way, and Task 3 replaces the body both of them patch.
-        self.enterContext(mock.patch.object(launcher, "_approval_refusal",
-                                            return_value=None))
+        wired_as_today(self)
         self.picks: list = []
         self.asked: list[dict] = []
         self.enterContext(mock.patch.object(selector, "pick", side_effect=self._pick))
@@ -733,6 +841,10 @@ class ThePaneWaitsThenBecomesTheHarness(_APlaneWithProfiles, unittest.TestCase):
         self.picks = list(picks)
         return launcher.cmd_frame_launch(
             SimpleNamespace(select=True, start=start, profile="", attended=True, rest=[]))
+
+
+class ThePaneWaitsThenBecomesTheHarness(_ASelectorPane, unittest.TestCase):
+    """`charter frame-launch --select` — what a new chat's window runs before any harness."""
 
     def test_a_pick_records_kind_and_profile_then_execs(self):
         self.assertEqual(self._run(selector.Choice(WORK)), 0)
@@ -781,10 +893,16 @@ class ThePaneWaitsThenBecomesTheHarness(_APlaneWithProfiles, unittest.TestCase):
 
         `$TMUX_PANE` is SET here, which is what makes that sentence a measurement: a hand
         run inside somebody's own tmux has one, and it names a pane of theirs.
+
+        **tmux PROVES a pane here**, which is what makes this case about the missing frame
+        and nothing else: a pane whose `#{pane_pid}` is this process would be closed by
+        every other line of `_close_the_cancelled_chat`, so only the missing chat stops it.
         """
         killed: list = []
+        own = launcher.tmuxctl.LivePane("%9", "beta", "beta.1", "")
         with mock.patch.object(launcher, "framed_chat", return_value=None), \
                 mock.patch.dict(os.environ, {"TMUX_PANE": "%9"}), \
+                mock.patch.object(launcher.tmuxctl, "live_pane_by_pid", return_value=own), \
                 mock.patch.object(launcher.tmuxctl, "run",
                                   side_effect=lambda a, argv, **kw: killed.append(argv)):
             self.assertEqual(self._run(), selector.CANCELLED_EXIT)
@@ -907,6 +1025,126 @@ class ThePaneWaitsThenBecomesTheHarness(_APlaneWithProfiles, unittest.TestCase):
                 SimpleNamespace(select=False, start="", profile="", attended=False, rest=[]))
         self.assertEqual(rc, 2)
         self.assertEqual(len(said), 1, said)
+
+
+class ANewProfileIsAskedInThePane(_ASelectorPane, unittest.TestCase):
+    """Task 3's question, put by the launch in the pane the selector was drawn in.
+
+    Enter on a new or changed profile is a pick like any other; `launcher.attempt` asks, on
+    the terminal the surface has just handed back, with `profiletrust.ask_in_terminal`'s own
+    prompt — the whole command and environment, never clipped (ruling 45) — and every
+    answer is a kind `_select_in_pane` already handles. A terminal on both ends, as a real
+    pane has: `Typed` for the keyboard, `ATerminal` for the screen.
+    """
+
+    #: A command wider than any pane, printable so nothing else escapes it.
+    LONG = "--" + "x" * 400
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.local.write_text(self.local.read_text().replace(
+            'command = ["claude"]', f'command = ["claude", "{self.LONG}"]'))
+        self._unapprove()
+        self.screen = ATerminal()
+        self.enterContext(mock.patch("sys.stdout", self.screen))
+        self.said: list[str] = []
+        self.enterContext(mock.patch.object(launcher.util, "err", side_effect=self.said.append))
+
+    def _typing(self, *lines: str) -> Typed:
+        typed = Typed(*lines)
+        self.enterContext(mock.patch("sys.stdin", typed))
+        return typed
+
+    def _approved(self) -> bool:
+        return not profiletrust.approval_needed(profiles.current().profiles[WORK])
+
+    def test_yes_shows_the_whole_command_records_it_and_starts_it(self):
+        typed = self._typing("y\n")
+        self.assertEqual(self._run(selector.Choice(WORK)), 0)
+        shown = self.screen.getvalue()
+        self.assertIn(profiletrust.QUESTION.strip(), shown)
+        self.assertIn(self.LONG, shown, "the approval prompt never clips")
+        self.assertIn("CLAUDE_CONFIG_DIR=~/.cw", shown)
+        self.assertNotIn("not shown", shown)
+        self.assertEqual(typed.reads, 1)
+        self.assertTrue(self._approved())
+        self.assertEqual(self.execs[0][1], ["claude", self.LONG])
+        self.assertFalse(state.is_waiting("beta.1"))
+
+    def test_no_goes_back_to_the_list_with_nothing_refused_and_the_cursor_on_that_row(self):
+        """A decline is the operator's own answer, already answered with `charter: nothing
+        started.` where they gave it — so the row is not marked refused (Enter on it must
+        ask again, not recite a reason) and nothing is said a second time."""
+        self._typing("n\n")
+        self.assertEqual(self._run(selector.Choice(WORK)), selector.CANCELLED_EXIT)
+        self.assertEqual(self.execs, [])
+        self.assertIsNone(self.afters[1])
+        self.assertEqual(self.asked[1]["start"], WORK)
+        self.assertFalse(self._approved())
+        self.assertIn(profiletrust.NOTHING_STARTED, self.screen.getvalue())
+        self.assertEqual(self.said, [])
+        self.assertTrue(state.is_waiting("beta.1"))
+
+    def test_a_yes_charter_could_not_write_down_refuses_on_that_row_and_never_asks_again(self):
+        """Task 3's N2b, on the selector: re-running the chain after an unrecordable yes
+        would find no record and put the identical question again. `KIND_RECORD` comes back
+        as that row's refusal, the command never runs, and Enter on the row only says why."""
+        typed = self._typing("y\n")
+        with mock.patch.object(profiletrust.config, "replace_for",
+                               side_effect=OSError(28, "No space left on device")):
+            self.assertEqual(self._run(selector.Choice(WORK)), selector.CANCELLED_EXIT)
+        self.assertEqual(typed.reads, 1, "the same question was asked twice")
+        self.assertEqual(self.execs, [])
+        self.assertEqual(self.afters[1].profile, WORK)
+        self.assertIn("could not record that", self.afters[1].why)
+        self.assertIn("No space left on device", self.afters[1].why)
+        # And the list it comes back to holds that row REFUSED, so Enter on it recites the
+        # reason instead of starting the same launch and asking the same question.
+        row = self._row(self._rows(after=self.afters[1]), WORK)
+        self.assertTrue(row.refused)
+        self.assertIn("No space left on device", row.note)
+
+    def test_a_yes_runs_the_whole_chain_again_and_the_wiring_probe_comes_after_it(self):
+        """Ruling 27, wiring last, and ruling 1 underneath it: the profile's own command is
+        not run to probe it until the operator has said yes to that command."""
+        order: list[str] = []
+
+        class _Answers(Typed):
+            def readline(self) -> str:
+                order.append("answered")
+                return super().readline()
+
+        typed = _Answers("y\n")
+        self.enterContext(mock.patch("sys.stdin", typed))
+        with mock.patch.object(wiring, "refusal",
+                               side_effect=lambda p, *, cwd: order.append("probed")
+                               or "profile 'claude-work' is not wired — the reason"):
+            self.assertEqual(self._run(selector.Choice(WORK)), selector.CANCELLED_EXIT)
+        self.assertEqual(order, ["answered", "probed"])
+        self.assertEqual(self.execs, [])
+        self.assertIn("is not wired", self.afters[1].why)
+
+    def test_a_record_that_moved_while_the_question_was_up_is_refused_not_asked_again(self):
+        real = profiletrust.record_launched
+
+        def _records_it_then_loses_it(p):
+            why = real(p)
+            (config.STATE_DIR / profiletrust.RECORD).write_text("{}")
+            return why
+
+        typed = self._typing("y\n")
+        with mock.patch.object(profiletrust, "record_launched",
+                               side_effect=_records_it_then_loses_it):
+            self._run(selector.Choice(WORK))
+        self.assertEqual(typed.reads, 1, "the same question was asked twice")
+        self.assertEqual(self.execs, [])
+        self.assertIn("moved while that question was on screen", self.afters[1].why)
+
+    def test_a_pane_with_no_terminal_to_ask_in_comes_back_with_that_reason(self):
+        self.enterContext(mock.patch("sys.stdin", APipe()))
+        self._run(selector.Choice(WORK))
+        self.assertEqual(self.execs, [])
+        self.assertIn("no terminal here to ask in", self.afters[1].why)
 
 
 class AWaitingPaneIsNotAChat(_APlaneWithProfiles, unittest.TestCase):

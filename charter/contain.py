@@ -349,6 +349,26 @@ def readable(value, limit: int = DISPLAY_LIMIT) -> str:
     return shown if shown.strip(" ") else BLANK
 
 
+def counted(text: str, limit: int = DISPLAY_LIMIT) -> str:
+    """*text* — already contained — within *limit* characters, SAYING how many it did not show.
+
+    :func:`readable`'s sibling for the other kind of surface (ruling 45 of the harness
+    profiles work). A SENTENCE quotes a value to say which one, so a fixed ``...`` bounds it
+    well: the sentence ends in a remedy a long value would push off the screen. A ROW that
+    an operator chooses or approves from is different — a `doctor` row whose hint is a
+    command to run, a profile selector row — because an ellipsis marks a cut and not its
+    size, and a reader cannot tell a clipped command from a whole one without the size.
+
+    One home, because it is one promise to one operator: `doctor` counts its rows with this,
+    and the frame's overlay counts what a pane-wide cut took with it (`frame/overlay
+    ._clipped`). Not :func:`readable` again: every caller hands over text that is contained
+    already and left whole, and a second pass would escape its escapes.
+    """
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"… +{len(text) - limit} not shown"
+
+
 #: How much of any ONE path a refusal sentence — or a generated brief — repeats back.
 #: Larger than `DISPLAY_LIMIT`, because these name a PATH and a plane's paths are
 #: legitimately long, and a clipped path is one the reader cannot act on. Still a fixed

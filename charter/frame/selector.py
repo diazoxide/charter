@@ -23,9 +23,19 @@ row is redrawn with it.
 harness nobody picked on a one-harness machine; one profile costs one Enter.
 
 **Every profile-derived string drawn here is contained** (ruling 35). `charter.local.toml`
-is a file a chat can write, and a `\\r` or an ESC in a `command` could otherwise redraw the
-approval prompt to show a harmless command while another one runs. The values are shown
-escaped (`contain.readable`), never interpreted.
+is a file a chat can write, and a `\\r` or an ESC in a `command` could otherwise redraw a
+row to show a harmless command while another one runs. The values are shown escaped
+(`contain.readable`), never interpreted — and **never cut without a word** (ruling 45): a
+row the operator chooses from says how much a narrow pane hid (`overlay.Surface
+.says_what_it_hid`), because a command clipped silently reads exactly like a whole one.
+
+**The approval is asked in this pane, by the launch, in Task 3's own words.** Enter on a
+new or changed profile is a pick like any other: the surface hands the terminal back and
+`frame/launcher.attempt` asks `run this? [y/N]` over the profile's whole command and
+environment (`profiletrust.ask_in_terminal`) — the one prompt every other path shows, never
+clipped, with its decline, its unrecordable yes and its record that moved while it was on
+screen each a kind of their own. A second prompt drawn on this surface would be a second
+spelling of that question, and a one-line surface heading cannot hold a command whole.
 
 **Nothing here is on the import path** (ruling 43). `frame/launcher.py` imports this at call
 time, because every `charter hook …` process builds the parser and derives config.
@@ -34,11 +44,12 @@ time, because every `charter hook …` process builds the parser and derives con
 from __future__ import annotations
 
 import shutil
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
-from .. import contain, profiles
+from .. import contain, profiles, profiletrust, wiring
 from . import overlay, palette
 
 #: What a pane that started nothing exits with — the shell's own number for "ended by the
@@ -46,7 +57,7 @@ from . import overlay, palette
 CANCELLED_EXIT = 130
 
 #: What every row's id starts with, so a chosen row names a profile without the title —
-#: which is `contain.readable`'s answer and may have been clipped — having to be parsed.
+#: which is escaped, and may be cut to the pane — having to be parsed.
 ROW_PREFIX = "profile:"
 
 LABEL = "charter · which profile?"
@@ -65,15 +76,11 @@ NOTHING_TO_PICK = ("charter: no profile can start here — every row above says 
 
 NOT_ON_PATH = "not on PATH: {cmd}"
 
-CONFIRM = "run this? {shown}"
-
-#: The confirm's one row. A `Surface` with no rows answers `None` for a CHOOSE — which
-#: `Surface.run` cannot tell from a cancel — so the question has something to be answered
-#: with. `y` is the key; the row is what the operator reads while deciding.
-CONFIRM_ROW = overlay.Row(id="confirm:yes", title="y   run it",
-                          note="any other key goes back to the list")
-
-CONFIRM_FOOTER = f"  y run it   any other key goes back   {ESC_HINT}"
+#: The row of a profile the operator has not approved yet (Task 3). NOT refused — Enter
+#: starts the launch, and the launch is what asks — and it names the state in
+#: `profiletrust`'s own word, `new` or `changed`, because those two are different things to
+#: be about to approve.
+NOT_APPROVED = "not approved yet ({state}) — Enter shows its command"
 
 
 class Choice(NamedTuple):
@@ -97,57 +104,71 @@ class Refused(NamedTuple):
 class Pending(NamedTuple):
     """What Tasks 3 and 4 have to say about one profile's row.
 
-    *refused* is whether Enter may start it, *note* is the row's right-hand sentence, and
-    *ask* is whether Enter shows the profile's command and asks in place. The three are one
-    record because the two states they describe differ in all three: *not wired* refuses,
-    while *not approved yet* does not refuse — it asks.
+    *refused* is whether Enter may start it, and *note* is the row's right-hand sentence.
+    The two states this describes differ in both: *not wired* refuses, while *not approved
+    yet* does not refuse — Enter starts the launch, which asks.
     """
 
     refused: bool
     note: str
-    ask: bool
 
 
 # --------------------------------------------------------------------------- #
-# The seam Tasks 3 and 4 fill.
+# Approved, and wired — Tasks 3 and 4, on the rows.
 # --------------------------------------------------------------------------- #
 
 
-def pending(p: profiles.Profile, *, cwd: Path) -> Pending | None:
-    """Whether *p* is approved and wired, or ``None`` when neither has anything to say.
+def states(ps: list[profiles.Profile], *, cwd: Path) -> dict[str, Pending | None]:
+    """Each profile's approval and wiring, by name — ``None`` for one with nothing to say.
 
-    **One function, because the two answers are asked in one order and never apart.**
-    Task 3's approval comes first and Task 4's wiring second, and that order is ruling 1
-    rather than a preference: detecting wiring RUNS the profile's own command
-    (`[*command, "plugin", "list", "--json"]`), so a profile whose launch record does not
-    match is never probed — its row says it is not approved yet instead. Splitting them
-    would put that ordering in every caller.
+    **Approval first, wiring second, and that order is ruling 1** rather than a preference:
+    detecting wiring RUNS the profile's own command (`[*command, "plugin", "list",
+    "--json"]`), so a profile whose launch record does not match is never probed — its row
+    says it is not approved yet instead (`profiletrust.approval_needed`).
+
+    **The wiring answer is `wiring.cached`'s where it still holds, and a fresh
+    `wiring.detect` where it does not** — every miss probed at once, then remembered. The
+    cache is DISPLAY only (ruling 21): a chat can write that file, its key and its stamp,
+    so a row it paints green proves nothing, and picking the row probes again in the launch
+    (`launcher.refusal` never reads it). Concurrent because a probe costs 137-718 ms and a
+    selector opening cold would otherwise pay one after another; remembered one at a time
+    here, after the pool, because `wiring.remember` rewrites the whole file and two threads
+    doing that would each keep only their own entry.
 
     *cwd* is the chat's own directory, which is what makes the wiring answer this chat's:
     Claude Code follows the most specific covering scope (local > project > user), so the
-    settings files beside the chat decide, and the cache stamp has to cover them rather
-    than only the plane root's (the fourth review's nit on this task).
+    settings files beside the chat decide, and `wiring.cached`'s stamp covers them.
 
-    ``None`` on this branch, which is what makes every installed profile's row runnable
-    until Tasks 3 and 4 are merged and this body is filled in. It runs no subprocess, so
-    the selector on `main` spawns nothing: ruling 11's promise holds by construction here
-    and by measurement once the probe exists.
+    A profile not wired, or one charter could not ask, is refused with **Task 4's own
+    sentence** (`wiring.sentence`) — the words the launch says when it refuses the same
+    profile a moment later, so the row and the refusal cannot tell the operator two things.
     """
-    return None
+    out: dict[str, Pending | None] = {}
+    asked: list[profiles.Profile] = []
+    for p in ps:
+        needed = profiletrust.approval_needed(p)
+        if needed:
+            out[p.name] = Pending(False, NOT_APPROVED.format(state=needed))
+            continue
+        known = wiring.cached(p, cwd=cwd)
+        if known is None:
+            asked.append(p)
+        else:
+            out[p.name] = _wired(p, known)
+    # The pool's own worker count, and no number of charter's: a plane declares a handful of
+    # profiles, and a cap written here would be one more constant with nothing to measure.
+    with ThreadPoolExecutor() as pool:
+        answers = list(pool.map(lambda p: wiring.detect(p, cwd=cwd), asked))
+    for p, w in zip(asked, answers):
+        wiring.remember(p, cwd=cwd, w=w)
+        out[p.name] = _wired(p, w)
+    return out
 
 
-def approve(p: profiles.Profile) -> str:
-    """Record the operator's yes for *p*, or say why it could not be recorded.
-
-    :func:`pending`'s other half and the reason it is a seam rather than a caller's branch:
-    the ask is charter's approval of a `command`, so the surface that asked is the surface
-    that records it. Task 3's `profiletrust.record_launched` fills this in.
-
-    **The write error rather than a bool** (the fourth review's nit): a launch record that
-    fails to write refuses rather than re-asking, so the sentence has to reach the footer.
-    ``""`` is "recorded".
-    """
-    return ""
+def _wired(p: profiles.Profile, w: wiring.Wiring) -> Pending | None:
+    """*w* as a row state: nothing to say for a wired profile, a refusal for any other."""
+    why = wiring.sentence(p, w)
+    return Pending(True, why) if why else None
 
 
 # --------------------------------------------------------------------------- #
@@ -190,9 +211,16 @@ def rows(have: profiles.ProfileSet, *, cwd: Path, start: str | None = None,
     the launch just refused it       yes       the refusal (ruling 30)
     `have.refused` holds the name    yes       the reason, the file's or git's
     the command is not on `PATH`     yes       ``not on PATH: <cmd>``
-    :func:`pending` has an answer    its own   its own
+    not approved yet (new/changed)   no        :data:`NOT_APPROVED`; never probed
+    not wired, or could not tell     yes       Task 4's own sentence
     otherwise                        no        ``<kind> · <env and command>``
     ===============================  ========  ==================================
+
+    **Nothing on a row is clipped by `contain`.** Every value arrives whole and escaped, and
+    the surface cuts it to the pane and says by how much (ruling 45) — a fixed ``...`` here
+    would leave that count counting what was left of it. A REFUSED name is the one
+    exception, and it is `profiles.Refused.name`'s contract rather than a choice made here:
+    that name was contained, and clipped, before this module ever saw it.
 
     *start* MARKS its row and nothing else. A `default` naming a profile this machine lacks
     marks nothing (ruling 18) — there is no row to mark — and the cursor is
@@ -206,22 +234,29 @@ def rows(have: profiles.ProfileSet, *, cwd: Path, start: str | None = None,
         # is drawn where `claude` was rather than at the bottom of the list.
         return (name not in order, order.index(name) if name in order else 0, name)
 
+    listed = [(p, shutil.which(profiles.expanded_command(p)[0]) is not None)
+              for p in have.profiles.values()]
+    listed = [(p, installed) for p, installed in listed
+              if installed or p.source != profiles.BUILTIN]
+    # Asked only of a row that could still start: a command that is not on `PATH` has
+    # nothing to probe, and the row the launch just refused is already saying why.
+    said = states([p for p, installed in listed
+                   if installed and not (after is not None and after.profile == p.name)],
+                  cwd=cwd)
     out: list[tuple[tuple[int, int, str], overlay.Row]] = []
-    for p in have.profiles.values():
-        program = profiles.expanded_command(p)[0]
-        installed = shutil.which(program) is not None
-        if p.source == profiles.BUILTIN and not installed:
-            continue
+    for p, installed in listed:
         if after is not None and after.profile == p.name:
             refused, note = True, after.why
         elif not installed:
-            refused, note = True, NOT_ON_PATH.format(cmd=contain.readable(program))
+            refused, note = True, NOT_ON_PATH.format(
+                cmd=contain.readable(profiles.expanded_command(p)[0], contain.NO_CLIP))
         else:
-            state = pending(p, cwd=cwd)
-            refused, note = ((False, f"{p.kind} · {profiles.display(p)}")
+            state = said[p.name]
+            refused, note = ((False, f"{p.kind} · {profiles.display(p, contain.NO_CLIP)}")
                              if state is None else (state.refused, state.note))
         out.append((place(p.name),
-                    overlay.Row(id=ROW_PREFIX + p.name, title=contain.readable(p.name),
+                    overlay.Row(id=ROW_PREFIX + p.name,
+                                title=contain.readable(p.name, contain.NO_CLIP),
                                 note=note, mark=p.name == start, refused=refused)))
     for r in have.refused:
         if not r.name:
@@ -244,6 +279,10 @@ class Selector(palette.Palette):
     """The palette over profile rows, with the selector's own label and bottom line."""
 
     label: str = LABEL
+
+    #: A row here is chosen from and may carry a command out of a file a chat can write,
+    #: so a cut says how much it took (ruling 45).
+    says_what_it_hid: bool = True
 
     #: The profile the cursor OPENS on, or ``""`` for `palette.aim`'s own answer.
     #:
@@ -269,33 +308,6 @@ class Selector(palette.Palette):
             if row.id == wanted:
                 self._sel = i
                 return
-
-
-@dataclass
-class Confirm(overlay.Surface):
-    """`run this? <command>` — Task 3's ask, in the pane that asked it.
-
-    A surface rather than a prompt for the reason the selector is one: this pane is in raw
-    mode with the alternate screen up, so a `input()` underneath it would be typed into a
-    rectangle nothing is drawing.
-
-    `y` and nothing else, because this is an approval: an operator who pressed a key they
-    did not mean goes back to the list rather than approving a command. A pointer event is
-    not an answer to a question at all, so it is ignored rather than read as a no.
-    """
-
-    rows: tuple[overlay.Row, ...] = (CONFIRM_ROW,)
-    footer: str | None = CONFIRM_FOOTER
-    #: No `· 1 to choose from` after the command: this surface asks one question, and the
-    #: count would describe the widget rather than the thing being approved. What it shows
-    #: instead, where a command is wider than the pane, is how much it hid
-    #: (`overlay._clipped`) — a `y` must never approve a command cut without a word.
-    counted: bool = False
-
-    def handle(self, ev: overlay.Event, height: int) -> str | None:
-        if ev.kind != overlay.KEY:
-            return None
-        return overlay.CHOOSE if ev.name in ("y", "Y") else overlay.CANCEL
 
 
 def opens_on(listed: tuple[overlay.Row, ...], start: str | None) -> str:
@@ -339,10 +351,11 @@ def pick(*, cwd: Path, root: Path, start: str | None = None,
          after: Refused | None = None, fd: int | None = None, out=None) -> Choice | None:
     """Own the pane until a profile is picked. The :class:`Choice`, or ``None`` for Esc.
 
-    Loops on a refused row with the reason in the footer (ruling 6) and on a new or changed
-    profile that was not approved, so what comes back is a name the operator meant to start.
-    Whether it CAN start is asked again by the launch, fresh (review B2), and a refusal
-    there re-enters this function through *after*.
+    Loops on a refused row with the reason in the footer (ruling 6), so what comes back is
+    a name the operator meant to start. Whether it CAN start is asked again by the launch,
+    fresh (review B2) — and so is whether it is approved, which is where a new or changed
+    profile's question is put — and a refusal there re-enters this function through
+    *after*.
 
     The profiles are re-read every round rather than once: the operator may have edited
     `charter.local.toml` in another window while the selector was up, and a list that could
@@ -358,21 +371,10 @@ def pick(*, cwd: Path, root: Path, start: str | None = None,
         if chosen is None:
             return None
         name = chosen.id.removeprefix(ROW_PREFIX)
-        p = have.profiles.get(name)
-        if chosen.refused or p is None:
-            # `p is None` is a row for a name `read` refused, and it is also the row of a
-            # profile that stopped existing between the paint and the Enter. One answer for
-            # both: the note says why, and the list comes back.
+        if chosen.refused or name not in have.profiles:
+            # A name not in `have.profiles` is a row for a name `read` refused, and it is
+            # also the row of a profile that stopped existing between the paint and the
+            # Enter. One answer for both: the note says why, and the list comes back.
             after = Refused(name, chosen.note)
             continue
-        state = pending(p, cwd=cwd)
-        if state is not None and state.ask:
-            if palette.own_the_tty(Confirm(heading=CONFIRM.format(
-                    shown=profiles.display(p))), fd=fd, out=out) is None:
-                after, start = None, name
-                continue
-            why = approve(p)
-            if why:
-                after = Refused(name, why)
-                continue
         return Choice(name)
