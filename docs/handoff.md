@@ -424,6 +424,13 @@ workspace's own file, it asked there too. A chat a frame opens stands in its wor
 directory, so that directory's file is the one that has to carry the rule. `charter doctor` run
 from such a chat reads that file, and its `handoff gate` row warns when the rule is not there.
 
+The row also counts the rule in `.claude/settings.local.json`, in the two places Claude Code
+reads that file for a session — measured on 2.1.267: the session's own directory, and the git
+root. That is where `charter guard ask --local` puts it at the plane root and where
+`charter workspace reinit` mirrors it into a checkout, so a workspace directory inside the
+plane's repository is gated by the plane's local rule, and a checkout by its own copy. A local
+file charter cannot parse or open is reported as not checked, never as holding the rule.
+
 **How it gets there.** The plane's `ask` rules ride into every workspace's generated
 `.claude/settings.json` ([#948](https://github.com/diazoxide/charter/pull/948)), so the gate is
 in force in a workspace chat without anyone copying it by hand, and a workspace that already

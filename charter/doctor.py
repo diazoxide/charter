@@ -2217,6 +2217,41 @@ def _stale_layer_clause(missing: list, plane: dict) -> str:
     return ""
 
 
+def _local_ask_rule(h, root: Path, pattern: str) -> tuple[str, str] | None:
+    """Claude Code's answer from the `.claude/settings.local.json` files it reads for a session
+    at *root* — ``("present" | "malformed", detail)``, or ``None`` when neither decides.
+
+    The shared file is not the only place the rule is in force, and charter itself writes the
+    other one: `charter guard ask --local` at the plane root, `reinit` into a checkout. Read
+    only the shared file, this row warned in both of those places that a rule charter had just
+    written was missing (#986). The two places are measured rather than assumed
+    (:data:`claude_code.CHECKOUT_LOCAL_SETTINGS`): the session's own directory, and the git
+    root :func:`_local_settings_root` finds — which is why a workspace directory, inside the
+    plane's repository, is prompted by the plane's local rule with no copy of its own.
+
+    Asked here and NOT inside `apply_ask_rule`: that is `charter guard ask`'s writer too, and a
+    writer that counted a local rule as present would skip writing the shared one somebody
+    asked for. Through the writer's own dry run all the same, so "present" and "malformed" mean
+    exactly what they mean for the shared file.
+
+    Every harness is asked, and only Claude Code answers: opencode and Codex say `unsupported`
+    to a local rule before reading anything, which decides nothing. The two places are Claude
+    Code's measurement, so a harness that grows a local file needs its own before this reads
+    for it.
+
+    The first file that decides wins, in the order listed. A malformed one therefore answers
+    not-checked even when a later file holds the rule: whether the host still reads the
+    rest past a file it cannot parse is not measured, and an answer that can only be useless is
+    the one this row takes (see `_how_to_fix`).
+    """
+    top = _local_settings_root(root)
+    for where in (root, *([top] if top is not None else [])):
+        status, detail = h.apply_ask_rule(where, pattern, local=True, dry_run=True)
+        if status in ("present", "malformed"):
+            return status, detail
+    return None
+
+
 def check_handoff_gate() -> Result:
     """Does a `charter handoff` wait for the operator's yes here? (chat handoff)
 
@@ -2249,10 +2284,21 @@ def check_handoff_gate() -> Result:
         root = session_root() if h.name == _harness.CLAUDE_CODE else _config.ROOT
         try:
             status, detail = h.apply_ask_rule(root, HANDOFF_ASK_PATTERN, dry_run=True)
+            if status == "added":
+                # Only when the shared file has not decided: it is read first, so a malformed
+                # one stays not-checked whatever the local file holds.
+                status, detail = (_local_ask_rule(h, root, HANDOFF_ASK_PATTERN)
+                                  or (status, detail))
             # The same reading one root over, for the stale-layer clause. Taken HERE so a
             # single `except OSError` covers both roots: a second handler around a second
             # call was measured dead, because every harness answers rather than raising for
             # an unreadable or malformed file (#982 review round 1).
+            #
+            # The SHARED file only, deliberately, even though the row above counts the local
+            # one (#986). This answers "would `reinit` carry the rule here", and `reinit`
+            # carries the plane's local rules into a checkout and never into a workspace
+            # directory — counted here, the clause would name `reinit` in a workspace
+            # directory where it writes nothing that prompts.
             plane[h.name] = h.apply_ask_rule(
                 _config.ROOT, HANDOFF_ASK_PATTERN, dry_run=True)[0]
         except OSError as e:
