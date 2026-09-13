@@ -1590,7 +1590,8 @@ def _persona_line_parts() -> PersonaLine | None:
         if not names:
             return None
         names = sorted(names)
-        active = persona.resolve_active()
+        sel = persona.selection()
+        active = sel.name
         if not active:
             # No active persona: the roster is the only list, and the tip is what turns
             # one of its names into an answer. The tip is the TAIL rather than part of
@@ -1599,9 +1600,26 @@ def _persona_line_parts() -> PersonaLine | None:
             avail = f"{_DIM} · {_R}".join(f"{_DIM}{n}{_R}" for n in names)
             return PersonaLine(f"{_DIM}◆ persona none{_R}", f" · {avail}",
                                f"{_DIM} · charter persona use <name>{_R}")
-        # Active (adopted) persona: name + vault health (the role reads as noise —
-        # the name already says it).
-        seg = f"{_MAGENTA}◆{_R} {_BOLD}{active}{_R}"
+        tail = ""
+        if sel.missing:
+            # A rung names a persona that does not exist — a pointer `persona remove` left
+            # behind, or a `$CHARTER_PERSONA` naming nothing (#1045). The session has no
+            # persona, and the plane's default is not standing in for it, so this used to
+            # draw `◆ forge` in the active style for an identity nobody has. The row says
+            # "missing" and names the command that says which rung holds the name and what
+            # moves it; the ways out differ by rung and would not fit here.
+            #
+            # Bounded to one line: that name came out of the environment or a pointer file,
+            # which no committed-name check has seen, and a separator in it would draw a
+            # second row wearing this one's layout.
+            from . import contain
+            seg = f"{accent('warn')}◆ {contain.one_line(active)} missing{_R}"
+            tail = f"{_DIM} · charter persona current{_R}"
+        else:
+            # Active (adopted) persona: name + vault health (the role reads as noise —
+            # the name already says it).
+            seg = f"{_MAGENTA}◆{_R} {_BOLD}{active}{_R}"
+        # A missing persona has no definition to name a vault, so this reads nothing for it.
         vault = persona.vault_of(active)
         if vault:
             # Same mark as the chips, from the same function rather than a second one
@@ -1621,7 +1639,7 @@ def _persona_line_parts() -> PersonaLine | None:
         if others:
             chips = f"{_DIM} · {_R}".join(f"{_DIM}{n}{_R}" for n in others)
             roster = f"{_DIM} · ◇ personas {_R}{chips}"
-        return PersonaLine(seg, roster)
+        return PersonaLine(seg, roster, tail)
     except Exception:
         return None
 

@@ -94,6 +94,10 @@ def cmd_persona_create(args) -> int:
             "(Inheriting one? Pass --extends <parent> instead.)")
         return 1
 
+    # Counted before anything is written, and only for a name that defines nothing yet: a
+    # pointer naming a persona `--force` is overwriting was never stale (#1045).
+    revived = {} if p.exists() else persona.pointers_naming(args.name)
+
     vault = args.vault or args.name
     p = persona.dir_of(args.name) / "persona.md"  # always create in the directory layout
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -114,6 +118,7 @@ def cmd_persona_create(args) -> int:
     persona.ensure_shared()             # the cross-persona _shared/ namespace
     util.ok(f"Created persona '{args.name}' → {p.parent.relative_to(config.ROOT)}/ "
             "(persona.md + memory/ + refs/; edit the charter, then commit — personas are shared).")
+    _say_revived(args.name, revived)
     outcome = _write_agent(args.name)
     if outcome == "written":
         util.info(f"  generated .claude/agents/{args.name}.md — invokable as subagent '{args.name}'.")
@@ -143,9 +148,32 @@ def cmd_persona_create(args) -> int:
     return 0
 
 
+#: The rungs `persona.pointers_naming` counts, as `_say_revived` names them.
+_REVIVED_RUNG = {"session": "{n} session pointer(s)", "terminal": "{n} terminal pointer(s)",
+                 "active-file": "the plane-wide .charter/active-persona"}
+
+
+def _say_revived(name: str, counts: dict[str, int]) -> None:
+    """Say which selections a new persona just became, when a removed one left any (#1045).
+
+    `persona remove` leaves every pointer that named the persona, and resolution keeps them
+    rather than handing those sessions the plane's default. So creating a persona under that
+    name again is a selection for every one of them, made by somebody who never ran `use`
+    there, and it arrives with the new persona's tools and vault. The count is what can be
+    said about it; whose sessions those were cannot be.
+    """
+    rungs = [_REVIVED_RUNG[rung].format(n=n) for rung, n in counts.items() if n]
+    if not rungs:
+        return
+    util.warn(f"{sum(counts.values())} selection(s) already named '{name}' before it existed, "
+              f"and now select it: {', '.join(rungs)}. Nobody chose it again: those sessions "
+              "and terminals now resolve to this persona.")
+
+
 def cmd_persona_list(args) -> int:
     names = persona.list_personas()
-    active = persona.resolve_active()
+    sel = persona.selection()
+    active = sel.name
     if not names:
         util.info('No personas yet. Create one: charter persona create <name> --role "<Role>"')
         return 0
@@ -162,8 +190,14 @@ def cmd_persona_list(args) -> int:
     # four-character escape), so measuring the raw name and printing the rendered one
     # leaves every column after PERSONA misaligned for every row in the table.
     shown = {n: contain.one_line(n) for n in names}
+    # A name no row below matches, said on the same line rather than left for the reader to
+    # notice by its absence from the table (#1045). The ways out go on a line of their own
+    # that does not repeat the name, so a name `one_line` had to escape is still printed once.
     print(f"Active persona: {contain.one_line(active) if active else '—'}  "
-          f"(via {contain.one_line(persona.source())})\n")
+          f"(via {contain.one_line(sel.source)}{' — ' + _MISSING if sel.missing else ''})")
+    if sel.missing:
+        print(f"Ways out: {persona.ways_out(sel.source)}.")
+    print()
     roles = {n: contain.one_line((persona.load(n) or {"meta": {}})["meta"].get("role") or "")
              for n in names}
     # The raw vault name stays the key `_vault_status` is asked about — a bound is a
@@ -386,10 +420,22 @@ def _say_mcp_boundary(name: str) -> None:
 
 
 def cmd_persona_current(args) -> int:
-    active = persona.resolve_active()
-    print(active or "(none)")
-    util.info(f"resolved via {persona.source()}")
+    sel = persona.selection()
+    # stdout stays the name the ladder resolved, even when it names nothing: that is what a
+    # script reading this has always been handed, and "(none)" would claim no rung decided,
+    # when one did and is hiding every rung below it (#1045).
+    print(sel.name or "(none)")
+    if sel.missing:
+        util.warn(f"resolved via {sel.source} — {_MISSING}, and the plane's default does not "
+                  "stand in for it.")
+        util.info(f"Ways out: {persona.ways_out(sel.source)}.")
+        return 0
+    util.info(f"resolved via {sel.source}")
     return 0
+
+
+#: How every command reporting a selection says the persona it names does not exist (#1045).
+_MISSING = "no persona by that name exists, so no persona is active"
 
 
 def cmd_persona_clear(args) -> int:
@@ -397,11 +443,42 @@ def cmd_persona_clear(args) -> int:
     held = persona.clear_active(terminal_id=terminal)
     if terminal is not None:
         return _say_cleared_in_a_chat(held)
-    util.ok("Active persona cleared.")
-    d = persona.default_persona()
-    if d:
-        util.info(f"Resolves to the committed default '{d}' now (personas/.default).")
+    # Read back, not predicted (ADR 0013, #1045). This used to name `personas/.default` as
+    # what the shell fell to, a rung it never compared with `charter.toml`'s declaration
+    # above it, and to say "cleared" beside a `$CHARTER_PERSONA` that no pointer outranks —
+    # and over a shell that held no selection at all, which is a removal that did not happen.
+    now = persona.selection()
+    if not held:
+        util.info("This shell had no persona selection of its own, so nothing was cleared.")
+    elif now.source == "$CHARTER_PERSONA":
+        util.warn("Persona selection cleared, but $CHARTER_PERSONA outranks every selection "
+                  "and still decides in this shell.")
+    else:
+        util.ok("Active persona cleared.")
+    _say_resolves_to("This shell", now)
     return 0
+
+
+def _say_resolves_to(subject: str, sel: persona.Selection) -> None:
+    """What *subject* resolves to after a `clear`, and the rung that decides it.
+
+    Both `clear` paths end here, so a chat and a shell describe one ladder in one sentence.
+    A name no persona answers to is said to be one, with what moves it (#1045): `clear` in a
+    chat leaves a launcher's pointer by design (#1022), and "resolves to 'forge'" for a
+    removed `forge` would read as a persona the chat now has.
+
+    The name is bounded to one line: it may come out of `$CHARTER_PERSONA` or a pointer file,
+    neither of which a committed-name check has seen.
+    """
+    if not sel.name:
+        util.info(f"{subject} now resolves to no persona.")
+        return
+    where = f"'{contain.one_line(sel.name)}' (via {sel.source})"
+    if not sel.missing:
+        util.info(f"{subject} now resolves to {where}.")
+        return
+    util.info(f"{subject} now resolves to {where}, where {_MISSING}.")
+    util.info(f"Ways out: {persona.ways_out(sel.source)}.")
 
 
 def _say_cleared_in_a_chat(held: bool) -> int:
@@ -422,9 +499,7 @@ def _say_cleared_in_a_chat(held: bool) -> int:
                 "theirs.")
     else:
         util.info("This chat had no persona selection of its own, so nothing was cleared.")
-    now = persona.resolve_active()
-    where = f"'{now}' (via {persona.source()})" if now else "no persona"
-    util.info(f"This chat now resolves to {where}.")
+    _say_resolves_to("This chat", persona.selection())
     return 0
 
 

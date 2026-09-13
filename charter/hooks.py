@@ -6868,8 +6868,15 @@ def _context_parts(data: dict, piece_note, live: bool) -> list[str]:
         if gap:
             parts.append(gap)
 
-    name = persona.resolve_active()
+    # One decision for the name, its rung and whether it exists, so the block below and the
+    # stale note cannot describe two different resolutions (#1045).
+    sel = persona.selection()
+    name = sel.name
     d = persona.resolve(name) if name else None  # inheritance applied (merged role/remit)
+    if sel.missing:
+        stale = _stale_persona_note(sel)
+        if stale:
+            parts.append(stale)
     if d:
         # 1) ROLE — adopt the persona's identity + remit. Injected ALWAYS (even with no
         #    memory), so the default (steward = front door) reliably shapes the session.
@@ -6893,7 +6900,7 @@ def _context_parts(data: dict, piece_note, live: bool) -> list[str]:
         meta = d.get("meta", {})
         role = _one_line(str(meta.get("role") or name))
         when = _one_line(str(meta.get("delegate-when") or ""))
-        src = persona.source()
+        src = sel.source
         identity = (
             f"⬢ **You are the `{name}` persona for this session** — charter selected it "
             f"(via {src}). Adopt it; the full charter is `charter persona show {name}`.\n"
@@ -6963,6 +6970,38 @@ def _context_parts(data: dict, piece_note, live: bool) -> list[str]:
     # deliberately, by someone about to commit the result.
 
     return parts
+
+
+def _stale_persona_note(sel) -> str:
+    """The briefing's line for a selection naming a persona that does not exist (#1045),
+    or ``""`` when it cannot be composed.
+
+    `persona remove` leaves the pointers that named the persona, and resolution keeps them:
+    a session whose pointer names `forge` after `forge` is gone gets no role and no grants,
+    and never the plane's default in its place, because the default is a persona nobody
+    chose for it. That half is right. The session used to be told none of it, so it went on
+    working as nobody, and a persona later created under the same name became its persona
+    again without a word. This is where it is told.
+
+    The name comes out of a pointer file or the environment, which no committed-name check
+    has seen, so it is bounded to one line like every other string spliced in here. Never
+    raises: `sessionstart` drops the whole briefing when `_context_parts` does, and this line
+    is not worth the workspace gate above it.
+    """
+    try:
+        from . import persona
+        shown = _one_line(str(sel.name))
+        return (
+            f"⬢ **No persona is active for this session.** charter selected `{shown}` "
+            f"(via {sel.source}), and no persona by that name exists on this plane — it was "
+            f"removed or renamed, or never created. charter does not fall back to the plane's "
+            f"default in its place, because this selection was somebody's choice and the "
+            f"default was not; so this session has no persona role and no persona tool "
+            f"grants, and a persona created later under that name becomes this session's "
+            f"persona. Tell the operator. "
+            f"Ways out: {persona.ways_out(sel.source)}.")
+    except Exception:
+        return ""
 
 
 def _rules_gap(data: dict) -> str:
