@@ -253,6 +253,25 @@ class NothingToCheckAgainstIsSaidNotSwallowed(UpdateCase):
         self.assertNotIn("offline", out)
         self.assertNotIn("charter update --to", out)
 
+    def test_a_machine_ahead_of_its_pin_succeeds_and_says_so(self):
+        """Ahead of the pin, `update` never moved the machine either: with no `--bump`,
+        PyPI only decides whether to propose moving the pin. The drift is `charter
+        version`'s to report, so the line states the two versions and nothing more."""
+        self.pin("0.44.0")
+        code, out = self.update()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(self.moved, [])
+        self.assertIn(f"this machine runs {INSTALLED}, ahead of the plane's pin 0.44.0", out)
+        self.assertIn("whether a newer release is published could not be checked", out)
+        self.assertIn("either it did not answer, or its answer could not be cached", out)
+        self.assertNotIn("on the plane's pin", out)
+        self.assertNotIn("latest", out.lower())
+
+    def test_bump_ahead_of_its_pin_is_still_refused(self):
+        self.pin("0.44.0")
+        code, out = self.update(bump=True)
+        self.assertSaidNothingWasChecked(code, out)
+
     def test_an_explicit_target_on_the_pin_claims_no_check_it_never_asked_for(self):
         """`--to` never asks PyPI, so a line about what PyPI did not answer would describe
         a request this run did not make."""
