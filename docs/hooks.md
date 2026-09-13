@@ -91,6 +91,10 @@ rule while one who reads a bare refusal files an issue.
   seen either way. A **quoted** heredoc fed only to a
   reader (`cat <<'EOF'`) is stdin data: its body is dropped, so a document naming these paths
   is not refused as a read of them ([#258](https://github.com/diazoxide/charter/issues/258)).
+  That body ends where bash ends it: `<<'EO'F`, `<<"EO"F` and `<<E\OF` are all heredocs whose
+  delimiter is `EOF`, because quotes are removed per character and the pieces join. A body whose
+  terminator never arrives is not dropped at all, since that is what a misread delimiter looks
+  like ([#975](https://github.com/diazoxide/charter/issues/975)).
   An *unquoted* body stays visible instead, because the shell expands it before the reader
   sees it and a `$( … )` in it would run. And `#` starts a comment only where a word starts. Position counts too: `{` and `}` are reserved words, so bash passes them as
   plain arguments anywhere but command position and `cat { <vault>` is one command that
