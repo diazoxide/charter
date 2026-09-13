@@ -6222,7 +6222,10 @@ def _workspace_confirm_nudge(session_id: str | None, unattended: bool = False) -
     try:
         from . import session, workspace
         from .harness import registry
-        if os.environ.get("CHARTER_WORKSPACE") or workspace.is_locked(session_id):
+        # The pin as resolution ranks it: a variable holding only whitespace pins nothing,
+        # and skipping the question for it left a session nobody chose a workspace for
+        # unasked (#1055).
+        if workspace.from_environment() or workspace.is_locked(session_id):
             return ""
         locks = (session.current() is not None
                  or not any(d.key == "session-lock"

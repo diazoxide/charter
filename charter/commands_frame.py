@@ -4807,7 +4807,10 @@ def _picker_wanted(args, chosen: str | None) -> bool:
     """
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         return False
-    if getattr(args, "workspace", None) or os.environ.get("CHARTER_WORKSPACE"):
+    # The variable as the ladder ranks it, not its presence: one holding only whitespace is
+    # no answer given, and skipping the picker for it launched into a workspace nobody
+    # chose (#1055).
+    if getattr(args, "workspace", None) or workspace.from_environment():
         return False
     if getattr(args, "pick", False):
         return True

@@ -179,6 +179,24 @@ paths that name the workspace, so being inside one is not a hint, it is the fact
 `charter workspace current` prints the answer *and the rung that produced it*, which is
 usually the faster question to ask than "which workspace am I in".
 
+`$CHARTER_WORKSPACE` is stripped of surrounding whitespace, so `" billing "` selects
+`billing`. A value that is empty or holds only whitespace names nothing and counts as unset:
+the rungs below it decide (#1055). That is what `export CHARTER_WORKSPACE=$(…)` leaves when
+the command prints only a space or a tab. Before, it hid every rung below it and the session
+fell to `default`, `charter workspace use` warned that `' '` takes precedence, and neither
+the session briefing nor the launch picker asked for a workspace, because the variable
+counted as a pin. `charter workspace current` says when it ignored one, after the rung that
+decided:
+
+```
+billing
+• LOCAL (private) · resolved via session, 🔒 locked for this session
+! $CHARTER_WORKSPACE is set but holds only whitespace, so charter ignored it and the rungs below it decided. Unset it, or set it to the workspace you meant.
+```
+
+An empty `$CHARTER_WORKSPACE` is not reported, because a frame starts every chat with the
+variable set and empty when the launch pinned no workspace.
+
 The nominated default is written to `workspaces/.default`, a committed file, and
 `charter workspace default` with no name prints it. `charter workspace default --clear`
 removes it and needs no name. It prints `Cleared` only when it removed the file. With

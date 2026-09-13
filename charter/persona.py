@@ -1215,6 +1215,27 @@ def blank_in_environment() -> bool:
     return bool(os.environ.get("CHARTER_PERSONA")) and from_environment() is None
 
 
+def blank_flag(value: str | None) -> str | None:
+    """The refusal for a ``--persona`` holding only whitespace, or ``None`` for any other
+    value (#1055).
+
+    **Refused, where the variable is ignored.** A flag is typed for one command, on purpose,
+    so there is no rung below it that the operator meant instead: falling through would run
+    `persona secret` against the active persona's vault or search the active persona's
+    memory, neither of which they named. Taken as a name, it did worse and said nothing
+    true: `persona secret --persona " "` blamed a vault file no whitespace name can have,
+    and `recall --persona " "` searched a persona called `' '` and answered "No memories
+    yet". The wording is `persona use`'s for a name that defines nothing.
+
+    Empty is not refused. Every reader of the flag tests it for truth, so `--persona ""` has
+    always meant no flag, and ``""`` is how charter's own records spell "no persona".
+    """
+    if value and not value.strip():
+        return (f"no persona '{contain.one_line(value)}' (a persona name is never only "
+                "whitespace)")
+    return None
+
+
 def _resolved(explicit: str | None = None) -> tuple[str | None, str]:
     """``(persona, where it came from)`` — the whole precedence, decided ONCE.
 

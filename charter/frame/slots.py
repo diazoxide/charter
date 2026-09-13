@@ -547,7 +547,7 @@ def _top(fid: str) -> str:
     degrade. The `dev` chip travels inside that one f-string, so it goes and comes back
     with the version and can never be left behind on its own.
     """
-    from .. import __version__, statusline
+    from .. import __version__, statusline, workspace as ws_mod
     from . import state
     # The FRAME's workspace, not this pane's own guess at one (#512) — see
     # :func:`_frame_workspace`. `$CHARTER_WORKSPACE` is the one rung a panel does share
@@ -561,9 +561,11 @@ def _top(fid: str) -> str:
     # did not name — which is what `state.workspace_for`'s rung 0 is about. Comparing the
     # value keeps the two halves of the chip agreeing by construction rather than by both
     # happening to consult the same rung, and it drops `source()`'s `from_path` walk and
-    # pointer reads off this slot.
+    # pointer reads off this slot. The value is `workspace.from_environment`'s, the one
+    # reading of the variable (#1055), so the marker and the ladder agree on what a blank
+    # one names: nothing.
     ws = _frame_workspace(fid)
-    pin = "*" if ws == os.environ.get("CHARTER_WORKSPACE", "").strip() else ""
+    pin = "*" if ws == ws_mod.from_environment() else ""
     # Identity always; the roster only when nothing else on screen is drawing it (#530).
     # `_persona_line_parts` is what decides which words are which — this row picks its
     # pieces and never assembles any, for the reason `_right`'s docstring gives about the
