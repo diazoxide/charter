@@ -104,7 +104,7 @@ class _ALaunchNamesAProfile(PersonaIso):
             out = "@1 %9\n"
         return subprocess.CompletedProcess(argv, 0, out, "")
 
-    def _launch(self, *, which: str | None = "/nowhere/claude", dead_status=None,
+    def _launch(self, *, which="/nowhere/claude", dead_status=None,
                 verdict: tuple = (None, ""), operator=None, stdin=None, stdout=None,
                 **ns) -> int:
         """The real `_launch` with tmux stood in — and every answer a case might care about
@@ -130,8 +130,12 @@ class _ALaunchNamesAProfile(PersonaIso):
                    else mock.patch("sys.stdout.isatty", return_value=True)]
         for s in streams:
             self.enterContext(s)
-        with mock.patch("charter.commands_frame.shutil.which", return_value=which), \
-                mock.patch.object(launcher.shutil, "which", return_value=which), \
+        # *which* is one answer for every program, or a function of the program's name for
+        # a case where the answer depends on WHICH program is asked (a wrapper and the
+        # harness it wraps, `tests/test_a_harness_runs_through_the_command_you_name.py`).
+        answer = {"side_effect": which} if callable(which) else {"return_value": which}
+        with mock.patch("charter.commands_frame.shutil.which", **answer), \
+                mock.patch.object(launcher.shutil, "which", **answer), \
                 mock.patch.object(tmuxctl, "version", return_value=(3, 7)), \
                 mock.patch.object(tmuxctl, "operator_server", return_value=operator), \
                 mock.patch.object(commands_frame, "_live_sessions", return_value={"beta"}), \
