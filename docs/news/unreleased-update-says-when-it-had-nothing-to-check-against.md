@@ -18,12 +18,15 @@ Now, with no pin, it installs nothing and exits 1:
 `--bump` on a machine already on the plane's pin gets the same refusal. It asks to move the
 pin past that version, and nothing says to what.
 
-Without `--bump`, a machine already on its pin has nothing to conform, so it still succeeds.
-It no longer passes over the check it did not make:
+Without `--bump`, a machine on or ahead of its pin has nothing to conform, so it still
+succeeds. It no longer passes over the check it did not make:
 
 ```
 • this machine is on the plane's pin 0.61.0; whether a newer release is published could not be checked: no version came back from PyPI, either it did not answer, or its answer could not be cached.
 ```
+
+A machine ahead of its pin reads `this machine runs <version>, ahead of the plane's pin <pin>`
+at the start of that line instead. `charter version` still reports that drift.
 
 Both messages give the same two causes `charter version bump` gives for the same condition,
 and like bump neither says which one happened. The old wording guessed "offline?", but an

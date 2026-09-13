@@ -26,8 +26,8 @@ their next session, so get an explicit yes before running it.
 names two possible causes and does not say which one happened, so do not pick one for the
 person either. On a plane with no pin, or with `--bump`, it exits 1 without moving
 anything. To install a version you already know, run `charter update --to X.Y.Z`. On a
-machine already on its pin it exits 0 and says whether a newer release is published could
-not be checked. Relay exactly that: the machine is on the pin. Do not call charter current
+machine on or ahead of its pin it exits 0 and says whether a newer release is published
+could not be checked. Relay exactly what it says about the pin. Do not call charter current
 or up to date.
 
 **A host's command.** Claude Code's plugin and Codex's belong to the host, so charter names
