@@ -473,12 +473,14 @@ class ClaudeCodeHarness(Harness):
         return {CHECKOUT_LOCAL_SETTINGS:
                 json.dumps({"permissions": restrictions}, indent=2) + "\n"}
 
-    def upgrade(self, root: Path) -> tuple[str, str]:
+    def upgrade(self, root: Path, *, dry_run: bool = False) -> tuple[str, str]:
         """Named, never run — the restraint `cmd_version_sync` already keeps.
 
         `claude` may be absent, may prompt for a scope, and the command mutates the
         reader's editor install. What changes here is only that this answer is now Claude
         Code's answer rather than the answer charter gave every harness.
+
+        So ``dry_run`` has nothing to skip: naming is the whole of this answer either way.
         """
         from .. import update
 

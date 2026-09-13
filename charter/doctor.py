@@ -3043,7 +3043,10 @@ def check_version_lock() -> Result:
     from . import harness as _harness
 
     h = _harness.get(_harness.current())
-    status, detail = h.upgrade(_config.ROOT) if h else ("absent", "")
+    # `dry_run`: this row only needs the sentence. The real call moves the artifact, and
+    # under opencode that rewrote the global plugin every project loads, from a check the
+    # SessionStart hook runs (#1039). `version sync` and `update` are where it moves.
+    status, detail = h.upgrade(_config.ROOT, dry_run=True) if h else ("absent", "")
     move = (f". To move THIS plane only: {detail}" if status == "manual"
             else f". {detail}" if status == "absent" and detail
             else "")

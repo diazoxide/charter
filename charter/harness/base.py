@@ -482,7 +482,7 @@ class Harness:
         """
         return frozenset()
 
-    def upgrade(self, root: Path) -> tuple[str, str]:
+    def upgrade(self, root: Path, *, dry_run: bool = False) -> tuple[str, str]:
         """Move THIS harness's installed charter artifact to the running CLI's version.
 
         ``("moved", detail)`` — charter rewrote a file it authored.
@@ -497,6 +497,14 @@ class Harness:
         command to everybody. :class:`Deficit` already records why a guess is worse than a
         gap ("sends somebody off to configure something that does not exist"); here the
         guess would be *run*, not merely read.
+
+        ``dry_run=True`` answers the same status and the same sentence and writes nothing —
+        ``moved`` then means *would move*. It exists for `doctor`, which words a hint from
+        this answer: a check that moves the plane changes the state it reports, and the
+        one harness that writes here wrote into its GLOBAL config, which every project on the
+        machine reads (#1039). Same contract as :meth:`apply_ask_rule`'s flag: the write path
+        minus the write, never a predictor of its own, or the question and the move drift.
+        A harness that never writes here takes the flag and has nothing to skip.
         """
         return ("absent", f"charter has not pinned how {self.name or 'this harness'} "
                           f"updates its charter artifact — `charter harness list`")

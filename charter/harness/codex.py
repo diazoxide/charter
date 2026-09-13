@@ -235,7 +235,7 @@ class CodexHarness(Harness):
         """
         return [text]
 
-    def upgrade(self, root: Path) -> tuple[str, str]:
+    def upgrade(self, root: Path, *, dry_run: bool = False) -> tuple[str, str]:
         """Codex's own config block never needs moving; its PLUGIN does.
 
         `_block()` writes only `shell_environment_policy` — a constant naming the harness,
@@ -247,6 +247,8 @@ class CodexHarness(Harness):
         documentation, and this one the same way: `codex plugin update` — the command
         everyone reaches for, including the first draft of this method — is rejected by the
         binary, and the two-step in :data:`PLUGIN_UPDATE_CMD` is what it actually offers.
+
+        Named, never run, so ``dry_run`` has nothing to skip.
         """
         return "manual", PLUGIN_UPDATE_CMD
 
