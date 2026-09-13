@@ -36,8 +36,10 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from charter import config, workspace
+from charter import config, doctor, util, workspace
+from charter.harness import base, registry
 
 from tests import _isolation
 from tests.test_a_workspace_carries_charters_layer import _plane_settings
@@ -251,6 +253,36 @@ class AMarkerThatGitTracks(Containment):
         self.assertEqual(keep.read_text(), "the guest's own file\n")
 
 
+class TheTrackedVerdictCostsOneGitCallPerCheckout(Containment):
+    """Whether git tracks a `.charter-generated` is asked of git, and only where it can mean
+    something: once per checkout per `worktree_answers` block — a layer report asks it for
+    the record and again for the row — and never for a workspace directory, whose marker is
+    charter's own and has no git root of its own to ask."""
+
+    def _marker_asks(self, spy, where: Path) -> list:
+        return [c for c in spy.call_args_list
+                if Path(c.args[0]) == where and c.args[1] == workspace.GENERATED_MARKER]
+
+    def test_a_tracked_marker_is_named_and_asked_about_once_in_one_report(self):
+        clone = _repo(self.wsdir() / "svc")
+        (clone / workspace.GENERATED_MARKER).write_text("{}\n")
+        _commit(clone)
+        with mock.patch.object(util, "git_path_state", wraps=util.git_path_state) as spy:
+            rows = workspace.harness_layer(self.ws)
+        self.assertIn(("svc/" + workspace.GENERATED_MARKER, "tracked"), rows,
+                      "the layer did not name a marker git tracks")
+        self.assertEqual(len(self._marker_asks(spy, clone)), 1,
+                         "one layer report asked git about one checkout's marker more than once")
+
+    def test_a_workspace_directorys_marker_is_not_asked_of_git(self):
+        self.assertTrue((self.wsdir() / workspace.GENERATED_MARKER).exists(),
+                        "fixture: the workspace directory has no marker to ask about")
+        with mock.patch.object(util, "git_path_state", wraps=util.git_path_state) as spy:
+            workspace.harness_layer(self.ws)
+        self.assertEqual(self._marker_asks(spy, self.wsdir()), [],
+                         "charter asked git about a workspace directory's own marker")
+
+
 class ASiblingThatSharesTheCheckoutsNamePrefix(Containment):
     """A `.charter-generated` linked at a SIBLING whose name begins with the checkout's own
     (`svc` → `svc-evil`). Containment compares resolved paths with a trailing separator, so
@@ -292,6 +324,43 @@ class AnEscapingMarkerKeyIsUntrusted(Containment):
     def test_an_absolute_key_adds_no_exclude_line(self):
         self.assertNotIn("victim.txt", self._wire_with_key(str(self.wsdir() / "victim.txt")),
                          "charter hid an absolute key a hostile marker named")
+
+
+class OneKeyCharterCouldNotHaveRecordedDropsTheWholeMarker(Containment):
+    """A marker is charter's record only when EVERY key is a name charter records: relative,
+    non-empty, no NUL, no `..`. One key that is not makes the whole marker untrusted, so a
+    clean key beside it vouches for nothing either.
+
+    The observable is a withdrawal: a clean key naming `.claude/agents/old.md` with its
+    digest is what charter withdraws once the plane stops generating that file. The control
+    shows the fixture reaches the withdrawal, so a file kept under a bad neighbour is kept by
+    the trust rule and not by some other refusal. Uncommitted markers throughout, so the
+    tracked-marker guard decides none of it. A NUL key, trusted, also raised out of the wire,
+    which runs on a launch path."""
+
+    def _wire(self, name: str, neighbour: dict) -> Path:
+        clone = _repo(self.wsdir() / name)
+        old = clone / ".claude" / "agents" / "old.md"
+        old.parent.mkdir(parents=True)
+        old.write_text("an agent the plane no longer has\n")
+        doc = {".claude/agents/old.md": workspace.content_digest(old.read_text()), **neighbour}
+        (clone / workspace.GENERATED_MARKER).write_text(json.dumps(doc) + "\n")
+        workspace.wire_guest(clone)
+        return old
+
+    def test_control_a_marker_of_clean_keys_withdraws_a_nested_file_it_recorded(self):
+        # Three segments on purpose: the withdrawal's root is the FIRST segment, `.claude`,
+        # and a path of two segments cannot tell the first from all-but-the-last.
+        self.assertFalse(self._wire("svc", {}).exists(),
+                         "a trusted marker's recorded file under .claude/agents was not withdrawn")
+
+    def test_a_clean_key_beside_one_charter_could_not_record_withdraws_nothing(self):
+        digest = workspace.content_digest("x\n")
+        for i, key in enumerate(["", "a\x00b", "../elsewhere.md", "/abs/elsewhere.md"]):
+            with self.subTest(key=key):
+                old = self._wire(f"svc{i}", {key: digest})
+                self.assertTrue(old.exists(),
+                                f"a marker holding the key {key!r} was trusted for its other keys")
 
 
 class AMarkerNamingAFileUnderADirectoryLink(Containment):
@@ -405,6 +474,19 @@ class AForgedDigestForAnOrdinaryFile(Containment):
         self.assertTrue(keep.exists(),
                         "charter withdrew an ordinary in-checkout file a forged marker named")
 
+    def test_unwire_does_not_remove_an_ordinary_file_a_forged_digest_names(self):
+        # `unwire_guest` asks the generated-roots question itself rather than through
+        # `_unwanted`, so the wire's refusal above says nothing about this one.
+        clone = _repo(self.wsdir() / "svc")
+        keep = clone / "keep.txt"
+        keep.write_text("the operator's file\n")
+        (clone / workspace.GENERATED_MARKER).write_text(json.dumps(
+            {"keep.txt": workspace.content_digest(keep.read_text())}) + "\n")  # untracked, trusted
+        removed = workspace.unwire_guest(clone)
+        self.assertTrue(keep.exists(),
+                        "unwire removed an ordinary in-checkout file a forged marker named")
+        self.assertNotIn("keep.txt", removed)
+
     def test_a_forged_digest_does_not_withdraw_the_git_exclude(self):
         clone = _repo(self.wsdir() / "svc")
         excl = clone / ".git" / "info" / "exclude"
@@ -415,6 +497,52 @@ class AForgedDigestForAnOrdinaryFile(Containment):
         workspace.wire_guest(clone)
         self.assertTrue(excl.exists(),
                         "charter withdrew .git/info/exclude a forged marker named")
+
+
+def _harness(name: str, **members) -> base.Harness:
+    """A registered-looking harness — a real `base.Harness` subclass, so it answers every
+    question the layer asks a harness and not only the one a test is about."""
+    return type("Fake", (base.Harness,), {"name": name, **members})()
+
+
+class AGeneratedRootIsThePathsFirstSegment(Containment):
+    """Charter withdraws only under its own generated roots, and a root is the FIRST segment
+    of a path a harness declares or generates — however deep the declaration.
+
+    Every shipped harness declares two-segment paths (`.claude/agents`), where the first
+    segment and everything-but-the-last are the same string, so these register a stand-in
+    harness whose paths are three segments deep. Each case is a file charter generated and
+    the plane then stopped generating: the withdrawal only happens when its root is
+    recognised."""
+
+    def test_a_file_under_a_deep_inherited_path_is_withdrawn_once_the_plane_drops_it(self):
+        deep = _harness("deep", inherited_paths=(".deep/nested/dir",))
+        source = config.ROOT / ".deep" / "nested" / "dir" / "a.md"
+        source.parent.mkdir(parents=True)
+        source.write_text("a plane file the checkout is cut off from\n")
+        clone = _repo(self.wsdir() / "svc")
+        mirrored = clone / ".deep" / "nested" / "dir" / "a.md"
+        with mock.patch.object(registry, "all", return_value=[deep]):
+            workspace.wire_guest(clone)
+            self.assertTrue(mirrored.exists(), "fixture: the deep inherited file was not mirrored")
+            source.unlink()
+            workspace.wire_guest(clone)
+        self.assertFalse(mirrored.exists(),
+                         "a mirrored file under a deep inherited path outlived its plane source")
+
+    def test_a_deep_file_a_harness_stops_generating_is_withdrawn(self):
+        # The root comes from what is still wanted here (`gen/sub/a.json`), not from any
+        # inherited path: this harness declares none.
+        files = {"gen/sub/a.json": "a\n", "gen/sub/b.json": "b\n"}
+        gen = _harness("gen", workspace_files=lambda self: dict(files))
+        dropped = self.wsdir() / "gen" / "sub" / "b.json"
+        with mock.patch.object(registry, "all", return_value=[gen]):
+            workspace.wire_harnesses(self.ws)
+            self.assertTrue(dropped.exists(), "fixture: the generated file was not written")
+            del files["gen/sub/b.json"]
+            workspace.wire_harnesses(self.ws)
+        self.assertFalse(dropped.exists(),
+                         "a file the harness stopped generating under a deep path was kept")
 
 
 class AWorkspaceChildThatLinksToAnOutsideRepo(Containment):
@@ -493,6 +621,48 @@ class AWorkspaceDirectoryThatIsALink(Containment):
                          "scaffold stamped its structure marker outside the plane")
         self.assertFalse((target / "workspace.md").exists(),
                          "scaffold wrote a workspace charter outside the plane")
+
+    def test_the_layer_report_names_the_link_and_reads_nothing_behind_it(self):
+        # The report's refusal, not the wire's: `doctor` reads this, and a layer read through
+        # the link would describe a directory that is not under the plane at all.
+        target = self.outside / "w9real"
+        (target / ".claude").mkdir(parents=True)
+        (target / ".claude" / "settings.json").write_text('{"theirs": true}\n')
+        (config.WORKSPACES_DIR / "w9").symlink_to(target)
+        self.assertEqual(workspace.harness_layer("w9"), [(workspace.GENERATED_MARKER, "foreign")],
+                         "the layer report read a workspace directory outside the plane")
+
+
+class AWorkspaceNameTheFilesystemCannotResolve(Containment):
+    """A path the filesystem cannot resolve is not inside the plane: containment answers no
+    rather than raising. A workspace name holding a NUL byte cannot be resolved at all."""
+
+    def test_the_wire_is_blocked_and_nothing_raises(self):
+        self.assertEqual(workspace.wire_harnesses("api\x00x"),
+                         [(workspace.GENERATED_MARKER, "blocked")])
+
+    def test_the_layer_report_names_it_and_nothing_raises(self):
+        self.assertEqual(workspace.harness_layer("api\x00x"),
+                         [(workspace.GENERATED_MARKER, "foreign")])
+
+
+class DoctorSaysWhatATrackedMarkerIs(Containment):
+    """`doctor`'s workspace-layer row, for a checkout whose `.charter-generated` git tracks:
+    the finding is named, and the hint says what the state means and who clears it."""
+
+    def test_the_row_names_the_marker_and_explains_tracked(self):
+        # A real plane, or the row answers "no control plane found" and asserts nothing.
+        _isolation.make_plane(self)
+        self.assertTrue(config.HAS_CONTROL_PLANE)
+        clone = _repo(self.wsdir() / "svc")
+        (clone / workspace.GENERATED_MARKER).write_text("{}\n")
+        _commit(clone)
+        workspace.wire_guest(clone)   # everything else current, so the finding is not elided
+        r = doctor.check_workspace_harness()
+        self.assertEqual(r.status, doctor.WARN)
+        self.assertIn(f"api/svc/{workspace.GENERATED_MARKER} (tracked)", r.detail)
+        self.assertIn("A 'tracked' marker is a `.charter-generated` git tracks in that checkout",
+                      r.hint)
 
 
 if __name__ == "__main__":
