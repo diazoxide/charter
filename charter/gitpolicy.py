@@ -202,7 +202,8 @@ def repos(root: Path, workspaces_dir: Path) -> list[Path]:
     return scan(root, workspaces_dir)[0]
 
 
-def scan(root: Path, workspaces_dir: Path) -> tuple[list[Path], list[Path]]:
+def scan(root: Path, workspaces_dir: Path
+         ) -> tuple[list[Path], list[tuple[Path, int | None]]]:
     """:func:`repos`, and beside it every directory under ``workspaces/<ws>/`` whose ``.git``
     charter cannot check.
 

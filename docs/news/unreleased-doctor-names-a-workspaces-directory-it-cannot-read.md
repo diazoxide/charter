@@ -32,4 +32,4 @@ workspace next, and it now says `not checked` with the path it could not read.
 skipped the clones it never reached without a word, down to "No git repos found". It now
 warns about each directory it could not read, with the same remedy as `doctor`.
 
-Closes #987 and #976.
+Nothing to adopt ([#987](https://github.com/diazoxide/charter/issues/987), [#976](https://github.com/diazoxide/charter/issues/976)).
