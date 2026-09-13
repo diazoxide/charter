@@ -13,9 +13,7 @@ Everything here is best-effort and never raises (git may be absent/shallow)."""
 
 from __future__ import annotations
 
-import subprocess
-
-from . import config
+from . import config, util
 
 # Paths whose commits change how a session behaves (memory/refs churn excluded).
 _BEHAVIOR_PATHS = ["CLAUDE.md", ".claude", "docs"]
@@ -27,11 +25,11 @@ _RESTART_PATHS = ["CLAUDE.md", ".claude/settings.json", ".claude/agents"]
 
 
 def _git(args, root=None):
+    # Through `util.run` for the environment it withholds (#964): with `GIT_DIR` exported,
+    # `head_sha` answered the exported repository's HEAD rather than the plane's, and every
+    # count here would have followed it.
     try:
-        return subprocess.run(
-            ["git", "-C", str(root or config.ROOT), *args],
-            capture_output=True, text=True, timeout=5,
-        )
+        return util.run(["git", "-C", str(root or config.ROOT), *args], check=False, timeout=5)
     except Exception:
         return None
 

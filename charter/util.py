@@ -153,6 +153,21 @@ class ProcError(RuntimeError):
         )
 
 
+#: What no git charter runs inherits (#964): the four variables that name a repository, which
+#: git obeys whatever ``-C`` or ``cwd=`` says. With ``GIT_DIR=<repoA>/.git`` exported,
+#: ``git -C <repoB> branch --show-current`` answers repoA's branch while
+#: ``rev-parse --show-toplevel`` still answers repoB, so the call looks right and is not; the
+#: status line called a clean clone dirty, reading repoA's index against repoB's files. git
+#: exports ``GIT_DIR`` inside every hook it runs, so a charter started from one gets it. A
+#: caller that means another repository says so on the argv, with ``--git-dir``.
+#:
+#: Not the ``GIT_CONFIG_*`` family, which names configuration rather than a repository:
+#: ``GIT_CONFIG_GLOBAL`` is how the test suite keeps the operator's own ``~/.gitconfig`` out
+#: of every git it spawns, and ``GIT_CONFIG_COUNT`` is how CONTRIBUTING hands the suite a
+#: runner's config.
+GIT_REPOSITORY_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
+
+
 def run(
     cmd: Sequence[str], cwd=None, check: bool = True, capture: bool = True,
     input: str | None = None, env: dict | None = None, timeout: float | None = None,
@@ -183,7 +198,9 @@ def run(
     ``unset`` names variables the child must NOT inherit, which an overlay cannot say: it can
     only add. ``GIT_DIR`` exported by a git hook points every git the child runs at that hook's
     repository whatever ``-C`` says — measured in #942's review round 3, where
-    ``git worktree list`` answered for the plane and a clone's exclude line was dropped.
+    ``git worktree list`` answered for the plane and a clone's exclude line was dropped. A git
+    child never inherits :data:`GIT_REPOSITORY_ENV` whatever *unset* says (#964); *unset* is
+    for withholding more than that.
     """
     overlay = dict(env or {})
     if cmd and cmd[0] == "git":
@@ -203,6 +220,11 @@ def run(
         # Covers git's own prompts only — not a GUI credential manager, and not an SSH
         # signing agent, which is a separate way for a captured git call to hang.
         overlay.setdefault("GIT_TERMINAL_PROMPT", "0")
+        # For EVERY git, not for the callers that ask: #942 added `unset=` for this and one
+        # call site of twenty used it, so `worktree`, `freshness`, the forge refresh and the
+        # status line all went on answering for whatever repository the caller's environment
+        # named. See `GIT_REPOSITORY_ENV` for what that costs.
+        unset = (*GIT_REPOSITORY_ENV, *unset)
     child_env = None
     if overlay:
         child_env = {**os.environ, **{k: v for k, v in overlay.items() if v is not None}}

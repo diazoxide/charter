@@ -320,10 +320,12 @@ def state_for_repo(d: Path, branch: str) -> dict:
 
 def _remote_url(d: Path) -> str | None:
     """The clone's raw `origin` URL, for inferring which forge hosts it."""
+    # `util.run`, never a bare `subprocess.run`: with `GIT_DIR` exported this answered the
+    # exported repository's origin, and the refresh asked that forge about this clone's branch
+    # (#964).
     try:
-        p = subprocess.run(["git", "-C", str(d), "remote", "get-url", "origin"],
-                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                           text=True, timeout=10)
+        p = util.run(["git", "-C", str(d), "remote", "get-url", "origin"], check=False,
+                     timeout=10)
     except Exception:
         return None
     url = (p.stdout or "").strip()
@@ -355,10 +357,8 @@ def _remote_path(d: Path):
     on the refresh path with its own 3s budget."""
     from .forge import registry
     try:
-        url = subprocess.run(
-            ["git", "-C", str(d), "remote", "get-url", "origin"],
-            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, timeout=3,
-        ).stdout.strip()
+        url = util.run(["git", "-C", str(d), "remote", "get-url", "origin"], check=False,
+                       timeout=3).stdout.strip()
     except Exception:
         return None
     return registry.namespace_of(url)
