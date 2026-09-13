@@ -393,11 +393,38 @@ def cmd_persona_current(args) -> int:
 
 
 def cmd_persona_clear(args) -> int:
-    persona.clear_active()
+    terminal = _terminal_for_selection()
+    held = persona.clear_active(terminal_id=terminal)
+    if terminal is not None:
+        return _say_cleared_in_a_chat(held)
     util.ok("Active persona cleared.")
     d = persona.default_persona()
     if d:
         util.info(f"Resolves to the committed default '{d}' now (personas/.default).")
+    return 0
+
+
+def _say_cleared_in_a_chat(held: bool) -> int:
+    """What `clear` did in a chat, which is less than it does anywhere else (#1022).
+
+    `persona.clear_active` dropped only the chat's session pointer: the terminal pointer and
+    the plane-wide file below it were chosen by the terminal that launched the frame or by a
+    bare shell, and a chat speaks for neither. So "Active persona cleared." would be false
+    the moment the status line drew the launcher's persona, and naming the committed default
+    would be a guess for the same reason `_scope_note` names none. What the chat resolves to
+    now is read back instead of predicted (ADR 0013).
+
+    *held* is whether that pointer named anything. A chat that never ran `use` had nothing
+    to drop, and "cleared" would report a write that did not happen.
+    """
+    if held:
+        util.ok("Active persona cleared for this chat only — other chats and terminals keep "
+                "theirs.")
+    else:
+        util.info("This chat had no persona selection of its own, so nothing was cleared.")
+    now = persona.resolve_active()
+    where = f"'{now}' (via {persona.source()})" if now else "no persona"
+    util.info(f"This chat now resolves to {where}.")
     return 0
 
 

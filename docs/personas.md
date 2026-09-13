@@ -354,6 +354,23 @@ shell, that never chose the persona. `charter persona create --use` selects the 
 `charter workspace use` makes the same choice for the same reason (#936, #953); see
 `docs/workspaces.md` → *Inside a chat*.
 
+**`charter persona clear` in a chat drops that session pointer and nothing else** (#1022).
+Everywhere else `clear` removes the session pointer, the terminal pointer and the plane-wide
+file together. In a chat the terminal pointer belongs to the terminal the frame was launched
+from, and the plane-wide file to a shell with no ids at all, so clearing them from a chat
+would erase a choice someone else made. `clear` therefore says what it did and reads back
+what is left:
+
+```
+✓ Active persona cleared for this chat only — other chats and terminals keep theirs.
+• This chat now resolves to 'forge' (via terminal).
+```
+
+A chat that never ran `use` is told `This chat had no persona selection of its own, so
+nothing was cleared.` `charter persona remove` in a chat leaves the launching terminal's
+pointer too, because `remove` clears a selection only when the removed persona resolved from
+the plane-wide file.
+
 A shell with neither a session id nor a pane id (a bare script, say) has nothing to key a
 pointer on. There `use` writes `.charter/active-persona`, the plane-wide local file, which
 is what that file is now for.

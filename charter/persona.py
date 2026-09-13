@@ -1255,20 +1255,37 @@ def set_active(name: str, session_id: str | None = None,
     return "terminal" if tf is not None else "session" if sf is not None else "plane"
 
 
-def clear_active() -> None:
+def clear_active(terminal_id: str | None = None) -> bool:
     """Drop this session's and this pane's selection, and the plane-wide file with them.
+    Returns whether this SESSION's pointer held a selection, which is all a chat has to clear.
 
     All three, because they are rungs of one ladder: clearing only the top rung would hand
     the session straight back to a lower one, and "cleared" would be a lie the very next
     command exposes.
+
+    ``terminal_id=""`` is `set_active`'s: this process speaks for no terminal (#1022). Inside
+    a chat `session.terminal` answers the `$TERM_SESSION_ID` of the terminal that launched
+    the frame, so the pointer this used to unlink was THAT terminal's choice. Measured: the
+    launcher ran `use forge`, a chat ran `clear`, and the launcher resolved `None`.
+
+    **And then it speaks for no plane-wide file either.** `set_active` writes that file only
+    for a shell with neither a session id nor a pane id, so a caller with no terminal to
+    speak for, and a session of its own, never wrote it. So the ladder argument above stops
+    at this session's rung here, on purpose: the rungs below it are someone else's choice,
+    and the caller says what it now resolves to rather than calling them cleared.
     """
-    sf, tf = _pointer_files()
-    for f in (sf, tf, config.ACTIVE_PERSONA_FILE):
+    sf, tf = _pointer_files(terminal_id=terminal_id)
+    # Read before the unlink, through the reader `_resolved` uses, so "held a selection" means
+    # what the session rung would have answered rather than "a file was there".
+    held = _read_pointer(sf) is not None
+    plane = () if terminal_id == "" else (config.ACTIVE_PERSONA_FILE,)
+    for f in (sf, tf, *plane):
         try:
             if f is not None and f.exists():
                 f.unlink()
         except OSError:
             pass
+    return held
 
 
 # --------------------------------------------------------------------------- #

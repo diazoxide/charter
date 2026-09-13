@@ -250,15 +250,14 @@ def _terminal_pointers() -> list[str]:
             if config.TERMINALS_DIR.is_dir() else [])
 
 
-class TestUseInsideAChat(SelectionScopeIso):
-    """`charter persona use`, typed in a chat's shell or run by a sub-agent inside it (#953).
+class InAChatIso(SelectionScopeIso):
+    """A plane holding `ops` and the chat `north.1`, and a way to run a command and read what
+    it said. `TestUseInsideAChat` and `TestClearInsideAChat` stand in the same chat."""
 
-    A chat speaks for no terminal, which `workspace use` settled for the same pointer one
-    noun over (#936) and `frame/switch.py` settled for this very pointer (#411). Every id
-    `session.terminal` could key on inside a frame names something other than this chat: a
-    tmux pane number the next server hands to an unrelated chat, or the `$TERM_SESSION_ID`
-    of the terminal that launched the frame, inherited by every pane on its server.
-    """
+    #: What a harness inherits when `charter claude` is typed in Terminal.app or iTerm2 without
+    #: tmux: `commands_frame._frame_env` strips `TMUX` and `TMUX_PANE` and nothing else of this
+    #: kind, and `session.terminal` ranks this variable first.
+    LAUNCHER = "w0t0p0:0A1B2C3D-0953"
 
     def setUp(self) -> None:
         super().setUp()
@@ -277,6 +276,17 @@ class TestUseInsideAChat(SelectionScopeIso):
     def _use(self, name: str) -> tuple[int, str]:
         from charter import commands_persona
         return self._run(commands_persona.cmd_persona_use, name=name)
+
+
+class TestUseInsideAChat(InAChatIso):
+    """`charter persona use`, typed in a chat's shell or run by a sub-agent inside it (#953).
+
+    A chat speaks for no terminal, which `workspace use` settled for the same pointer one
+    noun over (#936) and `frame/switch.py` settled for this very pointer (#411). Every id
+    `session.terminal` could key on inside a frame names something other than this chat: a
+    tmux pane number the next server hands to an unrelated chat, or the `$TERM_SESSION_ID`
+    of the terminal that launched the frame, inherited by every pane on its server.
+    """
 
     def test_a_chat_on_a_pane_writes_no_pointer_the_next_server_s_pane_reads(self):
         """Measured before: chat `north.1` on pane `%9` wrote `terminals/-9.persona` = `ops`,
@@ -313,11 +323,6 @@ class TestUseInsideAChat(SelectionScopeIso):
         # Not "a new chat starts as 'steward'": a chat opened with `--persona`, or by a
         # handoff that names one, starts as that, so the plane's default is not a promise.
         self.assertNotIn("steward", err)
-
-    #: What a harness inherits when `charter claude` is typed in Terminal.app or iTerm2 without
-    #: tmux: `commands_frame._frame_env` strips `TMUX` and `TMUX_PANE` and nothing else of this
-    #: kind, and `session.terminal` ranks this variable first.
-    LAUNCHER = "w0t0p0:0A1B2C3D-0953"
 
     def test_a_chat_leaves_the_terminal_that_launched_it_alone(self):
         """Measured before: with the launcher's `$TERM_SESSION_ID` inherited, `use ops` here
@@ -379,6 +384,121 @@ class TestUseOutsideAChatIsUnchanged(SelectionScopeIso):
                       "closing/reopening Claude).", buf.getvalue())
         with self.env(CHARTER_SESSION_ID="s2", TMUX_PANE="%7"):
             self.assertEqual(persona.resolve_active(), "forge")
+
+
+class TestClearInsideAChat(InAChatIso):
+    """`charter persona clear` in a chat, the reverse of #953 (#1022).
+
+    `use` there stopped writing a terminal pointer, and `clear` kept deleting one: the pointer
+    keyed on the `$TERM_SESSION_ID` the chat inherited from the terminal that launched its
+    frame. So a chat erased a choice that terminal made, somewhere else, and never wrote.
+    """
+
+    def _clear(self) -> tuple[int, str]:
+        from charter import commands_persona
+        return self._run(commands_persona.cmd_persona_clear)
+
+    def _launcher_chooses(self, name: str) -> None:
+        self.persona_(name)
+        with self.env(TERM_SESSION_ID=self.LAUNCHER):
+            self.assertEqual(persona.set_active(name), "terminal",
+                             "the launcher's own pointer was not planted")
+
+    def test_a_chat_leaves_the_selection_of_the_terminal_that_launched_it(self):
+        """Measured before: the launcher ran `use forge`, a chat that inherited its
+        `$TERM_SESSION_ID` ran `clear`, and the launcher's terminal then resolved `None`."""
+        self._launcher_chooses("forge")
+        in_the_chat = dict(CHARTER_SESSION_ID=CHAT, TERM_SESSION_ID=self.LAUNCHER,
+                           TMUX_PANE="%9")
+        with self.env(**in_the_chat):
+            self._use("ops")
+            rc, err = self._clear()
+            here = persona.resolve_active()
+        self.assertEqual(rc, 0, err)
+        with self.env(TERM_SESSION_ID=self.LAUNCHER):
+            self.assertEqual(persona.resolve_active(), "forge",
+                             "a chat's clear erased the choice of the terminal that launched it")
+        self.assertIsNone(persona.for_session(CHAT), "the chat's own selection survived clear")
+        self.assertEqual(here, "forge")
+
+    def test_a_chat_leaves_the_plane_wide_selection_a_bare_shell_made(self):
+        """`.charter/active-persona` is written only by a shell with no session id and no pane
+        id, and a chat always has a session id, so that file is never the chat's selection
+        either. Deleting it from a chat is the same erasure one rung lower."""
+        self.persona_("forge")
+        with self.env():
+            self.assertEqual(persona.set_active("forge"), "plane",
+                             "the bare shell's plane-wide file was not planted")
+        with self.env(CHARTER_SESSION_ID=CHAT, TMUX_PANE="%9"):
+            self._use("ops")
+            rc, err = self._clear()
+        self.assertEqual(rc, 0, err)
+        with self.env():
+            self.assertEqual(persona.resolve_active(), "forge",
+                             "a chat's clear erased the plane-wide selection")
+
+    def test_the_sentence_says_this_chat_s_selection_was_cleared_and_what_it_resolves_to(self):
+        """"Active persona cleared." was true when clear dropped every rung. In a chat it drops
+        one, and the chat goes on resolving the launcher's `forge` through the terminal rung,
+        so the bare sentence is the lie `persona.clear_active` warns about, exposed by the
+        next status line. Say whose selection went, and read back what is left (ADR 0013)."""
+        self._launcher_chooses("forge")
+        with self.env(CHARTER_SESSION_ID=CHAT, TERM_SESSION_ID=self.LAUNCHER, TMUX_PANE="%9"):
+            self._use("ops")
+            rc, err = self._clear()
+        self.assertEqual(rc, 0, err)
+        self.assertIn("Active persona cleared for this chat only — other chats and terminals "
+                      "keep theirs.", err)
+        self.assertIn("This chat now resolves to 'forge' (via terminal).", err)
+        self.assertNotIn("Active persona cleared.", err)
+
+    def test_a_chat_with_no_selection_of_its_own_is_told_nothing_was_cleared(self):
+        """A chat that never ran `use` has no pointer for `clear` to drop, so "cleared" would
+        report a write that did not happen."""
+        with self.env(CHARTER_SESSION_ID=CHAT, TMUX_PANE="%9"):
+            rc, err = self._clear()
+        self.assertEqual(rc, 0, err)
+        self.assertIn("This chat had no persona selection of its own, so nothing was cleared.",
+                      err)
+        self.assertNotIn("cleared for this chat", err)
+        self.assertIn("This chat now resolves to no persona.", err)
+
+    def test_removing_the_persona_the_launcher_chose_leaves_the_launcher_s_pointer(self):
+        """#1022 named `persona remove` as the same path, and it is not quite: `remove` clears
+        only when the removed persona resolved from the plane-wide file, so the launcher's
+        pointer never reaches `clear_active` from here. Pinned so that a change routing remove
+        through clear, in the name of consistency, cannot start deleting it. The pointer now
+        names a persona that no longer exists, and what to do about that is not a chat's
+        decision to make."""
+        self._launcher_chooses("forge")
+        with self.env(CHARTER_SESSION_ID=CHAT, TERM_SESSION_ID=self.LAUNCHER, TMUX_PANE="%9"):
+            from charter import commands_persona
+            rc, err = self._run(commands_persona.cmd_persona_remove, name="forge", force=False)
+        self.assertEqual(rc, 0, err)
+        self.assertEqual(len(_terminal_pointers()), 1,
+                         "a chat's remove deleted the pointer of the terminal that launched it")
+
+
+class TestClearOutsideAChatIsUnchanged(SelectionScopeIso):
+    """The other side of #1022's line: a harness in an ordinary pane still clears every rung,
+    because there the terminal pointer is its own (#255)."""
+
+    def test_a_session_in_an_ordinary_pane_still_clears_its_terminal_pointer(self):
+        import io
+        from contextlib import redirect_stderr
+        from types import SimpleNamespace
+        from charter import commands_persona
+        self.persona_("forge")
+        buf = io.StringIO()
+        with self.env(CHARTER_SESSION_ID="s1", TMUX_PANE="%7"):
+            persona.set_active("forge")
+            with redirect_stderr(buf):
+                rc = commands_persona.cmd_persona_clear(SimpleNamespace())
+        self.assertEqual(rc, 0, buf.getvalue())
+        self.assertEqual(_terminal_pointers(), [])
+        self.assertIn("Active persona cleared.", buf.getvalue())
+        with self.env(CHARTER_SESSION_ID="s2", TMUX_PANE="%7"):
+            self.assertIsNone(persona.resolve_active())
 
 if __name__ == "__main__":
     unittest.main()
