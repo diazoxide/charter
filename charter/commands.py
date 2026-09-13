@@ -3507,9 +3507,21 @@ def cmd_version_sync(args) -> int:
     with no plugin at all still needs a way to conform the binary, and removing the escape
     hatch would be its own defect.
     """
-    from . import instance as _instance, update as _update
+    from . import channel, instance as _instance, update as _update
     locked = _instance.locked_version(_instance.load(config.ROOT))
     if not locked:
+        if channel.is_dev():
+            # NOT "Pin one with: charter version bump --push". A pin beside the dev channel
+            # is the pair session start refuses, and bump refuses to write it (#947). No pin
+            # is the state this plane is meant to be in, so the next step is the one
+            # `charter version` names on dev, from the same function, so the two cannot
+            # drift apart.
+            util.info(f"This control plane pins no version — nothing to sync. It follows "
+                      f"`{_update.DEV_BRANCH}` (`[update] channel = \"dev\"`), which has no "
+                      f"version to pin.")
+            util.info(f"  move this charter onto `{_update.DEV_BRANCH}`:  "
+                      f"{_update.dev_remedy()}")
+            return 0
         util.info("This control plane pins no version — nothing to sync. "
                   "Pin one with: charter version bump --push")
         return 0
@@ -3572,7 +3584,24 @@ def cmd_version_sync(args) -> int:
 
 def cmd_version_bump(args) -> int:
     """Install → verify → write the lock → commit (+push). Team-affecting, so in that order."""
-    from . import instance as _instance, update
+    from . import channel, instance as _instance, update
+    if channel.is_dev():
+        # FIRST, before PyPI is asked, anything installed or the lock written. A pin beside
+        # `[update] channel = "dev"` is the pair session start refuses to settle — "Those
+        # ask for two different charters, so nothing was installed" (`hooks.py`) — and this
+        # command used to write it without a word, then `--push` it, so every teammate on
+        # the shared dev plane met that refusal about a `charter.toml` they never edited
+        # (#947). `--to` does not get past it: a pin typed by hand is still a pin beside
+        # the channel. Refused rather than warned, because which of the two the plane
+        # wants is the operator's to say, and each way out is one step.
+        util.err("refusing to pin a control plane that declares `[update] channel = "
+                 "\"dev\"`: a pin and the dev channel ask for two different charters. "
+                 "Nothing was installed or written.")
+        util.info("  to pin a release, drop `[update] channel = \"dev\"` from the plane's "
+                  "`charter.toml` and bump again")
+        util.info(f"  to stay on `{update.DEV_BRANCH}`, pin nothing and move this charter "
+                  f"onto it:  {update.dev_remedy()}")
+        return 1
     target = (getattr(args, "to", None) or "").strip()
     if not target:
         # What THIS call fetched, never the cache re-read after it. `fetch_and_store` leaves

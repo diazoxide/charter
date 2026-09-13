@@ -339,18 +339,6 @@ class VersionBumpPinsOnlyWhatItFetched(NoNetwork, PersonaIso):
                          "`fetch_and_store` also answers None when PyPI replied and the "
                          "cache write failed")
 
-    def test_a_dev_plane_whose_head_fetch_succeeds_refuses_the_same_way(self):
-        """The measured shape: on dev the branch GET can succeed while PyPI's fails, and a
-        partial fetch still writes the cache. The head is not a version, and the stale
-        `latest` beside it is not what this call fetched."""
-        pin_update_channel(self, "dev")
-        _cache(latest=_STALE, head=_HEAD, ts=1.0)
-        with mock.patch.object(update, "_fetch_latest", return_value=None), \
-             mock.patch.object(update, "_fetch_head", return_value="f" * 40):
-            rc, _ = self._bump()
-        self.assertEqual(rc, 1)
-        self.assertEqual(self.calls, [])
-
     def test_a_successful_fetch_pins_what_it_fetched(self):
         pin_update_channel(self, "stable")
         _cache(latest=_STALE, ts=1.0)

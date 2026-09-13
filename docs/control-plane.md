@@ -456,7 +456,11 @@ pushed it to the team as the pin.
 
 On a plane that declares the [dev channel](install.md#4-the-dev-channel--trying-main-without-cutting-a-release),
 `charter version` never suggests this command, because a pin and the dev channel cannot
-both be declared. It names `charter update` instead.
+both be declared. It names `charter update` instead, and so does `charter version sync` on
+a plane there that pins nothing. `charter version bump` itself refuses on such a plane,
+`--to` or not. It refuses before asking PyPI, installing anything or writing the lock, and
+names the two ways out: drop `[update] channel = "dev"` and bump again, or pin nothing. Before
+#947 it wrote the pin, and with `--push` every teammate's session start then refused the plane.
 
 ## `[harness]` — profiles, and the default
 
