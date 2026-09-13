@@ -18,6 +18,8 @@ from __future__ import annotations
 import contextlib
 import errno
 import os
+import shutil
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -235,6 +237,67 @@ class OneBaseItCannotRead(PersonaIso):
                          "2 base(s) consistent; workspaces/alpha/memory cannot be checked")
         self.assertEqual(r.hint, "workspaces/alpha/memory cannot be checked — restoring read "
                                  "access to it clears this.")
+
+    def test_a_memory_link_to_nothing_is_skipped_as_absent(self):
+        """The line after the unread one: a base `stat` answers is not there for is skipped, as
+        `Path.exists` skipped it before #1014, never read through. A link to nothing outside the
+        plane is the one base that line decides — read through, `index_refusal` names it as an
+        index charter will not touch. Pinned as it stands, so changing it is a decision."""
+        (self.alpha / "memory").rmdir()
+        outside = Path(tempfile.mkdtemp(prefix="edm-outside-"))
+        self.addCleanup(shutil.rmtree, outside, ignore_errors=True)
+        (self.alpha / "memory").symlink_to(outside / "nothing")
+        r = doctor.check_memory_indexes()
+        self.assertEqual((r.status, r.detail, r.hint), (doctor.OK, "3 base(s) consistent", ""))
+
+
+class WhatTheRowSaysOfTheBasesItRead(PersonaIso):
+    """The verdicts the unread clause is added beside, each pinned at the shape it prints."""
+
+    def refused_index(self, ws: str) -> None:
+        """A base whose `MEMORY.md` is a link out of the plane — an index charter will not
+        write through (#349)."""
+        mem = config.WORKSPACES_DIR / ws / "memory"
+        mem.mkdir(parents=True)
+        outside = Path(tempfile.mkdtemp(prefix="edm-outside-"))
+        self.addCleanup(shutil.rmtree, outside, ignore_errors=True)
+        (outside / "MEMORY.md").write_text("# Memory Index\n")
+        (mem / "MEMORY.md").symlink_to(outside / "MEMORY.md")
+
+    def test_two_refused_indexes_are_both_named_with_nothing_elided(self):
+        for ws in ("one", "two"):
+            self.refused_index(ws)
+        r = doctor.check_memory_indexes()
+        self.assertEqual((r.status, r.detail), (doctor.WARN, "2 index(es) charter will not touch"))
+        self.assertTrue(r.hint.startswith("ws:one: "), r.hint)
+        self.assertIn("; ws:two: ", r.hint)
+        self.assertNotIn("…", r.hint)
+        self.assertTrue(r.hint.endswith("  → this is a defect in a committed file: replace the "
+                                        "link with a real MEMORY.md"), r.hint)
+
+    def test_a_third_refused_index_is_elided(self):
+        """Two are shown; the rest are said to exist rather than dropped without a mark."""
+        for ws in ("one", "two", "three"):
+            self.refused_index(ws)
+        r = doctor.check_memory_indexes()
+        self.assertEqual((r.status, r.detail), (doctor.WARN, "3 index(es) charter will not touch"))
+        self.assertTrue(r.hint.endswith(", …  → this is a defect in a committed file: replace "
+                                        "the link with a real MEMORY.md"), r.hint)
+
+    def test_a_plane_whose_only_finding_is_a_large_index(self):
+        """Growth with no drift is its own verdict — a count of large indexes, not "0 dangling,
+        0 unindexed", which reads as a drift report that found nothing."""
+        mem = config.WORKSPACES_DIR / "big" / "memory"
+        mem.mkdir(parents=True)
+        names = [f"m{i:03}.md" for i in range(doctor._INDEX_LINES_WARN)]
+        for n in names:
+            (mem / n).write_text(f"# {n[:-3]}\n\nx\n")
+        (mem / "MEMORY.md").write_text(
+            "# Memory Index\n\n" + "".join(f"- [T]({n})\n" for n in names))
+        r = doctor.check_memory_indexes()
+        self.assertEqual((r.status, r.detail), (doctor.WARN, "1 large index(es)"))
+        self.assertTrue(r.hint.startswith(f"large: ws:big ({doctor._INDEX_LINES_WARN} entries)"),
+                        r.hint)
 
 
 

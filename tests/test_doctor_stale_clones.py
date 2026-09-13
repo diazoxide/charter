@@ -151,6 +151,29 @@ class TestItSeesEveryWorkspace(StaleCloneCase):
             self.assertIn(ws, f"{r.detail} {r.hint or ''}", ws)
 
 
+class TestTheDetailShowsFourAndMarksTheRest(StaleCloneCase):
+    """The row is one line: four stale clones are named, and a fifth is marked rather than
+    dropped without a word."""
+
+    def stale_in(self, count: int):
+        self.seed_origin()
+        clones = [self.clone_into(f"w{i}") for i in range(1, count + 1)]
+        self.advance_origin(1)
+        for c in clones:
+            self.fetch(c, 1)
+        return self.check()
+
+    def test_four_are_all_named(self):
+        self.assertEqual(self.stale_in(4).detail,
+                         "w1/svc (1 behind), w2/svc (1 behind), w3/svc (1 behind), "
+                         "w4/svc (1 behind)")
+
+    def test_a_fifth_is_marked(self):
+        self.assertEqual(self.stale_in(5).detail,
+                         "w1/svc (1 behind), w2/svc (1 behind), w3/svc (1 behind), "
+                         "w4/svc (1 behind), …")
+
+
 class TestItStaysQuietWhenItShould(StaleCloneCase):
     def test_an_up_to_date_clone_is_ok(self):
         self.seed_origin()
