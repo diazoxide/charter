@@ -146,6 +146,19 @@ class TestEveryReaderAgrees(StaleIso):
         self.assertEqual(rc, 0, err)
         self.assertIn("takes precedence — commands use 'forge', not 'steward'.", err)
 
+    def test_use_of_the_name_the_variable_already_names_is_not_warned(self):
+        """The variable and the selection agree, so nothing outranks anything: a warning
+        here would send the operator to unset a variable that is choosing what they chose.
+        Surrounding whitespace is compared as the name resolution ranks."""
+        from charter import commands_persona
+        self.persona_("forge")
+        for value in ("forge", " forge "):
+            with self.subTest(value=value), \
+                    self.env(CHARTER_PERSONA=value, CHARTER_SESSION_ID="s1"):
+                rc, _out, err = _run(commands_persona.cmd_persona_use, name="forge")
+                self.assertEqual(rc, 0, err)
+                self.assertNotIn("takes precedence", err)
+
     def test_the_frame_switcher_and_the_panel_it_repaints_agree_on_a_blank_pin(self):
         """`frame.switch._pin` reads the launch record, and already called a blank pin no
         pin, so it allowed the switch. The panel resolves through `persona.selection` with
