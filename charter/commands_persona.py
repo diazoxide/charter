@@ -418,9 +418,30 @@ def cmd_persona_default(args) -> int:
         # Both rungs, or a plane would still declare a front door after being told it no
         # longer does — the dotfile resolves whenever charter.toml is silent.
         had = bool(persona.declared_default() or persona.default_persona())
-        _instance.set_default_persona(config.ROOT, None)
-        if legacy.exists():
+        toml = config.ROOT / "charter.toml"
+        try:
+            _instance.clear_default_persona(config.ROOT)
+        except OSError as e:
+            # The OS's own words beside the path, and no cause of charter's (ADR 0009): a
+            # read-only file, an unreadable one and a full disk all land here. This used to
+            # go unasked and print "Cleared" over a declaration still in the file (#1010).
+            # Nothing about what the file now holds, either: a write that failed after
+            # opening can leave it short, so "left as it was" would be a claim unread.
+            util.err(f"could not clear the default persona: could not update {toml} "
+                     f"({e.strerror or e.__class__.__name__}).")
+            return 1
+        try:
             legacy.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as e:
+            # A read-only `personas/` raised straight out of the command as a traceback
+            # (#1010). An unlink that failed removed nothing, so the file is there as it was;
+            # and charter.toml's declaration is already gone, so this dotfile is now the rung
+            # that resolves when it names a persona that exists.
+            util.err(f"could not clear the default persona: could not remove {legacy} "
+                     f"({e.strerror or e.__class__.__name__}), which is left in place.")
+            return 1
         if had:
             util.ok("Cleared the declared default persona (commit with `charter save`).")
         else:

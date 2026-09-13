@@ -315,6 +315,13 @@ persona a session adopts when nobody has chosen one, and it is the only thing ch
 about front doors: **no persona name appears anywhere in charter's own code.** The name is
 your plane's, and the persona is an ordinary file you can rename, rewrite or delete.
 
+`charter persona default --clear` removes the declaration from `charter.toml` and the
+legacy `personas/.default` with it (below), because either one left behind would go on
+answering. It prints `Cleared` only when both are gone, and says so when neither was
+declared. When either file cannot be changed it names that file and the system's error and
+exits 1, because a clear that did not happen leaves every session with nothing else chosen
+walking through the front door you were told is gone.
+
 `charter init` creates no personas at all, so a fresh plane has no front door until you
 declare one. That is deliberate — charter never invents an identity for you.
 

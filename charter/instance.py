@@ -327,7 +327,7 @@ def locked_version(cfg: dict) -> str | None:
 def set_locked_version(root: Path, version: str) -> bool:
     """Write ``[charter] version`` into charter.toml, preserving the rest verbatim.
     :func:`_set_key` owns the how, and the why it is a textual edit."""
-    return _set_key(root, "charter", "version", version)
+    return _try_set_key(root, "charter", "version", version)
 
 
 def set_default_persona(root: Path, name: str | None) -> bool:
@@ -338,10 +338,44 @@ def set_default_persona(root: Path, name: str | None) -> bool:
     is how the second copy learns a lesson the first already knows (here: that ``default``
     also names a key under ``[workspace]``).
     """
-    return _set_key(root, "persona", "default", name)
+    return _try_set_key(root, "persona", "default", name)
 
 
-def _set_key(root: Path, section: str, key_name: str, value: str | None) -> bool:
+def clear_default_persona(root: Path) -> None:
+    """Undeclare ``[persona] default``, and let the ``OSError`` through when charter.toml
+    could not be rewritten.
+
+    Not ``set_default_persona(root, None)``, whose ``False`` is every failure at once and
+    carries none of the OS's words. `persona default --clear` ignored that ``False`` and
+    printed "Cleared" over a read-only charter.toml whose declaration every session with
+    nothing chosen went on adopting (#1010). The error it owes the reader names the file and
+    what the system said (ADR 0009), and a bool has no room for the second half.
+
+    A missing charter.toml declares nothing, so it is the one error that is not a failure
+    here, exactly as a missing `workspaces/.default` is not one for
+    `workspace.clear_declared_default`.
+    """
+    try:
+        _set_key(root, "persona", "default", None)
+    except FileNotFoundError:
+        pass
+
+
+def _try_set_key(root: Path, section: str, key_name: str, value: str | None) -> bool:
+    """:func:`_set_key`, answering ``False`` where the file could not be read or written.
+
+    A wrapper and not a second writer: `_set_key` stays the one function in charter that
+    edits charter.toml, which is what `test_frame_density` patches to prove a keypress
+    never does.
+    """
+    try:
+        _set_key(root, section, key_name, value)
+    except OSError:
+        return False
+    return True
+
+
+def _set_key(root: Path, section: str, key_name: str, value: str | None) -> None:
     """Set — or with ``value=None`` remove — ``key_name`` inside ``[section]``.
 
     Edited as text rather than round-tripped: stdlib ``tomllib`` reads TOML but
@@ -359,13 +393,13 @@ def _set_key(root: Path, section: str, key_name: str, value: str | None) -> bool
     whether a comment sitting under the header belonged to the key or to the section, and
     an empty ``[persona]`` reads the same as no ``[persona]`` to every consumer of this
     file — including :func:`default_persona_of`.
+
+    An ``OSError`` from reading or writing the file propagates; :func:`_try_set_key` is the
+    spelling that folds it into ``False``.
     """
     import re
     p = Path(root) / MARKER
-    try:
-        lines = p.read_text().splitlines(keepends=True)
-    except OSError:
-        return False
+    lines = p.read_text().splitlines(keepends=True)
 
     header = re.compile(rf"^[ \t]*\[{re.escape(section)}\][ \t]*$")
     any_header = re.compile(r"^[ \t]*\[")
@@ -374,7 +408,7 @@ def _set_key(root: Path, section: str, key_name: str, value: str | None) -> bool
     start = next((i for i, ln in enumerate(lines) if header.match(ln)), None)
     if start is None:
         if value is None:
-            return True  # nothing declared, nothing to undeclare
+            return  # nothing declared, nothing to undeclare
         tail = "" if not lines or lines[-1].endswith("\n") else "\n"
         lines += [tail, "\n", f"[{section}]\n", f'{key_name} = "{value}"\n']
     else:
@@ -382,17 +416,18 @@ def _set_key(root: Path, section: str, key_name: str, value: str | None) -> bool
                     len(lines))
         hit = next((i for i in range(start + 1, stop) if key.match(lines[i])), None)
         if value is None:
-            if hit is not None:
-                del lines[hit]
+            if hit is None:
+                # The emptied header a previous removal leaves behind, and no key: the same
+                # "nothing to undeclare" as a file with no section at all. Rewriting the file
+                # unchanged would fail `persona default --clear` on a read-only charter.toml
+                # that had nothing to take out of it, now that the failure is reported (#1010).
+                return
+            del lines[hit]
         elif hit is None:
             lines.insert(start + 1, f'{key_name} = "{value}"\n')
         else:
             lines[hit] = key.sub(lambda m: f'{m.group(1)}"{value}"', lines[hit])
-    try:
-        p.write_text("".join(lines))
-    except OSError:
-        return False
-    return True
+    p.write_text("".join(lines))
 
 
 def clamp_share(value: str | None) -> str:
