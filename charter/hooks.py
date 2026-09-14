@@ -1433,14 +1433,22 @@ _GH_BODY_COMMANDS = frozenset({("pr", "create"), ("pr", "comment"),
 #: apart, because there the file lives after an `@` in a `key=value`.
 _GH_BODY_FILE_FLAGS = frozenset({"-F", "--body-file", "--notes-file", "-T", "--template"})
 _GH_BODY_FILE_LONG = ("--body-file=", "--notes-file=", "--template=")
+#: The two short flags with the value attached (`-F<path>`, `-T<path>`). A bare `-F` reaches
+#: the attached check only as the LAST word (with a word after it, it took that word), and
+#: its empty tail is refused by `add` like any other non-path.
+_GH_BODY_FILE_SHORT = ("-F", "-T")
 
 
 def _gh_at_path(value: str) -> str | None:
     """The file `gh api`'s `--field key=value` reads, or None. gh's `@` magic: a value of
-    `@<path>` reads that file, and `@-` is stdin. The `@` sits after the `key=`, so
-    `body=@notes.md` reads `notes.md` and `body=@-` reads stdin (data, not a path)."""
-    _key, sep, val = value.partition("=")
-    if sep and val.startswith("@") and val != "@-":
+    `@<path>` reads that file. The `@` sits after the FIRST `=` — gh's `parseField` splits
+    the field at the first `=` it finds — so `body=@notes.md` reads `notes.md`,
+    `body=@a=b.md` reads `a=b.md`, and `body=x=@notes.md` is the literal string
+    `x=@notes.md`: no `@` in front, no file. `@-` is stdin and comes back as `-`, the one
+    spelling of stdin the caller's `add` refuses, so `-F -`, `--input -` and `key=@-` are one
+    rule in one place. A field with no `=` has no value, and no value starts with `@`."""
+    val = value.partition("=")[2]
+    if val.startswith("@"):
         return val[1:]
     return None
 
@@ -1463,9 +1471,17 @@ def _gh_file_operands(args: list[str]) -> list[str]:
     Best-effort, in the guard's usual fail-closed-but-narrow direction: a value taken from the
     next token, an `=` form, and an attached short cluster (`-F<path>`) are all read; a flag
     this does not list keeps the file unread, a missed deny rather than a wrong one.
+
+    *args* is one segment's argv, program first, and the program is already `gh`:
+    :func:`_leak_reason` matches the basename before asking, the way it matches a reader
+    before :func:`_file_operands`, so nothing here asks about `args[0]` — a second check
+    would be one no input could tell from its absence. The subcommand is the first word
+    that is not a flag. gh's root takes no flag today (`gh --help` lists `--help` and
+    `--version`, gh 2.83.2, each of which runs nothing), so for every command gh runs this
+    is the positional read :func:`_gh_body_on_stdin` makes — but that helper's miss keeps a
+    body visible and this one's is a missed deny, so this one reads PAST a flag rather than
+    stopping at it: `gh --flag api --input <vault>` is the read it says it is.
     """
-    if not args or os.path.basename(args[0]).lower() != "gh":
-        return []
     rest = args[1:]
     api = next((w for w in rest if not w.startswith("-")), None) == "api"
     out: list[str] = []
@@ -1489,8 +1505,8 @@ def _gh_file_operands(args: list[str]) -> list[str]:
                 add(w.split("=", 1)[1])
             elif w.startswith("--field="):
                 add(_gh_at_path(w.split("=", 1)[1]))
-            elif w.startswith("-F") and len(w) > 2:
-                add(_gh_at_path(w[2:]))
+            elif w.startswith("-F"):
+                add(_gh_at_path(w[2:]))     # a bare last `-F` has no field, so no file
         else:
             if w in _GH_BODY_FILE_FLAGS and i + 1 < n:
                 add(rest[i + 1])
@@ -1498,7 +1514,7 @@ def _gh_file_operands(args: list[str]) -> list[str]:
                 continue
             if w.startswith(_GH_BODY_FILE_LONG):
                 add(w.split("=", 1)[1])
-            elif len(w) > 2 and w[0] == "-" and w[1] in ("F", "T"):
+            elif w.startswith(_GH_BODY_FILE_SHORT):
                 add(w[2:])
         i += 1
     return out
