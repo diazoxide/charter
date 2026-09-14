@@ -17,10 +17,23 @@ per project that has a frame open.
 
 **A frame started before you upgrade keeps running until it ends.** It stays on the old
 `charter` server, and close, quit, a panel restarting, a resize and switching between its chats
-find it there, because every chat records which server it is on. What it cannot do is add a
-chat: `+`, and a workspace tab for a workspace it has no session for, refuse and say why,
-because the new chat would open on the project's new server where that frame cannot show it.
-`F2 → charter: quit`, then `charter`, puts the project back on its own server.
+find it there, because every chat records which server it is on. It is not where `charter`
+looks, though: `charter` in that project will not reattach it, and will not restore a quit
+record beside it (it says so and keeps the record). It cannot add a chat either — `+`, and a
+workspace tab for a workspace it has no session for, refuse and say why. To move it, type
+`charter frame-quit` in the project, then `charter`: the chats come back on the project's own
+server, resuming what can be resumed. Use the typed command rather than F2 in the old frame,
+because on a server two projects shared, F2 can belong to the other project.
+
+If two projects' chats were mixed into one session on `charter`, which is what happened when
+both opened `default`, each project's `charter frame-quit` stops only its own windows, in
+either order. This shows what is still there:
+
+    tmux -L charter list-panes -a -F '#{session_name} #{@charter_chat} #{@charter_plane}'
+
+Once both projects have quit and nothing you want is listed, `tmux -L charter kill-server`
+ends the old server. Not before: a chat it ends without a quit was never recorded, so
+`charter reopen` cannot bring it back.
 
 Inside a tmux you run yourself, charter still opens each chat as a window in your session, and
 now marks each window with the project it belongs to, so a close or quit in one project cannot

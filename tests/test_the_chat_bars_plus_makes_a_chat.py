@@ -367,8 +367,10 @@ class ThePressSaysWhyWhenItWillNotMakeAChat(_APlusOnAFrameInAlpha):
         """**Ruling 46.** A frame started before each plane had a tmux server of its own is
         still on the shared one, and a new chat now opens on this plane's own server —
         where this frame cannot show it, and a switch cannot follow it. So the `+` refuses
-        before a harness starts, and names the two routes that work: quit and `charter`,
-        which puts the plane back on its own server, or `charter -w` from a terminal."""
+        before a harness starts, and names the two routes that work: `charter frame-quit`
+        typed in the project and then `charter`, which puts the plane back on its own
+        server, or `charter -w` from a terminal. Not F2: on the shared server the palette
+        can act for whichever project started that server."""
         state.record_server(self.FID, tmuxctl.LEGACY_SOCKET)
         self.assertEqual(self._press(), 0)
         self.assertEqual(self.launched, [], "a chat was opened where this frame cannot show it")
@@ -377,7 +379,7 @@ class ThePressSaysWhyWhenItWillNotMakeAChat(_APlusOnAFrameInAlpha):
         self.assertIn("started before charter gave each plane a tmux server of its own",
                       said[0])
         self.assertIn("Nothing was opened", said[0])
-        self.assertIn("charter: quit", said[0])
+        self.assertIn("`charter frame-quit`, typed in this project", said[0])
         self.assertIn("charter -w alpha", said[0])
         self.assertEqual(said, [commands_frame.BEFORE_THIS_PLANES_SERVER.format(
             what="another chat", ws="alpha")])

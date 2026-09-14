@@ -156,7 +156,8 @@ class _TwoPlanes(PersonaIso):
             "    sys.exit(0)\n"
             "out = os.path.join(os.environ['RECORD_DIR'], f'{os.getpid()}.json')\n"
             "with open(out + '.tmp', 'w') as f:\n"
-            "    json.dump({'env': dict(os.environ), 'pid': os.getpid()}, f)\n"
+            "    json.dump({'env': dict(os.environ), 'pid': os.getpid(),\n"
+            "               'argv': sys.argv[1:]}, f)\n"
             "os.replace(out + '.tmp', out)\n"
             "time.sleep(300)\n")
         (bindir / "claude").chmod(0o755)
@@ -292,13 +293,9 @@ class TwoPlanesLaunchedOneAfterTheOther(_TwoPlanes, unittest.TestCase):
         self.assertIsNone(reopen.read(), "plane B was never quit and has nothing recorded")
 
 
-@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
-class AFrameStartedBeforeTheUpgrade(_TwoPlanes, unittest.TestCase):
-    """Ruling 46's legacy rule: a chat recorded on the shared socket, or recording no server
-    at all, is found there by close, quit and the launch's own gates — while every NEW chat
-    starts on the plane's own server."""
-
-    SLUG = "legacy-planes"
+class _OnTheSharedServer(_TwoPlanes):
+    """`_TwoPlanes`, plus a reapable socket standing in for `tmuxctl.LEGACY_SOCKET` and a way
+    to plant a chat on it the way a charter from before ruling 46 left one."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -306,9 +303,15 @@ class AFrameStartedBeforeTheUpgrade(_TwoPlanes, unittest.TestCase):
         self.addCleanup(_kill, self.legacy)
         self.enterContext(mock.patch.object(tmuxctl, "LEGACY_SOCKET", self.legacy))
 
-    def _old_chat(self, fid: str, *, first: bool, record: bool) -> str:
-        """One chat the way a pre-upgrade launcher left it: a window on the shared server
-        with its chat option, and a directory that records that server — or none."""
+    def _old_chat(self, fid: str, *, first: bool, record: bool = True,
+                  mark: bool = False, profile: str = "") -> str:
+        """One chat the way a pre-upgrade launcher left it, for whichever plane `config` is
+        on: a window on the shared server with its chat option — in a NEW `default` session
+        when *first*, else as a window joining the one already there, which is exactly what
+        a second plane's launch did — and a directory that records that server, or none.
+
+        *mark* writes the session's plane marker through production's own builder, the way
+        the launch that CREATED a session did; a joining launch never did."""
         cmd = "exec cat"
         if first:
             pane = _tmux(self.legacy, "new-session", "-d", "-s", WS, "-P", "-F",
@@ -318,6 +321,10 @@ class AFrameStartedBeforeTheUpgrade(_TwoPlanes, unittest.TestCase):
                          "#{pane_id}", "sh", "-c", cmd).stdout.strip()
         self.assertTrue(pane.startswith("%"), pane)
         _tmux(self.legacy, "set-option", "-w", "-t", pane, commands_frame._CHAT_OPTION, fid)
+        if mark:
+            argv = commands_frame._plane_option_argv(socket=self.legacy, harness_pane=pane)
+            ran = subprocess.run(argv, capture_output=True, text=True, timeout=20)
+            self.assertEqual(ran.returncode, 0, ran.stderr)
         state.frame_dir(fid, create=True)
         if record:
             state.record_server(fid, self.legacy)
@@ -326,7 +333,18 @@ class AFrameStartedBeforeTheUpgrade(_TwoPlanes, unittest.TestCase):
         state.record_cwd(fid, str(config.ROOT))
         state.record_identity(fid, {"CHARTER_HARNESS": "claude-code",
                                     "CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
+        if profile:
+            state.record_profile(fid, profile)
         return pane
+
+
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class AFrameStartedBeforeTheUpgrade(_OnTheSharedServer, unittest.TestCase):
+    """Ruling 46's legacy rule: a chat recorded on the shared socket, or recording no server
+    at all, is found there by close, quit and the launch's own gates — while every NEW chat
+    starts on the plane's own server."""
+
+    SLUG = "legacy-planes"
 
     def test_a_chat_recorded_on_the_shared_socket_is_closed_there(self):
         pane = self._old_chat("default.1", first=True, record=True)
@@ -400,6 +418,96 @@ class AFrameStartedBeforeTheUpgrade(_TwoPlanes, unittest.TestCase):
 
         self.assertFalse(state.frame_dir("default.7").exists(),
                          "the ended chat's directory outlived it")
+
+
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class TwoPlanesMixedInOneSessionBeforeTheUpgrade(_OnTheSharedServer, unittest.TestCase):
+    """**The reporter's own machine, as the upgrade finds it.** Before ruling 46, plane A
+    opened `default` on the shared server and plane B's `default` joined that session as a
+    window. Both planes' first chat is `default.1`, and the session carries plane A's marker
+    — the launch that created it wrote it, and B's joining launch did not.
+
+    Two readings could tell whose window is whose there, and one of them is wrong in exactly
+    this state: the SESSION marker names A for B's window too. What cannot be wrong is the
+    pane — a server-minted id each plane's own launcher wrote down for its own chat."""
+
+    SLUG = "mixed-planes"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self._in(self.a_root)
+        self.a_pane = self._old_chat(CHAT, first=True, mark=True, profile="claude-a")
+        state.record_harness_session(CHAT, "conv-plane-a")
+        self._in(self.b_root)
+        self.b_pane = self._old_chat(CHAT, first=False, profile="claude-b")
+        state.record_harness_session(CHAT, "conv-plane-b")
+        self.assertEqual(
+            _tmux(self.legacy, "list-panes", "-a", "-F", "#{session_id}").stdout.split(),
+            ["$0", "$0"], "the fixture is not one mixed session")
+
+    def test_the_plane_that_made_the_session_quits_its_own_window_and_not_the_other(self):
+        """Both windows carry `default.1` and the listing names B's second, so a quit that
+        aimed by chat id alone — last row wins — killed plane B's window and left A's."""
+        self._in(self.a_root)
+        self.assertEqual(commands_frame.cmd_quit(SimpleNamespace(chat=CHAT)), 0)
+
+        self.assertTrue(_eventually(lambda: not self._alive(self.legacy, self.a_pane)),
+                        "plane A's own window was not stopped")
+        self.assertTrue(self._alive(self.legacy, self.b_pane),
+                        "plane A's quit stopped plane B's window of the same id")
+
+    def test_the_plane_that_joined_the_session_quits_its_own_window_there(self):
+        """The session marker names plane A, so a veto on the marker alone skipped every one
+        of plane B's windows: B's quit recorded its chat, stopped nothing, and said it had.
+
+        Driven as the way out is spelled — `charter frame-quit` typed in plane B's own
+        project, no chat of its own to stand in — because F2 on that shared server can
+        belong to plane A."""
+        self._in(self.b_root)
+        self.assertEqual(commands_frame.cmd_quit(SimpleNamespace(chat="")), 0)
+
+        self.assertTrue(_eventually(lambda: not self._alive(self.legacy, self.b_pane)),
+                        "plane B's own window was not stopped")
+        self.assertTrue(self._alive(self.legacy, self.a_pane),
+                        "plane B's quit stopped plane A's window")
+        self.assertEqual([c.chat for c in reopen.read().all_chats()], [CHAT])
+
+    def test_the_plane_that_joined_the_session_closes_its_own_window_there(self):
+        self._in(self.b_root)
+        self.assertEqual(commands_frame.cmd_close(SimpleNamespace(chat="", chat_id=CHAT)), 0)
+
+        self.assertTrue(_eventually(lambda: not self._alive(self.legacy, self.b_pane)))
+        self.assertTrue(self._alive(self.legacy, self.a_pane))
+
+    def test_charter_after_a_quit_restores_that_planes_chats_while_the_other_plane_runs(self):
+        """**The upgrade route, end to end.** Plane A quits its old frame and types
+        `charter`. Plane B's `default.1` is still live on the shared server — a chat of the
+        same id — and must neither keep plane A's dead chat looking alive (which skipped the
+        restore, opened a fresh chat and recorded over the quit, losing the resume id) nor
+        be touched."""
+        self._in(self.a_root)
+        self.assertEqual(commands_frame.cmd_quit(SimpleNamespace(chat=CHAT)), 0)
+        self.assertTrue(_eventually(lambda: not self._alive(self.legacy, self.a_pane)))
+
+        with mock.patch.dict(os.environ, {"CHARTER_ROOT": str(self.a_root)}), \
+                mock.patch("sys.stdout.isatty", return_value=True), \
+                mock.patch("sys.stdin.isatty", return_value=False), \
+                mock.patch.object(commands_frame, "_attach_after_reopen",
+                                  return_value=0) as attached:
+            rc = commands_frame.cmd_launch(SimpleNamespace(
+                harness="claude", rest=[], no_frame=False, workspace=WS, pick=False,
+                fresh=False))
+
+        self.assertEqual(rc, 0)
+        attached.assert_called_once()
+        own = tmuxctl.plane_socket()
+        panes = _tmux(own, "list-panes", "-a", "-F", "#{pane_id}").stdout.split()
+        self.assertEqual(len(panes), 1, "the plane was not restored onto its own server")
+        argv = self._harness_in(own, panes[0])["argv"]
+        self.assertIn("--resume", argv)
+        self.assertEqual(argv[argv.index("--resume") + 1], "conv-plane-a")
+        self.assertTrue(self._alive(self.legacy, self.b_pane),
+                        "restoring plane A touched plane B's old frame")
 
 
 @unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")

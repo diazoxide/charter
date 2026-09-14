@@ -690,24 +690,35 @@ class TheLauncherTakesTheDecision(PersonaIso, unittest.TestCase):
         self.assertIn("edm-test-", str(config.STATE_DIR))
         reopen.write([_frame("alpha", "alpha.1")], focus="alpha")
 
-    def _launch(self, *, chats_live=(), reopen_rc=0, legacy_live=(), **kw):
+    def _launch_recording(self, **kw):
+        """:meth:`_launch` through the real recorder, which `cmd_launch` starts only for a
+        launch that is somebody's terminal — stood up here with a poll too slow to tick, so
+        what is asserted is whether it RUNS, never what it happened to write."""
+        with mock.patch.object(commands_frame, "_records_the_plane", return_value=True), \
+                mock.patch.object(record, "POLL", 3600.0):
+            return self._launch(**kw)
+
+    def _launch(self, *, chats_live=(), reopen_rc=0, legacy_live=(), claim=None, **kw):
         said = io.StringIO()
         self.said = said
         with redirect_stderr(said), mock.patch.multiple(commands_frame,
                                  _live_sessions=mock.DEFAULT,
                                  _live_chats=mock.DEFAULT,
+                                 _legacy_keep=mock.DEFAULT,
                                  _choose_workspace=mock.DEFAULT,
                                  _workspace_to_focus=mock.DEFAULT,
                                  cmd_reopen=mock.DEFAULT) as m, \
-                mock.patch("charter.frame.state.new_chat_id", return_value=None), \
+                mock.patch("charter.frame.state.new_chat_id",
+                           side_effect=claim or (lambda ws: None)), \
                 mock.patch("charter.commands_frame.shutil.which",
                            side_effect=lambda n, *a, **k: f"/usr/bin/{n}"), \
                 mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
                 mock.patch("charter.frame.tmuxctl.operator_server", return_value=None), \
                 mock.patch("sys.stdout.isatty", return_value=True):
             m["_live_sessions"].return_value = set()
-            m["_live_chats"].side_effect = lambda socket: set(
-                legacy_live if socket == tmuxctl.LEGACY_SOCKET else chats_live)
+            m["_live_chats"].return_value = set(chats_live)
+            # The legacy server's keep list, which is plane-checked by pane (ruling 46).
+            m["_legacy_keep"].return_value = set(legacy_live)
             m["_choose_workspace"].return_value = ("alpha", None, False)
             m["_workspace_to_focus"].return_value = None
             m["cmd_reopen"].return_value = reopen_rc
@@ -746,6 +757,58 @@ class TheLauncherTakesTheDecision(PersonaIso, unittest.TestCase):
         self.assertEqual(rc, 1)
         reopened.assert_not_called()
         self.assertTrue(state.frame_dir("alpha.1").is_dir(), "a running chat was reaped")
+
+    def test_a_restore_held_back_by_an_old_frame_never_records_over_the_quit(self):
+        """**The record is the only copy of the resume ids.** A launch that does not restore
+        because a chat of this plane still runs on the shared server goes on to open a fresh
+        chat — and the recorder it runs under writes the plane as it now stands, over the
+        record a quit left. So by the time this launch claims a chat, nothing in this process
+        is recording, and the operator is told why nothing was put back."""
+        state.frame_dir("alpha.1", create=True)
+        state.record_workspace("alpha.1", "alpha")
+        recording_at_the_claim: list = []
+
+        def claim(ws):
+            recording_at_the_claim.append(record.running())
+            return None
+
+        _rc, reopened = self._launch_recording(legacy_live=("alpha.1",), claim=claim)
+        reopened.assert_not_called()
+        self.assertEqual(recording_at_the_claim, [None],
+                         "the launch went on to open a chat with the recorder still running")
+        self.assertIn("left in place", self.said.getvalue())
+        self.assertIn("charter frame-quit", self.said.getvalue())
+        self.assertIsNotNone(reopen.read(), "the quit's record was not left in place")
+
+    def test_an_old_frame_with_no_record_to_protect_holds_nothing_back(self):
+        """With nothing recorded there is nothing a fresh chat could be recorded over, so the
+        launch records as every launch does, and does not tell the operator a record was
+        kept that does not exist."""
+        state.frame_dir("alpha.1", create=True)
+        state.record_workspace("alpha.1", "alpha")
+        reopen.forget()
+        recording_at_the_claim: list = []
+
+        def claim(ws):
+            recording_at_the_claim.append(record.running())
+            return None
+
+        self._launch_recording(legacy_live=("alpha.1",), claim=claim)
+        self.assertEqual(len(recording_at_the_claim), 1)
+        self.assertIsNotNone(recording_at_the_claim[0])
+        self.assertNotIn("left in place", self.said.getvalue())
+
+    def test_a_launch_with_nothing_held_back_keeps_recording(self):
+        recording_at_the_claim: list = []
+
+        def claim(ws):
+            recording_at_the_claim.append(record.running())
+            return None
+
+        reopen.forget()
+        self._launch_recording(claim=claim)
+        self.assertEqual(len(recording_at_the_claim), 1)
+        self.assertIsNotNone(recording_at_the_claim[0])
 
     def test_an_old_frame_that_has_ended_is_reaped_and_the_plane_is_restored(self):
         state.frame_dir("alpha.1", create=True)
@@ -1186,7 +1249,9 @@ class AReopenOntoARunningPlaneIsRefused(PersonaIso, unittest.TestCase):
         said = io.StringIO()
         with mock.patch.object(commands_frame, "cmd_launch",
                                side_effect=_launcher) as launch, \
-                mock.patch.object(commands_frame, "_chat_seats", return_value=seats), \
+                mock.patch.object(commands_frame, "_chat_seats",
+                                  **({"side_effect": seats} if callable(seats)
+                                     else {"return_value": seats})), \
                 mock.patch.object(commands_frame.sys.stdout, "isatty",
                                   return_value=True), \
                 mock.patch.object(commands_frame.tmuxctl, "version",
@@ -1210,9 +1275,24 @@ class AReopenOntoARunningPlaneIsRefused(PersonaIso, unittest.TestCase):
             "charter reopen: this plane is already running — reopening it would open a "
             "second copy of every chat, and a reopened chat gets a new id, so nothing on "
             "screen would tell the copies apart. Attach to what is there (`tmux -L "
-            f"{tmuxctl.plane_socket()} attach`), or quit it first (`F2 → charter: quit`). "
-            "Nothing was reopened, and the record is left in place.", out)
+            f"{tmuxctl.plane_socket()} attach`), or quit it first (`charter frame-quit` in this "
+            "project). Nothing was reopened, and the record is left in place.", out)
         self.assertIsNotNone(reopen.read(), "and the record is left to act on")
+
+    def test_the_refusal_names_the_server_the_live_chat_is_on_not_the_planes_own(self):
+        """Ruling 46: a chat started before the upgrade is live on the old shared server, and
+        `tmux -L charter-plane-…` would attach the operator to a server with nothing on it."""
+        _plant("alpha.1", ws="alpha")
+        state.record_server("alpha.1", tmuxctl.LEGACY_SOCKET)
+
+        rc, out, launch = self._reopen(
+            seats=lambda server: (_seats({"alpha.1": "@0"}, set())
+                                  if server == tmuxctl.LEGACY_SOCKET else []))
+
+        self.assertEqual(rc, 1)
+        launch.assert_not_called()
+        self.assertIn(f"(`tmux -L {tmuxctl.LEGACY_SOCKET} attach`)", out)
+        self.assertNotIn(tmuxctl.plane_socket(), out)
 
     def test_a_server_that_will_not_answer_does_not_block_the_reopen(self):
         """The opposite of `leave.plan`'s direction, and right for the opposite reason: a

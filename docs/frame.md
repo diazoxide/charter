@@ -508,18 +508,48 @@ and palette. That is what charter did through 0.61.1: every plane shared one ser
 ([ADR 0023](adr/0023-one-tmux-server-per-plane.md)).
 
 The name is not something you need to remember. A detach prints the reattach command with
-the plane's own socket in it, and `charter` typed in that project attaches to what is
-running. Two directories that share one `$CHARTER_HOME` are one plane, and share one server.
-The cost is one tmux server process per plane that has a frame open.
+the plane's own socket in it, and `charter` typed in that project attaches to a frame started
+on that server. Two directories that share one `$CHARTER_HOME` are one plane, and share one
+server. The cost is one tmux server process per plane that has a frame open.
 
 **A frame started before you upgraded keeps running where it is.** It is on the old shared
 server, `charter`, and every chat records which server it is on — so close, quit, a panel
 that dies, a resize and a switch between its chats all still reach it there. A chat old
-enough to record no server at all is looked for on `charter` too. What such a frame cannot
-do is open a chat: `+`, and a tab for a workspace it has no session for, open on the plane's
-new server, where that frame cannot show them, so they refuse and say so. `F2 → charter:
-quit` and then `charter` puts the plane back on its own server; `charter -w <workspace>` in
-a terminal opens one there straight away. Nothing new is ever started on `charter`.
+enough to record no server at all is looked for on `charter` too. Nothing new is ever
+started on `charter`, and that has three consequences worth knowing before you meet them:
+
+- **`charter` does not reattach it.** `charter` looks on this plane's own server, where that
+  frame is not. With a quit record to put back, it refuses to restore it beside the old
+  frame, says so, and leaves the record alone. Without one, it opens a new chat on the plane's
+  own server. `tmux -L charter attach` reaches the old frame. `charter reopen` names that
+  server in its refusal when a live chat is there.
+- **It cannot open a chat.** `+`, and a tab for a workspace it has no session for, would
+  open on the plane's own server, where that frame cannot show them, so they refuse and say
+  so.
+- **Its F2 may not be yours.** A key binding belongs to the whole server, and the palette on
+  `charter` runs with the environment of whichever project's launch started that server, so
+  on a machine where two projects shared it, F2 can act for the other one.
+
+So the way off the old server is typed in the project, not pressed in the frame:
+`charter frame-quit` in that project records and stops its chats on `charter`, and `charter`
+then puts them back on the project's own server, resuming each conversation that can be.
+`charter -w <workspace>` opens a chat there straight away if you would rather not stop
+anything yet.
+
+**Two projects mixed in one session on `charter`.** Before the upgrade, the second project
+to open `default` joined the first one's session as a window, and that session carries the
+first project's plane marker. You can see it:
+
+```
+tmux -L charter list-panes -a -F '#{session_name} #{@charter_chat} #{@charter_plane}'
+```
+
+lists chats of both projects under one session name and one project's `.charter` path. Charter
+tells the windows apart by the pane each project's own launcher recorded, not by that
+marker, so `charter frame-quit` in either project, in either order, stops that project's
+windows and no others. Once both projects have quit and the same listing shows nothing you
+want, `tmux -L charter kill-server` ends the old server. Not before: a chat it ends without a
+quit was never recorded, and `charter reopen` cannot bring it back.
 
 **Opening a workspace you already have open puts you in it rather than beside it.** A tmux
 session has one current window, so two terminals attached to one workspace look at the same
@@ -1121,7 +1151,9 @@ checks before it builds anything, and falls back to its own private server.
 **Closing the window detaches, and that is the exit that costs nothing.** tmux sessions
 survive a client leaving, so the common way out loses nothing and needs no resume: the
 harnesses keep running and `charter` in that project puts you back — or the
-`tmux -L charter-plane-<hex> attach -t <workspace>` the detach printed. A terminal
+`tmux -L charter-plane-<hex> attach -t <workspace>` the detach printed. A frame started before
+the upgrade is the exception, on the old `charter` server; see *Two projects open at once do
+not share a tmux server* above. A terminal
 that dies, a lid that closes and an ssh connection that drops all do this. `F2 → detach` is
 the same thing without needing to know tmux's prefix key.
 

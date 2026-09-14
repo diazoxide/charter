@@ -65,12 +65,29 @@ Frames started before this are on `charter` until they end, and must keep workin
   `_plane_live` reads as "charter could not ask" for the whole plane; asked unconditionally,
   a reopen on upgrade day read the plane as not running and put a second copy of a live chat
   on screen.
-- **A launch's "nothing live" gate counts the legacy server**, for the same doubling.
+- **A launch's "nothing live" gate counts the legacy server**, for the same doubling — and
+  a restore it holds back for that reason stops the launch's recorder and says so, because
+  the fresh chat it opens instead would otherwise be recorded over the quit, and the record
+  is the only copy of each chat's resume id.
+- **On the legacy server, a chat's own recorded pane decides whose window is whose.** Before
+  this ruling, a second plane's `default` joined the first plane's session as a window, so a
+  mixed session carries the first plane's marker for both planes' windows, and both planes'
+  first chat is `default.1`. By id alone, plane A's quit killed plane B's `default.1`, which
+  was listed after its own. Vetoed on the marker, plane B's quit stopped none of its own
+  windows. And the legacy reap's keep list, which was by id, kept plane A's quit `default.1`
+  alive while B's ran, so `charter` never restored plane A. So `_chat_seats` reads panes
+  (`list-panes -a`): where this plane recorded the chat's harness pane on that server, the
+  pane decides and the marker does not, and a chat recorded on another server is never a
+  window here. `_legacy_keep` keeps a chat this plane recorded only by that pane, and applies
+  no marker veto, so a keep list still leans towards keeping.
 - **Nothing new starts on the legacy server.** A frame there cannot open a chat: `+` and a
   workspace tab for a workspace it has no session for refuse by name, because the new chat
   would land on the plane's own server, where that frame cannot show it and a switch cannot
-  follow. The refusal names quit-then-`charter`, which restores the plane onto its own
-  server, and `charter -w <workspace>` from a terminal. A handoff from such a frame opens in
+  follow. The refusal names `charter frame-quit` typed in the project, then `charter`, which
+  restores the plane onto its own server, and `charter -w <workspace>` from a terminal. It
+  names the typed command and not F2 because on the shared server the palette's `run-shell`
+  inherits `$CHARTER_ROOT` from whichever launch started that server, so F2 there can act for
+  another plane. A handoff from such a frame opens in
   the background on the plane's own server, and its "is this session ours" question is asked
   of that server.
 - **A pane id is matched only against the server its chat records.** `_plane_session` finds a
@@ -85,9 +102,10 @@ launched inside one operator tmux put two `default.1` windows side by side, and
 `_stop_chats` aims `kill-window` by chat id. So `_launch_in_operator_tmux` now writes
 `@charter_plane` on its own chat WINDOW — a window option on charter's window, the same move
 as `@charter_chat`, and never a session option on the operator's session — and
-`#{@charter_plane}` resolves pane, then window, then session, so `_chat_seats`' existing veto
-reads it unchanged. `_window_seats`, which finds a launch's own window by chat id, gained the
-same veto. `tmuxctl.live_pane_by_pid` needed nothing: it proves a chat by the pid of the
+`#{@charter_plane}` resolves pane, then window, then session. `_chat_seats` tells two such
+windows apart by the pane each plane recorded (above), and the marker is what it reads for a
+chat with no pane record; `_window_seats`, which finds a launch's own window by chat id,
+gained the marker veto. `tmuxctl.live_pane_by_pid` needed nothing: it proves a chat by the pid of the
 process asking, and a pid is one pane.
 
 ## Rejected
@@ -106,8 +124,12 @@ the server.
 - **The socket name is not memorable.** Every place charter tells an operator how to get back
   in — a detach, `charter reopen`'s refusals, the "probably another plane's" refusals — prints
   the plane's own name, and `charter` in the project attaches without it.
-- **A frame started before the upgrade cannot add a chat** until it is quit and restored. The
-  alternative was to keep opening chats on the shared server, which is the defect.
+- **A frame started before the upgrade cannot add a chat** until it is quit and restored, and
+  `charter` does not reattach it. The alternative was to keep opening chats on the shared
+  server, which is the defect.
+- **Residual: a legacy server restarted after the upgrade.** Pane ids start again from `%0`,
+  so a pane record of a legacy chat that ended before the restart could match another plane's
+  new window with the same chat id. Nothing charter runs now starts that server.
 - **The suite's guard follows.** `tests._planeguard.RealTmuxReach` refuses the real plane's
   own socket, computed before any test isolates the state directory, and every
   `charter-plane-<12 hex>` in the real socket directory; `tests._tmuxreap.owns` refuses the

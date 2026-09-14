@@ -234,16 +234,35 @@ class TheReopenCommandsOwnWordsAreTheseWords(PersonaIso):
             commands_frame.NOTHING_RECORDED,
             "charter reopen: nothing recorded to put back. A plane is recorded when you "
             "quit it (`F2 → charter: quit`); a terminal that closed on its own only "
-            "detached, so its harnesses are still running — `tmux -L {socket} attach` "
-            "reaches them.")
+            "detached, so its harnesses are still running — {attach} reaches them.")
 
     def test_it_is_the_sentence_the_command_actually_prints(self):
         with mock.patch.object(util, "err") as said:
             self.assertEqual(commands_frame.cmd_reopen(SimpleNamespace()), 1)
 
         said.assert_called_once()
-        self.assertEqual(said.call_args[0][0],
-                         commands_frame.NOTHING_RECORDED.format(socket=tmuxctl.plane_socket()))
+        self.assertEqual(said.call_args[0][0], commands_frame.NOTHING_RECORDED.format(
+            attach=f"`tmux -L {tmuxctl.plane_socket()} attach`"))
+
+    def test_the_route_back_names_the_server_the_running_chat_is_on(self):
+        """Ruling 46: a chat that detached before the upgrade runs on the old shared server,
+        and naming this plane's own server would send the operator to an empty one."""
+        state.frame_dir("alpha.1", create=True)
+        state.record_workspace("alpha.1", "alpha")
+        state.record_server("alpha.1", tmuxctl.LEGACY_SOCKET)
+        # And a chat on this plane's own server that has ended: its server is asked, and
+        # has nothing live to be named for.
+        state.frame_dir("alpha.2", create=True)
+        state.record_workspace("alpha.2", "alpha")
+        state.record_server("alpha.2", tmuxctl.plane_socket())
+        with mock.patch.object(util, "err") as said, \
+                mock.patch.object(commands_frame, "_chat_seats",
+                                  side_effect=lambda server: [("alpha.1", "@0", True)]
+                                  if server == tmuxctl.LEGACY_SOCKET else []):
+            self.assertEqual(commands_frame.cmd_reopen(SimpleNamespace()), 1)
+        self.assertIn(f"— `tmux -L {tmuxctl.LEGACY_SOCKET} attach` reaches them",
+                      said.call_args[0][0])
+        self.assertNotIn(tmuxctl.plane_socket(), said.call_args[0][0])
 
 
 class TheTranscriptRowsOwnWordsAreTheseWords(PersonaIso):

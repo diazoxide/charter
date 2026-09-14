@@ -289,8 +289,8 @@ class AQuitRecordsWhatItCanAndSaysWhatItCouldNot(PersonaIso):
                          "the manifest lands, and it names nobody")
         with mock.patch.object(util, "err") as said:
             self.assertEqual(commands_frame.cmd_reopen(SimpleNamespace()), 1)
-        self.assertEqual(said.call_args[0][0],
-                         commands_frame.NOTHING_RECORDED.format(socket=tmuxctl.plane_socket()))
+        self.assertEqual(said.call_args[0][0], commands_frame.NOTHING_RECORDED.format(
+            attach=f"`tmux -L {tmuxctl.plane_socket()} attach`"))
 
     def test_a_pane_record_charter_cannot_use_captures_nothing(self):
         """`_PANE_ID_RE.fullmatch(pane_id)` — a `%N` and nothing else. A record written by

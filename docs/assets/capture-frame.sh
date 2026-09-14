@@ -85,16 +85,18 @@ DIR="$(cd "$DIR" && pwd -P)"
 [ -n "$DIR" ] || { echo "capture-frame.sh: could not make the scratch directory — captured nothing." >&2; exit 2; }
 
 # ── a tmux of its own — both of them ──────────────────────────────────────────
-# charter's frame server is a module constant (`commands_frame.SOCKET` = `charter`) with no
-# override, and every frame on the machine shares it. Launched straight onto it, this
-# capture created its session on the operator's live server, sourced the frame's config
-# there — where key tables are server-wide — and then had to pick its one session back out
+# charter's frame server is named by charter, not by this script: `charter-plane-<12 hex>`,
+# from a hash of the plane's state directory (`frame/tmuxctl.plane_socket`, ruling 46). It
+# was one name every frame on the machine shared, `charter`, and launched straight onto it
+# this capture created its session on the operator's live server, sourced the frame's
+# config there — where key tables are server-wide — and had to pick its one session back out
 # of theirs to kill it.
 #
 # tmux looks a `-L <name>` up under `$TMUX_TMPDIR` (`frame/tmuxctl.socket_path` spells the
 # same rule), and charter hands its own environment to every pane, panel and hook it starts
 # (`_frame_env` is `dict(os.environ, …)`). So with `$TMUX_TMPDIR` on a directory this run
-# made, charter's `-L charter` IS a private server, and the capture can end it whole.
+# made, the demo plane's server IS a private one, and the capture can end it whole. Its
+# name is asked of this tree's charter once the plane exists, below.
 #
 # Under `/tmp` rather than `<scratch-dir>` because a socket path has to fit a `sockaddr_un`
 # — 104 bytes on macOS, 108 on Linux — after tmux resolves the directory. Measured: a
@@ -105,14 +107,14 @@ SOCKDIR="$(cd "$SOCKDIR" && pwd -P)"
 export TMUX_TMPDIR="$SOCKDIR"
 mkdir -m 700 "$SOCKDIR/tmux-$(id -u)"
 OUTER="$SOCKDIR/tmux-$(id -u)/outer"
-INNER="$SOCKDIR/tmux-$(id -u)/charter"
+INNER=""   # the demo plane's own server, named once the plane exists
 
 cleanup() {
   # Both servers live in $SOCKDIR, which this run made and nothing else names, so ending
   # them whole ends nothing anybody else is looking at. The outer one first: its panes are
   # the launchers, and a launcher that loses its terminal returns.
   tmux -S "$OUTER" kill-server >/dev/null 2>&1 || true
-  tmux -S "$INNER" kill-server >/dev/null 2>&1 || true
+  [ -n "$INNER" ] && tmux -S "$INNER" kill-server >/dev/null 2>&1
   rm -rf "$SOCKDIR"
 }
 trap cleanup EXIT
@@ -146,6 +148,20 @@ export PATH
 
 PLANE="$DIR/plane"
 "$HERE/demo-plane.sh" "$PLANE" >&2 || exit 1
+
+# The frame server's name, asked of the charter that will launch the frame, from the
+# directory it will launch in — so the two cannot resolve different planes. Spelled here it
+# would be a second copy of `tmuxctl.plane_socket`'s hash, and a copy that drifted would
+# have `wait_for_chats` watch a server nothing starts until its deadline, and leave the real
+# one running (`cleanup` kills the server it was told about).
+NAME="$(cd "$PLANE" && "$VENV/bin/python3" -P -c \
+  'from charter.frame import tmuxctl; print(tmuxctl.plane_socket())')" || exit 1
+case "$NAME" in
+  charter-plane-*) ;;
+  *) echo "capture-frame.sh: charter named no plane server for $PLANE — captured nothing." >&2
+     exit 1 ;;
+esac
+INNER="$SOCKDIR/tmux-$(id -u)/$NAME"
 
 # ── launching a chat ──────────────────────────────────────────────────────────
 # One chat per call: `charter frame` in a window of the outer terminal, so every launch is

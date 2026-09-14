@@ -1744,6 +1744,17 @@ class _FakeTmux:
             return subprocess.CompletedProcess(cmd, self.mark_rc, stdout="",
                                                stderr="" if self.mark_rc == 0
                                                else "cannot set")
+        if commands_frame._CHAT_PANE_FORMAT in cmd:
+            # The legacy server's keep list (`_legacy_keep`, ruling 46): the same live chats
+            # the `list-windows` branch below reports, one row per chat, each on the pane its
+            # own directory recorded — this fake is one server, so a chat live here is live
+            # with the pane its launcher wrote down.
+            live = set(self.pre_existing_chats)
+            if self.fid and self.still_live:
+                live.add(self.fid)
+            rows = [f"{chat}\t@0\t1\t\t{state.harness_pane(chat) or '%0'}"
+                    for chat in sorted(live)]
+            return subprocess.CompletedProcess(cmd, 0, stdout="\n".join(rows), stderr="")
         if "list-panes" in cmd:
             # #714's reconciliation asking the window what it holds. The target is always
             # in its own answer — tmux lists the window CONTAINING it — and it is a pane
