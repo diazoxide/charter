@@ -931,6 +931,22 @@ def read_workspaces() -> tuple[list[str], list[tuple[Path, int | None]]]:
     return [d.name for d in found], unread
 
 
+def read_workspaces_aloud() -> tuple[list[str], list[tuple[Path, int | None]]]:
+    """:func:`read_workspaces`, having said on stderr, in :func:`cannot_check_workspace`'s
+    words, each workspace it could not look at.
+
+    For a command that shows the operator the plane's workspaces — `workspace list`, `status`,
+    `sync --all`, `recall --all`, `workspace optimize` over all of them, `guard ask`'s mirror,
+    `reinit --all` (#1043). `list_workspaces` leaves such a workspace out: on 3.14 it always did,
+    and on 3.11–3.13 it raised instead, so each of those commands would now pass over it without
+    a word on every interpreter. A caller only looking a name up, or asking which workspaces it
+    can open (the status line, the frame's tabs), keeps :func:`list_workspaces`."""
+    names, unread = read_workspaces()
+    for d, code in unread:
+        util.err(cannot_check_workspace(d.name, code))
+    return names, unread
+
+
 def _tab_order_file() -> Path:
     """Where this plane records the order its workspaces tab strip draws (#923).
 
@@ -1264,12 +1280,14 @@ def repo_trees(ws: str) -> list[Path]:
 
 
 def legacy_flat_clones() -> list[Path]:
-    """Git repos sitting directly under ``workspaces/`` (pre-workspace layout)."""
+    """Git repos sitting directly under ``workspaces/`` (pre-workspace layout).
+
+    Through :func:`read_directory`, as :func:`read_clones` asks one level down (#1043):
+    `Path.is_dir` raised on 3.11–3.13 for an entry charter cannot `stat`, which ended
+    `charter status` in a traceback. Such an entry is named by :func:`read_workspaces_aloud`,
+    and is no clone this can report."""
     _ensure_layout()
-    root = config.WORKSPACES_DIR
-    if not root.exists():
-        return []
-    return sorted(d for d in root.iterdir() if d.is_dir() and is_clone(d))
+    return read_directory(config.WORKSPACES_DIR, lambda d: _directory(d / ".git"))[0]
 
 
 def ensure(name: str) -> Path:
@@ -2983,6 +3001,17 @@ def uncheckable_fix(code: int | None, path, where: str = "it") -> str:
     says "that path"."""
     return (f"fix the symlink loop at {path}" if code == errno.ELOOP
             else f"restoring read access to {where} clears this")
+
+
+def cannot_check_workspace(name: str, code: int | None) -> str:
+    """The one sentence for a workspace a command could not look at, worded for the errno.
+
+    `reinit`'s since #1028, for the named form and `--all`; since #1043 also every command that
+    shows the operator the plane's workspaces (:func:`read_workspaces_aloud`), so no two of them
+    send a reader to different repairs for one directory."""
+    wd = workspace_dir(name)
+    return (f"workspace '{name}' cannot be checked — charter changes nothing it cannot see; "
+            f"{uncheckable_fix(code, wd, wd)}.")
 
 
 # --------------------------------------------------------------------------- #

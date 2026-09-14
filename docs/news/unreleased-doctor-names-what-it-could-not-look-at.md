@@ -1,6 +1,6 @@
 ---
 version: unreleased
-headline: `charter doctor` names a memory directory, a workspace or a clone it could not look at, where it used to read it as empty, absent or fine
+headline: `charter doctor`, and every command that lists workspaces, names a memory directory, a workspace or a clone it could not look at, where it used to read it as empty, absent or fine
 ---
 
 Four places in `charter doctor` took "could not look" for an answer.
@@ -34,5 +34,17 @@ Python version:
 
 The `workspace layer` and `changes` rows name an unreadable workspace the same way. A
 `memory/` linked out of the plane to nothing is reported as an index charter will not touch.
+
+So does every command that shows you the plane's workspaces. `workspace list`, `status`,
+`sync --all`, `recall --all`, `workspace optimize` with no name and `guard ask` used to leave
+a workspace they could not look at out without a word on 3.14, and end in a traceback on
+3.11–3.13. Each now prints the sentence `workspace reinit --all` already printed:
+
+```
+✗ workspace 'gamma' cannot be checked — charter changes nothing it cannot see; restoring read access to …/workspaces/gamma clears this.
+```
+
+`workspace list` no longer says "No workspaces yet" over a plane that holds one it could not
+read. `charter report` scrubs that workspace's name from the draft like any other.
 
 Nothing to adopt ([#1043](https://github.com/diazoxide/charter/issues/1043)).

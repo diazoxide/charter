@@ -109,8 +109,10 @@ def cmd_workspace_list(args) -> int:
     nothing.
     """
     active = workspace.resolve()
-    names = workspace.list_workspaces()
-    fresh = not names
+    # Aloud (#1043): a workspace charter cannot look at is named on stderr rather than left out
+    # of the table without a word, and a plane holding one is not "no workspaces yet".
+    names, unread = workspace.read_workspaces_aloud()
+    fresh = not names and not unread
     if config.DEFAULT_WORKSPACE not in names:
         names = sorted(names + [config.DEFAULT_WORKSPACE])
     if fresh:
@@ -689,7 +691,9 @@ def cmd_workspace_optimize(args) -> int:
     "read-only" stops meaning anything.
     """
     from . import curate
-    names = [args.name] if getattr(args, "name", None) else workspace.list_workspaces()
+    # Over every workspace, each one it could not look at is named, not skipped (#1043).
+    names = ([args.name] if getattr(args, "name", None)
+             else workspace.read_workspaces_aloud()[0])
     if getattr(args, "name", None) and not workspace.workspace_dir(args.name).exists():
         util.err(f"no workspace '{args.name}'")
         return 1
@@ -1709,14 +1713,6 @@ def cmd_workspace_fork(args) -> int:
 _LIVE_SHARED_COMPONENTS = {"workspace.md", "workspace.json", "memory/MEMORY.md"}
 
 
-def _cannot_check_workspace(name: str, code: int | None) -> str:
-    """`reinit`'s sentence for a workspace directory it cannot look at — one spelling for the
-    named form and for `--all`, so the two cannot send a reader to different repairs."""
-    wd = workspace.workspace_dir(name)
-    return (f"workspace '{name}' cannot be checked — charter changes nothing it cannot see; "
-            f"{workspace.uncheckable_fix(code, wd, wd)}.")
-
-
 def cmd_workspace_reinit(args) -> int:
     """Bring a workspace's on-disk structure up to the current layout — create any missing
     baseline files (workspace.md charter, memory/, refs/) and stamp the structure version.
@@ -1728,10 +1724,10 @@ def cmd_workspace_reinit(args) -> int:
     #: met it and the line under it said "Up to date — nothing to do" about the whole plane.
     unseen: list[tuple[str, int | None]] = []
     if getattr(args, "all", False):
-        names = workspace.list_workspaces()
-        unseen = workspace.uncheckable_workspaces()
-        for n, code in unseen:
-            util.err(_cannot_check_workspace(n, code))
+        # One listing for what it walks and what it names (#1043), said in the sentence every
+        # command that lists workspaces now says it in.
+        names, unread = workspace.read_workspaces_aloud()
+        unseen = [(d.name, code) for d, code in unread]
     else:
         name = getattr(args, "name", None) or workspace.resolve()
         # Asked with `workspace._existence` (#942 review round 4, minor 2's class): `Path.exists`
@@ -1740,7 +1736,7 @@ def cmd_workspace_reinit(args) -> int:
         # restore read access, which clears no loop.
         there, code = workspace._existence(workspace.workspace_dir(name), follow=True)
         if there is None:
-            util.err(_cannot_check_workspace(name, code))
+            util.err(workspace.cannot_check_workspace(name, code))
             return 1
         if there is False:
             util.err(f"no workspace '{name}'")

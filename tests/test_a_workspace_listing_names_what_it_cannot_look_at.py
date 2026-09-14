@@ -113,6 +113,25 @@ class AnEntryItCannotStatIsNamedNotDroppedOrRaised(ListingCase):
                          (["alpha", "beta"], [(loop, errno.ELOOP)]))
 
 
+class TheLegacyCloneScanAsksTheSameWay(ListingCase):
+    """`legacy_flat_clones` asked `Path.is_dir` of every entry under `workspaces/` too, so
+    `charter status` ended in a traceback on 3.11–3.13 over a workspace it cannot `stat`, after
+    printing the rows it could (#1043). The workspace is named by the listing; this scan is only
+    looking for stray clones, and one it cannot tell about is none it can report."""
+
+    def test_on_either_interpreter_it_answers_and_does_not_raise(self):
+        for answers in BOTH_INTERPRETERS:
+            with self.subTest(is_dir=answers):
+                with unsearchable(self.root, answers):
+                    self.assertEqual(workspace.legacy_flat_clones(), [])
+
+    def test_a_stray_clone_among_the_workspaces_is_still_found(self):
+        stray = self.root / "stray"
+        (stray / ".git").mkdir(parents=True)
+        (self.root / "notes.txt").write_text("")
+        self.assertEqual(workspace.legacy_flat_clones(), [stray])
+
+
 class WhatIsNotAWorkspaceIsNeitherListedNorNamed(ListingCase):
     """The other side of the line: only an entry whose kind cannot be told is unread."""
 

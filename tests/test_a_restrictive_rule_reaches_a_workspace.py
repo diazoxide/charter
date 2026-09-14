@@ -1153,13 +1153,25 @@ class GuardAskKeepsTheMirrorInStep(PlaneWithRestrictions):
         self.assertNotIn("npm test", self.generated().read_text())
 
     def test_a_workspaces_directory_that_cannot_be_read_does_not_fail_the_command(self):
-        with mock.patch.object(workspace, "list_workspaces",
+        with mock.patch.object(workspace, "read_workspaces",
                                side_effect=OSError("workspaces/ is unreadable")):
             rc, _said = self.invoke(commands.cmd_guard_ask, pattern="kubectl delete *",
                                     local=False)
         self.assertEqual(rc, 0)
         self.assertIn("Bash(kubectl delete *)", json.loads(
             (config.ROOT / SHARED).read_text())["permissions"]["ask"])
+
+    @unittest.skipIf(os.geteuid() == 0, "root searches a directory whatever its mode")
+    def test_a_workspace_it_cannot_read_is_named_beside_the_one_it_mirrored_into(self):
+        """The rule "applies to everyone on this repo", and a chat in a workspace charter could not
+        look at never got it (#1043): it was left out of the mirror without a word."""
+        from tests.test_a_command_that_lists_workspaces_names_one_it_cannot_read import (
+            locked_workspace, sentence)
+        locked_workspace(self)
+        rc, said = self.invoke(commands.cmd_guard_ask, pattern="kubectl delete *", local=False)
+        self.assertEqual(rc, 0)
+        self.assertIn(sentence(), said)
+        self.assertIn("Bash(kubectl delete *)", self.doc()["permissions"]["ask"])
 
     def test_one_workspace_that_cannot_be_wired_does_not_cost_the_others(self):
         workspace.ensure("south")
