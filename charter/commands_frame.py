@@ -6111,16 +6111,29 @@ def _launch(args) -> int:
     code = _query_pane_dead_status(SOCKET, harness_pane)
     # **What the pane's own launcher decided, for an open nobody is watching** (ruling 42).
     # Measured 2026-09-11: the eager ask above completes 6-14 ms after the start while a
-    # Python launcher's first line runs at 19-22 ms, so it never catches a launcher that
+    # Python launcher's first line runs at 19-22 ms, so it rarely catches a launcher that
     # refused — and by the time anything else could look, the teardown hook has killed the
     # window (`_pane_last_words` answered `[]` in all 40 runs). Every pane records what
     # CHARTER refused — a decline, which the operator answered themselves, is the one thing
     # it does not (ADR 0018) — and what differs is who reads it. An attended pane also holds
     # its own refusal on screen until somebody presses Enter, so only an unattended open — a
     # reopen, a handoff, a background open — has nobody in front of it and waits here.
+    #
+    # **Read whether or not the ask above found the pane dead, and the record wins (#1067).**
+    # Rarely is not never: on a loaded CI runner (3.11, a 212 ms run) the ask landed after
+    # the launcher had refused, recorded and exited, and it used to skip the record whenever
+    # it did. A launcher that recorded a refusal has said why it exited, and a dead pane is
+    # not evidence against that — least of all on Linux, where that pane's
+    # `#{pane_dead_status}` is EMPTY and read as `_UNKNOWN_DEATH_CODE`, so the operator got
+    # 1 and no sentence. `_launch_in_operator_tmux` has always let the record win this way.
+    # A dead pane costs this nothing: the wait ends on a pane that is not alive, and the
+    # launcher wrote before it exited. A pane the harness took over recorded no refusal, so
+    # the pane's own reading still stands.
     refused = ""
-    if code is None and p is not None and not attended:
-        code, refused = _await_the_launcher(SOCKET, fid, harness_pane)
+    if p is not None and not attended:
+        recorded, refused = _await_the_launcher(SOCKET, fid, harness_pane)
+        if recorded is not None:
+            code = recorded
     def nothing_ever_ran_here() -> bool:
         """Whether this chat's pane is still the profile selector — asked twice below, once
         for the early-death sentence and once for the recorded-plane one.
