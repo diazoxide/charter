@@ -300,8 +300,11 @@ def git_exclude_file(root: Path) -> Path | None:
 def is_clone(path: Path) -> bool:
     """A real clone, not a worktree. Git itself draws the line: a clone's ``.git`` is a
     DIRECTORY, a linked worktree's ``.git`` is a FILE pointing at the shared gitdir. So a
-    worktree can never be miscounted as a cloned repo — no bookkeeping required."""
-    return _unreadable(lambda: (path / ".git").is_dir())
+    worktree can never be miscounted as a cloned repo — no bookkeeping required.
+
+    A ``.git`` charter cannot `stat` is no clone here; :func:`read_clones` asks the same
+    :func:`_directory` and names it instead (#1043)."""
+    return _directory(path / ".git")[0] is True
 
 
 def workspace_dir(name: str) -> Path:
@@ -888,16 +891,11 @@ def _prune() -> None:
 
 
 def list_workspaces() -> list[str]:
-    """Directory names under ``workspaces/`` that are workspaces (not stray clones)."""
-    _ensure_layout()
-    root = config.WORKSPACES_DIR
-    if not root.exists():
-        return []
-    out = []
-    for d in sorted(root.iterdir()):
-        if d.is_dir() and not d.name.startswith(".") and not is_clone(d):
-            out.append(d.name)
-    return out
+    """Directory names under ``workspaces/`` that are workspaces (not stray clones).
+
+    :func:`read_workspaces`' first half, so it is one answer on every interpreter (#1043): an
+    entry charter cannot `stat` is left out, where `Path.is_dir` raised for it on 3.11–3.13."""
+    return read_workspaces()[0]
 
 
 def uncheckable_workspaces() -> list[tuple[str, int | None]]:
@@ -910,18 +908,27 @@ def uncheckable_workspaces() -> list[tuple[str, int | None]]:
     about a plane it had not looked at all of (#1028, ADR 0013). A caller that reports on every
     workspace names these; the listing itself stays as it is, because the status line and every
     other reader of it are asking which workspaces they can open, and these cannot be."""
+    return [(d.name, code) for d, code in read_workspaces()[1]]
+
+
+def read_workspaces() -> tuple[list[str], list[tuple[Path, int | None]]]:
+    """:func:`list_workspaces` and :func:`uncheckable_workspaces` from ONE listing — the
+    workspace names, and beside them every directory under ``workspaces/`` whose kind the
+    filesystem will not tell, with its errno (#1043).
+
+    A caller that reports on every workspace — each `doctor` row that lists them — asks this, so
+    it cannot count what it read and name what it did not from two reads that disagree. A
+    ``workspaces/`` that cannot be listed raises (:func:`read_directory`)."""
     _ensure_layout()
-    root = config.WORKSPACES_DIR
-    if _exists(root, follow=True) is not True:
-        return []
-    out = []
-    for d in sorted(root.iterdir()):
+
+    def keep(d: Path) -> tuple[bool | None, int | None]:
         if d.name.startswith("."):
-            continue  # charter's own (`.worktrees/`), never a workspace — as `list_workspaces`
-        there, code = _existence(d, follow=True)
-        if there is None:
-            out.append((d.name, code))
-    return out
+            return False, None  # charter's own (`.worktrees/`), never a workspace
+        is_dir, code = _directory(d)
+        return (is_dir and not is_clone(d)), code
+
+    found, unread = read_directory(config.WORKSPACES_DIR, keep)
+    return [d.name for d in found], unread
 
 
 def _tab_order_file() -> Path:
@@ -1223,6 +1230,15 @@ def clones(name: str) -> list[Path]:
     if not wd.exists():
         return []
     return sorted(d for d in wd.iterdir() if is_clone(d))
+
+
+def read_clones(name: str) -> tuple[list[Path], list[tuple[Path, int | None]]]:
+    """:func:`clones`, and beside them every directory in the workspace whose ``.git`` charter
+    cannot `stat`, with its errno (#1043) — the entries `gitpolicy.scan` names and
+    :func:`is_clone` answers "no clone" for. A workspace that cannot be listed raises
+    (:func:`read_directory`)."""
+    _ensure_layout()
+    return read_directory(workspace_dir(name), lambda d: _directory(d / ".git"))
 
 
 def repo_trees(ws: str) -> list[Path]:
@@ -2234,13 +2250,62 @@ def _existence(p: Path, follow: bool = False) -> tuple[bool | None, int | None]:
     a caller that words what to DO about an unreadable path (`reinit`, through
     `structure_status`) and a caller that only asks whether to write must not answer "is it
     there" from two different reads. The cause is `None` whenever the path was answered for."""
+    there, _st, code = _looked(p, follow)
+    return there, code
+
+
+def _looked(p: Path, follow: bool) -> tuple[bool | None, os.stat_result | None, int | None]:
+    """:func:`_existence`'s one `stat`, with what it returned — ``(there, stat, code)`` — so a
+    caller that asks what KIND of thing is there (:func:`_directory`) classifies the errno the
+    same way rather than a second way."""
     try:
-        (os.stat if follow else os.lstat)(p)
+        return True, (os.stat if follow else os.lstat)(p), None
     except (FileNotFoundError, NotADirectoryError):
-        return False, None
+        return False, None, None
     except OSError as e:
-        return None, e.errno
-    return True, None
+        return None, None, e.errno
+
+
+def _directory(p: Path) -> tuple[bool | None, int | None]:
+    """Whether *p*, through a link, is a directory — ``(True|False, None)`` — or ``(None, errno)``
+    when the filesystem will not say.
+
+    `Path.is_dir` has no third answer (#1043): for a path charter may not `stat` it raised on
+    3.11–3.13 and answered False on 3.14, so a workspace under a `workspaces/` at mode 666 cost a
+    doctor row on one interpreter and vanished from it on the other. :func:`_existence`'s
+    classification, asked of the mode it read."""
+    there, st, code = _looked(p, follow=True)
+    return (stat.S_ISDIR(st.st_mode) if there else there), code
+
+
+def read_directory(d: Path, keep=None) -> tuple[list[Path], list[tuple[Path, int | None]]]:
+    """The entries of directory *d* that *keep* keeps, sorted, and beside them each entry *keep*
+    could not tell about, with its errno — ``(entries, unread)``.
+
+    *keep* asks one entry and answers ``(True|False, None)`` or ``(None, errno)``, the shape of
+    :func:`_existence`; without it every entry is kept. An entry it cannot tell about is unread,
+    never dropped as "not one" and never raised (#1043) — the three answers `Path.is_dir` and
+    `Path.glob` gave for "could not look" were raise, False and an empty list.
+
+    A *d* that is not there, or is not a directory, has no entries. A *d* that is there and cannot
+    be LISTED raises the `OSError`, as `Path.iterdir` does: nothing under it can be counted, so the
+    caller names it on its own, apart from any entry (the shape #982 and #987 gave the listing).
+    Asked through `Path.iterdir`, which refuses on 3.11–3.14 alike."""
+    try:
+        entries = sorted(d.iterdir())
+    except (FileNotFoundError, NotADirectoryError):
+        return [], []
+    if keep is None:
+        return entries, []
+    kept: list[Path] = []
+    unread: list[tuple[Path, int | None]] = []
+    for p in entries:
+        yes, code = keep(p)
+        if yes is None:
+            unread.append((p, code))
+        elif yes:
+            kept.append(p)
+    return kept, unread
 
 
 def _stopped_at(p: Path, code: int) -> Path:

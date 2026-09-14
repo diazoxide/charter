@@ -26,6 +26,8 @@ from unittest import mock
 
 from charter import config, doctor, workspace
 from tests._isolation import PersonaIso
+from tests.test_a_workspace_listing_names_what_it_cannot_look_at import (
+    BOTH_INTERPRETERS, unsearchable)
 
 OK, WARN = doctor.OK, doctor.WARN
 
@@ -302,6 +304,75 @@ class TestOneWorkspaceItCannotReadIsNamed(StaleCloneCase):
         self.assertEqual(r.status, WARN)
         self.assertEqual(r.detail, "1 clone(s) across 1 of 2 workspace(s), none behind; "
                                    "workspaces/alpha cannot be checked")
+
+
+class TestWhatItCannotStatIsNamed(StaleCloneCase):
+    """A clone whose ``.git`` charter cannot `stat`, and a workspace it cannot `stat`, are named
+    with what clears them, and everything else is still checked (#1043, ADR 0009).
+
+    `is_clone` read "could not look" at ``.git`` as "no clone", so the row said nothing of that
+    clone while `gitpolicy.scan` named it (#1012). And `list_workspaces` asked `Path.is_dir`,
+    which raised for a workspace under a `workspaces/` at mode 666 on 3.11–3.13 (the whole row
+    `not checked`) and answered False on 3.14 (the row OK over a plane it had not read). Both
+    interpreter answers are injected so each is pinned on whichever one runs."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.seed_origin()
+        self.svc = self.clone_into("alpha")
+        self.web = self.clone_into("beta", "web")
+
+    def test_with_everything_readable_nothing_is_named(self):
+        r = self.check()
+        self.assertEqual((r.status, r.detail),
+                         (OK, "2 clone(s) across all workspaces, none behind"))
+
+    def test_a_clone_whose_git_it_cannot_stat_on_either_interpreter(self):
+        for answers in BOTH_INTERPRETERS:
+            with self.subTest(is_dir=answers):
+                with unsearchable(self.web, answers):
+                    r = self.check()
+                self.assertEqual(r.status, WARN)
+                self.assertEqual(r.detail, "1 clone(s) across 2 of 2 workspace(s), none behind; "
+                                           "workspaces/beta/web cannot be checked")
+                self.assertEqual(r.hint, "workspaces/beta/web cannot be checked — restoring "
+                                         "read access to it clears this.")
+
+    def test_a_stale_clone_beside_one_it_cannot_stat_is_still_reported(self):
+        self.advance_origin(2)
+        self.fetch(self.svc, 2)
+        with unsearchable(self.web, "raises"):
+            r = self.check()
+        self.assertEqual(r.detail, "alpha/svc (2 behind); workspaces/beta/web cannot be checked")
+        self.assertTrue(r.hint.endswith("   workspaces/beta/web cannot be checked — restoring "
+                                        "read access to it clears this."), r.hint)
+
+    @unittest.skipIf(os.geteuid() == 0, "root searches a directory whatever its mode")
+    def test_a_real_clone_at_mode_000(self):
+        self.web.chmod(0o000)
+        self.addCleanup(self.web.chmod, 0o755)
+        r = self.check()
+        self.assertEqual(r.status, WARN)
+        self.assertEqual(r.detail, "1 clone(s) across 2 of 2 workspace(s), none behind; "
+                                   "workspaces/beta/web cannot be checked")
+
+    def test_workspaces_it_cannot_stat_on_either_interpreter(self):
+        for answers in BOTH_INTERPRETERS:
+            with self.subTest(is_dir=answers):
+                with unsearchable(config.WORKSPACES_DIR, answers):
+                    r = self.check()
+                self.assertEqual(r.status, WARN)
+                self.assertEqual(r.detail, "0 clone(s) across 0 of 2 workspace(s), none behind; "
+                                           "workspaces/alpha, workspaces/beta cannot be checked")
+
+    @unittest.skipIf(os.geteuid() == 0, "root searches a directory whatever its mode")
+    def test_a_real_workspaces_directory_at_mode_666(self):
+        config.WORKSPACES_DIR.chmod(0o666)
+        self.addCleanup(config.WORKSPACES_DIR.chmod, 0o755)
+        r = self.check()
+        self.assertEqual(r.status, WARN)
+        self.assertEqual(r.detail, "0 clone(s) across 0 of 2 workspace(s), none behind; "
+                                   "workspaces/alpha, workspaces/beta cannot be checked")
 
 
 class TestItIsWiredIn(StaleCloneCase):

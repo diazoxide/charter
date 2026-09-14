@@ -92,6 +92,25 @@ _NOT_CHECKED_HINT = ("This check could not run, so its silence means nothing. Re
                      "`charter doctor` — if it persists, the reason above is the thing to fix.")
 
 
+def _beside_unread(result: Result, unread) -> Result:
+    """*result*, saying beside its verdict every path the row could not check, with what clears
+    each (ADR 0009) — and never OK while one stands.
+
+    Beside and not instead: the verdict is still true of what was read (#1014). One spelling for
+    every row that lists workspaces (#1043), so a path one row names is named the same in the
+    next. *unread* is ``(path, errno)`` pairs, each path inside the plane."""
+    from . import config as _config
+    from . import workspace as _workspace
+    if not unread:
+        return result
+    named = [p.relative_to(_config.ROOT).as_posix() for p, _ in unread]
+    cannot = "; ".join(f"{n} cannot be checked — {_workspace.uncheckable_fix(code, p)}"
+                       for n, (p, code) in zip(named, unread)) + "."
+    return Result(result.name, WARN if result.status == OK else result.status,
+                  detail=f"{result.detail}; {', '.join(named)} cannot be checked",
+                  hint=f"{result.hint}   {cannot}" if result.hint else cannot)
+
+
 def _first_line(text: str) -> str:
     text = (text or "").strip()
     return text.splitlines()[0] if text else ""
@@ -2550,20 +2569,26 @@ def check_workspace_clones() -> Result:
     unseen: list[tuple[Path, int | None]] = []
     total = 0
     try:
-        workspaces = _workspace.list_workspaces()
+        # Asked with what could not be told beside it (#1043): `list_workspaces` alone left a
+        # workspace charter cannot `stat` out, so the row was OK over it on 3.14, and `clones`
+        # alone left out a clone whose `.git` it cannot `stat`, which `gitpolicy.scan` names.
+        workspaces, unseen = _workspace.read_workspaces()
+        looked_for = len(workspaces) + len(unseen)
+        unread_ws = len(unseen)
         for ws in workspaces:
             try:
-                found = _workspace.clones(ws)
+                found, unstatted = _workspace.read_clones(ws)
             except OSError as e:
                 # One workspace charter cannot list is named, and the others are still read
                 # (#1014) — `gitpolicy.scan`'s shape. Left to the `except` below, it cost the
                 # whole row and hid a stale clone one workspace over: #156's blind spot, from
                 # one `chmod`. `workspaces/` itself still costs the whole row there, since
                 # nothing under it could be counted. No interpreter split reaches this line:
-                # `clones` asks `Path.exists` only of the workspace directory, which its
-                # readable parent answers, and the listing refuses on 3.11–3.14 alike.
+                # the listing refuses on 3.11–3.14 alike.
                 unseen.append((_workspace.workspace_dir(ws), e.errno))
+                unread_ws += 1
                 continue
+            unseen.extend(unstatted)
             for clone in found:
                 total += 1
                 # `@{upstream}` fails cleanly where there is no tracking branch, which is
@@ -2583,27 +2608,21 @@ def check_workspace_clones() -> Result:
     # What could not be listed is named beside whatever the rest said, with what clears it
     # (ADR 0009), and the row is never OK while it stands: "none behind" is only true of the
     # workspaces that were read.
-    named = [p.relative_to(_config.ROOT).as_posix() for p, _ in unseen]
-    unseen_detail = f"; {', '.join(named)} cannot be checked" if unseen else ""
-    cannot = "; ".join(f"{n} cannot be checked — {_workspace.uncheckable_fix(code, p)}"
-                       for n, (p, code) in zip(named, unseen)) + "."
     if not behind:
         if unseen:
-            return Result(name, WARN,
-                          detail=f"{total} clone(s) across {len(workspaces) - len(unseen)} of "
-                                 f"{len(workspaces)} workspace(s), none behind{unseen_detail}",
-                          hint=cannot)
+            return _beside_unread(
+                Result(name, WARN, detail=f"{total} clone(s) across {looked_for - unread_ws} of "
+                                          f"{looked_for} workspace(s), none behind"), unseen)
         if not total:
             return Result(name, OK, detail="no clones in any workspace — nothing to check")
         return Result(name, OK, detail=f"{total} clone(s) across all workspaces, none behind")
-    return Result(name, WARN,
-                  detail=", ".join(behind[:4]) + (", …" if len(behind) > 4 else "")
-                         + unseen_detail,
-                  hint=("→ charter sync --all  (plain `sync` only touches the ACTIVE "
-                        "workspace, which is how this stays hidden)  "
-                        "Counted from what the last fetch recorded, so it can under-report "
-                        "— never a live query, this runs at SessionStart.")
-                       + (f"   {cannot}" if unseen else ""))
+    return _beside_unread(Result(
+        name, WARN,
+        detail=", ".join(behind[:4]) + (", …" if len(behind) > 4 else ""),
+        hint=("→ charter sync --all  (plain `sync` only touches the ACTIVE "
+              "workspace, which is how this stays hidden)  "
+              "Counted from what the last fetch recorded, so it can under-report "
+              "— never a live query, this runs at SessionStart.")), unseen)
 
 
 def _mirrored_restrictions() -> dict[str, int]:
@@ -2674,13 +2693,16 @@ def check_workspace_harness() -> Result:
 
     # One worktree listing per repository for the whole run (review round 4): the check reads
     # every workspace, and a hung git cost 5 s per checkout without it.
+    unread: list[tuple[Path, int | None]] = []
     with _workspace.worktree_answers():
-        return _workspace_harness_result(_config, _workspace)
+        return _beside_unread(_workspace_harness_result(_config, _workspace, unread), unread)
 
 
-def _workspace_harness_result(_config, _workspace) -> Result:
+def _workspace_harness_result(_config, _workspace, unread: list) -> Result:
     """:func:`check_workspace_harness`' body, inside its one :func:`workspace.worktree_answers`
-    block."""
+    block. Adds to *unread* each directory under `workspaces/` whose kind it cannot tell, which
+    the caller says beside whichever verdict this returns (#1043) — one clause for its many
+    returns rather than one at each."""
     name = "workspace layer"
     if not _config.HAS_CONTROL_PLANE:
         return Result(name, OK, detail="no control plane found")
@@ -2702,7 +2724,9 @@ def _workspace_harness_result(_config, _workspace) -> Result:
     findings: list[tuple[str, str, str]] = []
     total = 0
     try:
-        for ws in _workspace.list_workspaces():
+        names, unstatted = _workspace.read_workspaces()
+        unread.extend(unstatted)
+        for ws in names:
             rows = _workspace.harness_layer(ws)
             total += len(rows)
             for rel, status in rows:
@@ -2938,6 +2962,14 @@ def check_changes() -> Result:
     is exactly the plane where the question *"do I want a prompt before each landing?"* is
     worth asking.
     """
+    unread: list[tuple[Path, int | None]] = []
+    return _beside_unread(_changes_result(unread), unread)
+
+
+def _changes_result(unread: list) -> Result:
+    """:func:`check_changes`' body. Adds to *unread* each directory under `workspaces/` whose
+    kind it cannot tell, which the caller says beside whichever verdict this returns (#1043):
+    `list_workspaces` alone dropped it, and the row was OK on 3.14 over changes it never read."""
     from . import change as _change
     from . import commands_change as _cc
     from . import config as _config
@@ -2951,7 +2983,9 @@ def check_changes() -> Result:
     unreadable: list[str] = []
     total = 0
     try:
-        for ws in _workspace.list_workspaces():
+        names, unstatted = _workspace.read_workspaces()
+        unread.extend(unstatted)
+        for ws in names:
             records, refused = _change.all_for(ws)
             total += len(records)
             for slug, complaint in refused:
@@ -3253,12 +3287,17 @@ def check_memory_indexes() -> Result:
     from . import config, memstore, persona, workspace
 
     bases = []
+    # What was not read, named beside the verdict. It opens with the directories under
+    # `workspaces/` whose kind charter cannot tell (#1043): `list_workspaces` alone dropped them,
+    # and their bases with them, so the row was OK on 3.14 over a plane it had not read.
+    unread: list[tuple[Path, int | None]] = []
     try:
         for name in persona.list_personas():
             bases.append((name, persona.memory_dir(name)))
         bases.append((config.SHARED_PERSONA, persona.memory_dir(config.SHARED_PERSONA,
                                                                 shared=True)))
-        for name in workspace.list_workspaces():
+        names, unread = workspace.read_workspaces()
+        for name in names:
             bases.append((f"ws:{name}", workspace.memory_dir(name)))
     except OSError as e:
         # Only an unreadable/absent tree is tolerated. A broader `except` here once
@@ -3277,7 +3316,7 @@ def check_memory_indexes() -> Result:
     unindexed_kinds: set[str] = set()
     large_kinds: set[str] = set()
     refused = []
-    unread: list[tuple[Path, int | None]] = []
+    unread_bases = 0
     for label, mem_dir in bases:
         # Asked through `workspace._existence`, not `Path.exists`, which gave two wrong answers
         # for a base inside a workspace at mode 000 (#1014). On 3.11–3.13 it raised, and
@@ -3286,10 +3325,26 @@ def check_memory_indexes() -> Result:
         # as was a base that is a symlink loop, on every interpreter. A base charter cannot
         # check is named, and the rest are still read.
         there, code = workspace._existence(mem_dir, follow=True)
+        if there is False:
+            # Not there THROUGH a link is not nothing there (#1043). A `memory/` that is a link to
+            # nothing was skipped as absent, so the refusal below never met the one base it is
+            # for — a dangling link out of the plane. Asked of the link itself.
+            there, code = workspace._existence(mem_dir)
         if there is None:
             unread.append((mem_dir, code))
+            unread_bases += 1
             continue
         if not there:
+            continue
+        try:
+            # LISTED before anything is read from it (#1043). `Path.glob` answers an empty list
+            # for a directory it may not read, so `memstore.files` said "no memories" of a base at
+            # mode 000 or 333 and the drift below described a store nobody had listed: consistent,
+            # or its indexed memories dangling. A link to nothing lists as nothing and goes on.
+            workspace.read_directory(mem_dir)
+        except OSError as e:
+            unread.append((mem_dir, e.errno))
+            unread_bases += 1
             continue
         # Asked FIRST, and reported on its own terms. A refused index answers "nothing is
         # listed", which is what an empty base answers too — so without this the drift
@@ -3321,14 +3376,7 @@ def check_memory_indexes() -> Result:
         # which were not, with what clears each (ADR 0009) — and none of them is OK while one
         # is unread. Said after the finding rather than instead of it: the finding is still
         # true of the bases it describes (#1014).
-        if not unread:
-            return Result("memory indexes", status, detail=detail, hint=hint)
-        named = [p.relative_to(config.ROOT).as_posix() for p, _ in unread]
-        cannot = "; ".join(f"{n} cannot be checked — {workspace.uncheckable_fix(code, p)}"
-                           for n, (p, code) in zip(named, unread)) + "."
-        return Result("memory indexes", WARN,
-                      detail=f"{detail}; {', '.join(named)} cannot be checked",
-                      hint=f"{hint}   {cannot}" if hint else cannot)
+        return _beside_unread(Result("memory indexes", status, detail=detail, hint=hint), unread)
 
     if refused:
         # Ahead of drift and growth because it outranks them: those are hygiene, this is a
@@ -3340,7 +3388,7 @@ def check_memory_indexes() -> Result:
                         + "  → this is a defect in a committed file: replace the link "
                           "with a real MEMORY.md")
     if not worst and not large:
-        return row(OK, detail=f"{len(bases) - len(unread)} base(s) consistent")
+        return row(OK, detail=f"{len(bases) - unread_bases} base(s) consistent")
     hint = ", ".join(worst[:4]) + (", …" if len(worst) > 4 else "")
     if unindexed:
         for kind in sorted(unindexed_kinds):

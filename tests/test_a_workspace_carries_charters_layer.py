@@ -746,7 +746,7 @@ class ARowThatCouldNotRunSaysSoRatherThanEndingTheDoctor(WorkspaceLayer):
         workspace.ensure(self.ws)
 
     def test_a_workspaces_directory_that_cannot_be_read_is_reported_not_checked(self):
-        with mock.patch.object(workspace, "list_workspaces",
+        with mock.patch.object(workspace, "read_workspaces",
                                side_effect=OSError("workspaces/ is unreadable")):
             r = doctor.check_workspace_harness()
         self.assertEqual(r.status, doctor.WARN)
