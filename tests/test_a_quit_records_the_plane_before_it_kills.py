@@ -950,6 +950,21 @@ class TheWindowListingRefusesWhatItCannotRead(PersonaIso, unittest.TestCase):
 
         self.assertEqual(seats, [])
 
+    def test_the_claim_is_one_answer_for_no_chat_and_for_a_chat_with_no_pane_record(self):
+        """`_this_planes_claim`: the two readers test the claim for truth and then compare
+        it to a pane, so an absent chat and a chat whose launcher wrote no pane are one
+        reading — nothing this plane can vouch for. It answered ``""`` for the second and the
+        sweep found that fallback indistinguishable from its absence; it is gone."""
+        _plant("default.1", ws="default")
+        (state.frame_dir("default.1") / "harness").unlink()
+        _plant("default.2", ws="default", pane="%4")
+
+        self.assertIsNone(commands_frame._this_planes_claim("default.1", SERVER))
+        self.assertIsNone(commands_frame._this_planes_claim("default.9", SERVER))
+        self.assertEqual(commands_frame._this_planes_claim("default.2", SERVER), "%4")
+        self.assertIs(commands_frame._this_planes_claim("default.2", "somewhere-else"),
+                      False)
+
     def test_a_chat_with_no_pane_record_falls_back_to_the_marker(self):
         _plant("default.1", ws="default")
         (state.frame_dir("default.1") / "harness").unlink()
@@ -1009,6 +1024,14 @@ class TheLegacyServersKeepListIsCheckedByPane(PersonaIso, unittest.TestCase):
 
     def test_a_chat_this_plane_has_no_pane_record_for_is_kept_by_its_id(self):
         self.assertEqual(self._keep("old.1\t@0\t1\t/plane/b/.charter\t%0\n"), {"old.1"})
+
+    def test_a_value_outside_the_alphabet_is_never_a_keep_entry(self):
+        """The keep list is handed to `state.reap` as its live set and compared against
+        directory names there, so what goes in it is #475's boundary: a pane carrying no
+        `@charter_chat` prints an empty first field, and a value off a tmux option is not
+        a name charter got from itself. Neither is an entry, whatever the pane column says."""
+        self.assertEqual(self._keep("\t@0\t1\t\t%0\n"
+                                    "old.1;kill-server\t@1\t1\t\t%1\n"), set())
 
     def test_a_server_that_would_not_answer_keeps_nothing_it_can_vouch_for(self):
         self.assertIsNone(self._keep("", returncode=1))

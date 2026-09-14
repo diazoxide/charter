@@ -3259,6 +3259,29 @@ class Launch(PersonaIso, unittest.TestCase):
         rc = _launch(fake)
         self.assertEqual(rc, 17)
 
+    def test_a_harness_that_died_unrecorded_during_attach_is_asked_about_once_more(self):
+        """The SECOND ask, after `attach` has returned. The write hook records the code in
+        the ordinary case; a hook that reported success and never fired leaves no `exit`
+        file behind and a dead pane that `remain-on-exit` kept — so the launcher asks tmux
+        itself once more, and tmux's own answer is the code. Without that ask a real crash
+        would come back as `attach`'s own 0, the failure this module exists to stop, through
+        the one gap the eager ask before `attach` cannot see.
+
+        The fake answers "alive" before the attach, as tmux does for a harness that has not
+        died yet, and "dead, status 9" after it; nothing writes the `exit` file."""
+        class _DiesUnrecordedDuringAttach(_FakeTmux):
+            attached = False
+
+            def __call__(self, cmd, **kwargs):
+                if "attach" in cmd:
+                    self.attached = True
+                if "display-message" in cmd and self.attached:
+                    return subprocess.CompletedProcess(cmd, 0, stdout="1:9", stderr="")
+                return super().__call__(cmd, **kwargs)
+
+        rc = _launch(_DiesUnrecordedDuringAttach(attach_rc=0))
+        self.assertEqual(rc, 9)
+
     def test_a_death_that_races_the_hooks_own_install_is_recovered(self):
         """Critical 1: `new-session` starts the harness immediately; the hooks that
         would record its exit code and end the session are not installed until a

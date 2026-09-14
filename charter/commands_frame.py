@@ -10009,17 +10009,24 @@ def _chat_pane_rows(socket: str) -> list[list[str]] | None:
 def _this_planes_claim(chat: str, socket: str) -> str | bool | None:
     """What this plane's own records say about *chat* on *socket*.
 
-    ``None`` when this plane has no chat of that id; ``False`` when it has one and its record
-    names another server, so a window of that id here is somebody else's; otherwise the
-    harness pane its launcher wrote down, or ``""`` when none was written. *chat* has already
-    been held to `_FRAME_ID_RE`, because it is about to be a directory name.
+    ``False`` when this plane has a chat of that id and its record names another server, so
+    a window of that id here is somebody else's; otherwise the harness pane its launcher
+    wrote down; ``None`` when there is no pane this plane can vouch for — no chat of that id
+    here, or one whose launcher predates `state.record_harness_pane`. **One answer for those
+    two, because both readers ask one question of them**: `_chat_seats` and `_legacy_keep`
+    each test the claim for truth and then compare it to the pane in hand, and a chat with
+    no pane record decides nothing either way, exactly as an absent chat does. This read
+    ``state.harness_pane(chat) or ""`` for the second case, and the deletion sweep found the
+    fallback indistinguishable from its absence — correctly: `harness_pane` never answers
+    ``""``, and no caller told ``""`` from ``None``. *chat* has already been held to
+    `_FRAME_ID_RE`, because it is about to be a directory name.
     """
     d = state.frame_dir(chat)
     if d is None or not d.is_dir():
         return None
     if not tmuxctl.same_server(state.frame_server(chat) or tmuxctl.LEGACY_SOCKET, socket):
         return False
-    return state.harness_pane(chat) or ""
+    return state.harness_pane(chat)
 
 
 def _chat_seats(socket: str) -> list[tuple[str, str, bool]] | None:
@@ -10130,6 +10137,9 @@ def _legacy_keep() -> set[str] | None:
         return None
     keep: set[str] = set()
     for chat, _window, _active, _plane, pane in rows:
+        # The keep list becomes `state.reap`'s live set and is compared against directory
+        # names, so a value off a tmux option that is not in the alphabet — a pane carrying
+        # no `@charter_chat` prints an empty one — is never an entry in it.
         if not _FRAME_ID_RE.fullmatch(chat):
             continue
         claim = _this_planes_claim(chat, tmuxctl.LEGACY_SOCKET)

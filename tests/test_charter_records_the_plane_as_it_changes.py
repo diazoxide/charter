@@ -1487,6 +1487,59 @@ class AReopenOntoARunningPlaneIsRefused(PersonaIso, unittest.TestCase):
         seats.assert_not_called()
 
 
+class TheAttachRouteNamesTheServersTheChatsAreOn(PersonaIso, unittest.TestCase):
+    """`commands_frame._attach_route` — the command a refusal tells the operator to type.
+
+    Asked the way a quit asks (`_plane_servers`, `_plane_live`), so the route and a quit
+    cannot disagree about where a chat is. **The sentence is spelled by hand**: the reopen
+    refusal above quotes it, and a route naming the wrong server sends an operator to a
+    tmux with nothing on it (ruling 46's third finding).
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.assertIn("edm-test-", str(config.STATE_DIR))
+
+    def _route(self, seats):
+        with mock.patch.object(commands_frame, "_chat_seats", side_effect=seats):
+            return commands_frame._attach_route()
+
+    def test_each_server_holding_a_live_chat_is_named_and_two_are_joined_by_or(self):
+        """Upgrade day: one chat on the plane's own server, one still on the shared one.
+        Both are live, so both are a way in, and the two commands are one sentence — the
+        plane's own first, then `or`."""
+        _plant("alpha.1", ws="alpha")
+        _plant("alpha.2", ws="alpha")
+        state.record_server("alpha.2", tmuxctl.LEGACY_SOCKET)
+
+        route = self._route(lambda socket: _seats(
+            {"alpha.2": "@0"} if socket == tmuxctl.LEGACY_SOCKET else {"alpha.1": "@0"},
+            set()))
+
+        self.assertEqual(route, f"`tmux -L {tmuxctl.plane_socket()} attach` or "
+                                "`tmux -L charter attach`")
+
+    def test_a_server_that_would_not_answer_is_not_a_route(self):
+        """`_plane_live` lists windows only for the servers that answered, so one that
+        refused has no entry at all. The route reads that as a server it cannot vouch for
+        rather than failing on the lookup and leaving the refusal with no sentence."""
+        _plant("alpha.1", ws="alpha")
+        _plant("alpha.2", ws="alpha")
+        state.record_server("alpha.2", tmuxctl.LEGACY_SOCKET)
+
+        route = self._route(lambda socket: (None if socket == tmuxctl.LEGACY_SOCKET
+                                            else _seats({"alpha.1": "@0"}, set())))
+
+        self.assertEqual(route, f"`tmux -L {tmuxctl.plane_socket()} attach`")
+
+    def test_the_planes_own_server_is_the_route_when_nothing_is_live(self):
+        _plant("alpha.1", ws="alpha")
+        state.record_server("alpha.1", tmuxctl.LEGACY_SOCKET)
+
+        self.assertEqual(self._route(lambda socket: []),
+                         f"`tmux -L {tmuxctl.plane_socket()} attach`")
+
+
 def _doomed(**kw):
     """One `leave.Doomed` with every field defaulted, so a case states only what it means."""
     base = dict(chat="alpha.1", workspace="alpha", persona="", harness="claude-code",
