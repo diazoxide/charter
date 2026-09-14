@@ -1306,24 +1306,45 @@ def _code_imports_charter(code: str) -> bool:
     scrubs the whole charter namespace at import of this package, *before* `charter.config`
     loads, so the pointer is gone by the time the plane is resolved and the child's CWD
     decides. Its fix is a cwd inside a throwaway plane, with ``$PYTHONPATH`` carrying the
-    tree.
+    tree. The guard judges it the same way: `_child_plane` walks up from that child's cwd
+    with the pointer removed, so a throwaway ``$CHARTER_ROOT`` does not wave through a child
+    standing in the real plane (#1064).
 
     **Source that will not tokenize is refused, not allowed.** It is either a child that
     cannot run at all — in which case the refusal is loud and one line from the fix — or a
     lexer disagreement, and a guard that settles its own uncertainty by waving the child
     through is the failure this one exists to end.
     """
+    return bool(_code_imports(code))
+
+
+#: The package whose import scrubs a child's ``$CHARTER_ROOT`` before charter resolves a
+#: plane (`tests/_envguard`, #1064). Named once, for the lexer and the ``-m`` reader both.
+_SUITE = "tests"
+
+
+def _code_imports(code: str) -> set[str]:
+    """What this Python SOURCE reaches: ``"charter"``, :data:`_SUITE`, both, or neither.
+
+    :func:`_code_imports_charter`'s lexing, collected rather than returned on the first
+    hit, because the two answers now decide different things. Either one makes the child
+    a charter child. Only :data:`_SUITE` says the child scrubs its ``$CHARTER_ROOT`` on the
+    way in, which is what `_child_plane` has to know (#1064). Source that will not tokenize
+    answers ``"charter"`` alone: refused as undecidable, and never assumed to scrub.
+    """
+    found: set[str] = set()
     try:
         importing = False
         for tok in tokenize.generate_tokens(io.StringIO(code).readline):
             if tok.type == tokenize.NAME:
                 if tok.string == "charter":
-                    return True
+                    found.add("charter")
+                    continue
                 if tok.string in ("import", "from"):
                     importing = True
                     continue
-                if importing and tok.string == "tests":
-                    return True
+                if importing and tok.string == _SUITE:
+                    found.add(_SUITE)
             if tok.type in (tokenize.NEWLINE, tokenize.NL) or (
                     tok.type == tokenize.OP and tok.string == ";"):
                 importing = False
@@ -1333,10 +1354,10 @@ def _code_imports_charter(code: str) -> bool:
                 except (ValueError, SyntaxError, MemoryError, RecursionError):
                     continue
                 if isinstance(value, str) and _module_is_charter(value):
-                    return True
+                    found.add("charter")
     except (tokenize.TokenError, IndentationError, SyntaxError, ValueError):
-        return True
-    return False
+        found.add("charter")
+    return found
 
 
 def _script_imports_charter(path: str) -> bool:
@@ -1354,15 +1375,23 @@ def _script_imports_charter(path: str) -> bool:
     Unreadable, or too large to be a probe, is answered ``True``: both mean this cannot be
     decided here, and refusal is the direction that is safe to be wrong in.
     """
+    return bool(_script_imports(path))
+
+
+def _script_imports(path: str) -> set[str]:
+    """:func:`_code_imports`'s answer for a FILE, with :func:`_script_imports_charter`'s
+    rules: a module of the ``charter`` package, and a file that cannot be read, are
+    ``"charter"`` alone — charter by location, or undecidable, and in neither case known
+    to import :data:`_SUITE`."""
     if os.path.basename(os.path.dirname(path)) == "charter":
-        return True
+        return {"charter"}
     try:
         if os.path.getsize(path) > 1 << 20:
-            return True
+            return {"charter"}
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
-            return _code_imports_charter(fh.read())
+            return _code_imports(fh.read())
     except OSError:
-        return True
+        return {"charter"}
 
 
 def _launcher_argv(parts: list[str]) -> tuple[list[str], list[str]]:
@@ -1420,19 +1449,63 @@ def _python_launches_charter(rest: list[str]) -> bool:
     :func:`_cmd_launches_charter` now uses too. It was written twice and walked once, so
     ``bash -lc 'charter docs'`` ran while ``python -Pmcharter`` was refused.
     """
+    return bool(_python_imports(rest))
+
+
+def _python_imports(rest: list[str]) -> set[str]:
+    """The tail of a Python interpreter's argv: what it reaches, as :func:`_code_imports`
+    answers — ``"charter"``, :data:`_SUITE`, both, or neither.
+
+    ``-m tests.<module>`` is :data:`_SUITE` by its name, the way ``-m charter`` is charter
+    by its name: running a module of the package imports the package first. ``-m unittest``
+    is NOT read as either — which modules it loads is decided by its own arguments and its
+    cwd, and `tools/sweep.py` spawns it detached against a sandbox tree.
+    """
     i, n = 0, len(rest)
     while i < n:
         tok = rest[i]
         if not tok.startswith("-") or tok == "-":
-            return _script_imports_charter(tok)
+            return _script_imports(tok)
         letter, value, consumed = _bundled_option(tok, "cm", valued="WXQ")
         if letter:
             if consumed == 2:
                 value = rest[i + 1] if i + 1 < n else ""
-            return (_code_imports_charter(value) if letter == "c"
-                    else _module_is_charter(value))
+            if letter == "c":
+                return _code_imports(value)
+            if _module_is_charter(value):
+                return {"charter"}
+            if value == _SUITE or value.startswith(_SUITE + "."):
+                return {_SUITE}
+            return set()
         i += consumed
-    return False
+    return set()
+
+
+def _runs_the_suite(args, opts: dict) -> bool:
+    """Will this child import :data:`_SUITE`, and so scrub the ``$CHARTER_ROOT`` it is handed?
+
+    Asked of a Python argv — through the launcher wrappers :func:`_launcher_argv` follows,
+    and by the program the interpreter path resolves to — because that is where the
+    recogniser reads ``import tests`` today. A shell string, ``shell=True`` and
+    ``executable=`` answer ``False``: such a child keeps being judged by its pointer, which
+    is what it was judged by before #1064, and none of them is a suite child this suite
+    spawns.
+    """
+    if opts.get("shell") or opts.get("executable") or isinstance(
+            args, (str, bytes, os.PathLike)) or args is None:
+        return False
+    try:
+        parts = [_decoded(a) for a in args]
+    except TypeError:
+        return False
+    if not parts or any(p is None for p in parts):
+        return False
+    parts, _consumed = _launcher_argv(parts)
+    if not parts:
+        return False
+    names = _program_names(parts[0], opts.get("cwd"), opts.get("env"))
+    return (any(_is_python(name) for name in names)
+            and _SUITE in _python_imports(parts[1:]))
 
 
 def _substitution_bodies(command: str) -> list[str]:
@@ -1837,8 +1910,12 @@ def _explain_background(parts: list[str]) -> str:
         f"`tests._planeguard.allow_background_children(self)`.")
 
 
-def _child_plane(opts: dict):
+def _child_plane(opts: dict, suite: bool = False):
     """The plane the child described by *opts* would resolve -- or ``None`` for none.
+
+    With *suite*, the plane a child that imports `tests` resolves: the same walk with its
+    ``$CHARTER_ROOT`` removed, because `tests/_envguard` removes it before charter resolves
+    a plane (#1064). A pointer handed to that child decides nothing.
 
     `root.find_root` is asked the child's question directly, with the child's environment
     (``env=None`` means it inherits ours) and the child's cwd. That is what `find_root`'s
@@ -1871,11 +1948,15 @@ def _child_plane(opts: dict):
 
     env = opts.get("env")
     cwd = opts.get("cwd")
+    walk_env = dict(os.environ) if env is None else env
     try:
         # A COPY, and `dict()` around it for the same reason the walk below takes one:
         # ``env=os.environ`` is a legal spelling, and a targeted `.get` off the live
         # mapping is what `_envguard` refuses.
-        pointer = dict(dict(os.environ) if env is None else env).get(_root.ENV_VAR)
+        pointer = dict(walk_env).get(_root.ENV_VAR)
+        if suite:
+            walk_env = {k: v for k, v in dict(walk_env).items() if k != _root.ENV_VAR}
+            pointer = None
     except (TypeError, ValueError, AttributeError):
         pointer = None                    # not a mapping at all; the walk still answers
     try:
@@ -1890,8 +1971,12 @@ def _child_plane(opts: dict):
         whose = ("the spawn's own cwd=" if cwd is not None
                  else "this process's cwd, which the spawn did not override: ")
         handed = f"the walk up from {whose}{start}"
+        if suite:
+            handed += (" — the child imports `tests`, and `tests/_envguard` removes any "
+                       f"${_root.ENV_VAR} it is handed before charter resolves a plane, "
+                       "so only its cwd decides (#1064)")
     try:
-        return _root.find_root(start, env=dict(os.environ) if env is None else env), handed
+        return _root.find_root(start, env=walk_env), handed
     except _root.ControlPlaneNotFound:
         try:
             # What `find_root_or_cwd` hands `config`: no plane above the child at all, so
@@ -1997,8 +2082,16 @@ def _guard_spawns() -> None:
         parts = _charter_argv(args, opts)
         if parts is not None:
             if _REAL_ROOT:
-                plane, source = _child_plane(opts)
-                if plane is not None:
+                # A child that imports `tests` loses its `$CHARTER_ROOT` to `_envguard`
+                # before charter resolves a plane, so its cwd decides (#1064). Its pointer
+                # is asked as well: source that imports charter BEFORE `tests` still
+                # resolves by it, and a pointer at the real plane is refused for every child.
+                judged = ([_child_plane(opts, suite=True)]
+                          if _runs_the_suite(args, opts) else [])
+                judged.append(_child_plane(opts))
+                for plane, source in judged:
+                    if plane is None:
+                        continue
                     try:
                         here = os.path.abspath(str(plane))
                     except (OSError, TypeError, ValueError):

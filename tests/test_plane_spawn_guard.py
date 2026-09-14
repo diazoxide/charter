@@ -1187,6 +1187,59 @@ class HowTheChildsPlaneIsResolved(_FakePlane):
         self.assertFalse(self.marker.exists())
 
 
+class AChildThatRunsTheSuiteIsJudgedFromItsCwd(_FakePlane):
+    """A child that imports `tests` has its ``$CHARTER_ROOT`` removed by `_envguard` before
+    charter resolves a plane (#1064), so the pointer it is handed decides nothing: the walk
+    up from its cwd does. The guard has to ask that question, or a throwaway pointer waves
+    through a child that is standing in the real plane.
+
+    The source names ``import tests`` under ``if False`` so the recogniser reads it while
+    the child never runs the package: an allowed case really runs and leaves its canary,
+    and a regression that let the refused case through runs nothing but that canary.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.canary = self.elsewhere / "the-suite-child-ran"
+        self.handed = {**os.environ, root.ENV_VAR: str(self.elsewhere)}
+        self.source = (f"open({str(self.canary)!r}, 'w').close()\n"
+                       f"if False:\n    import tests\n")
+
+    def _refused(self, args, cwd):
+        try:
+            child = subprocess.Popen(args, cwd=cwd, env=self.handed,
+                                     stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except _planeguard.RealPlaneSpawn as refused:
+            self.assertFalse(self.canary.exists(), "refused after the child ran")
+            return str(refused)
+        child.wait()
+        self.fail(f"{args} ran from {cwd} with a throwaway $CHARTER_ROOT; that pointer is "
+                  f"scrubbed as the child imports `tests`, so it resolved {cwd}")
+
+    def test_a_throwaway_pointer_does_not_rescue_a_suite_child_in_the_real_plane(self):
+        message = self._refused([sys.executable, "-c", self.source], cwd=self.real)
+        self.assertIn(str(self.real), message)
+        self.assertIn("_envguard", message)
+
+    def test_running_a_suite_module_is_the_same_child(self):
+        """``python -m tests.<module>`` imports the package without writing an import."""
+        self._refused([sys.executable, "-m", "tests.no_such_module"], cwd=self.real)
+
+    def test_the_same_child_standing_in_a_throwaway_plane_runs(self):
+        child = subprocess.Popen([sys.executable, "-c", self.source], cwd=self.elsewhere,
+                                 env=self.handed, stdin=subprocess.DEVNULL)
+        self.assertEqual(child.wait(), 0)
+        self.assertTrue(self.canary.exists(), "the child did not run")
+
+    def test_a_charter_child_that_does_not_run_the_suite_still_follows_its_pointer(self):
+        """Only the suite scrubs. `child_plane_env`'s whole contract is that a plain
+        charter child handed a throwaway ``$CHARTER_ROOT`` resolves it from anywhere."""
+        p = self.run_fake(cwd=self.real, env=self.handed)
+        self.assertEqual(p.returncode, 0)
+        self.assertTrue(self.marker.exists())
+
+
 class WhatCharterHandsItsOwnChildren(unittest.TestCase):
     """`util.child_env` — the reason an isolated case satisfies the guard without knowing
     it exists."""
