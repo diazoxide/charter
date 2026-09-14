@@ -448,19 +448,35 @@ class AnUnattendedLaunchReadsTheLaunchersVerdict(_ALaunchNamesAProfile, unittest
                      opening=commands_frame.Opening("fix it please"))
         self.awaited.assert_called_once()
 
-    def test_a_pane_that_already_died_is_not_asked_a_second_time(self):
-        """Two answers about one pane, and the eager one is the answer: tmux itself reported
-        `#{pane_dead_status}`, so the harness RAN and then exited on that number. Reading a
-        launcher record over the top of it would report a refusal for a chat that started
-        perfectly well and failed afterwards — and on the wrong exit code."""
+    def test_a_refusal_is_read_even_when_the_pane_is_already_dead(self):
+        """#1067: the eager ask can land after the launcher refused, recorded and exited —
+        CI 3.11 did, in a 212 ms run — and on Linux that dead pane's status is EMPTY, which
+        the ask reads as `_UNKNOWN_DEATH_CODE`. The launcher said why it exited; a dead pane
+        is not evidence against that, so the record wins, number and sentence both.
+
+        This case used to pin the opposite, on a record "from some other launch". There is
+        no such record to read: every launch claims a fresh chat directory (`state
+        .new_chat_id`'s `mkdir` fails on one that exists), and within one launch a harness
+        that ran leaves only the hand-over record — the case below."""
         with mock.patch.object(commands_frame, "_pane_last_words", return_value=[]):
             rc, said = self._said(profile="claude-work", attach=False,
                                   opening=commands_frame.Opening("fix it please"),
-                                  dead_status=7,
-                                  verdict=(3, "a refusal from some other launch"))
+                                  dead_status=commands_frame._UNKNOWN_DEATH_CODE,
+                                  verdict=(launcher.MISSING_EXIT, "not on PATH here"))
+        self.assertEqual(rc, launcher.MISSING_EXIT)
+        self.assertIn("not on PATH here", said)
+        self.awaited.assert_called_once()
+
+    def test_a_harness_that_took_the_pane_and_died_is_reported_from_the_pane(self):
+        """The launcher's hand-over is not a refusal (`_await_the_launcher` answers it as
+        `(None, "")`), so it cannot stand in for a pane tmux already reports dead: the
+        harness ran and exited on that number, and that number is the answer."""
+        with mock.patch.object(commands_frame, "_pane_last_words", return_value=[]):
+            rc, said = self._said(profile="claude-work", attach=False,
+                                  opening=commands_frame.Opening("fix it please"),
+                                  dead_status=7, verdict=(None, ""))
         self.assertEqual(rc, 7)
         self.assertIn("7", said)
-        self.assertNotIn("some other launch", said)
 
     def test_a_launch_with_no_profile_has_no_launcher_to_ask(self):
         """`charter frame -- <cmd>` starts the command itself — no charter launcher runs in

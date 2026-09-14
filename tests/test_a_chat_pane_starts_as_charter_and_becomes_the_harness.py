@@ -425,6 +425,87 @@ class ARefusalInThePaneReachesTheOperator(_ARealChatOnARealServer, unittest.Test
                         f"the launch did not report what the pane refused: {said}")
 
 
+class _TheFirstLookFindsThePaneAlreadyDead:
+    """The race #1067 lost on CI 3.11, with the race taken out.
+
+    `_launch` asks tmux whether the harness pane is dead the moment its hooks are in, and a
+    launcher that refused had usually not exited yet — the ask lands at 110-185 ms, the
+    record at 210-300 ms, and every one of 48 CI passes took at least 289 ms. The failing run
+    took 212 ms: the launcher had already recorded, exited, and left a dead pane whose
+    `#{pane_dead_status}` Linux reports EMPTY, which that ask reads as
+    `commands_frame._UNKNOWN_DEATH_CODE`.
+
+    So that first ask is made to lose, every time: it waits until the pane really has
+    stopped, then answers what Linux answers. Every later ask is tmux's own.
+    """
+
+    def _first_look_after_the_pane_died(self) -> None:
+        real = commands_frame._query_pane_dead_status
+        asked: list[str] = []
+
+        def too_late(socket: str, pane: str) -> int | None:
+            asked.append(pane)
+            if len(asked) > 1:
+                return real(socket, pane)
+            self.assertTrue(_eventually(lambda: not self._alive(pane), 30),
+                            f"the pane never stopped: {self._pane_text(pane)!r}")
+            return commands_frame._UNKNOWN_DEATH_CODE
+
+        self.enterContext(mock.patch.object(commands_frame, "_query_pane_dead_status",
+                                            side_effect=too_late))
+
+
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class ARefusalIsReadEvenWhenThePaneIsAlreadyGone(_TheFirstLookFindsThePaneAlreadyDead,
+                                                _ARealChatOnARealServer, unittest.TestCase):
+    """#1067: a launcher that recorded a refusal has said why it exited, and a dead pane
+    is not evidence against that — however early the launch first looks."""
+
+    SLUG = "pane-refusal-read-first"
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.local = declare_profiles(self, _NOWHERE)
+        approve_profile(self)
+        self.enterContext(mock.patch.object(launcher, "refusal", return_value=None))
+        self._first_look_after_the_pane_died()
+
+    def test_the_recorded_refusal_and_its_number_reach_the_operator(self):
+        said: list[str] = []
+        with mock.patch.object(commands_frame.util, "err", side_effect=said.append):
+            rc = self._launch(profile="claude-work",
+                              opening=commands_frame.Opening("fix the widget please"))
+        self.assertTrue(any("which is not on PATH" in s for s in said),
+                        f"the launch did not report what the pane refused: {said}")
+        self.assertEqual(rc, launcher.MISSING_EXIT, said)
+
+
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class AHarnessThatTookThePaneIsStillReportedFromThePane(_TheFirstLookFindsThePaneAlreadyDead,
+                                                       _ARealChatOnARealServer,
+                                                       unittest.TestCase):
+    """The other side of #1067's fix: what a launcher records when it hands the pane over
+    is not a refusal, and it must not stand in for a pane that has since died. A harness
+    that started and then exited before the first look is the early death it was before
+    the record was read first — reported from the pane, with the pane's own reading."""
+
+    SLUG = "pane-handed-over-then-died"
+    EXIT_WITH = 7
+
+    def setUp(self) -> None:
+        super().setUp()
+        declare_profiles(self, _LOCAL)
+        approve_profile(self)
+        self._first_look_after_the_pane_died()
+
+    def test_the_dead_panes_reading_is_what_the_launch_reports(self):
+        with mock.patch.object(commands_frame.util, "err"):
+            rc = self._launch(profile="claude-work",
+                              opening=commands_frame.Opening("fix the widget please"))
+        self._harness()
+        self.assertEqual(rc, commands_frame._UNKNOWN_DEATH_CODE)
+
+
 @unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
 class ThePaneAsksBeforeItRunsANewCommand(_ARealChatOnARealServer, unittest.TestCase):
     """Task 3's question, in the place the plan says it is asked: the chat's own pane.

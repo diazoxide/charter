@@ -202,9 +202,12 @@ a decision and not a detail.** Measured 2026-09-11 on tmux 3.7c and at the 3.2 f
 runs, in the pull request that shipped this launcher
 ([#981](https://github.com/diazoxide/charter/pull/981)): `_launch`'s eager
 `#{pane_dead_status}` ask completes **6-14 ms** after the start while a Python launcher's
-first line runs at **19-22 ms**, so the ask is always too early to catch a refusal — and by
-the time anything else could look, the chat-teardown hook has killed the window.
-`_pane_last_words` answered `[]` in all 40 runs on charter's own server. A refusal printed
+first line runs at **19-22 ms**, so the ask is almost always too early to catch a refusal —
+and by the time anything else could look, the chat-teardown hook has killed the window.
+`_pane_last_words` answered `[]` in all 40 runs on charter's own server. (Almost: a loaded
+CI runner once let the ask land after the launcher had refused and exited, and the refusal
+was lost — [#1067](https://github.com/diazoxide/charter/issues/1067). An unattended launch
+now reads the record whether or not that ask found the pane dead.) A refusal printed
 and exited on is a refusal nobody reads: the window carrying it is gone before the sentence
 can be collected. So the pane has to hold it, and holding it is the part that needs this
 record.
