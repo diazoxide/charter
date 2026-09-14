@@ -793,7 +793,8 @@ def report_submodule_drift(d: Path, label: str, branch: str | None = None,
 # --------------------------------------------------------------------------- #
 def cmd_sync(args) -> int:
     if getattr(args, "all", False):
-        names = workspace.list_workspaces()
+        # "All workspaces" names each one it could not look at rather than syncing past it (#1043).
+        names = workspace.read_workspaces_aloud()[0]
         targets = [(n, d) for n in names for d in workspace.clones(n)]
         scope = f"all workspaces ({len(names)})"
     else:
@@ -867,7 +868,8 @@ def cmd_status(args) -> int:
     # without `discover` (see `inventory.plane_repo`), so counting only what is on disk
     # would report "0 repos available to clone" beside a `charter clone` that works.
     inv_by_name = {r["name"]: r for r in inventory.repos(doc)}
-    all_ws = workspace.list_workspaces()
+    # The count below is of the workspaces it could read; each other one is named (#1043).
+    all_ws = workspace.read_workspaces_aloud()[0]
     explicit = getattr(args, "workspace", None)
     active = workspace.resolve(explicit)
 
@@ -1857,7 +1859,9 @@ def _mirror_into_workspaces() -> None:
     from . import workspace
 
     try:
-        names = workspace.list_workspaces()
+        # A workspace it could not look at gets no rule, so it is named — the rule "applies to
+        # everyone on this repo", and a chat there is not told otherwise by anything else (#1043).
+        names = workspace.read_workspaces_aloud()[0]
     except OSError:
         # The rule IS written. The mirror is the follow-up, and a plane whose `workspaces/`
         # cannot be listed must not turn a successful `guard ask` into a failure.
@@ -3084,6 +3088,10 @@ def cmd_recall(args) -> int:
             return 2
     limit = getattr(args, "limit", 8)
     all_ws = getattr(args, "all_workspaces", False)
+    if all_ws:
+        # "Every workspace" names each one it could not look at, whose memory it did not search
+        # (#1043). `recall.sources` lists the workspaces again for the search itself.
+        workspace.read_workspaces_aloud()
     # Ask for one more than we will show, so "8 of ?" can say whether anything was cut
     # without a second pass over every base.
     got = rc.recall(query=getattr(args, "query", None), limit=(limit + 1) if limit else 0,

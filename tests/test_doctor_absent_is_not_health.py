@@ -49,14 +49,14 @@ class TestACheckThatCouldNotRunWarns(AuditCase):
 
     def test_workspace_clones(self):
         from charter import workspace
-        self._raising(workspace, "list_workspaces")
+        self._raising(workspace, "read_workspaces")
         r = doctor.check_workspace_clones()
         self.assertEqual(r.status, WARN)
         self.assertIn("not checked", r.detail)
 
     def test_memory_indexes(self):
         from charter import workspace
-        self._raising(workspace, "list_workspaces")
+        self._raising(workspace, "read_workspaces")
         self.assertEqual(doctor.check_memory_indexes().status, WARN)
 
     def test_personas(self):

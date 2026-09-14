@@ -27,6 +27,8 @@ from unittest import mock
 from charter import config, doctor, memstore, persona
 from tests import _envguard
 from tests._isolation import PersonaIso, pin_update_channel
+from tests.test_a_workspace_listing_names_what_it_cannot_look_at import (
+    BOTH_INTERPRETERS, unsearchable)
 
 
 class IndexDrift(PersonaIso):
@@ -238,17 +240,109 @@ class OneBaseItCannotRead(PersonaIso):
         self.assertEqual(r.hint, "workspaces/alpha/memory cannot be checked — restoring read "
                                  "access to it clears this.")
 
-    def test_a_memory_link_to_nothing_is_skipped_as_absent(self):
-        """The line after the unread one: a base `stat` answers is not there for is skipped, as
-        `Path.exists` skipped it before #1014, never read through. A link to nothing outside the
-        plane is the one base that line decides — read through, `index_refusal` names it as an
-        index charter will not touch. Pinned as it stands, so changing it is a decision."""
+    def test_a_memory_link_to_nothing_outside_the_plane_is_an_index_it_will_not_touch(self):
+        """#1014 pinned this base as skipped, so that changing it would be a decision; #1043 is
+        that decision. `stat` answers "not there" through the link, and the row took that for an
+        absent base, so `index_refusal` — whose docstring names this exact case, "a dangling link
+        that escapes, which is absent and hostile at the same time" — was never asked. A link is
+        something there, so the base is read through to the refusal."""
         (self.alpha / "memory").rmdir()
         outside = Path(tempfile.mkdtemp(prefix="edm-outside-"))
         self.addCleanup(shutil.rmtree, outside, ignore_errors=True)
         (self.alpha / "memory").symlink_to(outside / "nothing")
         r = doctor.check_memory_indexes()
+        self.assertEqual((r.status, r.detail), (doctor.WARN, "1 index(es) charter will not touch"))
+        self.assertTrue(r.hint.startswith(f"ws:alpha: '{self.alpha / 'memory'}' resolves to "),
+                        r.hint)
+        self.assertIn("outside the directories a control plane keeps its data in", r.hint)
+
+    def test_a_memory_link_to_nothing_inside_the_plane_is_an_absent_base(self):
+        """The other side of that line: a link to nothing that stays in the plane is refused by
+        nothing, and a base that is not there has nothing to disagree with."""
+        (self.alpha / "memory").rmdir()
+        (self.alpha / "memory").symlink_to(self.alpha / "nothing")
+        r = doctor.check_memory_indexes()
         self.assertEqual((r.status, r.detail, r.hint), (doctor.OK, "3 base(s) consistent", ""))
+
+    def refusing_to_list(self, directory: Path):
+        """*directory* refusing to be LISTED, at both calls `Path.iterdir` and `Path.glob` make on
+        3.11–3.14, while `stat` of it and of the paths in it still answers — mode 333's shape."""
+        real_listdir, real_scandir = os.listdir, os.scandir
+
+        def refusing(real):
+            def call(p=".", *args, **kwargs):
+                if isinstance(p, (str, os.PathLike)) and Path(p) == directory:
+                    raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(p))
+                return real(p, *args, **kwargs)
+            return call
+
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.object(os, "listdir", refusing(real_listdir)))
+        stack.enter_context(mock.patch.object(os, "scandir", refusing(real_scandir)))
+        return stack
+
+    def test_a_memory_directory_it_cannot_list_is_named_not_counted_consistent(self):
+        """`Path.glob` answers an empty list for a directory it may not read, on every interpreter,
+        so `memstore.files` said "no memories" and the row counted a base nobody listed."""
+        (self.alpha / "memory" / "kept.md").write_text("# kept\n\nx\n")
+        (self.alpha / "memory" / "MEMORY.md").write_text("# Memory Index\n\n- [kept](kept.md)\n")
+        with self.refusing_to_list(self.alpha / "memory"):
+            r = doctor.check_memory_indexes()
+        self.assertEqual(r.status, doctor.WARN)
+        self.assertEqual(r.detail,
+                         "2 base(s) consistent; workspaces/alpha/memory cannot be checked")
+        self.assertEqual(r.hint, "workspaces/alpha/memory cannot be checked — restoring read "
+                                 "access to it clears this.")
+
+    @unittest.skipIf(os.geteuid() == 0, "root reads a directory whatever its mode")
+    def test_a_real_memory_directory_at_mode_000_or_333(self):
+        """000 read as an index charter will not touch, sent to "replace the link" over a
+        directory that is no link. 333 — searchable, not readable — read the one indexed memory
+        as dangling. Both are a base charter could not list."""
+        mem = self.alpha / "memory"
+        (mem / "kept.md").write_text("# kept\n\nx\n")
+        (mem / "MEMORY.md").write_text("# Memory Index\n\n- [kept](kept.md)\n")
+        self.addCleanup(mem.chmod, 0o755)
+        for mode in (0o000, 0o333):
+            with self.subTest(mode=oct(mode)):
+                mem.chmod(mode)
+                r = doctor.check_memory_indexes()
+                mem.chmod(0o755)
+                self.assertEqual(r.status, doctor.WARN)
+                self.assertEqual(r.detail,
+                                 "2 base(s) consistent; workspaces/alpha/memory cannot be checked")
+                self.assertEqual(r.hint, "workspaces/alpha/memory cannot be checked — restoring "
+                                         "read access to it clears this.")
+
+
+class WorkspacesItCannotStat(PersonaIso):
+    """A `workspaces/` charter can list and not search — mode 666 — hid every workspace base from
+    the row (#1043). `list_workspaces` asked `Path.is_dir`, which raised on 3.11–3.13, so the row
+    read `not checked` for every base, and answered False on 3.14, so the row was OK over the
+    one base left. Each is named instead, and the bases it can read are still checked."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        for ws in ("alpha", "beta"):
+            (config.WORKSPACES_DIR / ws / "memory").mkdir(parents=True)
+
+    DETAIL = "1 base(s) consistent; workspaces/alpha, workspaces/beta cannot be checked"
+    HINT = ("workspaces/alpha cannot be checked — restoring read access to it clears this; "
+            "workspaces/beta cannot be checked — restoring read access to it clears this.")
+
+    def test_on_either_interpreter(self):
+        for answers in BOTH_INTERPRETERS:
+            with self.subTest(is_dir=answers):
+                with unsearchable(config.WORKSPACES_DIR, answers):
+                    r = doctor.check_memory_indexes()
+                self.assertEqual((r.status, r.detail, r.hint), (doctor.WARN, self.DETAIL, self.HINT))
+
+    @unittest.skipIf(os.geteuid() == 0, "root searches a directory whatever its mode")
+    def test_a_real_workspaces_directory_at_mode_666(self):
+        config.WORKSPACES_DIR.chmod(0o666)
+        self.addCleanup(config.WORKSPACES_DIR.chmod, 0o755)
+        r = doctor.check_memory_indexes()
+        self.assertEqual((r.status, r.detail, r.hint), (doctor.WARN, self.DETAIL, self.HINT))
 
 
 class WhatTheRowSaysOfTheBasesItRead(PersonaIso):

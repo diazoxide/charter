@@ -165,7 +165,10 @@ def _identifiers() -> list[tuple[str, str]]:
     from .secrets import registry
 
     out: list[tuple[str, str]] = []
-    for w in workspace.list_workspaces():
+    # A workspace charter cannot look inside still has a name, and the name is the identifier
+    # (#1043). `list_workspaces` leaves it out, so it went into the draft unscrubbed.
+    names, unread = workspace.read_workspaces()
+    for w in names + [d.name for d, _code in unread]:
         out.append((w, _W))
     for p in persona.list_personas():
         out.append((p, _P))

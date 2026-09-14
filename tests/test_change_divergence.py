@@ -374,7 +374,7 @@ class TestTheDoctorRowsOwnBranches(DivergenceCase):
         """`doctor`'s own discipline: "not checked" is WARN, never OK — a check that
         silently did nothing is worse than no check (`test_doctor_absent_is_not_health`)."""
         from charter import workspace as _ws
-        with mock.patch.object(_ws, "list_workspaces", side_effect=OSError("nope")):
+        with mock.patch.object(_ws, "read_workspaces", side_effect=OSError("nope")):
             r = doctor.check_changes()
         self.assertEqual(r.status, doctor.WARN)
         self.assertIn("not checked", r.detail)
@@ -384,7 +384,7 @@ class TestTheDoctorRowsOwnBranches(DivergenceCase):
         """`check_memory_indexes`' recorded failure: a broad catch once swallowed a
         NameError and reported OK. A programming error must reach the caller."""
         from charter import workspace as _ws
-        with mock.patch.object(_ws, "list_workspaces", side_effect=NameError("typo")):
+        with mock.patch.object(_ws, "read_workspaces", side_effect=NameError("typo")):
             with self.assertRaises(NameError):
                 doctor.check_changes()
 
