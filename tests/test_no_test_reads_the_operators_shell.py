@@ -299,6 +299,87 @@ class WhatIsScrubbed(unittest.TestCase):
             with self.subTest(variable=name):
                 self.assertIn(name, got["recovered"])
 
+    def test_an_ambient_plane_pointer_never_decides_the_suites_plane(self):
+        """The scrub has to run before ANYTHING imports charter, not merely before the
+        line in `tests/__init__.py` that looks like the first charter import (#1064).
+
+        `charter.config` resolves the plane at import, and ``$CHARTER_ROOT`` wins outright
+        in `root.find_root`. `_envguard` used to import `_planeguard` at module level, which
+        imports `charter.hooks` and so `charter.config` — so a ``$CHARTER_ROOT`` exported in
+        the developer's shell had already chosen `config.ROOT` for the whole run by the
+        time the scrub removed it. The comments said the opposite, and most tests derive
+        their own plane, which is how it went unseen.
+
+        So a FRESH interpreter is handed a decoy plane as ``$CHARTER_ROOT`` — a real one,
+        with a ``charter.toml``, so `find_root` would take it — and stands in a second
+        throwaway plane. It imports `tests` and reports what `config.ROOT` became. An import
+        hook, installed before `tests` is imported, watches from outside rather than being
+        written into the scrub: it records which charter modules were already loaded when
+        `_envguard.install` was entered, and whether ``$CHARTER_ROOT`` was still present
+        when `charter.config` began to import.
+        """
+        decoy, _ = child_plane_env(self)
+        plane, _ = child_plane_env(self)
+        probe = "\n".join((
+            "import json, os, sys",
+            "seen = {'at_install': None}",
+            "def charter_modules():",
+            "    return sorted(m for m in sys.modules",
+            "                  if m == 'charter' or m.startswith('charter.'))",
+            "class Watch:",
+            "    def find_spec(self, name, path=None, target=None):",
+            "        if name == 'charter.config' and 'config_saw_root' not in seen:",
+            "            seen['config_saw_root'] = 'CHARTER_ROOT' in os.environ.copy()",
+            "        if name != 'tests._envguard':",
+            "            return None",
+            "        for finder in sys.meta_path:",
+            "            if finder is self or not hasattr(finder, 'find_spec'):",
+            "                continue",
+            "            spec = finder.find_spec(name, path, target)",
+            "            if spec is not None:",
+            "                break",
+            "        else:",
+            "            return None",
+            "        execute = spec.loader.exec_module",
+            "        def exec_module(module):",
+            "            execute(module)",
+            "            install = module.install",
+            "            def watched():",
+            "                seen['at_install'] = charter_modules()",
+            "                return install()",
+            "            module.install = watched",
+            "        spec.loader.exec_module = exec_module",
+            "        return spec",
+            "sys.meta_path.insert(0, Watch())",
+            "import tests",
+            "from charter import config",
+            "seen['root'] = os.path.realpath(str(config.ROOT))",
+            "seen['left'] = 'CHARTER_ROOT' in os.environ.copy()",
+            "print(json.dumps(seen))",
+        ))
+        tree = pathlib.Path(__file__).resolve().parent.parent
+        out = subprocess.run(
+            [sys.executable, "-c", probe],
+            env={**os.environ.copy(), "CHARTER_ROOT": str(decoy), "PYTHONPATH": str(tree)},
+            cwd=str(plane),
+            capture_output=True, text=True, timeout=120)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        got = json.loads(out.stdout)
+        self.assertNotEqual(
+            got["root"], os.path.realpath(decoy),
+            "an ambient $CHARTER_ROOT chose `config.ROOT` for a suite launched from that "
+            "shell: something `tests` imports reached `charter.config` before "
+            "`_envguard.install` removed the pointer (#1064)")
+        self.assertEqual(got["root"], os.path.realpath(plane))
+        self.assertFalse(got["left"], "$CHARTER_ROOT survived the scrub")
+        self.assertEqual(
+            got["at_install"], [],
+            f"{got['at_install']} were already imported when the scrub ran; the scrub has to "
+            f"come before anything imports charter, so keep `_envguard`'s own module-level "
+            f"imports free of it (#1064)")
+        self.assertIs(got.get("config_saw_root"), False,
+                      "`charter.config` began to import while $CHARTER_ROOT was still set")
+
     def test_what_was_removed_is_still_available_to_anything_that_needs_it(self):
         """Scrubbed, not destroyed. A test that genuinely has to know what the operator's
         shell held has an honest place to get it, so nobody's answer is to disable the

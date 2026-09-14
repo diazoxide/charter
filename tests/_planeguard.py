@@ -257,7 +257,8 @@ from pathlib import Path
 # Imported at module scope, which is safe at exactly this point and not before: `tests`
 # imports `_envguard` and scrubs the ambient charter namespace BEFORE it imports this
 # module, so `charter.config` still resolves its plane with the same environment
-# `install()` would have given it one line later.
+# `install()` would have given it one line later. That holds only while `_envguard` does not
+# import this module at ITS top; it did, and the plane was resolved before the scrub (#1064).
 from charter import hooks as _hooks      # noqa: E402
 
 # `charter.root` for the same reason and with more room: it imports `os`, `pathlib` and
