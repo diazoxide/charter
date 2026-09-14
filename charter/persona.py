@@ -861,7 +861,9 @@ def ancestor_that_does_not_load(name: str) -> str | None:
     chain = lineage(name)
     if not chain:
         return None
-    parent = (load(chain[-1])["meta"].get("extends") or "").strip()
+    # Not stripped: `_frontmatter` strips every value it reads, so there is nothing to strip
+    # and a second strip here could not be told from none.
+    parent = load(chain[-1])["meta"].get("extends", "")
     if parent in chain or not reference_ok(parent):
         return None
     return parent if def_path(parent).exists() else None

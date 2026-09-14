@@ -317,10 +317,14 @@ class ADefinitionThatIsThereAndDoesNotLoadIsNotCalledAbsent(NameCase):
                 self.assertIn(f"✗ {name}: persona.md: ", said)
         with self.subTest(what="the reason named"):
             said = _run(commands_persona.cmd_persona_lint, name="garbled", only=None)[1]
-            self.assertIn("is not utf-8 text", said)
+            self.assertIn(f"✗ garbled: persona.md: "
+                          f"'{config.PERSONAS_DIR / 'garbled' / 'persona.md'}' is not utf-8 "
+                          f"text (invalid start byte at offset 10)\n", said)
             if "locked" in self._names():
                 said = _run(commands_persona.cmd_persona_lint, name="locked", only=None)[1]
-                self.assertIn("cannot be read", said)
+                self.assertIn(f"✗ locked: persona.md: "
+                              f"'{config.PERSONAS_DIR / 'locked' / 'persona.md'}' cannot be "
+                              f"read (Permission denied)\n", said)
 
     def test_a_name_with_no_definition_is_still_absent_beside_them(self):
         for label, run in MUST_EXIST:
@@ -409,6 +413,41 @@ class AChildOfAParentThatDoesNotLoad(ADefinitionThatIsThereAndDoesNotLoadIsNotCa
                 self.assertNotIn("does not load",
                                  _run(commands_persona.cmd_persona_lint, name=name,
                                       only=None)[1])
+
+
+class WhatLintSaysOfAnUnreadableDefinitionStaysOnOneLine(NameCase):
+    def test_a_control_character_in_the_directory_is_escaped_in_the_path_it_names(self):
+        """The roster lists any directory with a `persona.md`, so the path `read_refusal`
+        names carries whatever the directory name holds."""
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root opens a mode-0 file")
+        d = config.PERSONAS_DIR / "lo\nck\x1bed"
+        d.mkdir()
+        (d / "persona.md").write_text("---\nrole: Locked\n---\n")
+        (d / "persona.md").chmod(0)
+        self.addCleanup((d / "persona.md").chmod, 0o644)
+        rc, said = _run(commands_persona.cmd_persona_lint, name=None, only=None)
+        self.assertEqual(rc, 1, said)
+        self.assertIn(f"✗ lo\\u000ack\\u001bed: persona.md: "
+                      f"'{config.PERSONAS_DIR}/lo\\x0ack\\x1bed/persona.md' cannot be read "
+                      f"(Permission denied)\n", said)
+
+
+class AFlatDefinitionTheRosterDoesNotList(NameCase):
+    def test_frame_switch_says_the_one_line_persona_use_says(self):
+        """`personas/readme.md` is a legacy flat definition `load` reads and the roster skips.
+        Refused, and not on the roster: the refusal is the one `persona use` gives, and not
+        replaced by "no persona" for being off the roster."""
+        (config.PERSONAS_DIR / "readme.md").write_bytes(b"---\nrole: \xff\n---\n")
+        self.assertNotIn("readme", persona.list_personas(), "precondition: not listed")
+        line = ("persona 'readme' does not load from personas/readme.md (see why: charter "
+                "persona lint readme)")
+        rc, said = _run(commands_persona.cmd_persona_use, name="readme")
+        self.assertEqual(rc, 1, said)
+        self.assert_says(said, line)
+        outcome = switch.to_persona("f1", "readme")
+        self.assertFalse(outcome.ok)
+        self.assertEqual(outcome.message, f"{line} — have: devops")
 
 
 class WhatTheCheckLeavesAlone(NameCase):
