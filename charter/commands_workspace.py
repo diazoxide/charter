@@ -1895,7 +1895,7 @@ def cmd_workspace_reinit(args) -> int:
             elif code == errno.ENOTDIR:
                 fix = ("is not a directory, and charter never moves existing content; moving it "
                        "out of the way clears this")
-            else:
+            elif code == errno.ELOOP:
                 # #1037: a link charter will not follow — where the file itself belongs, wherever
                 # it points, or where a directory belongs and it does not land on one inside the
                 # plane. Never "repoint it" for a file: no target makes a file link one charter
@@ -1903,7 +1903,17 @@ def cmd_workspace_reinit(args) -> int:
                 real = "file" if path == workspace.workspace_dir(n) / rel else "directory"
                 fix = (f"is a symlink, and charter writes nothing through one; replacing it with "
                        f"a real {real} clears this")
-            util.warn(f"'{n}': {rel} cannot be created — {path} {fix}.")
+            else:
+                # #1074: the structure stamp as a directory, a FIFO or any other file that is not a
+                # regular one. The stamp's write refuses each and its read no longer opens one, so
+                # it is #1028's sentence for a file-shaped path.
+                fix = ("is not a regular file, and charter never moves existing content; moving it "
+                       "out of the way clears this")
+            # The stamp is written over, not created, when it is there: "could not be written" is
+            # what happened to it, and it is the sentence the version line below gives way to.
+            did = ("could not be written" if rel == workspace._STRUCTURE_MARKER
+                   else "cannot be created")
+            util.warn(f"'{n}': {rel} {did} — {path} {fix}.")
         # The BACKFILL half of #884, and the reason it is checked after rather than read
         # off `before`: `workspace.scaffold_manifest` swallows its own failure, because it
         # runs from `ensure` on a launch path where raising would cost the operator their
@@ -1934,6 +1944,19 @@ def cmd_workspace_reinit(args) -> int:
             before["ok"] = not before["missing"] and before["version"] >= before["target"]
             util.err(f"'{n}': workspace.json could not be written — something is in the "
                      f"way at that path. charter never deletes or renames existing content.")
+        # The stamp, looked at again for the manifest's reason (#1074, ADR 0013): `scaffold`
+        # swallows a refused stamp write, and "added structure v0 → v5" printed over one that was
+        # not written — then again on the next run, since the workspace still read as stale. Only
+        # a stamp that now reads current is reported as added; one a row above names is left to
+        # that row, and one refused for a reason no row names gets this sentence.
+        if (before["version"] < before["target"]
+                and workspace.structure_version(n) < before["target"]):
+            unresolved.add(n)
+            if workspace._STRUCTURE_MARKER not in {rel for rel, _path, _code in before["in_the_way"]}:
+                util.warn(f"'{n}': {workspace._STRUCTURE_MARKER} could not be written, so this "
+                          f"workspace still reads as structure v{before['version']} and stays "
+                          f"flagged for reinit.")
+            before["ok"] = not before["missing"]   # files it did add are still reported
         if before["ok"]:
             continue
         repairs += 1
