@@ -1383,12 +1383,7 @@ def cmd_persona_dedupe(args) -> int:
 # --------------------------------------------------------------------------- #
 def _agent_sync_issues(name: str) -> list[tuple[str, str]]:
     """Is the generated .claude/agents/<name>.md in sync with the persona?"""
-    try:
-        d = persona.resolve(name)  # resolved, so a parent charter/tool change marks children stale
-    except (OSError, UnicodeError):
-        # A definition that does not read as text: `persona.lint` names why, and there is
-        # no persona to compare a sub-agent with (#1061).
-        return []
+    d = persona.resolve(name)  # resolved, so a parent charter/tool change marks children stale
     if not d:
         return []
     if persona.is_draft(name):

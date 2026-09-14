@@ -434,9 +434,10 @@ def read_refusal(name: str) -> str | None:
     """Why this persona's definition file, there and not refused by
     :func:`definition_refusal`, cannot be read as text, or ``None``.
 
-    :func:`load` raises for these. This reads the file again to name the reason, so ask it
-    only once `load` has failed: it is `persona lint`'s answer to the persona every other
-    command calls :data:`DOES_NOT_LOAD`, and the status line never pays for it.
+    :func:`load` answers ``None`` for these without saying why. This reads the file again to
+    name the reason, so ask it only once `load` has failed: it is `persona lint`'s answer to
+    the persona every other command calls :data:`DOES_NOT_LOAD`, and the status line never
+    pays for it.
     """
     p = def_path(name)
     if not p.exists() or definition_refusal(name):
@@ -450,18 +451,6 @@ def read_refusal(name: str) -> str | None:
         return contain.path_sentence(UNREADABLE, name=str(p),
                                      why=ex.strerror or type(ex).__name__)
     return None
-
-
-def _loaded(name: str) -> dict | None:
-    """:func:`load`, answering ``None`` for a definition file it cannot read or decode.
-
-    For the two callers that must say something about such a file rather than raise:
-    :func:`name_refusal` and :func:`lint` (#1061).
-    """
-    try:
-        return load(name)
-    except (OSError, UnicodeError):
-        return None
 
 
 def load(name: str) -> dict | None:
@@ -481,7 +470,16 @@ def load(name: str) -> dict | None:
     p = def_path(name)
     if not p.exists() or definition_refusal(name):
         return None
-    pairs, charter = _frontmatter(p.read_text())
+    try:
+        text = p.read_text()
+    except (OSError, UnicodeError):
+        # A file that is there and does not read as text does not load either, and says so
+        # the way a refused one does (#1061). It raised, through `resolve`, into every
+        # command that reached it, so one unreadable parent crashed `lint` for its children
+        # and one unreadable persona crashed `persona list` for the roster.
+        # :func:`read_refusal` says why, for `lint`.
+        return None
+    pairs, charter = _frontmatter(text)
     meta = dict(pairs)
     meta.setdefault("name", name)
     # The second answer the dict cannot carry, from the same read (#509). A third key
@@ -850,6 +848,23 @@ def lineage(name: str) -> list[str]:
         seen.add(cur)
         cur = (d["meta"].get("extends") or "").strip() or None
     return out
+
+
+def ancestor_that_does_not_load(name: str) -> str | None:
+    """The persona up *name*'s ``extends:`` chain whose definition file is there and does
+    not load, or ``None`` (#1061).
+
+    :func:`lineage` stops at the first persona that does not load, so :func:`resolve` builds
+    the child without it and says nothing. A parent that is absent, is not a name, or
+    closes a cycle is not this: `lint` already has a sentence for each of those.
+    """
+    chain = lineage(name)
+    if not chain:
+        return None
+    parent = (load(chain[-1])["meta"].get("extends") or "").strip()
+    if parent in chain or not reference_ok(parent):
+        return None
+    return parent if def_path(parent).exists() else None
 
 
 def resolve(name: str) -> dict | None:
@@ -1289,6 +1304,12 @@ INVALID_NAME = "invalid persona name '{name}' (lowercase letters, digits, '.', '
 #: no reason, because `persona lint` is the command that says why and this does not guess.
 DOES_NOT_LOAD = "persona '{name}' does not load from {file} (see why: charter persona lint {name})"
 
+#: :data:`DOES_NOT_LOAD` for the persona *name* inherits from, which is the one that does not
+#: load, so the line names both and points `lint` at the parent (#1061).
+INHERITS_ONE_THAT_DOES_NOT_LOAD = (
+    "persona '{name}' inherits from '{parent}', which does not load from {file} "
+    "(see why: charter persona lint {parent})")
+
 
 def name_refusal(name: str, *, defined: bool = True) -> str | None:
     """The refusal for a persona name a command was given, or ``None`` when it names a
@@ -1314,7 +1335,9 @@ def name_refusal(name: str, *, defined: bool = True) -> str | None:
     (#1061). It was called absent, and the create hint it got is one `persona create`
     refuses, because the file is there. "Is there" is the test `persona create` refuses on,
     so the hint is given exactly when `create` would take it. A file `load` cannot read or
-    decode raised out of every command that asked; it does not load either.
+    decode raised out of every command that asked; it does not load either. A persona that
+    loads and inherits from one that does not is :data:`INHERITS_ONE_THAT_DOES_NOT_LOAD`,
+    because what `resolve` builds for it is missing that parent.
 
     An empty name is refused as outside the alphabet. A *flag* reads empty as not given,
     and :func:`undefined_flag` is that reading.
@@ -1325,12 +1348,18 @@ def name_refusal(name: str, *, defined: bool = True) -> str | None:
     # Before `load`, which answers None for this too and would reach the create hint.
     if not valid_name(name):
         return INVALID_NAME.format(name=contain.one_line(name))
-    if not defined or _loaded(name) is not None:
+    if not defined:
         return None
-    file = def_path(name)
-    if file.exists():
-        return DOES_NOT_LOAD.format(name=name, file=file.relative_to(config.ROOT))
-    return NO_SUCH_PERSONA.format(name=name)
+    if load(name) is None:
+        file = def_path(name)
+        if file.exists():
+            return DOES_NOT_LOAD.format(name=name, file=file.relative_to(config.ROOT))
+        return NO_SUCH_PERSONA.format(name=name)
+    parent = ancestor_that_does_not_load(name)
+    if parent:
+        return INHERITS_ONE_THAT_DOES_NOT_LOAD.format(
+            name=name, parent=parent, file=def_path(parent).relative_to(config.ROOT))
+    return None
 
 
 def undefined_flag(value: str | None) -> str | None:
@@ -1911,6 +1940,12 @@ def structural_errors(name: str, known: set[str] | None = None) -> list[tuple[st
         problem = _reference_problem("extends", ext, allnames)
         if problem:
             issues.append(problem)
+        else:
+            # Listed, so not dangling, and still missing from what `resolve` builds (#1061).
+            parent = ancestor_that_does_not_load(name)
+            if parent:
+                issues.append(("error", "extends: " + DOES_NOT_LOAD.format(
+                    name=parent, file=def_path(parent).relative_to(config.ROOT))))
     cycle = _inherits_cycle(name)
     if cycle:
         issues.append(("error", f"extends: inheritance cycle ({cycle})"))
@@ -1992,7 +2027,7 @@ def lint(name: str, deep: bool = True) -> list[tuple[str, str]]:
     implementation with a flag, rather than a second "cheap health" function that would
     drift from this one the first time a check was added to only one of them.
     """
-    d = _loaded(name)
+    d = load(name)
     if not d:
         # WHY, when there is a why. "does not load" about a `persona.md` sitting right
         # there sends the reader looking for a missing file; the refusal names the path

@@ -335,6 +335,82 @@ class ADefinitionThatIsThereAndDoesNotLoadIsNotCalledAbsent(NameCase):
                 self.assertIn(f"{ABSENT[1]} — have: ", said)
 
 
+def _inherits_one_that_does_not_load(name: str, parent: str) -> str:
+    """The line every command says to a persona whose `extends:` chain reaches a persona
+    whose `persona.md` is there and does not load (#1061)."""
+    return (f"persona '{name}' inherits from '{parent}', which does not load from "
+            f"personas/{parent}/persona.md (see why: charter persona lint {parent})")
+
+
+class AChildOfAParentThatDoesNotLoad(ADefinitionThatIsThereAndDoesNotLoadIsNotCalledAbsent):
+    """`kid-of-<parent>` loads and `extends:` a parent whose `persona.md` does not (#1061).
+
+    Measured before: `persona show`, `stats`, `lint` (named, and over the roster),
+    `sync-agents --persona`, `persona secret --persona` and `create --extends` raised out of
+    `load` through `resolve`, and `persona use` adopted the child without its parent.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        for parent in ("garbled", "locked"):
+            self.make_persona(f"kid-of-{parent}", role="Kid", extends=parent)
+        self.make_persona("grandkid", role="Grandkid", extends="kid-of-garbled")
+        self.make_persona("kid-of-devops", role="Kid", extends="devops")
+
+    # The inherited tests are about the parents themselves and already ran once.
+    test_every_command_says_it_does_not_load_and_points_at_lint = None
+    test_the_lint_it_points_at_says_why_instead_of_raising = None
+    test_a_name_with_no_definition_is_still_absent_beside_them = None
+
+    def test_every_command_names_the_parent_that_does_not_load(self):
+        cases = [(f"kid-of-{p}", p) for p in self._names()] + [("grandkid", "garbled")]
+        for name, parent in cases:
+            line = _inherits_one_that_does_not_load(name, parent)
+            for label, run in MUST_EXIST:
+                with self.subTest(command=label, name=name):
+                    rc, said = run(name)
+                    self.assertEqual(rc, 1, said)
+                    self.assert_says(said, line)
+            for label, run in FRAMED:
+                with self.subTest(command=label, name=name):
+                    rc, said = run(name)
+                    self.assertEqual(rc, 1, said)
+                    self.assertEqual(len(said.strip().splitlines()), 1, said)
+                    self.assertIn(f"{line} — have: ", said)
+
+    def test_lint_names_the_parent_instead_of_raising(self):
+        for parent in self._names():
+            name = f"kid-of-{parent}"
+            row = (f"✗ {name}: extends: persona '{parent}' does not load from "
+                   f"personas/{parent}/persona.md (see why: charter persona lint {parent})")
+            with self.subTest(name=name):
+                rc, said = _run(commands_persona.cmd_persona_lint, name=name, only=None)
+                self.assertEqual(rc, 1, said)
+                self.assertIn(row, said)
+            with self.subTest(name=name, roster=True):
+                rc, said = _run(commands_persona.cmd_persona_lint, name=None, only=None)
+                self.assertEqual(rc, 1, said)
+                self.assertIn(row, said)
+
+    def test_only_a_parent_that_is_there_and_does_not_load_is_named(self):
+        """A parent that loads is no refusal. One that is absent, is a path, or closes a
+        cycle is not this sentence: `lint` has its own for each, and `persona use` took them
+        before and still does."""
+        self.make_persona("kid-of-nobody", role="Kid", extends="nobody")
+        self.make_persona("kid-of-a-path", role="Kid", extends="../elsewhere")
+        (config.ROOT / "elsewhere").mkdir()
+        (config.ROOT / "elsewhere" / "persona.md").write_text("---\nrole: Elsewhere\n---\n")
+        self.make_persona("ping", role="Ping", extends="pong")
+        self.make_persona("pong", role="Pong", extends="ping")
+        for name in ("kid-of-devops", "kid-of-nobody", "kid-of-a-path", "ping"):
+            with self.subTest(name=name):
+                rc, said = _run(commands_persona.cmd_persona_use, name=name)
+                self.assertEqual(rc, 0, said)
+                self.assertNotIn("does not load",
+                                 _run(commands_persona.cmd_persona_lint, name=name,
+                                      only=None)[1])
+
+
 class WhatTheCheckLeavesAlone(NameCase):
     def test_create_still_makes_a_persona_no_name_defines_yet(self):
         rc, said = _run(commands_persona.cmd_persona_create, **_create(name="scribe"))
