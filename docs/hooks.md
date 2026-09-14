@@ -106,6 +106,19 @@ rule while one who reads a bare refusal files an issue.
   other subcommands, an alias, a short cluster (`-aF -`), an abbreviation (`--fil=-`), `-F -`
   after `--`. What git does with the message after storing it is outside the guard, as a
   script file is: a `commit-msg` hook that runs the file it is handed runs the message.
+  A **PR or issue body on stdin** is data on the same terms: the quoted body of
+  `gh pr create`, `gh pr comment`, `gh issue create` or `gh issue comment` given
+  `--body-file -`, `--body-file=-`, `-F -` or `-F-` is dropped when no executor is in its
+  pipeline ([#1070](https://github.com/diazoxide/charter/issues/1070)). Before that, one
+  apostrophe in a body left the call unparseable, the body's words became operands of a
+  `| tail -1` after it, and two neighbours such as "`~`." and "Charter" joined into `.Charter`
+  and were refused as a vault read. `-e`, `--editor` and a short cluster holding `e` keep the
+  body visible, as a redirection target spelled like the flag and `-F -` after `--` do; gh 2.83.2
+  opens no editor on a body from stdin, but the refusal does not rest on that. `gh pr edit`,
+  `gh release … -F -`, `gh api --input -` and `-dF -` are not read. A line holding an
+  **escaped** backtick (`` --title "keeps its \`~/\`" ``) is attributed like any other; an
+  unescaped backtick, including one behind an escaped backslash (`` \\` ``), is a substitution
+  and leaves the line unattributed.
   An *unquoted* body stays visible instead, because the shell expands it before the reader
   sees it and a `$( … )` in it would run. And `#` starts a comment only where a word starts. Position counts too: `{` and `}` are reserved words, so bash passes them as
   plain arguments anywhere but command position and `cat { <vault>` is one command that
@@ -460,8 +473,8 @@ rule while one who reads a bare refusal files an issue.
   so a body that is NOT a reader's — a `python3 - <<'PY'` or `tee` body, or a
   `git commit -F -` spelling the leak guard does not read as a message — holding a lone `'` (as
   in `don't`) leaves the call unparseable and the look is skipped, so a handoff in a later
-  `eval '…'` or `bash -c '…'` is allowed; a `cat` body or a quoted `git commit -F -` message is
-  stripped first and costs nothing. Claude Code says the same of its rule:
+  `eval '…'` or `bash -c '…'` is allowed; a `cat` body, a quoted `git commit -F -` message or a
+  quoted `gh pr create --body-file -` body is stripped first and costs nothing. Claude Code says the same of its rule:
   a Bash rule "isn't a security boundary around the program"
   ([What a Bash rule doesn't match](https://code.claude.com/docs/en/permissions#bash-rule-limits)).
 
