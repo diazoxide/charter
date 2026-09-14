@@ -1558,8 +1558,33 @@ def _ends_in_line_continuation(line: str) -> bool:
     """A bare trailing backslash: bash splices this line with the next BEFORE tokenizing, so
     `cat <<'EOF' \\` then `| bash` is the one command `cat <<'EOF' | bash`, and the heredoc
     body follows the spliced whole. An even run of trailing backslashes is a literal `\\`,
-    not a continuation."""
+    not a continuation.
+
+    This is the RAW parity test, true whenever the last character is an odd-run backslash. A
+    caller reading a COMMAND line must also ask :func:`_comment_index`, because bash does not
+    splice a comment (`cat <<'EOF' # note\\` ends the line — #1086 class 2); a caller reading a
+    heredoc BODY line must not, because a `#` in a body is ordinary text, not a comment."""
     return line.endswith("\\") and (len(line) - len(line.rstrip("\\"))) % 2 == 1
+
+
+#: A `#` may begin a comment only where a word begins — after start-of-line or an unquoted
+#: blank or metacharacter. `echo a#b` prints `a#b`; `echo a #b` has a comment.
+_BEFORE_COMMENT = set(" \t\n;|&()<>")
+
+
+def _comment_index(line: str) -> int:
+    """The offset of the `#` that begins an unquoted comment on *line*, or ``-1``.
+
+    Read off :func:`_quote_map` so a `#` inside quotes (`grep '#'`) or in a substitution is not
+    one, and required at a WORD START so `a#b` is not. A comment runs to the end of the line, so
+    a trailing backslash after this index is inside the comment and splices nothing — the fact
+    :func:`_heredoc_layout` needs to stop folding a comment line into the next (#1086 class 2)."""
+    q = _quote_map(line)
+    for i, c in enumerate(line):
+        if c == "#" and not q[i] and (i == 0 or (line[i - 1] in _BEFORE_COMMENT
+                                                 and not q[i - 1])):
+            return i
+    return -1
 
 
 def _pipeline_continues(line: str) -> bool:
@@ -1667,10 +1692,23 @@ def _heredoc_layout(cmd: str) -> list[tuple[str, bool, bool, bool]]:
                 line = lines[i]
                 chunks.append((-1, line))
                 i += 1
-                if _ends_in_line_continuation(line):
+                # A comment is not spliced — bash ends the line at it — so a trailing backslash
+                # inside one continues nothing (#1086 class 2). `cat <<'EOF' # note\` opens its
+                # heredoc on THIS line; folding the next line in moved the body a line late and
+                # a real read after the terminator was stripped as body.
+                if _ends_in_line_continuation(line) and _comment_index(line) < 0:
                     folded += line[:-1]
                     continue
                 folded += line
+                # A quote bash has not closed swallows the newline: the next physical line is
+                # part of the same quoted word, not a new command, and a `<<` inside it opens no
+                # heredoc (#1086 class 1). `_heredoc_openers` filters a `<<` quoted WITHIN a
+                # line; carrying the open quote across the newline is what lets it filter a `<<`
+                # quoted by a string that began on an earlier line. The newline is literal text
+                # inside the quote, so it is kept in `folded`.
+                if _quote_map(folded)[-1] and i < n:
+                    folded += "\n"
+                    continue
                 break
             plan_text = plan_text + join + folded      # `join` is "" until a stage continues
             # This command line's heredoc bodies follow, in order; buffer each.
@@ -2608,6 +2646,72 @@ def _resegment(toks: list[str]) -> list[list[str]]:
     return _segment_tokens(pieces)
 
 
+def _splice_continuations(cmd: str) -> str:
+    """*cmd* with each ACTIVE backslash-newline removed — bash's first transformation, before
+    tokens or quotes are read. A backslash-newline splices only where the backslash is live: it
+    is literal inside single quotes and inside a comment, so those newlines stay. Kept narrow —
+    only an UNQUOTED backslash is spliced; one inside double quotes is left in place, which can
+    only keep more text on one line (the fail-closed direction for a guard reading operands)."""
+    q = _quote_map(cmd)
+    out: list[str] = []
+    in_comment = False
+    i, n = 0, len(cmd)
+    while i < n:
+        c = cmd[i]
+        if c == "\n":
+            in_comment = False
+            out.append(c)
+            i += 1
+            continue
+        if (not in_comment and c == "#" and not q[i]
+                and (i == 0 or (cmd[i - 1] in _BEFORE_COMMENT and not q[i - 1]))):
+            in_comment = True
+        if c == "\\" and i + 1 < n and cmd[i + 1] == "\n" and not q[i] and not in_comment:
+            i += 2                             # drop the backslash and the newline it splices
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _fallback_segments(cmd: str) -> list[list[str]]:
+    """Segment an unparseable *cmd* keeping bash's LINE structure (#1082).
+
+    The old fallback was ``_resegment(cmd.split())``, and ``str.split`` erases newlines. On the
+    parsed path a newline is a command boundary (:data:`_PUNCTUATION_CHARS` holds it), so a
+    single broken quote anywhere folded every following line into the segment before it —
+    `cd .charter/vaults` then `cat x.json` then a stray `echo "` read as ONE command whose
+    program was `cd`, and the vault read vanished. It cuts both ways, and the review of #1083
+    warned off the two easy over-corrections: splitting on EVERY newline strands a reader's
+    operand when a quoted string spans lines (`grep -e "a<newline>b" x.json`), and not splicing
+    is not an option either.
+
+    So a newline is a boundary exactly where bash makes one: not inside a quote it has not
+    closed (:func:`_quote_map`, which reads unbalanced input without raising), and not one a
+    live backslash spliced away (:func:`_splice_continuations`, run first as bash runs it). Each
+    resulting logical line is then lexed on its OWN — a broken quote on one line no longer
+    blinds the guard to the well-formed lines around it — and only a line that still will not
+    lex falls back to the crude :func:`_resegment`, whose stranding is now confined to that one
+    line. `_leak_reason` still scans the raw string here (this returns ``parsed=False``), so a
+    line this cannot take apart is caught by the net, not by luck.
+    """
+    cmd = _splice_continuations(cmd)
+    q = _quote_map(cmd)
+    out: list[list[str]] = []
+    start = 0
+    bounds = [i for i, c in enumerate(cmd) if c == "\n" and not q[i]]
+    for cut in [*bounds, len(cmd)]:
+        line = cmd[start:cut]
+        start = cut + 1
+        if not line.strip():
+            continue
+        try:
+            out.extend(_segment_tokens(_lex(line)))
+        except ValueError:
+            out.extend(_resegment(line.split()))
+    return out
+
+
 def _segment_argv(cmd: str) -> list[list[str]]:
     """A shell command as **argv per separately-executed segment**, quoting respected."""
     return _segment_argv_parsed(cmd)[0]
@@ -2669,7 +2773,11 @@ def _segment_argv_parsed(cmd: str) -> tuple[list[list[str]], bool]:
         # not relied on alone: the flag below is False, and :func:`_leak_reason` matches
         # the raw string as well. The guards that fail OPEN here (plane-root, single
         # credential) say so in their own docstrings.
-        return _resegment((cmd or "").split()), False
+        #
+        # Line structure is bash's, not `str.split`'s: :func:`_fallback_segments` cuts on the
+        # newlines bash makes a boundary and lexes each line it can, so a broken quote on one
+        # line no longer folds the vault read on the next into the segment before it (#1082).
+        return _fallback_segments(cmd or ""), False
     return _segment_tokens(toks), True
 
 

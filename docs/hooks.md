@@ -88,7 +88,13 @@ rule while one who reads a bare refusal files an issue.
   `<<`, and its pipeline, that decide, not the first word. **The pipeline is followed across
   lines**: a trailing `|` continues onto the command after the heredoc body (`cat <<'EOF' |`
   … `EOF` … `bash`), and a backslash-newline splices before it, so the downstream shell is
-  seen either way. A **quoted** heredoc fed only to a
+  seen either way. **Newlines, quotes and comments are read as bash reads them across lines**:
+  a `<<` inside a quoted string that spans lines opens no heredoc, a comment ending in `\` is not
+  spliced into the next line, and — when the command cannot be tokenised at all — it is still cut
+  into lines on the newlines bash makes a boundary (not one inside an unclosed quote, not one a
+  live backslash spliced away) rather than collapsed on whitespace, so a read on the line after a
+  `cd` is still seen ([#1082](https://github.com/diazoxide/charter/issues/1082),
+  [#1086](https://github.com/diazoxide/charter/issues/1086)). A **quoted** heredoc fed only to a
   reader (`cat <<'EOF'`) is stdin data: its body is dropped, so a document naming these paths
   is not refused as a read of them ([#258](https://github.com/diazoxide/charter/issues/258)).
   That body ends where bash ends it: `<<'EO'F`, `<<"EO"F` and `<<E\OF` are all heredocs whose
