@@ -27,13 +27,15 @@ because on a server two projects shared, F2 can belong to the other project.
 
 If two projects' chats were mixed into one session on `charter`, which is what happened when
 both opened `default`, each project's `charter frame-quit` stops only its own windows, in
-either order. This shows what is still there:
+either order. This lists what is still there, one row per window:
 
-    tmux -L charter list-panes -a -F '#{session_name} #{@charter_chat} #{@charter_plane}'
+    tmux -L charter list-windows -a -F '#{session_name} #{window_id} #{@charter_chat} #{@charter_plane}'
 
-Once both projects have quit and nothing you want is listed, `tmux -L charter kill-server`
-ends the old server. Not before: a chat it ends without a quit was never recorded, so
-`charter reopen` cannot bring it back.
+A mixed session shows as two windows under one session name with the same chat id; the
+`.charter` path is the session's and names only the project that created it. Once both
+projects have quit and no chats are listed, `tmux -L charter kill-server` ends the old server.
+Not before: a chat it ends without a quit was never recorded, so `charter reopen` cannot bring
+it back.
 
 Inside a tmux you run yourself, charter still opens each chat as a window in your session, and
 now marks each window with the project it belongs to, so a close or quit in one project cannot

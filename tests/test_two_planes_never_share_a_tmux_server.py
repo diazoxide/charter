@@ -35,6 +35,7 @@ from __future__ import annotations
 import itertools
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -478,6 +479,35 @@ class TwoPlanesMixedInOneSessionBeforeTheUpgrade(_OnTheSharedServer, unittest.Te
 
         self.assertTrue(_eventually(lambda: not self._alive(self.legacy, self.b_pane)))
         self.assertTrue(self._alive(self.legacy, self.a_pane))
+
+    def test_the_documented_listing_shows_the_mixed_session_as_two_windows_of_one_chat(self):
+        """`docs/frame.md` and the news entry hand the operator one command to see a mixed
+        session with. It is run here off the docs' own line, against this fixture, so the
+        docs cannot drift from what tmux prints. Per WINDOW and not per pane: a pane listing
+        prints every panel as a row and its plane column reads the same, so it cannot show
+        the one thing a mixed session is — two windows of one chat id under one session.
+        The plane column is the session's, plane A's, on both rows."""
+        docs = (_REPO_ROOT / "docs" / "frame.md").read_text()
+        news = (_REPO_ROOT / "docs" / "news" /
+                "unreleased-two-projects-never-share-a-tmux-server.md").read_text()
+        lines = [ln.strip() for ln in docs.splitlines()
+                 if ln.strip().startswith("tmux -L charter list-")]
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn(lines[0], news, "the news entry spells a different command")
+        argv = shlex.split(lines[0])
+        argv[argv.index("charter")] = self.legacy
+
+        out = subprocess.run(argv, capture_output=True, text=True, timeout=20)
+
+        self.assertEqual(out.returncode, 0, out.stderr)
+        rows = [ln.split(" ", 3) for ln in out.stdout.splitlines()]
+        self.assertEqual(len(rows), 2, out.stdout)
+        self.assertEqual({r[0] for r in rows}, {WS}, "one session")
+        self.assertEqual(len({r[1] for r in rows}), 2, "two windows")
+        self.assertEqual({r[2] for r in rows}, {CHAT}, "of one chat id")
+        self._in(self.a_root)
+        self.assertEqual({r[3] for r in rows}, {str(config.STATE_DIR)},
+                         "the plane column is the session's, and names plane A for both")
 
     def test_charter_after_a_quit_restores_that_planes_chats_while_the_other_plane_runs(self):
         """**The upgrade route, end to end.** Plane A quits its old frame and types

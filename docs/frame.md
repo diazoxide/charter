@@ -538,18 +538,20 @@ anything yet.
 
 **Two projects mixed in one session on `charter`.** Before the upgrade, the second project
 to open `default` joined the first one's session as a window, and that session carries the
-first project's plane marker. You can see it:
+first project's plane marker. You can see it, one row per window:
 
 ```
-tmux -L charter list-panes -a -F '#{session_name} #{@charter_chat} #{@charter_plane}'
+tmux -L charter list-windows -a -F '#{session_name} #{window_id} #{@charter_chat} #{@charter_plane}'
 ```
 
-lists chats of both projects under one session name and one project's `.charter` path. Charter
-tells the windows apart by the pane each project's own launcher recorded, not by that
-marker, so `charter frame-quit` in either project, in either order, stops that project's
-windows and no others. Once both projects have quit and the same listing shows nothing you
-want, `tmux -L charter kill-server` ends the old server. Not before: a chat it ends without a
-quit was never recorded, and `charter reopen` cannot bring it back.
+A mixed session is two windows under one session name carrying the same chat id — both
+projects' first chat is `default.1` — and one `.charter` path on both rows, because the plane
+column is the session's and names whichever project created it, so it cannot say whose window
+is whose. Charter tells the windows apart by the pane each project's own launcher recorded,
+not by that marker, so `charter frame-quit` in either project, in either order, stops that
+project's windows and no others. Once both projects have quit and the listing shows no chats,
+`tmux -L charter kill-server` ends the old server. Not before: a chat it ends without a quit
+was never recorded, and `charter reopen` cannot bring it back.
 
 **Opening a workspace you already have open puts you in it rather than beside it.** A tmux
 session has one current window, so two terminals attached to one workspace look at the same
