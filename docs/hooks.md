@@ -119,6 +119,16 @@ rule while one who reads a bare refusal files an issue.
   **escaped** backtick (`` --title "keeps its \`~/\`" ``) is attributed like any other; an
   unescaped backtick, including one behind an escaped backslash (`` \\` ``), is a substitution
   and leaves the line unattributed.
+  A body file naming a vault is the opposite case: `-F -` is stdin data, but
+  `gh pr create -F .charter/vaults/x.json` (and `--body-file`, `--notes-file`, `-T`/`--template`,
+  and `gh api --input <path>` / `--field key=@<path>`) READS that file and uploads it to the
+  forge — worse than printing it, because the value lands on the forge. `gh` is not a printer
+  and so is not in the reader allowlist, but these flags name a file it opens, so their operand
+  goes through the same vault check a reader's does
+  ([#1086](https://github.com/diazoxide/charter/issues/1086)). An ordinary body file
+  (`-F notes.md`) and `gh api -f/--raw-field key=@path` (a literal string, not a file) stay
+  allowed. A release ASSET named positionally (`gh release create v1 <path>`) is uploaded too
+  and is not covered here — a separate finding, not this flag check.
   An *unquoted* body stays visible instead, because the shell expands it before the reader
   sees it and a `$( … )` in it would run. And `#` starts a comment only where a word starts. Position counts too: `{` and `}` are reserved words, so bash passes them as
   plain arguments anywhere but command position and `cat { <vault>` is one command that
