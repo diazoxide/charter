@@ -1949,13 +1949,20 @@ def cmd_workspace_reinit(args) -> int:
         # not written — then again on the next run, since the workspace still read as stale. Only
         # a stamp that now reads current is reported as added; one a row above names is left to
         # that row, and one refused for a reason no row names gets this sentence.
-        if (before["version"] < before["target"]
-                and workspace.structure_version(n) < before["target"]):
+        #
+        # The read-back alone decides, with no `before["version"] < target` beside it: CI's sweep
+        # left that conjunct, and `<=` for its `<`, as survivors, and they were right. A stamp that
+        # read current before `scaffold` reads current after it — rewritten with the target, or
+        # refused and left as it was — and a write that raises ends this command, so no input
+        # tells the conjunct from its absence. The pins on both sides of the boundary are the
+        # tests beside #1074's.
+        after = workspace.structure_version(n)
+        if after < before["target"]:
             unresolved.add(n)
             if workspace._STRUCTURE_MARKER not in {rel for rel, _path, _code in before["in_the_way"]}:
                 util.warn(f"'{n}': {workspace._STRUCTURE_MARKER} could not be written, so this "
-                          f"workspace still reads as structure v{before['version']} and stays "
-                          f"flagged for reinit.")
+                          f"workspace still reads as structure v{after} and stays flagged for "
+                          f"reinit.")
             before["ok"] = not before["missing"]   # files it did add are still reported
         if before["ok"]:
             continue

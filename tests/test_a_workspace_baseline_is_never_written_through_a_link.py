@@ -629,11 +629,23 @@ class AStampReinitCouldNotWriteIsNeverReportedAdded(AStampCase):
         self.assertIn(self.in_the_way_row(), said)
 
     def test_a_stamp_reinit_writes_is_still_reported_added(self):
-        """The line the checks above withhold, still printed when the stamp was written."""
-        self.marker.write_text("4\n")
+        """The line the checks above withhold, still printed when the stamp was written — from one
+        version below the target, the boundary's stale side."""
+        below = workspace.STRUCTURE_VERSION - 1
+        self.marker.write_text(f"{below}\n")
         said = self.reinit_promptly()
-        self.assertIn(f"Reinitialized '{self.ws}' → added structure v4 → "
+        self.assertIn(f"Reinitialized '{self.ws}' → added structure v{below} → "
                       f"v{workspace.STRUCTURE_VERSION}.", said)
+        self.assertFalse(any("could not be written" in s for s in said), said)
+
+    def test_a_stamp_at_the_target_version_is_neither_added_nor_called_unwritten(self):
+        """The boundary's current side: a stamp that reads exactly the target, with nothing to add,
+        is up to date — no version line, and no row saying a stamp that is there was not written."""
+        self.marker.write_text(f"{workspace.STRUCTURE_VERSION}\n")
+        said = self.reinit_promptly()
+        self.assertIn(f"Up to date (structure v{workspace.STRUCTURE_VERSION}) — nothing to do.", said)
+        for claim in ("added structure", "could not be written"):
+            self.assertFalse(any(claim in s for s in said), (claim, said))
 
 class AnExclusiveCreateIsExclusiveOnBothBranches(_isolation.PersonaIso):
     """`config.create_for` is `write_for`'s dispatch with ``O_EXCL``, and the dispatch has two
