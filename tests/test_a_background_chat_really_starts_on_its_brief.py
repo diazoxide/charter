@@ -119,7 +119,7 @@ class _TwoChatsOnARealServer(PersonaIso):
         #: the same `$PATH`, which is how a run is pointed at the 3.2 floor binary.
         self.tmux = shutil.which("tmux")
         self.socket = _tmuxreap.name(f"{self.SLUG}-{next(_SERVERS)}")
-        self.enterContext(mock.patch.object(commands_frame, "SOCKET", self.socket))
+        self.enterContext(mock.patch.object(tmuxctl, "plane_socket", return_value=self.socket))
         self.addCleanup(subprocess.run, [self.tmux, "-L", self.socket, "kill-server"],
                         capture_output=True, timeout=20)
         #: Where the server this case starts writes its `-v` log, read only on a failure.

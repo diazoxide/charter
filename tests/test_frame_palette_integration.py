@@ -15,7 +15,8 @@ entry point is a root-table bind, so the only honest test is a client on a pty w
 written to it as a terminal would.
 
 **No `charter` on `$PATH` is needed and no shim is installed**, unlike the menu integration
-this replaces. `commands_frame.SOCKET` was a hardcoded constant every one of those tests had
+this replaces. `commands_frame.SOCKET` was a hardcoded constant (since ruling 46, a per-plane
+`tmuxctl.plane_socket()`) every one of those tests had
 to monkeypatch around; `cmd_palette` resolves its server from `state.frame_server(fid)`
 instead, so recording this class's own socket in the frame's own state is the entire
 substitution. That is not a testing convenience — it is the same "resolve the frame at the

@@ -38,6 +38,7 @@ from unittest import mock
 
 from charter import (commands_frame, commands_handoff, config, statusline, tui,
                      workspace)
+from charter.frame import tmuxctl
 from charter.frame import (builtin_actions, builtins, choose, chrome, picker,
                            notify, slots, state, switch)
 
@@ -660,14 +661,14 @@ class APlaneThatGoesColdForgetsItsArrivals(PersonaIso, unittest.TestCase):
 
     def test_a_plane_that_goes_cold_forgets_its_arrivals(self):
         _a_chat("alpha.1", ws="alpha", pane="%1")
-        self.assertEqual(state.reap(set(), server=commands_frame.SOCKET), ["alpha.1"])
+        self.assertEqual(state.reap(set(), server=tmuxctl.plane_socket()), ["alpha.1"])
         self.assertEqual(workspace.arrivals(), frozenset())
 
     def test_a_reap_that_leaves_a_frame_keeps_the_arrivals(self):
         """The other half, and the one #767 is about: a frame still on screen must not lose
         a mark because a SIBLING ended."""
         _a_chat("alpha.1", ws="alpha", pane="%1")
-        state.reap({"alpha.1"}, server=commands_frame.SOCKET)
+        state.reap({"alpha.1"}, server=tmuxctl.plane_socket())
         self.assertIn("beta", workspace.arrivals())
 
 

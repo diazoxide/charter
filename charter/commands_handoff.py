@@ -195,8 +195,7 @@ def cmd_handoff(args) -> int:
     source_ws = state.workspace_for(fid)
     msg = handoff.first_message(handoff.stamp(source_chat, source_ws), brief)
     if not in_a_chat or tmuxctl.is_operator_socket(state.frame_server(fid)
-                                                   or commands_frame.SOCKET,
-                                                   own=commands_frame.SOCKET):
+                                                   or tmuxctl.LEGACY_SOCKET):
         # `--create` without `--vision` was refused above, so the vision is there whenever
         # the workspace is being made, and `None` says it is not.
         command, named = _printed_command(ws=ws, msg=msg,

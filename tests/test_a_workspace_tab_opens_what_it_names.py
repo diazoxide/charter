@@ -54,6 +54,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, root
+from charter.frame import tmuxctl
 from charter.frame import state
 
 from tests import _tmuxreap, _tmuxsocket, _ttyguard
@@ -100,7 +101,7 @@ def _a_chat(fid: str, *, ws: str, pane: str | None, harness="claude-code") -> No
     """
     state.frame_dir(fid, create=True)
     state.record_workspace(fid, ws)
-    state.record_server(fid, commands_frame.SOCKET)
+    state.record_server(fid, tmuxctl.plane_socket())
     state.record_identity(fid, {"CHARTER_HARNESS": harness})
     if pane is not None:
         state.record_harness_pane(fid, pane)
@@ -146,7 +147,7 @@ class _Server:
             self.switched.append((cmd[cmd.index("-c") + 1], cmd[cmd.index("-t") + 1]))
             return _completed(cmd, 0)
         if "list-windows" in cmd:
-            return _completed(cmd, 0, "$2\t1\tbeta.1\n")
+            return _completed(cmd, 0, "$2\t1\tbeta.1\t\n")
         return _completed(cmd, 0)
 
 
@@ -269,6 +270,21 @@ class TheTabOpensTheWorkspaceItNames(_OpensBeta):
         self.assertEqual(self.launched, [], "it started a harness for nobody")
         self.assertEqual(s.switched, [])
         self.assertIn("no terminal", self.said.call_args[0][1])
+
+    def test_a_frame_on_the_server_every_plane_used_to_share_opens_nothing(self):
+        """**Ruling 46.** The open lands on this plane's own server, and a frame started
+        before that server existed is on the shared one — where `switch-client` cannot
+        follow it, so the click would start a harness nobody sees and then report that no
+        session opened. Refused before the launch, with the routes that work."""
+        state.record_server(self.FID, tmuxctl.LEGACY_SOCKET)
+        s = self._run()
+        self.assertEqual(self.launched, [], "it started a harness this frame cannot show")
+        self.assertEqual(s.switched, [])
+        said = self.said.call_args[0][1]
+        self.assertEqual(said, commands_frame.BEFORE_THIS_PLANES_SERVER.format(
+            what="'beta'", ws="beta"))
+        self.assertIn("cannot open 'beta' from this frame", said)
+        self.assertIn("charter -w beta", said)
 
     def test_an_open_that_starts_no_session_moves_nothing_and_says_so(self):
         """A launch can fail — a harness that is not installed, a state directory that
@@ -650,7 +666,7 @@ class TheLauncherAsksWhoseTmuxItIsIn(PersonaIso, unittest.TestCase):
                                workspace="beta", pick=False, attach=False,
                                size=(120, 40))
         empty = subprocess.CompletedProcess([], 0, "", "")
-        with mock.patch.object(commands_frame, "SOCKET", self.SOCKET), \
+        with mock.patch.object(tmuxctl, "plane_socket", return_value=self.SOCKET), \
                 mock.patch.dict(os.environ,
                                 {"TMUX": _tmuxsocket.tmux_env(tmux_socket)}), \
                 mock.patch.object(commands_frame.tmuxctl, "version",
@@ -1023,7 +1039,7 @@ class ARealTabOpensARealWorkspace(PersonaIso, unittest.TestCase):
         # every assertion below fails) while leaving a process alive to say so.
         self.enterContext(mock.patch("charter.commands_frame.bypass", return_value=127))
         self.socket = self.SOCKET
-        self.enterContext(mock.patch.object(commands_frame, "SOCKET", self.socket))
+        self.enterContext(mock.patch.object(tmuxctl, "plane_socket", return_value=self.socket))
         # `kids` first: `_teardown` reads it, and a `setUp` that dies between the two
         # would turn one failure into an `AttributeError` in the cleanup that reports it.
         self.kids: list[tuple[int, int]] = []
@@ -1443,7 +1459,7 @@ class ATabClickedInsideCharactersOwnTmux(ARealTabOpensARealWorkspace):
             self):
         """The record every later tab reads (`state.frame_server`).
 
-        Spelled by hand rather than compared to `commands_frame.SOCKET`, because the
+        Spelled by hand rather than compared to `tmuxctl.plane_socket()`, because the
         failure this pins is precisely a second, equal-but-different spelling of one
         socket: a round trip through the same constant would have agreed with itself
         while the operator was stuck."""

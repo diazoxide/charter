@@ -27,6 +27,7 @@ from unittest import mock
 
 from charter import (cli, commands_frame, commands_handoff, config, dispatch, todos,
                      workspace)
+from charter.frame import tmuxctl
 from charter.frame import state
 
 from tests import _tmuxsocket
@@ -475,7 +476,7 @@ class EveryRefusalSaysSomethingDifferent(_AHandoffFromAlpha):
             said.append(self._handoff("beta")[2])
         state.record_server("alpha.1", _tmuxsocket.OPERATOR_SOCKET)
         said.append(self._handoff("beta")[2])
-        state.record_server("alpha.1", commands_frame.SOCKET)   # back in charter's own tmux
+        state.record_server("alpha.1", tmuxctl.plane_socket())   # back in charter's own tmux
         self.bg.return_value = "cannot open a chat in 'beta': X"
         said.append(self._handoff("beta")[2])
         self.assertNotIn("", said)

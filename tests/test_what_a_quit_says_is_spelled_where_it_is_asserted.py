@@ -71,12 +71,15 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, contain, util
+from charter.frame import tmuxctl
 from charter import workspace as ws_mod
 from charter.frame import builtin_actions, component, leave, palette, reopen, state
 
 from tests._isolation import PersonaIso, wired_as_today
 
-SERVER = commands_frame.SOCKET
+#: A server these chats record, standing in for a plane's own. A NAME no test starts a
+#: server on: nothing here reaches tmux, and `tests._planeguard` refuses the shape if one did.
+SERVER = "charter-plane-5e77e45e77e4"
 
 #: One escape sequence and one newline, in a value charter reads off a committed file and
 #: prints back. The escape is `ESC [ 2 J` — erase the whole display — because a report line
@@ -231,7 +234,7 @@ class TheReopenCommandsOwnWordsAreTheseWords(PersonaIso):
             commands_frame.NOTHING_RECORDED,
             "charter reopen: nothing recorded to put back. A plane is recorded when you "
             "quit it (`F2 → charter: quit`); a terminal that closed on its own only "
-            "detached, so its harnesses are still running — `tmux -L charter attach` "
+            "detached, so its harnesses are still running — `tmux -L {socket} attach` "
             "reaches them.")
 
     def test_it_is_the_sentence_the_command_actually_prints(self):
@@ -239,7 +242,8 @@ class TheReopenCommandsOwnWordsAreTheseWords(PersonaIso):
             self.assertEqual(commands_frame.cmd_reopen(SimpleNamespace()), 1)
 
         said.assert_called_once()
-        self.assertEqual(said.call_args[0][0], commands_frame.NOTHING_RECORDED)
+        self.assertEqual(said.call_args[0][0],
+                         commands_frame.NOTHING_RECORDED.format(socket=tmuxctl.plane_socket()))
 
 
 class TheTranscriptRowsOwnWordsAreTheseWords(PersonaIso):

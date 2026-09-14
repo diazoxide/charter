@@ -593,7 +593,7 @@ class TheActionsCharterOffersItself(PersonaIso, unittest.TestCase):
         independently of the code under test (#601 — never a spelled uid, and never the
         production function confirming itself)."""
         state.record_server(self.FID,
-                            _tmuxsocket.socket_path(commands_frame.SOCKET))
+                            _tmuxsocket.socket_path(tmuxctl.plane_socket()))
         self.assertTrue(self._offers()["frame.detach"].available)
 
     def test_a_frame_in_a_tmux_charter_did_not_start_is_still_not_detachable(self):

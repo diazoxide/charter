@@ -13,8 +13,8 @@ is waiting on. Liveness arrives as an ARGUMENT (`live`), asked once by
 **Quit is plane-scoped, and that is a correction to the brief this shipped under rather
 than an interpretation of it.** §4i asks for *"a warning naming every workspace and chat
 that will stop"* and the operator's own words are *"all harness sessions will be closed"*.
-§3.3 then bounds it from the other side: one tmux server serves every plane on the machine
-and session names carry no plane, so the blast radius has to be filtered, and **the filter
+§3.3 then bounds it from the other side: a tmux server can hold more than one plane — the
+legacy shared socket, an operator's own tmux — and session names carry no plane, so the blast radius has to be filtered, and **the filter
 can only come from disk.** So the set is exactly *this plane's chat directories*, and the
 kill is per WINDOW — never `kill-server`, and never `kill-session` on a workspace name,
 which in another plane is another plane's session (`default` is a name every plane has).

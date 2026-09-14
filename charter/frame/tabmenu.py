@@ -372,9 +372,9 @@ def handback(env) -> tuple[str, str, str, str]:
       ._relayout_pane_env` answers ``None`` there and `overlay.open_argv` sets nothing, so
       the pane inherits whatever the shared server happens to hold. ``""`` is what every
       charter reader already treats as absent.
-    * The socket falls back to charter's own for `builtin_actions._server`'s reason: a
-      frame with no recorded server is one launched by a charter that predates
-      `state.record_server`, and charter's own socket is where it will be — never
+    * The socket falls back to the legacy shared one for `builtin_actions._server`'s
+      reason: a frame with no recorded server is one launched by a charter that predates
+      `state.record_server`, and `tmuxctl.LEGACY_SOCKET` is where it will be — never
       "nowhere", which would aim the teardown at no server at all.
     * `state.harness_pane` answers ``None`` for a frame charter has lost the record of,
       and ``None`` is not ``""``: it would be formatted into a tmux target as the four
@@ -389,11 +389,10 @@ def handback(env) -> tuple[str, str, str, str]:
     `commands_frame._relayout_pane_env` takes *fid* as an argument instead of reading it
     back out of a variable one tmux server shares between every frame on the machine.
     """
-    from .. import commands_frame
-    from . import state
+    from . import state, tmuxctl
     fid = env.get("CHARTER_SESSION_ID", "")
     return (fid,
-            state.frame_server(fid) or commands_frame.SOCKET,
+            state.frame_server(fid) or tmuxctl.LEGACY_SOCKET,
             state.harness_pane(fid) or "",
             env.get("TMUX_PANE", ""))
 

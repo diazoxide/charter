@@ -27,6 +27,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, persona, workspace
+from charter.frame import tmuxctl
 from charter.frame import reopen as reopen_state
 from charter.frame import state
 from charter.harness import claude_code
@@ -64,7 +65,7 @@ def _a_chat(fid: str, *, ws: str, pane: str | None = "%1", harness: str = "claud
     `tests/test_the_chat_bars_plus_makes_a_chat.py` keeps, for the same reason."""
     state.frame_dir(fid, create=True)
     state.record_workspace(fid, ws)
-    state.record_server(fid, socket or commands_frame.SOCKET)
+    state.record_server(fid, socket or tmuxctl.plane_socket())
     state.record_identity(fid, {"CHARTER_HARNESS": harness})
     if pane is not None:
         state.record_harness_pane(fid, pane)
@@ -353,6 +354,36 @@ class EveryRefusalComesBeforeAnythingStarts(_AChatInAlpha):
         self.assertIn("probably another plane's", got.message)
         self.assertEqual(self.launched, [])
 
+    def _sessions_on(self, answers: dict[str, str]):
+        """A stand-in that answers `list-sessions` per SERVER, and everything else as the
+        class's own does."""
+        def tmux(cmd, **kw):
+            if "list-sessions" in cmd:
+                return _completed(cmd, 0, answers.get(cmd[cmd.index("-L") + 1], ""))
+            return self._tmux(cmd, **kw)
+        return tmux
+
+    def test_the_name_is_asked_of_the_server_the_chat_will_open_on(self):
+        """**Ruling 46.** A handoff from a frame still on the shared server opens its chat on
+        this plane's OWN server, so that is where a session of the same name would be joined
+        — and the refusal has to be asked there, not of the server the caller is on."""
+        state.record_server(self.CALLER, tmuxctl.LEGACY_SOCKET)
+        own = tmuxctl.plane_socket()
+        with mock.patch("charter.commands_frame.subprocess.run",
+                        side_effect=self._sessions_on({own: "beta\n"})):
+            said = commands_frame.background_refusal("beta", caller=self.CALLER,
+                                                     first_message="fix the widget please")
+        self.assertIn("probably another plane's", said)
+        self.assertIn(f"tmux -L {own} attach -t beta", said)
+
+    def test_a_name_taken_only_on_the_shared_server_does_not_refuse(self):
+        state.record_server(self.CALLER, tmuxctl.LEGACY_SOCKET)
+        with mock.patch("charter.commands_frame.subprocess.run",
+                        side_effect=self._sessions_on({tmuxctl.LEGACY_SOCKET: "beta\n"})):
+            said = commands_frame.background_refusal("beta", caller=self.CALLER,
+                                                     first_message="fix the widget please")
+        self.assertEqual(said, "")
+
     def test_a_session_this_plane_can_prove_is_its_own_is_joined(self):
         self.beta_seat = "%5"
         _a_chat("beta.2", ws="beta", pane="%5")
@@ -419,7 +450,7 @@ class EveryRefusalComesBeforeAnythingStarts(_AChatInAlpha):
             "x " * (bound // 2 + 1))]
         state.record_server(self.CALLER, _tmuxsocket.OPERATOR_SOCKET)
         said.append(self._refusal())
-        state.record_server(self.CALLER, commands_frame.SOCKET)
+        state.record_server(self.CALLER, tmuxctl.plane_socket())
         state.record_identity(self.CALLER, {"CHARTER_HARNESS": ""})
         with mock.patch.object(config, "HARNESS", None):
             said.append(self._refusal())

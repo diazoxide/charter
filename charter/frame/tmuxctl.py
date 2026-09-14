@@ -19,6 +19,7 @@ runs and when it returns.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shutil
@@ -305,8 +306,9 @@ def socket_path(name: str) -> str:
     **The other half of :func:`server_argv`'s split, and the reason it needs one.** That
     function turns a NAME into ``-L`` and a PATH into ``-S``, which is right for aiming a
     command; it says nothing about whether two spellings aim at the SAME server. They
-    routinely do: `commands_frame.SOCKET` is ``charter``, and a process started in one of
-    that server's own panes reads ``/private/tmp/tmux-502/charter`` out of ``$TMUX``.
+    routinely do: a plane's own server is ``-L charter-plane-<hex>`` (:func:`plane_socket`),
+    and a process started in one of that server's own panes reads
+    ``/private/tmp/tmux-502/charter-plane-<hex>`` out of ``$TMUX``.
     #812 is what happens when those two are compared as strings.
 
     **The result is RESOLVED, and that is not tidiness.** tmux calls ``realpath()`` on the
@@ -382,13 +384,89 @@ def is_socket_path(server: str | None) -> bool:
     return bool(server) and server.startswith("/")
 
 
+#: The one socket every plane on a machine shared before ruling 46, and where every frame a
+#: charter older than that started is still running.
+#:
+#: **Named rather than deleted, because those frames outlive the upgrade.** A chat whose
+#: directory records a server (`state.record_server`) is found on that server by every
+#: close, quit, switch and panel; a chat with NO record was started by a charter that
+#: predates the record, which only ever ran frames here. So this is where a missing record
+#: resolves to — and nothing new is ever started on it, because a session here is joined by
+#: its bare workspace NAME and `default` is a name every plane has.
+LEGACY_SOCKET = "charter"
+
+#: The shape of a plane's own socket name: :func:`plane_socket`'s prefix and twelve hex
+#: digits of a sha256. Matched with `re.fullmatch`.
+PLANE_SOCKET_RE = re.compile(r"charter-plane-[0-9a-f]{12}")
+
+
+def plane_socket() -> str:
+    """The `-L` name of THIS plane's own tmux server: ``charter-plane-<12 hex>``.
+
+    **Ruling 46, and the defect it ends.** Every plane on a machine used to share one
+    server, :data:`LEGACY_SOCKET`, and a frame's session is named by its bare workspace. A
+    launch decided whether to start a session or join one by that NAME, so a second plane
+    opening `default` — `config.DEFAULT_WORKSPACE_FALLBACK`, a workspace every plane has —
+    became a window in the first plane's session: its panels, its tab strips, its
+    `pane-died` hooks, its key bindings and its F2 palette, reading the first plane's state
+    and profiles. Measured on real tmux before this existed
+    (`tests/test_two_planes_never_share_a_tmux_server.py`): two throwaway planes, one
+    shared socket, and the second plane's pane landed in session `$0` beside the first's.
+    A per-plane server is what makes that impossible for everything a server holds at once —
+    sessions, the `-f` config, key tables, global hooks, the server environment — where
+    unique session names on one server would still have shared the last four.
+
+    **Derived from the plane's STATE directory, resolved**, because that is what is
+    per-plane: two roots pointed at one `$CHARTER_HOME` share `.charter/frame/`, which is
+    where every chat record lives, so they are one plane by every question a frame asks
+    (`commands_frame._PLANE_OPTION` makes the same call). Resolved so a symlinked spelling
+    of one directory is not a second server. Asked at CALL time, never cached: `config.use`
+    re-points the plane at runtime, which is how a test holds two planes in one process.
+
+    **Twelve hex digits, because the socket is a path with a length limit.** tmux joins
+    this name onto ``<tmpdir>/tmux-<uid>/``, and `sun_path` is 104 bytes on macOS; measured
+    on the machine this was written on, the result is
+    ``/private/tmp/tmux-502/charter-plane-<12 hex>`` — 48 bytes. Forty-eight bits keep two
+    planes on one machine apart by a margin no machine will come near, and a name stays
+    something an operator can read in `ps`.
+
+    No slash, so :func:`is_socket_path` reads it as a NAME and :func:`server_argv` aims
+    `-L` at it. Cheap by construction — one `realpath` and one hash, no file read — because
+    every frame command asks it, and `charter.local.toml` stays off this path (ruling 43).
+    """
+    from .. import config  # at call time: `config` imports this package while it loads
+
+    state = os.path.realpath(str(config.STATE_DIR))
+    return "charter-plane-" + hashlib.sha256(os.fsencode(state)).hexdigest()[:12]
+
+
+def _a_charter_socket(path: str) -> bool:
+    """Is the socket FILE *path* one charter starts — any plane's own, or the legacy one?
+
+    A plane's own server is only ever reached by NAME from its own plane, so the one way a
+    charter socket arrives spelled as a path is `$TMUX` inside one of its panes — and that
+    pane can belong to ANOTHER plane's frame, or to a frame on :data:`LEGACY_SOCKET` started
+    before the upgrade. Both are servers charter started, not a tmux the operator is in: a
+    launch from such a pane builds this plane's own frame (a nested client, the shape a
+    launch from one of charter's own panes has always had), rather than opening a window on
+    a server whose config, hooks and palette belong to somebody else's plane.
+
+    Judged on the directory as well as the name: a file called `charter` somewhere else is
+    not charter's.
+    """
+    here = _resolved(path)
+    name = os.path.basename(here)
+    return (os.path.dirname(here) == os.path.dirname(_resolved(LEGACY_SOCKET))
+            and (name == LEGACY_SOCKET or bool(PLANE_SOCKET_RE.fullmatch(name))))
+
+
 def server_argv(server: str, *args: str, interactive: bool = False) -> list[str]:
     """`tmux`, the flags that select ONE server, then *args* — every element separate.
 
     Charter talks to two different servers now, and this is the one place that difference
-    is spelled: its own private one by NAME (`-L charter`, see `commands_frame.SOCKET`),
-    and the operator's existing one by SOCKET PATH (`-S /private/tmp/tmux-502/default`,
-    read out of `$TMUX` by :func:`operator_server`). :func:`is_socket_path` is the whole
+    is spelled: a plane's own private one by NAME (`-L charter-plane-<hex>`, see
+    :func:`plane_socket`), and the operator's existing one by SOCKET PATH
+    (`-S /private/tmp/tmux-502/default`, read out of `$TMUX` by :func:`operator_server`). :func:`is_socket_path` is the whole
     discriminator and says why it is total.
 
     Nothing is ever joined, here or anywhere downstream of here: a joined string is
@@ -532,18 +610,24 @@ def is_operator_socket(server: str | None, *, own: str | None = None) -> bool:
     a caller that has already resolved which server it means can say so rather than have
     this reach for a module global.
 
-    Imported lazily for `frame/builtin_actions._server`'s reason, and reached at CALL time
-    rather than bound at import: `commands_frame` imports this module at load, so a
-    top-level import would be a cycle — and a value bound once would not follow the
-    `commands_frame.SOCKET` a test patches, which is exactly how a suite ends up proving
-    the wrong socket's ownership.
+    *own* defaults to :func:`plane_socket`, asked at CALL time rather than bound once, so a
+    test that aims this plane at a reapable socket by patching that function is asking about
+    the server it really started.
+
+    **And a server charter started for ANOTHER plane, or the legacy shared one, is not the
+    operator's either** (ruling 46). Charter's own socket used to be one name every plane
+    shared, so "not mine" and "not charter's" were the same answer. With a server per plane
+    they are not: `$TMUX` read in a pane of another plane's frame, or of a frame started on
+    :data:`LEGACY_SOCKET` before the upgrade, names a server charter started, and reading it
+    as the operator's would open this plane's chat as a window on it — under that server's
+    config, hooks and palette, which is the cross-plane defect this ruling ends, reached
+    through a different door. :func:`_a_charter_socket` is that question.
     """
     if not is_socket_path(server):
         return False
     if own is None:
-        from ..commands_frame import SOCKET
-        own = SOCKET
-    return not same_server(server, own)
+        own = plane_socket()
+    return not same_server(server, own) and not _a_charter_socket(server)
 
 
 #: tmux's own separator between commands sent in ONE invocation. A standalone argument,
@@ -765,8 +849,8 @@ COULD_NOT_RUN = 127
 #:   of `display-message -p` exactly as it went in. That listing is
 #:   `commands_frame._chat_seats`, which `cmd_quit` asks BEFORE it kills anything, so the
 #:   raise does land in a quit — one call to the left of where the issue put it. §3.3 is why
-#:   it is not hypothetical: one tmux server serves every plane on the machine, so charter
-#:   reads windows it did not create.
+#:   it is not hypothetical: one tmux server served every plane on the machine (and the
+#:   legacy socket still does), so charter reads windows it did not create.
 #: * tmux's own stderr echoes the raw bytes of an argument it refuses (`invalid window name:
 #:   BAD\377NAME`), which is :func:`report_failure`'s input — so the decode could take
 #:   charter down while it was REPORTING a failure.

@@ -25,6 +25,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config
+from charter.frame import tmuxctl
 from charter.frame import chats, choose, leave, reopen as reopen_state, state
 from tests import _gitguard
 from tests._isolation import (APipe as _APipe, PersonaIso,
@@ -69,7 +70,7 @@ def _a_chat(fid: str, *, ws: str, profile: str | None = None,
     """
     state.frame_dir(fid, create=True)
     state.record_workspace(fid, ws)
-    state.record_server(fid, commands_frame.SOCKET)
+    state.record_server(fid, tmuxctl.plane_socket())
     state.record_identity(fid, {"CHARTER_HARNESS": harness})
     if profile is not None:
         state.record_profile(fid, profile)
@@ -251,7 +252,7 @@ class AWorkspaceTabStartsOnTheSameProfile(_APressInAlpha, unittest.TestCase):
                                   return_value=("$1", "beta.1")), \
                 mock.patch.object(commands_frame, "_window_size", return_value=(120, 40)):
             return commands_frame._open_workspace(self.FID, "beta",
-                                                  socket=commands_frame.SOCKET,
+                                                  socket=tmuxctl.plane_socket(),
                                                   window="@1")
 
     def test_a_workspace_tab_starts_on_the_profile_the_presser_is_running(self):
@@ -340,7 +341,7 @@ class TheRecordCarriesTheProfile(PersonaIso, unittest.TestCase):
 
     def _doomed(self, **kw):
         fields = dict(chat="alpha.1", workspace="alpha", persona="", harness="claude-code",
-                      cwd="", resume="", server=commands_frame.SOCKET, live=True,
+                      cwd="", resume="", server=tmuxctl.plane_socket(), live=True,
                       active=True, exit_code=None, closed=False, homeless=False,
                       cwd_gone=False, cwd_outside=False, profile="claude-work")
         return leave.Doomed(**{**fields, **kw})
@@ -550,7 +551,7 @@ class WhereTheHarnessWasShownTheProfileIs(PersonaIso, unittest.TestCase):
 
     def _doomed(self, **kw):
         fields = dict(chat="alpha.1", workspace="alpha", persona="", harness="claude-code",
-                      cwd="", resume="", server=commands_frame.SOCKET, live=True,
+                      cwd="", resume="", server=tmuxctl.plane_socket(), live=True,
                       active=True, exit_code=None, closed=False, homeless=False,
                       cwd_gone=False, cwd_outside=False, profile="claude-work")
         return leave.Doomed(**{**fields, **kw})

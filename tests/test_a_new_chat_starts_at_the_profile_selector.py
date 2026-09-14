@@ -1391,7 +1391,7 @@ class WhereItAppears(_APlaneWithProfiles, unittest.TestCase):
         (config.WORKSPACES_DIR / "beta").mkdir(parents=True, exist_ok=True)
         state.frame_dir("beta.1", create=True)
         state.record_workspace("beta.1", "beta")
-        state.record_server("beta.1", commands_frame.SOCKET)
+        state.record_server("beta.1", tmuxctl.plane_socket())
         state.record_harness_pane("beta.1", "%0")
         self.enterContext(mock.patch.object(commands_frame, "_spawn_gather"))
         self.enterContext(mock.patch.object(commands_frame, "_drawable_slots",
@@ -1816,7 +1816,7 @@ class TheSelectorOnARealServer(PersonaIso, unittest.TestCase):
         _ttyguard.no_terminal()
         self.tmux = shutil.which("tmux")
         self.socket = _tmuxreap.name(f"the-selector-{next(_SERVERS)}")
-        self.enterContext(mock.patch.object(commands_frame, "SOCKET", self.socket))
+        self.enterContext(mock.patch.object(tmuxctl, "plane_socket", return_value=self.socket))
         self.addCleanup(self._reap_the_server)
         self.enterContext(mock.patch.object(commands_frame, "_spawn_gather"))
         self.enterContext(mock.patch.object(commands_frame, "_drawable_slots",

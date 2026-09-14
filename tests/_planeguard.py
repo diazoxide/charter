@@ -813,13 +813,24 @@ def _explain_forge(parts: list[str], name: str) -> str:
 _GIT: frozenset[str] = frozenset({"git"})
 
 
-#: The program whose SERVER is the operator's: their own frame on charter's socket, their
-#: own tmux on ``default`` or on whatever ``$TMUX`` named when the suite started.
+#: The program whose SERVER is the operator's: their own frame on their plane's socket or
+#: on the legacy shared one, their own tmux on ``default`` or on whatever ``$TMUX`` named
+#: when the suite started.
 _TMUX: frozenset[str] = frozenset({"tmux"})
 
-#: `commands_frame.SOCKET`, spelled here because this module is installed before charter's
-#: frame is safe to import; `test_no_test_reaches_the_operators_tmux` pins the two equal.
+#: `tmuxctl.LEGACY_SOCKET` — the one server every plane shared before ruling 46, where an
+#: operator's frames started before the upgrade still run. Spelled here rather than
+#: imported, and `test_no_test_reaches_the_operators_tmux` pins the two equal.
 _CHARTER_SOCKET = "charter"
+
+#: `tmuxctl.PLANE_SOCKET_RE`'s shape, spelled for the same reason and pinned the same way.
+#: **Every** plane's own server on this machine, not only the one the suite runs in: another
+#: project's frame is somebody's live work too, and no test has a reason to reach it.
+_PLANE_SOCKET = re.compile(r"charter-plane-[0-9a-f]{12}")
+
+#: The socket directory the suite started with, resolved at install — the one directory
+#: every plane's own server listens in. Empty until then, which refuses nothing.
+_SOCKET_DIR = ""
 
 #: tmux's own option letters that take a value (`tmux.c`'s getopt string, ``2c:CDdf:lL:NqS:T:uUvV``).
 _TMUX_VALUED = frozenset("cfLST")
@@ -829,15 +840,51 @@ _TMUX_VALUED = frozenset("cfLST")
 _OPERATOR_TMUX: frozenset[str] = frozenset()
 
 
-def _operator_tmux(env) -> frozenset[str]:
-    """The operator's three tmux sockets as paths, from *env* — the suite's own environment
-    with `_envguard`'s scrubbed ``$TMUX`` put back, because the scrub is what hides it."""
-    home = os.path.join(env.get("TMUX_TMPDIR") or "/tmp", f"tmux-{os.getuid()}")
-    found = {os.path.realpath(os.path.join(home, _CHARTER_SOCKET)),
-             os.path.realpath(os.path.join(home, "default"))}
+def _socket_dir(env) -> str:
+    """``<$TMUX_TMPDIR or /tmp>/tmux-<uid>`` for *env*, resolved — where a `-L` name lands."""
+    return os.path.realpath(os.path.join(env.get("TMUX_TMPDIR") or "/tmp",
+                                         f"tmux-{os.getuid()}"))
+
+
+def _operator_tmux(env, plane: str = "") -> frozenset[str]:
+    """The operator's tmux sockets as paths, from *env* — the suite's own environment with
+    `_envguard`'s scrubbed ``$TMUX`` put back, because the scrub is what hides it.
+
+    *plane* is the `-L` name of the REAL plane's own server (`tmuxctl.plane_socket`, asked
+    before any test has isolated the state directory it is derived from). Named here as well
+    as caught by :func:`_a_planes_socket`, so the refusal holds even for a plane whose
+    socket name a future charter spells differently from :data:`_PLANE_SOCKET`.
+    """
+    home = _socket_dir(env)
+    found = {os.path.join(home, _CHARTER_SOCKET), os.path.join(home, "default")}
+    if plane:
+        found.add(os.path.join(home, plane))
     if env.get("TMUX"):
         found.add(os.path.realpath(env["TMUX"].split(",")[0]))
     return frozenset(found)
+
+
+def _a_planes_socket(socket: str) -> bool:
+    """Is the socket FILE *socket* some plane's own server, in the suite's socket directory?
+
+    Every `charter-plane-<12 hex>` there is refused, whichever plane it belongs to: a test
+    names its server with `tests._tmuxreap.name`, which can never produce that shape (the
+    reaper refuses it too), so the only servers with it are an operator's live frames.
+    Outside that directory — a `$TMUX_TMPDIR` a test made for itself — it is the test's own.
+    """
+    return (bool(_SOCKET_DIR) and os.path.dirname(socket) == _SOCKET_DIR
+            and bool(_PLANE_SOCKET.fullmatch(os.path.basename(socket))))
+
+
+def _real_plane_socket() -> str:
+    """The real plane's own tmux socket name, or ``""`` where there is no plane to derive it
+    from. Asked of production (`tmuxctl.plane_socket`), which `charter.config` has already
+    imported by the time this runs."""
+    try:
+        from charter.frame import tmuxctl
+        return tmuxctl.plane_socket()
+    except (OSError, ValueError):
+        return ""
 
 
 def _tmux_socket(argv: list[str], env) -> str | None:
@@ -2032,14 +2079,19 @@ def _guard_spawns() -> None:
     body execs charter is waved through (#967). :func:`_program_names` states why, and
     `WhatAnArgvCannotSay` in the same test module pins it.
     """
-    global _SPAWN_GUARDED, _VAULT_CLIS, _FORGE_CLIS, _OPERATOR_TMUX
+    global _SPAWN_GUARDED, _VAULT_CLIS, _FORGE_CLIS, _OPERATOR_TMUX, _SOCKET_DIR
     if _SPAWN_GUARDED:
         return
     _SPAWN_GUARDED = True
     _VAULT_CLIS = _credential_clis()
     _FORGE_CLIS = _forge_clis()
     from . import _envguard
-    _OPERATOR_TMUX = _operator_tmux({**os.environ, **_envguard.scrubbed()})
+    suite_env = {**os.environ, **_envguard.scrubbed()}
+    # The real plane's socket is derived from the real state directory, and `install` calls
+    # this before anything has isolated it — the pin above moves `config.ROOT` and
+    # deliberately not `config.STATE_DIR`.
+    _OPERATOR_TMUX = _operator_tmux(suite_env, _real_plane_socket())
+    _SOCKET_DIR = _socket_dir(suite_env)
     original = subprocess.Popen.__init__
 
     def __init__(self, args=None, *rest, **kw):
@@ -2072,7 +2124,7 @@ def _guard_spawns() -> None:
         reached = _reaches_a_credential_cli(args, opts, _TMUX)
         if reached is not None:
             socket = _tmux_socket(_launcher_argv(reached[0])[0], opts.get("env"))
-            if socket in _OPERATOR_TMUX:
+            if socket in _OPERATOR_TMUX or (socket is not None and _a_planes_socket(socket)):
                 raise RealTmuxReach(_explain_tmux(reached[0], socket))
             # A tmux that could start a server hands that server this environment, and the
             # server hands it to every `charter panel` it runs. `-V` starts nothing.

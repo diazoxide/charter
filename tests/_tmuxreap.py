@@ -30,8 +30,9 @@ than merely declining to add to it.
 **What it will touch, stated as a rule rather than a list.**
 
 1. The name must be one this suite hands out: :func:`name`'s ``charter-<slug>-<pid>``.
-   The operator's own frame runs on ``charter`` — `commands_frame.SOCKET`, no suffix — and
-   cannot match. ``probe-menu-80053`` and the other hand-rolled probe sockets on this
+   The operator's own frames run on ``charter-plane-<12 hex>`` — one server per plane,
+   `tmuxctl.plane_socket` — or, for a frame started before that, on ``charter`` with no
+   suffix; :func:`owns` refuses the first by name and the second cannot match. ``probe-menu-80053`` and the other hand-rolled probe sockets on this
    machine cannot match either, and that is deliberate: they are not in charter's
    namespace, and `tests/_envguard.py` makes the same call about ``EDM_`` for the same
    reason — a guard must not reach sideways into names charter does not own.
@@ -72,6 +73,11 @@ from pathlib import Path
 #: than redundant: it also matches before a trailing newline, so ``"charter-x-1\n"`` —
 #: which is a legal filename — was ours under ``match`` and is not under `fullmatch`.
 _OURS = re.compile(r"charter-[a-z0-9]+(?:-[a-z0-9]+)*-(\d+)")
+
+#: `charter.frame.tmuxctl.PLANE_SOCKET_RE`: a plane's own server, which is an operator's live
+#: frame and never this suite's. Spelled here, like `tests/_planeguard._PLANE_SOCKET`, and
+#: pinned equal to production by `test_the_suite_reaps_its_own_tmux_servers`.
+_PLANE = re.compile(r"charter-plane-[0-9a-f]{12}")
 
 #: How long a `kill-server` on a socket we already know is listening gets. Generous, and
 #: spent only on the way to giving up: nothing here waits for it to succeed.
@@ -117,8 +123,15 @@ def name(slug: str) -> str:
 
 
 def owns(candidate: str) -> bool:
-    """Whether *candidate* is a socket name this suite hands out."""
-    return _OURS.fullmatch(candidate) is not None
+    """Whether *candidate* is a socket name this suite hands out.
+
+    **Never a plane's own server, whatever :data:`_OURS` says** (ruling 46). A plane's socket
+    is ``charter-plane-<12 hex>``, and twelve hex digits are all decimal about once in 280
+    planes — ``charter-plane-316492058417`` is ``charter-<slug>-<pid>`` with the slug
+    ``plane`` and a pid that is gone, so the reaper would kill that operator's live frame on
+    the next run. :data:`_PLANE` is refused first, and :func:`name` refuses to produce it.
+    """
+    return _PLANE.fullmatch(candidate) is None and _OURS.fullmatch(candidate) is not None
 
 
 def socket_dir() -> Path:

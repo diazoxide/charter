@@ -394,7 +394,7 @@ class OnlyThePanesOwnFirstProcessIsFramed(_AProfileAndAPlane, unittest.TestCase)
     def setUp(self) -> None:
         super().setUp()
         state.frame_dir("alpha.1", create=True)
-        state.record_server("alpha.1", commands_frame.SOCKET)
+        state.record_server("alpha.1", tmuxctl.plane_socket())
         state.record_profile("alpha.1", "codex")
         self.rows = _row(53118)
         self.asked: list[list[str]] = []
@@ -425,7 +425,7 @@ class OnlyThePanesOwnFirstProcessIsFramed(_AProfileAndAPlane, unittest.TestCase)
             launcher.framed_chat()
         self.assertTrue(self.asked)
         for argv in self.asked:
-            self.assertIn(commands_frame.SOCKET, argv)
+            self.assertIn(tmuxctl.plane_socket(), argv)
             self.assertNotIn("/tmp/somebody/else", argv)
 
     def test_a_pane_whose_window_is_not_named_for_the_chat_is_not_framed(self):

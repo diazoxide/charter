@@ -26,7 +26,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from charter import commands_frame
+from charter.frame import tmuxctl
 from tests import _tmuxreap
 
 _HAS_TMUX = shutil.which("tmux") is not None
@@ -124,11 +124,33 @@ class TheNameIsWhatMakesASocketReapable(unittest.TestCase):
                 self.assertIn("#770", str(caught.exception))
 
     def test_the_operators_own_frame_socket_is_not_ours(self):
-        """`commands_frame.SOCKET` — asked of production, not spelled — is the socket the
-        operator's live frame runs on, and three of them were on this machine while #564
-        was being measured. It carries no pid, so the rule cannot reach it; this is the
-        case that fails if the rule is ever loosened to a bare prefix."""
-        self.assertFalse(_tmuxreap.owns(commands_frame.SOCKET))
+        """`tmuxctl.LEGACY_SOCKET` — asked of production, not spelled — is the socket the
+        operator's frames started before ruling 46 still run on, and three of them were on
+        this machine while #564 was being measured. It carries no pid, so the rule cannot
+        reach it; this is the case that fails if the rule is ever loosened to a bare
+        prefix."""
+        self.assertFalse(_tmuxreap.owns(tmuxctl.LEGACY_SOCKET))
+
+    def test_a_planes_own_server_is_never_ours_even_when_its_hash_is_all_digits(self):
+        """Ruling 46 gave every plane a server named ``charter-plane-<12 hex>``, and about
+        one plane in 280 hashes to twelve decimal digits — which `_OURS` reads as the slug
+        ``plane`` and a pid long gone. Reaped, that is an operator's live frame killed by the
+        next suite run. Asked of production's own name for this plane as well."""
+        for name in ("charter-plane-316492058417", "charter-plane-000000000001",
+                     "charter-plane-16aa9a47ae91", tmuxctl.plane_socket()):
+            with self.subTest(name=name):
+                self.assertFalse(_tmuxreap.owns(name))
+
+    def test_the_plane_pattern_is_productions(self):
+        self.assertEqual(_tmuxreap._PLANE.pattern, tmuxctl.PLANE_SOCKET_RE.pattern)
+
+    def test_no_name_the_helper_produces_is_a_planes_socket(self):
+        """The producer's side of the same rule, `plane` itself included as a slug: a name
+        this suite hands out is never one the guard refuses as an operator's plane, and
+        never one a reap would have to tell apart from one."""
+        for slug in ("plane", "two-planes", "integration-test", "a"):
+            with self.subTest(slug=slug):
+                self.assertIsNone(tmuxctl.PLANE_SOCKET_RE.fullmatch(_tmuxreap.name(slug)))
 
     def test_a_name_outside_charters_namespace_is_not_ours(self):
         """`probe-menu-80053` and friends were on this machine too, left by hand-run probe

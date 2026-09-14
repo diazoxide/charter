@@ -536,21 +536,107 @@ class WhoseServerIsIt(unittest.TestCase):
         self.assertFalse(tmuxctl.is_operator_socket("", own="charter"))
 
     def test_the_socket_it_compares_against_is_the_one_charter_launches_on(self):
-        """*own* defaults to `commands_frame.SOCKET`, read at CALL time.
+        """*own* defaults to `tmuxctl.plane_socket()`, asked at CALL time.
 
         Bound at import instead, this would answer for the socket the suite was loaded
         with rather than the throwaway one a real-tmux test patches in — so every such
         test would be measuring ownership of a server it never touched, which is the
         shape of mistake #812 is."""
-        from charter import commands_frame
-        self.assertEqual(commands_frame.SOCKET, "charter")
-        self.assertFalse(tmuxctl.is_operator_socket(socket_path("charter")))
-        with mock.patch.object(commands_frame, "SOCKET", "charter-somewhere-else"):
-            self.assertTrue(tmuxctl.is_operator_socket(socket_path("charter")))
-            self.assertFalse(
-                tmuxctl.is_operator_socket(socket_path("charter-somewhere-else")))
+        with mock.patch.object(tmuxctl, "plane_socket", return_value="charter-mine-1"):
+            self.assertFalse(tmuxctl.is_operator_socket(socket_path("charter-mine-1")))
+            self.assertTrue(tmuxctl.is_operator_socket(socket_path("charter-somewhere-2")))
+        with mock.patch.object(tmuxctl, "plane_socket", return_value="charter-somewhere-2"):
+            self.assertTrue(tmuxctl.is_operator_socket(socket_path("charter-mine-1")))
+            self.assertFalse(tmuxctl.is_operator_socket(socket_path("charter-somewhere-2")))
+
+    def test_the_legacy_shared_socket_is_charters_not_the_operators(self):
+        """Ruling 46: frames started before each plane had a server of its own are still on
+        `charter`, and a launch from one of their panes reads that socket out of `$TMUX` as a
+        path. It is a server charter started; read as the operator's, this plane's chat
+        would open as a window on it — under whichever plane's config and palette it holds."""
+        self.assertFalse(tmuxctl.is_operator_socket(socket_path(tmuxctl.LEGACY_SOCKET),
+                                                    own="charter-plane-0123456789ab"))
+
+    def test_another_planes_own_server_is_charters_not_the_operators(self):
+        """The same door from a pane of ANOTHER plane's frame: a server charter started, so
+        this plane builds its own frame rather than a window in that plane's server."""
+        self.assertFalse(tmuxctl.is_operator_socket(socket_path("charter-plane-fedcba987654"),
+                                                    own="charter-plane-0123456789ab"))
+
+    def test_a_charter_name_in_another_directory_is_not_charters(self):
+        """The directory decides as well as the name: a file called `charter` somewhere
+        tmux would never put charter's socket is a server charter did not start."""
+        self.assertTrue(tmuxctl.is_operator_socket("/somewhere/else/charter",
+                                                   own="charter-plane-0123456789ab"))
+        self.assertTrue(tmuxctl.is_operator_socket("/somewhere/else/charter-plane-fedcba987654",
+                                                   own="charter-plane-0123456789ab"))
+
+    def test_a_name_only_shaped_like_a_planes_is_the_operators(self):
+        """A fullmatch on twelve lowercase hex digits, not a prefix."""
+        for name in ("charter-plane-fedcba98765", "charter-plane-FEDCBA987654",
+                     "charter-plane-fedcba9876543", "charter-planes"):
+            with self.subTest(name=name):
+                self.assertTrue(tmuxctl.is_operator_socket(socket_path(name),
+                                                           own="charter-plane-0123456789ab"))
 
 
+class EachPlaneHasItsOwnServer(unittest.TestCase):
+    """`tmuxctl.plane_socket` — ruling 46's one function, asked of the plane's state dir."""
+
+    def _named_for(self, state_dir) -> str:
+        from charter import config
+        with mock.patch.object(config, "STATE_DIR", state_dir):
+            return tmuxctl.plane_socket()
+
+    def test_it_is_a_name_of_the_documented_shape(self):
+        name = self._named_for("/tmp/plane-a/.charter")
+        self.assertRegex(name, r"\Acharter-plane-[0-9a-f]{12}\Z")
+        self.assertIsNotNone(tmuxctl.PLANE_SOCKET_RE.fullmatch(name))
+        self.assertFalse(tmuxctl.is_socket_path(name), "a NAME, so `-L` aims at it")
+        self.assertEqual(tmuxctl.server_argv(name, "ls")[2:4], ["-L", name])
+
+    def test_it_is_the_sha256_of_the_resolved_state_directory(self):
+        import hashlib
+        with tempfile.TemporaryDirectory() as d:
+            real = os.path.realpath(d)
+            want = "charter-plane-" + hashlib.sha256(os.fsencode(real)).hexdigest()[:12]
+            self.assertEqual(self._named_for(d), want)
+
+    def test_two_planes_get_two_servers_and_one_plane_gets_one(self):
+        a = self._named_for("/tmp/plane-a/.charter")
+        self.assertEqual(a, self._named_for("/tmp/plane-a/.charter"))
+        self.assertNotEqual(a, self._named_for("/tmp/plane-b/.charter"))
+
+    def test_a_symlinked_spelling_of_one_directory_is_one_server(self):
+        with tempfile.TemporaryDirectory() as d:
+            real = os.path.join(d, "real")
+            os.mkdir(real)
+            link = os.path.join(d, "link")
+            os.symlink(real, link)
+            self.assertEqual(self._named_for(link), self._named_for(real))
+
+    def test_it_is_asked_at_call_time(self):
+        """`config.use` re-points the plane at runtime; a cached name would be the first
+        plane that asked."""
+        first = self._named_for("/tmp/plane-a/.charter")
+        self.assertNotEqual(first, self._named_for("/tmp/plane-c/.charter"))
+
+    def test_the_socket_path_fits_the_unix_socket_limit(self):
+        """`sun_path` is 104 bytes on macOS and 108 on Linux; the name is what charter
+        controls, and it adds 27 bytes to tmux's own directory."""
+        path = tmuxctl.socket_path(self._named_for("/tmp/plane-a/.charter"))
+        self.assertLessEqual(len(os.fsencode(path)), 104, path)
+        self.assertEqual(len("charter-plane-") + 12, 26)
+
+    def test_it_reads_no_file(self):
+        """Ruling 43 keeps `charter.local.toml` off every import path, and this is asked by
+        every frame command: a `realpath` and a hash, and nothing opened."""
+        with mock.patch("builtins.open", side_effect=AssertionError("opened a file")):
+            self._named_for("/tmp/plane-a/.charter")
+
+    def test_the_legacy_socket_is_the_one_every_plane_shared(self):
+        self.assertEqual(tmuxctl.LEGACY_SOCKET, "charter")
+        self.assertIsNone(tmuxctl.PLANE_SOCKET_RE.fullmatch(tmuxctl.LEGACY_SOCKET))
 
 
 class InertFormat(unittest.TestCase):

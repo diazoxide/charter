@@ -15,7 +15,7 @@ import unittest
 from unittest import mock
 
 from tests._isolation import PersonaIso
-from charter.frame import state
+from charter.frame import state, tmuxctl
 from tests._tmuxsocket import OPERATOR_SOCKET
 
 
@@ -1056,14 +1056,24 @@ class ReapAcrossServers(PersonaIso, unittest.TestCase):
         self.assertEqual(state.exit_code(fid), 42)
 
     def test_a_frame_from_before_charter_recorded_this_is_still_reapable(self):
-        """The migration case, and the one place an unknown server matches every
-        server. A directory with no marker was written by a charter that only ever ran
-        frames on its own private server; leaving it unreapable forever would trade a
-        transient bug for a permanent leak."""
+        """The migration case. A directory with no marker was written by a charter that
+        only ever ran frames on the one private server every plane shared; leaving it
+        unreapable forever would trade a transient bug for a permanent leak."""
         fid = f"legacy-{_a_dead_pid()}"
         state.bump(fid)
         self.assertIsNone(state.frame_server(fid))
-        self.assertEqual(state.reap(set(), server=self.THEIRS), [fid])
+        self.assertEqual(state.reap(set(), server=tmuxctl.LEGACY_SOCKET), [fid])
+
+    def test_a_frame_from_before_the_record_is_the_legacy_servers_and_no_other(self):
+        """Ruling 46: it used to match EVERY server, which was the same answer while there
+        was one private server. With one per plane, a reap of this plane's new server —
+        which has never heard of that frame — would delete the state of a chat still
+        running on the legacy one. So only a reap of the legacy server takes it."""
+        fid = f"legacy-{_a_dead_pid()}"
+        state.bump(fid)
+        self.assertEqual(state.reap(set(), server="charter-plane-0123456789ab"), [])
+        self.assertEqual(state.reap(set(), server=self.THEIRS), [])
+        self.assertTrue(state.frame_dir(fid).is_dir())
 
     def test_the_recorded_server_reads_back(self):
         state.record_server("f-1", self.THEIRS)

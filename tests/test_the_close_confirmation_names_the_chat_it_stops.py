@@ -48,6 +48,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame
+from charter.frame import tmuxctl
 from charter.frame import chats, leave, slots, state
 
 from tests._isolation import PersonaIso, make_plane
@@ -324,7 +325,7 @@ class AWindowOnANOTHERPlaneIsNotThisPlanesChat(PersonaIso, unittest.TestCase):
         # machine that is their live frame: an unmarked session there holding a `default.1`
         # is "this plane's" by the veto rule below, and `cmd_close` would kill it. So
         # charter's socket is this test's server too (`tests._planeguard.RealTmuxReach`).
-        self.enterContext(mock.patch.object(commands_frame, "SOCKET", self.socket))
+        self.enterContext(mock.patch.object(tmuxctl, "plane_socket", return_value=self.socket))
         self.plane = make_plane(self, "schema = 1\n")
         self.chat = f"{self.WS}.1"
 
@@ -482,10 +483,10 @@ class WhichChatACloseHandsYou(PersonaIso, unittest.TestCase):
         """
         self._plant(f"{self.WS}.1", f"{self.WS}.2")
         for chat in (f"{self.WS}.1", f"{self.WS}.2"):
-            state.record_server(chat, commands_frame.SOCKET)
+            state.record_server(chat, tmuxctl.plane_socket())
             state.record_harness_pane(chat, "%1")
         live = ({f"{self.WS}.1", f"{self.WS}.2"},
-                {commands_frame.SOCKET: {f"{self.WS}.1": "@0", f"{self.WS}.2": "@1"}},
+                {tmuxctl.plane_socket(): {f"{self.WS}.1": "@0", f"{self.WS}.2": "@1"}},
                 set())
         commands_frame.cmd_chat.side_effect = RuntimeError("the switch blew up")
 

@@ -50,6 +50,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import cli, commands_frame, config, instance
+from charter.frame import tmuxctl
 from charter.frame import leave, record, reopen, state
 
 from tests._isolation import PersonaIso, wired_as_today
@@ -419,7 +420,7 @@ def _plant(fid: str, *, ws: str, harness: str = "claude-code", pane: str = "%1",
     """Make *fid* look like a chat charter launched — through the production writers, so a
     fixture that stopped agreeing with the launcher fails here rather than against itself."""
     state.frame_dir(fid, create=True)
-    state.record_server(fid, commands_frame.SOCKET)
+    state.record_server(fid, tmuxctl.plane_socket())
     state.record_workspace(fid, ws)
     state.record_harness_pane(fid, pane)
     state.record_identity(fid, {"CHARTER_HARNESS": harness, "CHARTER_WORKSPACE": "",
@@ -689,7 +690,7 @@ class TheLauncherTakesTheDecision(PersonaIso, unittest.TestCase):
         self.assertIn("edm-test-", str(config.STATE_DIR))
         reopen.write([_frame("alpha", "alpha.1")], focus="alpha")
 
-    def _launch(self, *, chats_live=(), reopen_rc=0, **kw):
+    def _launch(self, *, chats_live=(), reopen_rc=0, legacy_live=(), **kw):
         said = io.StringIO()
         self.said = said
         with redirect_stderr(said), mock.patch.multiple(commands_frame,
@@ -705,7 +706,8 @@ class TheLauncherTakesTheDecision(PersonaIso, unittest.TestCase):
                 mock.patch("charter.frame.tmuxctl.operator_server", return_value=None), \
                 mock.patch("sys.stdout.isatty", return_value=True):
             m["_live_sessions"].return_value = set()
-            m["_live_chats"].return_value = set(chats_live)
+            m["_live_chats"].side_effect = lambda socket: set(
+                legacy_live if socket == tmuxctl.LEGACY_SOCKET else chats_live)
             m["_choose_workspace"].return_value = ("alpha", None, False)
             m["_workspace_to_focus"].return_value = None
             m["cmd_reopen"].return_value = reopen_rc
@@ -732,6 +734,26 @@ class TheLauncherTakesTheDecision(PersonaIso, unittest.TestCase):
         rc, reopened = self._launch(chats_live=("alpha.1",))
         self.assertEqual(rc, 1)
         reopened.assert_not_called()
+
+    def test_a_plane_whose_old_frame_still_runs_on_the_shared_server_is_not_restored_over(self):
+        """**Ruling 46.** Nothing live on this plane's own server is not "nothing live on
+        this plane" while a frame started before the upgrade runs on the shared one — a chat
+        with no server record, which is where such a frame is. Restoring beside it would put
+        a second copy of that chat on screen."""
+        state.frame_dir("alpha.1", create=True)
+        state.record_workspace("alpha.1", "alpha")
+        rc, reopened = self._launch(legacy_live=("alpha.1",))
+        self.assertEqual(rc, 1)
+        reopened.assert_not_called()
+        self.assertTrue(state.frame_dir("alpha.1").is_dir(), "a running chat was reaped")
+
+    def test_an_old_frame_that_has_ended_is_reaped_and_the_plane_is_restored(self):
+        state.frame_dir("alpha.1", create=True)
+        state.record_workspace("alpha.1", "alpha")
+        state.bump("alpha.1")
+        rc, reopened = self._launch()
+        self.assertFalse(state.frame_dir("alpha.1").exists())
+        reopened.assert_called_once()
 
     def test_a_plane_with_nothing_recorded_opens_a_chat_as_it_always_did(self):
         reopen.forget()
@@ -1187,9 +1209,9 @@ class AReopenOntoARunningPlaneIsRefused(PersonaIso, unittest.TestCase):
         self.assertIn(
             "charter reopen: this plane is already running — reopening it would open a "
             "second copy of every chat, and a reopened chat gets a new id, so nothing on "
-            "screen would tell the copies apart. Attach to what is there (`tmux -L charter "
-            "attach`), or quit it first (`F2 → charter: quit`). Nothing was reopened, and "
-            "the record is left in place.", out)
+            "screen would tell the copies apart. Attach to what is there (`tmux -L "
+            f"{tmuxctl.plane_socket()} attach`), or quit it first (`F2 → charter: quit`). "
+            "Nothing was reopened, and the record is left in place.", out)
         self.assertIsNotNone(reopen.read(), "and the record is left to act on")
 
     def test_a_server_that_will_not_answer_does_not_block_the_reopen(self):
@@ -1214,7 +1236,7 @@ class AReopenOntoARunningPlaneIsRefused(PersonaIso, unittest.TestCase):
 def _doomed(**kw):
     """One `leave.Doomed` with every field defaulted, so a case states only what it means."""
     base = dict(chat="alpha.1", workspace="alpha", persona="", harness="claude-code",
-                cwd="", resume="", server=commands_frame.SOCKET, live=True, active=False,
+                cwd="", resume="", server=tmuxctl.plane_socket(), live=True, active=False,
                 exit_code=None, closed=False, homeless=False, cwd_gone=False,
                 cwd_outside=False)
     base.update(kw)

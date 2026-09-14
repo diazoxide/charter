@@ -4158,10 +4158,12 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
         **Their TMUX, which is not the same claim as "nothing at all is written"** — the
         name says `tmux` for that reason. A launch writes charter's own frame state, and
         the first thing it writes is a DELETION: `state.reap` rmtrees every frame
-        directory the named server does not report, and a directory carrying no `server`
-        marker (the migration case `state.reap` documents) is not reported by any server
-        at all. The decoy below is exactly that shape — no marker, and named after a pid
-        that has genuinely exited, so neither of `reap`'s two keep-rules covers it — and
+        directory of the named server that server does not report. The decoy below is
+        exactly that shape — a `server` marker naming this very server, a window it no
+        longer has, and a name after a pid that has genuinely exited, so neither of
+        `reap`'s two keep-rules covers it. (It carried NO marker until ruling 46: that is
+        now the legacy shared server's migration case, which a reap of this server leaves
+        alone rather than delete the state of a frame still running there.) And
         asserting it is gone afterward pins the blast radius of one launch — which is also why this class cannot run
         without `PersonaIso`: the same rmtree against an unisolated `config.STATE_DIR`
         lands on the developer's live frames. The decoy is checked to be inside this
@@ -4261,6 +4263,7 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
                 create=True)
             self.assertIsNotNone(decoy)
             (decoy / "version").write_text("1\n")
+            state.record_server(decoy.name, OP_SOCKET_PATH)
             self.assertTrue(decoy.is_relative_to(self.tmp),
                             f"the frame state this test is about to have charter delete is "
                             f"at {decoy} — outside this test's own throwaway plane "
@@ -4343,9 +4346,9 @@ class WindowInsideAnOperatorsTmux(_TmuxServerFixture, PersonaIso):
                                             "#{window_name}").stdout,
                              "the frame's window was left behind")
             self.assertFalse(decoy.exists(),
-                             "a launch is expected to reap a frame directory with no "
-                             "`server` marker — if it has stopped doing that, `state.reap`'s "
-                             "migration case changed and the isolation this class rests on "
+                             "a launch is expected to reap a dead frame directory of the "
+                             "server it launches on — if it has stopped doing that, "
+                             "`state.reap` changed and the isolation this class rests on "
                              "is no longer being exercised by anything")
             if rc == [21]:
                 # **The probe is checked on the GREEN path too, and that is what keeps a
@@ -6633,7 +6636,7 @@ class ASwitchDressesTheWindowItEntersEvenWithNothingToSplit(_ChatsOnOneSession,
             self._srv("set-option", "-p", "-u", "-t", self.pane, name)
 
     def _switch(self) -> None:
-        with mock.patch.object(commands_frame, "SOCKET", self.SOCKET_NAME), \
+        with mock.patch.object(tmuxctl, "plane_socket", return_value=self.SOCKET_NAME), \
              mock.patch.object(commands_frame, "_say_on_screen",
                                lambda fid, msg, *a, **k: self.fail(msg)), \
              mock.patch.dict(os.environ,
@@ -6906,7 +6909,7 @@ class SwitchingBetweenChatsMovesTheClientAndThePanes(_ChatsOnOneSession,
             {"frame": {"component": [{"use": "chats", "edge": "top", "size": 1},
                                      {"use": "identity"}]}})
         frame["slots"] = [p["use"] for p in frame["components"]]
-        with mock.patch.object(commands_frame, "SOCKET", self.SOCKET_NAME), \
+        with mock.patch.object(tmuxctl, "plane_socket", return_value=self.SOCKET_NAME), \
              mock.patch.object(config, "FRAME", frame), \
              mock.patch.dict(os.environ,
                              {"CHARTER_SESSION_ID": f"{self.WS}.1",
@@ -7022,7 +7025,7 @@ class SwitchingBetweenChatsMovesTheClientAndThePanes(_ChatsOnOneSession,
         # client environment at all (`_relayout`'s `env=None`), and that is what the
         # guard resolves a spawn's plane from.
         plane = make_plane(self)
-        with mock.patch.object(commands_frame, "SOCKET", self.SOCKET_NAME), \
+        with mock.patch.object(tmuxctl, "plane_socket", return_value=self.SOCKET_NAME), \
              mock.patch.dict(os.environ,
                              {"CHARTER_SESSION_ID": f"{self.WS}.1",
                               "CHARTER_WORKSPACE": self.WS,
@@ -7117,7 +7120,7 @@ class ASwitchAcrossSessionsIsRefusedRatherThanReported(_TmuxServerFixture, Perso
 
     def _switch(self) -> list[str]:
         said: list[str] = []
-        with mock.patch.object(commands_frame, "SOCKET", self.SOCKET_NAME), \
+        with mock.patch.object(tmuxctl, "plane_socket", return_value=self.SOCKET_NAME), \
              mock.patch.object(commands_frame, "_say_on_screen",
                                lambda fid, msg, *a, **k: said.append(msg)), \
              mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "api.1",

@@ -42,11 +42,14 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, inflight
+from charter.frame import tmuxctl
 from charter.frame import chats, leave, reopen, state
 
 from tests._isolation import PersonaIso
 
-SERVER = commands_frame.SOCKET
+#: A server these chats record, standing in for a plane's own. A NAME no test starts a
+#: server on: nothing here reaches tmux, and `tests._planeguard` refuses the shape if one did.
+SERVER = "charter-plane-5e77e45e77e4"
 
 
 def _seats(windows, active):
@@ -426,17 +429,36 @@ class EachServerIsAskedOnceAndTheFocusIsWhereYouWere(PersonaIso, unittest.TestCa
         self.assertEqual(servers, [SERVER])
         self.assertEqual(len(servers), len(set(servers)))
 
-    def test_charters_own_socket_is_listed_even_when_no_chat_records_it(self):
-        # It is where a chat with no recorded server will be — `builtin_actions._server`'s
-        # own fallback, spelled the same way.
+    def test_a_server_no_chat_records_is_not_asked_not_even_the_planes_own(self):
+        # Ruling 46: a server nothing has started answers rc 1, which `_plane_live` reads as
+        # "could not ask" for the whole plane — so asking one nothing points at costs a quit
+        # its reading of every chat that IS somewhere.
         state.frame_dir("alpha.9", create=True)
         state.record_server("alpha.9", "somebody-elses-socket")
         state.record_workspace("alpha.9", "alpha")
 
         servers = commands_frame._plane_servers()
 
-        self.assertEqual(servers[0], SERVER)
-        self.assertIn("somebody-elses-socket", servers)
+        self.assertEqual(servers, ["somebody-elses-socket"])
+
+    def test_the_planes_own_server_is_asked_first_when_a_chat_points_at_it(self):
+        for fid, server in (("alpha.1", "somebody-elses-socket"),
+                            ("alpha.2", tmuxctl.plane_socket())):
+            state.frame_dir(fid, create=True)
+            state.record_server(fid, server)
+            state.record_workspace(fid, "alpha")
+
+        self.assertEqual(commands_frame._plane_servers(),
+                         [tmuxctl.plane_socket(), "somebody-elses-socket"])
+
+    def test_the_legacy_server_is_asked_while_a_chat_has_no_record(self):
+        # A chat with no `server` file was started before the record existed, on the one
+        # server every plane shared — and a quit that did not ask it would record that chat
+        # as stopped and kill nothing.
+        state.frame_dir("alpha.9", create=True)
+        state.record_workspace("alpha.9", "alpha")
+
+        self.assertEqual(commands_frame._plane_servers(), [tmuxctl.LEGACY_SOCKET])
 
     def test_a_quit_typed_outside_a_frame_records_no_focus(self):
         # `(state.own_workspace(fid) or "") if fid else ""` — the `else`. Without it the

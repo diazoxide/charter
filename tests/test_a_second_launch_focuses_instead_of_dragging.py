@@ -46,6 +46,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, workspace
+from charter.frame import tmuxctl
 from charter.frame import state
 from tests import _tmuxreap
 from tests._isolation import PersonaIso, wired_as_today
@@ -177,7 +178,7 @@ class _FakeServer:
 
 
 def _a_chat(fid: str, *, ws: str, pane: str | None,
-            server: str = commands_frame.SOCKET) -> None:
+            server: str | None = None) -> None:
     """A chat directory on THIS plane, in the shape a launcher leaves one.
 
     *server* is named rather than assumed because the real-tmux class below runs on a
@@ -186,7 +187,7 @@ def _a_chat(fid: str, *, ws: str, pane: str | None,
     """
     state.frame_dir(fid, create=True)
     state.record_workspace(fid, ws)
-    state.record_server(fid, server)
+    state.record_server(fid, server or tmuxctl.plane_socket())
     if pane is not None:
         state.record_harness_pane(fid, pane)
 
@@ -196,7 +197,7 @@ class TheFocusDecision(PersonaIso, unittest.TestCase):
 
     def _decide(self, fake):
         with mock.patch("charter.commands_frame.subprocess.run", side_effect=fake):
-            return commands_frame._workspace_to_focus(commands_frame.SOCKET, ws=SHARED)
+            return commands_frame._workspace_to_focus(tmuxctl.plane_socket(), ws=SHARED)
 
     def test_a_workspace_this_plane_has_never_opened_reaches_no_tmux_call_at_all(self):
         """The ordinary first launch, and the property that keeps this free: with no chat
@@ -236,6 +237,26 @@ class TheFocusDecision(PersonaIso, unittest.TestCase):
 
     def test_a_live_workspace_somebody_is_looking_at_is_focused(self):
         _a_chat("shared.1", ws=SHARED, pane="%0")
+        fake = _FakeServer(panes=[_seat("$3", "%0")], clients=["/dev/ttys001"])
+        self.assertEqual(self._decide(fake), ("$3", "shared.1"))
+
+    def test_a_pane_id_this_plane_recorded_on_another_server_matches_nothing_here(self):
+        """**Ruling 46: a pane id is minted per server.** A frame started before this plane
+        had a server of its own recorded `%0` on the shared one; `%0` on this plane's own
+        server is a chat of a different workspace. Matched across servers, `shared` would be
+        focused into `api`'s session."""
+        _a_chat("shared.1", ws=SHARED, pane="%0", server=tmuxctl.LEGACY_SOCKET)
+        _a_chat("api.1", ws="api", pane="%0")
+        fake = _FakeServer(panes=[_seat("$7", "%0")], clients=["/dev/ttys001"])
+        self.assertIsNone(self._decide(fake))
+        # No chat of `shared` is on this server at all, so it is decided on disk.
+        self.assertEqual(fake.calls, [])
+
+    def test_a_record_spelled_as_a_path_still_names_this_server(self):
+        """#812's spelling: a chat opened from one of this plane's own panes records the
+        socket the way `$TMUX` writes it, and it is still this server's chat."""
+        _a_chat("shared.1", ws=SHARED, pane="%0",
+                server=tmuxctl.socket_path(tmuxctl.plane_socket()))
         fake = _FakeServer(panes=[_seat("$3", "%0")], clients=["/dev/ttys001"])
         self.assertEqual(self._decide(fake), ("$3", "shared.1"))
 

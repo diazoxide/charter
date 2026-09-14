@@ -29,11 +29,14 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config
+from charter.frame import tmuxctl
 from charter.frame import leave, reopen, state
 
 from tests._isolation import PersonaIso
 
-SERVER = commands_frame.SOCKET
+#: A server these chats record, standing in for a plane's own. A NAME no test starts a
+#: server on: nothing here reaches tmux, and `tests._planeguard` refuses the shape if one did.
+SERVER = "charter-plane-5e77e45e77e4"
 
 
 def _seats(windows, active):

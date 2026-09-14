@@ -604,7 +604,7 @@ class TheCheckSaysWhichRefusalFired(PersonaIso, unittest.TestCase):
         Pane ids are per-server, so `%3` recorded by a chat on one server names a real,
         live, unrelated pane on the other, and the `select-window` charter would send
         would be told it worked."""
-        state.record_server("api.1", commands_frame.SOCKET)
+        state.record_server("api.1", tmuxctl.plane_socket())
         state.record_server("api.2", OPERATOR_SOCKET)
         out = chats.check("api.1", "api.2")
         self.assertFalse(out.ok)
@@ -616,7 +616,7 @@ class TheCheckSaysWhichRefusalFired(PersonaIso, unittest.TestCase):
         frames out of the roster entirely — so an absent value is a truncated record, and
         "charter cannot tell" is the same answer as "somewhere else" for something about
         to move a client."""
-        state.record_server("api.1", commands_frame.SOCKET)
+        state.record_server("api.1", tmuxctl.plane_socket())
         out = chats.check("api.1", "api.2")
         self.assertFalse(out.ok)
         self.assertIn("not on this frame's tmux server", out.message)
@@ -778,8 +778,8 @@ class AHostileChatRendersAsOneRowAndRunsNothing(PersonaIso, unittest.TestCase):
                                  repr(line))
 
     def _switch_argvs(self) -> list[list[str]]:
-        state.record_server("api.1", commands_frame.SOCKET)
-        state.record_server("api.2", commands_frame.SOCKET)
+        state.record_server("api.1", tmuxctl.plane_socket())
+        state.record_server("api.2", tmuxctl.plane_socket())
         fake = _FakeServer()
         with mock.patch.object(tmuxctl, "run", fake), \
              mock.patch.object(commands_frame.tmuxctl, "run", fake), \
@@ -1032,8 +1032,8 @@ class TheSwitchIsFourStepsInOneOrder(PersonaIso, unittest.TestCase):
         super().setUp()
         _plant("api.1", workspace="api", pane="%1")
         _plant("api.2", workspace="api", pane="%2")
-        state.record_server("api.1", commands_frame.SOCKET)
-        state.record_server("api.2", commands_frame.SOCKET)
+        state.record_server("api.1", tmuxctl.plane_socket())
+        state.record_server("api.2", tmuxctl.plane_socket())
         state.record_panes("api.1", panels={"top": "%3", "bottom": "%4"})
         self.fake = _FakeServer()
         self._patches = [
@@ -1344,7 +1344,7 @@ class TheSwitchEstablishesTheWindowItIsMovingTo(PersonaIso, unittest.TestCase):
         _plant("api.1", workspace="beta", pane="%1")
         _plant("beta.1", workspace="beta", pane="%2")
         for fid in ("api.1", "beta.1"):
-            state.record_server(fid, commands_frame.SOCKET)
+            state.record_server(fid, tmuxctl.plane_socket())
         state.record_panes("api.1", panels={"top": "%3", "bottom": "%4"})
         self.fake = _FakeServer()
         # `api.1`'s window is in session `$0`; `beta.1`'s is in session `$1` — which is

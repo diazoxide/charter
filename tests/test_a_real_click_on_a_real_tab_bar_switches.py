@@ -1073,11 +1073,11 @@ class ARealPressOnThePlusReachesTheCommandBehindIt(_ARealFrameWithBars,
     this plane's (`_plane_session` — a real `list-panes` against a real server), and it
     builds the chat.
 
-    **It builds it HERE, and that is measured rather than assumed.** `commands_frame.SOCKET`
-    is a module constant — `"charter"`, the one shared server every frame on this machine
-    runs on — so a launch that took the private-server path would build a session on the
-    operator's own live charter server, from a suite, which is the one thing no test in this
-    repository may do. It does not: the detached child is started from a pane on THIS
+    **It builds it HERE, and that is measured rather than assumed.** The pane's own charter is
+    a separate process no patch reaches, so its private server is the throwaway plane's real
+    `charter-plane-<hex>` — and a launch that took the private-server path would start a
+    server in the operator's socket directory from a suite, which is the one thing no test
+    in this repository may do. It does not: the detached child is started from a pane on THIS
     fixture's server, so its `$TMUX` names this socket, `tmuxctl.is_operator_socket` answers
     yes, and `_launch_in_operator_tmux` adds a window to the session the press came from.
     Measured 2026-09-12 while the profile selector was wired to the `+`: the new window and

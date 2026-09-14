@@ -13,8 +13,8 @@ The operator's own requirement, which is the whole specification:
   — correct about §4j, and it left the `workspaces` bar a fifteen-row listing where every
   tab refused. :class:`TheSwitchDecision` and :class:`TheSwitchItself` are the two halves
   of what replaces it.
-* **It cannot cross planes.** `commands_frame.SOCKET` is one tmux server per MACHINE, not
-  per plane: measured on the operator's own socket while this was written, eleven sessions
+* **It cannot cross planes.** `charter` was one tmux server per MACHINE, not per plane,
+  until ruling 46 (and frames started before it are still there): measured on the operator's own socket while this was written, eleven sessions
   from three different projects, and `default` — a name every plane has whether anybody
   chose it or not — among them. A `switch-client -t default` decided on a name can put an
   operator in another project's frame, across every isolation boundary charter has.
@@ -45,6 +45,7 @@ from pathlib import Path
 from unittest import mock
 
 from charter import commands_frame, config, workspace
+from charter.frame import tmuxctl
 from charter.frame import chats, state, switch
 from tests import _tmuxreap, _tmuxsocket
 from tests._isolation import PersonaIso
@@ -95,11 +96,11 @@ def _seat(session: str, pane: str, plane=_MINE) -> str:
 
 
 def _a_chat(fid: str, *, ws: str, pane: str | None,
-            server: str = commands_frame.SOCKET) -> None:
+            server: str | None = None) -> None:
     """A chat directory on THIS plane, in the shape a launcher leaves one."""
     state.frame_dir(fid, create=True)
     state.record_workspace(fid, ws)
-    state.record_server(fid, server)
+    state.record_server(fid, server or tmuxctl.plane_socket())
     if pane is not None:
         state.record_harness_pane(fid, pane)
 
@@ -169,7 +170,7 @@ class TheSwitchItself(PersonaIso, unittest.TestCase):
             mock.patch.object(commands_frame, "_apply_arrangement"))
         self.enterContext(mock.patch.object(
             commands_frame, "_relayout_target",
-            side_effect=lambda fid: (commands_frame.SOCKET, "%9", (3, 7))))
+            side_effect=lambda fid: (tmuxctl.plane_socket(), "%9", (3, 7))))
 
     class _Server:
         """The four answers a switch reads, and a record of everything it asked."""
@@ -229,7 +230,7 @@ class TheSwitchItself(PersonaIso, unittest.TestCase):
         client on it, `beta.1`'s pane in `$2`, and `$2`'s current window drawing
         `beta.1`."""
         opts = dict(place="$1\t@1", panes=[_seat("$1", "%1"), _seat("$2", "%2")],
-                    here=["/dev/ttys001"], landing=["$2\t1\tbeta.1"])
+                    here=["/dev/ttys001"], landing=["$2\t1\tbeta.1\t"])
         opts.update(kw)
         return self._Server(**opts)
 
@@ -270,7 +271,7 @@ class TheSwitchItself(PersonaIso, unittest.TestCase):
         of them current: dressing the first would leave the operator looking at bare
         panes and re-laying-out a window nobody is in."""
         _a_chat("beta.2", ws="beta", pane="%3")
-        self._switch(self._ordinary(landing=["$2\t0\tbeta.1", "$2\t1\tbeta.2"]))
+        self._switch(self._ordinary(landing=["$2\t0\tbeta.1\t", "$2\t1\tbeta.2\t"]))
         self.assertEqual([c[0][0] for c in self.laid_out.call_args_list],
                          ["beta.2", self.FID])
 
@@ -313,7 +314,7 @@ class TheSwitchItself(PersonaIso, unittest.TestCase):
         then kill them — leaving the operator on the bare harness pane #844 is about. So
         the chat left behind is compared, not assumed.
         """
-        self._switch(self._ordinary(landing=[f"$2\t1\t{self.FID}"]))
+        self._switch(self._ordinary(landing=[f"$2\t1\t{self.FID}\t"]))
         self.assertEqual([c[0][0] for c in self.laid_out.call_args_list], [self.FID])
         self.assertTrue(self.laid_out.call_args_list[0][1]["want"],
                         "the chat this switch landed on was stripped of its panels by "
@@ -407,7 +408,7 @@ class TheSwitchItself(PersonaIso, unittest.TestCase):
         Two spellings of one socket are not the same string, so this asserts on the
         SWITCH: the same fixture as the ordinary case, with the server recorded the way
         `$TMUX` spells it, still moves the client."""
-        state.record_server(self.FID, _tmuxsocket.socket_path(commands_frame.SOCKET))
+        state.record_server(self.FID, _tmuxsocket.socket_path(tmuxctl.plane_socket()))
         s = self._switch(self._ordinary())
         self.assertEqual(s.switched, [("/dev/ttys001", "$2")],
                          "a frame on charter's own socket was refused as a guest's")
@@ -437,7 +438,7 @@ class TheSwitchItself(PersonaIso, unittest.TestCase):
         windows. The client still moved — that is the report — and charter says nothing
         rather than announcing a switch on a frame nobody is looking at. This chat's own
         panels still go, because the operator is no longer in front of them."""
-        s = self._switch(self._ordinary(landing=["$2\t1\t"]))
+        s = self._switch(self._ordinary(landing=["$2\t1\t\t"]))
         self.assertEqual(s.switched, [("/dev/ttys001", "$2")])
         self.assertEqual([c[0][0] for c in self.laid_out.call_args_list], [self.FID])
         self.said.assert_not_called()
@@ -485,7 +486,7 @@ class ThePlaneIsWhatDecidesWhichSessionIsOurs(PersonaIso, unittest.TestCase):
     def _resolve(self, rows):
         done = _completed(["tmux"], 0, "".join(f"{r}\n" for r in rows))
         with mock.patch.object(commands_frame.tmuxctl, "run", return_value=done):
-            return commands_frame._plane_session(commands_frame.SOCKET, ws=SHARED)
+            return commands_frame._plane_session(tmuxctl.plane_socket(), ws=SHARED)
 
     def test_a_session_this_plane_marked_is_ours(self):
         self.assertEqual(self._resolve([_seat("$3", "%0")]), ("$3", "shared.1"))
@@ -554,8 +555,8 @@ def _plane(root: Path):
 class _RealServer(unittest.TestCase):
     """One tmux server of this module's own, and the pty plumbing the classes below share.
 
-    Nothing here touches `commands_frame.SOCKET`: the operator's own frame lives on that
-    socket with eleven sessions on it, and this suite starts, moves and kills clients.
+    Nothing here touches charter's own sockets: the operator's frames live on them — the
+    legacy `charter` one had eleven sessions on it — and this suite starts, moves and kills clients.
     """
 
     def setUp(self) -> None:
