@@ -17,10 +17,15 @@ gets #1055's sentence, a name outside the alphabet gets `persona create`'s with 
 hint, and a valid name no persona has gets `persona use`'s, hint included. The expected lines
 below are written out rather than read off `persona`'s constants, so a change to a constant
 has to change this file too.
+
+A fourth sentence came with #1061: a valid name whose `persona.md` is there and does not load
+is told so and pointed at `persona lint`, not called absent and offered a create that
+refuses.
 """
 from __future__ import annotations
 
 import io
+import os
 import re
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -208,6 +213,13 @@ class ARefusedNameIsShownOnOneLine(NameCase):
                                        "letters, digits, '.', '_', '-')")
 
 
+def _does_not_load(name: str) -> str:
+    """The line every command says to a persona whose `persona.md` is there and does not
+    load (#1061). Written out, like the three above."""
+    return (f"persona '{name}' does not load from personas/{name}/persona.md (see why: "
+            f"charter persona lint {name})")
+
+
 class APersonaThatDoesNotLoad(NameCase):
     """`personas/broken/persona.md` resolves out of the plane, so the roster lists `broken`
     and `load` refuses it."""
@@ -223,7 +235,7 @@ class APersonaThatDoesNotLoad(NameCase):
         """`handoff` and `frame-switch` asked the roster, which lists it, so a chat could be
         pinned to, or a frame switched onto, a persona `persona use` will not adopt."""
         self.assertIn("broken", persona.list_personas(), "precondition: it is listed")
-        line = "no persona 'broken' (create it: charter persona create broken)"
+        line = _does_not_load("broken")
         rc, said = _run(commands_persona.cmd_persona_use, name="broken")
         self.assertEqual(rc, 1, said)
         self.assert_says(said, line)
@@ -239,6 +251,211 @@ class APersonaThatDoesNotLoad(NameCase):
         self.assertEqual(rc, 1, said)
         self.assertIn("broken: persona.md:", said)
         self.assertNotIn("create it", said)
+
+
+class ADefinitionThatIsThereAndDoesNotLoadIsNotCalledAbsent(NameCase):
+    """A directory whose `persona.md` is there and does not load (#1061).
+
+    Measured before, on this plane: `persona.md` holding bytes that are not text, and one
+    the reader has no permission to open, both raised out of `load`, so `persona use` and
+    every other routed command ended in a traceback. The out-of-plane link above answered
+    `no persona 'broken' (create it: charter persona create broken)`, and `persona create
+    broken` then refused because it already exists. Neither said to run `persona lint`,
+    the one command that says why a persona does not load.
+
+    Frontmatter that is merely ill-formed (none at all, or never closed) is not here: it
+    loads, and measured so.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        garbled = config.PERSONAS_DIR / "garbled"
+        garbled.mkdir()
+        (garbled / "persona.md").write_bytes(b"---\nrole: \xff\xfe\n---\n")
+        locked = config.PERSONAS_DIR / "locked"
+        locked.mkdir()
+        (locked / "persona.md").write_text("---\nrole: Locked\n---\n")
+        (locked / "persona.md").chmod(0)
+        self.addCleanup((locked / "persona.md").chmod, 0o644)
+
+    def _names(self) -> tuple[str, ...]:
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            # Root opens a mode-0 file, so `locked` would load and prove nothing.
+            return ("garbled",)
+        return ("garbled", "locked")
+
+    def test_every_command_says_it_does_not_load_and_points_at_lint(self):
+        for name in self._names():
+            self.assertIn(name, persona.list_personas(), "precondition: it is listed")
+            line = _does_not_load(name)
+            for label, run in MUST_EXIST:
+                with self.subTest(command=label, name=name):
+                    rc, said = run(name)
+                    self.assertEqual(rc, 1, said)
+                    self.assert_says(said, line)
+            for label, run in FRAMED:
+                with self.subTest(command=label, name=name):
+                    rc, said = run(name)
+                    self.assertEqual(rc, 1, said)
+                    self.assertEqual(len(said.strip().splitlines()), 1, said)
+                    self.assertIn(f"{line} — have: ", said)
+
+    def test_the_lint_it_points_at_says_why_instead_of_raising(self):
+        """Measured before: `persona lint garbled` raised UnicodeDecodeError and `persona
+        lint locked` PermissionError, as did a bare `persona lint` over the roster, so the
+        pointer would have led to a traceback."""
+        for name in self._names():
+            with self.subTest(name=name):
+                rc, said = _run(commands_persona.cmd_persona_lint, name=name, only=None)
+                self.assertEqual(rc, 1, said)
+                self.assertIn(f"✗ {name}: persona.md: ", said)
+                self.assertNotIn("create it", said)
+        with self.subTest(roster=True):
+            rc, said = _run(commands_persona.cmd_persona_lint, name=None, only=None)
+            self.assertEqual(rc, 1, said)
+            for name in self._names():
+                self.assertIn(f"✗ {name}: persona.md: ", said)
+        with self.subTest(what="the reason named"):
+            said = _run(commands_persona.cmd_persona_lint, name="garbled", only=None)[1]
+            self.assertIn(f"✗ garbled: persona.md: "
+                          f"'{config.PERSONAS_DIR / 'garbled' / 'persona.md'}' is not utf-8 "
+                          f"text (invalid start byte at offset 10)\n", said)
+            if "locked" in self._names():
+                said = _run(commands_persona.cmd_persona_lint, name="locked", only=None)[1]
+                self.assertIn(f"✗ locked: persona.md: "
+                              f"'{config.PERSONAS_DIR / 'locked' / 'persona.md'}' cannot be "
+                              f"read (Permission denied)\n", said)
+
+    def test_a_name_with_no_definition_is_still_absent_beside_them(self):
+        for label, run in MUST_EXIST:
+            with self.subTest(command=label):
+                rc, said = run(ABSENT[0])
+                self.assertEqual(rc, 1, said)
+                self.assert_says(said, ABSENT[1])
+        for label, run in FRAMED:
+            with self.subTest(command=label):
+                rc, said = run(ABSENT[0])
+                self.assertEqual(rc, 1, said)
+                self.assertIn(f"{ABSENT[1]} — have: ", said)
+
+
+def _inherits_one_that_does_not_load(name: str, parent: str) -> str:
+    """The line every command says to a persona whose `extends:` chain reaches a persona
+    whose `persona.md` is there and does not load (#1061)."""
+    return (f"persona '{name}' inherits from '{parent}', which does not load from "
+            f"personas/{parent}/persona.md (see why: charter persona lint {parent})")
+
+
+class AChildOfAParentThatDoesNotLoad(ADefinitionThatIsThereAndDoesNotLoadIsNotCalledAbsent):
+    """`kid-of-<parent>` loads and `extends:` a parent whose `persona.md` does not (#1061).
+
+    Measured before: `persona show`, `stats`, `lint` (named, and over the roster),
+    `sync-agents --persona`, `persona secret --persona` and `create --extends` raised out of
+    `load` through `resolve`, and `persona use` adopted the child without its parent.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        for parent in ("garbled", "locked"):
+            self.make_persona(f"kid-of-{parent}", role="Kid", extends=parent)
+        self.make_persona("grandkid", role="Grandkid", extends="kid-of-garbled")
+        self.make_persona("kid-of-devops", role="Kid", extends="devops")
+
+    # The inherited tests are about the parents themselves and already ran once.
+    test_every_command_says_it_does_not_load_and_points_at_lint = None
+    test_the_lint_it_points_at_says_why_instead_of_raising = None
+    test_a_name_with_no_definition_is_still_absent_beside_them = None
+
+    def test_every_command_names_the_parent_that_does_not_load(self):
+        cases = [(f"kid-of-{p}", p) for p in self._names()] + [("grandkid", "garbled")]
+        for name, parent in cases:
+            line = _inherits_one_that_does_not_load(name, parent)
+            for label, run in MUST_EXIST:
+                with self.subTest(command=label, name=name):
+                    rc, said = run(name)
+                    self.assertEqual(rc, 1, said)
+                    self.assert_says(said, line)
+            for label, run in FRAMED:
+                with self.subTest(command=label, name=name):
+                    rc, said = run(name)
+                    self.assertEqual(rc, 1, said)
+                    self.assertEqual(len(said.strip().splitlines()), 1, said)
+                    self.assertIn(f"{line} — have: ", said)
+
+    def test_lint_names_the_parent_instead_of_raising(self):
+        for parent in self._names():
+            name = f"kid-of-{parent}"
+            row = (f"✗ {name}: extends: persona '{parent}' does not load from "
+                   f"personas/{parent}/persona.md (see why: charter persona lint {parent})")
+            with self.subTest(name=name):
+                rc, said = _run(commands_persona.cmd_persona_lint, name=name, only=None)
+                self.assertEqual(rc, 1, said)
+                self.assertIn(row, said)
+            with self.subTest(name=name, roster=True):
+                rc, said = _run(commands_persona.cmd_persona_lint, name=None, only=None)
+                self.assertEqual(rc, 1, said)
+                self.assertIn(row, said)
+
+    def test_a_name_that_does_not_load_itself_has_no_ancestor_to_name(self):
+        """Its callers ask only once the name loads, but the question is public, and a file
+        that stops loading between the two reads reaches it the same way."""
+        for name in ("garbled", "nobody", "kid-of-devops"):
+            with self.subTest(name=name):
+                self.assertIsNone(persona.ancestor_that_does_not_load(name))
+        self.assertEqual(persona.ancestor_that_does_not_load("grandkid"), "garbled")
+
+    def test_only_a_parent_that_is_there_and_does_not_load_is_named(self):
+        """A parent that loads is no refusal. One that is absent, is a path, or closes a
+        cycle is not this sentence: `lint` has its own for each, and `persona use` took them
+        before and still does."""
+        self.make_persona("kid-of-nobody", role="Kid", extends="nobody")
+        self.make_persona("kid-of-a-path", role="Kid", extends="../elsewhere")
+        (config.ROOT / "elsewhere").mkdir()
+        (config.ROOT / "elsewhere" / "persona.md").write_text("---\nrole: Elsewhere\n---\n")
+        self.make_persona("ping", role="Ping", extends="pong")
+        self.make_persona("pong", role="Pong", extends="ping")
+        for name in ("kid-of-devops", "kid-of-nobody", "kid-of-a-path", "ping"):
+            with self.subTest(name=name):
+                rc, said = _run(commands_persona.cmd_persona_use, name=name)
+                self.assertEqual(rc, 0, said)
+                self.assertNotIn("does not load",
+                                 _run(commands_persona.cmd_persona_lint, name=name,
+                                      only=None)[1])
+
+
+class WhatLintSaysOfAnUnreadableDefinitionStaysOnOneLine(NameCase):
+    def test_a_control_character_in_the_directory_is_escaped_in_the_path_it_names(self):
+        """The roster lists any directory with a `persona.md`, so the path `read_refusal`
+        names carries whatever the directory name holds."""
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root opens a mode-0 file")
+        d = config.PERSONAS_DIR / "lo\nck\x1bed"
+        d.mkdir()
+        (d / "persona.md").write_text("---\nrole: Locked\n---\n")
+        (d / "persona.md").chmod(0)
+        self.addCleanup((d / "persona.md").chmod, 0o644)
+        rc, said = _run(commands_persona.cmd_persona_lint, name=None, only=None)
+        self.assertEqual(rc, 1, said)
+        self.assertIn(f"✗ lo\\u000ack\\u001bed: persona.md: "
+                      f"'{config.PERSONAS_DIR}/lo\\x0ack\\x1bed/persona.md' cannot be read "
+                      f"(Permission denied)\n", said)
+
+
+class AFlatDefinitionTheRosterDoesNotList(NameCase):
+    def test_frame_switch_says_the_one_line_persona_use_says(self):
+        """`personas/readme.md` is a legacy flat definition `load` reads and the roster skips.
+        Refused, and not on the roster: the refusal is the one `persona use` gives, and not
+        replaced by "no persona" for being off the roster."""
+        (config.PERSONAS_DIR / "readme.md").write_bytes(b"---\nrole: \xff\n---\n")
+        self.assertNotIn("readme", persona.list_personas(), "precondition: not listed")
+        line = ("persona 'readme' does not load from personas/readme.md (see why: charter "
+                "persona lint readme)")
+        rc, said = _run(commands_persona.cmd_persona_use, name="readme")
+        self.assertEqual(rc, 1, said)
+        self.assert_says(said, line)
+        outcome = switch.to_persona("f1", "readme")
+        self.assertFalse(outcome.ok)
+        self.assertEqual(outcome.message, f"{line} — have: devops")
 
 
 class WhatTheCheckLeavesAlone(NameCase):

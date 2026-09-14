@@ -373,7 +373,18 @@ anything up, and says the same line for the same mistake (#1059):
 ✗ no persona 'devosp' (create it: charter persona create devosp)
 ✗ invalid persona name '../x' (lowercase letters, digits, '.', '_', '-')
 ✗ no persona ' ' (a persona name is never only whitespace)
+✗ persona 'devops' does not load from personas/devops/persona.md (see why: charter persona lint devops)
+✗ persona 'deploy' inherits from 'devops', which does not load from personas/devops/persona.md (see why: charter persona lint devops)
 ```
+
+The last two lines are for a persona whose `persona.md` is there but does not load, for
+example because it is not UTF-8, cannot be read, or links out of the plane, and for a persona
+that inherits from one through `extends:`. They have no create hint, because `persona create`
+refuses a name whose file is there, and `persona lint devops` says why the file does not load
+(#1061). `persona lint deploy` reports the parent as an `extends:` error. Before, the persona
+was reported as absent with the create hint, its children were used without it, and a file
+that could not be read or decoded crashed the command, `persona lint` and `persona list`
+included.
 
 That covers `persona use`, `show`, `default`, `remove`, `remember`, `recall`, `dedupe`,
 `log`, `forget`, `stats`, `optimize`, `migrate`, `sync-agents --persona`, `persona secret
