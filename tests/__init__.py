@@ -69,7 +69,9 @@ _ttyguard.install()
 # ABOVE the `_planeguard` import, which is not cosmetic: `$CHARTER_ROOT` is one of the
 # names scrubbed, and importing `charter.config` is what resolves the plane. Scrub after it
 # and the whole suite is already pointing at whichever plane the operator's shell pinned.
-from . import _envguard      # noqa: E402
+# Above it is not enough on its own, either: `_envguard` itself once imported `_planeguard`
+# at its top, so the plane was resolved on this very line, before `install()` below (#1064).
+from . import _envguard      # noqa: E402  (imports no charter module at its top, by design)
 
 _envguard.install()
 

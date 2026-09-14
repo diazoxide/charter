@@ -116,7 +116,13 @@ from __future__ import annotations
 import os
 import unittest
 
-from . import _planeguard
+# No charter module and nothing that reaches one, at module level, by design (#1064). This
+# file is imported so that `install` can run before `charter.config` resolves a plane, and
+# an import here runs before `install` does: `_planeguard` imports `charter.hooks` and so
+# `charter.config`, which is how an ambient ``$CHARTER_ROOT`` used to choose `config.ROOT`
+# for the whole run a line before the scrub removed it. What this file needs from charter
+# it asks for inside a function, and `test_no_test_reads_the_operators_shell` watches a
+# fresh interpreter to see that nothing charter is loaded when `install` is entered.
 
 
 class AmbientEnvRead(BaseException):
@@ -250,6 +256,8 @@ def _in_namespace(key: str) -> bool:
 
 
 def _explain(key: str) -> str:
+    # At call time, not at the top of this file: see the note on the imports above.
+    from . import _planeguard
     return (
         f"REFUSED: read of ${key}\n"
         f"{_planeguard._current_test()} read ${key} without declaring what it holds. That "
@@ -402,7 +410,8 @@ def install() -> None:
     """Scrub the ambient values, replace `os.environ`, and arm the guard per test.
 
     Called once, at import of the `tests` package — and *before* `charter.config` is first
-    imported, which is why `tests/__init__.py` calls it above the `_planeguard` import.
+    imported, which is why `tests/__init__.py` calls it above the `_planeguard` import and
+    why this module imports nothing that reaches charter at its own top (#1064).
     ``$CHARTER_ROOT`` is one of the names removed here, and `charter.config` resolves the
     plane at ITS import: scrub afterwards and the whole suite would already be pointing at
     whatever plane the operator's shell pinned.
