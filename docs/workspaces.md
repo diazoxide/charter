@@ -432,6 +432,15 @@ the write makes the create fail, not follow the link. The `.charter-structure` s
 with an open that refuses a link, so it is never written through one either; a stamp that could
 not be written leaves the workspace flagged for `reinit`.
 
+The stamp is read the same way, because every status-line render reads it. A stamp that is a
+symlink, a directory or a FIFO is never read: a FIFO nobody writes to used to hang `reinit` and
+the status line. The workspace stays flagged, and `reinit` says the stamp could not be written
+instead of reporting the structure version as added: "is a symlink, and charter writes nothing
+through one; replacing it with a real file clears this", or "is not a regular file, and charter
+never moves existing content; moving it out of the way clears this". A stamp write refused for
+any other reason is named too, and `reinit` reports the version as added only when the stamp
+now reads current.
+
 A workspace directory that is itself a symlink loop is named the same way — "fix the symlink
 loop at" its path — by `reinit <name>`, which exits 1, and by `reinit --all`, which counts it
 in its closing line as "could not be checked" and never prints "Up to date" while one was

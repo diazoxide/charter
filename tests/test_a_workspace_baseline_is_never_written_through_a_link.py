@@ -484,6 +484,169 @@ class TheStructureStampNeverFollowsALink(AWorkspaceWithABaseline):
         self.assertTrue(finished, "scaffold blocked on a FIFO at .charter-structure")
         self.assertTrue(stat.S_ISFIFO(os.lstat(marker).st_mode))
 
+
+class AStampCase(AWorkspaceWithABaseline):
+    """A workspace whose `.charter-structure` a case replaces, and a deadline for every call that
+    could block on it: a regression fails its case instead of hanging the suite."""
+
+    DEADLINE = 5
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.marker = self.wd / ".charter-structure"
+
+    def promptly(self, call):
+        """*call*'s result, or a failure if it has not returned within `DEADLINE` seconds."""
+        box: dict = {}
+        done = threading.Event()
+
+        def run():
+            try:
+                box["value"] = call()
+            except BaseException as e:  # re-raised on the case's own thread below
+                box["error"] = e
+            finally:
+                done.set()
+
+        threading.Thread(target=run, daemon=True).start()
+        finished = done.wait(self.DEADLINE)
+        if not finished and stat.S_ISFIFO(os.lstat(self.marker).st_mode):
+            # A reader is blocked in `open`, so a non-blocking writer opens: closing it hands the
+            # reader EOF and lets the thread finish rather than outlive the case.
+            os.close(os.open(self.marker, os.O_WRONLY | os.O_NONBLOCK))
+            done.wait(self.DEADLINE)
+        self.assertTrue(finished, f"blocked on {self.marker}")
+        if "error" in box:
+            raise box["error"]
+        return box["value"]
+
+    def a_fifo_stamp(self) -> None:
+        self.marker.unlink()
+        os.mkfifo(self.marker)
+
+
+class AStampThatIsNoFileIsNamedAndNeverBlocks(AStampCase):
+    """#1074. `.charter-structure` is read on every status-line render and by every `reinit`, and
+    a read that opens a FIFO nobody writes to never returns. Git cannot commit a FIFO, so it takes
+    a local file — and one stray file froze every render in the workspace. Reading the stamp now
+    refuses whatever is not a regular file, as writing it already did (#1051), and names it.
+
+    Every call that could hang runs on a thread with a deadline, and a FIFO left blocked is opened
+    for writing and closed on the way out, so a regression fails its case instead of the suite."""
+
+    def test_a_fifo_stamp_is_read_promptly_and_named_in_the_way(self):
+        self.a_fifo_stamp()
+        status = self.promptly(lambda: workspace.structure_status(self.ws))
+        self.assertEqual(status["version"], 0)
+        self.assertIn((".charter-structure", self.marker, errno.ENXIO), status["in_the_way"])
+
+    def test_a_directory_stamp_is_named_in_the_way_as_one(self):
+        self.marker.unlink()
+        self.marker.mkdir()
+        status = self.promptly(lambda: workspace.structure_status(self.ws))
+        self.assertIn((".charter-structure", self.marker, errno.EISDIR), status["in_the_way"])
+
+    def test_the_status_line_does_not_block_on_a_fifo_stamp(self):
+        """`needs_reinit` is the status line's question, asked for every workspace on each render."""
+        self.a_fifo_stamp()
+        self.assertTrue(self.promptly(lambda: workspace.needs_reinit(self.ws)))
+
+    def test_a_stamp_linked_to_a_current_stamp_is_not_read_through(self):
+        """The link is in the way wherever it points, as it is for the write: a version read
+        through a link is one charter did not stamp, so the workspace is not called current by it."""
+        target = self.wd / "somebodys-stamp"
+        target.write_text(f"{workspace.STRUCTURE_VERSION}\n")
+        self.replaced_by_link(self.marker, target)
+        status = self.promptly(lambda: workspace.structure_status(self.ws))
+        self.assertEqual(status["version"], 0)
+        self.assertIn((".charter-structure", self.marker, errno.ELOOP), status["in_the_way"])
+
+
+class AStampReinitCouldNotWriteIsNeverReportedAdded(AStampCase):
+    """#1074's first half, and ADR 0013's first rule: a success line reports what charter wrote.
+    The stamp write refused a link, a directory and a FIFO (#1051), and `reinit` printed
+    `added structure v0 → v5` over each — and the same line again on the next run, because the
+    workspace still read as stale. It says the stamp could not be written, and why, instead."""
+
+    def reinit_promptly(self) -> list[str]:
+        rc, said = self.promptly(self.reinit)
+        self.assertEqual(rc, 0, said)
+        return said
+
+    def refused_twice(self, row: str) -> None:
+        for run in ("first", "second"):
+            said = self.reinit_promptly()
+            self.assertIn(row, said, run)
+            self.assertEqual(sum(".charter-structure" in s for s in said), 1, (run, said))
+            for claim in ("added structure", "Up to date"):
+                self.assertFalse(any(claim in s for s in said), (run, claim, said))
+
+    def in_the_way_row(self) -> str:
+        return (f"'{self.ws}': .charter-structure could not be written — {self.marker} is not a "
+                f"regular file, and charter never moves existing content; moving it out of the way "
+                f"clears this.")
+
+    def test_a_stamp_that_is_a_link_is_named_and_not_reported_added(self):
+        target = self.wd / "raced-structure"
+        self.replaced_by_link(self.marker, target)
+        self.refused_twice(f"'{self.ws}': .charter-structure could not be written — {self.marker} "
+                           f"is a symlink, and charter writes nothing through one; replacing it "
+                           f"with a real file clears this.")
+        self.assertFalse(os.path.lexists(target))
+
+    def test_a_stamp_that_is_a_directory_is_named_and_not_reported_added(self):
+        self.marker.unlink()
+        self.marker.mkdir()
+        self.refused_twice(self.in_the_way_row())
+        self.assertTrue(self.marker.is_dir())
+
+    def test_a_stamp_that_is_a_fifo_is_named_and_not_reported_added(self):
+        self.a_fifo_stamp()
+        self.refused_twice(self.in_the_way_row())
+        self.assertTrue(stat.S_ISFIFO(os.lstat(self.marker).st_mode))
+
+    def test_a_stamp_refused_with_nothing_in_the_way_is_not_reported_added_either(self):
+        """The success line is checked against the stamp as it reads after the write, not against
+        the rows before it: a write refused for a reason nothing names — here a workspace directory
+        the stamp cannot be created in — prints no "added structure" and says it was not written."""
+        if os.geteuid() == 0:
+            self.skipTest("root ignores the mode, so the create is not refused")
+        self.marker.unlink()
+        self.wd.chmod(0o555)
+        self.addCleanup(self.wd.chmod, 0o755)
+        said = self.reinit_promptly()
+        self.assertIn(f"'{self.ws}': .charter-structure could not be written, so this workspace "
+                      f"still reads as structure v0 and stays flagged for reinit.", said)
+        for claim in ("added structure", "Up to date"):
+            self.assertFalse(any(claim in s for s in said), (claim, said))
+
+    def test_a_file_reinit_added_beside_a_refused_stamp_is_still_reported(self):
+        """Withholding the version line withholds only that: a README it did write is reported."""
+        (workspace.refs_dir(self.ws) / "README.md").unlink()
+        self.a_fifo_stamp()
+        said = self.reinit_promptly()
+        self.assertIn(f"Reinitialized '{self.ws}' → added refs/README.md.", said)
+        self.assertIn(self.in_the_way_row(), said)
+
+    def test_a_stamp_reinit_writes_is_still_reported_added(self):
+        """The line the checks above withhold, still printed when the stamp was written — from one
+        version below the target, the boundary's stale side."""
+        below = workspace.STRUCTURE_VERSION - 1
+        self.marker.write_text(f"{below}\n")
+        said = self.reinit_promptly()
+        self.assertIn(f"Reinitialized '{self.ws}' → added structure v{below} → "
+                      f"v{workspace.STRUCTURE_VERSION}.", said)
+        self.assertFalse(any("could not be written" in s for s in said), said)
+
+    def test_a_stamp_at_the_target_version_is_neither_added_nor_called_unwritten(self):
+        """The boundary's current side: a stamp that reads exactly the target, with nothing to add,
+        is up to date — no version line, and no row saying a stamp that is there was not written."""
+        self.marker.write_text(f"{workspace.STRUCTURE_VERSION}\n")
+        said = self.reinit_promptly()
+        self.assertIn(f"Up to date (structure v{workspace.STRUCTURE_VERSION}) — nothing to do.", said)
+        for claim in ("added structure", "could not be written"):
+            self.assertFalse(any(claim in s for s in said), (claim, said))
+
 class AnExclusiveCreateIsExclusiveOnBothBranches(_isolation.PersonaIso):
     """`config.create_for` is `write_for`'s dispatch with ``O_EXCL``, and the dispatch has two
     branches: a plain `open` for a committed path, which honours ``"x"`` by itself, and

@@ -4424,11 +4424,46 @@ def _required_components(name: str) -> dict[str, Path]:
 
 
 def structure_version(name: str) -> int:
-    """The layout version stamped in the workspace's marker (0 if missing/unreadable)."""
+    """The layout version stamped in the workspace's marker (0 if missing, unreadable, or in the
+    way — see :func:`_stamp`)."""
+    return _stamp(name)[0]
+
+
+def _stamp(name: str) -> tuple[int, tuple[Path, int] | None]:
+    """``(version, blocker)`` for the structure stamp — the one read of it, for
+    :func:`structure_version` and for the ``in_the_way`` row :func:`structure_status` hands
+    `reinit` to name. *blocker* is `_in_the_way`'s shape: the path, and the errno a stamp write
+    there meets — ``ELOOP`` for a symlink (at the stamp, or a workspace directory `scaffold`
+    refuses), ``EISDIR`` for a directory, ``ENXIO`` for any other file that is not a regular one.
+
+    Opened ``O_NOFOLLOW | O_NONBLOCK`` and judged by ``fstat`` (#1074), the rule the stamp's
+    write has had since #1051. `read_text` opened a FIFO at the name and waited for a writer
+    that never came, so one stray local file froze `reinit` and every status-line render in the
+    workspace. A non-blocking open of a FIFO returns at once, and a regular file is the only
+    thing read. A link is not read through either, wherever it points: charter never writes the
+    stamp through one, so a version read through one is not charter's.
+
+    Asks `_in_the_way` only when the open fails, which on a healthy plane it does not: this runs
+    for every workspace on each render, and the open is what today's read already paid for."""
+    marker = _structure_marker(name)
     try:
-        return int(_structure_marker(name).read_text().strip())
+        fd = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        # Absent, a link (``O_NOFOLLOW``'s ELOOP), or unanswered. `_in_the_way` tells a link at the
+        # stamp or at the workspace directory from the rest, by `lstat`, as it does for every
+        # baseline path.
+        return 0, _in_the_way(marker, workspace_dir(name))
+    try:
+        mode = os.fstat(fd).st_mode
+        if not stat.S_ISREG(mode):
+            return 0, (marker, errno.EISDIR if stat.S_ISDIR(mode) else errno.ENXIO)
+        # A raw read, not `os.fdopen`: that refuses a directory's descriptor by raising, and the
+        # stamp is a few bytes, so one read of a page holds all of it.
+        return int(os.read(fd, 4096).strip()), None
     except (OSError, ValueError):
-        return 0
+        return 0, None
+    finally:
+        os.close(fd)
 
 
 def structure_status(name: str) -> dict:
@@ -4455,12 +4490,15 @@ def structure_status(name: str) -> dict:
     seen = _baseline_answers(name)
     missing = [rel for rel, (_p, there, _code, blocker) in seen.items()
                if there is False and blocker is None]
-    ver = structure_version(name)
+    # The stamp is a row of `in_the_way` too (#1074), never of `missing`: an absent stamp is the
+    # version line's to report, and one that is not a regular file is what `reinit` names instead.
+    ver, stamp_blocker = _stamp(name)
     return {"ok": (not missing) and ver >= STRUCTURE_VERSION, "missing": missing,
             "unreadable": [(rel, _stopped_at(p, code), code)
                            for rel, (p, there, code, _blocker) in seen.items() if there is None],
             "in_the_way": [(rel, *blocker) for rel, (_p, _there, _code, blocker) in seen.items()
-                           if blocker],
+                           if blocker]
+                          + ([(_STRUCTURE_MARKER, *stamp_blocker)] if stamp_blocker else []),
             "version": ver, "target": STRUCTURE_VERSION}
 
 
@@ -4469,9 +4507,10 @@ def _baseline_answers(name: str) -> dict[str, tuple[Path, bool | None, int | Non
     """``{rel: (path, there, errno, blocker)}`` for every baseline path — the one
     classification :func:`structure_status` reports and :func:`scaffold` writes by.
 
-    Apart from `structure_status` because that also reads the structure marker, and `scaffold`
-    runs from `ensure` on a launch: a `.charter-structure` that is a FIFO blocks that read for
-    ever, and `scaffold` had never read it before #1037 gave it this classification to ask.
+    Apart from `structure_status` because that also reads the structure marker, which `scaffold`
+    has no need of: it runs from `ensure` on a launch, and its stamp write is judged by the
+    kernel. Both ask `_in_the_way` — this for the baseline paths, `_stamp` for the marker — so a
+    link there is one rule, and the marker read never blocks on a FIFO (#1074).
     """
     wd = workspace_dir(name)
     out = {}
