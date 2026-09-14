@@ -581,6 +581,45 @@ class TwoPlanesInsideOneOperatorTmux(_TwoPlanes, unittest.TestCase):
         self.assertTrue(self._alive(self.operator, b_pane),
                         "plane A's quit killed plane B's window of the same id")
 
+    def test_a_stale_record_matching_a_live_pane_here_is_vetoed_by_the_window_marker(self):
+        """**The operator's tmux restarts and pane ids start again.** Plane A holds a chat
+        directory from before the restart — this server, `%1` — and plane B opens the first
+        chat in the fresh tmux, which gets `%1`. Matched on the pane alone, plane A's quit
+        would kill plane B's window and record plane B's chat as its own. The marker charter
+        writes on its OWN window says whose it is, and here it is the reading that decides:
+        a window marker is written per chat, so unlike a mixed legacy session's SESSION
+        marker it can never name the wrong plane for the window it is on."""
+        b_pane = self._chat_window(self.b_root)
+        self._in(self.a_root)
+        state.frame_dir(CHAT, create=True)
+        state.record_server(CHAT, self.path)
+        state.record_workspace(CHAT, WS)
+        state.record_harness_pane(CHAT, b_pane)
+        state.record_identity(CHAT, {"CHARTER_HARNESS": "claude-code",
+                                     "CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
+
+        self.assertEqual(commands_frame.cmd_quit(SimpleNamespace(chat="")), 0)
+
+        self.assertTrue(self._alive(self.operator, b_pane),
+                        "plane A's quit killed plane B's window on a recycled pane id")
+        recorded = reopen.read()
+        for chat in (recorded.all_chats() if recorded else ()):
+            self.assertEqual(chat.transcript, "",
+                             "plane A's quit captured plane B's pane as its own chat")
+
+    def test_a_stale_record_matching_a_live_pane_here_closes_nothing_of_the_others(self):
+        b_pane = self._chat_window(self.b_root)
+        self._in(self.a_root)
+        state.frame_dir(CHAT, create=True)
+        state.record_server(CHAT, self.path)
+        state.record_workspace(CHAT, WS)
+        state.record_harness_pane(CHAT, b_pane)
+
+        commands_frame.cmd_close(SimpleNamespace(chat="", chat_id=CHAT))
+
+        self.assertTrue(self._alive(self.operator, b_pane),
+                        "plane A's close killed plane B's window on a recycled pane id")
+
     def test_a_pane_is_proven_by_its_own_pid_whichever_plane_holds_the_same_chat_id(self):
         """`launcher.framed_chat` and `_close_the_cancelled_chat` prove a chat by the pid of
         the process asking, and `@charter_chat` alone would not: both windows carry

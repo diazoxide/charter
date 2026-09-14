@@ -10055,17 +10055,30 @@ def _chat_seats(socket: str) -> list[tuple[str, str, bool]] | None:
     above, arrived at from the other side. A marker that names a DIFFERENT plane is a veto.
     That asymmetry is the whole of why this is a filter and not a match.
 
-    **Where this plane recorded the chat's harness pane on this server, the pane decides and
-    the marker does not** (ruling 46; :data:`_CHAT_PANE_FORMAT` has the measurement). A chat
-    this plane holds on ANOTHER server is not this window, whatever its id. The marker is
-    still the veto for a chat with no pane record, which is where it was always the only
-    reading. Stated residual: a legacy server restarted after the upgrade mints pane ids from
-    `%0` again, so a pane record of a chat that ended before that restart could match another
-    plane's new window of the same chat id — nothing charter now runs starts that server.
+    **Where this plane recorded the chat's harness pane, the pane decides — on
+    `tmuxctl.LEGACY_SOCKET`, and there alone** (ruling 46; :data:`_CHAT_PANE_FORMAT` has the
+    measurement). A chat this plane holds on ANOTHER server is not this window, whatever its
+    id. Everywhere else a marker naming another plane still vetoes a matching pane, and the
+    difference is what the marker can be wrong about:
+
+    * on the legacy server the marker is the SESSION's, written by the launch that CREATED
+      that session — so in a session a second plane joined it names the wrong plane for that
+      plane's own windows, which is the whole reason the pane decides there;
+    * everywhere else charter marks what it made for the chat it made it for: its own WINDOW
+      inside an operator's tmux, and its own session on a server that is this plane's alone.
+      A marker there naming another plane is never wrong about the window it is on, and it
+      is the one reading that survives a server RESTART: pane ids start again at `%0`, so a
+      record from before one can match a live pane it has nothing to do with. Measured on a
+      real operator-style server: a stale `%1` of this plane against another plane's first
+      chat, where the kill and the capture both went to that plane's window.
+
+    Residual, on the legacy server only: a charter old enough to predate the marker leaves
+    windows carrying none, and nothing charter now runs starts that server.
     """
     rows = _chat_pane_rows(socket)
     if rows is None:
         return None
+    on_the_legacy_server = tmuxctl.same_server(socket, tmuxctl.LEGACY_SOCKET)
     seats: list[tuple[str, str, bool]] = []
     seen: set[tuple[str, str]] = set()
     claims: dict[str, str | bool | None] = {}
@@ -10078,7 +10091,7 @@ def _chat_seats(socket: str) -> list[tuple[str, str, bool]] | None:
         claim = claims[chat]
         if claim is False or (claim and pane != claim):
             continue
-        if not claim and plane not in ("", ours):
+        if plane not in ("", ours) and not (claim and on_the_legacy_server):
             continue
         # One row per PANE, so a window of panels answers once per panel: the first row of a
         # window is the one that counts, and they all say the same.

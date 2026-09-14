@@ -811,10 +811,10 @@ class TheWindowListingRefusesWhatItCannotRead(PersonaIso, unittest.TestCase):
     already cost this project a `kill-server` armed on every window resize.
     """
 
-    def _seats_from(self, stdout):
+    def _seats_from(self, stdout, server=SERVER):
         run, _seen = _answers(stdout)
         with mock.patch.object(commands_frame.tmuxctl, "run", side_effect=run):
-            return commands_frame._chat_seats(SERVER)
+            return commands_frame._chat_seats(server)
 
     def test_a_well_formed_listing_is_read_whole(self):
         seats = self._seats_from("alpha.1\t@0\t1\t\t%0\nalpha.2\t@3\t0\t\t%3\n")
@@ -901,16 +901,35 @@ class TheWindowListingRefusesWhatItCannotRead(PersonaIso, unittest.TestCase):
     # -- the pane record, ruling 46 ------------------------------------------ #
 
     def test_a_recorded_pane_decides_over_another_planes_session_marker(self):
-        """**A mixed session from before the upgrade.** Plane A's launch made the session and
-        marked it; this plane's `default.1` joined it as a window, so its window reads plane
-        A's marker. The pane this plane's launcher wrote down is the reading that is right:
-        it is this plane's window, and a quit that skipped it stopped nothing of its own."""
+        """**A mixed session from before the upgrade, and only there.** Plane A's launch made
+        that session and marked it; this plane's `default.1` joined it as a window, so its
+        window reads plane A's marker. The pane this plane's launcher wrote down is the
+        reading that is right: it is this plane's window, and a quit that skipped it stopped
+        nothing of its own."""
         _plant("default.1", ws="default")
+        state.record_server("default.1", tmuxctl.LEGACY_SOCKET)
         state.record_harness_pane("default.1", "%7")
         seats = self._seats_from("default.1\t@0\t1\t/plane/a/.charter\t%0\n"
-                                 "default.1\t@7\t0\t/plane/a/.charter\t%7\n")
+                                 "default.1\t@7\t0\t/plane/a/.charter\t%7\n",
+                                 server=tmuxctl.LEGACY_SOCKET)
 
         self.assertEqual(seats, [("default.1", "@7", False)])
+
+    def test_a_marker_for_another_plane_vetoes_a_matching_pane_off_the_legacy_server(self):
+        """**A server restart mints pane ids from `%0` again**, so a record from before one
+        can match a live pane it has nothing to do with — measured inside an operator's tmux,
+        where the kill and the capture both went to another plane's window. Off the legacy
+        socket charter marks what it made for the chat it made it for (its own WINDOW in an
+        operator's tmux, its own session on a server that is this plane's alone), so a marker
+        naming another plane is never wrong about the window it is on, and it wins."""
+        _plant("default.1", ws="default")
+        state.record_harness_pane("default.1", "%1")
+        seats = self._seats_from("default.1\t@0\t1\t/plane/b/.charter\t%1\n")
+
+        self.assertEqual(seats, [])
+        self.assertEqual(
+            self._seats_from("default.1\t@0\t1\t\t%1\n"), [("default.1", "@0", True)],
+            "an unmarked window is still this plane's by the pane it recorded")
 
     def test_a_window_whose_pane_is_not_the_recorded_one_is_not_this_chat(self):
         """The same session from plane A's side: both windows carry `default.1` and this
