@@ -396,6 +396,14 @@ class AChildOfAParentThatDoesNotLoad(ADefinitionThatIsThereAndDoesNotLoadIsNotCa
                 self.assertEqual(rc, 1, said)
                 self.assertIn(row, said)
 
+    def test_a_name_that_does_not_load_itself_has_no_ancestor_to_name(self):
+        """Its callers ask only once the name loads, but the question is public, and a file
+        that stops loading between the two reads reaches it the same way."""
+        for name in ("garbled", "nobody", "kid-of-devops"):
+            with self.subTest(name=name):
+                self.assertIsNone(persona.ancestor_that_does_not_load(name))
+        self.assertEqual(persona.ancestor_that_does_not_load("grandkid"), "garbled")
+
     def test_only_a_parent_that_is_there_and_does_not_load_is_named(self):
         """A parent that loads is no refusal. One that is absent, is a path, or closes a
         cycle is not this sentence: `lint` has its own for each, and `persona use` took them
