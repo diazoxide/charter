@@ -370,6 +370,202 @@ class TheBranchShape(unittest.TestCase):
         self.assertEqual(_by(muts, "disable-branch"), [])
 
 
+class TheMultiStatementRefusalShape(unittest.TestCase):
+    """#1034: `if C:`, no `else`, several statements, and a way out at the end.
+
+    Print the refusal, print the ways out, `return 1` — the commonest refusal in
+    `charter/`, and it matched neither `drop-if` (one statement) nor `disable-branch` (an
+    `else`). PR #1016's sweep shard charged `cmd_version_bump` for exactly this and said
+    `nothing to sweep`. The condition is forced `False`, which asks the question without
+    deleting a statement and so without guessing which of several was the guard.
+    """
+
+    #: `charter/commands.py`'s `cmd_version_bump` refusal, as it stands on `main`: the
+    #: shape #1034 measured, bindings and all. The names the body binds are read inside
+    #: the body and nowhere else, so forcing the condition off strands none of them.
+    PINNED = """
+        def cmd_version_bump(args) -> int:
+            from . import channel, instance as _instance, update
+            if channel.is_dev():
+                conflict, ways, _brief = update.pin_beside_dev()
+                util.err(f"refusing to pin this control plane: {conflict}.")
+                for way in ways:
+                    util.info(f"  {way}")
+                return 1
+            return _instance.bump(args)
+    """
+
+    def test_the_refusal_1016_added_is_asked_about(self):
+        muts = _by(_mutations(self.PINNED), "disable-refusal")
+        self.assertEqual([(m.line, m.before, m.after) for m in muts],
+                         [(3, "channel.is_dev()", "False")])
+        self.assertEqual(muts[0].question,
+                         "is this refusal pinned, or does nothing change when it never "
+                         "fires?")
+
+    def test_every_way_out_of_the_body_counts(self):
+        """`return`, `raise`, `continue` and `break` all leave the code below the `if`
+        unreached, which is what makes the refusal a refusal."""
+        for way in ("return 1", "raise SystemExit(1)", "continue", "break"):
+            with self.subTest(way=way):
+                muts = _mutations(f"""
+                    def f(rows):
+                        for row in rows:
+                            if not row:
+                                util.err("empty row")
+                                {way}
+                            use(row)
+                """)
+                self.assertEqual(_afters(muts, "disable-refusal"), ["False"])
+
+    def test_a_body_that_does_not_leave_is_not_a_refusal(self):
+        """Two lines of logging that fall through to the rest of the function refuse
+        nothing, and a question about a refusal would be a question about nothing."""
+        muts = _mutations("""
+            def f(args):
+                if args.verbose:
+                    util.info("checking")
+                    util.info("  and again")
+                return run(args)
+        """)
+        self.assertEqual(_by(muts, "disable-refusal"), [])
+
+    def test_a_single_statement_is_drop_ifs_and_is_asked_once(self):
+        """`if C: return 1` is already `drop-if`'s, and forcing `C` off there is the same
+        question asked a second time — one more sandbox run and one more row (#655)."""
+        muts = _mutations("""
+            def f(arm):
+                if arm is None:
+                    return 1
+                return arm
+        """)
+        self.assertEqual(_by(muts, "disable-refusal"), [])
+        self.assertEqual(len(_by(muts, "drop-if")), 1)
+
+    def test_a_chain_is_disable_branchs_and_is_asked_once(self):
+        """With an `else` the forced-`False` edit is `disable-branch`'s, the same span and
+        the same replacement — one program, which is offered once (#655, #797)."""
+        muts = _mutations("""
+            def f(arm):
+                if arm is None:
+                    util.err("no arm")
+                    return 1
+                else:
+                    util.info("arm")
+                return arm
+        """)
+        self.assertEqual(_by(muts, "disable-refusal"), [])
+        self.assertEqual(_afters(muts, "disable-branch"), ["False", "True"])
+
+    def test_a_negated_type_filter_is_drop_isinstances_and_is_asked_once(self):
+        """`if not isinstance(…)` forced `False` is exactly `drop-isinstance`'s mutant, and
+        that row keeps it because its question names what went (#797). The plain call is
+        forced the other way by that rule, so there the two are distinct and both stay."""
+        negated = _mutations("""
+            def f(name):
+                if not isinstance(name, str):
+                    util.err("not a name")
+                    return 1
+                return name
+        """)
+        self.assertEqual(_by(negated, "disable-refusal"), [])
+        self.assertEqual(_afters(negated, "drop-isinstance"), ["False"])
+        plain = _mutations("""
+            def f(name):
+                if isinstance(name, bytes):
+                    util.err("bytes")
+                    return 1
+                return name
+        """)
+        self.assertEqual(_afters(plain, "disable-refusal"), ["False"])
+        self.assertEqual(_afters(plain, "drop-isinstance"), ["True"])
+
+    def test_a_name_the_rest_of_the_function_reads_is_never_stranded(self):
+        """The `NameError` `disable-branch`'s comment warns about, in the one place it can
+        still happen here. A way out leaves the code below unreached — but a `break`
+        reaches the code after the loop, a `continue` the lines above the `if`, and a
+        walrus in the condition is bound by the condition that is forced away. A mutant
+        that reddens the suite on an unbound name is a false pin, the outcome this file
+        exists to prevent, so the question is not asked at all."""
+        for label, source in (
+            ("assigned, read after the loop", """
+                def f(items):
+                    for item in items:
+                        if item:
+                            found = item
+                            log(item)
+                            break
+                    return found
+            """),
+            ("assigned, read ABOVE the if on the next pass", """
+                def f(items):
+                    for item in items:
+                        if item == "-":
+                            use(last)
+                        if not item:
+                            last = item
+                            log(item)
+                            continue
+                """),
+            ("imported, dotted", """
+                def f(items):
+                    for item in items:
+                        if item:
+                            import os.path
+                            log(item)
+                            break
+                    return os.sep
+            """),
+            ("imported, renamed", """
+                def f(items):
+                    for item in items:
+                        if item:
+                            from json import dumps as encode
+                            log(item)
+                            break
+                    return encode(items)
+            """),
+            *((f"defined by `{kind}`", f"""
+                def f(items):
+                    for item in items:
+                        if item:
+                            {kind} helper():
+                                pass
+                            log(item)
+                            break
+                    return helper()
+            """) for kind in ("def", "async def", "class")),
+            ("bound by the condition", """
+                def f(text):
+                    if (m := PATTERN.match(text)) is None:
+                        util.err("no match")
+                        return 1
+                    return m.group(1)
+            """),
+        ):
+            with self.subTest(label):
+                self.assertEqual(_by(_mutations(source), "disable-refusal"), [])
+
+    def test_a_name_read_only_in_another_function_strands_nothing(self):
+        """The exclusion is the function's and not the module's: `found` in a different
+        `def` is a different variable, and declining here would hide the refusal again."""
+        for kind in ("def", "async def"):
+            with self.subTest(kind=kind):
+                muts = _mutations(f"""
+                    {kind} f(items):
+                        for item in items:
+                            if item:
+                                found = item
+                                log(found)
+                                break
+                        return items
+
+                    def g(found):
+                        return found
+                """)
+                self.assertEqual(_afters(muts, "disable-refusal"), ["False"])
+
+
 class TheConstantShape(unittest.TestCase):
     """A module-level constant is a guard too."""
 
@@ -2467,6 +2663,12 @@ class TwoMutantsOfOneNodeAreNeverReportedAlike(unittest.TestCase):
 
         def render(rows, name, d, path, text, x, y, ch, i, n, in_class):
             if not isinstance(name, str):
+                return []
+            if not isinstance(path, str):
+                log(path)
+                return []
+            if not text:
+                log(text)
                 return []
             if name and name not in d:
                 return []
@@ -6859,6 +7061,40 @@ class ASweepThatMeasuredNothingSaysWhichKindOfNothing(unittest.TestCase):
         for said in (charged, unchanged):
             self.assertIn("NOTHING TO SWEEP", said)
             self.assertIn("nothing to sweep", said)
+
+    def test_a_branch_that_adds_a_multi_statement_refusal_has_something_to_sweep(self):
+        """#1034, end to end through the gate: PR #1016's shard, reconstructed. The branch
+        adds `if C:` + an error + a remedy + `return 1`, and the shard said `1 charged
+        file(s), and no operator finds a mutation in what they add`. The sweep itself is
+        stubbed to pin whatever it is handed, because what is under test is the plan the
+        gate hands it, not a suite — and the author did check by hand that it is pinned."""
+        tmp, base = self._repo(textwrap.dedent("""
+            def cmd_version_bump(args):
+                if channel.is_dev():
+                    util.err("refusing to pin a control plane that declares dev")
+                    util.info("  to pin a release, drop the channel")
+                    return 1
+                return 0
+        """).lstrip())
+        handed = []
+
+        def spy(root, ref, plan, *a, **k):
+            handed.extend(plan)
+            return [sweep.Result(m, "pinned", sweep.Outcome(False, 3, "tests.test_x"),
+                                 None, ["tests.test_x"]) for m in plan], []
+
+        for name, stub in (("sweep", spy), ("load_map", lambda *a, **k: {})):
+            real = getattr(sweep, name)
+            setattr(sweep, name, stub)
+            self.addCleanup(setattr, sweep, name, real)
+        code, said = self._cli(tmp, "--gate", "--base", base, "--jobs", "1",
+                               "--no-baseline", "--workdir", str(tmp / "wd"))
+        self.assertEqual(code, 0, said)
+        self.assertNotIn("no operator finds a mutation", said)
+        self.assertNotIn("nothing to sweep", said)
+        self.assertIn("1 mutations across 1 file(s)", said)
+        self.assertEqual([(m.path, m.line, m.operator) for m in handed],
+                         [("charter/__init__.py", 2, "disable-refusal")])
 
     # ----------------------------------------------------------------------------------
     # A shard's zero, a shard's refusal and a shard's silence are three values.

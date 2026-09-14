@@ -509,6 +509,38 @@ _SIMPLE_BODY = (ast.Return, ast.Raise, ast.Continue, ast.Break, ast.Pass,
                 ast.Assign, ast.AugAssign, ast.AnnAssign, ast.Expr)
 
 
+#: The last statement of a body that refuses: the code below its `if` is not reached.
+_WAYS_OUT = (ast.Return, ast.Raise, ast.Continue, ast.Break)
+
+
+def _strands_a_name(tree: ast.AST, parents: dict[int, ast.AST], node: ast.If) -> bool:
+    """Would forcing *node*'s condition off leave a name unbound that its function reads?
+
+    A name bound anywhere in the `if` — its body, or a walrus in its condition — and named
+    anywhere else in the innermost enclosing function. **Anywhere**, not "below": a loop
+    brings the lines above the `if` round again, and a `finally` runs after the `return`.
+    And named, not read: `n += 1` elsewhere reads `n` through a `Store`. Deliberately
+    coarse, because the cost of guessing wrong is lopsided — a question not asked here,
+    against a false pin where it is asked.
+    """
+    bound: set[str] = set()
+    inside: set[int] = set()
+    for part in ast.walk(node):
+        inside.add(id(part))
+        if isinstance(part, ast.Name) and isinstance(part.ctx, ast.Store):
+            bound.add(part.id)
+        elif isinstance(part, ast.alias):
+            bound.add((part.asname or part.name).split(".")[0])
+        elif isinstance(part, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bound.add(part.name)
+    scope = parents.get(id(node))
+    while scope is not None and not isinstance(scope, (ast.FunctionDef,
+                                                       ast.AsyncFunctionDef)):
+        scope = parents.get(id(scope))
+    return any(isinstance(read, ast.Name) and read.id in bound and id(read) not in inside
+               for read in ast.walk(scope or tree))
+
+
 def _drop_statement(sp: _Spans, node: ast.stmt, holder: list[ast.stmt]) -> str:
     """The replacement text for deleting *node*: nothing, or ``pass`` if it was alone."""
     return "pass" if _sole_statement(holder, node) else ""
@@ -1137,7 +1169,8 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
         # branch, is this shape and only this shape. Restricted to chains that HAVE an
         # `else`, because in a bare `if` the fall-through is a `NameError` waiting to
         # happen and a mutation that reddens the suite for that reason is a false pin —
-        # the one outcome worse than no signal.
+        # the one outcome worse than no signal. The bare `if` that REFUSES is the case
+        # where that fall-through can be ruled out, and is `disable-refusal`'s (#1034).
         if isinstance(node, ast.If) and node.orelse:
             # One direction of this pair is `drop-isinstance`'s when the test IS an
             # `isinstance` call, and forcing that test to a constant is one edit however
@@ -1169,6 +1202,31 @@ def _iter_operators(tree: ast.Module, sp: _Spans):
                 yield (node.test, "True", "disable-branch",
                        "is the rest of the chain pinned, or does nothing change when this "
                        "condition always holds?")
+
+        # `if C:` + the error + the ways out + `return 1`, with no `else`: the commonest
+        # refusal in `charter/`, and until #1034 neither rule above took it — `drop-if`
+        # wants one statement, `disable-branch` an `else` — so PR #1016's shard charged
+        # `cmd_version_bump` for exactly this and said `nothing to sweep`. The condition is
+        # forced `False`, as `disable-branch` does, rather than the body deleted, because
+        # deleting several statements at once cannot say which of them was the guard.
+        #
+        # The body has to END in a way out. That is what makes it a refusal, and it is also
+        # what narrows `disable-branch`'s `NameError` to the places it can still happen:
+        # with the code below the `if` unreached, a name the body binds is stranded only
+        # where control comes back round — after the loop a `break` leaves, above the `if`
+        # on the pass a `continue` starts, in a `finally` — or where the condition binds it
+        # itself. `_strands_a_name` declines every one of those rather than telling them
+        # apart, because a mutant that reddens on an unbound name is a false pin.
+        #
+        # More than one statement, because one is `drop-if`'s and the same question twice
+        # (#655); and not a negated type filter, because forcing that `False` is
+        # `drop-isinstance`'s program exactly (#797).
+        if isinstance(node, ast.If) and not node.orelse and len(node.body) > 1 \
+                and isinstance(node.body[-1], _WAYS_OUT) \
+                and _isinstance_forced_to(node.test) != "False" \
+                and not _strands_a_name(tree, parents, node):
+            yield (node.test, "False", "disable-refusal",
+                   "is this refusal pinned, or does nothing change when it never fires?")
 
         # The same refusal in expression clothes: `[x for x in xs if C]`. Round two's
         # first finding, `harness_rows`' `if _edge_of(slot) not in _COLUMN_EDGES`, lives
