@@ -899,6 +899,11 @@ def _is_executor(name: str) -> bool:
     return base in _EXECUTORS or bool(toolgate._VERSIONED.match(base))
 
 
+#: A backtick behind an EVEN run of backslashes, none included: one a shell may read as the
+#: start or end of a substitution. A backtick behind an odd run is escaped, so it is literal.
+_LIVE_BACKTICK_RE = re.compile(r"(?<!\\)(?:\\\\)*`")
+
+
 def _line_pipelines(line: str):
     """*line* as its pipelines: ``[(argvs, has_executor, heredoc_counts)]``, or ``None``
     when the line cannot be attributed safely.
@@ -927,8 +932,16 @@ def _line_pipelines(line: str):
     no prompt on that account (review round 5, ruling C). The test is the raw character,
     quoted or not: the narrow fix, rather than adding a backtick to :data:`_GROUPING`, which
     would change how every input is lexed.
+
+    An ESCAPED backtick is the one exception (:data:`_LIVE_BACKTICK_RE`), because it starts no
+    substitution in any quoting context: `\\`` is a literal backtick unquoted, inside double
+    quotes and inside `$'…'`, and inside single quotes the backslash and the backtick are both
+    literal. The lexer keeps it inside its word, so the boundaries it reports are bash's. A PR
+    title such as `--title "keeps its \\`~/\\`"` used to leave its line unattributable, so the
+    body gh read from stdin stayed visible and was refused (#1070). Parity decides the escape:
+    `\\\\`` is an escaped backslash before a live backtick, and it still returns ``None``.
     """
-    if "`" in line:
+    if _LIVE_BACKTICK_RE.search(line):
         return None
     try:
         toks = _split_punctuation(_lex(line))
@@ -1409,6 +1422,62 @@ def _commit_message_on_stdin(argv: list[str]) -> bool:
     return stdin
 
 
+#: The `gh` commands whose `--body-file -` reads a body gh posts and never runs (#1070).
+_GH_BODY_COMMANDS = frozenset({("pr", "create"), ("pr", "comment"),
+                               ("issue", "create"), ("issue", "comment")})
+
+
+def _gh_body_on_stdin(argv: list[str]) -> bool:
+    """Whether *argv* is a `gh pr|issue create|comment` that takes its body from stdin, so a
+    heredoc it opens is a BODY, which gh posts and never runs (#1070).
+
+    The same fact as :func:`_commit_message_on_stdin`, for the other message an agent writes in
+    the same call. `gh pr create --body-file - <<'EOF' | tail -1` kept its body visible because
+    `gh` is not a reader. One apostrophe in the prose stopped the call lexing. On that path argv
+    is a whitespace split that keeps no `\\n` boundary, so every word of the body became an
+    operand of `tail -1`, and :func:`_spliced_operands` joined "`~`." and "Charter" into
+    `.Charter`, a vault path to :data:`_VAULT_PATH_RE`. The call was refused as a vault read.
+
+    **Narrow, and every miss keeps the body visible.** The spellings read are `-F -`, `-F-`,
+    `--body-file -` and `--body-file=-` after a literal `gh pr|issue create|comment`. Not read:
+    `gh pr edit`, `gh release … -F -`, `gh api --input -`, a short cluster (`-dF -`), a body
+    file that is not stdin, and `-F -` after `--`. An alias cannot shadow `pr` or `issue`:
+    measured on gh 2.83.2, `gh alias set pr …` fails with "already a gh command".
+
+    **An editor is the one way a body could run**, since gh hands an editor the body as a file.
+    Measured on gh 2.83.2, gh opens none when the body is on stdin, whether `--editor` or the
+    `prefer_editor_prompt` setting asks and whether or not `GH_FORCE_TTY` is set. `-e`,
+    `--editor[=…]` and a short cluster holding `e` refuse the answer anyway, which costs a
+    missed allow. Redirections come out first, targets with them, as in git's case.
+    """
+    if not argv or os.path.basename(argv[0]).lower() != "gh":
+        return False
+    words: list[str] = []
+    skip = False
+    for w in argv[1:]:
+        if skip:
+            skip = False
+        elif _REDIRECT_RE.match(w):
+            skip = True
+        else:
+            words.append(w)
+    if tuple(words[:2]) not in _GH_BODY_COMMANDS:
+        return False
+    opts = words[2:]
+    stdin = False
+    for k, w in enumerate(opts):
+        if w == "--":
+            break                              # positionals from here: `-F -` is two args
+        if w in ("-F-", "--body-file=-") or (
+                w in ("-F", "--body-file") and opts[k + 1:k + 2] == ["-"]):
+            stdin = True
+        elif w == "--editor" or w.startswith("--editor="):
+            return False
+        elif w.startswith("-") and not w.startswith("--") and "e" in w:
+            return False
+    return stdin
+
+
 def _heredoc_strip_plan(line: str):
     """``[(delimiter, strip?)]`` for the heredocs opened on *line*, in the order their bodies
     follow — or ``None`` when nothing on the line may be stripped.
@@ -1420,7 +1489,9 @@ def _heredoc_strip_plan(line: str):
       the body RUNS (`cat <<EOF\\n$(cat <vault>)\\nEOF`). Only `<<'EOF'` / `<<"EOF"` are inert.
     * *reader* — the program that OPENS the `<<` (its segment's, via :func:`_split_env`), so
       `env cat <<'X'` is a reader behind a wrapper and its body is still data. A `git commit`
-      that takes its message from stdin counts as one (:func:`_commit_message_on_stdin`).
+      that takes its message from stdin counts as one (:func:`_commit_message_on_stdin`), and
+      so does a `gh pr|issue create|comment` taking its body from stdin
+      (:func:`_gh_body_on_stdin`).
     * *no executor in the pipeline* — the defect this replaces (#973): the old pre-pass asked
       only whether the LINE began with a reader, so `cat x && bash <<'EOF'`, `… | bash`,
       `… || bash`, `… & bash` and `cat x; bash <<'EOF'` each dropped a body a shell ran.
@@ -1467,9 +1538,10 @@ def _heredoc_strip_plan(line: str):
         for argv, hc in zip(argvs, hcounts):
             prog = argv[0] if argv else ""
             # A commit message on stdin is a reader's body by another name: git stores it and
-            # runs none of it, so it earns the same two clauses and nothing more (#997).
+            # runs none of it, so it earns the same two clauses and nothing more (#997). A gh
+            # PR or issue body on stdin is the same, posted and never run (#1070).
             reader = (os.path.basename(prog).lower() in _READERS
-                      or _commit_message_on_stdin(argv))
+                      or _commit_message_on_stdin(argv) or _gh_body_on_stdin(argv))
             for _ in range(hc):
                 m = headers[k]
                 quoted = bool(m.group("q"))
