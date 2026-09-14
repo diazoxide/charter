@@ -81,6 +81,10 @@ class ACommentIsNotSpliced(unittest.TestCase):
         self.assertEqual(6, hooks._comment_index("cat x # note"))
         self.assertEqual(-1, hooks._comment_index("cat a#b"))          # mid-word
         self.assertEqual(-1, hooks._comment_index("grep '#' f"))       # quoted
+        # The `#` sits right after a `(` that `_quote_map` marks quoted (the `(` of `$(`
+        # inside `"…"`), and the `#` itself is unquoted. The inner `not q[i - 1]` conjunct
+        # is what keeps this from reading as a word-start comment.
+        self.assertEqual(-1, hooks._comment_index('"$(#x)"'))
 
     def test_a_genuine_continuation_still_splices_on_the_unparseable_path(self):
         """A real (non-comment) backslash-newline is still spliced in the fallback, so a read
@@ -111,6 +115,63 @@ class WhatBashRunsStaysRefusedAcrossLines(unittest.TestCase):
 
     def test_the_plain_read_is_refused(self):
         self.assertTrue(denies(R))
+
+
+class TheFallbackSplicerFollowsBashBackslashRules(unittest.TestCase):
+    """#1089 lines 2666/2669: `_splice_continuations` removes a backslash-newline only where
+    bash does — a LIVE backslash, immediately before a NEWLINE, outside single quotes and
+    outside a comment — and it never indexes past the end. Each conjunct is pinned by an
+    input its removal changes; unit-tested here because the fallback path runs only when a
+    command is unparseable, and each of these is a per-character rule the guard reads off
+    the raw string on that path."""
+
+    def test_a_bare_backslash_newline_is_spliced(self):
+        # positive control: the transformation the function exists to do.
+        self.assertEqual("ab", hooks._splice_continuations("a\\\nb"))
+
+    def test_a_trailing_backslash_does_not_index_past_the_end(self):
+        # 2669 `i + 1 < n`: a command ending in a bare `\\` has no next char to read; without
+        # the bound (drop-conjunct) or shifted to `<= n`, `cmd[i + 1]` raises IndexError.
+        self.assertEqual("a\\", hooks._splice_continuations("a\\"))
+
+    def test_only_a_backslash_before_a_newline_splices(self):
+        # 2669 `cmd[i + 1] == "\\n"`: a `\\` before an ordinary character is left in place.
+        self.assertEqual("a\\b", hooks._splice_continuations("a\\b"))
+
+    def test_a_backslash_newline_in_single_quotes_is_literal(self):
+        # 2669 `not q[i]`: inside `'…'` the backslash is literal, so bash keeps the newline.
+        self.assertEqual("'a\\\nb'", hooks._splice_continuations("'a\\\nb'"))
+
+    def test_a_backslash_newline_in_a_comment_is_literal(self):
+        # 2669 `not in_comment` (and the 2666 block that sets it): bash does not continue a
+        # comment, so a `\\` at the end of one splices nothing (#1086 class 2).
+        self.assertEqual("#c\\\nb", hooks._splice_continuations("#c\\\nb"))
+
+    def test_a_hash_mid_word_is_not_a_comment_so_the_next_splice_fires(self):
+        # 2666 word-start guard `(i == 0 or (cmd[i-1] in _BEFORE_COMMENT ...))`: `a#b` is not
+        # a comment, so `in_comment` stays False and the following backslash-newline splices.
+        self.assertEqual("a#bc", hooks._splice_continuations("a#b\\\nc"))
+
+    def test_a_hash_after_a_quoted_metachar_is_not_a_comment(self):
+        # 2666 inner `not q[i - 1]`: the `(` before `#` is quoted (the `(` of `$(` inside
+        # `"…"`), so `#` is not at a word start; `in_comment` stays False and the splice fires.
+        self.assertEqual('"$(#)"', hooks._splice_continuations('"$(#\\\n)"'))
+
+
+class AColZeroCommentDoesNotFoldTheNextHeredoc(unittest.TestCase):
+    """#1089 line 1699: `_comment_index(line) < 0` must reject a comment at index 0. Shifted
+    to `<= 0`, a whole-line comment ending in `\\` folds into the command after it, whose
+    heredoc plan then goes unknown and a data body is read as commands."""
+
+    def test_a_data_heredoc_after_a_col0_comment_stays_data(self):
+        # real: the `#c\\` line is its own command; the `cat <<'EOF'` body is data -> ALLOW.
+        # `<= 0` mutant: `#c` folds into `cat <<'EOF'`, the plan is lost, the body is kept
+        # and its `cat <vault>` line is read as a command -> DENY.
+        self.assertIsNone(hooks._leak_reason(f"#c\\\ncat <<'EOF'\n{R}\nEOF", PLANE))
+
+    def test_the_same_read_as_a_live_command_after_a_comment_is_denied(self):
+        # the vault-reaching twin: no heredoc hides it, so it is refused either way.
+        self.assertTrue(denies(f"#c\\\n{R}"))
 
 
 if __name__ == "__main__":
