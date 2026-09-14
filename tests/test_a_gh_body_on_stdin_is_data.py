@@ -152,11 +152,16 @@ class WhatAShellRunsStaysRefused(PlaneIso):
     def test_a_live_backtick_on_the_opener_line_keeps_the_body_visible(self):
         """An unescaped backtick is a substitution, which can re-pipe the body into a shell, so
         the line stays unattributable (review round 5, ruling C). `\\\\`` is an escaped backslash
-        before a LIVE backtick, and counts as one."""
-        for title in ('"it\'s `~/`"', '"a \\\\`bash\\\\`"', "`bash`"):
+        before a LIVE backtick, and counts as one.
+
+        Asked of the leak guard itself as well as of the hook: another gate also refuses a
+        substitution holding `bash`, and a hand mutant that read `\\\\`` as escaped passed the
+        hook-only form of this test."""
+        for title in ('"it\'s `~/`"', '"a \\\\`x\\\\`"', "a\\\\`x\\\\`", "`bash`"):
             cmd = _heredoc(f"gh pr create --title {title} -F -", READER_LINE)
             with self.subTest(title=title):
                 self.assertTrue(self.denies(cmd), cmd)
+                self.assertEqual(hooks._READ_REASON, hooks._leak_reason(cmd, str(self.tmp)), cmd)
 
     def test_options_end_at_a_double_dash(self):
         cmd = _heredoc("gh pr comment 12 -- -F -", READER_LINE)
