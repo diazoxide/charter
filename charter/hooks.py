@@ -2683,7 +2683,7 @@ def _fallback_segments(cmd: str) -> list[list[str]]:
     `cd .charter/vaults` then `cat x.json` then a stray `echo "` read as ONE command whose
     program was `cd`, and the vault read vanished. It cuts both ways, and the review of #1083
     warned off the two easy over-corrections: splitting on EVERY newline strands a reader's
-    operand when a quoted string spans lines (`grep -e "a<newline>b" x.json`), and not splicing
+    operand when a quoted string spans lines (`grep -e "a\nb" x.json`), and not splicing
     is not an option either.
 
     So a newline is a boundary exactly where bash makes one: not inside a quote it has not

@@ -27,7 +27,7 @@ resulting line on its own, so a broken quote on one line no longer blinds the gu
 well-formed lines around it. A `<<` carried inside a multi-line quote opens no heredoc.
 
 The two over-corrections an adversarial review warned against stay closed: a newline INSIDE a
-quote is still not a boundary, so `grep -e "a<newline>b" x.json` keeps its operand and is refused;
+quote is still not a boundary, so `grep -e "a\nb" x.json` keeps its operand and is refused;
 and the `$( … )` splice is still applied on the unparseable path.
 
 Correct parsing surfaces some commands that were refused only as a side effect of the old

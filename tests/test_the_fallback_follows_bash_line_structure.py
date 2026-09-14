@@ -45,7 +45,7 @@ class TheFallbackKeepsLineStructure(unittest.TestCase):
         self.assertTrue(denies(f"cd .charter/vaults\ncat x.json\necho \""))
 
     def test_a_backslash_newline_splice_before_a_broken_line_is_denied(self):
-        # the `\`<newline> splices, so `cat $(echo . )charter/vaults/x.json` is one read.
+        # the `\`\n` splices, so `cat $(echo . )charter/vaults/x.json` is one read.
         self.assertTrue(denies(f"cat $(echo . )\\\ncharter/vaults/x.json\necho \""))
 
     def test_a_well_formed_line_beside_a_broken_one_still_lexes(self):
@@ -92,7 +92,7 @@ class TheReviewWarningsStayClosed(unittest.TestCase):
     """The two over-corrections the #1083 review measured as bypasses must not reopen."""
 
     def test_a_newline_inside_a_quote_does_not_strand_a_readers_operand(self):
-        # `grep -e "a<newline>b" x.json` after a cd: the quoted newline is not a boundary, so
+        # `grep -e "a\nb" x.json` after a cd: the quoted newline is not a boundary, so
         # x.json stays grep's operand and the read is refused (naive newline-splitting allowed it).
         self.assertTrue(denies("cd .charter/vaults; grep -e \"a\nb\" x.json\necho '"))
 
