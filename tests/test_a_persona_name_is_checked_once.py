@@ -17,10 +17,15 @@ gets #1055's sentence, a name outside the alphabet gets `persona create`'s with 
 hint, and a valid name no persona has gets `persona use`'s, hint included. The expected lines
 below are written out rather than read off `persona`'s constants, so a change to a constant
 has to change this file too.
+
+A fourth sentence came with #1061: a valid name whose `persona.md` is there and does not load
+is told so and pointed at `persona lint`, not called absent and offered a create that
+refuses.
 """
 from __future__ import annotations
 
 import io
+import os
 import re
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -208,6 +213,13 @@ class ARefusedNameIsShownOnOneLine(NameCase):
                                        "letters, digits, '.', '_', '-')")
 
 
+def _does_not_load(name: str) -> str:
+    """The line every command says to a persona whose `persona.md` is there and does not
+    load (#1061). Written out, like the three above."""
+    return (f"persona '{name}' does not load from personas/{name}/persona.md (see why: "
+            f"charter persona lint {name})")
+
+
 class APersonaThatDoesNotLoad(NameCase):
     """`personas/broken/persona.md` resolves out of the plane, so the roster lists `broken`
     and `load` refuses it."""
@@ -223,7 +235,7 @@ class APersonaThatDoesNotLoad(NameCase):
         """`handoff` and `frame-switch` asked the roster, which lists it, so a chat could be
         pinned to, or a frame switched onto, a persona `persona use` will not adopt."""
         self.assertIn("broken", persona.list_personas(), "precondition: it is listed")
-        line = "no persona 'broken' (create it: charter persona create broken)"
+        line = _does_not_load("broken")
         rc, said = _run(commands_persona.cmd_persona_use, name="broken")
         self.assertEqual(rc, 1, said)
         self.assert_says(said, line)
@@ -239,6 +251,88 @@ class APersonaThatDoesNotLoad(NameCase):
         self.assertEqual(rc, 1, said)
         self.assertIn("broken: persona.md:", said)
         self.assertNotIn("create it", said)
+
+
+class ADefinitionThatIsThereAndDoesNotLoadIsNotCalledAbsent(NameCase):
+    """A directory whose `persona.md` is there and does not load (#1061).
+
+    Measured before, on this plane: `persona.md` holding bytes that are not text, and one
+    the reader has no permission to open, both raised out of `load`, so `persona use` and
+    every other routed command ended in a traceback. The out-of-plane link above answered
+    `no persona 'broken' (create it: charter persona create broken)`, and `persona create
+    broken` then refused because it already exists. Neither said to run `persona lint`,
+    the one command that says why a persona does not load.
+
+    Frontmatter that is merely ill-formed (none at all, or never closed) is not here: it
+    loads, and measured so.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        garbled = config.PERSONAS_DIR / "garbled"
+        garbled.mkdir()
+        (garbled / "persona.md").write_bytes(b"---\nrole: \xff\xfe\n---\n")
+        locked = config.PERSONAS_DIR / "locked"
+        locked.mkdir()
+        (locked / "persona.md").write_text("---\nrole: Locked\n---\n")
+        (locked / "persona.md").chmod(0)
+        self.addCleanup((locked / "persona.md").chmod, 0o644)
+
+    def _names(self) -> tuple[str, ...]:
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            # Root opens a mode-0 file, so `locked` would load and prove nothing.
+            return ("garbled",)
+        return ("garbled", "locked")
+
+    def test_every_command_says_it_does_not_load_and_points_at_lint(self):
+        for name in self._names():
+            self.assertIn(name, persona.list_personas(), "precondition: it is listed")
+            line = _does_not_load(name)
+            for label, run in MUST_EXIST:
+                with self.subTest(command=label, name=name):
+                    rc, said = run(name)
+                    self.assertEqual(rc, 1, said)
+                    self.assert_says(said, line)
+            for label, run in FRAMED:
+                with self.subTest(command=label, name=name):
+                    rc, said = run(name)
+                    self.assertEqual(rc, 1, said)
+                    self.assertEqual(len(said.strip().splitlines()), 1, said)
+                    self.assertIn(f"{line} — have: ", said)
+
+    def test_the_lint_it_points_at_says_why_instead_of_raising(self):
+        """Measured before: `persona lint garbled` raised UnicodeDecodeError and `persona
+        lint locked` PermissionError, as did a bare `persona lint` over the roster, so the
+        pointer would have led to a traceback."""
+        for name in self._names():
+            with self.subTest(name=name):
+                rc, said = _run(commands_persona.cmd_persona_lint, name=name, only=None)
+                self.assertEqual(rc, 1, said)
+                self.assertIn(f"✗ {name}: persona.md: ", said)
+                self.assertNotIn("create it", said)
+        with self.subTest(roster=True):
+            rc, said = _run(commands_persona.cmd_persona_lint, name=None, only=None)
+            self.assertEqual(rc, 1, said)
+            for name in self._names():
+                self.assertIn(f"✗ {name}: persona.md: ", said)
+        with self.subTest(what="the reason named"):
+            said = _run(commands_persona.cmd_persona_lint, name="garbled", only=None)[1]
+            self.assertIn("is not utf-8 text", said)
+            if "locked" in self._names():
+                said = _run(commands_persona.cmd_persona_lint, name="locked", only=None)[1]
+                self.assertIn("cannot be read", said)
+
+    def test_a_name_with_no_definition_is_still_absent_beside_them(self):
+        for label, run in MUST_EXIST:
+            with self.subTest(command=label):
+                rc, said = run(ABSENT[0])
+                self.assertEqual(rc, 1, said)
+                self.assert_says(said, ABSENT[1])
+        for label, run in FRAMED:
+            with self.subTest(command=label):
+                rc, said = run(ABSENT[0])
+                self.assertEqual(rc, 1, said)
+                self.assertIn(f"{ABSENT[1]} — have: ", said)
 
 
 class WhatTheCheckLeavesAlone(NameCase):

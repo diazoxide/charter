@@ -368,12 +368,15 @@ def to_persona(fid: str, name: str) -> Outcome:
     if refused:
         return Outcome(False, refused)
     known = personas()
-    # Existence is `load`'s answer, as it is for `persona use`, so a listed directory whose
-    # `persona.md` does not load is refused too. The roster is asked as well, because a
-    # picker's row is a name off it and this is what catches one removed since it was drawn.
-    if name not in known or p_mod.load(name) is None:
-        return Outcome(False, f"{p_mod.NO_SUCH_PERSONA.format(name=name)} — have: "
-                              f"{_some(known)}")
+    # Existence is `name_refusal`'s answer, as it is for `persona use`, so a listed
+    # directory whose `persona.md` does not load is refused in the same words, not called
+    # absent (#1061). The roster is asked as well, because a picker's row is a name off it
+    # and this is what catches one removed since it was drawn.
+    refused = p_mod.name_refusal(name)
+    if not refused and name not in known:
+        refused = p_mod.NO_SUCH_PERSONA.format(name=name)
+    if refused:
+        return Outcome(False, f"{refused} — have: {_some(known)}")
     pinned = _pin(fid, "CHARTER_PERSONA")
     if pinned:
         return Outcome(False, "cannot switch: $CHARTER_PERSONA pins this frame to "

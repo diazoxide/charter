@@ -424,6 +424,46 @@ def definition_refusal(name: str) -> str | None:
     return contain.dir_refusal(p.parent) or contain.file_refusal(p)
 
 
+#: Why a definition file charter may read did not come back as text (#1061). What the read
+#: said, and nothing about why the file is that way.
+UNREADABLE = "'{name}' cannot be read ({why})"
+NOT_TEXT = "'{name}' is not {encoding} text ({why} at offset {at})"
+
+
+def read_refusal(name: str) -> str | None:
+    """Why this persona's definition file, there and not refused by
+    :func:`definition_refusal`, cannot be read as text, or ``None``.
+
+    :func:`load` raises for these. This reads the file again to name the reason, so ask it
+    only once `load` has failed: it is `persona lint`'s answer to the persona every other
+    command calls :data:`DOES_NOT_LOAD`, and the status line never pays for it.
+    """
+    p = def_path(name)
+    if not p.exists() or definition_refusal(name):
+        return None
+    try:
+        p.read_text()
+    except UnicodeDecodeError as ex:
+        return contain.path_sentence(NOT_TEXT, name=str(p), encoding=ex.encoding,
+                                     why=ex.reason, at=str(ex.start))
+    except OSError as ex:
+        return contain.path_sentence(UNREADABLE, name=str(p),
+                                     why=ex.strerror or type(ex).__name__)
+    return None
+
+
+def _loaded(name: str) -> dict | None:
+    """:func:`load`, answering ``None`` for a definition file it cannot read or decode.
+
+    For the two callers that must say something about such a file rather than raise:
+    :func:`name_refusal` and :func:`lint` (#1061).
+    """
+    try:
+        return load(name)
+    except (OSError, UnicodeError):
+        return None
+
+
 def load(name: str) -> dict | None:
     """The persona's OWN (unmerged) definition. For the effective persona with
     inheritance applied, use :func:`resolve`.
@@ -1244,6 +1284,11 @@ NO_SUCH_PERSONA = "no persona '{name}' (create it: charter persona create {name}
 #: the refusal `persona create` gives and that hint would lead to.
 INVALID_NAME = "invalid persona name '{name}' (lowercase letters, digits, '.', '_', '-')"
 
+#: What every command says to a valid name whose definition file is there and does not load
+#: (#1061). No create hint, because `persona create` refuses a name whose file is there, and
+#: no reason, because `persona lint` is the command that says why and this does not guess.
+DOES_NOT_LOAD = "persona '{name}' does not load from {file} (see why: charter persona lint {name})"
+
 
 def name_refusal(name: str, *, defined: bool = True) -> str | None:
     """The refusal for a persona name a command was given, or ``None`` when it names a
@@ -1257,13 +1302,19 @@ def name_refusal(name: str, *, defined: bool = True) -> str | None:
     `devosp` for a persona nobody defines. `persona stats devosp` exited 0 over a row for
     it. `vault add --persona` stored whatever it was given as the vault's owner (#1057).
 
-    Three sentences for three fixes. Whitespace is :func:`blank_flag`'s. A name outside the
+    Four sentences for four fixes. Whitespace is :func:`blank_flag`'s. A name outside the
     alphabet is :data:`INVALID_NAME`, with no create hint, because `persona create` would
     refuse it. A valid name nothing defines is :data:`NO_SUCH_PERSONA`, hint included.
     Existence is :func:`load`'s answer, so every command refuses the persona `persona use`
     refuses. ``defined=False`` is for the callers that answer existence themselves: `persona
     create`, which makes the persona, and the ones that say more about a missing persona
     than "no persona" can.
+
+    A valid name whose definition file is there and does not load is :data:`DOES_NOT_LOAD`
+    (#1061). It was called absent, and the create hint it got is one `persona create`
+    refuses, because the file is there. "Is there" is the test `persona create` refuses on,
+    so the hint is given exactly when `create` would take it. A file `load` cannot read or
+    decode raised out of every command that asked; it does not load either.
 
     An empty name is refused as outside the alphabet. A *flag* reads empty as not given,
     and :func:`undefined_flag` is that reading.
@@ -1274,9 +1325,12 @@ def name_refusal(name: str, *, defined: bool = True) -> str | None:
     # Before `load`, which answers None for this too and would reach the create hint.
     if not valid_name(name):
         return INVALID_NAME.format(name=contain.one_line(name))
-    if defined and load(name) is None:
-        return NO_SUCH_PERSONA.format(name=name)
-    return None
+    if not defined or _loaded(name) is not None:
+        return None
+    file = def_path(name)
+    if file.exists():
+        return DOES_NOT_LOAD.format(name=name, file=file.relative_to(config.ROOT))
+    return NO_SUCH_PERSONA.format(name=name)
 
 
 def undefined_flag(value: str | None) -> str | None:
@@ -1938,12 +1992,14 @@ def lint(name: str, deep: bool = True) -> list[tuple[str, str]]:
     implementation with a flag, rather than a second "cheap health" function that would
     drift from this one the first time a check was added to only one of them.
     """
-    d = load(name)
+    d = _loaded(name)
     if not d:
         # WHY, when there is a why. "does not load" about a `persona.md` sitting right
         # there sends the reader looking for a missing file; the refusal names the path
-        # charter actually resolved to, which is the whole defect (#336).
-        refused = definition_refusal(name)
+        # charter actually resolved to, which is the whole defect (#336). A file that is
+        # there and does not read as text raised here instead, and every other command
+        # now sends the reader here to find out why (#1061).
+        refused = definition_refusal(name) or read_refusal(name)
         # `contain.readable`, because *name* here is a DIRECTORY name and a directory name
         # is not a name charter minted: `personas/` is committed, and a filesystem forbids
         # only `/` and NUL. A U+2028 in one made this single lint row two rows, the second
