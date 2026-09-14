@@ -543,6 +543,80 @@ class WhatARunningPlaneRecordsIsWhatAQuitRecords(PersonaIso, unittest.TestCase):
 
         self.assertEqual([c.resume for c in reopen.read().all_chats()], ["conv-1"])
 
+    def test_it_signs_the_record_as_the_recorders(self):
+        """So the write can tell this record from a quit's, which nothing else on disk does:
+        a running plane's record is written again on the next quiet period, a quit's is the
+        only copy of dead chats' resume ids, and the guard below reads the signature."""
+        _plant("alpha.1", ws="alpha")
+
+        with mock.patch.object(commands_frame, "_chat_seats") as seats:
+            seats.return_value = _seats({"alpha.1": "@0"}, set())
+            commands_frame.record_the_plane_now("alpha.1")
+
+        self.assertEqual(reopen.read().writer, reopen.RECORDER)
+
+    def test_a_quits_record_is_not_written_over_while_a_chat_is_still_on_the_shared_server(self):
+        """**Ruling 46.** This is the plane `_launch` holds a restore back in: the record's
+        chats are dead, their resume ids are in that file alone, and a chat of this plane
+        from before the upgrade still runs on the old shared server. The launch stops its
+        own recorder — but a tick that fell due at the workspace picker, and a second
+        `charter`'s recorder, both reach this write with a recorder running, so the rule is
+        kept at the write. The record stands, and the answer is honest: nothing landed."""
+        _plant("alpha.1", ws="alpha")
+        _plant("alpha.2", ws="alpha")
+        state.record_server("alpha.2", tmuxctl.LEGACY_SOCKET)
+        reopen.write([_frame("alpha", "alpha.9", resume="conv-9")], focus="alpha")
+
+        with mock.patch.object(commands_frame, "_chat_seats") as seats:
+            seats.return_value = _seats({"alpha.1": "@0", "alpha.2": "@1"}, set())
+            self.assertFalse(commands_frame.record_the_plane_now("alpha.1"))
+
+        m = reopen.read()
+        self.assertEqual([c.resume for c in m.all_chats()], ["conv-9"])
+        self.assertEqual(m.writer, reopen.QUIT)
+
+    def test_a_chat_recording_no_server_is_on_the_shared_server_for_this_too(self):
+        """`state.frame_server`'s rule, kept here as everywhere: a chat old enough to record
+        no server was launched on the one every plane shared."""
+        _plant("alpha.1", ws="alpha")
+        (state.frame_dir("alpha.1") / "server").unlink()
+        self.assertIsNone(state.frame_server("alpha.1"))
+        reopen.write([_frame("alpha", "alpha.9", resume="conv-9")], focus="alpha")
+
+        with mock.patch.object(commands_frame, "_chat_seats") as seats:
+            seats.return_value = _seats({"alpha.1": "@0"}, set())
+            self.assertFalse(commands_frame.record_the_plane_now("alpha.1"))
+
+        self.assertEqual([c.resume for c in reopen.read().all_chats()], ["conv-9"])
+
+    def test_its_own_earlier_record_is_written_over_while_a_chat_is_on_the_shared_server(self):
+        """The guard is for a QUIT's record and not for the shared server as such: the
+        running plane's own last record describes chats that are on screen, and refusing to
+        replace it would leave a plane unrecorded for as long as its old frame ran."""
+        _plant("alpha.1", ws="alpha")
+        state.record_server("alpha.1", tmuxctl.LEGACY_SOCKET)
+        reopen.write([_frame("alpha", "alpha.9", resume="conv-9")], focus="alpha",
+                     writer=reopen.RECORDER)
+
+        with mock.patch.object(commands_frame, "_chat_seats") as seats:
+            seats.return_value = _seats({"alpha.1": "@0"}, set())
+            self.assertTrue(commands_frame.record_the_plane_now("alpha.1"))
+
+        self.assertEqual([c.chat for c in reopen.read().all_chats()], ["alpha.1"])
+
+    def test_a_quits_record_is_written_over_once_nothing_is_on_the_shared_server(self):
+        """The ordinary plane, where the recorder has always written over the last quit —
+        one that restored and ran on, or one whose `[frame] restore` is off. Nothing of this
+        plane points at the shared server, so nothing is held back."""
+        _plant("alpha.1", ws="alpha")
+        reopen.write([_frame("alpha", "alpha.9", resume="conv-9")], focus="alpha")
+
+        with mock.patch.object(commands_frame, "_chat_seats") as seats:
+            seats.return_value = _seats({"alpha.1": "@0"}, set())
+            self.assertTrue(commands_frame.record_the_plane_now("alpha.1"))
+
+        self.assertEqual([c.chat for c in reopen.read().all_chats()], ["alpha.1"])
+
     def test_a_record_that_did_not_land_says_so(self):
         """The recorder's own loop reads this: a write that failed is not retried on every
         tick, so the answer has to be honest rather than optimistic."""
@@ -698,7 +772,12 @@ class TheLauncherTakesTheDecision(PersonaIso, unittest.TestCase):
                 mock.patch.object(record, "POLL", 3600.0):
             return self._launch(**kw)
 
-    def _launch(self, *, chats_live=(), reopen_rc=0, legacy_live=(), claim=None, **kw):
+    def _launch(self, *, chats_live=(), reopen_rc=0, legacy_live=(), claim=None,
+                choose=None, seats=None, **kw):
+        """*choose* stands in for the workspace picker and *claim* for `state.new_chat_id`
+        — the two moments a case can act inside the launch, before and after the hold-back
+        line. *seats* is what `_chat_seats` answers per server, for a case whose recorder
+        reads the plane; by default every server has nothing, and no tmux is asked."""
         said = io.StringIO()
         self.said = said
         with redirect_stderr(said), mock.patch.multiple(commands_frame,
@@ -708,6 +787,8 @@ class TheLauncherTakesTheDecision(PersonaIso, unittest.TestCase):
                                  _choose_workspace=mock.DEFAULT,
                                  _workspace_to_focus=mock.DEFAULT,
                                  cmd_reopen=mock.DEFAULT) as m, \
+                mock.patch.object(commands_frame, "_chat_seats",
+                                  side_effect=seats or (lambda socket: [])), \
                 mock.patch("charter.frame.state.new_chat_id",
                            side_effect=claim or (lambda ws: None)), \
                 mock.patch("charter.commands_frame.shutil.which",
@@ -720,6 +801,8 @@ class TheLauncherTakesTheDecision(PersonaIso, unittest.TestCase):
             # The legacy server's keep list, which is plane-checked by pane (ruling 46).
             m["_legacy_keep"].return_value = set(legacy_live)
             m["_choose_workspace"].return_value = ("alpha", None, False)
+            if choose is not None:
+                m["_choose_workspace"].side_effect = choose
             m["_workspace_to_focus"].return_value = None
             m["cmd_reopen"].return_value = reopen_rc
             rc = commands_frame.cmd_launch(_launch_args(**kw))
@@ -809,6 +892,97 @@ class TheLauncherTakesTheDecision(PersonaIso, unittest.TestCase):
         self._launch_recording(claim=claim)
         self.assertEqual(len(recording_at_the_claim), 1)
         self.assertIsNotNone(recording_at_the_claim[0])
+
+    def test_a_tick_that_falls_due_at_the_workspace_picker_does_not_write_over_the_held_back_quit(self):
+        """**The recorder starts at the top of `cmd_launch`, and the hold-back line is a
+        picker away.** An operator who sat at the workspace picker for a few seconds had
+        the plane written before `_launch` reached the line that stops the recorder — so
+        the stop alone protected nothing, and the quit's record, the one copy of its resume
+        ids, was replaced. The guard is at the write (`_quit_record_held_back`): driven
+        here as a tick that fell due at the picker, reading the chat still on the shared
+        server as the tick would."""
+        reopen.write([_frame("alpha", "alpha.1", resume="conv-1")], focus="alpha")
+        state.frame_dir("alpha.1", create=True)
+        state.record_workspace("alpha.1", "alpha")
+        wrote: list = []
+
+        def at_the_picker(args):
+            wrote.append(commands_frame.record_the_plane_now(""))
+            return ("alpha", None, False)
+
+        self._launch_recording(
+            legacy_live=("alpha.1",), choose=at_the_picker,
+            seats=lambda socket: (_seats({"alpha.1": "@0"}, set())
+                                  if socket == tmuxctl.LEGACY_SOCKET else []))
+
+        self.assertEqual(wrote, [False], "the tick at the picker wrote the plane")
+        m = reopen.read()
+        self.assertEqual([c.resume for c in m.all_chats()], ["conv-1"])
+        self.assertEqual(m.writer, reopen.QUIT)
+        self.assertIn("left in place", self.said.getvalue())
+
+    def test_a_second_charter_that_finds_the_plane_live_does_not_write_over_the_held_back_quit(self):
+        """**The other way past the stop.** The first `charter` opened a fresh chat on the
+        plane's own server with its recorder stopped. A second `charter` in the same
+        project finds that chat live, so it never reaches the hold-back line at all — it is
+        a launch onto a running plane, told nothing about a kept record and recording as
+        every launch does — and its recorder meets the quit's record with a chat of this
+        plane still on the shared server. The write refuses; that recorder runs on, because
+        the running plane is not what was held back.
+
+        This is also the pin on `not live_before` in the hold-back's own condition: a
+        running plane is not told its record was kept, because nothing was held back from
+        it, and its recorder is not stopped."""
+        reopen.write([_frame("alpha", "alpha.1", resume="conv-1")], focus="alpha")
+        state.frame_dir("alpha.1", create=True)
+        state.record_workspace("alpha.1", "alpha")
+        _plant("alpha.2", ws="alpha")
+        wrote: list = []
+        recording_at_the_claim: list = []
+
+        def claim(ws):
+            recording_at_the_claim.append(record.running())
+            wrote.append(commands_frame.record_the_plane_now("alpha.2"))
+            return None
+
+        def seats(socket):
+            if socket == tmuxctl.LEGACY_SOCKET:
+                return _seats({"alpha.1": "@0"}, set())
+            return _seats({"alpha.2": "@0"}, {"alpha.2"})
+
+        _rc, reopened = self._launch_recording(
+            chats_live=("alpha.2",), legacy_live=("alpha.1",), claim=claim, seats=seats)
+
+        reopened.assert_not_called()
+        self.assertEqual(len(recording_at_the_claim), 1)
+        self.assertIsNotNone(recording_at_the_claim[0],
+                             "a launch onto a running plane stopped its recorder")
+        self.assertEqual(wrote, [False], "the second terminal's recorder wrote the plane")
+        m = reopen.read()
+        self.assertEqual([c.resume for c in m.all_chats()], ["conv-1"])
+        self.assertEqual(m.writer, reopen.QUIT)
+        self.assertNotIn("left in place", self.said.getvalue())
+
+    def test_a_launch_that_asked_for_something_in_particular_holds_nothing_back(self):
+        """`charter claude --resume <id>` names what it wants, so it was never going to
+        restore (`_restores_the_plane`) and nothing was held back from it: no sentence about
+        a kept record, and its recorder keeps running — the guard at the write is what keeps
+        the quit's record whole under it. The pin on the `_restores_the_plane` conjunct."""
+        state.frame_dir("alpha.1", create=True)
+        state.record_workspace("alpha.1", "alpha")
+        recording_at_the_claim: list = []
+
+        def claim(ws):
+            recording_at_the_claim.append(record.running())
+            return None
+
+        self._launch_recording(legacy_live=("alpha.1",), claim=claim,
+                               rest=["--resume", "x"])
+
+        self.assertEqual(len(recording_at_the_claim), 1)
+        self.assertIsNotNone(recording_at_the_claim[0])
+        self.assertNotIn("left in place", self.said.getvalue())
+        self.assertIsNotNone(reopen.read(), "the quit's record was not left in place")
 
     def test_an_old_frame_that_has_ended_is_reaped_and_the_plane_is_restored(self):
         state.frame_dir("alpha.1", create=True)

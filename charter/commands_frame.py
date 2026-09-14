@@ -5809,6 +5809,18 @@ def _launch(args) -> int:
         # under a recorder that writes the plane as it now stands, over it. Stopped before the
         # chat is claimed, and said, so `charter` after that old frame is quit still has
         # something to put back.
+        #
+        # **The stop is this launch's, and the record's own guard is at the write**
+        # (`_quit_record_held_back`): the recorder has been ticking since the top of
+        # `cmd_launch`, so a plane written while the operator sat at the workspace picker
+        # above had already landed over the quit before this line; and a second `charter` in
+        # this project finds the fresh chat live and never reaches this branch at all.
+        #
+        # Each conjunct is its own case and none stands in for another: `not live_before`
+        # because a live plane was not held back by anything, it is running, and this
+        # sentence would name the wrong reason; `_restores_the_plane` because a launch that
+        # declined to restore (`--fresh`, a `rest`) had nothing not put back; and
+        # `_has_a_record` because with nothing recorded there is nothing kept to speak of.
         record.stop()
         util.warn(RESTORE_HELD_BACK)
 
@@ -10354,7 +10366,10 @@ def _record_the_plane(doomed, *, focus: str, active, windows,
             brief=state.brief(c.chat) or ""))
     for ws in order:
         frames.append(reopen_state.Frame(workspace=ws, chats=tuple(entries[ws])))
-    if not reopen_state.write(frames, focus=focus):
+    # Signed by who is writing (`reopen.QUIT`'s note): `capture` is true for exactly the
+    # caller that is a quit, and the recorder is the one reader of the signature.
+    if not reopen_state.write(frames, focus=focus, writer=reopen_state.QUIT if capture
+                              else reopen_state.RECORDER):
         return None
     if capture:
         # Keyed on what was RECORDED and not on what was stopped: a transcript is a file in
@@ -10382,6 +10397,17 @@ def record_the_plane_now(chat: str) -> bool:
     empty write. It is the state a plane is in for the instant between a quit's manifest and
     the launcher noticing its attach ended, and replacing a quit's record with an empty one
     there would destroy exactly the thing this feature exists to keep.
+
+    **And a quit's record is not written over while a chat of this plane is still on the
+    old shared server** (ruling 46) — :func:`_quit_record_held_back`. That is the state
+    `_launch` holds a restore back in: the record's chats are dead and their resume ids are
+    in that file alone, so the plane as it now stands must not replace it until a restore
+    has consumed it. The launch stops its own recorder for that reason, and this is the
+    same rule at the write itself, because the launch's stop is not the only way here: the
+    recorder ticks from the top of `cmd_launch`, so an operator sitting at the workspace
+    picker for a few seconds had the plane written before the hold-back line was reached;
+    and a second `charter` in the same project, finding the plane live on its own server
+    and so never reaching that line, recorded the fresh chat over the quit. Measured both.
     """
     # **Asked of the disk before it is asked of tmux.** A plane with no chat directories has
     # nothing to record whatever a server says, and this runs on a poll: `_plane_live` is a
@@ -10397,8 +10423,31 @@ def record_the_plane_now(chat: str) -> bool:
     doomed = leave.stopping(leave.plan(live=live, focus=focus))
     if not doomed:
         return False
+    if _quit_record_held_back(doomed):
+        return False
     return _record_the_plane(doomed, focus=focus, active=active, windows=windows,
                              capture=False) is not None
+
+
+def _quit_record_held_back(doomed) -> bool:
+    """Is the record on disk a quit's that no restore has consumed, while a chat of this
+    plane is still on `tmuxctl.LEGACY_SOCKET`?
+
+    *doomed* is `leave.stopping`'s answer — the chats live, or that charter could not ask
+    about, each carrying the server its directory records — so "still on the legacy server"
+    is read off the same listing the record would be written from, and `_launch`'s own
+    hold-back (`still_on_the_legacy_server`, asked after a reap) and this cannot disagree
+    about whether the plane is in that state. A chat with no server record is on the legacy
+    server, as everywhere (`state.frame_server`).
+
+    The record is asked second: it is a file read, and on the ordinary plane nothing points
+    at the legacy server, so the ordinary tick never pays it.
+    """
+    if not any(tmuxctl.same_server(c.server or tmuxctl.LEGACY_SOCKET, tmuxctl.LEGACY_SOCKET)
+               for c in doomed):
+        return False
+    m = reopen_state.read()
+    return m is not None and bool(m.frames) and m.writer != reopen_state.RECORDER
 
 
 def _stop_chats(doomed, *, windows) -> int:
@@ -10655,7 +10704,8 @@ def _forget_transcript(fid: str) -> None:
         frames = [reopen_state.Frame(workspace=f.workspace,
                                      chats=tuple(c for c in f.chats if c.chat != fid))
                   for f in m.frames]
-        reopen_state.write([f for f in frames if f.chats], focus=m.focus, at=m.at)
+        reopen_state.write([f for f in frames if f.chats], focus=m.focus, at=m.at,
+                           writer=m.writer)
     reopen_state.prune_transcripts(
         {c.chat for c in (reopen_state.read() or reopen_state.Manifest(
             at=0, focus="", frames=())).all_chats()})
@@ -10988,7 +11038,7 @@ def _consume(m, done, *, quiet: bool = False) -> None:
     if not left:
         reopen_state.forget()
         return
-    if reopen_state.write(left, focus=m.focus, at=m.at):
+    if reopen_state.write(left, focus=m.focus, at=m.at, writer=m.writer):
         _report(quiet, util.warn,
                 f"charter reopen: {sum(len(f.chats) for f in left)} chat(s) still "
                 "recorded — `charter reopen` again to retry just those")

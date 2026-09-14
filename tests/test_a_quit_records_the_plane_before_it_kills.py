@@ -1293,7 +1293,11 @@ class WhatIsOnDiskIsAFormatAndNotAnImplementationDetail(PersonaIso, unittest.Tes
         reopen.write([self._one()], focus="alpha", at=1700000000)
 
         raw = json.loads(reopen.path().read_text())
-        self.assertEqual(sorted(raw), ["at", "focus", "frames", "version"])
+        # `writer` joined the top level when the recorder had to tell a quit's record from
+        # its own (ruling 46), on the same terms as the per-chat fields below: `version`
+        # stays 1, and a manifest without the key reads as a QUIT's — the older and the
+        # irreplaceable of the two — which is the case pinned two tests down.
+        self.assertEqual(sorted(raw), ["at", "focus", "frames", "version", "writer"])
         self.assertEqual(raw["at"], 1700000000)
         self.assertEqual(raw["focus"], "alpha")
         self.assertEqual(sorted(raw["frames"][0]), ["chats", "workspace"])
@@ -1310,6 +1314,33 @@ class WhatIsOnDiskIsAFormatAndNotAnImplementationDetail(PersonaIso, unittest.Tes
             sorted(raw["frames"][0]["chats"][0]),
             ["active", "brief", "chat", "cwd", "harness", "persona", "profile", "resume",
              "transcript", "workspace"])
+
+    def test_the_writer_is_spelled_quit_or_recorder(self):
+        """Two words on disk, and a quit's is the default: `_record_the_plane` is the one
+        caller that says otherwise, for the running plane's record."""
+        reopen.write([self._one()], focus="alpha")
+        self.assertEqual(json.loads(reopen.path().read_text())["writer"], "quit")
+
+        reopen.write([self._one()], focus="alpha", writer=reopen.RECORDER)
+        self.assertEqual(json.loads(reopen.path().read_text())["writer"], "recorder")
+        self.assertEqual(reopen.read().writer, "recorder")
+
+    def test_a_manifest_that_names_no_writer_or_an_unknown_one_reads_as_a_quits(self):
+        """The migration case is the one that matters most here: on the day of the upgrade
+        the record on disk is the OLD charter's quit — which is exactly the record the
+        recorder must not write over while a chat is still on the shared server — and it has
+        no `writer` at all. Reading that as the recorder's would lose it on the first tick.
+        An unknown value is a manifest this charter did not write, and reads the same way."""
+        reopen.write([self._one()], focus="alpha", writer=reopen.RECORDER)
+        raw = json.loads(reopen.path().read_text())
+
+        del raw["writer"]
+        reopen.path().write_text(json.dumps(raw))
+        self.assertEqual(reopen.read().writer, "quit")
+
+        raw["writer"] = "panel"
+        reopen.path().write_text(json.dumps(raw))
+        self.assertEqual(reopen.read().writer, "quit")
 
     def test_at_is_a_whole_number_of_seconds_and_defaults_to_now(self):
         # `int(...)`, so a float clock never reaches the file: `at` is read back through an
