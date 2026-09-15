@@ -1188,9 +1188,10 @@ class ANewProfileIsAskedInThePane(_ASelectorPane, unittest.TestCase):
 
         typed = _Answers("y\n")
         self.enterContext(mock.patch("sys.stdin", typed))
-        with mock.patch.object(wiring, "refusal",
-                               side_effect=lambda p, *, cwd: order.append("probed")
-                               or "profile 'claude-work' is not wired — the reason"):
+        with mock.patch.object(wiring, "wired_or_refusal",
+                               side_effect=lambda p, *, cwd, root: order.append("probed")
+                               or wiring.Answer("profile 'claude-work' is not wired — the "
+                                                "reason", "")):
             self.assertEqual(self._run(selector.Choice(WORK)), selector.CANCELLED_EXIT)
         self.assertEqual(order, ["answered", "probed"])
         self.assertEqual(self.execs, [])

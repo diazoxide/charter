@@ -26,6 +26,7 @@ import json
 import os
 import shlex
 import shutil
+import threading
 import time
 import unittest
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
@@ -268,7 +269,7 @@ class ClaudeCodeIsAskedUnderTheProfilesEnvironment(PersonaIso, unittest.TestCase
         for answer, rc in ((listing(), 0), ("", 1)):
             with self.subTest(rc=rc), spawns([], answer, rc=rc):
                 w = wiring.detect(p, cwd=self.here)
-                said = wiring.refusal(p, cwd=self.here)
+                said = wiring.wired_or_refusal(p, cwd=self.here, root=config.ROOT).refusal
             self.assertEqual(w.fix, f"charter harness install {long_name}")
             self.assertIn(f"profile '{'l' * 160}...'", said)
 
@@ -446,7 +447,7 @@ class ClaudeCodeIsAskedUnderTheProfilesEnvironment(PersonaIso, unittest.TestCase
         with spawns([], "", rc=1):
             w = wiring.detect(self.p, cwd=self.here)
             self.assertEqual(w.state, wiring.UNKNOWN_STATE)
-            said = wiring.refusal(self.p, cwd=self.here)
+            said = wiring.wired_or_refusal(self.p, cwd=self.here, root=config.ROOT).refusal
         self.assertIn("could not ask", said)
         self.assertIn("claude plugin list --json", self.probe_in(said))
 
@@ -454,7 +455,7 @@ class ClaudeCodeIsAskedUnderTheProfilesEnvironment(PersonaIso, unittest.TestCase
         """Ruling 12 and review 10: an unknown is not a pass, and nothing raises out of it."""
         with spawns([], raises=util.ProcTimeout(["claude"], 5.0)):
             w = wiring.detect(self.p, cwd=self.here)
-            said = wiring.refusal(self.p, cwd=self.here)
+            said = wiring.wired_or_refusal(self.p, cwd=self.here, root=config.ROOT).refusal
         self.assertEqual(w.state, wiring.UNKNOWN_STATE)
         self.assertIn("could not ask", said)
 
@@ -481,7 +482,7 @@ class ClaudeCodeIsAskedUnderTheProfilesEnvironment(PersonaIso, unittest.TestCase
             "claude-nul", env=[("CLAUDE_CONFIG_DIR", "/tmp/a\x00b")]))
         with mock.patch.object(plugincache, "available", lambda *a, **k: True):
             w = wiring.detect(p, cwd=self.here)
-            said = wiring.refusal(p, cwd=self.here)
+            said = wiring.wired_or_refusal(p, cwd=self.here, root=config.ROOT).refusal
         self.assertEqual(w.state, wiring.UNKNOWN_STATE)
         self.assertIn("could not ask", said)
         self.assertNotIn("\x00", said)
@@ -805,7 +806,7 @@ class CodexIsReadAtTheProfilesHome(PersonaIso, unittest.TestCase):
                 w = wiring.detect(self.p, cwd=self.tmp)
                 self.assertEqual(w.state, wiring.UNKNOWN_STATE)
                 self.assertIn(key, w.detail)
-                self.assertIn("could not ask", wiring.refusal(self.p, cwd=self.tmp))
+                self.assertIn("could not ask", wiring.wired_or_refusal(self.p, cwd=self.tmp, root=config.ROOT).refusal)
 
     def test_a_trust_entry_of_the_wrong_shape_is_named_rather_than_skipped(self):
         """The ledger entry itself: `trusted_hash` read off a string is the traceback, and a
@@ -834,7 +835,7 @@ class CodexIsReadAtTheProfilesHome(PersonaIso, unittest.TestCase):
         p = approve_profile(self, make_profile("codex-nul", kind="codex",
                                                env=[("CODEX_HOME", "/tmp/a\x00b")]))
         self.assertEqual(wiring.detect(p, cwd=self.tmp).state, wiring.UNKNOWN_STATE)
-        self.assertIn("could not ask", wiring.refusal(p, cwd=self.tmp))
+        self.assertIn("could not ask", wiring.wired_or_refusal(p, cwd=self.tmp, root=config.ROOT).refusal)
 
     def test_the_step_no_command_can_take_is_said_in_these_words(self):
         """Operator-facing, and the one step of the three that is a sentence: pinned here
@@ -875,7 +876,7 @@ class CodexIsReadAtTheProfilesHome(PersonaIso, unittest.TestCase):
         w = wiring.detect(self.p, cwd=self.tmp)
         self.assertEqual(w.state, wiring.UNKNOWN_STATE)
         self.assertIn(f"{self.home / 'config.toml'} could not be read", w.detail)
-        self.assertIn("could not ask", wiring.refusal(self.p, cwd=self.tmp))
+        self.assertIn("could not ask", wiring.wired_or_refusal(self.p, cwd=self.tmp, root=config.ROOT).refusal)
 
     def test_a_config_that_is_not_utf8_names_the_file(self):
         (self.home / "config.toml").write_bytes(b"\xff\xfe[plugins]\n")
@@ -1030,7 +1031,7 @@ class OpencodeIsAskedUnderTheProfilesConfigHome(PersonaIso, unittest.TestCase):
         self.shim()
         with spawns([], raises=util.ProcTimeout(["opencode"], 5.0)):
             w = wiring.detect(self.p, cwd=self.tmp)
-            said = wiring.refusal(self.p, cwd=self.tmp)
+            said = wiring.wired_or_refusal(self.p, cwd=self.tmp, root=config.ROOT).refusal
         self.assertEqual(w.state, wiring.UNKNOWN_STATE)
         self.assertIn("could not ask", said)
         self.assertIn("check by hand: ", said)
@@ -1051,7 +1052,7 @@ class OpencodeIsAskedUnderTheProfilesConfigHome(PersonaIso, unittest.TestCase):
         p = approve_profile(self, make_profile("oc-nul", kind="opencode",
                                                env=[("XDG_CONFIG_HOME", "/tmp/x\x00y")]))
         self.assertEqual(wiring.detect(p, cwd=self.tmp).state, wiring.UNKNOWN_STATE)
-        self.assertIn("could not ask", wiring.refusal(p, cwd=self.tmp))
+        self.assertIn("could not ask", wiring.wired_or_refusal(p, cwd=self.tmp, root=config.ROOT).refusal)
 
     def test_an_entry_holding_a_nul_byte_is_skipped_rather_than_raised_on(self):
         """`Path.resolve` refuses a NUL with `ValueError`; an answer is text the harness
@@ -1137,7 +1138,7 @@ class NothingUnapprovedIsRun(PersonaIso, unittest.TestCase):
         calls = []
         with spawns(calls, raises=AssertionError("a declared command was run")):
             w = wiring.detect(self.p, cwd=config.ROOT)
-            said = wiring.refusal(self.p, cwd=config.ROOT)
+            said = wiring.wired_or_refusal(self.p, cwd=config.ROOT, root=config.ROOT).refusal
         self.assertEqual(calls, [])
         self.assertEqual(w.state, wiring.UNKNOWN_STATE)
         # Task 3's own sentence, and not a paraphrase of it: the state word is the record's.
@@ -1154,7 +1155,7 @@ class NothingUnapprovedIsRun(PersonaIso, unittest.TestCase):
         calls = []
         with spawns(calls, raises=AssertionError("a declared command was run")):
             w = wiring.detect(self.p, cwd=config.ROOT)
-            said = wiring.refusal(self.p, cwd=config.ROOT)
+            said = wiring.wired_or_refusal(self.p, cwd=config.ROOT, root=config.ROOT).refusal
             installed = wiring.install(self.p, config.ROOT)
             rows = {r.name: r for r in doctor.check_profile_wiring()}
         # The built-ins are probed in the same doctor run — the file decides nothing about
@@ -1249,6 +1250,11 @@ class AYesNeverWalksPastAWiringRefusal(_ALaunchNamesAProfile, unittest.TestCase)
     not carry charter's guard is still refused — on every path (re-review N2)."""
 
     def unwired(self):
+        """A folder that reads unwired before AND after the launch's own install (ruling
+        47) — the install stood in as having done its part, so what is left is Task 4's
+        sentence and not a complaint about the install."""
+        self.enterContext(mock.patch.object(wiring, "_wire",
+                                            return_value=[("installed", "stood in")]))
         return mock.patch.object(wiring, "_asked", return_value=wiring.Wiring(
             wiring.UNWIRED, "charter@charter is not installed", "charter harness install x"))
 
@@ -1339,6 +1345,8 @@ class TheLaunchRefusesAnUnwiredProfile(PersonaIso, unittest.TestCase):
         return launcher.refusal(p, root=config.ROOT, attended=False, env=dict(os.environ))
 
     def test_a_built_in_that_is_not_wired_is_refused_with_the_fix(self):
+        """Codex, so the launch writes charter's own line into the empty home (ruling 47)
+        and still refuses — with Codex's own steps, which are what is left to do."""
         home = self.tmp / "empty-codex"
         home.mkdir()
         p = make_profile("codex", kind="codex", source=profiles.BUILTIN)
@@ -1347,7 +1355,8 @@ class TheLaunchRefusesAnUnwiredProfile(PersonaIso, unittest.TestCase):
             r = self.refuse(p)
         self.assertIsNotNone(r)
         self.assertEqual(r.kind, wiring.KIND_WIRING)
-        self.assertIn("charter harness install codex", r.text)
+        self.assertIn("codex plugin add", r.text)
+        self.assertIn('CHARTER_HARNESS = "codex"', (home / "config.toml").read_text())
 
     def test_a_built_in_claude_under_claudeguards_empty_answer_is_refused(self):
         """This is why `wired_as_today` exists. In-process the suite's guard makes
@@ -1409,8 +1418,9 @@ class TheLaunchRefusesAnUnwiredProfile(PersonaIso, unittest.TestCase):
                                  harness="claude-code", cwd="", resume="", transcript="",
                                  active=True, profile="claude")
         asked = []
-        with mock.patch.object(wiring, "refusal",
-                               side_effect=lambda p, *, cwd: asked.append(cwd) or "no"), \
+        with mock.patch.object(wiring, "wired_or_refusal",
+                               side_effect=lambda p, *, cwd, root: asked.append(cwd)
+                               or wiring.Answer("no", "")), \
                 mock.patch.object(commands_frame.util, "warn"), \
                 mock.patch.object(commands_frame, "cmd_launch", return_value=0):
             commands_frame._reopen_one(chat)
@@ -1464,7 +1474,8 @@ class AStartPaysTheProbeTwice(_ALaunchNamesAProfile, unittest.TestCase):
         self._no_approval_needed()
         self.probed: list = []
         self.enterContext(mock.patch.object(
-            wiring, "refusal", side_effect=lambda p, *, cwd: self.probed.append(cwd) or ""))
+            wiring, "wired_or_refusal",
+            side_effect=lambda p, *, cwd, root: self.probed.append(cwd) or wiring.Answer("", "")))
 
     def test_a_terminal_launch_probes_before_tmux(self):
         self.assertEqual(self._launch(profile="claude-work", stdin=_APipe()), 0)
@@ -1568,7 +1579,7 @@ class ARefusalThatQuotesACommandShowsItEscaped(PersonaIso, unittest.TestCase):
         p = approve_profile(self, make_profile(self.nasty, command=[self.nasty],
                                                env=[("CLAUDE_CONFIG_DIR", self.nasty)]))
         with spawns([], "", rc=1):
-            said = wiring.refusal(p, cwd=self.tmp)
+            said = wiring.wired_or_refusal(p, cwd=self.tmp, root=config.ROOT).refusal
         self.assertNotIn("\r", said)
         self.assertNotIn("\x1b", said)
         self.assertIn(contain.readable(self.nasty), said)
@@ -1576,7 +1587,7 @@ class ARefusalThatQuotesACommandShowsItEscaped(PersonaIso, unittest.TestCase):
     def test_not_wired_escapes_the_name_and_the_fix(self):
         p = approve_profile(self, make_profile(self.nasty))
         with spawns([], listing()):
-            said = wiring.refusal(p, cwd=self.tmp)
+            said = wiring.wired_or_refusal(p, cwd=self.tmp, root=config.ROOT).refusal
         self.assertNotIn("\r", said)
         self.assertNotIn("\x1b", said)
 
@@ -2312,7 +2323,7 @@ class EveryProfileDerivedTextIsShownEscaped(PersonaIso, unittest.TestCase):
                              command=(self.NASTY,), env=(), source=profiles.BUILTIN)
         w = wiring.detect(p, cwd=self.tmp)
         self.assertEqual(w.state, wiring.UNKNOWN_STATE)
-        self.clean(w.detail, w.fix, wiring.refusal(p, cwd=self.tmp))
+        self.clean(w.detail, w.fix, wiring.wired_or_refusal(p, cwd=self.tmp, root=config.ROOT).refusal)
         self.clean(*(text for _status, text in wiring.install(p, self.tmp)))
 
     def test_a_reason_charter_may_not_run_it_yet_is_shown_escaped(self):
@@ -2321,7 +2332,7 @@ class EveryProfileDerivedTextIsShownEscaped(PersonaIso, unittest.TestCase):
         p = make_profile(self.NASTY)
         answer = wiring.detect(p, cwd=self.tmp)
         self.assertEqual(answer.state, wiring.UNKNOWN_STATE)
-        self.clean(answer.detail, answer.fix, wiring.refusal(p, cwd=self.tmp),
+        self.clean(answer.detail, answer.fix, wiring.wired_or_refusal(p, cwd=self.tmp, root=config.ROOT).refusal,
                    *(label for _s, label in wiring.install(p, self.tmp)))
 
     def test_the_claude_detail_names_its_folder_and_scope_escaped(self):
@@ -2331,7 +2342,7 @@ class EveryProfileDerivedTextIsShownEscaped(PersonaIso, unittest.TestCase):
         with spawns([], listing(entry(scope=self.NASTY, project=here, enabled=False))):
             w = wiring.detect(p, cwd=here)
         self.assertEqual(w.state, wiring.UNWIRED)
-        self.clean(w.detail, w.fix, wiring.refusal(p, cwd=here))
+        self.clean(w.detail, w.fix, wiring.wired_or_refusal(p, cwd=here, root=config.ROOT).refusal)
 
     def test_the_codex_detail_names_its_home_escaped(self):
         home = self.dirty_dir("cx")
@@ -2340,7 +2351,7 @@ class EveryProfileDerivedTextIsShownEscaped(PersonaIso, unittest.TestCase):
                                                env=[("CODEX_HOME", str(home))]))
         w = wiring.detect(p, cwd=self.tmp)
         self.assertEqual(w.state, wiring.UNKNOWN_STATE)
-        self.clean(w.detail, w.fix, wiring.refusal(p, cwd=self.tmp), wiring.by_hand(p))
+        self.clean(w.detail, w.fix, wiring.wired_or_refusal(p, cwd=self.tmp, root=config.ROOT).refusal, wiring.by_hand(p))
 
     def test_the_opencode_detail_names_its_probe_home_and_neighbours_escaped(self):
         xdg = self.dirty_dir("xdg")
@@ -2357,7 +2368,7 @@ class EveryProfileDerivedTextIsShownEscaped(PersonaIso, unittest.TestCase):
         self.assertEqual(w.state, wiring.UNWIRED)
         self.clean(w.detail, w.fix)
         with spawns([], raises=util.ProcTimeout(["oc"], 5.0)):
-            self.clean(wiring.refusal(p, cwd=self.tmp))
+            self.clean(wiring.wired_or_refusal(p, cwd=self.tmp, root=config.ROOT).refusal)
 
     def test_the_install_and_the_wiring_report_name_it_escaped(self):
         import io
@@ -2566,7 +2577,7 @@ class TheSeamsTheSweepAsksAbout(PersonaIso, unittest.TestCase):
         (home / "config.toml").write_text("[x")
         p = approve_profile(self, make_profile("codex-alt", kind="codex",
                                                env=[("CODEX_HOME", str(home))]))
-        said = wiring.refusal(p, cwd=self.tmp)
+        said = wiring.wired_or_refusal(p, cwd=self.tmp, root=config.ROOT).refusal
         self.assertIn("check by hand: ", said)
         self.assertEqual(shlex.split(said.split("check by hand: ", 1)[1]),
                          ["cat", str(home / "config.toml")])
@@ -2669,6 +2680,373 @@ class TheSeamsTheSweepAsksAbout(PersonaIso, unittest.TestCase):
         with mock.patch.object(wiring, "install") as inst:
             self.assertEqual(commands._wire_profiles(config.ROOT, install=True), [])
         inst.assert_not_called()
+
+
+# --------------------------------------------------------------------------- #
+# Wired, not refused (ruling 47)                                               #
+# --------------------------------------------------------------------------- #
+
+
+#: A Claude Code folder with no charter plugin: the answer a launch used to refuse on, and
+#: the one it now installs over. Its fix IS the install, which is what makes it automatic.
+NOT_INSTALLED = wiring.Wiring(wiring.UNWIRED,
+                              "charter@charter is not installed in /cw for /plane",
+                              "charter harness install claude-work")
+#: Installed and disabled: unwired, and the fix is an `enable` and not the install.
+DISABLED = wiring.Wiring(wiring.UNWIRED, "charter@charter is installed and reads as disabled",
+                         "cd /plane && claude plugin enable charter@charter --scope local")
+IS_WIRED = wiring.Wiring(wiring.WIRED, "charter@charter enabled at project scope", "")
+COULD_NOT_TELL = wiring.Wiring(wiring.UNKNOWN_STATE, "claude plugin list --json timed out",
+                               "charter harness install claude-work")
+
+
+class _AWiringSeam(PersonaIso):
+    """`wiring._asked` answering a queue of answers (the last one repeated) and
+    `wiring._wire` stood in and counted — the two seams ruling 47 sits between."""
+
+    def setUp(self):
+        super().setUp()
+        make_plane(self)
+        declare_profiles(self)
+        self.p = approve_profile(self)
+        self.wired: list[tuple[str, Path]] = []
+
+    def asked(self, *answers: wiring.Wiring):
+        queue = list(answers)
+
+        def _asked(p, *, cwd):
+            return queue.pop(0) if len(queue) > 1 else queue[0]
+
+        return mock.patch.object(wiring, "_asked", side_effect=_asked)
+
+    def wire(self, *pairs: tuple[str, str]):
+        def _wire(p, root):
+            self.wired.append((p.name, root))
+            return list(pairs)
+
+        return mock.patch.object(wiring, "_wire", side_effect=_wire)
+
+    def answer(self, p=None) -> "wiring.Answer":
+        return wiring.wired_or_refusal(p or self.p, cwd=config.ROOT, root=config.ROOT)
+
+
+class ALaunchWiresWhatItCanAndRefusesTheRest(_AWiringSeam, unittest.TestCase):
+    """Ruling 47: a definite UNWIRED answer is installed over — the same install `charter
+    harness install` runs — said in one line, detected again, and the chain goes on. An
+    UNKNOWN is never installed over, the probe gate stays first, and a failed install
+    refuses with a sentence that names what the install said."""
+
+    def test_a_definite_unwired_answer_is_wired_and_the_launch_goes_on(self):
+        with self.asked(NOT_INSTALLED, IS_WIRED), self.wire(("installed", "ok")):
+            got = self.answer()
+        self.assertEqual(got.refusal, "")
+        self.assertEqual(self.wired, [("claude-work", config.ROOT)])
+        self.assertEqual(got.wired, f"wired 'claude-work' — installed charter@charter into "
+                                    f"{self.home / '.cw'}")
+
+    def test_the_fresh_answer_is_remembered_for_the_selectors_next_paint(self):
+        with self.asked(NOT_INSTALLED, IS_WIRED), self.wire(("installed", "ok")):
+            self.answer()
+        self.assertEqual(wiring.cached(self.p, cwd=config.ROOT), IS_WIRED)
+
+    def test_an_unknown_answer_is_never_installed_over(self):
+        """Ruling 12 kept: "could not ask" is not "asked and the guard is absent", and
+        installing over an unknown state is how a second copy appears."""
+        with self.asked(COULD_NOT_TELL), self.wire(("installed", "ok")):
+            got = self.answer()
+        self.assertEqual(self.wired, [])
+        self.assertEqual(got, wiring.Answer(wiring.sentence(self.p, COULD_NOT_TELL), ""))
+        self.assertIn("could not ask", got.refusal)
+
+    def test_a_wired_profile_installs_nothing_and_says_nothing(self):
+        with self.asked(IS_WIRED), self.wire(("installed", "ok")):
+            got = self.answer()
+        self.assertEqual(got, wiring.Answer("", ""))
+        self.assertEqual(self.wired, [])
+
+    def test_the_probe_gate_stays_first_so_an_unapproved_profile_is_neither_probed_nor_wired(self):
+        (config.STATE_DIR / profiletrust.RECORD).write_text("{}")
+        calls: list = []
+        with spawns(calls, raises=AssertionError("a declared command was run")), \
+                self.wire(("installed", "ok")):
+            got = self.answer()
+        self.assertEqual((self.wired, calls), ([], []))
+        self.assertEqual(got, wiring.Answer(profiletrust.UNATTENDED.format(
+            name="claude-work", state=profiletrust.NEW), ""))
+
+    def test_a_profile_in_a_file_git_would_commit_is_neither_probed_nor_wired(self):
+        (config.ROOT / ".gitignore").write_text("# nothing ignored\n")
+        calls: list = []
+        with spawns(calls, raises=AssertionError("a declared command was run")), \
+                self.wire(("installed", "ok")):
+            got = self.answer()
+        self.assertEqual((self.wired, calls), ([], []))
+        self.assertIn("is refused", got.refusal)
+        self.assertEqual(got.wired, "")
+
+    def test_a_failed_install_refuses_and_names_what_the_install_said(self):
+        with self.asked(NOT_INSTALLED), \
+                self.wire(("failed", "`claude plugin install` failed: clone timed out")):
+            got = self.answer()
+        self.assertEqual(got.wired, "")
+        self.assertIn("profile 'claude-work' is not wired, and charter could not wire it",
+                      got.refusal)
+        self.assertIn("failed: `claude plugin install` failed: clone timed out", got.refusal)
+        self.assertIn("Nothing was started", got.refusal)
+        self.assertIn("charter harness install claude-work", got.refusal)
+
+    def test_a_failed_install_is_never_remembered_as_wired(self):
+        with self.asked(NOT_INSTALLED), self.wire(("failed", "no network")):
+            self.answer()
+        remembered = wiring.cached(self.p, cwd=config.ROOT)
+        self.assertNotEqual(getattr(remembered, "state", None), wiring.WIRED)
+
+    def test_an_install_that_said_installed_over_a_still_unwired_folder_says_the_fresh_answer(self):
+        """The install did what it does and the folder still reads unwired — installed and
+        disabled, say. What is left is the fresh probe's own sentence and its own fix, not
+        a complaint about an install that reported success."""
+        with self.asked(NOT_INSTALLED, DISABLED), self.wire(("installed", "ok")):
+            got = self.answer()
+        self.assertEqual(got, wiring.Answer(wiring.sentence(self.p, DISABLED), ""))
+        self.assertIn("plugin enable", got.refusal)
+        self.assertNotIn("could not wire", got.refusal)
+
+    def test_every_status_that_is_not_charter_reporting_what_it_did_is_a_fault(self):
+        """`commands._WIRED_NOTES`'s rule, one surface over: a status a harness adds later
+        fails loud rather than quiet."""
+        for status in ("unvouched", "unavailable", "unknown", "failed", "refused",
+                       "malformed", "doubled", "a-status-nobody-has-written-yet"):
+            with self.subTest(status), self.asked(NOT_INSTALLED), \
+                    self.wire((status, "the detail")):
+                got = self.answer()
+            self.assertIn(f"{status}: the detail", got.refusal)
+            self.assertIn("could not wire", got.refusal)
+        for status in wiring.DID:
+            with self.subTest(status), self.asked(NOT_INSTALLED, DISABLED), \
+                    self.wire((status, "the detail")):
+                got = self.answer()
+            self.assertNotIn("could not wire", got.refusal)
+
+    def test_the_did_statuses_are_the_ones_init_reports_as_notes(self):
+        self.assertEqual(wiring.DID, commands._WIRED_NOTES)
+
+    def test_a_launch_that_found_the_install_already_there_says_so_rather_than_installed(self):
+        """A second launch that waited on the first one's install finds it present: the
+        line it says is true about what THIS launch did."""
+        with self.asked(NOT_INSTALLED, IS_WIRED), self.wire(("present", "already there")):
+            got = self.answer()
+        self.assertEqual(got.refusal, "")
+        self.assertIn("wired 'claude-work'", got.wired)
+        self.assertIn("already", got.wired)
+        self.assertNotIn("installed", got.wired)
+
+    def test_a_launch_and_harness_install_run_one_and_the_same_wire(self):
+        with self.asked(NOT_INSTALLED, IS_WIRED), self.wire(("installed", "ok")):
+            self.answer()
+            wiring.install(self.p, config.ROOT)
+        self.assertEqual([name for name, _root in self.wired], ["claude-work", "claude-work"])
+
+    def test_the_wired_line_is_contained(self):
+        """Ruling 35: the name and the folder come out of a file a chat can write."""
+        nasty = self.tmp / "c\x1b[2Kw"
+        p = approve_profile(self, make_profile("cl\raude", env=[("CLAUDE_CONFIG_DIR",
+                                                                  str(nasty))]))
+        with self.asked(NOT_INSTALLED, IS_WIRED), self.wire(("installed", "ok")):
+            got = self.answer(p)
+        self.assertNotIn("\x1b", got.wired)
+        self.assertNotIn("\r", got.wired)
+        self.assertIn("cl\\u000daude", got.wired)
+        self.assertIn("c\\u001b[2Kw", got.wired)
+
+    def test_codex_gets_charters_line_and_the_launch_still_stops_with_codexs_own_steps(self):
+        """The exception by construction: hook trust is granted only inside a Codex
+        session. Charter writes its part — the policy line — and refuses with the steps
+        only a person can take, as `charter harness install codex` does."""
+        home = self.tmp / "cx"
+        p = approve_profile(self, make_profile("codex-alt", kind="codex",
+                                               env=[("CODEX_HOME", str(home))]))
+        got = self.answer(p)
+        self.assertEqual(got.wired, "")
+        self.assertIn('CHARTER_HARNESS = "codex"', (home / "config.toml").read_text())
+        self.assertIn(f"CODEX_HOME={shlex.quote(str(home))}", got.refusal)
+        self.assertIn("codex plugin add", got.refusal)
+        self.assertNotIn("could not wire", got.refusal)
+        # A second launch writes nothing more: the line is there, and the answer is the same.
+        before = (home / "config.toml").read_bytes()
+        self.assertEqual(self.answer(p).refusal, got.refusal)
+        self.assertEqual((home / "config.toml").read_bytes(), before)
+
+    def test_two_launches_of_one_unwired_profile_install_one_at_a_time(self):
+        """Measured 2026-09-15 (claude 2.1.272, one empty folder, two installs at once):
+        both exited 0 and the manifest parsed — once. A lock under `.charter/` is what makes
+        that the rule rather than the sample: the second launch waits, and its own install
+        then finds the first one's work in place."""
+        installed = threading.Event()
+        inside, peak, guard = [0], [0], threading.Lock()
+
+        def _asked(p, *, cwd):
+            return IS_WIRED if installed.is_set() else NOT_INSTALLED
+
+        def _wire(p, root):
+            with guard:
+                inside[0] += 1
+                peak[0] = max(peak[0], inside[0])
+            time.sleep(0.2)
+            installed.set()
+            with guard:
+                inside[0] -= 1
+            return [("installed", "ok")]
+
+        got: list = []
+        with mock.patch.object(wiring, "_asked", _asked), \
+                mock.patch.object(wiring, "_wire", _wire):
+            threads = [threading.Thread(target=lambda: got.append(self.answer()))
+                       for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=30)
+        self.assertEqual(peak[0], 1, "two installs ran into one folder at once")
+        self.assertEqual([g.refusal for g in got], ["", ""])
+
+    def test_a_lock_charter_cannot_take_does_not_stop_the_install(self):
+        """Best effort, like the cache: a state directory charter cannot write is a
+        launch that goes ahead unserialised, not one that refuses."""
+        with self.asked(NOT_INSTALLED, IS_WIRED), self.wire(("installed", "ok")), \
+                mock.patch.object(wiring.config, "open_for", side_effect=OSError("ro")):
+            got = self.answer()
+        self.assertEqual(got.refusal, "")
+        self.assertEqual(len(self.wired), 1)
+
+
+class EveryLaunchPathWiresAtItsFirstProbe(_ALaunchNamesAProfile, unittest.TestCase):
+    """The install happens at the FIRST probe that sees UNWIRED, on whichever path that is
+    — before tmux, in the pane, with no frame, at a reopen, before a handoff — and the line
+    is said where that path's operator is looking. A3 still holds: a start pays two probes,
+    and the second finds the folder wired."""
+
+    def setUp(self):
+        super().setUp()
+        self._no_approval_needed()
+        self.wired: list[str] = []
+        self.enterContext(mock.patch.object(
+            wiring, "_wire", side_effect=lambda p, root: self.wired.append(p.name)
+            or [("installed", "ok")]))
+
+    def asked(self, *answers):
+        queue = list(answers)
+        return mock.patch.object(
+            wiring, "_asked",
+            side_effect=lambda p, *, cwd: queue.pop(0) if len(queue) > 1 else queue[0])
+
+    def refuse(self, p, **kw):
+        return launcher.refusal(p, root=config.ROOT, attended=False,
+                                env=dict(os.environ), **kw)
+
+    def test_charter_profile_wires_before_tmux_says_so_and_opens_the_frame(self):
+        with self.asked(NOT_INSTALLED, IS_WIRED):
+            rc, said = self._said(profile="claude-work", stdin=_APipe())
+        self.assertEqual(rc, 0)
+        self.assertTrue(self._started(), self.argvs)
+        self.assertEqual(self.wired, ["claude-work"])
+        self.assertIn("charter: wired 'claude-work' — installed charter@charter into", said)
+
+    def test_the_pane_wires_before_the_exec_and_the_harness_takes_the_pane(self):
+        from charter.frame import state
+
+        state.frame_dir("beta.1", create=True)
+        said = io.StringIO()
+        with self.asked(NOT_INSTALLED, IS_WIRED), redirect_stderr(said), \
+                mock.patch.object(launcher.shutil, "which", return_value="/nowhere/claude"), \
+                mock.patch.object(launcher, "framed_chat", return_value="beta.1"), \
+                mock.patch.object(launcher, "_wait_for_the_operator",
+                                  side_effect=AssertionError("waited on a refusal")):
+            rc = launcher.cmd_frame_launch(SimpleNamespace(
+                profile="claude-work", attended=True, rest=[]))
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(self.execs), 1)
+        self.assertEqual(self.wired, ["claude-work"])
+        self.assertIn("charter: wired 'claude-work'", said.getvalue())
+        # Handed over, and no refusal recorded for the opener to read back.
+        self.assertEqual(state.launch("beta.1"), (0, ""))
+
+    def test_no_frame_wires_and_execs(self):
+        said = io.StringIO()
+        with self.asked(NOT_INSTALLED, IS_WIRED), redirect_stderr(said), \
+                mock.patch.object(launcher.shutil, "which", return_value="/nowhere/claude"):
+            rc = launcher.start(self._profile(), [], fid=None, attended=True)
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(self.execs), 1)
+        self.assertIn("charter: wired 'claude-work'", said.getvalue())
+
+    def test_the_second_probe_finds_it_wired_and_installs_nothing_more(self):
+        with self.asked(NOT_INSTALLED, IS_WIRED), redirect_stderr(io.StringIO()), \
+                mock.patch.object(launcher.shutil, "which", return_value="/nowhere/claude"):
+            self.assertIsNone(self.refuse(self._profile()))
+            self.assertIsNone(self.refuse(self._profile()))
+        self.assertEqual(self.wired, ["claude-work"])
+
+    def test_an_unknown_answer_still_refuses_on_the_launch_chain(self):
+        with self.asked(COULD_NOT_TELL), \
+                mock.patch.object(launcher.shutil, "which", return_value="/nowhere/claude"):
+            r = self.refuse(self._profile())
+        self.assertEqual(r.kind, launcher.KIND_WIRING)
+        self.assertEqual(self.wired, [])
+
+    def test_a_failed_install_refuses_with_kind_wiring_and_the_install_said(self):
+        with self.asked(NOT_INSTALLED), \
+                mock.patch.object(wiring, "_wire", return_value=[("failed", "no network")]), \
+                mock.patch.object(launcher.shutil, "which", return_value="/nowhere/claude"):
+            r = self.refuse(self._profile())
+        self.assertEqual(r.kind, launcher.KIND_WIRING)
+        self.assertIn("failed: no network", r.text)
+
+    def test_a_reopen_wires_and_reports_it(self):
+        (config.WORKSPACES_DIR / "alpha").mkdir(parents=True, exist_ok=True)
+        chat = reopen_state.Chat(chat="alpha.1", workspace="alpha", persona="",
+                                 harness="claude-code", cwd="", resume="", transcript="",
+                                 active=True, profile="claude-work")
+        said, launched = [], []
+        with self.asked(NOT_INSTALLED, IS_WIRED), \
+                mock.patch.object(commands_frame.util, "ok", side_effect=said.append), \
+                mock.patch.object(commands_frame.util, "warn"), \
+                mock.patch.object(commands_frame, "cmd_launch",
+                                  side_effect=lambda args: launched.append(args) or 0):
+            commands_frame._reopen_one(chat)
+        self.assertEqual(len(launched), 1)
+        self.assertEqual(self.wired, ["claude-work"])
+        self.assertTrue(any("charter reopen: wired 'claude-work'" in s for s in said), said)
+
+    def test_a_reopen_still_skips_a_profile_charter_could_not_wire(self):
+        (config.WORKSPACES_DIR / "alpha").mkdir(parents=True, exist_ok=True)
+        chat = reopen_state.Chat(chat="alpha.1", workspace="alpha", persona="",
+                                 harness="claude-code", cwd="", resume="", transcript="",
+                                 active=True, profile="claude-work")
+        warned, launched = [], []
+        with self.asked(NOT_INSTALLED), \
+                mock.patch.object(wiring, "_wire", return_value=[("failed", "no network")]), \
+                mock.patch.object(commands_frame.util, "warn", side_effect=warned.append), \
+                mock.patch.object(commands_frame, "cmd_launch",
+                                  side_effect=lambda args: launched.append(args) or 0):
+            self.assertIsNone(commands_frame._reopen_one(chat))
+        self.assertEqual(launched, [])
+        self.assertIn("could not wire", "\n".join(warned))
+
+    def test_a_handoff_wires_before_it_opens_and_says_so(self):
+        from tests.test_a_chat_carries_its_profile import _a_chat
+
+        _a_chat("alpha.1", ws="alpha", profile="claude-work")
+        said = io.StringIO()
+        with self.asked(NOT_INSTALLED, IS_WIRED), redirect_stderr(said), \
+                mock.patch.object(commands_frame, "_plane_session",
+                                  return_value=("$1", "beta.1")), \
+                mock.patch.object(commands_frame, "_window_size", return_value=(120, 40)), \
+                mock.patch.object(commands_frame, "_live_sessions", return_value=set()):
+            refused = commands_frame.background_refusal(
+                "beta", caller="alpha.1", first_message="fix the widget please")
+        self.assertEqual(refused, "")
+        self.assertEqual(self.wired, ["claude-work"])
+        self.assertIn("charter: wired 'claude-work'", said.getvalue())
 
 
 if __name__ == "__main__":

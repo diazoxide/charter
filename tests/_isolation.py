@@ -467,10 +467,13 @@ def wired_as_today(case=None):
     which reads as unwired. Either way the answer is "not wired", and a test about `+`,
     tabs or reopen is not about that.
 
-    `wiring.refusal` and not `wiring.detect`, so the probe seam stays available to the
-    module that IS about wiring. **A real-tmux test cannot use this** — a pane is a child
-    process no patch reaches — so those declare a profile whose `command` is their own
-    recorder, and the recorder answers `plugin list --json` with a covering, enabled entry.
+    `wiring.wired_or_refusal` and not `wiring.detect`, so the probe seam stays available to
+    the module that IS about wiring — and answering "wired, nothing installed" rather than
+    only "not refused", because ruling 47 made the launch's probe an install as well as a
+    question, and a case that is not about wiring must not find software installed either.
+    **A real-tmux test cannot use this** — a pane is a child process no patch reaches — so
+    those declare a profile whose `command` is their own recorder, and the recorder answers
+    `plugin list --json` with a covering, enabled entry.
 
     Given no *case* it returns the patcher instead of entering it, for a module where NO
     test is about wiring — `setUpModule` starts it and `tearDownModule` stops it, which is
@@ -478,7 +481,8 @@ def wired_as_today(case=None):
     """
     from charter import wiring
 
-    patcher = mock.patch.object(wiring, "refusal", lambda p, *, cwd: "")
+    patcher = mock.patch.object(wiring, "wired_or_refusal",
+                                lambda p, *, cwd, root: wiring.Answer("", ""))
     if case is None:
         return patcher
     case.enterContext(patcher)
