@@ -620,5 +620,114 @@ class TwoPlanesOnOneServer(PersonaIso, unittest.TestCase):
         self.assertEqual([c.chat for c in p.chats], [f"{ws}.1"])
 
 
+@unittest.skipUnless(_HAS_TMUX and shutil.which(commands_frame._PAGER[0]),
+                     "needs a real tmux and a pager")
+class TwoPlanesTranscriptViewersOnOneSharedServer(PersonaIso, unittest.TestCase):
+    """**#933 for the transcript viewer.** On the legacy `charter` socket (and inside an
+    operator's `-S` tmux) two planes both hold `default.1`, and `_live_chats` lists EVERY
+    window there. A viewer killed by its chat id alone would let plane A's close, quit, or
+    own "previous transcript" kill plane B's viewer window. The WINDOW-scoped `@charter_plane`
+    marker vetoes that, exactly as `_chat_seats` vetoes the chat kill.
+
+    Red on `01a27eb`, where `_kill_transcript_windows` matched by `@charter_transcript` alone.
+    """
+
+    def setUp(self):
+        super().setUp()
+        make_plane(self)
+        self.socket = _tmuxreap.name(f"shared-viewers-{next(_SERVERS)}")
+        # The shared server IS the legacy socket here — a per-plane server holds only one
+        # plane's windows, so the collision this is about lives on the shared ones.
+        self.enterContext(mock.patch.object(tmuxctl, "LEGACY_SOCKET", self.socket))
+        self.addCleanup(lambda: subprocess.run(
+            ["tmux", "-L", self.socket, "kill-server"], capture_output=True, text=True))
+        self.a_root = self.tmp
+        self.b_root = self.tmp.parent / f"{self.tmp.name}-plane-b"
+        self.b_root.mkdir()
+        (self.b_root / "charter.toml").write_text("schema = 1\n")
+        self.addCleanup(shutil.rmtree, self.b_root, True)
+        self.ws = config.DEFAULT_WORKSPACE
+        self.fid = f"{self.ws}.1"
+
+    def _tmux(self, *a, check=True):
+        out = subprocess.run(["tmux", "-L", self.socket, *a], capture_output=True,
+                             text=True, timeout=20)
+        if check:
+            self.assertEqual(out.returncode, 0, f"{a}: {out.stderr}")
+        return out.stdout.strip()
+
+    def _windows(self):
+        out = self._tmux("list-windows", "-a", "-F",
+                         "#{window_id}\t#{@charter_transcript}\t#{@charter_plane}", check=False)
+        return {w.split("\t")[0]: w.split("\t") for w in out.splitlines() if "\t" in w}
+
+    def _plant(self, root, *, first: bool) -> tuple[str, str]:
+        """Plane *root*'s `default.1` chat window and its transcript viewer, both on the
+        shared server, both marked with that plane's own `@charter_plane`. Returns the chat
+        pane and the viewer window id."""
+        config.use(root)
+        plane = str(config.STATE_DIR)
+        if first:
+            pane = self._tmux("new-session", "-d", "-s", self.ws, "-P", "-F",
+                              "#{pane_id}", "-x", "80", "-y", "24", "sh", "-c", "exec cat")
+        else:
+            pane = self._tmux("new-window", "-d", "-t", self.ws, "-P", "-F",
+                              "#{pane_id}", "sh", "-c", "exec cat")
+        self._tmux("set-option", "-w", "-t", pane, commands_frame._CHAT_OPTION, self.fid)
+        self._tmux("set-option", "-w", "-t", pane, commands_frame._PLANE_OPTION, plane)
+        viewer = self._tmux("new-window", "-d", "-t", self.ws, "-n",
+                            f"transcript {self.fid}", "-P", "-F", "#{window_id}",
+                            "sh", "-c", "exec cat")
+        self._tmux("set-option", "-w", "-t", viewer, commands_frame._TRANSCRIPT_OPTION,
+                   self.fid)
+        self._tmux("set-option", "-w", "-t", viewer, commands_frame._PLANE_OPTION, plane)
+        state.frame_dir(self.fid, create=True)
+        state.record_server(self.fid, self.socket)
+        state.record_workspace(self.fid, self.ws)
+        state.record_harness_pane(self.fid, pane)
+        state.record_cwd(self.fid, str(root))
+        state.record_identity(self.fid, {"CHARTER_HARNESS": "claude-code",
+                                         "CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
+        return pane, viewer
+
+    def _viewer_of(self, plane_root) -> str:
+        want = str(config.derive(plane_root)["STATE_DIR"])
+        return next(w for w, cols in self._windows().items()
+                    if cols[1] == self.fid and cols[2] == want)
+
+    def test_plane_As_close_leaves_plane_Bs_viewer(self):
+        self._plant(self.a_root, first=True)
+        self._plant(self.b_root, first=False)
+        b_viewer = self._viewer_of(self.b_root)
+        config.use(self.a_root)
+        self.assertEqual(commands_frame.cmd_close(
+            SimpleNamespace(chat="", chat_id=self.fid)), 0)
+        self.assertIn(b_viewer, self._windows(),
+                      "plane A's close killed plane B's transcript viewer of the same chat id")
+
+    def test_plane_As_quit_leaves_plane_Bs_viewer(self):
+        self._plant(self.a_root, first=True)
+        self._plant(self.b_root, first=False)
+        b_viewer = self._viewer_of(self.b_root)
+        config.use(self.a_root)
+        commands_frame.cmd_quit(SimpleNamespace(chat=self.fid))
+        self.assertIn(b_viewer, self._windows(),
+                      "plane A's quit killed plane B's transcript viewer of the same chat id")
+
+    def test_plane_As_own_transcript_leaves_plane_Bs_viewer(self):
+        """`cmd_transcript` kills an existing viewer of the same chat before opening a new
+        one — and on a shared server that must be its OWN plane's, not plane B's."""
+        a_pane, _av = self._plant(self.a_root, first=True)
+        self._plant(self.b_root, first=False)
+        b_viewer = self._viewer_of(self.b_root)
+        config.use(self.a_root)
+        config.write_for(reopen.transcript_path(self.fid), "OLD TEXT\n")
+        with mock.patch.object(tmuxctl, "plane_socket", return_value=self.socket):
+            self.assertEqual(commands_frame.cmd_transcript(
+                SimpleNamespace(chat=self.fid)), 0)
+        self.assertIn(b_viewer, self._windows(),
+                      "plane A opening its own transcript killed plane B's viewer")
+
+
 if __name__ == "__main__":       # pragma: no cover
     unittest.main()

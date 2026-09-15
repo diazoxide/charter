@@ -2174,9 +2174,9 @@ class EscClosesASelectorRecordedOnTheLegacySocket(PersonaIso, unittest.TestCase)
     def _text(self, pane):
         return "".join(self._tmux("capture-pane", "-p", "-t", pane).stdout.splitlines())
 
-    def _dead(self, pane):
-        out = self._tmux("display-message", "-p", "-t", pane, "#{pane_dead}")
-        return out.returncode != 0 or out.stdout.strip() != "0"
+    def _sessions(self):
+        out = self._tmux("list-sessions", "-F", "#{session_name}")
+        return out.stdout.split() if out.returncode == 0 else []
 
     def test_escape_closes_a_selector_recorded_on_the_legacy_socket(self):
         argv = launcher.argv_select("claude")
@@ -2186,6 +2186,12 @@ class EscClosesASelectorRecordedOnTheLegacySocket(PersonaIso, unittest.TestCase)
             capture_output=True, text=True, timeout=20, env={**os.environ, **self.env})
         self.assertEqual(out.returncode, 0, out.stderr)
         pane = out.stdout.strip()
+        # **`remain-on-exit on`, so a cancelled selector's own process exiting is NOT what
+        # closes the window** — the dead pane lingers, exactly as it does on charter's own
+        # servers, so what this measures is `_close_the_cancelled_chat`'s explicit kill and
+        # not the process simply ending. Without it the pane vanishes on its own and the test
+        # would pass whatever `_close_the_cancelled_chat` did.
+        self._tmux("set-option", "-g", "remain-on-exit", "on")
         state.frame_dir(self.FID, create=True)
         state.record_server(self.FID, self.legacy)
         state.record_workspace(self.FID, self.WS)
@@ -2195,8 +2201,119 @@ class EscClosesASelectorRecordedOnTheLegacySocket(PersonaIso, unittest.TestCase)
         self.assertTrue(_eventually(lambda: "which profile" in self._text(pane)),
                         f"the selector never painted: {self._text(pane)!r}")
         self._tmux("send-keys", "-t", pane, "Escape")
-        self.assertTrue(_eventually(lambda: self._dead(pane), 30.0),
-                        f"Esc did not close the legacy selector: still={self._text(pane)!r}")
+        self.assertTrue(
+            _eventually(lambda: self.WS not in self._sessions(), 30.0),
+            f"Esc did not close the legacy selector's window: sessions={self._sessions()}")
+
+
+@unittest.skipUnless(shutil.which("tmux"), "no tmux on this machine")
+class EscClosesASelectorWhoseRecordNamesAServerItsPaneIsNotOn(PersonaIso,
+                                                              unittest.TestCase):
+    """**The upgrade-day regression itself, on a real tmux — red on 0.62.0.** The field bug
+    was a chat whose recorded server is not the one its pane is actually on: `framed_chat`
+    and `_close_the_cancelled_chat` asked only `state.frame_server(fid) or LEGACY_SOCKET`,
+    found nothing there, and closed nothing — so Esc left the selector sitting forever.
+
+    The pane really runs on `self.here`; its record names `self.wrong`, a server it is NOT
+    on. On 0.62.0 Esc asks `self.wrong` and does nothing (RED). The fix proves the pane by
+    its own pid across the servers a chat can be on — and tmux itself sets `$TMUX` to the
+    server the pane is on, so `tmuxctl.operator_server()` names `self.here` and
+    `live_pane_by_pid` finds the pane there. **Neither the old code nor the fix ever probes
+    `tmuxctl.LEGACY_SOCKET` here**: the old code asks only the recorded `self.wrong` (a
+    non-empty record), and the fix finds the pane at the operator candidate — before LEGACY
+    — because the pane's own pid is on `self.here`. So this touches no server but its own two
+    reapable ones.
+    """
+
+    WS = "beta"
+    FID = "beta.1"
+
+    def setUp(self):
+        super().setUp()
+        v = tmuxctl.version()
+        if v is None or v < tmuxctl.FLOOR:
+            self.skipTest("needs a tmux at or above the floor")
+        make_plane(self)
+        no_background_refresh(self)
+        _ttyguard.no_terminal()
+        self.tmux = shutil.which("tmux")
+        self.here = _tmuxreap.name(f"skew-here-{next(_SERVERS)}")
+        # A reapable socket the pane is NOT on — never started, so a probe of it answers
+        # "no server" at once. This is the record's lie.
+        self.wrong = _tmuxreap.name(f"skew-wrong-{next(_SERVERS)}")
+        self.addCleanup(self._kill)
+        (config.WORKSPACES_DIR / self.WS).mkdir(parents=True, exist_ok=True)
+        bindir = self.tmp / "bin"; bindir.mkdir()
+        (bindir / "claude").write_text(
+            f"#!{sys.executable}\nimport json,sys,time\n"
+            "if sys.argv[1:3]==['plugin','list']:\n"
+            "    json.dump([{'id':'charter@charter','scope':'user','enabled':True,"
+            "'installedAt':'2026-09-12T00:00:00Z'}], sys.stdout); sys.exit(0)\n"
+            "time.sleep(300)\n")
+        (bindir / "claude").chmod(0o755)
+        self.env = {
+            "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH','')}",
+            "CHARTER_ROOT": str(config.ROOT),
+            "CHARTER_SESSION_ID": self.FID,
+            "PYTHONPATH": os.pathsep.join(
+                [str(_REPO_ROOT), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep),
+            **_gitguard.environment(), **_envguard.stated(),
+        }
+        wired_as_today(self)
+
+    def _kill(self):
+        for sock in (self.here, self.wrong):
+            subprocess.run([self.tmux, "-L", sock, "kill-server"],
+                           capture_output=True, timeout=20)
+            try:
+                os.unlink(_tmuxsocket.socket_path(sock))
+            except OSError:
+                pass
+
+    def _tmux(self, *a):
+        return subprocess.run([self.tmux, "-L", self.here, *a], capture_output=True,
+                              text=True, timeout=20)
+
+    def _text(self, pane):
+        return "".join(self._tmux("capture-pane", "-p", "-t", pane).stdout.splitlines())
+
+    def _sessions(self):
+        out = self._tmux("list-sessions", "-F", "#{session_name}")
+        return out.stdout.split() if out.returncode == 0 else []
+
+    def test_escape_closes_a_selector_whose_record_names_the_wrong_server(self):
+        argv = launcher.argv_select("claude")
+        # The pane really runs on `self.here`; tmux sets its own `$TMUX` to this server, which
+        # is what the fix's operator-candidate probe finds it by.
+        out = subprocess.run(
+            [self.tmux, "-L", self.here, "new-session", "-d", "-s", self.WS, "-n",
+             self.FID, "-x", "120", "-y", "40", "-P", "-F", "#{pane_id}", "--", *argv],
+            capture_output=True, text=True, timeout=20, env={**os.environ, **self.env})
+        self.assertEqual(out.returncode, 0, out.stderr)
+        pane = out.stdout.strip()
+        # **`remain-on-exit on`, so the launcher exiting on Esc does NOT close the window on
+        # its own** — the dead pane lingers, as on charter's own servers, so only
+        # `_close_the_cancelled_chat`'s explicit `kill-window` closes it. That is the whole
+        # point: on 0.62.0 it asks the wrong server and never issues that kill, so the window
+        # stays; without remain-on-exit the pane would vanish anyway and hide the bug.
+        self._tmux("set-option", "-g", "remain-on-exit", "on")
+        # `@charter_chat`, so `framed_chat`'s operator-socket proof (the option, not the
+        # window name) resolves to this chat when the pane is found on `self.here`.
+        self._tmux("set-option", "-w", "-t", pane, "@charter_chat", self.FID)
+        state.frame_dir(self.FID, create=True)
+        # THE SKEW: the record names a server the pane is not on.
+        state.record_server(self.FID, self.wrong)
+        state.record_workspace(self.FID, self.WS)
+        state.record_cwd(self.FID, str(config.ROOT))
+        state.record_harness_pane(self.FID, pane)
+        state.record_waiting(self.FID)
+        self.assertTrue(_eventually(lambda: "which profile" in self._text(pane)),
+                        f"the selector never painted: {self._text(pane)!r}")
+        self._tmux("send-keys", "-t", pane, "Escape")
+        self.assertTrue(
+            _eventually(lambda: self.WS not in self._sessions(), 30.0),
+            f"Esc did not close the window of a selector whose record named the wrong "
+            f"server: sessions={self._sessions()}")
 
 
 if __name__ == "__main__":

@@ -697,6 +697,15 @@ A switch is refused, with the reason on your own screen, for a chat this workspa
 have, one whose window has gone, one charter has no pane record for, and the chat you are
 already in.
 
+**A chat on another tmux server is refused too, and its tab says so before you press it.**
+The per-plane server upgrade can leave a frame's chats split across two servers — the ones
+open before the upgrade stay on the legacy `charter` server, and every chat opened since is on
+this plane's own — and a client cannot move between servers. Such a tab is marked with a `~`
+where an ordinary idle tab is blank, `F2 → chat` says *on another server* on its row, and the
+refusal names the way back on: quit that frame with `charter frame-quit` typed in its project,
+and `charter` (or `charter reopen`) brings its chats back on this plane's own server, where
+this frame can reach them.
+
 ### Where a switch says what it did
 
 **On the attention row — the frame's own last row, not tmux's message line.** Whatever you
@@ -1347,6 +1356,17 @@ last 2,000 lines of each pane (at most 512 KB) into `.charter/frame/<chat>.trans
 **offered, never replayed** — the reopened harness's pane starts clean, because replaying a
 previous run's output above a new run's prompt would present a session that is not running as
 though it were. The row is refused, with its reason, until a quit has captured one.
+
+**The viewer window does not outlive the chat it was opened for.** Close or quit that chat
+and its transcript viewer goes with it; if the chat's harness dies on its own, the viewer it
+leaves on this plane's own server is swept the next time charter launches, so it never keeps
+a workspace's tmux session alive with nothing charter recognises in it. On the servers two
+projects share — the legacy `charter` socket from before the per-plane upgrade, and a tmux you
+run yourself — a stranded viewer is left for you to close, because two projects can hold a
+chat of the same name there and charter will not close a window by a chat id that might be the
+other project's; each viewer is stamped with the project that opened it, so the sweep and the
+close only ever act on this project's own. Opening a transcript twice for one chat replaces
+the first viewer rather than stacking a second.
 
 **`F2 → chat: close` stops one chat and marks it so nothing brings it back.** That is the
 whole difference from quit: quit records, close forgets. It exists because charter reads "no

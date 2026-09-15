@@ -258,22 +258,16 @@ class TheKillIsAimedAtAWindowTmuxJustNamed(PersonaIso, unittest.TestCase):
         self.assertNotIn("kill-session", kills[0])
 
     def test_a_chat_with_no_window_in_the_listing_is_not_aimed_at(self):
+        """A stopped chat with no window in the listing is aimed at nothing — and the viewer
+        sweep is asked ONLY for chats a `kill-window` actually hit, so a teardown that found
+        nothing to stop makes no tmux call at all (a chat already gone leaves its viewer, if
+        any, to the launch-time sweep)."""
         _plant("alpha.1", ws="alpha")
         doomed = leave.stopping(leave.plan(live=None, focus="alpha"))
 
-        seen = []
-
-        class _Out:
-            returncode = 0
-            stdout = ""
-
-        with mock.patch.object(commands_frame.tmuxctl, "run",
-                               side_effect=lambda why, argv, **kw: seen.append(argv) or _Out()):
+        with mock.patch.object(commands_frame.tmuxctl, "run") as run:
             self.assertEqual(commands_frame._stop_chats(doomed, windows={}), 0)
-
-        # A stopped chat with no window in the listing is aimed at nothing — the only tmux
-        # calls are the (empty) transcript-viewer listings, never a `kill-window`.
-        self.assertEqual([c for c in seen if "kill-window" in c], [])
+            run.assert_not_called()
 
 
 if __name__ == "__main__":       # pragma: no cover

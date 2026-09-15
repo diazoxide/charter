@@ -32,5 +32,9 @@ run yourself — where a session of that name really can be somebody else's.
 opens a pager in its own window beside the chat. When the chat was closed, quit, or its
 harness died, that window used to stay — a session holding nothing charter recognised, which
 then read as another plane's and blocked reopening the workspace. The viewer now goes with the
-chat it was opened for, and any viewer left over by a crash is swept before the next launch
-reads what is live.
+chat it was opened for on close and quit, and a viewer left over by a crash on this plane's
+own server is swept before the next launch reads what is live. A viewer stranded on the
+legacy `charter` socket or inside a tmux you run yourself — the servers two projects share —
+is left for you to close by hand, because charter will not close a window there by a chat id
+that another project may share; each viewer carries a marker naming the project that opened
+it, so a close in one project never reaches another's.
