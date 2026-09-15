@@ -65,6 +65,17 @@ Frames started before this are on `charter` until they end, and must keep workin
   `_plane_live` reads as "charter could not ask" for the whole plane; asked unconditionally,
   a reopen on upgrade day read the plane as not running and put a second copy of a live chat
   on screen.
+- **A server that does not answer says nothing about the chats on the others** (#1088). The
+  same doubling came back for a server that had been started and then went away, killed by
+  hand or crashed: `_plane_live`'s "could not ask" still stood for the whole plane, and a
+  reopen read it as "nothing live". A reopen now decides per server. A chat live on a server
+  that answered refuses the reopen. A server nothing listens on (`tmuxctl.nothing_listening`:
+  `ECONNREFUSED` for the socket file a `kill-server` or a SIGKILL leaves, `ENOENT` for none)
+  is running no chats, so its chats are restored. A server that does not answer and is still
+  there, which is how a SIGSTOP'd one measured, has its chats held back with a line naming it
+  while the rest are restored. A launch no longer reaps such a server's directories either,
+  because they are how the reopen knows what to hold back. The whole-plane `None` stays the
+  answer for a quit and the recorder, where "could not ask" keeps a chat in the record.
 - **A launch's "nothing live" gate counts the legacy server**, for the same doubling — and
   a restore it holds back for that reason stops the launch's recorder and says so, because
   the fresh chat it opens instead would otherwise be recorded over the quit, and the record

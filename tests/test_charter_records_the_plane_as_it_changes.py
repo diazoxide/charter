@@ -800,11 +800,13 @@ class TheLauncherTakesTheDecision(PersonaIso, unittest.TestCase):
             return self._launch(**kw)
 
     def _launch(self, *, chats_live=(), reopen_rc=0, legacy_live=(), claim=None,
-                choose=None, seats=None, **kw):
+                choose=None, seats=None, gone=True, **kw):
         """*choose* stands in for the workspace picker and *claim* for `state.new_chat_id`
         — the two moments a case can act inside the launch, before and after the hold-back
         line. *seats* is what `_chat_seats` answers per server, for a case whose recorder
-        reads the plane; by default every server has nothing, and no tmux is asked."""
+        reads the plane; by default every server has nothing, and no tmux is asked.
+        ``None`` for *chats_live* or *legacy_live* is that server refusing its listing, and
+        *gone* is what `tmuxctl.nothing_listening` then says of every server."""
         said = io.StringIO()
         self.said = said
         with redirect_stderr(said), mock.patch.multiple(commands_frame,
@@ -822,11 +824,14 @@ class TheLauncherTakesTheDecision(PersonaIso, unittest.TestCase):
                            side_effect=lambda n, *a, **k: f"/usr/bin/{n}"), \
                 mock.patch("charter.frame.tmuxctl.version", return_value=(3, 7)), \
                 mock.patch("charter.frame.tmuxctl.operator_server", return_value=None), \
+                mock.patch("charter.frame.tmuxctl.nothing_listening",
+                           side_effect=lambda server: gone), \
                 mock.patch("sys.stdout.isatty", return_value=True):
             m["_live_sessions"].return_value = set()
-            m["_live_chats"].return_value = set(chats_live)
+            m["_live_chats"].return_value = None if chats_live is None else set(chats_live)
             # The legacy server's keep list, which is plane-checked by pane (ruling 46).
-            m["_legacy_keep"].return_value = set(legacy_live)
+            m["_legacy_keep"].return_value = (None if legacy_live is None
+                                              else set(legacy_live))
             m["_choose_workspace"].return_value = ("alpha", None, False)
             if choose is not None:
                 m["_choose_workspace"].side_effect = choose
@@ -839,6 +844,29 @@ class TheLauncherTakesTheDecision(PersonaIso, unittest.TestCase):
         rc, reopened = self._launch()
         self.assertEqual(rc, 0)
         reopened.assert_called_once()
+
+    def test_a_server_still_there_that_listed_nothing_is_not_reaped_on_it(self):
+        """#1088. A wedged server's `list-sessions` times out into the empty list a server
+        that is not running gives, and the launch reaped on it, so the restore after it had
+        no directory left to tell a reopen which chats to hold back. The directory goes
+        only once nothing listens on that server."""
+        for gone, kept in ((False, True), (True, False)):
+            with self.subTest(gone=gone):
+                _plant("alpha.1", ws="alpha")
+
+                self._launch(chats_live=None, gone=gone)
+
+                self.assertEqual(state.frame_dir("alpha.1").is_dir(), kept)
+
+    def test_the_legacy_server_still_there_that_listed_nothing_is_not_reaped_either(self):
+        for gone, kept in ((False, True), (True, False)):
+            with self.subTest(gone=gone):
+                _plant("alpha.1", ws="alpha")
+                state.record_server("alpha.1", tmuxctl.LEGACY_SOCKET)
+
+                self._launch(legacy_live=None, gone=gone)
+
+                self.assertEqual(state.frame_dir("alpha.1").is_dir(), kept)
 
     def test_the_restore_is_the_quiet_one(self):
         """An operator who typed `charter reopen` is reading. An operator who typed
@@ -1442,8 +1470,13 @@ class AReopenOntoARunningPlaneIsRefused(PersonaIso, unittest.TestCase):
         self.assertIn("edm-test-", str(config.STATE_DIR))
         reopen.write([_frame("alpha", "alpha.1")], focus="alpha")
 
-    def _reopen(self, *, seats):
+    def _reopen(self, *, seats, gone=lambda server: True, starts=True):
+        """*gone* is `tmuxctl.nothing_listening` per server — asked only of a server whose
+        seats are ``None`` — so no case is decided by a socket file on this machine. *starts*
+        False is a launch that ran and put nothing back."""
         def _launcher(args):
+            if not starts:
+                return 1
             args.reopening.fid = "alpha.9"
             return 0
 
@@ -1453,6 +1486,8 @@ class AReopenOntoARunningPlaneIsRefused(PersonaIso, unittest.TestCase):
                 mock.patch.object(commands_frame, "_chat_seats",
                                   **({"side_effect": seats} if callable(seats)
                                      else {"return_value": seats})), \
+                mock.patch.object(commands_frame.tmuxctl, "nothing_listening",
+                                  side_effect=gone), \
                 mock.patch.object(commands_frame.sys.stdout, "isatty",
                                   return_value=True), \
                 mock.patch.object(commands_frame.tmuxctl, "version",
@@ -1495,22 +1530,120 @@ class AReopenOntoARunningPlaneIsRefused(PersonaIso, unittest.TestCase):
         self.assertIn(f"(`tmux -L {tmuxctl.LEGACY_SOCKET} attach`)", out)
         self.assertNotIn(tmuxctl.plane_socket(), out)
 
-    def test_a_server_that_will_not_answer_does_not_block_the_reopen(self):
+    def test_a_server_that_will_not_answer_and_is_gone_does_not_block_the_reopen(self):
         """The opposite of `leave.plan`'s direction, and right for the opposite reason: a
-        reopen is wanted precisely when there is no server at all, so "could not ask" must
-        not refuse the command in the one situation it exists for."""
+        reopen is wanted precisely when there is no server at all — after a restart, or a
+        kill — so a server nothing listens on must not refuse the command in the one
+        situation it exists for."""
         _plant("alpha.1", ws="alpha")
 
-        rc, _out, launch = self._reopen(seats=None)
+        rc, _out, launch = self._reopen(seats=None, gone=lambda server: True)
 
         self.assertEqual(rc, 0)
         launch.assert_called()
+
+    def test_a_server_that_will_not_answer_says_nothing_about_a_chat_live_on_another(self):
+        """#1088. One server gone or wedged, a chat running on the other: the chat that was
+        answered for is live, so the reopen is refused. It used to read the whole plane as
+        stopped and start that chat a second time."""
+        _plant("alpha.1", ws="alpha")
+        _plant("alpha.2", ws="alpha")
+        state.record_server("alpha.2", tmuxctl.LEGACY_SOCKET)
+
+        for gone in (True, False):
+            with self.subTest(gone=gone):
+                rc, out, launch = self._reopen(
+                    seats=lambda server: (_seats({"alpha.1": "@0"}, set())
+                                          if server == tmuxctl.plane_socket() else None),
+                    gone=lambda server, gone=gone: gone)
+
+                self.assertEqual(rc, 1)
+                launch.assert_not_called()
+                self.assertIn("charter reopen: this plane is already running", out)
+
+    def test_the_chats_on_a_server_still_there_that_will_not_answer_are_held_back(self):
+        """#1088's other half. A wedged server may be running its chats, so those are not
+        started, and the line names them and the server. The chat on a server that answered
+        with nothing live comes back, and the held one is what the record keeps."""
+        _plant("alpha.1", ws="alpha")
+        _plant("beta.1", ws="beta")
+        state.record_server("beta.1", "wedged-socket")
+        reopen.write([_frame("alpha", "alpha.1"), _frame("beta", "beta.1")], focus="alpha")
+
+        rc, out, launch = self._reopen(
+            seats=lambda server: None if server == "wedged-socket" else [],
+            gone=lambda server: server != "wedged-socket")
+
+        self.assertEqual(rc, 0)
+        self.assertEqual([c.args[0].workspace for c in launch.call_args_list], ["alpha"])
+        self.assertIn(
+            "charter reopen: beta.1 not reopened — the tmux server they are recorded on did "
+            "not answer and is still there, so they may still be running on it "
+            "(`tmux -L wedged-socket attach` reaches it). They stay in the record: run "
+            "`charter reopen` again once that server answers, or once it is stopped.", out)
+        self.assertEqual([c.chat for c in reopen.read().all_chats()], ["beta.1"])
+
+    def test_a_record_held_back_whole_starts_nothing_and_says_only_why(self):
+        """Nothing was tried, so "none of the recorded chats could be started" would name a
+        failure that did not happen."""
+        _plant("alpha.1", ws="alpha")
+        state.record_server("alpha.1", "wedged-socket")
+
+        rc, out, launch = self._reopen(seats=None, gone=lambda server: False)
+
+        self.assertEqual(rc, 1)
+        launch.assert_not_called()
+        self.assertIn("charter reopen: alpha.1 not reopened", out)
+        self.assertNotIn("could be started", out)
+        self.assertEqual([c.chat for c in reopen.read().all_chats()], ["alpha.1"])
+
+    def test_a_record_nothing_held_back_that_starts_nothing_says_it_could_not(self):
+        """The other side of the case above. Nothing was held back and every launch was
+        tried and put nothing back, so the operator is told none could be started and the
+        record stays to try again. Without it a reopen that did nothing says nothing."""
+        _plant("alpha.1", ws="alpha")
+
+        rc, out, launch = self._reopen(seats=[], starts=False)
+
+        self.assertEqual(rc, 1)
+        launch.assert_called()
+        self.assertIn("charter reopen: none of the recorded chats could be started — the "
+                      "record is left in place so this can be tried again.", out)
+        self.assertEqual([c.chat for c in reopen.read().all_chats()], ["alpha.1"])
+
+    def test_a_chat_with_no_server_record_is_held_back_when_the_legacy_server_is_wedged(self):
+        """A directory with no `server` file is the legacy server's, as everywhere
+        (`state.frame_server`), so a wedged legacy server holds that chat back too."""
+        _plant("alpha.1", ws="alpha")
+        (state.frame_dir("alpha.1") / "server").unlink()
+
+        rc, out, launch = self._reopen(seats=None, gone=lambda server: False)
+
+        self.assertEqual(rc, 1)
+        launch.assert_not_called()
+        self.assertIn(f"(`tmux -L {tmuxctl.LEGACY_SOCKET} attach` reaches it)", out)
+
+    def test_a_recorded_chat_with_no_directory_is_on_no_server_and_comes_back(self):
+        """Only a chat's directory says which server it is on. The record's `beta.1` has
+        none left, so the wedged server this plane records holds back nothing of it. Read
+        without the directory, `state.frame_server` answers "no record", which would be the
+        legacy server here."""
+        _plant("alpha.1", ws="alpha")
+        state.record_server("alpha.1", tmuxctl.LEGACY_SOCKET)
+        reopen.write([_frame("alpha", "alpha.1"), _frame("beta", "beta.1")], focus="alpha")
+
+        rc, out, launch = self._reopen(seats=None, gone=lambda server: False)
+
+        self.assertEqual(rc, 0)
+        self.assertEqual([c.args[0].workspace for c in launch.call_args_list], ["beta"])
+        self.assertIn("charter reopen: alpha.1 not reopened", out)
+        self.assertNotIn("beta.1 not reopened", out)
 
     def test_a_plane_with_no_chat_directories_asks_no_server_anything(self):
         """A live chat always has a directory — `state.new_chat_id` claims its ordinal with
         the `mkdir` — so no directories is a complete answer, not a guess."""
         with mock.patch.object(commands_frame, "_chat_seats") as seats:
-            self.assertFalse(commands_frame._plane_is_running())
+            self.assertEqual(commands_frame._plane_liveness(), (False, ()))
         seats.assert_not_called()
 
 
@@ -1713,8 +1846,8 @@ class ThePlaneThatSaysNothingRecordsAndRestores(PersonaIso, unittest.TestCase):
 
         with mock.patch.object(config, "FRAME", {"components": []}), \
                 mock.patch.object(commands_frame, "cmd_launch", side_effect=_launcher), \
-                mock.patch.object(commands_frame, "_plane_is_running",
-                                  return_value=False), \
+                mock.patch.object(commands_frame, "_plane_liveness",
+                                  return_value=(False, ())), \
                 mock.patch.object(commands_frame.sys.stdout, "isatty",
                                   return_value=True), \
                 mock.patch.object(commands_frame.tmuxctl, "version",

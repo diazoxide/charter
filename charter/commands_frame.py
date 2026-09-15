@@ -3841,7 +3841,9 @@ def _reap_the_legacy_server() -> bool:
     kept alive, here :func:`_legacy_keep`'s pane-checked list, because that server holds
     other planes' chats of the same ids — and the same rule for when they may be trusted: a
     server that listed sessions and then would not list its panes cannot say which chats are
-    live, and is not reaped on that answer.
+    live, and is not reaped on that answer. Nor is one that listed nothing because it would
+    not answer at all while something still listens on it (#1088): an empty list is "no
+    server" only once `tmuxctl.nothing_listening` says so.
 
     True when any directory still points at the legacy server afterwards — a frame still
     running there, or one charter could not ask about — which `cmd_launch` reads as "this
@@ -3851,7 +3853,8 @@ def _reap_the_legacy_server() -> bool:
         return False
     sessions = _live_sessions(tmuxctl.LEGACY_SOCKET)
     chats = _legacy_keep()
-    if chats is not None or not sessions:
+    if chats is not None or (not sessions
+                             and tmuxctl.nothing_listening(tmuxctl.LEGACY_SOCKET)):
         state.reap(sessions | (chats or set()), server=tmuxctl.LEGACY_SOCKET)
     return _points_at_the_legacy_server()
 
@@ -5750,8 +5753,12 @@ def _launch(args) -> int:
     # of chats that are running — the version file their panels poll and the exit code
     # their own launcher has not read yet. Not reaping costs a directory until the next
     # launch. An EMPTY session list is the opposite fact and reaps as it always did: the
-    # server is not running, so nothing recorded against it is live.
-    can_reap = live_chats is not None or not live_sessions
+    # server is not running, so nothing recorded against it is live — **once nothing listens
+    # on its socket** (#1088). A wedged server's `list-sessions` times out into the same
+    # empty list, and reaping on it would also take away the record `_reopen_plane` holds
+    # that server's chats back by, so the restore below would start them a second time.
+    can_reap = live_chats is not None or (not live_sessions
+                                          and tmuxctl.nothing_listening(socket))
     live_before = live_sessions | (live_chats or set())
     if live_sessions:
         # Arm `remain-on-exit` by construction here, not by coincidence. The placeholder
@@ -5783,9 +5790,9 @@ def _launch(args) -> int:
     # originals. Nothing live anywhere on this plane is the only reading under which a
     # restore cannot double something.
     #
-    # `not live_before` also implies `can_reap` — an empty `live_sessions` makes it true —
-    # so the wedged-server case (sessions listed, windows refused) is excluded by the same
-    # expression rather than by a second guard.
+    # `not live_before` excludes the wedged server that listed sessions and refused windows.
+    # One that would not even list sessions, and is still there, reaches the restore
+    # unreaped, and `_reopen_plane` holds back the chats recorded on it (#1088).
     #
     # **After the reap** for the reason the reap itself is here: `cmd_reopen` allocates a
     # fresh ordinal per chat, and the directories the record describes are dead ones a reap
@@ -10822,24 +10829,76 @@ REOPEN_ON_A_LIVE_PLANE = (
     "in this project). Nothing was reopened, and the record is left in place.")
 
 
-def _plane_is_running() -> bool:
-    """Whether any chat on this plane is live right now.
+#: What `charter reopen` says about the chats it holds back, one line per server that would not
+#: answer and is still there (#1088). Said on the quiet restore too: it is why those chats did
+#: not come back, and a restore that is silent about that is #752. The server is named as the
+#: command that reaches it, the way :data:`REOPEN_ON_A_LIVE_PLANE` names one.
+REOPEN_HELD_BACK = (
+    "charter reopen: {chats} not reopened — the tmux server they are recorded on did not "
+    "answer and is still there, so they may still be running on it ({attach} reaches it). "
+    "They stay in the record: run `charter reopen` again once that server answers, or once "
+    "it is stopped.")
 
-    **The disk is asked first**, and it is a complete answer rather than an optimisation: a
-    live chat always has a directory, because `state.new_chat_id` claims its ordinal with
-    the `mkdir` (see that function). No directories is no chats, and it costs a `scandir`
-    instead of a `list-windows` per server.
 
-    **A server that will not answer reads as "nothing live", which is the opposite of
-    `leave.plan`'s direction and is right here for the opposite reason.** A quit must not
-    silently record nothing, so an unanswerable server makes it assume the worst. A reopen
-    is wanted precisely when there is no server at all — after a restart — so assuming the
-    worst there would refuse the command in the one situation it exists for.
+def _plane_liveness() -> tuple[bool, tuple[str, ...]]:
+    """Whether a chat of this plane is live on a server that answered, and which of this
+    plane's servers could not say.
+
+    **No chat directories asks no server anything**, without a check of its own: a live chat
+    always has a directory, because `state.new_chat_id` claims its ordinal with the `mkdir`
+    (see that function), and `_plane_servers` names only the servers a directory records. So
+    a plane with none reaches `_plane_live` with no server to ask and reads as not running
+    (`test_a_plane_with_no_chat_directories_asks_no_server_anything`).
+
+    **Decided per server, and never from `_plane_live`'s ``None``** (#1088). That ``None``
+    stands for the whole plane when ANY server refuses, which is the right lean for a quit
+    (record every chat, attempt every kill) and the wrong one for a reopen. This used to read
+    it as "nothing live", so a plane whose own server had been killed by hand read as
+    stopped, and a reopen started a second copy of a chat still running on the shared server
+    beside it (`test_a_reopen_with_one_dead_server_still_sees_the_chat_live_on_the_other`).
+    A server that does not answer says nothing about chats recorded on the others. So:
+
+    * a chat on a server that answered is live or not by that answer, and one live chat
+      anywhere charter can see is a running plane;
+    * a server that would not answer and that nothing listens on — killed, crashed, never
+      started, or gone with a restart (`tmuxctl.nothing_listening`) — is running no chats,
+      which is the situation a reopen exists for;
+    * a server that would not answer and is still there, a wedged one, may be running its
+      chats. It is the second value, and `_reopen_plane` holds back the chats recorded on
+      it and restores the rest.
     """
-    if not leave.plane_chats():
-        return False
-    live, _windows, _active = _plane_live(_plane_servers())
-    return bool(live)
+    servers = _plane_servers()
+    _live, windows, _active = _plane_live(servers)
+    unsure = tuple(server for server in servers
+                   if server not in windows and not tmuxctl.nothing_listening(server))
+    return any(windows.values()), unsure
+
+
+def _held_back(m, unsure) -> set[str]:
+    """The chats of manifest *m* recorded on a server in *unsure*, said once per server.
+
+    A chat is on the server its own directory records (`state.frame_server`, the legacy
+    server for none), which is how `_plane_servers` found *unsure* in the first place. A
+    recorded chat whose directory is gone is on no server of this plane's: a directory is
+    reaped only when its own server has answered without it, or is gone.
+    """
+    held: set[str] = set()
+    for server in unsure:
+        names = []
+        for c in m.all_chats():
+            d = state.frame_dir(c.chat)
+            if d is None or not d.is_dir():
+                continue
+            if tmuxctl.same_server(state.frame_server(c.chat) or tmuxctl.LEGACY_SOCKET,
+                                   server):
+                names.append(c.chat)
+        if names:
+            held.update(names)
+            util.warn(REOPEN_HELD_BACK.format(
+                chats=_named_briefly(names),
+                attach="`" + " ".join(tmuxctl.server_argv(server, "attach",
+                                                          interactive=True)) + "`"))
+    return held
 
 
 #: What `charter reopen` says when there is nothing recorded. It names the thing that
@@ -10979,19 +11038,30 @@ def _reopen_plane(args) -> int:
     # :data:`REOPEN_ON_A_LIVE_PLANE`. Bare `charter`'s own restore reaches this function
     # only with nothing live (`cmd_launch`'s `not live_before`), so this is a second reading
     # of one rule rather than a second rule.
-    if _plane_is_running():
+    running, unsure = _plane_liveness()
+    if running:
         util.err(REOPEN_ON_A_LIVE_PLANE.format(attach=_attach_route()))
         return 1
+    # **Only what a wedged server may be running is held back** (#1088). Starting those
+    # chats could double them; the rest of the record is on servers that answered or are
+    # gone, and one wedged server costing every other chat its restore would be the
+    # whole-plane answer this replaced, turned the other way.
+    held = _held_back(m, unsure)
     quiet = getattr(args, "quiet", False)
     back: list[Reopening] = []
     for f in m.frames:
         for c in f.chats:
+            if c.chat in held:
+                continue
             r = _reopen_one(c, quiet=quiet)
             if r is not None:
                 back.append(r)
     if not back:
-        util.err("charter reopen: none of the recorded chats could be started — the "
-                 "record is left in place so this can be tried again.")
+        # A record that was held back whole has had its sentence; "could not be started"
+        # would name a failure that nothing tried.
+        if len(held) < len(m.all_chats()):
+            util.err("charter reopen: none of the recorded chats could be started — the "
+                     "record is left in place so this can be tried again.")
         return 1
     total = len(m.all_chats())
     # **The refusal above is said either way, and that is deliberate.** `quiet` shortens a
