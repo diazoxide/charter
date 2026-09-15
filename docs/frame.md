@@ -3235,11 +3235,16 @@ harness.
 row only where its program is installed, because a harness this machine does not have is not
 an option you were offered. A profile that **cannot** start is still listed, with the reason
 on the row: its command is not on `PATH`, git would carry `charter.local.toml`,
-`charter.local.toml` itself refused it, or it is **not wired** — its config folder does not
-carry charter's guard, said in the same sentence a launch refuses with, fix included. **Enter
-on such a row shows the reason in the footer and leaves the selector open.** The palette does the opposite — a refused Enter closes it —
-and that is right there, where the surface is a pane over a running harness. Here the
-surface is the chat, so closing it would close the chat.
+`charter.local.toml` itself refused it, or it is **not wired** in a way charter cannot fix
+alone — a Codex home whose hooks nobody has trusted, a plugin installed and disabled, a
+folder charter could not ask — said in the same sentence a launch refuses with, fix
+included. A folder charter *can* wire is not a refused row: it reads `not wired yet — Enter
+installs charter@charter into ~/.claude-alt`, and the launch installs it before the harness
+starts ([harnesses.md](harnesses.md#per-profile--wired-automatically-or-it-refuses)).
+**Enter on a refused row shows the reason in the footer and leaves the selector open.** The
+palette does the opposite — a refused Enter closes it — and that is right there, where the
+surface is a pane over a running harness. Here the surface is the chat, so closing it would
+close the chat.
 
 **A new or changed profile is not refused — it asks.** Its row says `not approved yet (new)`
 or `(changed)` and nothing about wiring, because finding out means running the command you

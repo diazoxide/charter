@@ -228,11 +228,13 @@ command = ["ccs", "work"]
   again whenever its command or environment changes, charter shows exactly what will run
   and asks `run this? [y/N]`. The file is one a chat can write; the question is what stands
   for your approval. Built-ins never ask.
-- **A config folder without charter's guard refuses to start.** A second
+- **A config folder without charter's guard is wired before the chat starts.** A second
   `CLAUDE_CONFIG_DIR` has none of the first one's plugins, so a chat there would look
-  guarded and not be. charter asks the harness itself, refuses the launch, and prints the
-  one command that wires it: `charter harness install claude-work`. `charter doctor` gains a
-  row per profile.
+  guarded and not be. charter asks the harness itself, installs its plugin into that folder,
+  says so in one line — `wired 'claude-work' — installed charter@charter into
+  ~/.claude-work` — and starts the chat only once the harness answers *wired*. Codex is the
+  exception: its hooks are trusted only inside a Codex session, so charter writes its part
+  and prints Codex's own steps instead of starting. `charter doctor` gains a row per profile.
 - **Every chat remembers its profile.** The `+`, a handoff and `charter reopen` bring a chat
   back on the same profile — the same account — not merely the same harness.
 

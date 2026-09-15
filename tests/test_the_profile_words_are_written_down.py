@@ -104,6 +104,29 @@ class TestTheDecisionsAreRecorded(unittest.TestCase):
             self.assertIn(claim, text,
                           f"0018's amendment no longer accounts for {claim!r}")
 
+    def test_the_profile_adr_is_amended_for_a_launch_that_wires(self):
+        """Ruling 44 applied to ruling 47: the record rejected *setup at launch* because a
+        click would write a plugin into a second account unasked, and the launch now does
+        exactly that where it can — so the rejected option is marked where it stands, and
+        the amendment says where the line moved and where it did not."""
+        text = next(ADR.glob("*-a-harness-profile-belongs-to-one-machine.md")).read_text()
+        self.assertIn("wired, not refused", text)
+        setup = next(l for l in text.splitlines() if "**Setup at launch.**" in l)
+        self.assertIn("Narrowed 2026-09-15", setup)
+        amendment = text[text.index("## Amendment, 2026-09-15"):]
+        for claim in ("Codex", "unknown", "#857", "one line", "lock"):
+            self.assertIn(claim, amendment, f"the amendment says nothing about {claim!r}")
+
+    def test_the_wiring_section_is_linked_by_its_current_anchor(self):
+        """The section was renamed with the rule it describes, and `control-plane.md` links
+        it by anchor — a link that keeps the old heading's anchor lands at the top of the
+        page and says nothing."""
+        harnesses = (ROOT / "docs" / "harnesses.md").read_text()
+        self.assertIn("### Per profile — wired automatically, or it refuses", harnesses)
+        self.assertNotIn("wired, or it refuses to start", harnesses)
+        self.assertIn("harnesses.md#per-profile--wired-automatically-or-it-refuses",
+                      (ROOT / "docs" / "control-plane.md").read_text())
+
     def test_the_phase5_credentials_line_carries_its_supersession(self):
         """That spec is the record of what was decided in August, so the sentence stays
         and is marked rather than rewritten."""
