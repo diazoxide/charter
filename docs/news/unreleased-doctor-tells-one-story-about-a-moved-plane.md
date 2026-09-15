@@ -57,5 +57,5 @@ The same row also handles three more cases:
 - **`$CLAUDE_CODE_PLUGIN_CACHE_DIR` is set.** Claude Code then reads its install list from that
   directory, which charter does not follow, so the row says it could not tell.
 
-Paths and plugin ids taken from the install list now print as one line of plain text, so a
-newline or a terminal escape in them cannot add a line to the report or clear your screen.
+In this row, charter now escapes a newline or a terminal escape in a path or plugin id it takes
+from the install list, and prints the rest as one line of plain text.
