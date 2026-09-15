@@ -903,6 +903,80 @@ def _is_executor(name: str) -> bool:
 #: start or end of a substitution. A backtick behind an odd run is escaped, so it is literal.
 _LIVE_BACKTICK_RE = re.compile(r"(?<!\\)(?:\\\\)*`")
 
+#: The reserved words that open a compound command whose body runs commands, and the tokens a
+#: COMMAND POSITION follows. A word is only reserved where a command word is expected, which is
+#: exactly after one of these predecessors; elsewhere it is an ordinary argument.
+_COMPOUND_WORDS = frozenset("while until for select if case".split())
+_COMMAND_POSITION_AFTER = frozenset(
+    [";", ";;", "&&", "||", "|", "|&", "&", "\n", "do", "then", "else", "elif", "in", "{", "("])
+
+#: ANSI-C `$'…'` decodes a handful of backslash escapes; the rest pass through as the character
+#: after the backslash, which is enough to KEEP THE QUOTES BALANCED — the only property the
+#: guard needs from it (a decoded path is a known-open expansion either way, see `_leak_reason`).
+_ANSI_C_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "a": "\a", "b": "\b", "f": "\f",
+                   "v": "\v", "\\": "\\", "'": "'", '"': '"', "?": "?", "e": "\x1b"}
+
+
+def _desugar_ansi_c(cmd: str) -> str:
+    """*cmd* with each unquoted ANSI-C `$'…'` rewritten as an ordinary shell-quoted token.
+
+    `shlex` — and so :func:`_lex` — does not know `$'…'`: it reads `$` as a bare character and
+    the following `'…'` as a plain single-quoted string, so `$'\\''` (one apostrophe) leaves a
+    dangling quote that swallows the rest of the line, and a `| sh -s` after it stopped being a
+    token. The executor behind it was never seen and a heredoc body it runs was stripped as data
+    (#1086 class 4). Rewriting `$'…'` to `shlex.quote(decoded)` restores the token boundary bash
+    sees; the decoded value is preserved so `$'sh'` stays the program `sh`, not a placeholder.
+
+    Only an UNQUOTED `$'` is a real ANSI-C string; inside `'…'` or `"…"` the `$` is literal, so
+    :func:`_quote_map` gates it. The terminator is the first unescaped `'`, exactly as bash ends
+    it, so the `'` in `$'\\''` does not close the construct.
+    """
+    if "$'" not in cmd:
+        return cmd
+    import shlex
+    q = _quote_map(cmd)
+    out: list[str] = []
+    i, n = 0, len(cmd)
+    while i < n:
+        if cmd.startswith("$'", i) and not q[i]:
+            j = i + 2
+            buf: list[str] = []
+            while j < n and cmd[j] != "'":
+                if cmd[j] == "\\" and j + 1 < n:
+                    buf.append(_ANSI_C_ESCAPES.get(cmd[j + 1], cmd[j + 1]))
+                    j += 2
+                else:
+                    buf.append(cmd[j])
+                    j += 1
+            out.append(shlex.quote("".join(buf)))
+            i = j + 1 if j < n else n          # step over the closing quote
+            continue
+        out.append(cmd[i])
+        i += 1
+    return "".join(out)
+
+
+def _compound_holds_executor(toks: list[_Tok]) -> bool:
+    """Whether *toks* contain a compound command (loop or conditional) whose body runs an
+    executor in command position (#1086 class 3).
+
+    The pipeline splitter treats the `;`/`&&` inside `while … do … done` as pipeline
+    boundaries, so an `eval`/`sh` in the body is attributed to a different pipeline than the
+    heredoc it consumes. Rather than model the compound's structure, :func:`_line_pipelines`
+    bails to ``None`` when this is true — the safe answer that keeps every body visible. The
+    executor must stand where a command begins (after a separator or a `do`/`then`), so `grep
+    eval f` — `eval` as an argument — does not count."""
+    seen_compound = False
+    prev = "\n"                                # start of line is a command position
+    for t in toks:
+        if t.bare and t.text in _COMPOUND_WORDS and prev in _COMMAND_POSITION_AFTER:
+            seen_compound = True
+        elif seen_compound and t.bare and prev in _COMMAND_POSITION_AFTER and _is_executor(t.text):
+            return True
+        if t.bare:
+            prev = t.text
+    return False
+
 
 def _line_pipelines(line: str):
     """*line* as its pipelines: ``[(argvs, has_executor, heredoc_counts)]``, or ``None``
@@ -925,6 +999,16 @@ def _line_pipelines(line: str):
     body a shell runs. ``None`` means the caller strips nothing on the line, which keeps every
     body visible — the safe direction.
 
+    A **compound command** — a `while`/`until`/`for`/`select` loop, an `if`/`case`, delimited by
+    the reserved WORDS `do … done`, `then … fi`, `case … esac` — is not split on the `;`/`&&`
+    inside it, because those separate the commands of its BODY, not pipelines. `{ … }` and
+    `( … )` already return ``None`` here (they are :data:`_GROUPING`); the word-delimited
+    compounds did not, so `cat <<'EOF' | while read l; do eval "$l"; done` split at the loop's
+    own `;`, and the `eval` that runs the piped body fell into a later "pipeline" the heredoc was
+    not attributed to. The body read as data and a vault read inside it was stripped (#1086 class
+    3). When such a compound holds an executor in command position, this returns ``None`` — the
+    same safe answer a `{ … }` group gets, keeping the body visible for the guard to read.
+
     A **backtick** substitution returns ``None`` for the same reason `$( … )` does, and needs
     saying separately because the lexer does not treat it as punctuation: it folds ``x=`bash``
     into one word, so the answer that comes back is WRONG rather than absent, and a caller
@@ -944,8 +1028,12 @@ def _line_pipelines(line: str):
     if _LIVE_BACKTICK_RE.search(line):
         return None
     try:
-        toks = _split_punctuation(_lex(line))
+        toks = _split_punctuation(_lex(_desugar_ansi_c(line)))
     except ValueError:
+        return None
+    if _compound_holds_executor(toks):
+        # A loop or conditional whose body runs the piped heredoc: keep every body visible
+        # rather than split it away at the compound's own separators (#1086 class 3).
         return None
     pipelines: list = []
     current: list[list[str]] = [[]]        # commands of the pipeline being built

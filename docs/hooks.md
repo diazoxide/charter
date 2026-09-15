@@ -85,7 +85,10 @@ rule while one who reads a bare refusal files an issue.
   runs it: a shell that opens the `<<` (`bash <<'EOF'`), or one anywhere in the opener's
   pipeline (`cat x && bash <<'EOF'`, `cat <<'EOF' | bash`), so a vault read on any of its
   lines is denied wherever the reader on the line stands — it is the command that opens the
-  `<<`, and its pipeline, that decide, not the first word. **The pipeline is followed across
+  `<<`, and its pipeline, that decide, not the first word. A shell inside a **loop or
+  conditional** the body is piped into (`cat <<'EOF' | while read l; do eval "$l"; done`) counts,
+  and an executor is still seen when it stands behind ANSI-C `$'…'` quoting
+  ([#1086](https://github.com/diazoxide/charter/issues/1086)). **The pipeline is followed across
   lines**: a trailing `|` continues onto the command after the heredoc body (`cat <<'EOF' |`
   … `EOF` … `bash`), and a backslash-newline splices before it, so the downstream shell is
   seen either way. **Newlines, quotes and comments are read as bash reads them across lines**:
