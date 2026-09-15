@@ -85,6 +85,50 @@ class TheLinkIsRecordedBesideTheChat(PersonaIso, unittest.TestCase):
         self.assertFalse(state.record_conversation("gamma.9", "/abs/t"))
         self.assertFalse((state._root() / "gamma.9").exists())
 
+    def test_an_id_that_names_no_directory_records_and_reads_nothing_and_never_raises(self):
+        """`frame_dir` answers ``None`` for an id that is a path; a hook hands these whatever
+        `$CHARTER_SESSION_ID` holds, and a hook must never break a turn."""
+        for bad in ("../escape", "a/b"):
+            with self.subTest(fid=bad):
+                self.assertFalse(state.record_conversation(bad, "/abs/t"))
+                self.assertFalse(state.adopt_report(bad))
+                self.assertFalse(state.resumed_start(bad))
+
+    def test_a_pid_that_cannot_be_written_does_not_raise(self):
+        with mock.patch.object(state.config, "replace_for", side_effect=OSError(28, "full")):
+            self.assertIsNone(state.record_harness_pid(FID, 4242))
+        self.assertIsNone(state.harness_pid(FID))
+
+    def test_a_clear_that_meets_a_directory_in_its_place_does_not_raise(self):
+        """`unlink` refuses a directory (EISDIR on Linux, EPERM on macOS), and each clear goes
+        on to the next file rather than stopping at the first it cannot remove."""
+        (self.d / "session").mkdir()
+        (self.d / "session.durable").write_text("u1\n")
+        state.clear_harness_session(FID)
+        self.assertFalse((self.d / "session.durable").exists())
+        (self.d / "conversation").mkdir()
+        state.clear_conversation(FID)
+        self.assertTrue((self.d / "conversation").is_dir())
+        (self.d / "session.adopted").mkdir()
+        state.record_harness_pid(FID, 9)
+        state.clear_adoption(FID)
+        self.assertIsNone(state.harness_pid(FID))
+
+    def test_the_link_files_are_named_as_a_running_launcher_wrote_them(self):
+        """A chat started under one charter is reported on by the next one's hooks once the
+        plugin updates, so these names are read across a version while the chat runs —
+        spelled here by hand, not imported, so a rename cannot move both halves at once."""
+        state.record_harness_session(FID, "u1")
+        state.record_conversation(FID, "/abs/t")
+        state.record_harness_pid(FID, 9)
+        state.adopt_report(FID)
+        state.record_start(FID, resumed=True)
+        for name, body in (("session.durable", "u1"), ("conversation", "/abs/t"),
+                           ("harness.pid", "9"), ("session.adopted", ""),
+                           ("session.start", "resumed")):
+            with self.subTest(file=name):
+                self.assertEqual((self.d / name).read_text().strip(), body)
+
     def test_the_harness_pid_is_a_positive_number(self):
         state.record_harness_pid(FID, 4242)
         self.assertEqual(state.harness_pid(FID), 4242)
@@ -834,6 +878,15 @@ class ALinkFollowsOnlyTheChatsOwnHarness(PlaneIso, unittest.TestCase):
                 self._opencode("ses_abc", harness=harness)
                 self.assertIsNone(state.kept_harness_session(fid))
 
+    def test_a_claude_code_tool_hook_in_its_own_chat_writes_nothing(self):
+        """Claude Code reports at SessionStart. Its tool hooks run in its own chat's pane,
+        of its own kind, carrying its own `session_id` — and still move nothing, or every
+        tool call after `/clear` would drag the link back to whichever id that call named."""
+        _chat("beta.2", kind="claude-code", pane="%4", server="srv")
+        self._opencode("u-from-a-tool-call", harness="claude-code")
+        self.assertIsNone(state.kept_harness_session("beta.2"))
+        self.assertFalse(state.adopted("beta.2"))
+
     def test_an_opencode_nested_in_another_harnesss_chat_writes_nothing(self):
         _chat("beta.2", kind="claude-code", pane="%4", server="srv")
         self._opencode("ses_abc")
@@ -936,6 +989,13 @@ class AReopenAsksForTheConversationBack(PersonaIso, unittest.TestCase):
         args, said = self._reopen(harness="opencode", resume="ses_x")
         self.assertTrue(args.resume)
         self.assertIn(leave.RESUMES, said)
+
+    def test_an_opencode_chat_with_nothing_to_resume_is_not_told_it_moved(self):
+        """The sentence is about a resume the move costs; a chat with no link loses none,
+        and hearing that its conversation cannot be found elsewhere would be a false alarm."""
+        args, said = self._reopen(harness="opencode", resume="", cwd=str(self.elsewhere))
+        self.assertFalse(args.resume)
+        self.assertNotIn("finds a conversation by", said)
 
     def test_opencode_resumes_only_in_its_recorded_directory(self):
         """O2, read from source: `opencode -s <id>` looks the id up in the working

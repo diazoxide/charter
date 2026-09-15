@@ -11170,8 +11170,9 @@ def _claim_kept_id(rec) -> tuple[str | None, str]:
         return chat, ""
     d = state.frame_dir(chat) if state.ordinal_of(chat) is not None else None
     if d is None:
-        return None, KEPT_ID_UNCLAIMED.format(chat=contain.readable(chat),
-                                              dir=contain.readable(chat))
+        # *chat* is a quit record's, held to `chats.ID_RE` on the way in (`reopen._usable`),
+        # so it is already in an alphabet a terminal shows as it is — no containment here.
+        return None, KEPT_ID_UNCLAIMED.format(chat=chat, dir=chat)
     shown = contain.readable(str(d), contain.PATH_DISPLAY_LIMIT)
     pid = state._claiming_pid(d)
     if pid is not None and state._launcher_is_alive(pid):
@@ -11737,8 +11738,9 @@ def _reopen_one(c, *, quiet: bool = False) -> "Reopening | None":
     resume = _resumes(c)
     if resume and harness.get(c.harness).resume_needs_cwd and not _same_directory(where, c.cwd):
         resume = False
-        _report(quiet, util.warn, REOPEN_ELSEWHERE.format(chat=c.chat,
-                                                          harness=contain.readable(c.harness)))
+        # `c.harness` is a registered harness's name here — `_resumes` said yes, which it
+        # says only for one — so it is charter's own constant, not text to contain.
+        _report(quiet, util.warn, REOPEN_ELSEWHERE.format(chat=c.chat, harness=c.harness))
     r = Reopening(c)
     argv_args = _reopen_args(c, harness_name=p.kind, profile=p.name, reopening=r,
                              resume=resume)

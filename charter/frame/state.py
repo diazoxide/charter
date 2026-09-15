@@ -303,10 +303,10 @@ def new_chat_id(workspace: str) -> str | None:
         with _locked(root):
             start = highest_ordinal(prefix) + 1
             for n in range(start, min(start + _CHAT_ORDINAL_MAX, ORDINAL_CEILING + 1)):
-                # The mark first, and a mark that did not land hands out nothing: an id
-                # handed out unrecorded is one the next allocation could hand out again.
-                if not _raise_mark(prefix, n):
-                    return None
+                # The mark first, and a mark that did not land hands out nothing — it raises
+                # into the `except` below: an id handed out unrecorded is one the next
+                # allocation could hand out again.
+                _raise_mark(prefix, n)
                 # A plain join, and the containment is asserted rather than branched on —
                 # the deletion sweep is why. `contain.child` here could only ever refuse a
                 # name `workspace_prefix` cannot produce: the alphabet holds no separator
@@ -354,7 +354,7 @@ def _locked(root: Path):
 def _as_ordinal(value) -> int:
     """A mark's value as an ordinal: a positive `int`, else 0 — a hand-edited or
     half-understood mark reads as "nothing handed out", and the traces still count."""
-    return value if isinstance(value, int) and value > 0 else 0
+    return max(value, 0) if isinstance(value, int) else 0
 
 
 def _read_mark(root: Path) -> dict:
@@ -366,22 +366,21 @@ def _read_mark(root: Path) -> dict:
     return data if isinstance(data, dict) else {}
 
 
-def _raise_mark(prefix: str, n: int) -> bool:
-    """Raise *prefix*'s mark to *n* — never lower it — and say whether it landed.
+def _raise_mark(prefix: str, n: int) -> None:
+    """Raise *prefix*'s mark to *n* — never lower it. A write that does not land RAISES.
 
-    Called only under :func:`_locked`. Written whole with `config.replace_for` whether or
-    not the value moves, because the caller's rule is "the mark covers this ordinal before
-    the directory exists", and one write is the simplest way to be sure it does. Every other
+    Called only under :func:`_locked`, by the two claims, each of which already answers an
+    `OSError` with "nothing handed out" — so the failure travels to that answer rather than
+    being caught here and turned back into it (a catch of its own was one the deletion sweep
+    could not tell from its absence). Written whole with `config.replace_for` whether or not
+    the value moves, because the caller's rule is "the mark covers this ordinal before the
+    directory exists", and one write is the simplest way to be sure it does. Every other
     prefix's entry is carried through.
     """
     root = _root()
     marks = _read_mark(root)
     marks[prefix] = max(_as_ordinal(marks.get(prefix)), n)
-    try:
-        config.replace_for(root / CHAT_IDS, json.dumps(marks, sort_keys=True) + "\n")
-    except OSError:
-        return False
-    return True
+    config.replace_for(root / CHAT_IDS, json.dumps(marks, sort_keys=True) + "\n")
 
 
 def _digits(tail: str) -> int | None:
@@ -419,6 +418,12 @@ def _traces(prefix: str) -> list[int]:
     ``{workspace}-{pid}`` id never counts.
     """
     from . import reopen
+    # Two patterns rather than string splitting, and the reason is the deletion sweep: with a
+    # dot-free prefix, splitting at the first dot or the last one reads every name the same,
+    # so either spelling was a line no test could tell from the other. A pattern says the
+    # shape once: the whole id, or the id followed by a marker family.
+    whole = re.compile(re.escape(prefix) + r"\.([0-9]+)")
+    marker = re.compile(re.escape(prefix) + r"\.([0-9]+)\.")
     found: list[int | None] = []
     root = _root()
     try:
@@ -426,8 +431,8 @@ def _traces(prefix: str) -> list[int]:
     except OSError:
         names = []
     for name in names:
-        head, _sep, tail = name.removesuffix(reopen.TRANSCRIPT_SUFFIX).rpartition(_CHAT_SEP)
-        found.append(_digits(tail) if head == prefix else None)
+        m = whole.fullmatch(name.removesuffix(reopen.TRANSCRIPT_SUFFIX))
+        found.append(_digits(m.group(1)) if m else None)
     try:
         raw = json.loads((root / reopen.MANIFEST).read_text())
     except (OSError, ValueError):
@@ -438,15 +443,15 @@ def _traces(prefix: str) -> list[int]:
         for chat in listed if isinstance(listed, list) else ():
             name = chat.get("chat") if isinstance(chat, dict) else None
             if isinstance(name, str):
-                head, _sep, tail = name.rpartition(_CHAT_SEP)
-                found.append(_digits(tail) if head == prefix else None)
+                m = whole.fullmatch(name)
+                found.append(_digits(m.group(1)) if m else None)
     try:
         markers = [e.name for e in os.scandir(config.SESSIONS_DIR)]
     except OSError:
         markers = []
     for name in markers:
-        head, _sep, rest = name.partition(_CHAT_SEP)
-        found.append(_digits(rest.partition(_CHAT_SEP)[0]) if head == prefix else None)
+        m = marker.match(name)
+        found.append(_digits(m.group(1)) if m else None)
     return [n for n in found if n is not None]
 
 
@@ -461,23 +466,25 @@ def highest_ordinal(prefix: str) -> int:
 def ordinal_of(chat: str) -> int | None:
     """The ordinal after *chat*'s last dot, when it is one :func:`new_chat_id` could hand
     out — ``1`` to :data:`ORDINAL_CEILING` — else ``None``."""
-    _head, sep, tail = (chat or "").rpartition(_CHAT_SEP)
+    _head, sep, tail = chat.rpartition(_CHAT_SEP)
     n = _digits(tail) if sep else None
     return n or None
 
 
-def _mintable(chat: str) -> int | None:
-    """*chat*'s ordinal when the whole id is one :func:`new_chat_id` could have minted.
+def _mintable(chat: str) -> tuple[str, int] | None:
+    """``(prefix, ordinal)`` when the whole id *chat* is one :func:`new_chat_id` could have
+    minted, else ``None``.
 
     The prefix must be one `workspace_prefix` hands back unchanged — which rules out a dot
     in it (`a.b.7`), an empty one (`.7`), a stripped end (`-beta.7`) and every character
     outside the id alphabet in one comparison — and the ordinal must be in range. That also
     makes the id a `chats.is_chat` chat by construction: the alphabet is `chats.ID_RE`'s and
-    a `.`-separated tail is never read as a launcher pid.
+    a `.`-separated tail is never read as a launcher pid. The prefix is handed back so no
+    caller parses the id a second time.
     """
     n = ordinal_of(chat)
-    head = (chat or "").rpartition(_CHAT_SEP)[0]
-    return n if n is not None and workspace_prefix(head) == head else None
+    head = chat.rpartition(_CHAT_SEP)[0]
+    return (head, n) if n is not None and workspace_prefix(head) == head else None
 
 
 def claim_chat_id(chat: str) -> bool:
@@ -489,15 +496,15 @@ def claim_chat_id(chat: str) -> bool:
     charter mints, a lock or mark that cannot be written, and a directory that already
     exists — which `commands_frame._claim_kept_id` then asks tmux about before it gives up.
     """
-    n = _mintable(chat)
-    if n is None:
+    found = _mintable(chat)
+    if found is None:
         return False
+    prefix, n = found
     root = _root()
     try:
         config.private_mkdir(root)
         with _locked(root):
-            if not _raise_mark(chat.rpartition(_CHAT_SEP)[0], n):
-                return False
+            _raise_mark(prefix, n)   # a mark that did not land raises: nothing is claimed
             d = root / chat
             config.claim_private_dir(d)
             _record_claim(d)
@@ -1177,7 +1184,9 @@ def conversation(fid: str) -> str | None:
     if d is None:
         return None
     try:
-        return (d / _CONVERSATION_FILE).read_text().strip() or None
+        # No `or None`: an empty file is never written (`record_conversation` refuses an
+        # empty path), and every caller reads `""` and `None` alike.
+        return (d / _CONVERSATION_FILE).read_text().strip()
     except (OSError, ValueError):
         return None
 

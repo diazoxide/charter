@@ -6078,7 +6078,10 @@ def _record_harness_report(chat: str, h, data: dict) -> None:
         return
     link = frame_state.kept_harness_session(chat)
     if h.reports_harness_pid:
-        raw = os.environ.get("CLAUDE_PID", "")
+        # No default: a report with no `$CLAUDE_PID` raises into the caller's `except`, and
+        # that is exactly its answer — before adoption it never adopts, after it it is not the
+        # adopted pid. A `""` in its place was a second spelling of the same "no report".
+        raw = os.environ["CLAUDE_PID"]
         pid = int(raw) if raw.isdigit() and int(raw) > 0 else None
         adopted = frame_state.harness_pid(chat)
         if adopted is None:
@@ -6131,8 +6134,10 @@ def _record_reported_session(data: dict) -> None:
         h = registry.get(os.environ.get("CHARTER_HARNESS"))
         if h.reports_session_at != "tool":
             return
-        chat = frame_state.chat_in_pane(os.environ.get("TMUX_PANE", ""),
-                                        os.environ.get("TMUX", "").partition(",")[0])
+        # No defaults: a hook outside tmux has neither variable, and a missing one raises into
+        # the `except` below — the same "no chat" an empty one would read as.
+        chat = frame_state.chat_in_pane(os.environ["TMUX_PANE"],
+                                        os.environ["TMUX"].partition(",")[0])
         if frame_state.identity(chat).get("CHARTER_HARNESS") != h.name:
             return
         sid = data.get("session_id")

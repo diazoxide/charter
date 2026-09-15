@@ -82,7 +82,7 @@ class TheCounterOnlyGrows(PersonaIso, unittest.TestCase):
     def test_the_mark_never_goes_down(self):
         _write_mark({"beta": 9, "gamma": 2})
         with state._locked(state._root()):
-            self.assertTrue(state._raise_mark("beta", 3))
+            state._raise_mark("beta", 3)
         self.assertEqual(json.loads(_mark_file().read_text()), {"beta": 9, "gamma": 2})
 
     def test_the_mark_is_written_before_the_directory(self):
@@ -212,6 +212,17 @@ class EveryTraceCounts(PersonaIso, unittest.TestCase):
     def test_a_session_marker(self):
         (Path(config.SESSIONS_DIR) / "beta.3.workspace").write_text("beta\n")
         self.assertEqual(state.new_chat_id("beta"), "beta.4")
+
+    def test_a_marker_family_with_dots_of_its_own_counts(self):
+        """`hooks`' `.<tool-use-id>.<kind>.ask-pending` family carries dots after the
+        ordinal, so the ordinal is the segment right after the prefix, not the last one."""
+        (Path(config.SESSIONS_DIR) / "beta.5.toolu_a1.PreToolUse.ask-pending").write_text("x")
+        self.assertEqual(state.new_chat_id("beta"), "beta.6")
+
+    def test_the_bare_id_in_the_sessions_directory_is_not_a_marker(self):
+        """`_forget_session` sweeps `<id>.<family>` and nothing else, so neither does this."""
+        (Path(config.SESSIONS_DIR) / "beta.4").write_text("x")
+        self.assertEqual(state.new_chat_id("beta"), "beta.1")
 
     def test_names_that_are_not_this_prefix_do_not_count(self):
         for name in ("betamax.9", "beta-9", "beta.x", "beta.9x", "alpha.beta.9"):
@@ -383,6 +394,9 @@ class ARecordedIdIsClaimedExactly(PersonaIso, unittest.TestCase):
     def test_the_ordinal_is_read_after_the_last_dot_within_the_bound(self):
         self.assertEqual(state.ordinal_of("beta.7"), 7)
         self.assertEqual(state.ordinal_of("beta.99999"), 99_999)
+        # After the LAST dot: a pre-#695 id could carry a dot in its prefix, and its ordinal
+        # is still its tail (whether charter may keep such an id is `_mintable`'s question).
+        self.assertEqual(state.ordinal_of("a.b.7"), 7)
         for name in ("beta.0", "beta.100000", "beta", "beta.x", "beta.²", "", "7"):
             with self.subTest(name=name):
                 self.assertIsNone(state.ordinal_of(name))
@@ -543,6 +557,39 @@ class ARestoredChatKeepsItsId(PersonaIso, unittest.TestCase):
                 self.assertIn("could not claim", why)
         self.rows.assert_not_called()
         self.assertTrue((state._root() / "beta" / "keep").is_file())
+
+    def test_the_directory_a_refusal_names_is_contained(self):
+        """The plane's state path is the operator's, and a sentence carrying it goes to a
+        terminal (ruling 35): an ESC in it is shown, never obeyed."""
+        state._root().mkdir(parents=True, exist_ok=True)
+        (state._root() / "beta.7").mkdir()
+        hostile = Path("/plane\x1b[2J/.charter/frame/beta.7")
+        self.rows.return_value = [["beta.7", "@3", "1", THIS_PLANE, "%4"]]
+        with mock.patch.object(state, "frame_dir", return_value=hostile):
+            fid, why = commands_frame._claim_kept_id(self.rec)
+        self.assertIsNone(fid)
+        self.assertNotIn("\x1b", why)
+        self.assertIn("\\u001b", why)
+
+    def test_the_server_in_the_command_a_refusal_names_is_contained(self):
+        """The server comes out of the chat's `server` record, which a chat can write, and it
+        is spelled into a command the operator is told to run."""
+        self._surviving(server="srv\x1b[2J")
+        self.rows.return_value = [["beta.7", "@3", "1", THIS_PLANE, "%4"]]
+        fid, why = commands_frame._claim_kept_id(self.rec)
+        self.assertIsNone(fid)
+        self.assertIn("kill-window -t @3", why)
+        self.assertNotIn("\x1b", why)
+
+    def test_the_unclaimed_sentence_is_these_words(self):
+        """Spelled out by hand, so a reword is visible (`test_what_a_quit_says_is_spelled_
+        where_it_is_asserted`'s rule): it is what an operator reads when a reopen could not
+        claim a chat's own directory."""
+        self.assertEqual(
+            commands_frame.KEPT_ID_UNCLAIMED.format(chat="beta.7", dir="/p/beta.7"),
+            "charter reopen: beta.7 is not reopened — charter could not claim /p/beta.7 for "
+            "it. It stays recorded; check that the plane's state directory can be written, "
+            "then run charter reopen again.")
 
     def test_a_claim_that_still_fails_after_the_reap_says_so(self):
         self._surviving()

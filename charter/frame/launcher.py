@@ -506,7 +506,9 @@ def session_argv(p, fid: str | None, *, resume: bool, rest: list[str]) -> tuple[
     if words is not None:
         return list(words), ""
     if resume:
-        util.err(f"charter: {RESUME_GONE.format(name=contain.readable(p.name))}")
+        # `p` is a RESOLVED profile, and `profiles` refuses a name outside its own shape before
+        # it can resolve (a `\r` in one is refused by name), so the name needs no containing.
+        util.err(f"charter: {RESUME_GONE.format(name=p.name)}")
     if h.chooses_session_id:
         sid = str(uuid.uuid4())
         return h.new_session_argv(sid, name), sid
