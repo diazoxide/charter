@@ -6420,8 +6420,12 @@ class ALaunchFillsTheCacheItJustEmptied(PersonaIso, unittest.TestCase):
 
         Asserted on the CALL rather than on the file, for `record_server`'s own reason in
         this module: the last `reap` of a finished launch legitimately removes this
-        frame's whole directory, marker and all."""
-        for name, launch in (("private", _launch), ("operator", _launch_inside)):
+        frame's whole directory, marker and all.
+
+        Both paths run in one plane, so the second launch is `demo.2`: a chat id is never
+        handed out again (#1101), even once the first chat's directory is reaped."""
+        for n, (name, launch) in enumerate((("private", _launch),
+                                            ("operator", _launch_inside)), start=1):
             with self.subTest(path=name):
                 marked: list[tuple[str, str]] = []
                 real = state.record_workspace
@@ -6430,7 +6434,7 @@ class ALaunchFillsTheCacheItJustEmptied(PersonaIso, unittest.TestCase):
                                                              real(fid, ws))[1]):
                     launch(_FakeTmux(exit_code=0) if name == "private"
                            else _FakeOperatorTmux(exit_code=0))
-                self.assertEqual(marked, [(_frame_id(), "demo")])
+                self.assertEqual(marked, [(f"demo.{n}", "demo")])
 
 
 class SpawningTheGather(PersonaIso, unittest.TestCase):

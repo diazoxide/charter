@@ -201,13 +201,18 @@ class _DrivesTheLauncher:
     """
 
     def _launch(self, *, reopening=None, live_workspace=False, rest=(), fresh=False,
-                still_live=True):
-        """Run `cmd_launch` to its return. Answers what it asked, and records the calls."""
+                still_live=True, while_attached=None):
+        """Run `cmd_launch` to its return. Answers what it asked, and records the calls.
+
+        *while_attached* runs while the operator's client is attached — where a quit pressed
+        in the frame lands, after the launch has been given its chat id."""
         calls = {"attached": False, "focused": False, "said": []}
         asked: list[int] = []
 
         def _interact(_server, _args, **kw):
             calls["attached"] = True
+            if while_attached is not None:
+                while_attached()
             return _Answered(stdout="", returncode=0)
 
         def _focus(socket, *, ws):
@@ -352,8 +357,11 @@ class TheLauncherSTailIsWhereAReopenDiffers(_DrivesTheLauncher, PersonaIso,
 
     def test_a_launch_whose_plane_was_quit_names_the_command_that_undoes_it(self):
         # `if _wants_attach(args): _say_the_plane_is_recorded(fid, over=…)`. The chat this launch is about has
-        # to BE in the manifest, which for an ordinary launch means the ordinal it is handed
-        # is one a quit recorded — the recycled-ordinal case, which is the common one.
+        # to BE in the manifest, which means a quit recorded it while this client was
+        # attached. It used to be staged as a record written BEFORE the launch, on the
+        # recycled ordinal the launch was then handed; a chat id is never handed out again
+        # (#1101), so the record is written where a real quit lands — during the attach,
+        # naming the id this launch holds.
         #
         # **`fresh=True`, and #845 is why the premise had to be said out loud.** Bare
         # `charter` on a plane with nothing live now RESTORES the record instead of opening
@@ -366,14 +374,18 @@ class TheLauncherSTailIsWhereAReopenDiffers(_DrivesTheLauncher, PersonaIso,
         # a quit makes true and an ordinary detach does not.
         import io
         from contextlib import redirect_stderr
-        reopen.write([reopen.Frame(workspace="alpha", chats=(
-            reopen.Chat(chat="alpha.1", workspace="alpha", persona="",
-                        harness="claude-code", cwd="", resume="conv-1", transcript="",
-                        active=True),))], focus="alpha")
+
+        def a_quit_lands():
+            (chat,) = [d.name for d in state._root().iterdir() if d.is_dir()]
+            reopen.write([reopen.Frame(workspace="alpha", chats=(
+                reopen.Chat(chat=chat, workspace="alpha", persona="",
+                            harness="claude-code", cwd="", resume="conv-1", transcript="",
+                            active=True),))], focus="alpha")
+
         buf = io.StringIO()
 
         with redirect_stderr(buf):
-            self._launch(fresh=True, still_live=False)
+            self._launch(fresh=True, still_live=False, while_attached=a_quit_lands)
 
         self.assertIn("charter reopen", buf.getvalue())
 

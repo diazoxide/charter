@@ -13,15 +13,19 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import unittest
+import uuid
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands_frame, config, contain
-from charter.frame import leave, reopen, state, tmuxctl
+from charter import commands_frame, config, contain, profiles
+from charter.frame import launcher, leave, reopen, state, tmuxctl
 from charter.harness import claude_code, codex, opencode, registry
 from charter.harness.base import Harness
-from tests._isolation import PersonaIso
+from tests import _gitguard
+from tests._isolation import PersonaIso, make_plane, wired_as_today
 
 FID = "beta.1"
 
@@ -329,6 +333,204 @@ class ResumeIsOfferedOnlyWhereTheConversationExists(PersonaIso, unittest.TestCas
         state.clear_conversation(fid)
         (c,) = leave.plan(live={fid}, focus="beta").chats
         self.assertEqual(c.conversation, "")
+
+
+_UUID_SHAPED = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+class TheLauncherAddsTheSession(PersonaIso, unittest.TestCase):
+    """The session words are added by the launcher at the `exec`, from the chat's own record
+    — after `framed_chat()` has proved the pane — and never cross tmux."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        make_plane(self)
+        wired_as_today(self)
+        self.enterContext(mock.patch.dict(
+            os.environ, {"CHARTER_ROOT": str(config.ROOT), "PATH": os.environ.get("PATH", ""),
+                         **_gitguard.environment()}, clear=True))
+        self.enterContext(mock.patch.object(launcher.shutil, "which",
+                                            return_value="/usr/bin/harness"))
+        self.framed = self.enterContext(mock.patch.object(launcher, "framed_chat",
+                                                          return_value=FID))
+        self.enterContext(mock.patch.object(launcher, "_wait_for_the_operator"))
+        self.execs: list[dict] = []
+        self.exec = self.enterContext(mock.patch.object(
+            launcher.os, "execvpe", side_effect=self._exec))
+        _chat(FID, kind="claude-code")
+
+    def _exec(self, program, argv, env):
+        # What the chat's record says at the moment the pane stops being charter's.
+        self.execs.append(dict(argv=list(argv), link=state.kept_harness_session(FID),
+                               conversation=state.conversation(FID),
+                               pid=state.harness_pid(FID), adopted=state.adopted(FID),
+                               resumed=state.resumed_start(FID)))
+
+    def _launch(self, profile="claude", rest=("--", "-p", "x"), **kw) -> int:
+        return launcher.cmd_frame_launch(SimpleNamespace(
+            profile=profile, attended=False, rest=list(rest), **kw))
+
+    def test_a_framed_claude_start_gets_a_fresh_uuid_and_its_id_as_name(self):
+        state.record_conversation(FID, "/abs/earlier.jsonl")
+        self.assertEqual(self._launch(), 0)
+        (e,) = self.execs
+        self.assertEqual(e["argv"][:2], ["claude", "--session-id"])
+        u = e["argv"][2]
+        self.assertEqual(e["argv"][3:], ["--name", FID, "-p", "x"])
+        self.assertEqual(uuid.UUID(u).version, 4)
+        self.assertEqual(e["link"], u, "the link must exist before the harness does")
+        self.assertIsNone(e["conversation"], "an earlier start's transcript is not this one's")
+        self.assertFalse(e["resumed"])
+
+    def test_each_start_chooses_a_new_id(self):
+        self._launch()
+        self._launch()
+        self.assertNotEqual(self.execs[0]["argv"][2], self.execs[1]["argv"][2])
+
+    def test_every_start_clears_the_adoption(self):
+        for resume in (False, True):
+            with self.subTest(resume=resume):
+                state.record_harness_session(FID, "u-linked")
+                state.record_harness_pid(FID, 77)
+                state.adopt_report(FID)
+                self.execs.clear()
+                self._launch(rest=[], resume=resume)
+                (e,) = self.execs
+                self.assertIsNone(e["pid"])
+                self.assertFalse(e["adopted"])
+
+    def test_an_unframed_start_gets_no_session(self):
+        self.framed.return_value = None
+        state.record_harness_session(FID, "u-linked")
+        state.record_harness_pid(FID, 77)
+        state.adopt_report(FID)
+        self.assertEqual(self._launch(), 0)
+        (e,) = self.execs
+        self.assertEqual(e["argv"], ["claude", "-p", "x"])
+        self.assertEqual((e["link"], e["pid"], e["adopted"]), ("u-linked", 77, True),
+                         "a launch with no frame writes no chat's record")
+
+    def test_the_operators_own_session_flag_wins(self):
+        """Nothing is added, so the harness is never handed `--session-id` beside a
+        `--resume` (C4: refused). The link is then what the harness reports: the start clears
+        the previous one, so its first report adopts rather than being read as a stranger."""
+        for rest in (["--resume", "abc"], ["--resume=abc"], ["-r", "abc"], ["-c"],
+                     ["--continue"], ["--fork-session"], ["--session-id", "abc"]):
+            with self.subTest(rest=rest):
+                state.record_harness_session(FID, "u-linked")
+                self.execs.clear()
+                self._launch(rest=["--", *rest])
+                (e,) = self.execs
+                self.assertEqual(e["argv"], ["claude", *rest])
+                self.assertIsNone(e["link"])
+                self.assertFalse(e["resumed"])
+
+    def test_a_resume_hands_the_link_back(self):
+        state.record_harness_session(FID, "u-linked")
+        state.record_conversation(FID, "/abs/t.jsonl")
+        self.assertEqual(self._launch(rest=["--"], resume=True), 0)
+        (e,) = self.execs
+        self.assertEqual(e["argv"], ["claude", "--resume", "u-linked", "--name", FID])
+        self.assertEqual((e["link"], e["conversation"], e["resumed"]),
+                         ("u-linked", "/abs/t.jsonl", True))
+
+    def test_a_resume_with_no_link_starts_fresh_and_says_so(self):
+        said: list[str] = []
+        with mock.patch.object(launcher.util, "err", side_effect=said.append):
+            self.assertEqual(self._launch(rest=["--"], resume=True), 0)
+        self.assertTrue(any("cannot be resumed here" in s for s in said), said)
+        (e,) = self.execs
+        self.assertEqual(e["argv"][1], "--session-id")
+        self.assertFalse(e["resumed"])
+
+    def test_a_fresh_codex_start_forgets_the_last_starts_link(self):
+        state.record_identity(FID, {"CHARTER_HARNESS": "codex"})
+        state.record_harness_session(FID, "s1")
+        state.record_conversation(FID, "/abs/rollout.jsonl")
+        self._launch(profile="codex", rest=["--"])
+        self.assertEqual(self.execs[-1]["argv"], ["codex"])
+        self.assertEqual((self.execs[-1]["link"], self.execs[-1]["conversation"]), (None, None))
+        self.assertFalse(self.execs[-1]["resumed"])
+        state.record_harness_session(FID, "s1")
+        self._launch(profile="codex", rest=["--"], resume=True)
+        self.assertEqual(self.execs[-1]["argv"], ["codex", "resume", "s1"])
+        self.assertEqual(self.execs[-1]["link"], "s1")
+        self.assertTrue(self.execs[-1]["resumed"])
+
+    def test_a_codex_resume_with_no_link_is_a_fresh_start(self):
+        state.record_identity(FID, {"CHARTER_HARNESS": "codex"})
+        with mock.patch.object(launcher.util, "err"):
+            self._launch(profile="codex", rest=["--"], resume=True)
+        (e,) = self.execs
+        self.assertEqual(e["argv"], ["codex"])
+        self.assertFalse(e["resumed"])
+
+    def test_opencode_resumes_by_its_reported_id(self):
+        state.record_identity(FID, {"CHARTER_HARNESS": "opencode"})
+        state.record_harness_session(FID, "ses_abc")
+        self._launch(profile="opencode", rest=["--"], resume=True)
+        self.assertEqual(self.execs[-1]["argv"], ["opencode", "-s", "ses_abc"])
+
+    def test_a_harness_with_no_resume_starts_fresh(self):
+        with mock.patch.dict(registry.KINDS, {"nosuch": _NoResume}):
+            state.record_harness_session(FID, "s1")
+            with mock.patch.object(launcher.util, "err") as err:
+                got = launcher.session_argv(SimpleNamespace(harness="nosuch", name="p"), FID,
+                                            resume=True, rest=[])
+            self.assertEqual(got, ([], ""))
+            err.assert_called_once()
+            self.assertEqual(launcher.session_argv(
+                SimpleNamespace(harness="never-registered", name="p"), FID, resume=True,
+                rest=[]), ([], ""))
+
+    def test_an_exec_that_raises_restores_everything(self):
+        self.exec.side_effect = OSError(5, "Input/output error")
+        state.record_harness_session(FID, "u0")
+        state.record_conversation(FID, "/abs/c0")
+        state.record_harness_pid(FID, 9)
+        state.adopt_report(FID)
+        undone: list[int] = []
+        p = profiles.current().profiles["claude"]
+        r = launcher.attempt(p, [], fid=FID, attended=False,
+                             on_exec=lambda: lambda: undone.append(1))
+        self.assertEqual(r.kind, launcher.KIND_EXEC)
+        self.assertEqual(undone, [1], "the caller's own undo still runs")
+        self.assertEqual((state.kept_harness_session(FID), state.conversation(FID),
+                          state.harness_pid(FID), state.adopted(FID)),
+                         ("u0", "/abs/c0", 9, True))
+
+    def test_an_exec_that_raises_on_a_first_start_leaves_no_link(self):
+        self.exec.side_effect = OSError(5, "Input/output error")
+        p = profiles.current().profiles["claude"]
+        launcher.attempt(p, [], fid=FID, attended=False)
+        self.assertEqual((state.kept_harness_session(FID), state.harness_session(FID),
+                          state.conversation(FID), state.harness_pid(FID),
+                          state.adopted(FID)), (None, None, None, None, False))
+
+    def test_a_refused_start_touches_no_link(self):
+        state.record_harness_session(FID, "u0")
+        state.adopt_report(FID)
+        with mock.patch.object(launcher.shutil, "which", return_value=None), \
+                mock.patch.object(launcher.util, "err"):
+            self.assertEqual(self._launch(), launcher.MISSING_EXIT)
+        self.assertEqual((state.kept_harness_session(FID), state.adopted(FID)), ("u0", True))
+
+    def test_the_session_never_crosses_tmux(self):
+        """Only the flag rides tmux's argv; the id, the name and the uuid are the launcher's
+        own, read from the chat's record in the pane."""
+        state.record_harness_session(FID, "e8962ccc-d263-4996-9881-c774dc586d3f")
+        words = launcher.argv("claude", [], attended=True, resume=True)
+        self.assertIn("--resume", words)
+        self.assertFalse(any(_UUID_SHAPED.search(w) for w in words), words)
+        self.assertNotIn("--resume", launcher.argv("claude", [], attended=True))
+
+    def test_frame_launch_takes_the_resume_flag(self):
+        from charter import cli
+        ns = cli.build_parser().parse_args(
+            ["frame-launch", "--profile", "claude", "--resume", "--", "-p"])
+        self.assertTrue(ns.resume)
+        ns = cli.build_parser().parse_args(["frame-launch", "--profile", "claude"])
+        self.assertFalse(ns.resume)
 
 
 class TheLinkTravelsThroughTheRecord(PersonaIso, unittest.TestCase):

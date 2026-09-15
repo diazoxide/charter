@@ -69,6 +69,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import uuid
 from pathlib import Path
 from typing import Callable, Mapping, NamedTuple
 
@@ -189,19 +190,25 @@ def _nothing() -> None:
     """The undo an :func:`attempt` with nothing to undo runs."""
 
 
-def argv(profile: str, rest: list[str], *, attended: bool) -> list[str]:
+def argv(profile: str, rest: list[str], *, attended: bool, resume: bool = False) -> list[str]:
     """What tmux is handed where the harness's own argv went.
 
     Unattended unless told (review 3): a pane nobody is at must never wait on a question,
     so `--attended` is what an open with somebody in front of it adds rather than what a
     reopen or a handoff has to remember to take away.
 
+    *resume* adds `--resume` and nothing else (#1101): the flag crosses tmux, and the link
+    it asks for never does. The launcher reads the chat's own record in the pane
+    (:func:`session_argv`), because a session id and a name are not words charter hands
+    tmux's argument parser, which has already cost this repo #957 and #961.
+
     `util.self_relaunch_argv` for its own reason (#390): `python -m charter` prepends the
     child's cwd to `sys.path`, and a chat's cwd is a workspace clone that may hold its own
     `charter/` package.
     """
     return util.self_relaunch_argv("frame-launch", "--profile", profile,
-                                   *(("--attended",) if attended else ()), "--", *rest)
+                                   *(("--attended",) if attended else ()),
+                                   *(("--resume",) if resume else ()), "--", *rest)
 
 
 def argv_select(start: str | None) -> list[str]:
@@ -226,7 +233,9 @@ def environment(p: profiles.Profile, base: Mapping[str, str], *,
     """The environment *p*'s command is exec'd with.
 
     **`CHARTER_HARNESS` stays the KIND's registry name**, because hooks compare it to
-    `claude-code` for session ids, resume and the working spinner. The profile rides beside
+    `claude-code` for the working spinner, and opencode's shim names itself with it. (Which
+    harness sent a SESSION report is decided by the report itself since #1101 — a nested
+    harness inherits this variable.) The profile rides beside
     it as `CHARTER_HARNESS_PROFILE`, set here at the exec rather than through tmux — it
     never joins `commands_frame._FRAME_IDENTITY`, which would put it on a tmux `-e`.
 
@@ -460,7 +469,96 @@ def _exec_exit(e: OSError) -> int:
     return REFUSED_EXIT
 
 
+#: What a resume that has nothing to resume says, before it starts a fresh conversation.
+RESUME_GONE = ("the conversation this chat was linked to cannot be resumed here — starting a "
+               "fresh one on profile '{name}'.")
+
+
+def session_argv(p, fid: str | None, *, resume: bool, rest: list[str]) -> tuple[list[str], str]:
+    """The words that tie this start to one harness session, and the id charter chose.
+
+    ``(words, chosen)``, where *chosen* is ``""`` unless charter minted the id (#1101):
+
+    * **no frame, no session.** An unframed launch has no chat to link, and a Claude Code
+      launched bare must not be handed an id nothing records.
+    * **the operator's own session flag wins.** A launch whose own arguments carry one of
+      the harness's session flags gets nothing added — Claude Code refuses `--session-id`
+      beside `--resume` (C4) — and the link becomes whatever the harness then reports.
+    * **a resume hands the link back** when there is one and the harness resumes by id;
+      otherwise it says so (:data:`RESUME_GONE`) and starts fresh.
+    * **a harness that takes an id is handed a new one** — `uuid.uuid4()`, minted here at
+      the `exec`, so every route that starts a harness gets one and the link exists before
+      the harness does.
+
+    The name is the chat's id. It is read from the chat's record in this pane and never
+    crosses tmux, which is also why the id is minted here and not by the launch that made
+    the window.
+    """
+    if fid is None:
+        return [], ""
+    from ..harness import registry
+    h = registry.get(p.harness)
+    if h is None or any(word.partition("=")[0] in h.session_flags for word in rest):
+        return [], ""
+    name = fid
+    link = state.kept_harness_session(fid) if resume else None
+    words = h.resume_argv(link, name) if link else None
+    if words is not None:
+        return list(words), ""
+    if resume:
+        util.err(f"charter: {RESUME_GONE.format(name=contain.readable(p.name))}")
+    if h.chooses_session_id:
+        sid = str(uuid.uuid4())
+        return h.new_session_argv(sid, name), sid
+    return [], ""
+
+
+def _start_linked(fid: str | None, *, chosen: str, resumed: bool,
+                  then: Callable[[], Callable[[], None]]) -> Callable[[], None]:
+    """Record that a start begins — every start, and only a start — then run *then*.
+
+    **The adoption is cleared**, so this start adopts its own first report again and a
+    report from an earlier start's harness cannot move the link (`hooks._record_harness_report`).
+    **The start is recorded** as resumed or fresh, which a Codex report reads (X3).
+    **A chosen id is the link**, and its conversation is none yet. **A fresh start of a
+    harness that chose nothing** forgets the previous link and conversation, so an earlier
+    start's conversation is never offered as this one's. A resumed start keeps both.
+
+    The undo puts back everything it changed and then runs *then*'s own: an `execvpe` that
+    raises leaves nothing running, and a link naming a session nothing started would be
+    offered as a resume. No `fid is None` guard: every `state` writer answers a `None` id
+    with nothing, because `frame_dir(None)` names no directory.
+    """
+    link, conv = state.kept_harness_session(fid), state.conversation(fid)
+    pid, was_adopted = state.harness_pid(fid), state.adopted(fid)
+    state.clear_adoption(fid)
+    state.record_start(fid, resumed=resumed)
+    if chosen:
+        state.record_harness_session(fid, chosen)
+        state.clear_conversation(fid)
+    elif not resumed:
+        state.clear_harness_session(fid)
+        state.clear_conversation(fid)
+    after = then()
+
+    def undo() -> None:
+        if link:
+            state.record_harness_session(fid, link)
+        else:
+            state.clear_harness_session(fid)
+        if conv:
+            state.record_conversation(fid, conv)
+        if pid is not None:
+            state.record_harness_pid(fid, pid)
+        if was_adopted:
+            state.adopt_report(fid)
+        after()
+
+    return undo
+
+
 def attempt(p: profiles.Profile, rest: list[str], *, fid: str | None, attended: bool,
+            resume: bool = False,
             on_exec: Callable[[], Callable[[], None]] = lambda: _nothing) -> Refusal | None:
     """Run the chain and hand this process to *p*'s command. A :class:`Refusal`, or ``None``.
 
@@ -474,6 +572,10 @@ def attempt(p: profiles.Profile, rest: list[str], *, fid: str | None, attended: 
     **The ask is here**, because this is the one function every path reaches — the pane,
     `--no-frame`, and a launch whose output is a pipe — and a question asked in only some
     of them is an approval that depends on how the harness was started.
+
+    **And so is the session link** (#1101): *resume* asks for the chat's linked conversation
+    back, and the words that tie the start to its session (:func:`session_argv`) go before
+    *rest*, after the chain has said yes — a refused start mints no id and moves no link.
     """
     env = environment(p, os.environ, framed=fid is not None)
     r = refusal(p, root=config.ROOT, attended=attended, env=env)
@@ -482,12 +584,16 @@ def attempt(p: profiles.Profile, rest: list[str], *, fid: str | None, attended: 
                                                  env=env))
     if r is not None:
         return r
-    undo = on_exec()
+    words, chosen = session_argv(p, fid, resume=resume, rest=rest)
+    # Resumed only when a resume was asked for AND handed back: a resume with nothing to
+    # resume starts fresh, whether that fresh start chose an id or not.
+    undo = _start_linked(fid, chosen=chosen, resumed=bool(resume and words and not chosen),
+                         then=on_exec)
     if fid is not None:
         state.record_profile(fid, p.name)
     cmd = profiles.expanded_command(p)
     try:
-        os.execvpe(cmd[0], [*cmd, *rest], env)
+        os.execvpe(cmd[0], [*cmd, *words, *rest], env)
     except OSError as e:
         undo()
         return Refusal(KIND_EXEC,
@@ -858,6 +964,7 @@ def cmd_frame_launch(args) -> int:
     if rest[:1] == ["--"]:
         rest = rest[1:]
     r = attempt(p, rest, fid=fid, attended=args.attended,
+                resume=getattr(args, "resume", False),
                 on_exec=lambda: _handed_over(fid))
     if r is None:
         return 0
