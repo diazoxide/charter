@@ -5,25 +5,31 @@
 
 **Goal:** `/exit`, a double Ctrl+C or a crash no longer destroys a chat, and charter has one way
 out.
-- **One way out:** `F10`, the identity row's `F10 close`, and the same two `F2` rows open one
-  menu. *Close charter (keep chats running)* detaches this terminal. *Close charter and stop all
-  chats…* confirms, records and stops.
+- **One way out:** `F10`, the identity row's `F10 close` and the same two `F2` rows open one menu.
+  - *Close charter (keep chats running)* detaches the terminal that asked, and only that one.
+  - *Close charter and stop all chats…* confirms, records and stops.
 - **Every tab names exactly one harness session**, so a tab that ended can offer resume.
 - **A chat id is never handed out twice**, so a new chat inherits nothing.
 - **A tab can carry a title.**
 
 **Architecture:**
 - **Ids.** `state.new_chat_id` starts above a per-prefix high-water mark kept in
-  `.charter/frame/chat-ids.json`, and above every trace an id leaves. The `mkdir` claim stays
-  the exclusion.
-- **The link.** `harness/base.Harness` gains the session members. `frame/launcher.py` adds the
-  session and resume arguments at the `exec`, from the chat's own record, so none of them
-  crosses tmux. Hooks record what Codex and opencode report.
-- **An exit.** `pane-died[1]` stops being `kill-window` and runs `charter frame-ended`
-  (`frame/ended.py`). A clean exit respawns the pane into the selector with a resume row. A
-  crash leaves the dead pane and opens a drawer beside it.
-- **The gate.** `frame/gate.py` is the menu, `tabmenu.py`'s shape. `conf_text` binds `F10`. The
-  identity row gains a gate door.
+  `.charter/frame/chat-ids.json`, and above every trace an id leaves. The mark is written before the
+  claim, and the `mkdir` claim stays the exclusion.
+- **The link.**
+  - `harness/base.Harness` gains the session members.
+  - `frame/launcher.py` adds the session and resume arguments at the `exec`, from the chat's own
+    record, so none of them crosses tmux.
+  - Hooks record what Codex and opencode report. Only the chat's own harness may change its link.
+- **An exit.** For a profile's harness, `pane-died[1]` stops being `kill-window` and runs
+  `charter frame-ended` (`frame/ended.py`).
+  - A clean exit respawns the proven dead pane into the selector with a resume row.
+  - A crash leaves the dead pane and opens a drawer beside it.
+  - The escape hatch keeps `kill-window`.
+- **The gate.** `frame/gate.py` is the menu, in `tabmenu.py`'s shape.
+  - `conf_text` binds `F10`.
+  - Every bind and click route records the presser (`#{client_name}`).
+  - The identity row gains a gate door on charter's own server.
 
 **Tech Stack:**
 - Python ≥ 3.11 stdlib, and stdlib `unittest`.
@@ -31,11 +37,12 @@ out.
   tmux (3.4).
 - Claude Code, codex-cli and opencode at the versions this machine runs. Step 0 records them.
 
-**Spec:** `docs/superpowers/specs/2026-09-15-one-exit-gate.md` (binding). The decisions and
-their evidence: `workspaces/harness-profiles/refs/exit-gate-decisions.md` in the plane.
+**Spec:** `docs/superpowers/specs/2026-09-15-one-exit-gate.md` (binding). The decisions, the rulings on
+the spec's open questions and the evidence are in `workspaces/harness-profiles/refs/exit-gate-decisions.md`
+in the plane.
 
-**Line anchors** are against `origin/main` @ `5ad755d` (0.62.0). Open PRs #1100 and #1103 and
-every task here move them, so re-anchor by symbol name, never by number.
+**Line anchors** are against `origin/main` @ `5ad755d` (0.62.0). Open PRs #1100 and #1103 and every task
+here move them, so re-anchor by symbol name, never by number.
 
 ## Global Constraints
 
@@ -43,132 +50,141 @@ Every task's requirements include this section.
 
 **Carried over from the harness-profiles plan:**
 - stdlib only, Python ≥ 3.11; no new runtime dependency.
-- **Tests are stdlib `unittest`, and they fail first.** Every behavioural change lands with a
-  test that is red without it. They use the isolation helpers CONTRIBUTING names:
+- **Tests are stdlib `unittest`, and they fail first.** Every behavioural change lands with a test that
+  is red without it. They use the isolation helpers CONTRIBUTING names:
   - `tests._isolation.PersonaIso`/`PlaneIso`;
-  - `_planeguard` (including `RealTmuxReach`, `RealForgeReach` and `BackgroundGrandchild`);
+  - `_planeguard`, including `RealTmuxReach`, `RealForgeReach` and `BackgroundGrandchild`;
   - `_envguard`, `_ttyguard`, `_gitguard`, `_tmuxreap`, `_claudeguard` and `_execguard`.
 - `charter/frame/tmuxctl.py` is the only module that calls tmux (ADR 0018).
-- Charter never parses the harness pane. It draws in a chat pane only where ADR 0018 allows,
-  as task 2 amends it.
+- Charter never parses the harness pane. It draws in a chat pane only where ADR 0018 allows, as task 2
+  amends it.
 - **No version bump and no tag.**
-  - Each task's news entry is its own file, `docs/news/unreleased-<slug>.md`.
-  - Its frontmatter is flat `key: value` with unquoted values, and only the six keys
-    CONTRIBUTING lists.
+  - Each task's news entry is its own file, `docs/news/unreleased-<slug>.md`, with flat `key: value`
+    frontmatter, unquoted values, and only the six keys CONTRIBUTING lists.
   - No test names it by filename (`test_news_gate.test_no_test_opens_an_entry_by_its_staged_name`).
 - Docs move with the code, in the same PR.
 - Comments explain why.
-- Every state write goes through `config.write_for` / `config.replace_for` /
-  `config.private_mkdir` / `config.claim_private_dir`.
+- Every state write goes through `config.write_for`, `config.replace_for`, `config.create_for`,
+  `config.open_for`, `config.private_mkdir` or `config.claim_private_dir`.
 - **A hook never breaks a turn.** New hook-reachable code is best-effort, in
   `hooks._record_harness_session`'s `except Exception: pass` shape.
-- **Real-tmux tests clean up after themselves.** Every socket is named with
-  `tests._tmuxreap.name("<slug>")`: lowercase letters, digits and single hyphens, never
-  `tmux-3.2`. It is killed and unlinked in cleanup.
-- A new `mock.patch.dict(os.environ, …)` passes `clear=True` or states every value it depends
-  on.
-- **Every refusal follows CONTEXT.md's Prose rules:** it says the rule worked and names the fix
-  in the same breath.
-- **A real-tmux test that launches a harness** puts a recorder first on the tmux client's `PATH`
-  under the kind's name and hands the server `CHARTER_ROOT`. That is how
-  `tests/test_a_chat_pane_starts_as_charter_and_becomes_the_harness.py` does it. A declared
-  profile is seeded with `tests._isolation.approve_profile` and checked with `assert_approved`.
-- Kill only the PIDs you started. Never `pkill -f`: sibling agents run the same suites.
+- **A test that starts tmux names every socket** with `tests._tmuxreap.name("<slug>")` (lowercase
+  letters, digits and single hyphens), and kills and unlinks it in cleanup.
+- A new `mock.patch.dict(os.environ, …)` passes `clear=True` or states every value it depends on.
+- **Every refusal follows CONTEXT.md's Prose rules:** it says the rule worked and names the fix in the
+  same breath.
+- **A real-tmux test that launches a harness puts a recorder first on the tmux client's `PATH`** under
+  the kind's name, and hands the server `CHARTER_ROOT`.
+  - That is how `tests/test_a_chat_pane_starts_as_charter_and_becomes_the_harness.py` does it.
+  - A declared profile is seeded with `tests._isolation.approve_profile` and checked with
+    `assert_approved`.
+- Kill only the PIDs you started. Never `pkill -f`.
 
-**The operator's standing rules on this machine.** They replace the harness-profiles plan's
-*run the whole suite before each PR* and *run `tools/sweep.py`*.
+**The operator's standing rules on this machine.** These replace the harness-profiles plan's *run the
+whole suite before each PR* and *run `tools/sweep.py`*.
 - **No full local suite and no local sweep.**
   - Locally a task runs only the modules it writes or changes:
     `( unset TMUX TMUX_PANE; python3 -m unittest tests.<module> … )`.
-  - The whole suite runs on CI's four `test (3.x)` jobs, and the guard sweep on `sweep.yml`.
-    Each PR reports both from the run's own summary.
-  - `tests/test_plane_spawn_guard.py` scans the tree statically, so a task that adds a spawn or
-    an exec runs that module locally too.
+  - The whole suite runs on CI's four `test (3.x)` jobs, and the guard sweep on `sweep.yml`. Each PR
+    reports both from the run's own summary.
+  - A task that adds a spawn or an exec also runs `tests/test_plane_spawn_guard.py` locally.
 - **Never touch the operator's tmux servers.**
-  - Nothing a task runs addresses `-L charter`, the default socket, a `charter-plane-*` socket
-    this plane's frames run on, or the server `$TMUX` names.
-  - `tests._planeguard.RealTmuxReach` refuses those for a test's child.
-  - A measurement by hand uses a throwaway `-S /tmp/cp-t<N>-<slug>/s` socket started with
-    `-f /dev/null`, run with `TMUX` and `TMUX_PANE` unset. A socket path under the session
-    scratchpad passes tmux's 104-byte limit.
+  - Nothing a task runs addresses `-L charter`, the default socket, a `charter-plane-*` socket this
+    plane's frames run on, or the server `$TMUX` names. `tests._planeguard.RealTmuxReach` refuses those
+    for a test's child.
+  - A measurement by hand uses a throwaway `-S /tmp/cp-t<N>-<slug>/s` socket, started `-f /dev/null`,
+    run with `TMUX` and `TMUX_PANE` unset.
 - **Every guard is pinned by a test that goes red without it.**
-  - CI's sweep reports survivors for lines under `charter/`. Each gets a test or its line
-    deleted, and the PR says which.
-  - A guard added under `tests/` is never mutated by the sweep, so it gets a hand deletion
-    check: delete the line in a scratch copy, run the covering class. The PR names the class
-    that went red.
+  - CI's sweep reports survivors for lines under `charter/`, and each gets a test or its line deleted.
+  - A guard added under `tests/` gets a hand deletion check, and the PR names the class that went red.
 - **Anything a chat can write is contained before charter shows it or hands it on** (ruling 35).
-  - That covers a title, a brief's first line, a harness session id, a transcript path, and
-    every hook payload field.
-  - Display goes through `contain.readable`/`contain.one_line`.
-  - A value is held to its shape before it reaches an argv.
-  - A path is only ever `stat`ed.
-- **An ADR amendment ships with the code that first relies on it** (ruling 44): ADR 0024 in
-  task 1, the ADR 0018 amendment in task 2.
-- **Scratch files are namespaced per task** (`/tmp/cp-t1-…`, `<scratchpad>/t1/…`): parallel agents
-  on this machine share one scratchpad and clobber each other's files.
-- **Commit messages and PR bodies go through a file** (`git commit -F`, `gh pr create
-  --body-file`): the vault guard reads the whole tool call.
+  - That covers a title, a brief's first line, a harness session id, a transcript path, a presser
+    name, and every hook payload field.
+  - Display goes through `contain.readable` or `contain.one_line`.
+  - A value is held to its shape before it reaches an argv, and a path is only ever `stat`ed.
+- **An ADR amendment ships with the code that first relies on it** (ruling 44): ADR 0024 in task 1,
+  the ADR 0018 amendment in task 2.
+- **Scratch files are namespaced per task** (`/tmp/cp-t1-…`, `<scratchpad>/t1/…`). Parallel agents on
+  this machine share one scratchpad.
+- **Commit messages and PR bodies go through a file** (`git commit -F`, `gh pr create --body-file`).
+  The vault guard reads the whole tool call.
 
 **Added for this feature:**
-- **`layout.CARRIABLE` is unchanged, and nothing new crosses tmux but flags and closed-alphabet
-  ids.**
+- **No new kill, respawn, split or detach acts on a record alone** (spec, *What proves a pane before
+  charter acts on it*; the #933/#1103 rule).
+  - Each is aimed at what ONE listing on the chat's recorded server proves, targeted by the pane or
+    client id that listing reported:
+    - `@charter_chat == <id>` and `@charter_plane == commands_frame._this_plane()`;
+    - for a drawer, `@charter_drawer == <id>`;
+    - for a detach, a presser attached to that chat's session.
+  - A respawn never passes `-k`. A race two processes can both win is claimed with `config.create_for`.
+- **Plane-marker tests on every new tmux write.** Each task's write is tested against three things:
+  - a pane of **another plane** carrying the same chat id;
+  - an **unmarked** pane, with no `@charter_plane`;
+  - a record naming a pane the listing puts under another chat.
+
+  Each case must be red without its guard.
+- **`layout.CARRIABLE` is unchanged, and nothing new crosses tmux but flags and closed-alphabet ids.**
   - A title, a harness session id and a transcript path never ride a `-e`, a launcher argv or
-    `set-environment`. The launcher reads them from the chat's record at the `exec`.
-  - The new words on a tmux argv are `--resume`, `--ended`, `--gate` and chat ids already held
-    to `chats.ID_RE`, plus `#{client_name}`, which tmux expands for itself.
+    `set-environment`.
+  - The new words on a tmux argv are `--resume`, `--ended`, `--fresh`, `--gate`, and chat ids already
+    held to `chats.ID_RE`, plus `#{client_name}`, which tmux expands for itself.
 - **A tmux hook or bind action is a constant string** (`_pane_died_write_hook_argv`'s docstring,
   `commands_frame.py:1407-1412`). It holds formats tmux expands and variables the shell expands;
   charter interpolates nothing into it.
-- **Charter restarts nothing by itself and never types into a harness** (ADR 0018 as task 2
-  amends it). No path starts a harness after an exit without an operator's Enter, and no
-  `send-keys` reaches a chat pane. Task 2 and task 3 pin both by recording every `tmuxctl.run`
-  argv.
+- **Charter restarts nothing by itself and never types into a harness** (ADR 0018 as task 2 amends
+  it).
+  - No path starts a harness after an exit without an operator's Enter.
+  - End of input is never read as a choice.
+  - No `send-keys` reaches a chat pane.
+  - Tasks 2 and 3 pin these by recording every `tmuxctl.run` argv.
 - **Nothing reads a harness's pane to decide.**
   - The ended step decides from `state.exit_code` and the link.
-  - `_pane_last_words` and `_capture_transcript` keep the two moments ADR 0018's 2026-09-01
-    amendment gives them.
+  - `_pane_last_words` and `_capture_transcript` keep their two moments, and a quit captures no ended
+    tab.
   - Resume existence is a `stat` of a path the harness named.
-- **Nothing parses a chat id beyond what `chats._order` already reads**, which is the ordinal
-  after the last dot.
+- **"Close charter" detaches the proven presser and nothing else** (decision 2). No route falls back
+  to every client of a session.
+- **Nothing parses a chat id beyond what `chats._order` already reads**, which is the ordinal after
+  the last dot.
 - **Open PRs #1100 and #1103 touch the same functions** (`_launch`, `launcher.py`, `chats.py`,
-  `slots.py`, the reopen path). Before each task starts, run `git fetch` and re-read whichever of
-  them has merged, then re-anchor.
+  `slots.py`, the reopen path). Before each task starts, `git fetch` and re-read whichever has merged,
+  then re-anchor.
 
 ## Order and parallelism
 
 **1 → 2 → 3 → 4, one task at a time, each its own reviewed PR** (spec, *Build order*).
-
 - **Task 1** has no dependency.
 - **Task 2** needs task 1 on `main`:
-  - kept ids, for reopen;
+  - kept ids and restored records, for reopen;
   - the link and `leave.conversation_exists`, for the resume row;
-  - `launcher.attempt(..., resume=)`.
+  - `launcher.attempt(..., resume=)` and its `on_exec` wrapper, where `ended.reset` is called.
 - **Task 3** needs tasks 1 and 2: it composes the name task 1's launcher passes, and draws it on
   task 2's resume row.
-- **Task 4** needs task 2, because its confirmation lists ended tabs, and task 3, because its rows
-  name titles.
+- **Task 4** needs task 2, whose confirmation lists ended tabs, and task 3, whose rows name titles.
 
-**The spec's open questions, and where each is answered before code:**
+**The spec's open questions, as ruled** (decisions file, *Rulings on the spec's open questions*):
 
-| Open question | Answered in | By | Default if nobody rules |
-|---|---|---|---|
-| 1. opencode's chat id on the hook path (#946) | task 1, before code | controller | (A): resolve by `$TMUX_PANE` against charter's pane records |
-| 2. The five harness facts decision 10 rests on | task 1, Step 0 | the measurement | a harness whose reading fails gets `resume_argv → None` |
-| 3. Which terminal the button's *Close charter* detaches | task 4, Step 0 (G3) | the measurement | detach every client of that workspace's session, and say so |
-| 4. `pane-died` on Linux for an empty status and signal | task 2, CI's real-tmux run | controller, before task 2 merges | none — task 2 does not invent a fallback |
-| 5. `charter frame -- <cmd>` keeps today's ending | task 2, before code | operator | yes |
+| Open question | Status | Where it lands |
+|---|---|---|
+| 1. opencode's chat id on the hook path (#946) | ruled (A) | task 1: `state.chat_in_pane`, `hooks._record_reported_session` |
+| 2. The facts decision 10 rests on, plus C5 (nested SessionStart) and C6 (`/clear`) | being measured | task 1 Step 0. C1–C6 run live; X and O are read from source |
+| 3. Which terminal the button detaches | ruled: record the presser | task 4: the `MouseDown1Pane` bind and G3. An unidentifiable presser stops the task |
+| 4. `pane-died` on Linux for an empty status and signal | open | task 2's CI real-tmux run; the controller rules before merge |
+| 5. `charter frame -- <cmd>` | ruled: keep today's behaviour | task 2: the hook branch and its real-tmux test |
 
 ## Measured while writing this plan
 
-Nothing was run. The plan's author read code only, and the facts it rests on are in the
-decisions file:
-- `claude --help`: `-n/--name`, `--session-id`, `-r/--resume`, `/rename`.
-- `codex resume [SESSION_ID]`.
-- `opencode -s/--session`, `session_rename` on Ctrl+R.
-- Measured on 3.7c: `has-session -t default.1` → `can't find pane: 1` (#1097).
+**Nothing was run.** The plan's author read code only, and the facts it rests on are in the decisions
+file:
+- `claude --help`: `-n/--name`, `--session-id`, `-r/--resume`, `/rename`;
+- `codex resume [SESSION_ID]`;
+- `opencode -s/--session`, `session_rename` on Ctrl+R;
+- measured on 3.7c: `has-session -t default.1` → `can't find pane: 1` (#1097).
 
-Every reading a task needs is its own Step 0.
+**#729** removed `"#{client_name}"` from the hotkey bind because its one consumer, `display-message
+-c`, was gone (`commands_frame.py:861-876`, PR #763). That reason does not forbid a new consumer, and
+`frame-palette` still accepts the `client` positional (`cli.py:971`).
 
 ---
 
@@ -178,45 +194,47 @@ Created:
 
 | Path | Task | Responsibility |
 |---|---|---|
-| `charter/frame/ended.py` | 2 | The ended step: prove the dead pane, record `ended`, respawn into the selector or open the drawer; the drawer's rows and what each does; `cmd_frame_ended`. |
-| `charter/frame/rename.py` | 3 | The one-line title input (`Rename`, a `palette.Palette` whose query is the value), `normalized`, the rename doorway rows, `first_line_title`. |
-| `charter/frame/gate.py` | 4 | `GATE_KEY`, the gate's two rows, the stop doorway, the detach with the presser's client, `draw`. |
-| `docs/adr/0024-a-chat-id-names-one-chat-and-one-harness-session.md` | 1 | The id and link decisions (the spec's draft, with Step 0's readings). |
+| `charter/frame/ended.py` | 2 | The ended step: `_proof` (one listing), `present`, `reset`, `drop_drawer`, the drawer's rows and `choose`, `draw`, `cmd_frame_ended`. |
+| `charter/frame/rename.py` | 3 | The one-line title input (`Rename`), `normalized`, the rename doorway rows, `first_line_title`. |
+| `charter/frame/gate.py` | 4 | `GATE_KEY`, the gate's two rows with the cursor pinned to detach, the stop doorway, `draw`. |
+| `docs/adr/0024-a-chat-id-names-one-chat-and-one-harness-session.md` | 1 | The id and link decisions. |
 | `docs/news/unreleased-a-chat-id-is-never-handed-out-again.md` | 1 | News. |
 | `docs/news/unreleased-an-ended-harness-keeps-its-tab.md` | 2 | News. |
 | `docs/news/unreleased-a-tab-can-carry-a-title.md` | 3 | News. |
 | `docs/news/unreleased-one-gate-closes-charter.md` | 4 | News. |
-| `tests/test_a_chat_id_is_never_handed_out_again.py` | 1 | Counter, traces, lock, scans, kept ids on reopen, #1101's repro, the ADR pin. |
-| `tests/test_a_tab_is_linked_to_one_harness_session.py` | 1 | Harness members, the launcher's session arguments, what hooks record, resume existence, the record. |
+| `tests/test_a_chat_id_is_never_handed_out_again.py` | 1 | Counter, traces, lock, digits bound, fail-closed mark, scans, kept ids and their proof, #1101's repro, the ADR pin. |
+| `tests/test_a_tab_is_linked_to_one_harness_session.py` | 1 | Harness members, the launcher's session arguments, what hooks record, the nested-harness rule, `chat_in_pane`, resume existence, the record. |
 | `tests/test_a_launch_hands_the_harness_its_session_on_a_real_server.py` | 1 | Real tmux: the id reaches the harness argv and not tmux's; a reopened chat keeps its id. |
-| `tests/test_an_ended_harness_keeps_its_tab.py` | 2 | The hook, the ended step, the selector after an exit, the drawer, marks, close without asking, quit and reopen, exit codes, the operator's tmux, the ADR pin. |
-| `tests/test_an_ended_harness_keeps_its_tab_on_a_real_server.py` | 2 | Real tmux: a clean exit, a crash, a signal death, the last chat, the operator's tmux. |
-| `tests/test_a_tab_can_carry_a_title.py` | 3 | Storage and containment, the strip, rename from the tab menu and `F2`, `+`, a handoff, `--name`, the record. |
-| `tests/test_one_gate_closes_charter.py` | 4 | The bind, reserved keys, the menu, the detach resolution (#1097), the button, the `F2` rows, the operator's tmux. |
-| `tests/test_the_gate_detaches_a_real_client.py` | 4 | Real tmux over ptys: `F10` detaches only the presser; `F2 → detach` detaches again; a real click on the button opens the gate. |
+| `tests/test_an_ended_harness_keeps_its_tab.py` | 2 | The hook and its escape-hatch branch, proof and plane guards, the claim, reset on every start, the selector after an exit, Esc against end of input, the drawer, marks, close without asking, quit and reopen, exit codes, the operator's tmux, the ADR pin. |
+| `tests/test_an_ended_harness_keeps_its_tab_on_a_real_server.py` | 2 | Real tmux: clean exit, crash, signal death, the last chat, the escape hatch, the operator's tmux, another plane's pane. |
+| `tests/test_a_tab_can_carry_a_title.py` | 3 | Storage and containment, where a title is shown and where it is not, rename, `+`, a handoff, `--name`, the record. |
+| `tests/test_one_gate_closes_charter.py` | 4 | The binds carry the presser, reserved keys, the menu and its pinned cursor, the presser-only detach (#1097), the button, decision 7, the `F2` rows. |
+| `tests/test_the_gate_detaches_a_real_client.py` | 4 | Real tmux over ptys: `F10` and `F2 → Close charter` detach only the presser; a real click records the presser and opens the gate. |
 
 Modified:
 
 | Path | Task | Change |
 |---|---|---|
-| `charter/frame/state.py` | 1, 2, 3 | Counter, traces, lock, `claim_chat_id`, session id shape, `record_conversation`, `chat_in_pane` (1); `drawn`, `ended`, `drawer` marks (2); `title` (3). |
+| `charter/frame/state.py` | 1, 2, 3 | Counter, traces, digits bound, lock through `config.open_for`, mark before claim, `claim_chat_id`, `reap_chat`, session id shape, `record_conversation`, `record_harness_pid`, `chat_in_pane` (1); `drawn`, the `ended` claim, `drawer` marks (2); `title` (3). |
 | `charter/harness/base.py`, `claude_code.py`, `codex.py`, `opencode.py` | 1 | The session members and their overrides. |
-| `charter/frame/launcher.py` | 1, 2, 3 | `session_argv`, `attempt(resume=)`, `argv(resume=)` (1); `argv_select(ended=)`, `resume_row`, Esc closes an ended tab, `_picked` clears ended (2); `session_name` (3). |
-| `charter/hooks.py` | 1 | `_record_harness_session` gated on the registry and recording `conversation`; `_record_reported_session` for opencode. |
-| `charter/frame/leave.py` | 1, 2, 3, 4 | `resumable_harness` from the registry, `conversation_exists`, `Doomed.conversation`, resume clause and summary (1); `Doomed.ended`, `needs_confirming`, `CLOSE_NOW_ID`, the ended note (2); `Doomed.title`, `title()` (3); `OPEN_QUIT`'s words (4). |
-| `charter/frame/reopen.py` | 1, 2, 3 | `Chat.conversation` (1), `Chat.ended` (2), `Chat.title` (3); the recycled-ordinal docstrings (1). |
-| `charter/commands_frame.py` | 1, 2, 3, 4 | Restore claims the kept id, `_resumes`, `_restore_recorded_chat`, `_reopen_one`/`_reopen_args`, `_record_the_plane` (1); the ended hook, drawn mark, check-after-mark, operator-tmux loop, `cmd_close`, reopen ended (2); `cmd_rename`, palette doorway, handoff title, restore title (3); `conf_text`'s `F10`, `cmd_palette`/`_open_palette` `--gate` (4). |
-| `charter/frame/selector.py` | 2, 3 | Resume row, `Choice.resume`, ended footer (2); title row (3). |
+| `charter/frame/launcher.py` | 1, 2, 3 | `session_argv`, `attempt(resume=)` and its `on_exec` wrapper, `argv(resume=)`, the harness pid record (1); `ended.reset` in that wrapper, `argv_select(ended=, fresh=)`, `resume_row`, Esc against end of input (2); `session_name` (3). |
+| `charter/hooks.py` | 1 | `_record_harness_session` gated on the registry, with the adoption rule (adopt, follow, ignore by `CLAUDE_PID`; first report per start for Codex); `_record_reported_session` for opencode. |
+| `charter/frame/leave.py` | 1, 2, 3, 4 | `resumable_harness`, `conversation_exists`, `Doomed.conversation` (1); `Doomed.ended`, `needs_confirming`, `CLOSE_NOW_ID`, the ended note (2); `Doomed.title` (3); `OPEN_QUIT`'s words (4). |
+| `charter/frame/reopen.py` | 1, 2, 3 | `Chat.conversation` (1), `Chat.ended` (2), `Chat.title` (3). |
+| `charter/commands_frame.py` | 1, 2, 3, 4 | Kept-id claim and its proof, `_resumes`, `_restore_recorded_chat`, `_reopen_one` (1); the ended hook and its escape-hatch branch, drawn mark, late check, operator-tmux loop, `cmd_close`, capture skip, reopen ended (2); `cmd_rename`, palette doorway, handoff title (3); `conf_text` binds carry the presser, `cmd_palette` reads it (4). |
+| `charter/frame/overlay.py` | 2 | `Surface.left` records a key cancel against end of input. |
+| `charter/frame/layout.py` | 2 | `respawn_argv(kill=True)`; the ended step passes `kill=False`. |
+| `charter/frame/selector.py` | 2, 3 | Resume row, `Choice.resume`, `END_OF_INPUT`, the ended footer (2); title row (3). |
 | `charter/frame/chats.py` | 2, 3 | `Chat.ended` (2); `Chat.title`, `label_of` (3). |
-| `charter/frame/slots.py` | 2, 3, 4 | `ENDED_MARK` (2); strip labels (3); `GATE_BUTTON`, `_Doors` gate columns (4). |
+| `charter/frame/slots.py` | 2, 3, 4 | `ENDED_MARK` (2); strip labels (3); `GATE_BUTTON`, `_Doors` gate columns, no button in the operator's tmux (4). |
 | `charter/frame/tabmenu.py` | 2, 3 | Close-now row on an ended tab (2); rename row (3). |
-| `charter/frame/builtin_actions.py` | 4 | `_detach(fid, client)` (#1097), the detach row's words. |
-| `charter/frame/builtins.py` | 4 | `_strip_events` opens the gate from a gate door. |
+| `charter/frame/builtin_actions.py` | 4 | `_detach(fid, client)` presser-only (#1097); `build(..., client=)`. |
+| `charter/frame/builtins.py` | 4 | `_strip_events` reads the recorded presser and opens the gate from a gate door. |
 | `charter/frame/choose.py` | 3 | The chat picker names titles. |
-| `charter/instance.py` | 4 | `F10` reserved in `component_arrangement`; a hotkey equal to it refused. |
-| `charter/cli.py` | 1, 2, 3, 4 | `frame-launch --resume` (1); `frame-ended`, `frame-launch --ended`, `frame-palette --ended` (2); `frame-rename` (3); `frame-palette --gate --client` (4). |
+| `charter/instance.py` | 4 | `F10` reserved; a hotkey equal to it refused. |
+| `charter/cli.py` | 1, 2, 3, 4 | `frame-launch --resume` (1); `frame-ended`, `frame-launch --ended --fresh`, `frame-palette --ended` (2); `frame-rename`, `--title-row` (3); `frame-palette --gate` (4). |
 | `docs/adr/0018-charter-may-run-the-harness-but-never-draws-it.md` | 2 | The 2026-09-15 amendment. |
-| `CONTEXT.md` | 1, 2, 3, 4 | **Chat** (1), **Ended tab** (2), **Title** (3), **Exit gate** (4). |
+| `CONTEXT.md` | 1, 2, 3, 4 | **Chat** (1), **Ended tab** (2), **Title** (3), **Exit gate** and **Presser** (4). |
 | `docs/frame.md`, `docs/harnesses.md`, `docs/control-plane.md` | 1–4 | Docs with each task. |
 | `docs/superpowers/specs/2026-08-30-charter-opens-like-an-ide.md` | 2 | Dated notes at §4j and §5. |
 
@@ -224,280 +242,303 @@ There is no new `docs/*.md` page, so `pyproject.toml`'s force-include set does n
 (`test_docs_show.TestPagesShip.test_nothing_else_is_force_included`).
 
 ---
-
 ## Task 1: A chat id is never handed out again, and every tab is linked to one harness session
 
-**Depends on:** nothing. **Closes:** #1101. **Nothing about ending a chat changes here.**
-`pane-died[1]` is still `kill-window`, and no surface offers anything new except resume for Codex
-and opencode.
+**Depends on:** nothing. **Closes:** #1101.
 
-### Step 0 — Measure first. A failed reading changes what a harness is offered, never the design.
+**Nothing about ending a chat changes here.** `pane-died[1]` is still `kill-window`, and no surface
+offers anything new except resume for Codex and opencode.
 
-**Where.** Throwaway directories under `/tmp/cp-t1-*`, with a SessionStart hook that dumps its
-stdin to a file. Claude Code uses a throwaway `CLAUDE_CONFIG_DIR` logged in to the operator's
-account. Codex uses a `CODEX_HOME` and opencode an `XDG_CONFIG_HOME` holding charter's wiring.
-Each reading below spends one short prompt. The implementer asks the controller before spending
-them and records the versions.
+### Step 0 — taken 2026-09-15
 
-| # | Reading | Pass when |
-|---|---|---|
-| C1 | `claude --session-id <uuid4> --name "t1 · beta.1"`, then quit before any prompt | the SessionStart payload's `session_id == <uuid4>`; it carries `transcript_path`; record whether that path is a file at SessionStart |
-| C2 | the same, after one prompt | `transcript_path` is a file |
-| C3 | `claude --resume <uuid4> --name "t2 · beta.1"` | the conversation comes back; record the SessionStart `session_id` (same, or new) and whether `/resume`'s list shows `t2 · beta.1` |
-| C4 | `claude --resume <uuid4> --session-id <other>` | recorded only — charter never combines them |
-| X1 | `codex`, one prompt | SessionStart payload carries `session_id` and `transcript_path`; the path is a file after the prompt |
-| X2 | `codex resume <X1's session_id>` | that conversation comes back |
-| O1 | `opencode`, one prompt that runs one tool | the shim's `tool.execute.before` payload carries `session_id` (`input.sessionID`) |
-| O2 | `opencode -s <O1's id>` | that conversation comes back |
+The readings are in the controller's `exit-gate-t1-step0.md` (session scratchpad). They were taken on:
+- claude 2.1.272, run live on the operator's account, with 4 model requests to Haiku 4.5;
+- codex-cli 0.147.0, read from source at `rust-v0.147.0`, not run;
+- opencode 1.18.23, read from source at `v1.18.23`, not run;
+- tmux 3.7c, on a throwaway `-L cp-t1-*` server.
 
-**Stop rule, written into the dispatch.**
-- A failed C-reading stops the task and goes to the controller. Claude Code's chosen id is the
-  decision's ruling, and a failure changes the spec.
-- A failed X- or O-reading does not stop the task:
-  - that harness's `resume_argv` answers `None` in this task;
-  - the table goes into the PR and into `docs/harnesses.md`;
-  - the spec's open question 2 is updated.
-- The design is never bent around a failed reading.
+**No C-reading failed, so the stop rule did not fire.** The PR copies the table into its description.
 
-**Before code:** the controller's ruling on the spec's open question 1 (opencode's chat on the
-hook path) is in the task issue. This task implements (A) unless it says (B).
+| # | Reading | Verdict | What it settles |
+|---|---|---|---|
+| C1 | `claude --session-id <uuid> --name "t1 · beta.1"`, quit before any prompt | **pass** | SessionStart `session_id == <uuid>`, `source=startup`, `transcript_path` present. The file does **not** exist at SessionStart, nor after a quit with no prompt. So a chat with no prompt yet is not offered resume |
+| C2 | the same, after one prompt | **pass** | the transcript file exists |
+| C3 | `claude --resume <uuid> --name "t2 · beta.1"` | **pass** | the conversation comes back, with the **same** `session_id`, `source=resume`, and the new name written with no prompt. A fresh `claude --resume` picker lists `t2 · beta.1`. The in-session `/resume` hides the current session |
+| C4 | `claude --resume <uuid> --session-id <other>` | **recorded** | refused (`--session-id can only be used with --continue or --resume if --fork-session is also specified`, exit 1). Charter never combines them |
+| C5 | a nested `claude -p` from a chat's Bash tool | **recorded** | a new `session_id` and its own SessionStart. The environment is identical (`CLAUDECODE`, `TMUX_PANE`, `CHARTER_*` inherited). `CLAUDE_PID` differs: 44188 for the outer harness, 44929 for the nested one, each equal to its hook's `$PPID` |
+| C6 | `/clear` | **recorded** | SessionStart with `source=clear`, a **new** `session_id` and the same `CLAUDE_PID`. `claude --resume <original uuid>` still brings back the pre-clear conversation |
+| X1 | Codex SessionStart | **pass**, read from source | `session_id` and `transcript_path` (`codex-rs/hooks/src/schema.rs:486-497`); the rollout exists before the hook runs (`core/src/session/mod.rs:4074-4085`). SessionStart runs at the **first turn**, not at launch (`core/src/session/turn.rs:233`, `:457`) |
+| X2 | `codex resume <id>` | **pass**, read from source | a UUID is looked up exactly (`tui/src/lib.rs:626-659`); a non-UUID falls through to a name lookup |
+| O1 | opencode `tool.execute.before` input | **pass**, read from source | `sessionID`, shaped `ses_` + 12 hex + 14 base62, which fits `SESSION_ID_RE` |
+| O2 | `opencode -s <id>` | **pass** (medium-high), read from source | validates the id with `directory: cwd` (`src/cli/tui/validate-session.ts:7-28`), so **resume must run in the chat's recorded directory** |
+
+**What the readings changed in this task, by the controller's ruling:**
+- **Claude Code's link adopts, follows `/clear`, and ignores a nested harness,** by `CLAUDE_PID`.
+- **Codex and opencode adopt the first report of each start.**
+- **A Codex chat has no link until its first turn.**
+- **opencode resumes only in the chat's recorded directory.**
 
 ### Files
 
 - `charter/frame/state.py`:
-  - `new_chat_id` (`:193-279`): start from `highest_ordinal(prefix) + 1`, under the lock; claim
-    upward with `config.claim_private_dir` for at most `_CHAT_ORDINAL_MAX` attempts; `_record_claim`;
-    raise the mark; release. `_CHAT_ORDINAL_MAX`'s note (`:132-141`) becomes a bound on attempts.
-  - New beside it: `CHAT_IDS`, `CHAT_IDS_LOCK`, `_locked()` (a context manager over `fcntl.flock`),
-    `_mark(prefix)`, `_raise_mark(prefix, n)`, `_traces(prefix)`, `highest_ordinal(prefix)`,
-    `ordinal_of(chat)`, `claim_chat_id(chat)`.
-  - `record_harness_session` (`:692-746`): refuses a sid outside `SESSION_ID_RE`.
-  - After `kept_harness_session` (`:821-843`): `CONVERSATION_FILE`, `record_conversation`,
-    `conversation`, `clear_conversation`. `clear_shape`'s tuple (`:1852`) does not list it: the
-    conversation is the link's, not the gauge's.
-  - `chat_in_pane(pane, server)` after `harness_pane` (`:676`).
-  - Docstrings that call an ordinal recycled:
+  - **`new_chat_id` (`:193-279`).** Under the lock:
+    - `start = highest_ordinal(prefix) + 1`;
+    - for each candidate `n` (at most `_CHAT_ORDINAL_MAX` attempts, never past `99_999`), first
+      `_raise_mark(prefix, n)`, then `claim_private_dir`;
+    - a failed mark write → `None`, with no directory made.
+
+    `_CHAT_ORDINAL_MAX`'s note (`:132-141`) becomes a bound on attempts.
+  - **New beside it:**
+    - `CHAT_IDS`, `CHAT_IDS_LOCK`, `ORDINAL_CEILING = 10 ** chats._MAX_ORDINAL_DIGITS - 1`;
+    - `_locked()`, a context manager that opens the lock with `config.open_for(root / CHAT_IDS_LOCK,
+      "a")` and takes `fcntl.flock`;
+    - `_mark(prefix)`, `_raise_mark(prefix, n) -> bool`, `_traces(prefix)`, `highest_ordinal(prefix)`,
+      `ordinal_of(chat)`;
+    - `claim_chat_id(chat)`, `reap_chat(chat)`.
+  - **`record_harness_session` (`:692-746`)** refuses a sid outside `SESSION_ID_RE`.
+  - **After `kept_harness_session` (`:821-843`):**
+    - `record_conversation`, `conversation`, `clear_conversation`;
+    - `record_harness_pid`, `harness_pid`;
+    - `adopt_report` (the `session.adopted` claim, with `config.create_for`) and `clear_adoption`.
+
+    `clear_shape`'s tuple (`:1852`) lists none of them.
+  - **`chat_in_pane(pane, server)`** after `harness_pane` (`:676`). Two or more matches answer `None`.
+  - **The recycled-ordinal docstrings:**
     - `new_chat_id`'s rename paragraph (`:235-241`, kept);
-    - `clear_exit` (`:591-596`), `clear_shape` (`:1781+`), `clear_respawn` (`:2433+`);
+    - `clear_exit` (`:591-596`), `clear_shape`, `clear_respawn`;
     - `_forget_session` (`:2625-2636`);
     - `reap`'s empty-directory note (`:2819-2823`).
-- `charter/harness/base.py` — after `first_message_argv` (`:284+`): `chooses_session_id`,
-  `names_its_transcript`, `session_flags`, `reports_session_at`, `new_session_argv`, `resume_argv`.
-- `charter/harness/claude_code.py` (`ClaudeCodeHarness`, `:244`), `codex.py` (`CodexHarness`,
-  `:141`), `opencode.py` (`OpenCodeHarness`, `:688`) — the overrides.
+- **`charter/harness/base.py`**, after `first_message_argv`:
+  - `chooses_session_id`, `names_its_transcript`, `session_flags`, `reports_session_at`;
+  - `reports_harness_pid`, `resume_needs_cwd`;
+  - `new_session_argv`, `resume_argv`.
+- **`charter/harness/claude_code.py`, `codex.py`, `opencode.py`** — the overrides (below).
 - `charter/frame/launcher.py`:
-  - `argv` (`:192-204`) takes `resume: bool = False` and adds `--resume` before `--`.
-  - New `session_argv(p, fid, *, resume, rest)` and `RESUME_GONE`.
-  - `attempt` (`:463-498`) takes `resume: bool = False`: the session arguments go before `rest`,
-    and `on_exec` also records the chosen id and clears `conversation`; the undo restores both.
-  - `cmd_frame_launch` (`:772-813`) passes `args.resume`.
-- `charter/cli.py` — `frame-launch` (`:1195-1210`): `--resume`, `action="store_true"`.
+  - **`argv` (`:192-204`)** takes `resume: bool = False`.
+  - **`session_argv(p, fid, *, resume, rest)`** and `RESUME_GONE` are new.
+  - **`attempt` (`:463-498`)** takes `resume: bool = False`:
+    - the session words go before `rest`;
+    - its `on_exec` wrapper (below) records the start;
+    - the undo restores what the wrapper changed.
+  - **`cmd_frame_launch` (`:772-813`)** passes `args.resume`.
+- **`charter/cli.py`** — `frame-launch` (`:1195-1210`) gains `--resume`, `action="store_true"`.
 - `charter/hooks.py`:
-  - `_record_harness_session` (`:5976-6027`): the gate is the registry's
-    `reports_session_at == "sessionstart"`, and the chat's recorded kind must equal
-    `$CHARTER_HARNESS`; it also records `transcript_path` when `names_its_transcript`.
-  - New `_record_reported_session(data)`, called beside every `_turn_bump()` call
-    (`grep -n "_turn_bump()" charter/hooks.py`), for `reports_session_at == "tool"`.
+  - **`_record_harness_session` (`:5976-6027`)** becomes `_record_harness_report(chat, h, data)`
+    under the registry gate, and records `transcript_path` when `names_its_transcript`.
+  - **`_record_reported_session(data)`** is new, called beside every `_turn_bump()`, for
+    `reports_session_at == "tool"`.
 - `charter/frame/leave.py`:
-  - `Doomed.conversation: str = ""` (`:51-116`); `plan` fills it (`:181-204`).
-  - `resumable_harness` (`:409-426`) asks `registry.get(name).resume_argv`; its docstring's refusal
-    of a member is replaced by the reason the bar is now met.
-  - New `conversation_exists(harness, link, conversation)`.
-  - `_resume_clause` (`:391-406`) and `summary`'s `back` (`:292`) ask it.
+  - `Doomed.conversation: str = ""`, which `plan` fills.
+  - `resumable_harness` (`:409-426`) asks the registry, and its docstring gives the reason the bar is
+    met.
+  - New `conversation_exists(harness, link, conversation)`, which `_resume_clause` (`:391-406`) and
+    `summary` (`:292`) ask.
   - `_group`'s note (`:249-254`).
-- `charter/frame/reopen.py` — `Chat.conversation: str = ""` (`:92-160`); `_chat`'s key list
-  (`:360-362`); `Chat.chat`/`Chat.workspace` notes (`:104-117`).
+- `charter/frame/reopen.py` — `Chat.conversation: str = ""`, `_chat`'s key list (`:360-362`), and the
+  notes at `:104-117`.
 - `charter/commands_frame.py`:
-  - `_launch` (`:5880-5893`): when `_reopening(args)` is not `None`, `fid = restoring.chat.chat`
-    if `state.claim_chat_id(...)`, else `KEPT_ID_TAKEN` and return 1; otherwise `new_chat_id`.
+  - **`_launch` (`:5880-5893`).** A reopen claims its kept id through `_claim_kept_id(restoring.chat)`
+    (below), and an ordinary launch calls `new_chat_id`. The refusal sentence names both causes.
     The launcher argv sites pass `resume=getattr(args, "resume", False)`.
-  - `_resumes` (`:10724-10737`): `leave.conversation_exists(c.harness, c.resume, c.conversation)`.
-  - `_restore_recorded_chat` (`:10740-10805`): writes `rec.resume` (`record_harness_session`) and
-    `rec.conversation` into the claimed directory; its recycled-ordinal paragraph goes.
-  - `_reopen_one` (`:11243-11245`, `:11278-11280`): `rest = []`, `resume=_resumes(c)`.
-  - `_reopen_args` (`:11306-11319`): `resume`.
-  - `_record_the_plane` (`:10368-10376`): `conversation=c.conversation`.
-  - Notes at `:6505-6509` and `REOPEN_ON_A_LIVE_PLANE`'s comment (`:10808-10814`).
-- `charter/frame/chats.py` — `_MAX_ORDINAL_DIGITS`' note (`:355`): ordinals only grow, and past
-  99,999 a tab sorts last.
-- Tests: the three Task 1 modules (File Structure) and the existing cases below.
-- Docs: `docs/frame.md`, `docs/harnesses.md`, `CONTEXT.md`, `docs/adr/0024-…`, news.
+  - **`_resumes` (`:10724-10737`)** asks `leave.conversation_exists`.
+  - **`_restore_recorded_chat` (`:10740-10805`)** writes `rec.resume` and `rec.conversation` into the
+    claimed directory.
+  - **`_reopen_one`:**
+    - `rest = []`, `resume=_resumes(c)` (`:11243-11245`, `:11278-11280`);
+    - for a harness with `resume_needs_cwd`, only when `_same_directory(where, c.cwd)`, and otherwise
+      a sentence saying why it reopens empty.
+  - **`_reopen_args` (`:11306-11319`)** takes `resume`.
+  - **`_record_the_plane` (`:10368-10376`)** writes `conversation`.
+  - **`KEPT_ID_TAKEN`** and `_claim_kept_id`.
+  - **Notes** at `:6505-6509` and `:10808-10814`.
+- **`charter/frame/chats.py`** — `_MAX_ORDINAL_DIGITS`' note (`:355`).
+- **Tests:** the three Task 1 modules, and the existing cases below.
+- **Docs:** `docs/frame.md`, `docs/harnesses.md`, `CONTEXT.md`, `docs/adr/0024-…`, news.
 
 ### Interfaces
 
 **Consumes (on `main`):**
-- `config.claim_private_dir`, `config.replace_for`, `config.write_for`, `config.SESSIONS_DIR`
-- `state.workspace_prefix` (`:82`), `state._root` (`:189`), `state.frame_dir` (`:313`),
-  `state._record_claim` (`:282`), `state.harness_pane` (`:676`), `state.frame_server` (`:875`),
-  `state.identity` (`:1912`)
+- `config.claim_private_dir`, `replace_for`, `create_for`, `open_for`, `write_for`, `SESSIONS_DIR`
+- `state.workspace_prefix` (`:82`), `_root` (`:189`), `frame_dir` (`:313`), `_record_claim` (`:282`),
+  `_claiming_pid` (`:2495`), `_launcher_is_alive` (`:2526`), `harness_pane` (`:676`), `frame_server`
+  (`:875`), `identity` (`:1912`), `_forget_session` (`:2622`)
 - `reopen.path` (`:196`), `reopen.TRANSCRIPT_SUFFIX` (`:71`)
-- `launcher.framed_chat` (`:520`), `launcher._handed_over` (`:578`), `launcher._picked` (`:616`)
-- `harness.registry.get` (`harness/registry.py:31`)
-- `tmuxctl.same_server`, `contain.PATH_DISPLAY_LIMIT`
-- `hooks._chat_id` (`:5921`), `hooks._in_a_plane`
+- `commands_frame._chat_pane_rows` (`:9996`), `_this_plane` (`:1315`), `_same_directory` (`:11130`),
+  `_restore_root` (`:11057`)
+- `launcher.framed_chat` (`:520`); `harness.registry.get`; `tmuxctl.same_server`, `PANE_ID_RE`;
+  `contain.PATH_DISPLAY_LIMIT`; `chats._MAX_ORDINAL_DIGITS`
 
 **Produces:**
 
 ```python
 # charter/frame/state.py
 CHAT_IDS = "chat-ids.json"      # {prefix: highest ordinal ever handed out}, a FILE in the frame root
-CHAT_IDS_LOCK = "chat-ids.lock" # fcntl.flock'd around every read-max-write of CHAT_IDS
+CHAT_IDS_LOCK = "chat-ids.lock"
+ORDINAL_CEILING = 99_999         # 10 ** chats._MAX_ORDINAL_DIGITS - 1
 SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
-CONVERSATION_FILE = "conversation"
 
 def new_chat_id(workspace: str) -> str | None: ...
-    # unchanged signature; never an ordinal any trace or the mark still names; None as today,
-    # and also when the lock cannot be opened
-def claim_chat_id(chat: str) -> bool: ...
-    # a restore claims exactly *chat*; False when it is not a chat id, its directory exists, or
-    # the claim fails. Raises the mark on success.
-def ordinal_of(chat: str) -> int | None: ...    # the decimal digits after the last dot, else None
-def highest_ordinal(prefix: str) -> int: ...    # max(mark, traces); 0 for a prefix nothing names
+    # None as today, and when the lock cannot be opened, the mark cannot be written, or the next
+    # ordinal would pass ORDINAL_CEILING
+def claim_chat_id(chat: str) -> bool: ...  # claim exactly *chat* (a restore), under the lock, mark first
+def reap_chat(chat: str) -> None: ...      # rmtree the chat's directory, then _forget_session(chat)
+def ordinal_of(chat: str) -> int | None: ...   # 1..ORDINAL_CEILING after the last dot, else None
+def highest_ordinal(prefix: str) -> int: ...   # max(mark, traces); never raises
 def record_harness_session(fid: str, sid: str) -> bool: ...   # refuses sid outside SESSION_ID_RE
-def record_conversation(fid: str, path: str) -> bool: ...
-    # absolute, no NUL, len <= contain.PATH_DISPLAY_LIMIT; True when the record changed
+def record_conversation(fid: str, path: str) -> bool: ...     # absolute, no NUL, <= PATH_DISPLAY_LIMIT
 def conversation(fid: str) -> str | None: ...
 def clear_conversation(fid: str) -> None: ...
-def chat_in_pane(pane: str, server: str) -> str | None: ...
-    # the chat whose recorded harness pane is *pane* on a server tmuxctl.same_server calls *server*
+def record_harness_pid(fid: str, pid: int) -> None: ...       # harness.pid; pid > 0
+def harness_pid(fid: str) -> int | None: ...
+def adopt_report(fid: str) -> bool: ...    # create_for(session.adopted); True only for the first caller
+def clear_adoption(fid: str) -> None: ...  # removes session.adopted and harness.pid
+def chat_in_pane(pane: str, server: str) -> str | None: ...   # exactly one match, else None
 
 # charter/harness/base.py — class Harness
 chooses_session_id: bool = False
 names_its_transcript: bool = False
-session_flags: tuple[str, ...] = ()   # words in `rest` that mean the operator named a session
+reports_harness_pid: bool = False     # the hook environment carries the harness's own pid
+resume_needs_cwd: bool = False        # the resume looks the id up in the working directory
+session_flags: tuple[str, ...] = ()
 reports_session_at: str = ""          # "sessionstart" | "tool" | ""
-def new_session_argv(self, sid: str, name: str) -> list[str]: ...     # [] by default
-def resume_argv(self, sid: str, name: str) -> list[str] | None: ...   # None: charter cannot resume it
+def new_session_argv(self, sid: str, name: str) -> list[str]: ...
+def resume_argv(self, sid: str, name: str) -> list[str] | None: ...
 
-# claude_code.ClaudeCodeHarness
-#   chooses_session_id = True; names_its_transcript = True; reports_session_at = "sessionstart"
-#   session_flags = ("--session-id", "--resume", "-r", "--continue", "-c", "--fork-session")
-#   new_session_argv -> ["--session-id", sid, "--name", name]
-#   resume_argv      -> ["--resume", sid, "--name", name]
-# codex.CodexHarness
-#   names_its_transcript = True; reports_session_at = "sessionstart"
+# claude_code: chooses_session_id, names_its_transcript, reports_harness_pid = True;
+#   reports_session_at = "sessionstart";
+#   session_flags = ("--session-id", "--resume", "-r", "--continue", "-c", "--fork-session");
+#   new_session_argv -> ["--session-id", sid, "--name", name];
+#   resume_argv -> ["--resume", sid, "--name", name]
+# codex:    names_its_transcript = True; reports_session_at = "sessionstart";
 #   session_flags = ("resume", "fork"); resume_argv -> ["resume", sid]
-# opencode.OpenCodeHarness
-#   reports_session_at = "tool"; session_flags = ("-s", "--session", "-c", "--continue")
-#   resume_argv -> ["-s", sid]
+# opencode: resume_needs_cwd = True; reports_session_at = "tool";
+#   session_flags = ("-s", "--session", "-c", "--continue"); resume_argv -> ["-s", sid]
 
 # charter/frame/launcher.py
-RESUME_GONE = ("the conversation this chat was linked to cannot be resumed here — starting a "
-               "fresh one on profile '{name}'.")
+RESUME_GONE = ("the conversation this chat was linked to cannot be resumed here — starting a fresh "
+               "one on profile '{name}'.")
 def argv(profile: str, rest: list[str], *, attended: bool, resume: bool = False) -> list[str]: ...
-def session_argv(p: profiles.Profile, fid: str | None, *, resume: bool,
-                 rest: list[str]) -> tuple[list[str], str]: ...
-    # (the words to put before rest, the id on_exec records or "")
+def session_argv(p, fid: str | None, *, resume: bool, rest: list[str]) -> tuple[list[str], str]: ...
 def attempt(p, rest, *, fid, attended, resume: bool = False, on_exec=...) -> Refusal | None: ...
 
 # charter/frame/leave.py
-def resumable_harness(name: str) -> bool: ...   # registry answer: resume_argv("x", "") is not None
+def resumable_harness(name: str) -> bool: ...
 def conversation_exists(harness: str, link: str, conversation: str) -> bool: ...
-class Doomed(NamedTuple): ...; conversation: str = ""
-
-# charter/frame/reopen.py
-class Chat(NamedTuple): ...; conversation: str = ""
 
 # charter/commands_frame.py
-KEPT_ID_TAKEN = ("charter reopen: {chat} is not reopened — a directory for that id is still on "
-                 "this plane, so opening it would give two chats one id. It stays recorded; "
-                 "run charter reopen again once that chat has ended.")
+KEPT_ID_TAKEN = ("charter reopen: {chat} is not reopened — {dir} belongs to a chat that is still "
+                 "{what}, so opening it would give two chats one id. It stays recorded; {fix}, then "
+                 "run charter reopen again.")
+def _claim_kept_id(rec) -> tuple[str | None, str]: ...   # (the claimed id, or None and the sentence)
 
 # charter/hooks.py
-def _record_reported_session(data: dict) -> None: ...   # opencode's route; best-effort
+def _record_harness_report(chat: str, h, data: dict) -> None: ...
+def _record_reported_session(data: dict) -> None: ...
 ```
 
 ### Behaviour
 
-**`new_chat_id(workspace)`.**
-1. `prefix = workspace_prefix(workspace)`; `config.private_mkdir(root)`. An `OSError` is `None`,
-   as today.
-2. `with _locked(root):`. The context manager opens `root / CHAT_IDS_LOCK` with
-   `os.open(…, O_RDWR | O_CREAT | O_NOFOLLOW, 0o600)` and takes `fcntl.flock(fd, LOCK_EX)`, the
-   idiom of `hooks.py:8058`. An `OSError` opening or locking is `None`: an allocation that cannot
-   keep the mark monotonic is refused, never done unguarded.
-3. `start = highest_ordinal(prefix) + 1`. For `n` in `range(start, start + _CHAT_ORDINAL_MAX)`:
-   - `claim_private_dir(root / f"{prefix}.{n}")`;
-   - `FileExistsError` → continue; any other `OSError` → `None`;
-   - on success, `_record_claim(d)` then `_raise_mark(prefix, n)`, return the name.
-4. **The `mkdir` stays the exclusion, and the lock is only what keeps the mark from going down.**
-   A racer that is not holding the lock — a charter older than this task, running across the
-   upgrade — still cannot share a name, because the kernel picks one `mkdir`.
+**The allocator.**
+1. `prefix = workspace_prefix(workspace)`, then `config.private_mkdir(root)`. An `OSError` is `None`.
+2. `with _locked(root):`. An `OSError` opening or locking is `None`.
+3. `start = highest_ordinal(prefix) + 1`. For `n` in `range(start, min(start + _CHAT_ORDINAL_MAX,
+   ORDINAL_CEILING + 1))`:
+   - `if not _raise_mark(prefix, n): return None` — the id record could not be written, so nothing
+     is handed out;
+   - `claim_private_dir(root / f"{prefix}.{n}")`: `FileExistsError` → continue; any other `OSError` →
+     `None`;
+   - on success, `_record_claim(d)`, then return the name.
 
-**`highest_ordinal(prefix)` — the mark and the traces, every time.**
-- **The mark:** `json.loads(CHAT_IDS)[prefix]` when it is an `int` ≥ 0. Anything else reads 0 — an
-  unreadable mark is not a reason to trust nothing, because the traces still count.
-- **Traces**, each a name `f"{prefix}.{digits}"` whose digits parse:
-  - every entry of `os.scandir(root)`, directory or file, matched as `{prefix}.{n}` or
-    `{prefix}.{n}{TRANSCRIPT_SUFFIX}`. `prefix` holds no dot (`workspace_prefix` maps it to `_`),
-    so `rpartition(".")` after removing the suffix answers it;
-  - every `chat` string in `reopen.json` read raw — any `version`, any shape that
-    `frames[*].chats[*].chat` reaches — ignoring what is not text;
-  - every entry of `SESSIONS_DIR` whose name splits as `[prefix, digits, *family]` on `.`.
-- **An old `{workspace}-{pid}` frame id carries no dot and never counts.**
-- **Cost** is one `scandir` of the frame root and one of `SESSIONS_DIR`, and one JSON read, per
-  allocation. It is paid on a chat open, never on a hook or a repaint.
+   Falling out of the loop is `None`.
+4. **The `mkdir` stays the exclusion.** A racer not holding the lock, such as an older charter across
+   the upgrade, still cannot share a name.
 
-**`_raise_mark(prefix, n)`.** Read `CHAT_IDS` (or `{}`), set `max(existing, n)`, and
-`config.replace_for` the JSON with `sort_keys=True`. It is called only under the lock.
+**`_raise_mark(prefix, n)`** reads `CHAT_IDS` (unreadable → `{}`), sets `max(existing, n)`, and
+`config.replace_for`s it. It answers `False` on `OSError`, and is called only under the lock.
 
-**`claim_chat_id(chat)`.** It requires all three of `chats.is_chat(chat)`,
-`ordinal_of(chat) is not None`, and a prefix with no dot. Then, under the lock:
-`claim_private_dir(root / chat)`, `_record_claim`, and `_raise_mark(prefix, ordinal)`.
-`FileExistsError` or `OSError` → `False`, and nothing is written into an existing directory.
+**`highest_ordinal(prefix)`** takes the max of these, and never raises:
+- the mark (a non-`int` or negative value reads as 0);
+- every trace whose digits parse and have at most `chats._MAX_ORDINAL_DIGITS` digits. Longer names are
+  ignored:
+  - `os.scandir(root)` entries named `{prefix}.{n}` or `{prefix}.{n}.transcript`;
+  - every `chat` string reachable as `frames[*].chats[*].chat` in `reopen.json` read raw;
+  - `SESSIONS_DIR` entries splitting as `[prefix, n, *family]`.
 
-**`_launch` on a reopen.** It claims the recorded id before anything else that makes state:
-- `_pin_workspace`, `frame_dir(create=True)` and the rest follow unchanged;
-- a failed claim prints `KEPT_ID_TAKEN` and returns 1, so `_reopen_one` reports the chat not
-  back and `_consume` keeps it;
-- `restoring.fid` is the kept id;
-- `_restore_recorded_chat` writes `rec.resume` and `rec.conversation` into the claimed directory
-  before tmux, beside the persona and brief it already restores.
+`prefix` holds no dot, so an old `{workspace}-{pid}` id never counts.
 
-**`launcher.session_argv(p, fid, *, resume, rest)`.**
-1. `fid is None` → `([], "")`. An unframed launch has no chat to link.
+**`claim_chat_id(chat)`** requires `chats.is_chat(chat)`, `ordinal_of(chat)`, and a dot-free prefix.
+Then, under the lock: `_raise_mark(prefix, n)`, `claim_private_dir`, `_record_claim`.
+`FileExistsError`, `OSError` or a failed mark → `False`.
+
+**`_claim_kept_id(rec)`** — the path that can succeed:
+1. `state.claim_chat_id(rec.chat)` → `(rec.chat, "")`.
+2. Otherwise, if `state._claiming_pid(dir)` is alive → `(None, KEPT_ID_TAKEN)`, with *what* = `being
+   started`, *fix* = `wait for that launch`.
+3. `rows = _chat_pane_rows(server)` for `server = state.frame_server(rec.chat) or
+   tmuxctl.LEGACY_SOCKET`. `None`, meaning the server did not answer, counts as no live pane for this
+   chat only.
+4. `live = [r for r in rows or () if r[0] == rec.chat and r[3] == _this_plane()]`.
+   - **None live** → `state.reap_chat(rec.chat)`, then `claim_chat_id` again.
+   - **Some live** → `(None, KEPT_ID_TAKEN)`, with *what* = `running`, *fix* =
+     `shlex.join(tmuxctl.server_argv(server, "kill-window", "-t", live[0][1]))`, and *dir* the
+     contained directory path.
+
+A pane of another plane with that id, or one with no plane marker, is not this plane's.
+
+**`launcher.session_argv(p, fid, *, resume, rest)`:**
+1. `fid is None` → `([], "")`.
 2. `h = registry.get(p.harness)`; `None` → `([], "")`.
-3. Any word of `rest` in `h.session_flags` → `([], "")`. The operator named a session; the
-   harness's SessionStart report is the link.
+3. Any word of `rest` in `h.session_flags` → `([], "")`.
 4. `name = fid`. Task 3 replaces this line with `session_name(fid)`.
-5. `resume` and `link := state.kept_harness_session(fid)` and
-   `(args := h.resume_argv(link, name)) is not None` → `(args, "")`.
-6. `resume` otherwise → `util.err(f"charter: {RESUME_GONE…}")`, then fall through to a fresh start.
-7. `h.chooses_session_id` → `sid = str(uuid.uuid4())`; `(h.new_session_argv(sid, name), sid)`.
+5. `resume`, `link := state.kept_harness_session(fid)`, and `(args := h.resume_argv(link, name))` →
+   `(args, "")`.
+6. `resume` otherwise → `util.err(f"charter: {RESUME_GONE…}")`, then fall through.
+7. `h.chooses_session_id` → `sid = str(uuid.uuid4())`, `(h.new_session_argv(sid, name), sid)`.
 8. Otherwise → `([], "")`.
 
-**`attempt(…, resume=)`.**
-- `words, chosen = session_argv(p, fid, resume=resume, rest=rest)`, and `rest = [*words, *rest]`.
-  The words go before `rest`, so an operator's own `-p hi` stays last.
-- The `on_exec` it runs is wrapped:
-  - read the previous `kept_harness_session` and `conversation`;
-  - when `chosen`, write it with `record_harness_session` and `clear_conversation`;
-  - call the caller's `on_exec`.
-- The undo it returns restores both previous values, then runs the caller's undo.
+**`attempt`'s `on_exec` wrapper — every start, and only a start, resets the adoption:**
+- **Before:** read the previous link, conversation and harness pid.
+- **Always:** `state.clear_adoption(fid)`, so the start adopts its own first report again.
+- **A chosen id:** `record_harness_session(fid, chosen)` and `clear_conversation(fid)`.
+- **A fresh start of a harness that chooses no id** (`not resume and not chosen`): the link and
+  conversation are cleared, so an earlier start's conversation is not offered as this start's.
+- **Then** the caller's `on_exec`.
+- **The undo** restores the link, conversation, harness pid and adoption, then runs the caller's undo.
 
 **Hooks.**
-- **`_record_harness_session(data)`:**
-  1. `chat = _chat_id()`, and the plane check, as today.
-  2. `h = registry.get(os.environ.get("CHARTER_HARNESS", ""))`. `h is None` or
-     `h.reports_session_at != "sessionstart"` → return.
-  3. `state.identity(chat).get("CHARTER_HARNESS") != h.name` → return. A harness started by hand
-     inside another chat's shell inherits that chat's id, and must not write its own session over
-     the chat's link.
-  4. `sid = data.get("session_id")`: a `str` recorded through `record_harness_session`, which
-     holds it to `SESSION_ID_RE`; a change bumps.
-  5. When `h.names_its_transcript`, `tp = data.get("transcript_path")`: a `str` recorded through
-     `record_conversation`, which holds it to its shape.
-- **`_record_reported_session(data)`** (ruling on open question 1, A):
-  1. `h = registry.get(os.environ.get("CHARTER_HARNESS", ""))` with
-     `h.reports_session_at == "tool"`.
-  2. `pane = os.environ.get("TMUX_PANE", "")` held to `tmuxctl.PANE_ID_RE`.
-  3. `server` is the first comma field of `$TMUX`.
-  4. `chat = state.chat_in_pane(pane, server)`, whose recorded kind must be `h.name`.
-  5. `record_harness_session(chat, data.get("session_id"))`; nothing is recorded as the
-     conversation.
 
-  `_chat_id()` is never read here: it holds opencode's own id (`opencode.py:332`).
-- **Both are wrapped in `except Exception: pass`.**
+`_record_harness_session(data)`:
+1. `chat = _chat_id()`, and the plane check.
+2. `h = registry.get($CHARTER_HARNESS)` with `reports_session_at == "sessionstart"`.
+3. `state.identity(chat)["CHARTER_HARNESS"] == h.name`.
+4. `_record_harness_report(chat, h, data)`.
+
+`_record_harness_report(chat, h, data)`:
+- `sid` must be a `str` matching `SESSION_ID_RE`; otherwise return.
+- `link = state.kept_harness_session(chat)`.
+- **`h.reports_harness_pid` (Claude Code):**
+  - `pid = int(os.environ.get("CLAUDE_PID", ""))` when it is digits > 0, else `None`.
+  - `adopted = state.harness_pid(chat)`.
+  - **Adopt:** `adopted is None and (sid == link or not link)` and `pid` → record the sid, the
+    harness pid (`record_harness_pid`) and `adopt_report`.
+  - **Follow:** `adopted is not None and pid == adopted and sid != link` → record the sid, and clear
+    the conversation until this report's path is recorded.
+  - **Anything else is ignored:** a pid that differs, no pid after adoption, or a report before
+    adoption whose id is not the chosen one.
+- **Otherwise (Codex):** `state.adopt_report(chat)` → record the sid. A `False` is ignored: this
+  start already adopted.
+- **A recorded report** with `h.names_its_transcript` also records `transcript_path` through
+  `record_conversation`.
+
+`_record_reported_session(data)`, for opencode (ruled OQ1 (A)):
+1. `h.reports_session_at == "tool"`.
+2. `pane` from `$TMUX_PANE`, held to `PANE_ID_RE`; `server` is `$TMUX`'s first comma field.
+3. `chat = state.chat_in_pane(pane, server)`, whose kind is `h.name`.
+4. `state.adopt_report(chat)` → record the sid.
+
+`_chat_id()` is never read, because it holds opencode's own id (`opencode.py:332`).
+
+Both functions are wrapped in `except Exception: pass`.
 
 **`leave.conversation_exists(harness, link, conversation)`:**
 ```python
@@ -506,14 +547,11 @@ if not link or h is None or h.resume_argv(link, "") is None:
     return False
 if h.names_its_transcript:
     return bool(conversation) and os.path.isfile(conversation)
-return True   # opencode: a tool hook reported the session; it names no transcript
+return True   # opencode: a tool hook reported the session, and it names no transcript
 ```
 
-**What the quit row says.**
-- `_resume_clause(c)`: `RESUMES` when `conversation_exists(c.harness, c.resume, c.conversation)`.
-- Otherwise the three existing sentences in their existing order. `NO_RESUME_HARNESS` is reached
-  only when `resumable_harness` is false, which after this task is only a Step 0 failure.
-- `summary`'s `back` counts `conversation_exists`.
+A Codex chat that has taken no turn has no link (X1), so it has no resume. A Claude Code chat with no
+prompt has a link and no file (C1), so it has no resume either.
 
 ### Test cases (write first; each must fail before the code exists)
 
@@ -523,82 +561,72 @@ Class `TheCounterOnlyGrows(PersonaIso, unittest.TestCase)`:
 
 | Case | Asserts |
 |---|---|
-| `test_a_reaped_ordinal_is_not_handed_out_again` | `new_chat_id("beta") == "beta.1"`; `shutil.rmtree` that directory (what a reap does); `new_chat_id("beta") == "beta.2"`. Red at `5ad755d`, which answers `beta.1` |
-| `test_the_mark_is_a_file_in_the_frame_root` | after one allocation, `json.loads((config.STATE_DIR / "frame" / "chat-ids.json").read_text()) == {"beta": 1}`, the name spelled literally |
-| `test_one_mark_per_prefix_not_per_workspace_name` | `new_chat_id("a.b")`, then `new_chat_id("a_b")` → `"a_b.1"`, `"a_b.2"` |
-| `test_workspaces_do_not_share_a_count` | `alpha.1`, then `beta.1` |
-| `test_a_lost_mark_falls_back_to_the_traces` | allocate `beta.1`, `beta.2`; delete `chat-ids.json` and both directories; leave `beta.2.transcript` → `beta.3` |
-| `test_an_unreadable_mark_still_counts_the_traces` | `chat-ids.json` holds `not json`, a directory `beta.7` → `beta.8` |
-| `test_the_mark_never_goes_down` | `{"beta": 9}`, `state._raise_mark("beta", 3)` under the lock → still 9 |
-| `test_a_taken_ordinal_is_still_skipped` (pin: passes at `5ad755d`) | a directory `beta.1` and no mark → `beta.2` |
-| `test_the_attempt_bound_counts_from_the_start` | mark `{"beta": 20000}` → `beta.20001`. Red at `5ad755d`, which answers `None` |
+| `test_a_reaped_ordinal_is_not_handed_out_again` | `beta.1`; `shutil.rmtree` it; the next is `beta.2`. Red at `5ad755d` |
+| `test_the_mark_is_a_file_in_the_frame_root` | `json.loads((config.STATE_DIR / "frame" / "chat-ids.json").read_text()) == {"beta": 1}`, spelled literally |
+| `test_one_mark_per_prefix_not_per_workspace_name` | `a.b` then `a_b` → `a_b.1`, `a_b.2` |
+| `test_a_lost_mark_falls_back_to_the_traces` | allocate two; delete the mark and both directories, keep `beta.2.transcript` → `beta.3` |
+| `test_an_unreadable_mark_still_counts_the_traces` | the mark holds `not json`, a directory `beta.7` exists → `beta.8` |
+| `test_the_mark_never_goes_down` | `{"beta": 9}`, `_raise_mark("beta", 3)` → still 9 |
+| `test_the_mark_is_written_before_the_directory` | `config.claim_private_dir` patched to assert `json.loads(chat-ids.json)["beta"] >= <its ordinal>` when called |
+| `test_a_mark_that_cannot_be_written_hands_out_nothing` | `config.replace_for` raises `OSError` for `chat-ids.json` → `None`; no `beta.*` directory exists |
+| `test_the_lock_is_opened_through_config` | `config.open_for` recorded → called with `root / "chat-ids.lock"` before any mark write |
+| `test_the_attempt_bound_counts_from_the_start` | mark `{"beta": 20000}` → `beta.20001`. Red at `5ad755d` |
+| `test_no_ordinal_past_the_ceiling_is_handed_out` | mark `{"beta": 99999}` → `None` |
+| `test_a_taken_ordinal_is_still_skipped` (pin) | a directory `beta.1` exists → `beta.2` |
 
-Class `EveryTraceCounts(PersonaIso, unittest.TestCase)` — the migration, with no `chat-ids.json`:
+Class `EveryTraceCounts(PersonaIso, unittest.TestCase)`, with no `chat-ids.json`:
+- A directory `beta.4` → `beta.5`.
+- A transcript `beta.6.transcript` → `beta.7`.
+- `reopen.json` naming `beta.9` → `beta.10`.
+- `{"version": 99, "frames": [{"chats": [{"chat": "beta.12"}]}]}` → `beta.13`.
+- `SESSIONS_DIR / "beta.3.workspace"` → `beta.4`.
+- `test_names_that_are_not_this_prefix_do_not_count`: `betamax.9`, `beta-9`, `beta.x`, `beta.9x` →
+  `beta.1`.
+- `test_a_name_past_the_digit_bound_is_ignored_not_raised`: a directory `beta.123456` and
+  `SESSIONS_DIR / "beta.9999999999999999999999.lock"` → `beta.1`, no exception.
+- `test_chat_turns_is_not_a_trace` (pin): `STATE_DIR / "chat-turns" / "beta.8"` → `beta.1`.
+
+Class `TwoAllocatorsNeverShareAnId(PersonaIso, unittest.TestCase)`:
+- **Eight threads, five allocations each** → 40 distinct ids, and the mark is 40.
+- **`test_the_mark_is_raised_while_the_lock_is_held`** — `fcntl.flock` and `config.replace_for`
+  recorded → `LOCK_EX` before the replace and `LOCK_UN` after. Red when the lock is deleted.
+- **A lock that cannot be opened** (`config.open_for` raises) → `None`, and no directory.
+
+Class `NoScanReadsTheMarkAsAChat(PersonaIso, unittest.TestCase)` — neither file shows up anywhere:
+- `leave.plane_chats()` and `chats._by_workspace()` hold neither `chat-ids.json` nor `chat-ids.lock`.
+- `state.reap(set(), server=tmuxctl.LEGACY_SOCKET)` and `state.reap(set(), server="x")` leave both.
+- `reopen.prune_transcripts(set())` leaves both.
+
+Class `ARestoredChatKeepsItsId(PersonaIso, unittest.TestCase)` — `_chat_pane_rows` stood in per case:
 
 | Case | Asserts |
 |---|---|
-| `test_a_chat_directory` | directory `beta.4` → `beta.5` |
-| `test_a_transcript` | file `beta.6.transcript` → `beta.7` |
-| `test_a_quit_record` | `reopen.json` naming `beta.9` → `beta.10` |
-| `test_a_quit_record_this_charter_cannot_read` | `{"version": 99, "frames": [{"chats": [{"chat": "beta.12"}]}]}` → `beta.13` |
-| `test_a_session_marker` | `config.SESSIONS_DIR / "beta.3.workspace"` → `beta.4` |
-| `test_names_that_are_not_this_prefix_do_not_count` | `betamax.9`, `beta-9`, `beta.x`, `beta.9x` → `beta.1` |
+| `test_claiming_a_recorded_id_makes_exactly_that_directory` | `claim_chat_id("beta.7")`; the `launcher` file holds this pid; the mark ≥ 7 |
+| `test_a_name_that_is_not_a_chat_id_is_not_claimed` | subTest `"../x"`, `"beta-7"`, `"beta"`, `"beta.7.transcript"` → `False` |
+| `test_a_reopen_launch_claims_the_recorded_id` | `_launch` with `reopening=Reopening(reopen.Chat(chat="beta.7", …))`, under `TheLaunchOpensWithoutMovingAnyone`'s patches (`tests/test_a_chat_opens_in_the_background_with_its_first_message.py:437-461`) → `reopening.fid == "beta.7"`, and the `new-window`/`new-session` argv names it |
+| `test_a_surviving_directory_no_pane_proves_live_is_reaped_and_claimed` | directory `beta.7` holding `server`; rows `[]` → `_claim_kept_id` answers `"beta.7"`; the directory is new (no `server` file); `SESSIONS_DIR / "beta.7.workspace"` gone |
+| `test_a_server_that_does_not_answer_counts_as_no_live_pane_for_that_chat_only` | rows `None`; directories `beta.7` and `beta.8` → `beta.7` claimed; `beta.8` untouched |
+| `test_another_planes_pane_is_not_this_chats_life` | a row `beta.7 @3 1 /other/plane %4` → reaped and claimed |
+| `test_an_unmarked_pane_is_not_this_chats_life` | a row `beta.7 @3 1  %4` (empty plane) → reaped and claimed |
+| `test_a_live_pane_of_this_plane_refuses_naming_the_directory_and_the_command` | a row `beta.7 @3 1 <this plane> %4` → `None`; the sentence holds the directory and `kill-window -t @3`; the directory untouched |
+| `test_a_live_launcher_claim_refuses_without_asking_tmux` | `launcher` file holds this test's own pid → `None`; `_chat_pane_rows` not called; `"being started"` |
+| `test_a_refused_reopen_stays_recorded` | after `_reopen_one` and `_consume`, the manifest still names `beta.7` |
+| `test_an_ordinary_launch_never_takes_a_recorded_id` | the manifest names `beta.3`, no directories → `beta.4` |
 
-Class `TwoAllocatorsNeverShareAnId(PersonaIso, unittest.TestCase)`:
-- `test_concurrent_allocations_are_distinct_and_the_mark_is_the_highest` — eight threads, five
-  allocations each, with `concurrent.futures.ThreadPoolExecutor` → 40 distinct ids, and the mark
-  is 40.
-- `test_the_mark_is_raised_while_the_lock_is_held` — `fcntl.flock` and `config.replace_for` are
-  recorded into one log → `LOCK_EX` comes before the replace of `chat-ids.json`, and `LOCK_UN`
-  after it. **Red when the lock is deleted.**
-- `test_a_lock_that_cannot_be_opened_allocates_nothing` — `os.open` raises for the lock path →
-  `None`, and no chat directory exists.
-
-Class `NoScanReadsTheMarkAsAChat(PersonaIso, unittest.TestCase)` — after one allocation and its
-directory removed:
-- `test_the_quit_scan_skips_both_files` — `leave.plane_chats()` holds neither `chat-ids.json` nor
-  `chat-ids.lock`.
-- `test_the_tab_scan_skips_both_files` — `chats._by_workspace()` holds neither.
-- `test_a_reap_of_any_server_leaves_both` — `state.reap(set(), server=tmuxctl.LEGACY_SOCKET)` and
-  `state.reap(set(), server="x")` → both files remain.
-- `test_the_transcript_sweep_leaves_both` — `reopen.prune_transcripts(set())` → both remain.
-
-Class `ARestoredChatKeepsItsId(PersonaIso, unittest.TestCase)`:
-- `test_claiming_a_recorded_id_makes_exactly_that_directory` — `claim_chat_id("beta.7")` is
-  `True`, the directory holds `launcher` with this pid, and the mark is ≥ 7.
-- `test_a_directory_that_survived_is_not_adopted` — a directory `beta.7` holding `server` →
-  `False`, and its files are byte-identical afterwards.
-- `test_a_name_that_is_not_a_chat_id_is_not_claimed` — subTest over `"../x"`, `"beta-7"`,
-  `"beta"`, `"beta.7.transcript"` → `False`.
-- `test_a_reopen_launch_claims_the_recorded_id` — `_launch` with
-  `reopening=Reopening(reopen.Chat(chat="beta.7", workspace="beta", …))`, under
-  `TheLaunchOpensWithoutMovingAnyone`'s patches
-  (`tests/test_a_chat_opens_in_the_background_with_its_first_message.py:437-461`) →
-  `reopening.fid == "beta.7"`, and the recorded `new-window`/`new-session` argv names `beta.7`.
-- `test_a_reopen_whose_id_is_taken_is_refused_and_stays_recorded` — a directory `beta.7` exists →
-  `_reopen_one` returns `None`; stderr holds `"would give two chats one id"`; after `_consume` the
-  manifest still names `beta.7`.
-- `test_an_ordinary_launch_never_takes_a_recorded_id` — the manifest names `beta.3`, and no
-  directories exist → an ordinary `_launch` allocates `beta.4`.
-
-Class `AClosedChatsLeftoversAreNeverInherited(PersonaIso, unittest.TestCase)` — #1101.
-- **setUp:** a chat `default.1` with an identity and a workspace record, `default.1.transcript`,
-  and a `reopen.json` naming `default.1`. Then `state.record_closed("default.1")` and
-  `shutil.rmtree` of its directory: a close followed by a reap.
+Class `AClosedChatsLeftoversAreNeverInherited(PersonaIso, unittest.TestCase)` — #1101:
+- **setUp:** `default.1` with an identity and a workspace, `default.1.transcript`, a `reopen.json`
+  naming it, `record_closed`, `rmtree`.
 - `test_the_next_chat_is_not_the_closed_chats_id` — `new_chat_id("default") == "default.2"`.
 - `test_the_new_chat_is_not_offered_the_old_transcript` —
   `builtin_actions._has_transcript("default.2") is False`.
-- `test_closing_the_new_chat_leaves_the_old_record` — `commands_frame._forget_transcript("default.2")`
-  → `reopen_state.read().all_chats()` still names `default.1`, and `default.1.transcript` exists.
+- `test_closing_the_new_chat_leaves_the_old_record` — `_forget_transcript("default.2")` leaves
+  `default.1` in the manifest and its transcript file in place.
 
-Class `TheRecordIsWrittenDown(unittest.TestCase)` — files read off
-`Path(__file__).resolve().parents[1]`, never through `config`:
-- `test_the_chat_id_adr_exists_once` — exactly one
-  `docs/adr/*-a-chat-id-names-one-chat-and-one-harness-session.md`, whose first line starts with
-  `# `. The slug is pinned, not the number.
-- `test_the_adr_states_its_costs` — its text holds `forged`, `opencode` and `99,999`.
-- `test_context_says_a_chat_id_is_handed_out_once` — CONTEXT.md's `**Chat**:` entry holds
-  `handed out once`.
+Class `TheRecordIsWrittenDown(unittest.TestCase)` — files read off the repository root:
+- **One ADR:** exactly one `docs/adr/*-a-chat-id-names-one-chat-and-one-harness-session.md`, and its
+  first line starts with `# `.
+- **Its costs:** the text holds `CLAUDE_PID`, `/new`, `99,999`.
+- **CONTEXT.md:** `**Chat**:` holds `handed out once`.
 
 **`tests/test_a_tab_is_linked_to_one_harness_session.py`**
 
@@ -606,148 +634,165 @@ Class `EachHarnessSaysHowItsSessionIsNamed(PersonaIso, unittest.TestCase)`:
 
 | Case | Asserts |
 |---|---|
-| `test_claude_code_takes_a_chosen_id_and_a_name` | `new_session_argv("u", "n") == ["--session-id", "u", "--name", "n"]`; `resume_argv("u", "n") == ["--resume", "u", "--name", "n"]`; `chooses_session_id` |
-| `test_codex_resumes_by_the_id_it_reported` | `new_session_argv("u", "n") == []`; `resume_argv("s", "n") == ["resume", "s"]` |
-| `test_opencode_resumes_by_the_id_it_reported` | `resume_argv("s", "n") == ["-s", "s"]`; `reports_session_at == "tool"` |
-| `test_every_launchable_harness_answers` | for each registered harness with a `cli_name`: `resume_argv` is a list or `None`; `reports_session_at in {"sessionstart", "tool", ""}` |
-| `test_resumable_is_the_registrys_answer` | `leave.resumable_harness("codex")`; a stand-in registry entry whose `resume_argv` answers `None` → `False` |
+| `test_claude_code` | `new_session_argv("u", "n") == ["--session-id", "u", "--name", "n"]`; `resume_argv("u", "n") == ["--resume", "u", "--name", "n"]`; `chooses_session_id`, `reports_harness_pid` |
+| `test_codex` | `new_session_argv == []`; `resume_argv("s", "n") == ["resume", "s"]`; not `resume_needs_cwd` |
+| `test_opencode` | `resume_argv("s", "n") == ["-s", "s"]`; `resume_needs_cwd`; `reports_session_at == "tool"` |
+| `test_resumable_is_the_registrys_answer` | a stand-in entry whose `resume_argv` answers `None` → `False` |
 
-Class `TheLauncherAddsTheSession(PersonaIso, unittest.TestCase)`.
-- **Stand-ins:** `charter.frame.launcher.os.execvpe` patched; `launcher.framed_chat` → `"beta.1"`;
-  `launcher._approval_refusal` and `wiring.wired_or_refusal` stood in.
+Class `TheLauncherAddsTheSession(PersonaIso, unittest.TestCase)`:
+- **Stand-ins:** `launcher.os.execvpe` patched; `framed_chat` → `beta.1`; approval and wiring stood in.
 - **Setup:** `beta.1` records kind `claude-code`.
 
 | Case | Asserts |
 |---|---|
-| `test_a_framed_claude_start_gets_a_fresh_uuid_and_its_id_as_name` | `cmd_frame_launch(profile="claude", rest=["--", "-p", "x"])` → the exec argv is `["claude", "--session-id", u, "--name", "beta.1", "-p", "x"]`; `uuid.UUID(u).version == 4`; inside the `execvpe` fake, `state.kept_harness_session("beta.1") == u` |
-| `test_an_unframed_start_gets_no_session` | `framed_chat` → `None` → `["claude", "-p", "x"]`, nothing recorded |
-| `test_the_operators_own_session_flag_wins` | rest `["--resume", "abc"]` → no `--session-id` word; the link unchanged |
-| `test_a_resume_hands_the_link_back` | link `u` recorded, `--resume` → `["claude", "--resume", u, "--name", "beta.1"]` |
-| `test_a_resume_with_no_link_starts_fresh_and_says_so` | no link, `--resume` → `--session-id` argv; stderr holds `"cannot be resumed here"` |
-| `test_codex_gets_nothing_fresh_and_resumes_by_its_report` | codex kind: fresh → `["codex"]`; link `s` + `--resume` → `["codex", "resume", "s"]` |
-| `test_a_fresh_start_forgets_the_old_conversation` | `conversation` recorded → gone inside the `execvpe` fake |
-| `test_an_exec_that_raises_restores_the_link_and_conversation` | link `old`, conversation `/c`; `execvpe` raises `OSError` → both restored |
-| `test_the_session_never_crosses_tmux` | `launcher.argv("claude", [], attended=True, resume=True)` holds `"--resume"` and no word matching a UUID; a `_launch` with tmux recorded holds `--session-id` in no argv |
+| `test_a_framed_claude_start_gets_a_fresh_uuid_and_its_id_as_name` | `cmd_frame_launch(profile="claude", rest=["--", "-p", "x"])` → `["claude", "--session-id", u, "--name", "beta.1", "-p", "x"]`, `uuid.UUID(u).version == 4`, the link is `u` inside the `execvpe` fake |
+| `test_every_start_clears_the_adoption` | `harness.pid` and `session.adopted` recorded → both gone inside the fake, for a fresh start and for `--resume` |
+| `test_an_unframed_start_gets_no_session` | `framed_chat` → `None` → `["claude", "-p", "x"]` |
+| `test_the_operators_own_session_flag_wins` | rest `["--resume", "abc"]` → no `--session-id`, the link unchanged |
+| `test_a_resume_hands_the_link_back` | link `u`, `--resume` → `["claude", "--resume", u, "--name", "beta.1"]` |
+| `test_a_resume_with_no_link_starts_fresh_and_says_so` | `"cannot be resumed here"` on stderr, and `--session-id` |
+| `test_a_fresh_codex_start_forgets_the_last_starts_link` | codex, link `s1` → inside the fake, no link and no conversation; `--resume` with `s1` → `["codex", "resume", "s1"]` |
+| `test_an_exec_that_raises_restores_everything` | link, conversation, harness pid, adoption all restored |
+| `test_the_session_never_crosses_tmux` | `launcher.argv("claude", [], attended=True, resume=True)` holds `--resume` and no UUID-shaped word; `_launch`'s recorded tmux argvs hold no `--session-id` |
 
-Class `WhatAHookRecords(PersonaIso, unittest.TestCase)` — `os.environ` patched `clear=True` with
-`CHARTER_SESSION_ID=beta.1`, `CHARTER_ROOT=<plane>` and the kind named per case:
+Class `ALinkFollowsOnlyTheChatsOwnHarness(PersonaIso, unittest.TestCase)` — `os.environ` patched
+`clear=True` with `CHARTER_SESSION_ID=beta.1`, `CHARTER_HARNESS` per case, `CLAUDE_PID` per case:
 
 | Case | Asserts |
 |---|---|
-| `test_claude_code_records_its_id_and_its_transcript` | kind `claude-code`, payload `{"session_id": "u1", "transcript_path": "/abs/t.jsonl"}` → link `u1`, `state.conversation("beta.1") == "/abs/t.jsonl"` |
-| `test_codex_records_what_it_reports_at_session_start` | kind `codex` → link and conversation recorded. Red at `5ad755d` (the gate returned) |
-| `test_a_report_replaces_a_chosen_id` | link `chosen`, payload `session_id` `reported` → `reported` |
-| `test_a_harness_started_inside_another_chats_shell_records_nothing` | identity kind `claude-code`, env `CHARTER_HARNESS=codex` → the link unchanged |
-| `test_an_id_that_could_be_read_as_a_flag_is_refused` | subTest over `"-rf"`, `"a b"`, `"x" * 200`, `""` → nothing written |
-| `test_a_relative_or_nul_path_is_refused` | subTest over `"t.jsonl"`, `"/a\x00b"`, `"/" + "a" * 5000` → no conversation |
-| `test_opencode_is_recorded_from_its_tool_hook_by_its_pane` | env `CHARTER_HARNESS=opencode`, `CHARTER_SESSION_ID=ses_abc` (the shim's overwrite), `TMUX_PANE=%4`, `TMUX=<srv>,1,0`; `beta.1` records pane `%4`, server `<srv>`, kind `opencode` → `hooks._record_reported_session({"session_id": "ses_abc"})` → link `ses_abc` |
-| `test_opencode_in_a_pane_charter_did_not_record_writes_nothing` | `TMUX_PANE=%9` → no link |
-| `test_the_hook_never_raises` | `state.record_harness_session` raises `RuntimeError` → both functions return `None` |
+| `test_the_first_report_of_the_chosen_id_adopts_its_pid` | link `u`, report `session_id=u`, `CLAUDE_PID=100`, `transcript_path=/abs/t` → `harness_pid == 100`, conversation `/abs/t` (C1) |
+| `test_a_resume_reporting_the_same_id_re_adopts` | adoption cleared by a start; report `u`, `CLAUDE_PID=200` → `harness_pid == 200` (C3) |
+| `test_clear_from_the_adopted_pid_moves_the_link` | adopted 100; report `v`, `CLAUDE_PID=100`, `source=clear` → link `v` (C6) |
+| `test_a_nested_harness_is_ignored` | adopted 100; report `w`, `CLAUDE_PID=300` → link `u`, conversation unchanged (C5) |
+| `test_a_report_without_claude_pid_after_adoption_is_ignored` | adopted 100; no `CLAUDE_PID` → unchanged |
+| `test_a_report_of_another_id_before_adoption_is_ignored` | link `u`, no adoption, report `w` → unchanged |
+| `test_a_start_that_chose_no_id_adopts_its_first_report` | no link; report `x`, `CLAUDE_PID=100` → link `x`, pid 100 |
+| `test_codex_adopts_the_first_report_of_a_start_only` | kind `codex`; report `s1` → link `s1`; report `s2` → still `s1`; a start clears adoption; report `s3` → `s3`. Red at `5ad755d` for the first report |
+| `test_a_harness_started_inside_another_chats_shell_records_nothing` | identity `claude-code`, env `CHARTER_HARNESS=codex` → unchanged |
+| `test_an_id_that_could_be_read_as_a_flag_is_refused` | `"-rf"`, `"a b"`, `"x" * 200`, `""` → nothing |
+| `test_a_relative_or_nul_path_is_refused` | `"t.jsonl"`, `"/a\x00b"`, a 5000-byte path → no conversation |
+| `test_opencode_is_recorded_from_its_tool_hook_by_its_pane` | `CHARTER_HARNESS=opencode`, `CHARTER_SESSION_ID=ses_abc…`, `TMUX_PANE=%4`, `TMUX=<srv>,1,0`; `beta.1` records pane `%4` on `<srv>`, kind `opencode` → link `ses_abc…`; a second report `ses_def…` → unchanged |
+| `test_a_pane_two_chats_record_resolves_to_none` | `beta.1` and `beta.2` both record `%4` on `<srv>` → `chat_in_pane` → `None`, nothing recorded |
+| `test_a_pane_charter_did_not_record_writes_nothing` | `%9` → nothing |
+| `test_the_hook_never_raises` | `state.record_harness_session` raises → both return `None` |
 
 Class `ResumeIsOfferedOnlyWhereTheConversationExists(PersonaIso, unittest.TestCase)`:
-
-| Case | Asserts |
-|---|---|
-| `test_a_named_transcript_that_is_a_file_resumes` | claude-code, link, `conversation` names a file in `self.tmp` → `conversation_exists` true, `leave._resume_clause(doomed) == leave.RESUMES`, `commands_frame._resumes(chat)` true |
-| `test_a_named_transcript_that_is_gone_reopens_empty` | the file is missing → `NO_RESUME_YET` |
-| `test_an_opencode_report_is_enough` | opencode, link, no conversation → resumes |
-| `test_no_link_is_never_a_resume` | codex, conversation file present, no link → does not resume |
-| `test_the_quit_summary_counts_what_can_resume` | two chats, one with a file and one without → `"1 of 2 can resume"` |
-| `test_a_reopen_hands_resume_to_the_launcher_not_rest` | `_reopen_one` with `cmd_launch` recorded → `rest == []`, `resume is True` |
+- **A named transcript that is a file resumes.** `conversation_exists`, `_resume_clause == RESUMES`,
+  and `_resumes` are all true.
+- **The C1 case: a link with no transcript file** → `NO_RESUME_YET`.
+- **The X1 case: a Codex chat with no link** → not resumable, and says `NO_RESUME_YET`.
+- **An opencode report is enough.**
+- **`test_opencode_resumes_only_in_its_recorded_directory`:** `c.cwd` outside the workspace, so
+  `_restore_root` moves it → `_reopen_args(...).resume is False`, and the warning says why.
+- **The quit summary counts what can resume:** one of two.
+- **A reopen hands `resume` to the launcher, not `rest`:** `rest == []`, `resume is True`.
 
 Class `TheLinkTravelsThroughTheRecord(PersonaIso, unittest.TestCase)`:
-- `test_a_quit_records_the_conversation` — `_record_the_plane` with a `Doomed(...,
-  conversation="/abs/t.jsonl")`, every field by keyword → the literal key `"conversation"` in
-  `reopen.json`.
-- `test_a_record_from_0_62_reads_as_no_conversation` — a chat without the key →
-  `read().all_chats()[0].conversation == ""`.
-- `test_a_restored_chat_has_its_link_before_tmux` — inside the `new-window` fake,
-  `kept_harness_session("beta.7") == "u"` and `conversation("beta.7") == "/abs/t.jsonl"`.
+- The literal key `"conversation"` in `reopen.json`.
+- A record from 0.62 reads as `""`.
+- A restored chat has its link and conversation before tmux (inside the `new-window` fake).
 
-**`tests/test_a_launch_hands_the_harness_its_session_on_a_real_server.py`** — real tmux.
-- **Skip rules, sockets, `_spawn_gather` stand-in, recorder on the client's `PATH` as `claude`,
-  and `CHARTER_ROOT`:** exactly as
-  `tests/test_a_chat_pane_starts_as_charter_and_becomes_the_harness.py`.
-- Class `TheSessionReachesTheHarnessAndNotTmux(PersonaIso, unittest.TestCase)`.
-- `test_the_harness_argv_carries_the_chosen_id_and_tmux_never_saw_it` — the recorder's argv holds
-  `--session-id <u> --name <fid>`, and `display-message -p -t <pane> '#{pane_start_command}'` does
-  not hold `u`.
+**`tests/test_a_launch_hands_the_harness_its_session_on_a_real_server.py`** — real tmux, with the
+fixtures of `tests/test_a_chat_pane_starts_as_charter_and_becomes_the_harness.py`:
+- `test_the_harness_argv_carries_the_chosen_id_and_tmux_never_saw_it` — the recorder argv holds
+  `--session-id <u> --name <fid>`, and `#{pane_start_command}` does not hold `u`.
 - `test_a_reopened_chat_comes_back_under_its_own_id`:
-  - two chats, then `_record_the_plane` and `_stop_chats` as `cmd_quit` runs them;
+  - two chats, then `_record_the_plane` and `_stop_chats`;
   - `state.reap`;
-  - `_reopen_one` for each → `r.fid == c.chat` for both;
-  - the recorder's second argv holds `--resume <u>`.
+  - `_reopen_one` for each → `r.fid == c.chat`, and the second recorder argv holds `--resume <u>`.
 
-**Existing tests this task changes** (a floor: CI's four `test (3.x)` jobs name the rest, and each
-is changed in this PR):
-- `tests/test_frame_state.py::ChatIdIsAllocated` — every case that expects an ordinal back after
-  its directory is removed now expects the next one.
-  `test_a_taken_ordinal_is_skipped_rather_than_adopted` stays as a pin.
-- `tests/test_frame_state.py::AClaimSurvivesASiblingsReap` — re-read. The claim-marker race stays;
-  any assertion that the reaped name is claimed again flips.
+**Existing tests this task changes.** CI's four jobs name the rest; each is changed in this PR.
+
+*Premise gone — ordinals are no longer recycled:*
+- `tests/test_a_reaped_chat_leaves_its_session_behind.py::ARecycledOrdinalStartsFromNothing` (`:96`,
+  `:110`, `:130`) asserts the reaped ordinal comes back. It is restaged onto a reopen that keeps its
+  id through `claim_chat_id`, which is the one way a directory's markers can meet the same id again.
+  `_forget_session`'s guard stays pinned.
+- `tests/test_a_chat_belongs_to_its_workspace_for_life.py::TheOtherDoorMovesNoChatEither::test_a_pointer_left_behind_by_a_reaped_chat_decides_nothing`
+  (`:378`) — its docstring's `lowest free ordinal` premise; the planted relaunch becomes a kept id.
 - `tests/test_a_chats_harness_session_outlives_its_gauge.py::ItDoesNotOUTLIVETheChatItself::test_a_recycled_ordinal_cannot_inherit_the_previous_chats_durable_id`
-  — no recycled ordinal exists. Restage it: *a reaped chat's id is never handed out, so its
-  durable id has no heir*.
-- `tests/test_a_chats_harness_session_outlives_its_gauge.py::AHookIsTheWriterNow` — the case
-  asserting a non-Claude harness records nothing flips for Codex.
-  `test_a_claude_code_hook_records_the_id_reopen_asks_with` stays.
+  (`:198`) — restaged on a kept id.
 - `tests/test_a_reopen_says_what_it_cannot_bring_back.py::WhatAReopenPutsBack::test_the_manifest_outranks_a_stale_pointer_left_on_a_recycled_ordinal`
-  — restaged on a kept id. The resume-sentence cases for `opencode records no session id` flip.
-- `tests/test_a_key_cycles_the_tab_strips_height.py::TheHeightIsRememberedForThisFrameAndNoLonger::test_a_new_frame_claiming_a_recycled_id_does_not_inherit_it`
-  — kept as the reopen-into-a-surviving-directory pin, docstring reworded.
+  (`:470`) — restaged on a kept id.
+- `tests/test_the_branch_not_taken_is_still_a_promise.py::RestoringAChatsRecordsChecksTheNameItWasGiven::test_a_recycled_ordinal_moves_no_transcript_onto_itself`
+  (`:873`) — the equal-name case is now every reopen; renamed.
+- Kept as reopen-into-its-own-directory pins, docstrings reworded:
+  - `tests/test_a_key_cycles_the_tab_strips_height.py::TheHeightIsRememberedForThisFrameAndNoLonger::test_a_new_frame_claiming_a_recycled_id_does_not_inherit_it` (`:172`);
+  - `tests/test_the_repo_table_scrolls_and_selects.py::ASelectionBelongsToOneFrame::test_a_new_frame_claiming_a_recycled_id_does_not_inherit_a_selection` (`:1090`).
+- `tests/test_frame_state.py`:
+  - `ChatIdIsAllocated::test_giving_up_is_bounded_rather_than_a_spin` — with traces, a taken name no
+    longer exhausts the loop. It is restaged with `config.claim_private_dir` always raising
+    `FileExistsError`, and `_CHAT_ORDINAL_MAX` patched to 2.
+  - `ChatIdIsAllocated::test_a_taken_ordinal_is_skipped_rather_than_adopted` stays as a pin.
+  - Docstrings re-read for recycling prose: `AClaimSurvivesASiblingsReap` (`:346`), `ClearExit`
+    (`:669`), `ClearRespawn` (`:809`), `TheFramesOwnWorkspace::test_a_relaunch_on_the_same_id_overwrites_rather_than_keeps`
+    (`:1115`).
+- `tests/test_frame_launcher.py::Launch::test_a_launch_claims_an_id_no_directory_already_holds`
+  (`:4217`) — its docstring's claim-by-`mkdir` paragraph gains the mark.
+- `tests/test_a_chat_records_where_it_was_started.py::TheLauncherSTailIsWhereAReopenDiffers::test_a_launch_whose_plane_was_quit_names_the_command_that_undoes_it`
+  (`:356`) — a reopen now gets the SAME ids by design; re-read its gate.
+
+*The link and resume:*
+- `tests/test_a_chats_harness_session_outlives_its_gauge.py::AHookIsTheWriterNow` — the non-Claude
+  case flips for Codex. `test_a_claude_code_hook_records_the_id_reopen_asks_with` (`:281`) sets
+  `CLAUDE_PID` and a chosen link.
+- `tests/test_a_reopen_says_what_it_cannot_bring_back.py` and
+  `tests/test_what_a_quit_says_is_spelled_where_it_is_asserted.py` — the opencode resume sentence.
 - `tests/test_a_second_launch_focuses_instead_of_dragging.py::TheLaunchTakesTheDecision::test_a_focused_launch_claims_no_ordinal_and_makes_no_directory`
-  — also asserts `chat-ids.json` was not written.
+  — also asserts `chat-ids.json` is not written.
 - `tests/test_a_quit_records_the_plane_before_it_kills.py::WhatIsOnDiskIsAFormatAndNotAnImplementationDetail`
   — gains the `conversation` key.
-- `tests/test_the_launcher_becomes_the_profile.py::TheLauncher::test_the_pane_command_resolves_the_profile_by_name`
-  — the exec argv now holds `--session-id <u> --name beta.1` before `-p x`.
-  `test_the_profile_and_kind_ride_the_exec_not_tmux` is unchanged, because its `rest` carries
-  `--resume`.
-- `tests/test_quit_and_reopen_on_a_real_tmux.py::ARealQuitStopsRealChats` — re-read for id
-  assertions after reopen.
-- `tests/test_what_a_quit_says_is_spelled_where_it_is_asserted.py` — the opencode resume sentence.
+- `tests/test_the_launcher_becomes_the_profile.py`:
+  - `ThePaneCommandResolvesTheProfileByName::test_the_pane_execs_the_profile_it_was_named` (`:549`) —
+    the exec argv gains `--session-id <u> --name <fid>` before its rest;
+  - `TheLauncherBecomesTheProfile::test_the_profile_and_kind_ride_the_exec_not_tmux` (`:136`) is
+    unchanged, because its `rest` carries `--resume`;
+  - `TheLauncherBecomesTheProfile::test_an_exec_that_fails_after_on_exec_undoes_it` (`:188`) — the
+    wrapper's undo runs as well as the caller's.
+- `tests/test_quit_and_reopen_on_a_real_tmux.py::ARealQuitStopsRealChats` — id assertions after a
+  reopen.
+
+*Grep before finishing:* `grep -rn "recycl\|lowest free\|fresh ordinal\|same NAME back\|same ids back\|must be recycled" tests/ charter/`,
+in both directions. A hit about pids or pane ids is not this task's.
 
 ### Implementation steps
 
-- [ ] Step 0: C1–C4, X1–X2, O1–O2. Record the table; apply the stop rule.
-- [ ] Confirm the controller's ruling on open question 1 is in the task issue.
+- [ ] Step 0 is taken: copy its table into the PR description.
 - [ ] Write the three new modules and the changed cases.
 - [ ] Run `( unset TMUX TMUX_PANE; python3 -m unittest tests.test_a_chat_id_is_never_handed_out_again tests.test_a_tab_is_linked_to_one_harness_session tests.test_a_launch_hands_the_harness_its_session_on_a_real_server )`
-      — expect import errors and assertion failures; note the counts for the PR.
-- [ ] `state.py`: the lock, mark, traces, `new_chat_id`, `claim_chat_id`, `ordinal_of`,
-      `record_conversation`, `chat_in_pane`, `SESSION_ID_RE`.
+      — expect failures; note the counts.
+- [ ] `state.py`: lock through `config.open_for`, mark before claim, digits bound and ceiling,
+      traces, `claim_chat_id`, `reap_chat`, the link and adoption records, `chat_in_pane`.
 - [ ] Harness members and overrides; `leave.resumable_harness`, `conversation_exists`,
       `_resume_clause`, `summary`, `Doomed.conversation`; `reopen.Chat.conversation`.
-- [ ] `launcher.session_argv`, `attempt(resume=)`, `argv(resume=)`; `frame-launch --resume`.
-- [ ] `hooks._record_harness_session`'s gate and conversation; `_record_reported_session` beside
-      every `_turn_bump()`.
-- [ ] `_launch`'s kept-id claim; `_restore_recorded_chat`; `_reopen_one`/`_reopen_args`;
-      `_record_the_plane`.
-- [ ] Run `grep -rn "recycl\|lowest free\|fresh ordinal\|same NAME back\|same ids back" charter/ tests/ docs/frame.md`
-      and reword every hit or restage its test, in both directions (`assertIn` and `assertNotIn`).
-- [ ] Re-run the three modules and every changed existing module; green.
-- [ ] Hand deletion check: no guard is added under `tests/`; say so in the PR.
-- [ ] ADR 0024, CONTEXT.md, docs, news. Commit; push; read the four `test (3.x)` jobs and the
-      sweep summary; a test for each survivor.
+- [ ] `launcher.session_argv`, the `on_exec` wrapper, `argv(resume=)`; `frame-launch --resume`.
+- [ ] `hooks`: the registry gate, `_record_harness_report` (adopt, follow, ignore; first report per
+      start), `_record_reported_session`.
+- [ ] `_launch`'s `_claim_kept_id`; `_restore_recorded_chat`; `_reopen_one`/`_reopen_args` with
+      `resume_needs_cwd`; `_record_the_plane`.
+- [ ] The grep above; reword each hit or restage its test.
+- [ ] Re-run every new and changed module, plus `tests.test_plane_spawn_guard`; green.
+- [ ] ADR 0024, CONTEXT.md, docs, news. Commit, push, read CI's four `test (3.x)` jobs and the
+      sweep summary, and add a test per survivor.
 
 ### Docs and news
 
 - **`docs/frame.md`.**
-  - `## Leaving` (`:1188-1193`): a reopened chat comes back under the id it had, and a closed
-    chat's id is never handed out again, so no new chat is offered an earlier chat's transcript.
+  - `## Leaving` (`:1188-1193`): a reopened chat comes back under its own id, and a closed chat's id
+    is never handed out again.
   - The quit example (`:1167-1176`): the opencode row reads `conversation resumes`.
-  - `**Resume is Claude Code only…**` (`:1325-1334`) becomes *resume, per harness*:
-    - Claude Code by the id charter handed it;
-    - Codex by the id its SessionStart reported;
-    - opencode by the id its first tool call reported;
-    - offered only when the conversation exists;
-    - Step 0's failures named.
-- **`docs/harnesses.md`** `## What each harness lets charter offer` (`:105`): a resume row per
-  harness, with Step 0's versions and readings, and the session-name limit.
-- **`CONTEXT.md`** **Chat** (`:83-88`): *handed out once for the life of the plane* and *linked to
-  exactly one harness session*.
-- **`docs/adr/0024-a-chat-id-names-one-chat-and-one-harness-session.md`**: the spec's draft, with
-  Step 0's readings in *Consequences*.
+  - `**Resume is Claude Code only…**` (`:1325-1334`) becomes the table below, in prose.
+- **`docs/harnesses.md`** `## What each harness lets charter offer` (`:105`) gains the resume table,
+  with Step 0's versions:
+
+  | Harness | Link | Offered when | Resumes with | Limits |
+  |---|---|---|---|---|
+  | Claude Code 2.1.272 | the id charter hands it; follows `/clear`; ignores a nested `claude` | after the first prompt (the transcript exists) | `--resume <id> --name <title · id>` | the in-session `/resume` hides the current session; the name shows in a fresh `claude --resume` picker, and in `/resume` from every other session |
+  | Codex 0.147.0 | the first id it reports in each start | after its first turn (it reports nothing before) | `codex resume <id>` | after `/new`, resume offers the start's first conversation; read from source, not run |
+  | opencode 1.18.23 | the first id its tool hooks report in each start | after its first tool call | `opencode -s <id>`, in the chat's recorded directory | a new session inside opencode is not followed; a chat moved to another directory reopens empty; read from source, not run |
+
+- **`CONTEXT.md`** **Chat** (`:83-88`): *handed out once* and *linked to exactly one harness session*.
+- **`docs/adr/0024-…`**: the spec's draft.
 - **News** `docs/news/unreleased-a-chat-id-is-never-handed-out-again.md`:
 
   ```
@@ -757,14 +802,13 @@ is changed in this PR):
   ---
   ```
 
-  Body:
-  - the #1101 failure in the operator's terms;
-  - what now holds: ids only grow, a reopened chat keeps its id, every tab is linked to one
-    session, resume per harness;
-  - the limits: an opencode conversation that never ran a tool, and a forged hook.
+  The body covers:
+  - #1101;
+  - ids only grow, and a reopened chat keeps its id;
+  - one session per tab, and that `/clear` is followed;
+  - the resume table's limits.
 
-  No `adopt:`, unless the ruling on open question 1 was (B), which moves the shim and needs
-  `adopt: reinit`.
+  No `adopt:`.
 
 **Suggested PR title:** A chat id is never handed out again, and every tab is linked to the harness session it holds (#1101)
 
@@ -772,512 +816,550 @@ is changed in this PR):
 
 ## Task 2: A harness that ends keeps its tab
 
-**Depends on:** task 1 on `main`. The operator's answer to the spec's open question 5 (the escape
-hatch) is in the task issue before code.
+**Depends on:** task 1 on `main`. **Ruled before code:** open question 5 — the escape hatch keeps today's
+ending.
 
 ### Step 0 — Measure first. A failed reading stops this task.
 
-**Where.** Throwaway `-S /tmp/cp-t2-<slug>/s` servers started `-f /dev/null`. On tmux 3.7c, and
-at the 3.2 floor through a directory holding a `tmux` symlink first on `PATH`: the convention
-`tests/test_a_real_click_on_a_real_tab_bar_switches.py:34` records. Both arms:
-- **charter's own server layout:** `layout.session_argv` for a first chat, `chat_window_argv` for
-  a second;
-- **the operator's:** `layout.window_argv`, `_remain_on_exit_argv`, `layout.respawn_argv`.
+**Where.** Throwaway `-S /tmp/cp-t2-<slug>/s` servers, started `-f /dev/null`, on tmux 3.7c and at the
+3.2 floor. The 3.2 binary comes first on `PATH` from a directory holding a `tmux` symlink, the convention
+`tests/test_a_real_click_on_a_real_tab_bar_switches.py:34` records.
 
-A recorder stands in for the harness. It exits with `$EXIT_WITH`, or is killed from outside with
-`TERM` or `KILL`.
+Two arms:
+- **charter's own layout:** `layout.session_argv` for a first chat and `chat_window_argv` for a second,
+  with `_plane_option_argv`;
+- **the operator's:** `layout.window_argv`, `_remain_on_exit_argv`, `_plane_option_argv(window=True)`
+  and `layout.respawn_argv`.
+
+A recorder stands in for the harness. It exits with `$EXIT_WITH`, or is killed from outside with `TERM`
+or `KILL`.
 
 | # | Reading | Pass when |
 |---|---|---|
-| E1 | `_pane_died_write_hook_argv` + the new `pane-died[1]` constant action, with a stand-in `frame-ended` that appends `#{@charter_chat}` and its pid to a file; recorder exits 0, 3, `TERM`, `KILL` | the stand-in runs once per death with the chat id expanded; the exit file holds 0, 3, 1, 1; the window is still listed |
-| E2 | from that stand-in: `layout.respawn_argv(..., harness_argv=<a stand-in launcher>)` against the dead pane | the pane id, window id, `@charter_chat`, `show-hooks -p -t <pane>` (both hooks) and `remain-on-exit` are unchanged; the new process's pid is `#{pane_pid}`; `launcher.framed_chat()` run in it answers the chat on both servers; `$CHARTER_SESSION_ID` in it is the chat |
-| E3 | `split-window -t <dead pane> -l 6 <stand-in drawer>` | the split succeeds; the harness pane's `#{pane_dead}` stays 1; after `kill-pane` of the drawer the dead pane is still listed, and by eye still shows its last lines |
+| E1 | the write hook plus the new `pane-died[1]` constant action, with a stand-in `frame-ended` that appends `#{@charter_chat}` and its pid; the recorder exits 0, 3, `TERM`, `KILL` | the stand-in runs once per death with the id expanded; the exit file holds 0, 3, 1, 1; the window is still listed |
+| E2 | from that stand-in: `respawn-pane` **without `-k`** on the dead pane | the pane id, window id, `@charter_chat`, both pane hooks and `remain-on-exit` are unchanged; the new pid is `#{pane_pid}`; `launcher.framed_chat()` in it answers the chat on both servers; `$CHARTER_SESSION_ID` in it is the chat |
+| E2b | `respawn-pane` without `-k` on a **live** pane | tmux refuses it (`pane … still active`), rc ≠ 0, and the live process is untouched |
+| E3 | `split-window -t <dead pane> -l 6 -P -F '#{pane_id}' <stand-in>`, then `set-option -p -t <that id> @charter_drawer <chat>` | the split succeeds; the dead pane's `#{pane_dead}` stays 1; one `list-panes -a -F '#{pane_id}\t#{pane_dead}\t#{@charter_chat}\t#{@charter_plane}\t#{@charter_drawer}'` shows the drawer's marker on the drawer alone, `@charter_chat` and `@charter_plane` on both panes |
 | E4 | a client attached over a pty to a session whose only window's pane has ended and been respawned | `attach` has not returned after 3 s, and returns within 1 s of that window's `kill-window` |
-| E5 | operator arm: `_wait_for_harness` on the recorder, then `respawn_argv` again, then `_wait_for_harness` | the first returns the code; the second waits on the new process and returns its code |
-| E6 | a respawn of a harness pane whose window has panels split off it | every panel is unchanged, and `select-pane -t <harness pane>` still gives it focus |
+| E5 | operator arm: `_wait_for_harness`, respawn, `_wait_for_harness` | the second wait waits on the new process |
+| E6 | a respawn of a harness pane whose window has panels | every panel is unchanged, and `select-pane -t <harness pane>` still gives it focus |
+| E7 | a pane whose stdin ends while a raw-mode Python stand-in reads it (the server killed, then the pane) | the stand-in's read answers end of input — not an Escape byte |
 
 E1's `TERM` and `KILL` rows also run on CI's Linux runner, as
-`AnExitOnARealServer.test_a_signal_death_ends_the_tab` (the spec's open question 4). The PR quotes
-that run.
+`AnExitOnARealServer.test_a_signal_death_ends_the_tab` (open question 4). The PR quotes that run.
 
-**Stop rule, written into the dispatch.** If any criterion fails on any version or arm, the
-implementer:
-- stops before any code;
-- writes the table of readings (version, arm, value) into the task issue;
-- reports to the controller.
+**Stop rule, written into the dispatch.** If any criterion fails on any version or arm, the implementer
+stops before any code, writes the table of readings into the task issue, and reports to the controller.
 
 ### Files
 
-- Create `charter/frame/ended.py` and the two Task 2 test modules.
-- `charter/commands_frame.py`:
-  - `_pane_died_teardown_hook_argv` (`:1421-1459`) becomes `_pane_died_ended_hook_argv`. Its
-    docstring keeps the array-replacement measurement and the install order.
-  - `_launch` (`:6245-6263`):
-    - the batch installs the ended hook where the teardown hook was;
-    - the refusal (`:6362-6374`) becomes `ENDED_HOOK_NOT_INSTALLED`;
-    - after `_arm_panel_respawn` (`:6386`): `state.record_drawn(fid)`, then
-      `_query_pane_dead_status` once more; a dead pane → `ended.present(fid, socket=socket)`
-      in-process.
-  - `_launch_in_operator_tmux` (the wait at the end of the function, after `_drop_panels`):
-    loop while the window stands. When `_wait_for_harness` returns a code for a drawn, unclosed
-    chat, `state.record_exit`, then `ended.present(fid, socket=socket)`, then wait again. The
-    early path before `_draw_panels` is unchanged.
-  - `cmd_close` (`:10491-10564`): also `state.clear_ended`, `ended.drop_drawer`.
-  - `_record_the_plane` (`:10368-10376`): `ended=c.ended`.
-  - `_reopen_one` (`:11278-11290`): an ended record → `_reopen_args(..., select=True, ended=True,
-    start=p.name)`, with no `resume`.
-  - `_launch`'s selector branch: `launcher.argv_select(start, ended=...)`, and for an ended
-    restore `state.record_ended(fid)` before tmux, never `record_waiting`.
-- `charter/frame/launcher.py`:
-  - `argv_select` (`:207-221`): `ended: bool = False` adds `--ended`.
-  - `resume_row(fid)`.
-  - `_select_in_pane` (`:707-769`) passes `resume=resume_row(fid)` when `args.ended`. A
-    `Choice(resume=True)` → `attempt(p, [], fid=fid, attended=True, resume=True, on_exec=…)`.
-    Esc with `args.ended` → `commands_frame.cmd_close(SimpleNamespace(chat_id=fid, chat=fid))`,
-    never `_close_the_cancelled_chat`.
-  - `_picked` (`:616-653`): `clear_ended`, `clear_exit`, `ended.drop_drawer`; the undo writes
-    `record_ended` back.
-  - `cmd_frame_launch`: `args.ended`.
-- `charter/frame/selector.py`: `RESUME_ID`, `Resume`, `Choice.resume`, and `resume=` on `rows`
-  (`:200-285`), `opens_on` (`:324-336`) and `pick` (`:361-391`). `FOOTER_ENDED` names Esc as
-  closing the tab.
-- `charter/frame/state.py` — beside `record_closed` (`:2234`): `record_drawn`/`was_drawn`,
-  `record_ended`/`is_ended`/`clear_ended`, `record_drawer`/`drawer`. Each is one file in the chat's
-  directory, in `_CLOSED_FILE`'s shape and promise.
-- `charter/frame/chats.py` — `Chat.ended: bool = False` (`:72-90`); `roster` (`:425-451`) fills it.
-- `charter/frame/slots.py` — `ENDED_MARK = "x"`. `_chats_strip` (`:4577-4603`) hands the ended set
-  to the bar alongside the working set (`working_chats`, `:4555`), which draws the mark in the
-  spinner's cell and the name dim.
-- `charter/frame/tabmenu.py` — `CLOSE_NOW_ID`, `close_now_title`; `catalogue` (`:172-237`),
-  `chose` (`:263-301`), `opens` (`:304-326`); the module docstring's row paragraph.
-- `charter/frame/leave.py`:
-  - `Doomed.ended`; `plan` fills it with `state.is_ended`.
-  - `_ended` (`:380-388`) says `ended — comes back ended; resume offered` or `ended — comes back
-    ended; nothing to resume`.
-  - `needs_confirming`; `CLOSE_NOW_ID`.
-  - `open_rows` (`:463-503`) offers the close row as an action when the palette's own chat does
-    not need confirming; `is_row` and `goes_through` know it.
-- `charter/frame/reopen.py` — `Chat.ended: bool = False`; `_chat` reads `raw.get("ended") is True`.
-- `charter/cli.py`:
-  - `frame-ended` (`--chat`), added to `_core_commands` (`:865-871`);
-  - `frame-launch --ended` (`:1195-1210`);
-  - `frame-palette --ended` (`:970-991`).
-- `docs/adr/0018-charter-may-run-the-harness-but-never-draws-it.md` — the amendment, appended.
-- `docs/superpowers/specs/2026-08-30-charter-opens-like-an-ide.md` — dated notes at §4j
-  (`:469-474`) and §5 (`:521-522`).
-- Docs and news below.
+- **Create** `charter/frame/ended.py` and the two Task 2 test modules.
+- **`charter/frame/layout.py`** — `respawn_argv` (`:1227`) gains `kill: bool = True`. The ended step
+  passes `False`. The operator's placeholder respawn keeps `-k`.
+- **`charter/frame/overlay.py`**:
+  - `LEFT_KEY`, `LEFT_EOF` and `Surface.left: str = ""`;
+  - `run` (`:865-905`) sets `left = LEFT_KEY` before returning `None` for a `CANCEL`, and
+    `left = LEFT_EOF` before returning `None` at end of input;
+  - every existing caller's `None` is unchanged.
+- **`charter/commands_frame.py`**:
+  - **`_pane_died_ended_hook_argv`** is new, beside `_pane_died_teardown_hook_argv` (`:1421-1459`),
+    which stays.
+  - **`_launch` (`:6245-6263`):**
+    - installs the ended hook when `p is not None`, else today's teardown hook;
+    - `ENDED_HOOK_NOT_INSTALLED` replaces the refusal sentence (`:6362-6374`) for a profile chat;
+    - after `_arm_panel_respawn` (`:6386`), a profile chat gets `state.record_drawn(fid)`, then
+      `_query_pane_dead_status` again, and a dead pane → `record_exit` and `ended.present`.
+  - **`_launch_in_operator_tmux`** — the wait after `_drop_panels` becomes a loop for a profile chat.
+    The escape hatch and the path before `_draw_panels` are unchanged.
+  - **`cmd_close` (`:10491-10564`)** also runs `state.clear_ended` and `ended.drop_drawer`.
+  - **`_record_the_plane` (`:10337-10376`):**
+    - `ended=c.ended`;
+    - no `_capture_transcript` for an ended chat, which names its existing `<id>.transcript` the way
+      `capture=False` does (`:10353-10360`).
+  - **`_reopen_one` (`:11278-11290`)** sends an ended record to `_reopen_args(..., select=True,
+    ended=True, start=p.name, profile=p.name)`.
+  - **`_launch`'s selector branch** hands tmux `launcher.argv_select(start, ended=…)`. For an ended
+    restore, before tmux, it runs `state.claim_ended(fid)`, `state.record_profile(fid, p.name)` and
+    `state.record_picked_kind(fid, p.harness)`, and never `record_waiting`.
+- **`charter/frame/launcher.py`**:
+  - **`argv_select` (`:207-221`)** gains `ended: bool = False` (adds `--ended`) and `fresh: bool =
+    False` (adds `--fresh`).
+  - **`resume_row(fid)`** is new.
+  - **`attempt`'s `on_exec` wrapper** (task 1) also calls `ended.reset(fid)`; its undo calls
+    `state.claim_ended(fid)` when it was ended.
+  - **`_select_in_pane` (`:707-769`)**, when `args.ended`:
+    - passes `resume=None if args.fresh else resume_row(fid)`;
+    - on `Choice(resume=True)` → `attempt(p_of_chat, [], …, resume=True)`;
+    - on a real Esc (`selector.KEY_CANCEL`) → `commands_frame.cmd_close` in-process;
+    - on `selector.END_OF_INPUT` → return `selector.CANCELLED_EXIT`, having written nothing.
+
+    A pane that never started keeps `_close_the_cancelled_chat` for both.
+  - **`cmd_frame_launch`** reads `args.ended` and `args.fresh`.
+- **`charter/frame/selector.py`**:
+  - `RESUME_ID`, `Resume`, `Choice.resume`;
+  - `KEY_CANCEL` and `END_OF_INPUT`, two sentinels `pick` answers where it answered `None`, decided
+    from `Selector.left`;
+  - `resume=` on `rows` (`:200-285`), `opens_on` (`:324-336`) and `pick` (`:361-391`);
+  - `FOOTER_ENDED`.
+
+  `_select_in_pane` is `pick`'s only caller.
+- **`charter/frame/state.py`**, beside `record_closed` (`:2234`):
+  - `record_drawn`/`was_drawn`;
+  - `claim_ended` (with `config.create_for`) / `is_ended` / `clear_ended`;
+  - `record_drawer`/`drawer`.
+- **`charter/frame/chats.py`** — `Chat.ended`; `roster` fills it.
+- **`charter/frame/slots.py`** — `ENDED_MARK = "x"`. `_chats_strip` (`:4577-4603`) hands the ended set
+  beside the working set (`working_chats`, `:4555`).
+- **`charter/frame/tabmenu.py`** — `CLOSE_NOW_ID`, `close_now_title`; `catalogue`, `chose`, `opens`.
+  The close row stays last.
+- **`charter/frame/leave.py`**:
+  - `Doomed.ended`, the ended note (`_ended`, `:380-388`);
+  - `needs_confirming`, `CLOSE_NOW_ID`;
+  - `open_rows` (`:463-503`) keeps its order, with *chat: close* last, and swaps the close doorway
+    for `CLOSE_NOW_ID` when the palette's chat needs no confirming.
+- **`charter/frame/reopen.py`** — `Chat.ended: bool = False`.
+- **`charter/cli.py`** — `frame-ended` (`--chat`), added to `_core_commands` (`:865-871`);
+  `frame-launch --ended --fresh`; `frame-palette --ended`.
+- **Docs** — `docs/adr/0018-…` (the amendment); the IDE spec's §4j and §5 notes; docs and news below.
 
 ### Interfaces
 
 **Consumes:**
 - From task 1:
   - `leave.conversation_exists`;
-  - `launcher.attempt(..., resume=)`, `argv(..., resume=)`;
-  - `state.kept_harness_session`, `state.conversation`;
-  - `reopen.Chat.conversation`.
+  - `launcher.attempt(..., resume=)` and its `on_exec` wrapper;
+  - `state.kept_harness_session`, `conversation`;
+  - `reopen.Chat.conversation`;
+  - `Harness.resume_needs_cwd`.
 - On `main`:
-  - `layout.respawn_argv(*, socket, harness_pane, env, cwd, harness_argv)`;
-  - `commands_frame._frame_identity_env`, `_guest_harness_env`, `_query_pane_dead_status`
-    (`:1742`), `_repaint_the_other_strips` (`:10661`), `_as_a_drawer` (`:9358`),
-    `_say_on_screen` (`:9713`);
-  - `palette.Palette`, `palette.own_the_tty`; `overlay.Row`;
-  - `tabmenu.handback` (`:360`);
-  - `util.self_relaunch_argv`; `tmuxctl.PANE_ID_RE`.
+  - `layout.respawn_argv`;
+  - `commands_frame._frame_identity_env`, `_guest_harness_env`, `_query_pane_dead_status` (`:1742`),
+    `_repaint_the_other_strips` (`:10661`), `_this_plane` (`:1315`), `_PLANE_OPTION`, `_CHAT_OPTION`;
+  - `palette.Palette`, `own_the_tty`; `tabmenu.handback` (`:360`);
+  - `tmuxctl.live_pane_by_pid` (`:549`), `PANE_ID_RE`; `config.create_for`.
 
 **Produces:**
 
 ```python
 # charter/frame/state.py
-def record_drawn(fid: str) -> None: ...   # the launch finished laying the chat out
+def record_drawn(fid: str) -> None: ...
 def was_drawn(fid: str) -> bool: ...
-def record_ended(fid: str) -> None: ...
+def claim_ended(fid: str) -> bool: ...    # config.create_for(<dir>/ended); True only for the first caller
 def is_ended(fid: str) -> bool: ...
 def clear_ended(fid: str) -> None: ...
-def record_drawer(fid: str, pane: str) -> None: ...   # refuses a pane outside tmuxctl.PANE_ID_RE
+def record_drawer(fid: str, pane: str) -> None: ...   # held to tmuxctl.PANE_ID_RE
 def drawer(fid: str) -> str | None: ...
+
+# charter/frame/overlay.py
+LEFT_KEY, LEFT_EOF = "key", "eof"
+# Surface.left: str = ""   — set by run() before it answers None
+
+# charter/frame/layout.py
+def respawn_argv(*, socket, harness_pane, env, cwd, harness_argv, kill: bool = True) -> list[str]: ...
 
 # charter/frame/ended.py
 CLEAN = 0
 RESUME_ID, FRESH_ID, CLOSE_ID = "ended:resume", "ended:fresh", "ended:close"
+DRAWER_OPTION = "@charter_drawer"
 DRAWER_ROWS = 6
-def present(fid: str, *, socket: str) -> str: ...   # "selector" | "drawer" | "" (did nothing); never raises
+PROOF_FORMAT = "#{pane_id}\t#{pane_dead}\t#{@charter_chat}\t#{@charter_plane}\t#{@charter_drawer}"
+class Proof(NamedTuple):
+    harness: str               # the proven harness pane id, or ""
+    harness_dead: bool
+    drawers: tuple[str, ...]   # proven drawer pane ids
+def proof(fid: str, *, socket: str) -> Proof | None: ...   # ONE list-panes; None when the server did not answer
+def present(fid: str, *, socket: str) -> str: ...          # "selector" | "drawer" | ""; never raises
+def reset(fid: str) -> None: ...                            # clear ended, exit, and a proven drawer
+def drop_drawer(fid: str) -> None: ...                      # kill-pane only a proven drawer
 def drawer_rows(fid: str) -> tuple[overlay.Row, ...]: ...
 def choose(row, fid: str) -> None: ...
-def drop_drawer(fid: str) -> None: ...
-def draw(args) -> int: ...          # the drawer pane's own process; always 0
-def cmd_frame_ended(args) -> int: ...   # always 0 — a run-shell child's non-zero prints into the pane
+def draw(args) -> int: ...          # the drawer's own process; always 0
+def cmd_frame_ended(args) -> int: ...   # always 0
 
 # charter/frame/selector.py
 RESUME_ID = "resume:"
 FOOTER_ENDED = "  up/down move   enter start   esc close this tab"
+KEY_CANCEL = object()      # a real Esc
+END_OF_INPUT = object()    # the pane's input ended
 class Resume(NamedTuple):
-    title: str    # "resume <session name>"
-    note: str     # "<kind> · session <first 8 of the link>"
+    title: str
+    note: str
 class Choice(NamedTuple):
     profile: str
     resume: bool = False
 def rows(have, *, cwd, start=None, after=None, resume: Resume | None = None) -> tuple[overlay.Row, ...]: ...
 def opens_on(listed, start, *, resume: Resume | None = None) -> str: ...
-def pick(*, cwd, root, start=None, after=None, resume: Resume | None = None,
-         fd=None, out=None) -> Choice | None: ...
+def pick(*, cwd, root, start=None, after=None, resume: Resume | None = None, fd=None, out=None): ...
+    # -> Choice | KEY_CANCEL | END_OF_INPUT
 
 # charter/frame/launcher.py
-def argv_select(start: str | None, *, ended: bool = False) -> list[str]: ...
+def argv_select(start: str | None, *, ended: bool = False, fresh: bool = False) -> list[str]: ...
 def resume_row(fid: str | None) -> "selector.Resume | None": ...
 
 # charter/frame/leave.py
 CLOSE_NOW_ID = "leave:close:now"
-def needs_confirming(chat: str) -> bool: ...   # not state.is_ended(chat) and not state.is_waiting(chat)
-class Doomed(NamedTuple): ...; ended: bool = False
-
-# charter/frame/reopen.py / chats.py
-class Chat(NamedTuple): ...; ended: bool = False
+def needs_confirming(chat: str) -> bool: ...
+# Doomed / reopen.Chat / chats.Chat: ended: bool = False
 
 # charter/frame/slots.py
 ENDED_MARK = "x"
-
 # charter/frame/tabmenu.py
 CLOSE_NOW_ID = "tab:close-now"
-def close_now_title(target: str) -> str: ...   # "chat: close <target> — its harness has ended"
+def close_now_title(target: str) -> str: ...
 
 # charter/commands_frame.py
 def _pane_died_ended_hook_argv(*, socket: str, harness_pane: str) -> list[str]: ...
 ENDED_HOOK_NOT_INSTALLED = (
-    "charter frame: refusing to attach — the hook that answers this chat's harness ending "
-    "failed to install, so an exit later would leave a dead tab charter could offer nothing on. "
-    "The harness is still running, detached; reattach manually if you must: "
-    "tmux -L {socket} attach -t {session}")
+    "charter frame: refusing to attach — the hook that answers this chat's harness ending failed to "
+    "install, so an exit later would leave a dead tab charter could offer nothing on. The harness is "
+    "still running, detached; reattach manually if you must: tmux -L {socket} attach -t {session}")
 ```
 
 ### Behaviour
 
-**The hook.** `_pane_died_ended_hook_argv` returns
-`tmuxctl.server_argv(socket, "set-hook", "-p", "-t", pane, "pane-died[1]", action)`.
-- **The action** is the constant
-  `run-shell -b "\"$CHARTER_PY\" -m charter frame-ended --chat \"#{@charter_chat}\""`.
-- **Its quoting** is the write hook's (`:1414-1416`): `\\"` and `\\$` escaped for tmux's own
-  parse.
-- **`-b`**, because the ended step spawns tmux commands, and a `run-shell` without `-b` holds
-  tmux's command queue while it runs (`_panel_died_hook_argv`'s note, `:1535+`).
+**The hook.**
+- `_pane_died_ended_hook_argv` returns `tmuxctl.server_argv(socket, "set-hook", "-p", "-t", pane,
+  "pane-died[1]", action)`.
+- The action is the constant `run-shell -b "\"$CHARTER_PY\" -m charter frame-ended --chat
+  \"#{@charter_chat}\""`, quoted as the write hook is (`:1414-1416`).
+- **The branch (ruled open question 5):** `_launch` installs it only when `p is not None`. The escape
+  hatch keeps `_pane_died_teardown_hook_argv`, and so its `kill-window`, its exit code and its
+  `attach` return, unchanged.
 
-**`ended.present(fid, *, socket)`.** Every step returns `""` on the first thing that is not so.
-1. `chats.ID_RE.fullmatch(fid)`.
-2. `state.was_drawn(fid)`, `not state.is_ended(fid)`, `not state.was_closed(fid)`.
-3. `pane = chats.pane_of(fid)`.
-4. One `list-panes -a -F '#{pane_id}\t#{pane_dead}\t#{@charter_chat}'` on `socket`. Its row for
-   `pane` must read `1` and `fid`. A live pane, a pane under another chat, or a server that does
-   not answer: `""`.
-5. `state.record_ended(fid)`, `state.bump(fid)`, `commands_frame._repaint_the_other_strips(fid)`.
-6. Branch on the exit code:
-   - **`state.exit_code(fid) == CLEAN`** → one `layout.respawn_argv`:
-     - `harness_argv=launcher.argv_select(state.profile(fid) or None, ended=True)`;
-     - `cwd=state.chat_cwd(fid) or config.ROOT`;
-     - `env`: on charter's server
-       `commands_frame._frame_identity_env(state.identity(fid))`; on an operator socket
-       `_guest_harness_env` of the same.
+**`ended.proof(fid, *, socket)` — the one listing.**
+- One `list-panes -a -F PROOF_FORMAT` on `socket`. Rows of any other width are dropped.
+- `me = commands_frame._this_plane()`.
+- **The harness** is the row whose pane is `chats.pane_of(fid)`, and whose chat is `fid`, plane is
+  `me` and drawer is `""`. A record naming a pane the listing puts under another chat, another plane,
+  or no plane proves nothing: `harness = ""`.
+- **The drawers** are the rows whose drawer, chat and plane are `fid`, `fid` and `me`.
+- rc ≠ 0 → `None`.
 
-     `respawn_argv` passes `-k`. Return `"selector"`.
-   - **Otherwise** → `split-window -v -l DRAWER_ROWS -t <pane> -P -F '#{pane_id}' -e
-     CHARTER_SESSION_ID=<fid> -- <util.self_relaunch_argv("frame-palette", "--ended", "--chat",
-     fid)>`. Then `state.record_drawer(fid, <the reported pane>)`, then `select-pane -t <drawer>`.
-     Return `"drawer"`.
-7. The whole body is in `try`/`except Exception: return ""`. Nothing is ever sent to the harness
-   pane but `respawn-pane`, and nothing reads it.
+**`ended.present(fid, *, socket)`.** Each step answers `""` at the first thing that is not so.
+1. `chats.ID_RE.fullmatch(fid)`, `state.profile(fid)`, `state.was_drawn(fid)`,
+   `not state.was_closed(fid)`.
+2. `pr = proof(fid, socket=socket)`; `pr is None or not pr.harness or not pr.harness_dead` → `""`.
+3. `state.claim_ended(fid)`. `False` → `""`: this exit is already presented.
+4. `state.bump(fid)`, then `commands_frame._repaint_the_other_strips(fid)`.
+5. Present:
+   - **`state.exit_code(fid) == CLEAN`** → one `layout.respawn_argv(kill=False, harness_pane=pr.harness,
+     harness_argv=launcher.argv_select(state.profile(fid), ended=True), cwd=state.chat_cwd(fid) or
+     config.ROOT, env=…)`. The env is `_frame_identity_env(state.identity(fid))`, or on an operator
+     socket `_guest_harness_env` of it. Return `"selector"`.
+   - **Otherwise** → `split-window -v -l DRAWER_ROWS -t <pr.harness> -P -F '#{pane_id}' -e
+     CHARTER_SESSION_ID=<fid> -- <self_relaunch_argv("frame-palette", "--ended", "--chat", fid)>`.
+     Then `set-option -p -t <reported id> @charter_drawer <fid>`, `state.record_drawer(fid, <id>)`,
+     `select-pane -t <id>`. Return `"drawer"`.
+6. The whole body is in `try`/`except Exception: return ""`. A refused respawn (tmux: still active)
+   leaves `ended` claimed and returns `""`.
 
-**`cmd_frame_ended(args)`:**
-```python
-fid = getattr(args, "chat", "") or ""
-socket = state.frame_server(fid) or tmuxctl.LEGACY_SOCKET
-ended.present(fid, socket=socket)
-return 0
-```
+**`ended.reset(fid)`**, which the `on_exec` wrapper calls for every start:
+- `state.clear_ended(fid)`, `state.clear_exit(fid)`, `drop_drawer(fid)`.
 
-**The drawer (`ended.draw(args)`)** takes `tabmenu.draw`'s shape:
-- `handback(os.environ)`, then a `palette.Palette(catalogue=drawer_rows(fid),
-  label=f"chat {fid} ended", mouse=True)`, then `own_the_tty`, then `choose`.
-- In `finally`: `drop_drawer(fid)`, and `select-pane -t <harness pane>`.
-- It returns 0.
+A resumed or fresh chat is then live, drawn, unclaimed, and presented again at its next exit.
+
+**`ended.drop_drawer(fid)`:**
+- `pr = proof(…)`, then one `kill-pane -t <id>` per `pr.drawers`, then `state.record_drawer` cleared.
+- The recorded drawer is never itself a target.
+
+**The drawer's own process (`ended.draw(args)`)** has `tabmenu.draw`'s shape: `handback`, a
+`palette.Palette(catalogue=drawer_rows(fid), label=f"chat {fid} ended", mouse=True)`, `own_the_tty`,
+then `choose`. Its `finally` does two things:
+- closes its own pane, proven by `tmuxctl.live_pane_by_pid(server, os.getpid())`, which is
+  `launcher._close_the_cancelled_chat`'s proof;
+- runs `select-pane -t <proven harness pane>`.
+
+It returns 0. A `None` row — Esc or end of input — chooses nothing, and the tab stays ended.
 
 **`drawer_rows(fid)`:**
-1. `ended:resume` — present only when `leave.conversation_exists(kind, link, conversation)`, with
+1. `ended:resume` — only when `leave.conversation_exists(kind, link, conversation)`, with
    `launcher.resume_row(fid)`'s title and note.
-2. `ended:fresh` — `start fresh on <profile>`.
+2. `ended:fresh` — `start fresh`.
 3. `ended:close` — `close this tab`.
 
-**`choose(row, fid)`:**
-- `ended:resume` → one `respawn_argv` of the harness pane into
-  `launcher.argv(profile, [], attended=True, resume=True)`.
-- `ended:fresh` → the same, without `resume`.
-- `ended:close` → `builtin_actions._spawn(util.self_relaunch_argv("frame-close", fid, "--chat",
-  fid), fid=fid)`.
-- `None` → nothing; the tab stays ended and the drawer goes.
+**`choose(row, fid)`.** Each of the first two acts on a fresh `proof`, and only when its harness pane is
+dead:
+- `ended:resume` → `respawn_argv(kill=False, harness_argv=launcher.argv(profile, [], attended=True,
+  resume=True))`.
+- `ended:fresh` → `respawn_argv(kill=False, harness_argv=launcher.argv_select(profile, ended=True,
+  fresh=True))`. That is the selector, as decision 4 says, with no resume row. The drawer never starts
+  a profile.
+- `ended:close` → `builtin_actions._spawn(util.self_relaunch_argv("frame-close", fid, "--chat", fid),
+  fid=fid)`.
+
+The respawn's cwd is `state.chat_cwd(fid)`. For a `resume_needs_cwd` harness (opencode), that
+directory is where the id is looked up (O2).
+
+**`launcher.resume_row(fid)`.**
+- `kind` is `state.identity(fid)["CHARTER_HARNESS"]`, or when that is empty,
+  `resolve(state.profile(fid))[0].harness`.
+- It answers `Resume(title=f"resume {name}", note=f"{kind} · session {link[:8]}")` when
+  `leave.conversation_exists(kind, link, conversation)`, else `None`.
+- `name` is `fid` here; task 3 composes it.
 
 **The selector after an exit (`_select_in_pane` with `--ended`):**
-- `resume_row(fid)` returns `Resume(title=f"resume {name}", note=f"{kind} · session {link[:8]}")`
-  when `conversation_exists`, else `None`. `name` is `fid` here, and task 3 composes it.
-- `selector.rows(..., resume=…)` puts `Row(id=RESUME_ID, title=…, note=…)` first. `opens_on`
-  answers the resume row when it is present, else the start profile as before.
-- `Choice(resume=True)` → `attempt(p_of_chat, [], …, resume=True, on_exec=lambda: _picked(fid, p))`.
-- A profile row → `attempt(p, [], …, resume=False, …)`, a fresh link (task 1).
-- Esc → `commands_frame.cmd_close(...)` in-process. It returns `selector.CANCELLED_EXIT`.
+- `rows(..., resume=…)` puts `Row(id=RESUME_ID, …)` first, and `opens_on` answers it.
+- `Choice(resume=True)` → `attempt(p_of_chat, [], fid=fid, attended=True, resume=True, on_exec=lambda:
+  _picked(fid, p))`. A profile row → `resume=False`.
+- `KEY_CANCEL` → `commands_frame.cmd_close(SimpleNamespace(chat_id=fid, chat=fid))`, then
+  `CANCELLED_EXIT`.
+- `END_OF_INPUT` → `CANCELLED_EXIT`. No closed mark, no `_forget_transcript`, no manifest change.
 - The footer is `FOOTER_ENDED`.
 
-**`_launch` on charter's own server.**
-- The ended hook sits where the teardown hook was, at `teardown_at`. The refusal to attach when
-  it did not install stays, with `ENDED_HOOK_NOT_INSTALLED`.
-- In the `code is None` branch, after `_arm_panel_respawn`:
+**`_launch` on charter's own server, for a profile chat.**
+- The ended hook sits where the teardown hook was.
+- After `_arm_panel_respawn`:
   1. `state.record_drawn(fid)`;
   2. `late = _query_pane_dead_status(socket, harness_pane)`;
-  3. `late is not None` → `state.record_exit(fid, late)`, then `ended.present(fid,
-     socket=socket)`.
-- **Nothing else in `_launch` changes.** When `attach` returns, `state.exit_code(fid)` is the code
-  the chat last recorded, else 0. The tail's detach sentence stands.
+  3. `late is not None` → `record_exit`, then `ended.present`.
+- The claim makes the hook and this late check present one exit once.
 
-**`_launch_in_operator_tmux`.** After `_drop_panels`, the single wait becomes a loop. It returns
-when the window is gone, with `code` unchanged in meaning:
+**`_launch_in_operator_tmux`, for a profile chat**, after `_drop_panels`:
 ```python
 while True:
     code = _wait_for_harness(socket, harness_pane)
     if code is None or state.was_closed(fid):
-        break   # the window went, or the tab was closed
+        break
     state.record_exit(fid, code)
     state.record_drawn(fid)
     if not ended.present(fid, socket=socket):
-        break   # nothing was offered: close as before
+        break   # nothing offered: close as before
 ```
-The early path, before `_draw_panels`, keeps its `_close_window()` and report.
+Everything before `_draw_panels`, and the escape hatch, keep today's `_close_window()`.
 
 **Closing.**
 - `leave.needs_confirming(chat)` is `not state.is_ended(chat) and not state.is_waiting(chat)`.
-- `tabmenu.catalogue(target)` ends in `Row(id=CLOSE_NOW_ID, title=close_now_title(target))` when
-  it is false, else in today's close row.
-- `chose` spawns `frame-close <target> --chat <fid>` for `CLOSE_NOW_ID`; `opens` answers `None`
-  for it.
-- `leave.open_rows(fid)` swaps its close doorway for `CLOSE_NOW_ID` on the same rule, and
-  `_draw_palette`'s branch for `goes_through(row, CLOSE)` also takes `CLOSE_NOW_ID`.
+- `tabmenu.catalogue(target)` ends in `CLOSE_NOW_ID` when it is false, else in today's close row; the
+  close row is last either way.
+- `leave.open_rows(fid)` keeps `(quit, close)` and swaps the close row's id and title on the same rule.
+  `_draw_palette` treats `CLOSE_NOW_ID` like `goes_through(row, CLOSE)`.
 
 **Quit and reopen.**
-- `leave.plan` fills `ended=state.is_ended(fid)`, and `_record_the_plane` writes it.
-- `_reopen_one`, for `c.ended`, builds `_reopen_args(c, harness_name=p.kind, profile=p.name,
-  rest=[], reopening=r)` with `select=True, ended=True, start=p.name`.
-- `_launch`'s selector branch, for `ended`, records `record_ended` instead of `record_waiting`, and
-  hands tmux `argv_select(start, ended=True)`.
+- `leave.plan` fills `ended=state.is_ended(fid)`.
+- `_record_the_plane` writes it, and captures no ended chat.
+- `_reopen_one` sends an ended record through the selector branch as above. Before tmux, `_launch`
+  writes:
+  - `claim_ended`;
+  - the profile and kind from the record;
+  - task 1's link and conversation.
 
-**What charter says about the exit code, in `docs/frame.md` only.** No code line changes in
-`_launch`'s tail. `attach` returns later, and that is the behaviour change.
+  So `resume_row` answers on the restored tab.
 
 ### Test cases (write first; each must fail before the code exists)
 
 **`tests/test_an_ended_harness_keeps_its_tab.py`**
 
-Class `TheHookNoLongerKillsTheWindow(PersonaIso, unittest.TestCase)`:
+Class `TheHookAndItsBranch(PersonaIso, unittest.TestCase)`:
 
 | Case | Asserts |
 |---|---|
-| `test_index_one_runs_the_ended_step` | `_pane_died_ended_hook_argv(socket="s", harness_pane="%1")[-3:]` is `["pane-died[1]", action]` preceded by `"%1"`; `"kill-window" not in action`; `"frame-ended" in action`; `"#{@charter_chat}" in action`; `action.startswith("run-shell -b ")` |
-| `test_the_action_is_a_constant` | two sockets and two panes → the same action text |
-| `test_the_launch_installs_it_after_the_write_hook` | `_launch` with `tmuxctl.write_all` recorded → the `pane-died[1]` write's index is greater than the `pane-died` write's |
-| `test_no_launch_installs_kill_window_on_pane_died` | no recorded argv holds both `pane-died` and `kill-window` |
+| `test_index_one_runs_the_ended_step` | the argv ends `["pane-died[1]", action]` after `"%1"`; `"kill-window" not in action`; `"frame-ended"`, `"#{@charter_chat}"` in it; `action.startswith("run-shell -b ")` |
+| `test_the_action_is_a_constant` | two sockets and panes → the same text |
+| `test_a_profile_launch_installs_it_after_the_write_hook` | `_launch` with a profile → the `pane-died[1]` write follows the `pane-died` write, and holds `frame-ended` |
+| `test_the_escape_hatch_keeps_kill_window` | `_launch` with `harness="frame", rest=["--", "true"]` → the `pane-died[1]` write is `kill-window`, and no `frame-ended` appears. Red without the branch |
+| `test_the_escape_hatch_is_never_presented` | a chat with no profile, drawn, pane dead → `present` returns `""` |
 
-Class `WhatTheEndedStepDoes(PersonaIso, unittest.TestCase)` — `tmuxctl.run` recorded; `list-panes`
-answered per case; `beta.1` records pane `%1`, server `s`, profile `claude`, drawn:
-
-| Case | Asserts |
-|---|---|
-| `test_a_clean_exit_respawns_the_pane_into_the_ended_selector` | exit 0, row `%1\t1\tbeta.1` → `present` returns `"selector"`; one `respawn-pane` argv on `%1` whose command ends `["frame-launch", "--select", "--attended", "--start", "claude", "--ended"]` (order as `argv_select` builds it); `state.is_ended("beta.1")` |
-| `test_a_crash_leaves_the_dead_pane_and_opens_a_drawer` | exit 3 → `"drawer"`; no `respawn-pane`; one `split-window` with `-t %1` running `frame-palette --ended --chat beta.1`; `state.drawer("beta.1")` is the reported pane |
-| `test_a_signal_death_is_a_crash` | exit `commands_frame._UNKNOWN_DEATH_CODE` → `"drawer"` |
-| `test_a_chat_the_launch_has_not_drawn_is_left_to_the_launch` | no drawn mark → `""`, no tmux write, not ended |
-| `test_a_live_pane_is_never_touched` | row `%1\t0\tbeta.1` → `""`, no write |
-| `test_a_pane_listed_under_another_chat_is_not_acted_on` | row `%1\t1\tbeta.2` → `""` |
-| `test_a_chat_already_ended_is_not_presented_twice` | ended mark → `""` |
-| `test_a_closed_chat_is_not_presented` | closed mark → `""` |
-| `test_it_reads_nothing_from_the_pane` | `commands_frame._pane_last_words` patched to raise; no recorded argv is `capture-pane` |
-| `test_it_never_sends_keys` | across every case above, no recorded argv holds `send-keys` |
-| `test_every_other_strip_is_woken` | `beta.2` exists → `state.version("beta.2")` moved |
-| `test_the_command_always_returns_zero_and_refuses_an_unusable_id` | `cmd_frame_ended(SimpleNamespace(chat="../x"))` → 0, no tmux call; `present` raising → 0 |
-
-Class `TheLaunchStillOwnsAnEarlyDeath(PersonaIso, unittest.TestCase)` — `_launch` under
-`tests/test_frame_launcher.py::Launch`'s patches:
+Class `NothingActsOnARecordAlone(PersonaIso, unittest.TestCase)`:
+- **Setup:** `tmuxctl.run` recorded and `list-panes` answered per case. `beta.1` records pane `%1`,
+  server `s`, profile `claude`, drawn, exit 0. `P` is `commands_frame._this_plane()`.
 
 | Case | Asserts |
 |---|---|
-| `test_an_early_death_is_still_reported_and_its_window_killed` (pin: passes at `5ad755d`) | eager status 127 → the early-death sentence on stderr, `kill-window -t %1` recorded, no drawn mark |
-| `test_the_drawn_mark_is_written_before_attach` | inside the `tmuxctl.interact` (attach) fake, `state.was_drawn(fid)` |
-| `test_a_death_between_the_hooks_and_the_mark_is_answered_by_the_launch` | `_query_pane_dead_status` → `None`, then `0` → `ended.present` called once, with `fid` |
-| `test_an_ended_hook_that_did_not_install_refuses_to_attach` | `write_all` answers rc 1 at the hook's index → no attach; stderr holds `"answers this chat's harness ending"` |
+| `test_a_proven_dead_pane_is_respawned_without_k` | row `%1\t1\tbeta.1\tP\t` → one `respawn-pane` on `%1`, and `"-k"` is not in it |
+| `test_another_planes_pane_is_not_touched` | row `%1\t1\tbeta.1\t/other\t` → `""`, no write, not ended |
+| `test_an_unmarked_pane_is_not_touched` | row `%1\t1\tbeta.1\t\t` → `""`, no write |
+| `test_a_recorded_pane_listed_under_another_chat_is_not_touched` | row `%1\t1\tbeta.2\tP\t` → `""` |
+| `test_a_live_pane_is_not_touched` | row `%1\t0\tbeta.1\tP\t` → `""` |
+| `test_a_server_that_does_not_answer_touches_nothing` | rc 1 → `""` |
+| `test_the_hook_and_the_late_check_present_once` | two `present` calls → one respawn; `claim_ended` answers `True` then `False` |
+| `test_a_crash_opens_a_drawer_and_marks_it` | exit 3 → one `split-window -t %1`, then `set-option -p -t <id> @charter_drawer beta.1` |
+| `test_drop_drawer_kills_only_a_proven_drawer` | drawer recorded `%7`; rows `%7\t0\tbeta.1\tP\tbeta.1` and `%8\t0\tbeta.1\tP\t` → exactly `kill-pane -t %7` |
+| `test_drop_drawer_never_kills_the_recorded_pane_when_unproven` | drawer recorded `%7`; row `%7\t0\tbeta.2\tP\tbeta.2` → no `kill-pane` |
+| `test_choose_respawns_only_a_proven_dead_pane` | row `%1\t0\tbeta.1\tP\t` (live again) → `choose(resume)` writes nothing |
+| `test_it_reads_nothing_from_the_pane_and_sends_no_keys` | no argv is `capture-pane` or `send-keys` in any case above |
+| `test_the_command_always_returns_zero` | `cmd_frame_ended(SimpleNamespace(chat="../x"))` → 0, no tmux call; `present` raising → 0 |
 
-Class `TheSelectorAfterAnExit(PersonaIso, unittest.TestCase)` — `palette.own_the_tty` returns
-queued rows, `framed_chat` → `beta.1`, `execvpe` patched, `pane.claim` stood in; `beta.1` is
-ended, kind `claude-code`, profile `claude`, link `u`, conversation a file in `self.tmp`:
+Class `EveryStartClearsTheEndedState(PersonaIso, unittest.TestCase)` — execvpe patched, `framed_chat` →
+`beta.1`, `beta.1` ended with exit 3, drawer `%7` proven:
 
 | Case | Asserts |
 |---|---|
-| `test_resume_is_the_first_row_and_the_cursor_starts_on_it` | the first `Selector`'s first row id is `resume:`, title `resume beta.1`; `Selector(...).selected().id == "resume:"` |
-| `test_no_conversation_means_no_resume_row` | the conversation file removed → no `resume:` row; the cursor is on `profile:claude` |
-| `test_resume_execs_the_harness_on_its_link` | resume picked → `execvpe` argv `["claude", "--resume", "u", "--name", "beta.1"]` |
-| `test_a_profile_row_starts_fresh_on_a_new_link` | `profile:claude` picked → `--session-id v`, `v != "u"`; `state.conversation("beta.1") is None` inside the fake |
-| `test_a_pick_clears_ended_exit_and_the_drawer` | a drawer `%7` recorded, exit 3 → inside the fake: not ended, `exit_code is None`; a `kill-pane -t %7` argv recorded |
-| `test_escape_closes_the_tab_for_good` | `own_the_tty` → `None` with `ended=True` → `commands_frame.cmd_close` called with `chat_id="beta.1"`; `launcher._close_the_cancelled_chat` not called |
-| `test_escape_at_a_selector_that_never_started_writes_no_mark` (pin) | `ended=False` → `_close_the_cancelled_chat` called, `state.was_closed("beta.1") is False` |
+| `test_a_selector_pick_resets` | `_select_in_pane` picks `profile:claude` → inside the fake: not ended, `exit_code is None`, `kill-pane -t %7` recorded |
+| `test_the_drawers_resume_resets` | `cmd_frame_launch(profile="claude", resume=True)` (what `choose(resume)` respawns into) → the same three |
+| `test_a_reopen_start_resets` | `cmd_frame_launch(profile="claude")` for a restored chat → the same |
+| `test_an_exec_that_raises_claims_ended_again` | execvpe raises → `is_ended` |
+| `test_a_resumed_chat_is_live_confirms_on_close_and_is_presented_again` | after the resume: `needs_confirming("beta.1")`; `tabmenu.catalogue` ends in `tab:close`; a later dead row → `present` returns non-empty |
+| `test_start_fresh_in_the_drawer_goes_to_the_selector` | `choose(fresh)` → the respawn command holds `frame-launch --select`, `--ended`, `--fresh`, and no `--profile`; `_select_in_pane(fresh=True)` has no `resume:` row |
+
+Class `TheSelectorAfterAnExit(PersonaIso, unittest.TestCase)` — link `u`, conversation a file:
+
+| Case | Asserts |
+|---|---|
+| `test_resume_is_first_and_preselected` | the first row id is `resume:`, and `selected().id == "resume:"` |
+| `test_no_conversation_means_no_resume_row` | no file → the cursor is on `profile:claude` |
+| `test_resume_execs_the_harness_on_its_link` | `["claude", "--resume", "u", "--name", "beta.1"]` |
+| `test_a_profile_row_starts_fresh_on_a_new_link` | `--session-id v`, `v != "u"` |
+| `test_a_real_escape_closes_the_tab_for_good` | `pick` → `KEY_CANCEL` → `cmd_close(chat_id="beta.1")`; `was_closed` |
+| `test_end_of_input_leaves_the_tab_ended_and_open` | `pick` → `END_OF_INPUT` → `cmd_close` not called; `was_closed` false; `_forget_transcript` not called; the manifest still names `beta.1`; `is_ended` |
+| `test_a_never_started_selector_keeps_todays_close_on_either` (pin) | not ended → `_close_the_cancelled_chat` on both, `was_closed` false |
+| `test_the_surface_tells_escape_from_end_of_input` | `overlay.Surface.run` fed `b"\x1b"` → `left == LEFT_KEY`; fed `None` → `left == LEFT_EOF` |
 | `test_the_footer_says_escape_closes_this_tab` | the rendered last line holds `esc close this tab` |
 
 Class `TheCrashDrawer(PersonaIso, unittest.TestCase)`:
-
-| Case | Asserts |
-|---|---|
-| `test_three_rows_with_resume_first` | link and conversation file → `[r.id for r in drawer_rows("beta.1")] == ["ended:resume", "ended:fresh", "ended:close"]` |
-| `test_two_rows_with_no_conversation` | → `["ended:fresh", "ended:close"]` |
-| `test_resume_respawns_the_harness_pane_into_the_launcher` | `choose(resume)` → one `respawn-pane` on `%1` whose command holds `frame-launch --profile claude --attended --resume` |
-| `test_start_fresh_respawns_without_resume` | no `--resume` in it |
-| `test_close_this_tab_does_not_ask` | `_spawn` recorded with `frame-close beta.1 --chat beta.1`; no `Palette` built |
-| `test_the_drawer_goes_whatever_happens` | `own_the_tty` → `None`, then raising → a `kill-pane -t <drawer>` and a `select-pane -t %1` recorded both times |
+- **Rows:** `drawer_rows` with a conversation → resume, fresh, close; without one → fresh, close.
+- **Resume:** `choose(resume)` → the respawn command holds `frame-launch --profile claude --attended
+  --resume`, with `-c <chat cwd>`.
+- **Close:** `choose(close)` spawns `frame-close beta.1 --chat beta.1`.
+- **`test_the_drawer_closes_its_own_pane_by_pid`:** `live_pane_by_pid` → `%7` → `kill-pane -t %7`,
+  whether `own_the_tty` answered `None` or raised.
+- **End of input** in the drawer chooses nothing: `is_ended` still.
 
 Class `AnEndedTabIsMarked(PersonaIso, unittest.TestCase)`:
-- `test_the_roster_says_ended` — `chats.roster("beta.2")` → the `beta.1` entry has `ended=True`.
-- `test_the_strip_draws_the_mark_and_a_click_still_resolves_to_the_chat` — the chats bar
-  rendered → `ENDED_MARK` is on the row, and `slots.TABS.tab_at(0, <a column of beta.1's name>)
-  == "beta.1"`.
-- `test_the_mark_is_one_ascii_cell` — `ENDED_MARK.isascii()` and `tui.width(ENDED_MARK) == 1`.
-- `test_a_background_chat_ends_the_same_way` — `present` for a chat opened with `Opening` →
-  `"selector"`, ended.
+- The roster says ended.
+- The strip draws `ENDED_MARK`, and `TABS.tab_at` still answers the chat.
+- `ENDED_MARK` is one ASCII cell.
+- A background chat ends the same way.
 
 Class `ClosingAnEndedTabDoesNotAsk(PersonaIso, unittest.TestCase)`:
-
-| Case | Asserts |
-|---|---|
-| `test_needs_confirming` | subTest: running → `True`; ended → `False`; waiting → `False` |
-| `test_the_tab_menus_close_row_is_an_action_on_an_ended_tab` | `tabmenu.catalogue("beta.1")[-1].id == "tab:close-now"`; `opens(...) is None`; `chose(...)` spawns `frame-close beta.1` |
-| `test_a_running_tab_is_still_confirmed` (pin) | not ended → `tab:close`, and `opens` builds a `Palette` over `leave.confirm_rows` |
-| `test_the_palettes_close_row_is_an_action_for_an_ended_chat` | `leave.open_rows("beta.1")[-1].id == "leave:close:now"`, and `leave.is_row` of it is true |
+- `needs_confirming`: running → `True`; ended → `False`; waiting → `False`.
+- The tab menu's last row is `tab:close-now` on an ended tab; `opens` → `None`; `chose` spawns
+  `frame-close`.
+- A running tab is still confirmed (pin).
+- `leave.open_rows("beta.1")` is `(leave:quit, leave:close:now)` on an ended chat: the close row stays
+  last.
 
 Class `QuitAndReopenKeepEndedTabs(PersonaIso, unittest.TestCase)`:
 
 | Case | Asserts |
 |---|---|
-| `test_a_quit_records_an_ended_tab_as_ended` | `_record_the_plane([Doomed(..., ended=True)], …)` → the literal `"ended": true` in `reopen.json` |
-| `test_the_confirmation_says_it_comes_back_ended` | `leave.note(Doomed(..., ended=True, resume="u", conversation=<file>))` holds `comes back ended; resume offered`; without the file, `nothing to resume` |
-| `test_the_recorder_writes_ended_too` | `record_the_plane_now("beta.1")` with `_plane_live` stood in → `ended` in the file |
-| `test_a_reopen_brings_an_ended_chat_back_at_the_ended_selector` | `_reopen_one(Chat(..., ended=True))` with `cmd_launch` recorded → `select is True`, `ended is True`, `start == "claude"`, no `resume` |
-| `test_a_restored_ended_chat_is_ended_before_tmux_and_not_waiting` | inside the `new-window` fake: `state.is_ended("beta.7")`, `not state.is_waiting("beta.7")`; the argv holds `--ended` |
+| `test_a_quit_records_an_ended_tab_as_ended` | `"ended": true` in `reopen.json` |
+| `test_a_quit_captures_no_ended_tab` | `_capture_transcript` patched to raise → not called for an ended chat; an existing `beta.1.transcript` is named in the record |
+| `test_the_confirmation_says_it_comes_back_ended` | `comes back ended; resume offered` / `nothing to resume` |
+| `test_a_reopen_brings_an_ended_chat_back_at_the_ended_selector` | `select is True`, `ended is True`, `start == "claude"`, no `resume` |
+| `test_a_restored_ended_tab_can_resume` | `_launch` for that record under the tmux fakes → inside `new-window`: `is_ended`, not `is_waiting`, `profile == "claude"`, `identity()["CHARTER_HARNESS"] == "claude-code"`, link `u`, `launcher.resume_row("beta.7")` is not `None`; then `_select_in_pane` picking resume execs `--resume u` |
+| `test_resume_row_falls_back_to_the_profile_for_the_kind` | identity kind empty, profile `claude` → `resume_row` answers |
+| `test_the_unattended_reopened_selector_survives_end_of_input` | the restored ended chat's `_select_in_pane` with `pick` → `END_OF_INPUT` → the manifest still names it, `was_closed` false, `is_ended` |
 | `test_a_record_from_before_reads_as_not_ended` | no key → `False` |
 
 Class `TheExitCodeArrivesWhenTheTabCloses(PersonaIso, unittest.TestCase)`:
-- `test_attach_returning_after_a_close_returns_the_recorded_code` — exit 3 recorded, the chat not
-  in `live_after` → rc 3.
-- `test_a_detach_is_still_zero_and_says_so` (pin) — the chat live after attach → rc 0 and the
-  `detached` line.
+- Exit 3 recorded, the chat not live after attach → rc 3.
+- A detach is 0 and says so (pin).
 
-Class `InsideTheOperatorsTmux(PersonaIso, unittest.TestCase)` — `_launch_in_operator_tmux` with
-tmux recorded:
-- `test_an_exit_after_the_draw_presents_and_keeps_waiting` — `_wait_for_harness` → 0, then `None`
-  → `ended.present` called once; the function returns after the second wait; no `kill-window`
-  between the two waits.
-- `test_an_exit_before_the_draw_is_still_an_early_death` (pin) — `_pane_state` dead at the first
-  ask → `_close_window` and the report.
+Class `InsideTheOperatorsTmux(PersonaIso, unittest.TestCase)`:
+- `test_a_profile_exit_after_the_draw_presents_and_keeps_waiting`: two waits, one `present`, no
+  `kill-window` between them.
+- `test_the_escape_hatch_still_closes_at_exit` (pin): the profile is `""` → `_close_window`.
+- `test_an_exit_before_the_draw_is_still_an_early_death` (pin).
 
 Class `TheRecordIsWrittenDown(unittest.TestCase)`:
-- `test_adr_0018_is_amended_for_an_exit` — 0018 holds `a harness exit is no longer final` and
-  `Charter restarts nothing by itself`.
-- `test_context_defines_an_ended_tab` — CONTEXT.md holds `**Ended tab**:` followed by an `_Avoid_:`
-  line before the next `**`.
-- `test_the_ide_spec_says_4j_is_built` — its §4j holds `Built 2026-09-15`.
+- 0018 holds `a harness exit is no longer final`, `Charter restarts nothing by itself` and
+  `only as a listing proves it`.
+- CONTEXT.md holds `**Ended tab**:`.
+- The IDE spec's §4j holds `Built 2026-09-15`.
 
-**`tests/test_an_ended_harness_keeps_its_tab_on_a_real_server.py`** — real tmux.
-- Skip rules and fixtures as `tests/test_a_chat_pane_starts_as_charter_and_becomes_the_harness.py`.
-- `selector.pick` and `ended.draw` are stood in through a `PYTHONPATH` shim that writes its argv
-  to a file and exits 0 without drawing: the approach
-  `tests/test_a_new_chat_starts_at_the_profile_selector.py::TheSelectorOnARealServer` records.
-- Class `AnExitOnARealServer(PersonaIso, unittest.TestCase)`:
-- `test_a_clean_exit_keeps_the_window_and_respawns_the_same_pane` (E2) — the recorder exits 0 →
-  within 5 s: the window is still listed, `#{pane_id}` unchanged, the shim's record holds
-  `--select` and `--ended`, and `state.is_ended(fid)`.
-- `test_a_crash_keeps_the_dead_pane_and_opens_a_drawer` (E3) — exit 3 → the harness pane lists
-  `#{pane_dead}` 1, and a second pane in the window has a start command holding
-  `frame-palette --ended`.
-- `test_a_signal_death_ends_the_tab` (E1, open question 4) — `os.kill(<recorder pid>,
-  signal.SIGKILL)` → the drawer within 5 s. **It fails with the `list-panes` output on a
-  platform where it does not happen. It is not skipped.**
-- `test_the_last_chat_ending_keeps_the_session` — one chat, exit 0 → the session is still listed;
-  `commands_frame.cmd_close` of it → the session is gone. It replaces
+**`tests/test_an_ended_harness_keeps_its_tab_on_a_real_server.py`** — real tmux, fixtures as
+`tests/test_a_chat_pane_starts_as_charter_and_becomes_the_harness.py`. `selector.pick` and `ended.draw`
+are stood in through a `PYTHONPATH` shim, as
+`tests/test_a_new_chat_starts_at_the_profile_selector.py::TheSelectorOnARealServer` records.
+
+Class `AnExitOnARealServer(PersonaIso, unittest.TestCase)`:
+- **A clean exit keeps the window and respawns the same pane.** Within 5 s, the pane id is unchanged
+  and the shim record holds `--ended`.
+- **A crash keeps the dead pane and opens a marked drawer.** The listing shows `@charter_drawer` on
+  the drawer alone.
+- **`test_a_signal_death_ends_the_tab`** (open question 4). `SIGKILL` to the recorder → a drawer
+  within 5 s. **It fails with the listing where that does not happen, and is not skipped.**
+- **`test_the_last_chat_ending_keeps_the_session`** replaces
   `ChatsAreWindowsOnOneWorkspaceSession::test_the_last_chats_teardown_still_ends_the_session`.
-- `test_the_same_holds_in_a_tmux_you_already_had` — an `-S` server with `$TMUX` patched;
-  `_launch_in_operator_tmux` in a thread; the recorder exits 0 → the pane is respawned; a
-  `kill-window` of it → the thread returns within 5 s.
+- **`test_the_escape_hatch_closes_its_window_and_returns_its_code`:**
+  - `_launch(harness="frame", rest=["--", "sh", "-c", "sleep 1; exit 7"])`, with `tmuxctl.interact`
+    stood in by a helper that attaches a real client over a pty
+    (`tests/test_a_real_click_on_a_real_tab_bar_switches.py`'s helper) and returns when that client
+    exits, killing it at 10 s;
+  - it asserts `_launch` returns 7 and the window is gone;
+  - without the branch, the ended hook keeps the window, the client never exits, and the case fails
+    at its bound.
+- **`test_another_planes_pane_with_the_same_id_is_never_respawned`:**
+  - two throwaway planes on one `-S` server;
+  - plane B's chat `default.1` exits 0 while plane A's `default.1` is recorded drawn;
+  - `ended.present("default.1")` run as plane A → no respawn, and B's pane still dead.
+- **`test_the_same_holds_in_a_tmux_you_already_had`:** an `-S` server, `$TMUX` patched,
+  `_launch_in_operator_tmux` in a thread, and the recorder exits 0 → respawned; `kill-window` → the
+  thread returns.
 
 **Existing tests this task changes** (a floor):
-- `tests/test_frame_launcher.py::PaneDiedHooks::test_the_teardown_hook_is_a_constant_kill_window_at_index_1`
-  — asserts the ended hook's constant action.
-- `tests/test_frame_launcher.py::Launch::test_the_write_hook_is_installed_before_the_teardown_hook`
-  — the same order, renamed for the ended hook.
-- `tests/test_frame_launcher.py::Launch::test_refuses_to_attach_when_the_teardown_hook_fails_to_install`
-  — `ENDED_HOOK_NOT_INSTALLED`'s words.
-- `tests/test_frame_launcher.py::Launch::test_a_failed_teardown_after_an_early_death_is_reported`
-  — unchanged; the early-death `kill-window` pin.
-- `tests/test_frame_launcher.py::LaunchInsideTmux` — cases asserting the window closes after a
-  drawn harness exits flip. `test_a_harness_that_dies_at_once_is_never_switched_to` stays.
-- `tests/test_frame_tmux_integration.py::TmuxIntegration::test_the_write_hook_must_be_installed_before_the_teardown_hook`
-  — the array-replacement measurement, kept for `[1]` and renamed.
-- `tests/test_frame_tmux_integration.py::ChatsAreWindowsOnOneWorkspaceSession::test_the_last_chats_teardown_still_ends_the_session`
-  — replaced (above).
-- `tests/test_a_chat_pane_starts_as_charter_and_becomes_the_harness.py::TheHarnessExitCodeTravelsAsItDid::test_a_harness_exit_code_travels_as_it_did`
-  — *the window is gone* becomes *the window stays and the chat is ended*; the exit-code
-  assertion stays.
-- `tests/test_a_new_chat_starts_at_the_profile_selector.py`, as #1103 leaves it — its Esc cases
-  stay for a pane that never started.
-- `tests/test_a_right_click_on_a_tab_acts_on_that_tab.py::TheMenuIsTheTwoRowsThatHaveATabToSitOn`
-  and `::CloseIsConfirmedAndItNamesTheTabYouClicked` — an ended tab's close row.
-- `tests/test_a_reopen_says_what_it_cannot_bring_back.py` and
-  `tests/test_what_a_quit_says_is_spelled_where_it_is_asserted.py` — the `already ended on its own`
+- **`tests/test_frame_launcher.py`:**
+  - `PaneDiedHooks::test_the_teardown_hook_is_a_constant_kill_window_at_index_1` — kept for the escape
+    hatch, with a sibling case for the ended hook.
+  - `Launch::test_the_write_hook_is_installed_before_the_teardown_hook` — the order holds for both
+    hooks.
+  - `Launch::test_refuses_to_attach_when_the_teardown_hook_fails_to_install` — `ENDED_HOOK_NOT_INSTALLED`
+    for a profile chat.
+  - `Launch::test_a_failed_teardown_after_an_early_death_is_reported` — unchanged, a pin.
+  - `LaunchInsideTmux` — a profile chat's close-at-exit cases flip, and
+    `test_a_harness_that_dies_at_once_is_never_switched_to` stays.
+- **`tests/test_frame_tmux_integration.py`:**
+  - `TmuxIntegration::test_the_write_hook_must_be_installed_before_the_teardown_hook` — kept.
+  - `ChatsAreWindowsOnOneWorkspaceSession::test_the_last_chats_teardown_still_ends_the_session` —
+    replaced.
+- **`tests/test_a_chat_pane_starts_as_charter_and_becomes_the_harness.py::TheHarnessExitCodeTravelsAsItDid::test_a_harness_exit_code_travels_as_it_did`**
+  — the window stays, and the chat is ended.
+- **`tests/test_a_new_chat_starts_at_the_profile_selector.py`**, as #1103 leaves it — its Esc cases
+  stay for a never-started pane, and `pick`'s `None` becomes `KEY_CANCEL`/`END_OF_INPUT`.
+- **`tests/test_frame_overlay.py`** — `run`'s cancel cases also assert `left`.
+- **`tests/test_a_right_click_on_a_tab_acts_on_that_tab.py`** — `TheMenuIsTheTwoRowsThatHaveATabToSitOn`
+  and `CloseIsConfirmedAndItNamesTheTabYouClicked`.
+- **`tests/test_a_reopen_says_what_it_cannot_bring_back.py`** and
+  **`tests/test_what_a_quit_says_is_spelled_where_it_is_asserted.py`** — the `already ended on its own`
   literal.
-- `tests/test_quit_and_reopen_on_a_real_tmux.py` — gains `AnEndedTabComesBackEnded`: quit with one
-  ended tab, reopen → that window's shim record holds `--ended`.
-- `tests/test_a_background_chat_really_starts_on_its_brief.py` — re-read for assertions that the
-  window goes when the recorder exits.
+- **`tests/test_a_quit_records_the_plane_before_it_kills.py`** — the capture cases keep a live chat's
+  capture.
+- **`tests/test_quit_and_reopen_on_a_real_tmux.py`** — gains `AnEndedTabComesBackEnded`.
+- **`tests/test_a_background_chat_really_starts_on_its_brief.py`** — re-read its window-gone
+  assertions.
 
 ### Implementation steps
 
-- [ ] Step 0: E1–E6 on both versions and both arms; apply the stop rule.
-- [ ] Confirm the operator's answer to open question 5 is in the task issue.
-- [ ] Write the two modules and the changed cases; run them locally — expect failures; note the
-      counts.
-- [ ] `state` marks; `reopen.Chat.ended`; `chats.Chat.ended`; `leave.Doomed.ended`,
-      `needs_confirming`, `CLOSE_NOW_ID`, the ended note.
-- [ ] `ended.py`; the `cli` parsers.
-- [ ] `commands_frame`: the ended hook, the drawn mark, the check after it, the refusal
-      sentence, the operator-tmux loop, `cmd_close`, `_record_the_plane`, `_reopen_one`, the
-      selector branch.
-- [ ] `selector` resume row; `launcher` `--ended`, `resume_row`, Esc closes, `_picked` clears.
+- [ ] Step 0: E1–E7 on both versions and both arms; apply the stop rule.
+- [ ] Write the two modules and the changed cases; run them locally — expect failures; note the counts.
+- [ ] `overlay.left`; `layout.respawn_argv(kill=)`.
+- [ ] `state` marks and the `ended` claim; `reopen`, `chats` and `leave` fields; `needs_confirming`,
+      `CLOSE_NOW_ID`.
+- [ ] `ended.py`: `proof`, `present`, `reset`, `drop_drawer`, `draw`, `choose`; the `cli` parsers.
+- [ ] `commands_frame`: the hook branch, drawn mark and late check, operator-tmux loop, `cmd_close`,
+      capture skip, reopen ended.
+- [ ] `selector` resume row and the two sentinels; `launcher` `argv_select(ended=, fresh=)`,
+      `resume_row`, reset in the `on_exec` wrapper, Esc against end of input.
 - [ ] `tabmenu` and palette close-now; the strip's mark.
-- [ ] Run `grep -rn "kill-window\|teardown hook\|teardown_hook\|already ended on its own\|closes as it always did\|dead tab" charter/ tests/ docs/frame.md`
-      in both directions; each hit reworded or restaged.
-- [ ] Re-run the focused modules and every changed module; green.
+- [ ] `grep -rn "kill-window\|teardown hook\|teardown_hook\|already ended on its own\|closes as it always did\|dead tab" charter/ tests/ docs/frame.md`,
+      both directions.
+- [ ] Re-run every new and changed module; green.
 - [ ] The ADR 0018 amendment, the IDE-spec notes, CONTEXT.md, docs, news.
-- [ ] Commit; push. Read the four `test (3.x)` jobs, and quote the signal case's Linux result.
-      Read the sweep summary and add a test per survivor.
-- [ ] If the signal case is red on Linux, stop before merge and take open question 4 to the
-      controller.
+- [ ] Commit, push; read the four `test (3.x)` jobs and quote the signal case's Linux result; read the
+      sweep summary.
+- [ ] If the signal case is red on Linux, stop before merge and take open question 4 to the controller.
 
 ### Docs and news
 
 - **`docs/frame.md`.**
-  - `## Inside a tmux you already have` (`:1070-1075`): *"when the harness exits, charter closes
-    the window"* becomes *the tab stays and offers a choice, and `charter claude` returns when
-    you close the tab*.
-  - `## Leaving` gains `### When a harness ends`, after its opening paragraphs:
-    - a clean exit, a crash, no conversation yet, a background chat;
-    - that charter restarts nothing by itself and types nothing into the harness;
-    - that closing an ended tab does not ask.
-  - `## Exit codes` (`:1394-1401`): the code now arrives when the tab closes or you detach.
-  - `## When the command dies before the frame is drawn` (`:1486`): one sentence — this is still
-    the one case a chat's window closes on its own.
-  - `## How a harness starts` (`:1517-1540`): the amended ADR in one sentence.
-  - `### No harness starts until you pick a profile` (`:3206`): the selector after an exit, its
-    resume row, and that Esc closes the tab.
+  - `## Inside a tmux you already have` (`:1070-1075`): a profile's tab stays and offers a choice, and
+    `charter frame -- <cmd>` still closes at exit.
+  - `## Leaving` gains `### When a harness ends`:
+    - the two presentations and end of input;
+    - that charter restarts nothing and types nothing;
+    - that closing an ended tab does not ask;
+    - that a quit does not capture an ended tab;
+    - that a session charter did not mark is not presented.
+  - `## Exit codes` (`:1394-1401`): the code arrives when the tab closes, and the escape hatch keeps
+    its own.
+  - `## When the command dies before the frame is drawn` (`:1486`): still the one case a profile chat's
+    window closes on its own.
+  - `## How a harness starts` (`:1517-1540`): the amendment in one sentence.
+  - `### No harness starts until you pick a profile` (`:3206`): the selector after an exit, its resume
+    row, Esc, `--fresh`.
   - The `-` paragraph (`:944-962`): an ended tab closes without the warning.
-- **IDE spec.** Dated notes at §4j and §5, not deletions: *Built 2026-09-15 by
-  `docs/superpowers/specs/2026-09-15-one-exit-gate.md`*.
-- **`CONTEXT.md`** **Ended tab**, in `### Chats`.
+- **IDE spec.** Dated notes at §4j and §5: `Built 2026-09-15 by docs/superpowers/specs/2026-09-15-one-exit-gate.md`.
+- **`CONTEXT.md`** **Ended tab**.
 - **ADR 0018** — the amendment.
 - **News** `docs/news/unreleased-an-ended-harness-keeps-its-tab.md`:
 
@@ -1288,12 +1370,13 @@ Class `TheRecordIsWrittenDown(unittest.TestCase)`:
   ---
   ```
 
-  Body:
-  - the failure: every exit killed the window and a later launch reaped the chat;
-  - the two presentations, and resume;
-  - that closing a tab is now the one way to end a chat;
-  - `charter claude` returns when the tab closes;
-  - the limits: ended tabs stay until closed, and Ctrl+C is not disabled.
+  The body covers:
+  - the failure;
+  - the two presentations;
+  - that closing a tab is the one way to end a chat;
+  - `charter claude` returns when the tab closes, and `charter frame -- <cmd>` is unchanged;
+  - the limits: ended tabs stay until closed; Ctrl+C is not disabled; an unmarked older session is
+    not presented.
 
 **Suggested PR title:** A harness that ends keeps its tab, and the tab offers resume, a fresh start or close
 
@@ -1305,53 +1388,69 @@ Class `TheRecordIsWrittenDown(unittest.TestCase)`:
 
 ### Step 0 — none new
 
-`--name` is measured by task 1's C1 and C3, including a title with spaces and ` · `. This task
-re-reads that table, and stops if C3 showed `--resume` refusing `--name`.
+Task 1's C1 and C3 measured `--name "t1 · beta.1"` and `--name "t2 · beta.1"`:
+- a title with spaces and ` · ` is accepted at a start and at a resume;
+- the name is written with no prompt;
+- it is listed by a fresh `claude --resume` picker.
+
+This task re-reads that table.
+
+### Where a title is shown, and where it is not
+
+A title is shown **wherever a chat is named to a person**. That is decision 11's *"shown in: the
+strip"*, extended as the controller ruled:
+- the chat strip, instead of the id;
+- after the id in the tab menu's label, the quit and close confirmation rows (`leave.title`), the ended
+  selector's resume row and drawer, and the chat picker (`choose`).
+
+**Nowhere else.** A workspace tab's selector names profiles, not chats, so it shows no chat's title.
+The selector's own title row, at `+` and at a workspace tab, is an input for the *new* chat's title,
+and shows nothing about any other chat.
 
 ### Files
 
-- Create `charter/frame/rename.py` and `tests/test_a_tab_can_carry_a_title.py`.
-- `charter/frame/state.py` — beside `record_brief` (`:2099`): `TITLE_MAX`, `TITLE_FILE`,
+- **Create** `charter/frame/rename.py` and `tests/test_a_tab_can_carry_a_title.py`.
+- **`charter/frame/state.py`** — beside `record_brief` (`:2099`): `TITLE_MAX`, `TITLE_FILE`,
   `record_title`, `title`.
-- `charter/frame/chats.py` — `Chat.title: str = ""`; `roster` fills it; `label_of(chat)`.
-- `charter/frame/slots.py` — `_chats_strip` (`:4577-4603`) hands a label per id. Today it returns
-  a 5-tuple, and `_workspaces_strip` (`:4702`) and `BARS` (`:4706`) share the shape, so both gain
-  a sixth element (`{}` for workspaces). The bar draws the label; `_Tabs.publish` (`:3487`) is
-  still handed ids.
-- `charter/frame/launcher.py` — `session_name(fid)`; `session_argv` and `resume_row` use it.
-- `charter/frame/tabmenu.py`:
+- **`charter/frame/chats.py`** — `Chat.title: str = ""`; `roster` fills it; `label_of(chat)`.
+- **`charter/frame/slots.py`** — `_chats_strip` (`:4577-4603`) hands a label per id as a sixth tuple
+  element. `_workspaces_strip` (`:4702`) hands `{}`, and `BARS` (`:4706`) keeps one shape. The bar
+  draws the label, and `_Tabs.publish` (`:3487`) is still handed ids.
+- **`charter/frame/launcher.py`**:
+  - `session_name(fid)`, which `session_argv` and `resume_row` use;
+  - `argv_select(start, *, ended=False, fresh=False, titling=False)`, where `titling` adds
+    `--title-row`;
+  - `_select_in_pane` passes it on.
+- **`charter/frame/tabmenu.py`**:
   - `RENAME_ID`, `rename_title`;
-  - `catalogue` gives transcript, rename, close;
+  - `catalogue` gives transcript, rename, then the close row, last;
   - `opens` answers `rename.Rename` for `RENAME_ID`;
   - `label` shows the title;
-  - the module docstring's *"Exactly two rows"* and *"no rename anywhere in the frame"*
-    (`:36-42`) are rewritten.
-- `charter/frame/selector.py` — `TITLE_ID` and a title row, last, when `titling=True`; `pick`
-  loops through `rename.Rename` in the pane and back.
-- `charter/frame/launcher.py` — `argv_select(start, *, ended=False, titling=False)` adds
-  `--title-row`; `_select_in_pane` passes it on.
-- `charter/commands_frame.py`:
-  - `cmd_rename(args)`.
-  - `_palette_catalogue` (`:9140-9166`) inserts `rename.open_rows(fid)` before
-    `leave.open_rows(fid)`.
-  - `_picker` (`:9417+`) opens `rename.opens`.
-  - `_launch`'s `opening` branch (`:5977-5985`) records `rename.first_line_title(opening.brief)`.
-  - `_restore_recorded_chat` records `rec.title`; `_record_the_plane` writes `title=`.
+  - the module docstring's *"Exactly two rows"* and *"no rename anywhere in the frame"* (`:36-42`) are
+    rewritten.
+- **`charter/frame/selector.py`** — `TITLE_ID`, and `rows(..., titling=)` puts a title row **last**;
+  `pick(..., titling=)` loops through `rename.Rename` in the pane.
+- **`charter/commands_frame.py`**:
+  - `cmd_rename(args)`;
+  - `_palette_catalogue` (`:9140-9166`) inserts `rename.open_rows(fid)` before `leave.open_rows(fid)`,
+    which stays last with *chat: close* last;
+  - `_picker` (`:9417+`) opens `rename.opens`;
+  - `_launch`'s `opening` branch (`:5977-5985`) records `rename.first_line_title(opening.brief)`;
+  - `_restore_recorded_chat` records `rec.title`; `_record_the_plane` writes `title=`;
   - `cmd_new_chat` (`:11591+`) and `_open_workspace` (`:8510+`) launch with `titling=True`.
-- `charter/frame/leave.py` — `Doomed.title`; `title()` (`:429-443`) shows `label · profile`.
-- `charter/frame/reopen.py` — `Chat.title: str = ""`; `_chat`'s key list.
-- `charter/frame/choose.py` — the chat picker's row title uses `chats.label_of`.
-- `charter/cli.py` — `frame-rename` (`chat`, then `title` as `nargs=REMAINDER` after `--`), added
+- **`charter/frame/leave.py`** — `Doomed.title`; `title()` (`:429-443`) is `f"{chat} · {title} ·
+  {profile}"`, dropping the empty parts.
+- **`charter/frame/reopen.py`** — `Chat.title: str = ""`; `_chat`'s key list.
+- **`charter/frame/choose.py`** — the chat picker's row title uses `chats.label_of`.
+- **`charter/frame/ended.py`** — the drawer's label names the title.
+- **`charter/cli.py`** — `frame-rename` (`chat`, then `title` as `nargs=REMAINDER` after `--`), added
   to `_core_commands`; `frame-launch --title-row`.
-- Docs and news below.
 
 ### Interfaces
 
 **Consumes:**
-- From tasks 1–2:
-  - `launcher.session_argv`, `resume_row`, `argv_select(ended=)`;
-  - `selector.pick(resume=)`, `tabmenu.CLOSE_NOW_ID`;
-  - `reopen.Chat.ended`.
+- From tasks 1–2: `launcher.session_argv`, `resume_row`, `argv_select`; `selector.pick`;
+  `tabmenu.CLOSE_NOW_ID`; `reopen.Chat.ended`.
 - On `main`: `palette.Palette`, `palette.typed` (`palette.py:160`), `contain.one_line`,
   `contain.readable`, `commands_frame._repaint_the_other_strips`, `_say_on_screen`,
   `builtin_actions._spawn`.
@@ -1363,46 +1462,41 @@ re-reads that table, and stops if C3 showed `--resume` refusing `--name`.
 TITLE_MAX = 60
 TITLE_FILE = "title"
 def record_title(fid: str, text: str) -> bool: ...
-    # "" removes the title; refuses text that is not printable or is longer than TITLE_MAX after
+    # "" removes; refuses non-printable text or more than TITLE_MAX characters after
     # contain.one_line; True when the record changed
 def title(fid: str) -> str | None: ...
 
 # charter/frame/chats.py
 class Chat(NamedTuple): ...; title: str = ""
-def label_of(chat: str) -> str: ...     # contain.readable(title) when set, else the id
+def label_of(chat: str) -> str: ...   # contain.readable(title) when set, else the id
 
 # charter/frame/rename.py
 OPEN_ID = "rename:open"
 GO_ID = "rename:go"
 TOO_LONG = "a title is at most {max} characters — this one is {n}; nothing was renamed"
 NOT_PRINTABLE = "a title is one line of printable text — nothing was renamed"
-def normalized(text: str) -> tuple[str | None, str]: ...   # (the title or None, why it was refused)
-def first_line_title(brief: str) -> str: ...                # first non-blank line, one_line, cut at TITLE_MAX with contain.readable's marker
-def open_rows(fid: str) -> tuple[overlay.Row, ...]: ...     # "chat: rename — give this tab a title"
+def normalized(text: str) -> tuple[str | None, str]: ...
+def first_line_title(brief: str) -> str: ...
+def open_rows(fid: str) -> tuple[overlay.Row, ...]: ...   # "chat: rename — give this tab a title"
 def is_row(row) -> bool: ...
 def opens(row, target: str) -> "Rename | None": ...
 @dataclass
 class Rename(palette.Palette):
-    target: str = ""      # the one row is the typed text; Enter on GO_ID records it
-def chose(row, target: str, *, fid: str, text: str) -> bool: ...   # spawns `frame-rename <target> -- <text>`
+    target: str = ""
+def chose(row, target: str, *, fid: str, text: str) -> bool: ...   # spawns frame-rename <target> -- <text>
 
 # charter/frame/launcher.py
-def session_name(fid: str) -> str: ...  # f"{title} · {fid}" or fid; the title as recorded (printable, one line)
+def session_name(fid: str) -> str: ...   # f"{title} · {fid}" or fid
+def argv_select(start, *, ended: bool = False, fresh: bool = False, titling: bool = False) -> list[str]: ...
+
+# charter/frame/selector.py
+TITLE_ID = "title:"
+def rows(have, *, cwd, start=None, after=None, resume=None, titling: bool = False) -> tuple[overlay.Row, ...]: ...
+def pick(*, cwd, root, start=None, after=None, resume=None, titling: bool = False, fd=None, out=None): ...
 
 # charter/frame/tabmenu.py
 RENAME_ID = "tab:rename"
 def rename_title(target: str) -> str: ...
-
-# charter/frame/selector.py
-TITLE_ID = "title:"
-def rows(have, *, cwd, start=None, after=None, resume=None,
-         titling: bool = False) -> tuple[overlay.Row, ...]: ...   # the title row last when titling
-def pick(*, cwd, root, start=None, after=None, resume=None, titling: bool = False,
-         fd=None, out=None) -> Choice | None: ...                   # loops through Rename on TITLE_ID
-
-# charter/frame/launcher.py
-def argv_select(start: str | None, *, ended: bool = False, titling: bool = False) -> list[str]: ...
-    # titling adds --title-row
 
 # charter/commands_frame.py
 def cmd_rename(args) -> int: ...   # always 0; the outcome goes to _say_on_screen
@@ -1410,46 +1504,35 @@ def cmd_rename(args) -> int: ...   # always 0; the outcome goes to _say_on_scree
 
 ### Behaviour
 
-- **`record_title` is the one gate.** It applies `contain.one_line`, strips, and refuses a
-  character that is not `str.isprintable()` or a length over `TITLE_MAX`. Empty removes the
-  file. It writes through `config.write_for`.
-- **The strip.**
-  - `label_of` is drawn in the tab, measured with `tui.width`, clipped by the bar's existing
-    rules.
-  - The click map is published with the id, so `TABS.tab_at` answers the chat.
-  - A title wider than a tab is `tui.truncate`d like a long id is today.
+- **`record_title` is the one gate.** It applies `contain.one_line` and strips. It refuses any
+  character that is not `str.isprintable()`, and anything over `TITLE_MAX`. Empty removes the file.
+  It writes through `config.write_for`.
+- **The strip.** `label_of` is drawn and measured with `tui.width`, and clipped by the bar's rules. The
+  click map is published with the id.
 - **Rename from the tab menu or `F2`.**
-  1. The row opens `Rename` in the same pane: a doorway, `tabmenu.opens`' and `_picker`'s shape.
-  2. Typing edits the one row, whose title is `title: <typed>`; `palette.typed` is the query.
-  3. Enter runs `normalized`. A refusal goes to the footer, and the surface stays. A title is
-     spawned as `frame-rename <target> -- <title>` through `builtin_actions._spawn`, a `Popen`
-     argv with no tmux.
-  4. Esc renames nothing.
+  1. The row is a doorway to `Rename` in the same pane, whose one row is `title: <typed>`.
+  2. Enter runs `normalized`. A refusal stays in the footer. A title is spawned as `frame-rename
+     <target> -- <title>` through `builtin_actions._spawn`: a `Popen` argv, no tmux.
+  3. Esc renames nothing.
 - **`cmd_rename(args)`.**
   1. The id is held to `chats.ID_RE` and must name a chat on this plane.
-  2. `normalized`, then `state.record_title`.
-  3. `state.bump(target)` and `_repaint_the_other_strips(target)`.
-  4. `_say_on_screen(fid, "renamed — Claude Code sees the new name the next time it starts or
-     resumes")` when the kind is `claude-code`, and `"renamed"` otherwise.
+  2. `normalized`, then `record_title`.
+  3. `bump`, then `_repaint_the_other_strips`.
+  4. `_say_on_screen` says `renamed — Claude Code sees the new name the next time it starts or
+     resumes` for a `claude-code` chat, and `renamed` otherwise.
 
-  It sends no `send-keys`, respawns nothing, and touches no harness.
+  It sends no keys and respawns nothing.
 - **At `+` and a workspace tab.**
-  - The selector carries `Row(id=TITLE_ID, title="title: (none) — Enter to name this chat")` as
-    its **last** row, so `palette.aim` and `opens_on` never put the cursor on it.
-  - Enter opens `Rename` in the pane, records through `state.record_title` directly (the pane is
-    the chat's own, proven by `framed_chat`), and returns to the list with the row showing the
-    title.
-  - It is not offered on an ended selector or on a reopen.
-- **A handoff.** `_launch` records `rename.first_line_title(opening.brief)` beside
-  `state.record_brief`. `first_line_title` cuts with `contain.readable`'s marker and never
-  refuses: a brief is not a tab label.
-- **The name Claude Code sees.**
-  - `launcher.session_name(fid)` is read at every `exec` by `session_argv`, for `--session-id …
-    --name` and `--resume … --name`.
-  - Codex and opencode get nothing, because their `new_session_argv` and `resume_argv` take no
-    name.
-- **The record.** `leave.Doomed.title` comes from `state.title`, `_record_the_plane` writes it,
-  and `_restore_recorded_chat` records it before tmux.
+  - The selector's `Row(id=TITLE_ID, title="title: (none) — Enter to name this chat")` is last, so
+    `palette.aim` and `opens_on` never put the cursor on it.
+  - Enter opens `Rename`, records through `state.record_title` (the pane is the chat's own, proven by
+    `framed_chat`), and comes back.
+  - It is not offered on an ended selector or a reopen.
+- **A handoff.** `_launch` records `first_line_title(opening.brief)`: the first non-blank line, run
+  through `contain.one_line`, cut at `TITLE_MAX` with `contain.readable`'s marker, never refused.
+- **The name Claude Code sees.** `session_name(fid)` is read at every `exec`. Codex and opencode get
+  none.
+- **The record.** `leave.Doomed.title` → `_record_the_plane` → `_restore_recorded_chat`, before tmux.
 
 ### Test cases (write first; each must fail before the code exists)
 
@@ -1459,105 +1542,93 @@ Class `TheTitleIsStoredAndContained(PersonaIso, unittest.TestCase)`:
 
 | Case | Asserts |
 |---|---|
-| `test_a_title_is_recorded_and_read` | `record_title("beta.1", "fix the widget")` → `title("beta.1") == "fix the widget"`; the file is `.charter/frame/beta.1/title`, spelled literally |
-| `test_empty_removes_it` | → `title is None`, no file |
-| `test_a_newline_becomes_one_line` | `"a\nb"` → the recorded text holds no `\n` |
+| `test_a_title_is_recorded_and_read` | `record_title("beta.1", "fix the widget")` → `title == "fix the widget"`; the file is `.charter/frame/beta.1/title`, spelled literally |
+| `test_empty_removes_it` | → `None`, no file |
+| `test_a_newline_becomes_one_line` | `"a\nb"` → no `\n` |
 | `test_a_control_byte_is_refused` | `"a\x1b[2Kb"` → `False`, nothing written |
-| `test_a_title_over_the_limit_is_refused_with_its_length` | 61 characters → `False`; `rename.normalized` answers `(None, "…at most 60 characters — this one is 61…")` |
-| `test_a_brief_first_line_is_cut_not_refused` | `first_line_title("\n\n" + "x" * 90 + "\nrest")` is at most 60 characters and ends with `contain.readable`'s marker |
-| `test_a_drawn_title_is_escaped` | a title file written by hand holding `\x1b` → `chats.label_of` holds no ESC byte |
+| `test_a_title_over_the_limit_is_refused_with_its_length` | 61 characters → `False`; `normalized` holds `this one is 61` |
+| `test_a_brief_first_line_is_cut_not_refused` | at most 60 characters, ending in `contain.readable`'s marker |
+| `test_a_drawn_title_is_escaped` | a hand-written file holding `\x1b` → `label_of` holds no ESC |
 
-Class `TheStripDrawsTheTitle(PersonaIso, unittest.TestCase)`:
-- `test_a_titled_tab_draws_its_title_and_an_untitled_one_its_id` — the chats bar rendered →
-  `fix it` and `beta.2` are on the row.
-- `test_a_click_on_a_title_resolves_to_the_chat` — `TABS.tab_at(0, <a column of "fix it">) ==
-  "beta.1"`.
-- `test_the_workspaces_strip_is_unchanged` (pin) — its render equals the render at `5ad755d` for
-  the same plane.
+Class `WhereATitleIsShown(PersonaIso, unittest.TestCase)`:
+- **The strip:** a titled tab draws its title and an untitled one its id; a click on the title
+  resolves to the chat.
+- **The tab menu's label:** `tabmenu.label("beta.1")` holds `fix it`.
+- **The confirmation rows:** `leave.title(Doomed(..., title="fix it", profile="claude")) ==
+  "beta.1 · fix it · claude"`.
+- **The resume row:** `launcher.resume_row("beta.1").title == "resume fix it · beta.1"`.
+- **The chat picker:** `choose`'s chat row holds `fix it`.
+- **`test_a_workspace_tabs_selector_names_no_chat_title`:** a sibling chat titled `secret plan` →
+  `selector.rows(..., titling=True)` holds that text in no row.
+- **The workspaces strip is unchanged** (pin).
 
 Class `RenameFromTheTabMenuAndF2(PersonaIso, unittest.TestCase)`:
 
 | Case | Asserts |
 |---|---|
-| `test_the_tab_menu_carries_rename_between_transcript_and_close` | `[r.id for r in tabmenu.catalogue("beta.1")] == ["tab:transcript", "tab:rename", "tab:close"]` |
-| `test_the_palette_carries_rename_before_the_leaving_rows` | `_palette_catalogue` → the `rename:open` row comes before `leave:quit` |
-| `test_the_rename_row_is_a_doorway` | `tabmenu.opens(rename_row, …)` is a `rename.Rename`; `tabmenu.chose` of it is `False` |
-| `test_enter_spawns_frame_rename_with_the_typed_text_on_argv_and_not_tmux` | `rename.chose(go_row, "beta.1", fid="beta.1", text="fix it")` → `_spawn` argv ends `["frame-rename", "beta.1", "--", "fix it"]`; no `tmuxctl.run` call |
-| `test_the_command_records_bumps_and_says_when_claude_sees_it` | `cmd_rename(SimpleNamespace(chat_id="beta.1", title=["fix", "it"], chat="beta.1"))` → title recorded; `beta.2`'s version moved; the notice holds `next time it starts or resumes` for a `claude-code` chat |
-| `test_a_rename_never_touches_the_harness` | no recorded tmux argv holds `send-keys` or `respawn-pane` |
-| `test_a_name_that_is_not_a_chat_is_refused_before_anything` | `chat_id="../x"` → nothing written, the notice holds the refusal |
+| `test_the_tab_menu_carries_rename_and_close_stays_last` | ids `["tab:transcript", "tab:rename", "tab:close"]`; on an ended tab the last is `tab:close-now` |
+| `test_the_palette_carries_rename_before_the_leaving_rows` | `rename:open` before `leave:quit`; `leave:close` last |
+| `test_the_rename_row_is_a_doorway` | `opens` → `Rename`; `chose` → `False` |
+| `test_enter_spawns_frame_rename_with_the_text_on_argv_not_tmux` | `_spawn` argv ends `["frame-rename", "beta.1", "--", "fix it"]`; no `tmuxctl.run` |
+| `test_the_command_records_bumps_and_says_when_claude_sees_it` | recorded; `beta.2`'s version moved; the notice holds `next time it starts or resumes` |
+| `test_a_rename_never_touches_the_harness` | no tmux argv holds `send-keys` or `respawn-pane` |
+| `test_a_name_that_is_not_a_chat_is_refused` | `chat_id="../x"` → nothing written |
 
 Class `ATitleAtThePlus(PersonaIso, unittest.TestCase)`:
-- `test_the_selector_carries_a_title_row_last_when_titling` — `selector.rows(..., titling=True)[-1].id
-  == "title:"`.
-- `test_the_cursor_never_opens_on_it` — `Selector(rows).selected().id != "title:"` with a runnable
-  profile row present.
-- `test_a_title_given_at_the_selector_is_recorded_before_the_pick` — queued rows: `title:`, then
-  the typed `fix it` on `Rename`, then `profile:claude` → inside the `execvpe` fake,
-  `state.title("beta.1") == "fix it"`.
-- `test_the_plus_and_a_tab_ask_for_the_title_row` — the `cmd_new_chat` and `_open_workspace`
-  launch args hold `titling=True`, and a reopen's do not.
+- The title row is last when titling.
+- The cursor never opens on it.
+- A title given there is recorded before the pick (inside the `execvpe` fake).
+- `+` and a tab set `titling=True`; a reopen and an ended selector do not.
 
 Class `AHandoffTitlesItsChat(PersonaIso, unittest.TestCase)`:
-- `test_the_first_line_of_the_brief_is_the_title` — `open_in_background("beta", caller="alpha.1",
-  first_message=…, brief="Fix the widget\n\nDetails…")` with `cmd_launch` running `_launch` under
-  its patches → `state.title(<new fid>) == "Fix the widget"`.
-- `test_a_brief_carrying_control_bytes_titles_nothing_unescaped` — `"\x1b]0;x\x07Fix"` → the
-  strip's label holds no ESC or BEL byte.
+- The first line of the brief is the title.
+- A brief carrying `\x1b]0;x\x07` leaves no ESC or BEL in the label.
 
-Class `ClaudeIsNamedAtStartAndResume(PersonaIso, unittest.TestCase)` — task 1's launcher patches:
-- `test_a_titled_chat_is_named_title_dot_id` — `--name` is followed by `fix it · beta.1`.
-- `test_an_untitled_chat_is_named_its_id` — `--name beta.1`.
-- `test_a_resume_after_a_rename_carries_the_new_name` — rename, then `--resume` →
-  `--name "new · beta.1"`.
-- `test_codex_and_opencode_are_given_no_name` — no `--name` in either argv.
-- `test_the_resume_row_names_the_session` — `launcher.resume_row("beta.1").title ==
-  "resume fix it · beta.1"`.
+Class `ClaudeIsNamedAtStartAndResume(PersonaIso, unittest.TestCase)`:
+- A titled chat gets `--name "fix it · beta.1"`, and an untitled one `--name beta.1`.
+- A resume after a rename carries the new name.
+- Codex and opencode get no `--name`.
 
 Class `TheTitleTravelsThroughTheRecord(PersonaIso, unittest.TestCase)`:
-- `test_a_quit_records_the_title` — the literal key `"title"`.
-- `test_a_reopen_restores_it_before_tmux` — inside the `new-window` fake, `state.title("beta.7")`.
-- `test_a_record_from_before_reads_as_untitled` — no key → `""`.
-- `test_the_quit_row_names_the_title` — `leave.title(Doomed(..., title="fix it", profile="claude"))
-  == "beta.1 · fix it · claude"`.
+- The literal key `"title"`.
+- Restored before tmux.
+- A record from before reads as untitled.
 
 **Existing tests this task changes** (a floor):
-- `tests/test_a_right_click_on_a_tab_acts_on_that_tab.py::TheMenuIsTheTwoRowsThatHaveATabToSitOn`
-  — three rows; the class name and its docstring's scope argument are rewritten.
-- `tests/test_a_real_click_on_a_real_tab_bar_switches.py::ARealRightClickOnTheChatBarOpensARealMenu`
-  — the row count.
+- `tests/test_a_right_click_on_a_tab_acts_on_that_tab.py::TheMenuIsTheTwoRowsThatHaveATabToSitOn` —
+  three rows, and the class name and docstring rewritten.
+- `tests/test_a_real_click_on_a_real_tab_bar_switches.py::ARealRightClickOnTheChatBarOpensARealMenu` —
+  the row count.
 - `tests/test_frame_bars.py` and `tests/test_a_tab_strip_grows_a_row_when_its_tabs_overflow.py` —
-  widths measured from labels; the strip tuple's sixth element.
+  widths from labels, and the sixth tuple element.
 - `tests/test_frame_palette.py::TheActionsCharterOffersItself` — the catalogue's rows.
-- `tests/test_a_new_chat_starts_at_the_profile_selector.py::TheRows` — no title row without
-  `titling`.
+- `tests/test_a_new_chat_starts_at_the_profile_selector.py::TheRows` — no title row without `titling`.
 - `tests/test_the_launcher_becomes_the_profile.py` and task 1's module — the `--name` value.
 - `tests/test_a_reopen_says_what_it_cannot_bring_back.py` — `leave.title` literals.
 
 ### Implementation steps
 
-- [ ] Re-read task 1's C1/C3 table; stop if `--resume` refuses `--name`.
-- [ ] Tests first; run the module and the changed modules — expect failures; note the counts.
-- [ ] `state` title; `chats.label_of`, `Chat.title`; `reopen`/`leave` title fields.
+- [ ] Re-read task 1's C1 and C3 readings.
+- [ ] Tests first; run the new module and the changed ones — expect failures; note the counts.
+- [ ] The `state` title; `chats.label_of`; the `reopen` and `leave` fields.
 - [ ] `rename.py`; `cmd_rename`; the `cli` parsers.
 - [ ] The strip's labels; `tabmenu`'s rename row; the palette doorway and `_picker`.
-- [ ] The selector title row and `argv_select(titling=)`; `cmd_new_chat`/`_open_workspace`.
-- [ ] `launcher.session_name` in `session_argv` and `resume_row`; the handoff's title; the restore.
-- [ ] Run `grep -rn "Exactly two rows\|no rename\|two rows that have a tab" charter/ tests/` in both
+- [ ] The selector's title row; `argv_select(titling=)`; `cmd_new_chat` and `_open_workspace`.
+- [ ] `session_name`; the handoff title; the restore; the drawer label.
+- [ ] `grep -rn "Exactly two rows\|no rename\|two rows that have a tab" charter/ tests/`, both
       directions.
-- [ ] Focused modules green. Docs, news, commit, push, CI's four jobs, the sweep summary.
+- [ ] Focused modules green; docs, news; commit, push; CI's four jobs; the sweep summary.
 
 ### Docs and news
 
-- **`docs/frame.md`.**
-  - The chat strip and `-` paragraphs (`:930-962`): a tab shows its title, rename is on the tab
-    menu and `F2`, and `+` offers a title row.
-  - `### A chat opened for you in the background` (`:726`): the brief's first line titles it.
+- **`docs/frame.md`:**
+  - the strip and `-` paragraphs (`:930-962`): titles, rename, the `+` title row, and where a title
+    is shown;
+  - `### A chat opened for you in the background` (`:726`): the brief's first line titles it;
   - `## Leaving`: a reopen restores titles.
-  - `### No harness starts until you pick a profile`: the title row.
-- **`docs/harnesses.md`** — the session name: Claude Code sees `<title> · <id>` at its next start
-  or resume; Codex and opencode keep their own names.
-- **`CONTEXT.md`** **Title**, avoiding *name*.
+- **`docs/harnesses.md`** — the session name, `<title> · <id>`, which Claude Code sees at its next start
+  or resume and lists in a fresh `claude --resume` picker (C3). Codex and opencode keep their own.
+- **`CONTEXT.md`** **Title**.
 - **News** `docs/news/unreleased-a-tab-can-carry-a-title.md`:
 
   ```
@@ -1567,9 +1638,6 @@ Class `TheTitleTravelsThroughTheRecord(PersonaIso, unittest.TestCase)`:
   ---
   ```
 
-  Body: where titles come from; that Claude Code sees one at its next start or resume; that Codex
-  and opencode keep their own names; and that charter never types into a harness.
-
 **Suggested PR title:** A tab can carry a title, and Claude Code is started under it
 
 ---
@@ -1578,64 +1646,77 @@ Class `TheTitleTravelsThroughTheRecord(PersonaIso, unittest.TestCase)`:
 
 **Depends on:** tasks 2 and 3 on `main`. **Closes:** #1097.
 
-### Step 0 — Measure first. A failed G1, G2 or G4 stops this task.
+### Step 0 — Measure first. A failed G1, G2, G3, G4 or G6 stops this task.
 
-**Where.** A throwaway `-S /tmp/cp-t4-<slug>/s` server with two clients attached over two ptys:
-`tests/test_a_real_click_on_a_real_tab_bar_switches.py::_ARealFrameWithBars`' pty helper, run by
-hand. Both tmux 3.7c and the 3.2 floor.
+**Where.** A throwaway `-S /tmp/cp-t4-<slug>/s` server, with two clients attached over two ptys
+(`tests/test_a_real_click_on_a_real_tab_bar_switches.py::_ARealFrameWithBars`' pty helper, run by hand).
+Both tmux 3.7c and the 3.2 floor.
 
 | # | Reading | Pass when |
 |---|---|---|
-| G1 | `bind -n F10 run-shell 'echo "#{client_name}" >> <file>'`; `\x1b[21~` written to client A's pty | the file holds A's `#{client_name}` and not B's, on both versions |
-| G2 | `detach-client -t <A>` | A's `attach` exits; B's is still attached |
-| G3 | an SGR press on a panel pane in A's view; the panel's child runs `display-message -p -t <$session id> '#{client_name}'` | record the answer, three trials in each order of last activity (open question 3). Not a stop criterion |
-| G4 | `detach-client -s default.1` against a session `default` with a window `default.1`; then `detach-client -s <$N>` from `display-message -p -t <%pane> '#{session_id}'` | the first fails with `can't find`, the second detaches every client of that session |
-| G5 | `conf_text(...)` with the `F10` line, `source-file`'d | `list-keys -T root` shows `F10` and `F2`, and the escape hatch's line is still the last one sourced |
+| G1 | `bind -n F2 run-shell 'echo "#{client_name}" >> <file>'`, and the same for `F10`; each key's bytes written to client A's pty | the file holds A's `#{client_name}` and not B's, on both versions |
+| G2 | `detach-client -t <A>` | A's `attach` exits; B stays attached |
+| G3 | the `MouseDown1Pane` bind with its panel branch `set-option -p -t = @charter_presser "#{client_name}" ; send-keys -M`; an SGR press on a panel pane in A's view, then in B's | after A's press the panel pane's `@charter_presser` is A's name, after B's it is B's, in either order of last activity, three trials each. **If not, the task stops and goes to the controller** (the spec's open question 3 ruling) |
+| G4 | `detach-client -s default.1` against session `default` with window `default.1` | fails with `can't find` — the #1097 reading, recorded |
+| G5 | `conf_text(...)` with the `F10` line and the changed hotkey and click binds, `source-file`'d | `list-keys -T root` shows `F2`, `F10` and `MouseDown1Pane` with the presser; the escape hatch's line is still last |
+| G6 | `list-clients -F '#{client_name}\t#{session_id}'` on the server, and `display-message -p -t <$N> '#{@charter_plane}'` | each attached client is listed with its session; a session created by `layout.session_argv` and `_plane_option_argv` answers its plane |
 
-**Stop rule** as task 2's. **G3's result chooses the pointer route** (Behaviour, below), and goes
-into the PR and the spec's open question 3.
+**Stop rule** as task 2's.
 
 ### Files
 
-- Create `charter/frame/gate.py`, `tests/test_one_gate_closes_charter.py`, and
+- **Create** `charter/frame/gate.py`, `tests/test_one_gate_closes_charter.py` and
   `tests/test_the_gate_detaches_a_real_client.py`.
-- `charter/commands_frame.py`:
-  - `conf_text` (`:1018-1035`): the gate's bind directly after the hotkey's, before
-    `BAR_ROWS_KEY`'s and the toggles; the escape hatch stays last.
-  - `cmd_palette` (`:8948-9024`): `gate.wanted(args)` → `gate.draw(args)`, beside
+- **`charter/commands_frame.py` — `conf_text` (`:1018-1035`).**
+  - **The hotkey bind** passes the presser in `frame-palette`'s existing `client` positional:
+    `frame-palette "#{client_name}" --chat "#{@charter_chat}"`. #729 left that positional accepted,
+    and its reason for removing the value (a consumer gone) no longer holds.
+  - **The gate's `F10` bind** follows the hotkey's.
+  - **`tmuxctl.CLICK_KEY`'s panel branch** records the presser before forwarding:
+    `'set-option -p -t = @charter_presser "#{client_name}" ; send-keys -M'`.
+  - The escape hatch stays last.
+- **`charter/commands_frame.py` — the palette.**
+  - **`cmd_palette` (`:8948-9024`):** `gate.wanted(args)` → `gate.draw(args)`, beside
     `tabmenu.wanted`.
-  - `_open_palette` (`:9026-9070`): splices `gate.forward(args)` beside `tabmenu.forward(args)`.
-  - `_draw_palette` (`:9168-9300`): a chosen `builtin_actions` detach row passes the palette's
-    client when it has one.
-- `charter/frame/builtin_actions.py`:
-  - `_detach(fid, client="")` (`:116-124`) resolves as below; `NO_SESSION_TO_DETACH`.
-  - `_register_detach` (`:139-146`): the title is `gate.DETACH_TITLE`; `available` and
-    `reason_unavailable` are unchanged.
-- `charter/frame/leave.py` — `OPEN_QUIT` (`:459`) is `gate.STOP_TITLE`; ids unchanged.
-- `charter/frame/slots.py`:
-  - `_Doors` (`:320-399`): `_gate` columns, `publish(columns, gate=())`, `opens_gate(col)`.
-  - `_top` (`:433-615`): `GATE_BUTTON` at the right end. It is dropped whole after the version and
-    before the identity, and its columns are published through `_door_columns`.
-- `charter/frame/builtins.py` — `_strip_events` (`:701-752`): a gate door spawns
-  `frame-palette --gate`.
-- `charter/instance.py`:
+  - **`_open_palette` (`:9026-9070`):** forwards the presser (`args.client`, held to
+    `gate.CLIENT_RE`) and `--gate`.
+  - **`_draw_palette` (`:9168-9300`):** hands `builtin_actions.build(..., client=)` the presser.
+- **`charter/frame/builtin_actions.py`.**
+  - **`_detach(fid, client)` (`:116-124`)** is presser-only, proven by a listing.
+    `NO_PRESSER_TO_DETACH`.
+  - **`build(fid, *, current_density, current_chrome, client="")` (`:798`)** closes the presser over
+    `_register_detach`'s `run`.
+  - **The detach row's title** is `gate.DETACH_TITLE`, and it is listed refused with
+    `NO_PRESSER_TO_DETACH` when `client` is empty. `_detachable` is unchanged.
+- **`charter/frame/leave.py`** — `OPEN_QUIT` (`:459`) is `gate.STOP_TITLE`. The ids stay, and the order
+  stays `(quit, close)`: *chat: close* last.
+- **`charter/frame/slots.py`.**
+  - **`_Doors` (`:320-399`)** gains `_gate`, `publish(columns, gate=())` and `opens_gate(col)`.
+  - **`_top` (`:433-615`)** draws `GATE_BUTTON` at the right end and publishes its columns. It is
+    dropped after the version and before the identity, and stays at `terse`.
+  - **Inside the operator's own tmux** `_top` draws no button and publishes no gate column. That is
+    `_bottom`'s rule (`:2805-2813`).
+- **`charter/frame/builtins.py` — `_strip_events` (`:701-752`).**
+  - Reads its own pane's `@charter_presser`, with one `display-message -p -t $TMUX_PANE`, held to
+    `gate.CLIENT_RE`.
+  - Spawns `frame-palette <presser> --gate` for a gate door, and `frame-palette <presser>` for a
+    palette door.
+- **`charter/instance.py`.**
   - `component_arrangement`'s `bound` (`:2561-2562`) gains `gate.GATE_KEY`.
-  - The `[frame] hotkey` resolution (read `frame_of` and `:2100` first) refuses a value equal to
-    `gate.GATE_KEY`, falling back to the shipped `F2` exactly as it does for a value
-    `_HOTKEY_RE` refuses, with the reason where that path puts it.
-- `charter/cli.py` — `frame-palette` (`:970-991`): `--gate` (`store_true`) and `--client`
-  (`default=""`).
-- Docs and news below.
+  - The `[frame] hotkey` resolution refuses a value equal to it, falling back to `F2` as an unusable
+    hotkey does. Read `frame_of` and `:2100` first.
+- **`charter/cli.py`** — `frame-palette` (`:970-991`) gains `--gate` (`store_true`). The `client`
+  positional (`:971`) is read now, not ignored.
 
 ### Interfaces
 
 **Consumes:**
-- From tasks 2–3: `leave.plan(...).chats[*].ended`, `leave.note`, `chats.label_of`.
+- From tasks 2–3: `leave.plan(...)` with `ended`, `leave.note`, `chats.label_of`.
 - On `main`:
   - `commands_frame._pane_place` (`:7949`), `_plane_live`, `_plane_servers`, `_as_a_drawer`,
-    `_close_palette` (`:9605`), `_say_on_screen`;
+    `_close_palette` (`:9605`), `_say_on_screen`, `_this_plane`;
   - `tabmenu.handback`; `builtin_actions._spawn`, `_server`, `_detachable`;
-  - `slots._door_columns` (`:402`); `instance.component_arrangement`.
+  - `slots._door_columns` (`:402`); `palette.Palette`.
 
 **Produces:**
 
@@ -1648,20 +1729,26 @@ DETACH_ID = "gate:detach"
 STOP_ID = "gate:stop"
 DETACH_TITLE = "Close charter (keep chats running)"
 STOP_TITLE = "Close charter and stop all chats…"
+PRESSER_OPTION = "@charter_presser"
 CLIENT_RE = re.compile(r"/dev/[A-Za-z0-9._/-]{1,64}")
-DETACHES_EVERY_CLIENT = "detaches every terminal on this workspace — charter cannot tell which one clicked"
+NOT_HERE = ("the close menu is not drawn inside a tmux you already have — F2's rows carry it, and your "
+            "own prefix key detaches")
 def wanted(args) -> bool: ...
-def client_of(args) -> str: ...            # args.client held to CLIENT_RE, else ""
-def forward(args) -> tuple[str, ...]: ...  # ("--gate",) + ("--client", c) when c, else ()
+def presser_of(args) -> str: ...     # args.client held to CLIENT_RE, else ""
 def catalogue(fid: str, *, client: str) -> tuple[overlay.Row, ...]: ...
+@dataclass
+class Gate(palette.Palette): ...      # _refilter pins the cursor to DETACH_ID, refused or not
 def opens(row, fid: str, *, live) -> "palette.Palette | None": ...
 def chose(row, fid: str, *, client: str) -> bool: ...
-def draw(args) -> int: ...                 # always 0
+def draw(args) -> int: ...           # always 0
 
 # charter/frame/builtin_actions.py
-NO_SESSION_TO_DETACH = ("charter cannot find this chat's tmux session, so it detached nothing — "
-                        "close the terminal to detach it")
-def _detach(fid: str, client: str = "") -> str: ...
+NO_PRESSER_TO_DETACH = ("charter cannot tell which terminal asked, so it detached nothing — press F10 "
+                        "in the terminal you want to close, or close it")
+NOT_ATTACHED_HERE = ("that terminal is not attached to this chat's session on this plane, so charter "
+                     "detached nothing")
+def _detach(fid: str, client: str) -> str: ...
+def build(fid: str, *, current_density: str, current_chrome: str, client: str = "") -> ActionRegistry: ...
 
 # charter/frame/slots.py
 GATE_BUTTON = "F10 close"
@@ -1672,203 +1759,194 @@ class _Doors:
 
 ### Behaviour
 
-**The bind.** One line, after the hotkey's:
-`f"bind -n {gate.GATE_KEY} run-shell '\"${_CHARTER_PY_ENV}\" -m charter frame-palette --gate --chat \"#{{{_CHAT_OPTION}}}\" --client \"#{{client_name}}\"'"`.
-It is a constant, and tmux expands both formats at the keypress (G1).
+**The binds.** Each is one line in `conf_text`, and each is a constant:
+- **hotkey:** `bind -n {hotkey} run-shell '"$CHARTER_PY" -m charter frame-palette "#{client_name}"
+  --chat "#{@charter_chat}"'`
+- **gate:** `bind -n F10 run-shell '"$CHARTER_PY" -m charter frame-palette "#{client_name}" --gate
+  --chat "#{@charter_chat}"'`
+- **click:** `bind -n MouseDown1Pane if-shell -F -t = '#{@charter_panel}' 'set-option -p -t =
+  @charter_presser "#{client_name}" ; send-keys -M' 'select-pane -t =; send-keys -M'`. The spelling is
+  as G3 and G5 settle it.
 
-**The menu (`gate.draw`)** takes `tabmenu.draw`'s shape: `handback`, then
-`palette.Palette(catalogue=catalogue(fid, client=client_of(args)), label=LABEL, mouse=True)`,
-then `own_the_tty` with `then=` answering `opens` through `commands_frame._as_a_drawer`, then
-`chose`. `finally` runs `_close_palette`.
+**The menu (`gate.draw`).**
+- **On an operator socket** it draws nothing, says `NOT_HERE` on the attention row, and returns 0.
+- **Otherwise** it has `tabmenu.draw`'s shape: `handback`, `Gate(catalogue=catalogue(fid,
+  client=presser_of(args)), label=LABEL, mouse=True)`, `own_the_tty` with `then=` answering `opens`
+  through `_as_a_drawer`, then `chose`. `finally` runs `_close_palette`.
 
 **`catalogue(fid, *, client)`:**
-1. `Row(id=DETACH_ID, title=DETACH_TITLE)`.
-   - `note=DETACHES_EVERY_CLIENT` when `client == ""` and G3 did not pass.
-   - `refused=True` with `_register_detach`'s own `reason_unavailable` when
-     `not builtin_actions._detachable(fid)`: the operator's own tmux.
+1. `Row(id=DETACH_ID, title=DETACH_TITLE)`, `refused=not client`, with `note=NO_PRESSER_TO_DETACH`
+   when it is refused.
 2. `Row(id=STOP_ID, title=STOP_TITLE)` — a doorway.
 
-It is first-runnable-row aimed, so *Close charter (keep chats running)* is under the cursor
-wherever it can run.
+`Gate._refilter` puts the cursor on `DETACH_ID` in every state. It is never left to `palette.aim`,
+which would open on the stop row when the detach row is refused.
 
-**`opens(row, fid, *, live)`.** `STOP_ID` → `palette.Palette(catalogue=leave.confirm_rows(
-leave.plan(live=live, focus=state.own_workspace(fid) or ""), verb=leave.QUIT), label=leave.QUIT,
-mouse=True)`. Anything else → `None`.
+**`opens`.** `STOP_ID` → `palette.Palette(catalogue=leave.confirm_rows(leave.plan(live=live,
+focus=state.own_workspace(fid) or ""), verb=leave.QUIT), label=leave.QUIT, mouse=True)`.
 
-**`chose(row, fid, *, client)`:**
-- `DETACH_ID` → `builtin_actions._detach(fid, client)`, and `True`.
-- `leave.goes_through(row, leave.QUIT)` → `_spawn(util.self_relaunch_argv("frame-quit", "--chat",
-  fid), fid=fid)`, and `True`.
+**`chose`:**
+- `DETACH_ID` → `builtin_actions._detach(fid, client)`.
+- `leave.goes_through(row, QUIT)` → `_spawn(frame-quit --chat fid)`.
 - A refused row → `False`, and its note is said.
 
-**`_detach(fid, client="")` — #1097.**
-1. `server = _server(fid)`.
-2. `client` matching `gate.CLIENT_RE` → `_spawn(tmuxctl.server_argv(server, "detach-client",
-   "-t", client))`.
-3. Otherwise `place = commands_frame._pane_place(server, state.harness_pane(fid))`:
-   - `None` → return `NO_SESSION_TO_DETACH` and spawn nothing;
-   - else `_spawn(tmuxctl.server_argv(server, "detach-client", "-s", place[0]))`, where
-     `place[0]` is `$N`.
-4. A chat id and a session name are never a target.
+**`_detach(fid, client)` — #1097, and decision 2.**
+1. `client` must match `gate.CLIENT_RE`. Otherwise return `NO_PRESSER_TO_DETACH`, spawning nothing.
+2. `server = _server(fid)`; `place = commands_frame._pane_place(server, state.harness_pane(fid))`.
+   `None` → return `NOT_ATTACHED_HERE`.
+3. One `list-clients -F '#{client_name}\t#{session_id}'` on `server`. The presser's row must name
+   `place[0]`, and `display-message -p -t <place[0]> '#{@charter_plane}'` must equal `_this_plane()`.
+   Otherwise → `NOT_ATTACHED_HERE`.
+4. `_spawn(tmuxctl.server_argv(server, "detach-client", "-t", client))`.
 
-**The pointer route.**
-- `_strip_events` spawns `frame-palette --gate` with no client for a gate door.
-- **If G3 passed**, `gate.draw` resolves the client itself, with `tmuxctl.run(...,
-  "display-message", "-p", "-t", <$N>, "#{client_name}")` held to `CLIENT_RE`, and the row carries
-  no note.
-- **If G3 did not pass**, the row detaches every client of the session and carries
-  `DETACHES_EVERY_CLIENT`.
+It never targets a chat id, a session name or `-s`. No branch detaches every client.
 
-**The button.**
-- `_top` builds `f" {GATE_BUTTON} "` as the last cell.
-  - When the row fits, the right end is `charter <version> │ F10 close`.
-  - When it does not, the version goes first, then the button, then the identity is truncated as
-    today.
-- Its columns are published as `gate=`; `opens_palette` never answers for them.
-- At `terse` the version goes and the button stays.
+**The pointer route.** `_strip_events` reads `@charter_presser` from its own pane and hands it on. An
+empty or unshaped value reaches the gate as no presser, where the detach row is refused with its
+reason.
+
+**The button.** `_top` builds `f" {GATE_BUTTON} "` as the last cell on charter's own server, and never
+on an operator socket.
 
 **The `F2` rows.**
-- `frame.detach`'s title is `DETACH_TITLE`, and its `run` passes the palette's client: `cmd_palette`
-  reads `--client` when `_open_palette` forwarded one, and today's hotkey bind carries none. So the
-  `F2` row resolves the session per step 3, unless G3 passed and the palette resolved it.
+- `frame.detach`'s title is `DETACH_TITLE`, and its `run` detaches the hotkey's presser.
 - `leave.OPEN_QUIT` is `STOP_TITLE`.
-- Both keep their ids and positions.
+- The ids and positions stay: *chat: close* is still the palette's last row, and its stop row second
+  to last. `palette.aim` lands on charter's first harmless row, as today.
 
-**Reserved.**
-- `instance.component_arrangement` refuses `key = "F10"` with its existing *already bound*
-  sentence.
-- `[frame] hotkey = "F10"` resolves to `F2`, and the reason is reported where an unusable hotkey's
-  already is.
-
-**Inside the operator's own tmux.**
-- `_launch_in_operator_tmux` writes no bind: a pin that already holds.
-- The palette's rows are the gate's. *Close charter* is refused there with its reason.
-  *Close charter and stop all chats…* runs `frame-quit`.
+**Reserved.** A component `key = "F10"` is refused. `[frame] hotkey = "F10"` resolves to `F2` with its
+reason.
 
 ### Test cases (write first; each must fail before the code exists)
 
 **`tests/test_one_gate_closes_charter.py`**
 
-Class `TheKeyIsBound(PersonaIso, unittest.TestCase)`:
+Class `TheBindsCarryThePresser(PersonaIso, unittest.TestCase)`:
 
 | Case | Asserts |
 |---|---|
-| `test_conf_text_binds_f10_to_the_gate_with_the_chat_and_the_client` | a line starts `bind -n F10 run-shell` and holds `frame-palette --gate`, `#{@charter_chat}` and `#{client_name}` |
-| `test_the_bind_is_a_constant` | two sessions → the same line |
-| `test_it_follows_the_hotkey_and_the_hatch_stays_last` | the `F10` line's index is greater than the hotkey's; the last non-empty line is `overlay.hatch_bind()` |
-| `test_the_operators_tmux_gets_no_bind` (pin: passes at `5ad755d`) | `_launch_in_operator_tmux` with tmux recorded → no argv holds `bind` or `F10` |
+| `test_the_hotkey_bind_passes_client_name_again` | the `bind -n F2` line holds `frame-palette "#{client_name}" --chat "#{@charter_chat}"`. Red at `5ad755d` |
+| `test_f10_opens_the_gate_with_the_presser` | a `bind -n F10` line holds `frame-palette "#{client_name}" --gate` |
+| `test_a_click_on_a_panel_records_its_presser` | the `MouseDown1Pane` line's panel branch holds `set-option -p -t = @charter_presser "#{client_name}"` before `send-keys -M`; its other branch is unchanged |
+| `test_every_bind_is_a_constant_and_the_hatch_stays_last` | two sessions → the same lines; the last non-empty line is `overlay.hatch_bind()` |
+| `test_the_operators_tmux_gets_no_bind` (pin) | `_launch_in_operator_tmux` → no argv holds `bind` or `F10` |
 
 Class `TheKeyIsReserved(PersonaIso, unittest.TestCase)`:
-- `test_a_component_cannot_take_f10` — a `[[frame.component]]` with `key = "F10"` → refused with
-  `"already bound"`.
-- `test_a_hotkey_of_f10_falls_back_to_f2` — `[frame] hotkey = "F10"` → `config.FRAME["hotkey"] ==
-  "F2"`, and the reason is reported.
+- A component with `key = "F10"` → `"already bound"`.
+- `hotkey = "F10"` → `config.FRAME["hotkey"] == "F2"`, with its reason.
 
 Class `TheMenu(PersonaIso, unittest.TestCase)`:
 
 | Case | Asserts |
 |---|---|
-| `test_two_rows_detach_first` | `[r.id for r in gate.catalogue("beta.1", client="/dev/ttys003")] == ["gate:detach", "gate:stop"]`; titles are `DETACH_TITLE` and `STOP_TITLE`, spelled here |
-| `test_the_cursor_opens_on_close_charter` | `palette.Palette(catalogue=…).selected().id == "gate:detach"` |
-| `test_stop_all_chats_opens_the_quit_confirmation_listing_every_chat` | two running chats and one ended → `gate.opens(stop_row, …)` is a `Palette` whose rows are `leave.confirm_rows(…, verb=QUIT)`, three chat rows, the ended one's note holding `comes back ended` |
-| `test_the_confirming_row_runs_frame_quit` | `gate.chose(leave_go_row, "beta.1", client="")` spawns `frame-quit --chat beta.1` |
-| `test_stop_is_a_doorway_not_an_action` | `gate.chose(stop_row, …) is False`, no spawn |
-| `test_the_menu_always_returns_zero_and_gives_the_harness_back` | `own_the_tty` raises → `draw` returns 0; `_close_palette` recorded |
+| `test_two_rows_detach_first` | `gate:detach`, `gate:stop`, with the titles spelled here |
+| `test_the_cursor_opens_on_close_charter_when_it_can_run` | `Gate(...).selected().id == "gate:detach"` |
+| `test_the_cursor_never_opens_on_stop_even_when_detach_is_refused` | `client=""` → `selected().id == "gate:detach"`, and Enter answers its note. Red with `palette.aim` |
+| `test_stop_all_chats_opens_the_quit_confirmation_listing_every_chat` | two running and one ended → three chat rows, the ended one's note holding `comes back ended` |
+| `test_the_confirming_row_runs_frame_quit` | spawns `frame-quit --chat beta.1` |
+| `test_the_menu_is_not_drawn_inside_the_operators_tmux` | an operator socket → `own_the_tty` not called; the notice holds `F2's rows carry it` |
+| `test_the_menu_always_returns_zero_and_gives_the_harness_back` | `own_the_tty` raises → 0, `_close_palette` recorded |
 
-Class `CloseCharterDetachesThisTerminal(PersonaIso, unittest.TestCase)` — #1097:
+Class `CloseCharterDetachesOnlyThePresser(PersonaIso, unittest.TestCase)` — #1097:
 
 | Case | Asserts |
 |---|---|
-| `test_a_named_client_is_detached_alone` | `_detach("default.1", "/dev/ttys003")` → `_spawn` argv `[..., "detach-client", "-t", "/dev/ttys003"]` |
-| `test_without_a_client_the_chats_session_id_is_the_target` | `_pane_place` → `("$4", "@9")` → `[..., "detach-client", "-s", "$4"]` |
-| `test_a_chat_id_is_never_the_target` | across both cases, no argv holds `default.1`. Red at `5ad755d` |
-| `test_a_session_that_cannot_be_found_detaches_nothing_and_says_so` | `_pane_place` → `None` → no spawn; the return is `NO_SESSION_TO_DETACH` |
-| `test_a_client_name_outside_its_shape_is_not_used` | `client="x; kill-server"` → the `-s $4` route |
-| `test_the_operators_tmux_row_is_refused_with_its_reason` (pin) | an operator socket → the detach row `refused`, with the prefix-key sentence |
+| `test_a_proven_presser_is_detached_alone` | `_pane_place` → `("$4", "@9")`; `list-clients` → `/dev/ttys003\t$4`; plane `P` → `_spawn` argv `[..., "detach-client", "-t", "/dev/ttys003"]` |
+| `test_no_presser_detaches_nothing` | `client=""` → no spawn; `NO_PRESSER_TO_DETACH` |
+| `test_no_route_ever_detaches_a_whole_session` | across every case, no argv holds `-s` |
+| `test_a_chat_id_is_never_the_target` | no argv holds `default.1`. Red at `5ad755d` |
+| `test_a_presser_attached_to_another_session_is_not_detached` | `list-clients` → `/dev/ttys003\t$7` → no spawn, `NOT_ATTACHED_HERE` |
+| `test_a_session_of_another_plane_is_not_detached` | the session's plane `/other` → no spawn |
+| `test_an_unmarked_session_is_not_detached` | the session's plane `""` → no spawn |
+| `test_a_client_name_outside_its_shape_is_not_used` | `"x; kill-server"` → no spawn |
+| `test_the_f2_detach_row_detaches_the_hotkeys_presser` | `build(fid, …, client="/dev/ttys003")`, then `frame.detach`'s `run` → the `-t` argv |
+| `test_the_f2_detach_row_is_refused_without_a_presser` | `build(..., client="")` → the offer is not available, and its reason is `NO_PRESSER_TO_DETACH` |
+| `test_the_operators_tmux_row_is_refused_with_its_reason` (pin) | an operator socket → refused, with the prefix-key sentence |
 
 Class `TheButton(PersonaIso, unittest.TestCase)`:
-- `test_the_identity_row_ends_in_the_gate_button` — `_top(fid)` rendered at 120 columns ends in
-  `F10 close ` (the right pad).
-- `test_its_columns_open_the_gate_and_not_the_palette` — `DOORS.opens_gate(<a column of the
-  button>)` and not `opens_palette` for it; the workspace chip's column is the reverse.
-- `test_a_starved_row_drops_the_version_before_the_button` — at the width where both do not fit,
-  `charter ` is absent and `F10 close` is present.
-- `test_a_click_on_it_spawns_the_gate` — `builtins._strip_events(fid)` given a press at the
-  button's column → `_spawn` argv holds `frame-palette --gate`.
-- `test_terse_keeps_the_button` — `verbosity` → `terse` → `F10 close` present, `charter ` absent.
+- **Right end:** `_top(fid)` at 120 columns ends in `F10 close `.
+- **Doors:** its columns open the gate, not the palette; the workspace chip is the reverse.
+- **Starved:** a starved row drops the version before the button; at `terse` the button stays.
+- **A click reads the recorded presser:** `display-message` answers `/dev/ttys003` → `_spawn` argv
+  holds `frame-palette /dev/ttys003 --gate`.
+- **A presser that cannot be read is no presser:** it answers `""`, or `x;y` → the argv holds no
+  client.
+- **`test_no_button_inside_the_operators_tmux`** (decision 7): an operator socket → no `F10 close` on
+  the row, and `DOORS.opens_gate` is false for every column.
 
 Class `TheF2RowsAreTheGate(PersonaIso, unittest.TestCase)`:
-- `test_the_detach_row_says_close_charter` — `_offers()["frame.detach"].title == "Close charter
-  (keep chats running)"`, and it is still the first id.
-- `test_the_quit_doorway_says_stop_all_chats` — `leave.open_rows("beta.1")[0].title == "Close
-  charter and stop all chats…"`, and `leave.verb_of` of it is `QUIT`.
+- **The detach row:** its title is `Close charter (keep chats running)`, and it is still the first id.
+- **The stop row:** `leave.open_rows("beta.1")[0].title == "Close charter and stop all chats…"`.
+- **`test_close_is_still_the_last_row`:** `leave.open_rows("beta.1")[-1].id` is the close row, and
+  `_palette_catalogue(...)[-1]` is it too.
+- **`test_the_palette_never_opens_on_the_stop_row_inside_the_operators_tmux`:** an operator socket →
+  the aimed row is not `leave:quit`.
 
-**`tests/test_the_gate_detaches_a_real_client.py`** — real tmux over ptys.
-- The `_ARealFrameWithBars` / `_ARealFrameWithStrips` base, skip rules and reaped sockets.
-- Class `F10OnARealServer(_ARealFrameWithBars, unittest.TestCase)`:
-  - `test_f10_then_enter_detaches_only_the_terminal_that_pressed_it` — two clients on one frame;
-    `\x1b[21~` then `\r` written to A's pty → A's client process exits within 5 s, and
-    `list-clients` still lists B.
-  - `test_f2_detach_detaches_again` (#1097) — the palette's detach row run for chat `<ws>.1` →
-    `list-clients -t <session>` is empty within 5 s. Red at `5ad755d`.
-- Class `ARealClickOnTheGateButtonOpensTheGate(_ARealFrameWithStrips, unittest.TestCase)`:
-  - `test_a_press_on_f10_close_opens_the_gate_menu` — an SGR press at the button's column →
-    within 5 s a pane whose start command holds `frame-palette --gate`.
+**`tests/test_the_gate_detaches_a_real_client.py`** — real tmux over ptys, with the `_ARealFrameWithBars`
+and `_ARealFrameWithStrips` bases:
+- **Class `ThePresserOnARealServer(_ARealFrameWithBars, unittest.TestCase)`:**
+  - `test_f10_then_enter_detaches_only_the_terminal_that_pressed_it` — two clients; `\x1b[21~` then
+    `\r` to A's pty → A exits within 5 s, and `list-clients` still lists B.
+  - `test_f2_close_charter_detaches_only_the_terminal_that_pressed_it` (#1097) — `F2`, type `close
+    charter`, `\r` in A's pty → A exits, and B stays. Red at `5ad755d`, where nothing detaches.
+- **Class `ARealClickRecordsItsPresser(_ARealFrameWithStrips, unittest.TestCase):`**
+  - `test_a_press_on_f10_close_opens_the_gate_for_that_client` — an SGR press at the button's column
+    in A's pty → within 5 s a pane whose start command holds `frame-palette <A's name> --gate`.
 
 **Existing tests this task changes** (a floor):
-- `tests/test_frame_palette.py::TheActionsCharterOffersItself` — the detach row's title; its id
-  stays first.
-- `tests/test_a_click_on_a_panel_stays_where_it_points.py` and
-  `tests/test_component_toggle_keys.py`, each `…::test_the_escape_hatch_is_still_the_last_line`
-  — pins, with the `F10` line present.
+- `tests/test_frame_palette.py::TheActionsCharterOffersItself` — the detach row's title and
+  availability, which now depends on the presser; its id stays first.
+- `tests/test_a_click_on_a_panel_stays_where_it_points.py` and `tests/test_component_toggle_keys.py`,
+  each `…::test_the_escape_hatch_is_still_the_last_line` — pins with the new lines present.
+- `tests/test_a_click_on_a_panel_stays_where_it_points.py` — its `MouseDown1Pane` bind assertions gain
+  the presser branch; the click still does not move the keyboard.
 - `tests/test_component_toggle_keys.py` — a component key `F10` is refused.
 - `tests/test_frame_slots.py::TopRenderer` — the right end.
-- `tests/test_a_real_click_opens_the_real_palette.py::ARealClickOnTheHotkeyHintOpensTheRealPalette`
-  — a pin that the hint still opens the palette.
+- `tests/test_a_real_click_opens_the_real_palette.py::ARealClickOnTheHotkeyHintOpensTheRealPalette` —
+  the spawned argv holds the presser.
+- `tests/test_frame_launcher.py` — `conf_text` hotkey-bind literal cases.
 - `tests/test_what_a_quit_says_is_spelled_where_it_is_asserted.py` — `OPEN_QUIT`'s words.
 - `tests/test_a_confirmation_is_a_drawer_not_a_window.py` — the gate's stop doorway is a drawer.
 - `tests/test_the_palette_advertises_unmaking_what_it_makes.py` — the row titles.
 
 ### Implementation steps
 
-- [ ] Step 0: G1–G5; the stop rule; G3's result recorded.
-- [ ] Tests first; run the modules and the changed modules — expect failures; note the counts.
-- [ ] `builtin_actions._detach` (#1097) and its row title.
-- [ ] `gate.py`; `cli`'s `--gate`/`--client`; `cmd_palette`/`_open_palette`.
-- [ ] `conf_text`'s bind; the reserved key in `instance`.
-- [ ] The button: `_Doors`, `_top`, `_strip_events`.
-- [ ] `leave.OPEN_QUIT`.
-- [ ] Run `grep -rn "detach — leave the harness running\|charter: quit — stop every harness" charter/ tests/ docs/`
-      in both directions.
-- [ ] Focused modules green. Docs, news, commit, push, CI's four jobs, the sweep summary.
+- [ ] Step 0: G1–G6, with the stop rule. G3 decides whether the task continues.
+- [ ] Tests first; run the modules and the changed ones — expect failures; note the counts.
+- [ ] `conf_text`'s three binds; `cli`'s `--gate`.
+- [ ] `builtin_actions._detach` (presser-only, proven) and `build(client=)`.
+- [ ] `gate.py`; `cmd_palette`, `_open_palette`, `_draw_palette`.
+- [ ] `_Doors`, `_top` (with the operator rule), `_strip_events`.
+- [ ] `instance`'s reserved key; `leave.OPEN_QUIT`.
+- [ ] `grep -rn "detach — leave the harness running\|charter: quit — stop every harness\|detach-client" charter/ tests/ docs/`,
+      both directions.
+- [ ] Focused modules green; docs, news; commit, push; CI's four jobs; the sweep summary.
 
 ### Docs and news
 
-- **`docs/frame.md`.**
-  - `## Leaving: detach, close, quit — and reopen` (`:1151`) opens with the gate: `F10`, the
-    button, the two rows, what each keeps. Closing the terminal still detaches. `F2 → detach`
-    works again.
-  - The identity row's paragraph (`:366-372`): the `F10 close` button opens the gate, not the
+- **`docs/frame.md`:**
+  - `## Leaving` (`:1151`) opens with the gate: `F10`, the button, the two rows, and that only the
+    terminal that asked is detached. Closing the terminal still detaches it. `F2 → detach` works
+    again.
+  - The identity row paragraph (`:366-372`): the `F10 close` button opens the gate.
+  - `## Inside a tmux you already have` (`:1094-1105`): no gate key and no button; the rows are in the
     palette.
-  - `## Inside a tmux you already have` (`:1094-1105`): no gate key, and the rows are in the
-    palette.
-  - `## Configuring it`: `F10` joins `F12` as a key a component and `hotkey` may not take.
+  - `## Configuring it`: `F10` joins `F12` as a reserved key.
 - **`docs/control-plane.md`** `[frame] hotkey`: `F10` is refused.
-- **`CONTEXT.md`** **Exit gate**.
+- **`CONTEXT.md`** **Exit gate** and **Presser**.
 - **News** `docs/news/unreleased-one-gate-closes-charter.md`:
 
   ```
   ---
   version: unreleased
-  headline: F10 closes charter — detaching this terminal with every chat still running, or stopping them all after a confirmation — and F2 → detach detaches again
+  headline: F10 closes charter — detaching only the terminal you pressed it in, or stopping every chat after a confirmation — and F2 → detach detaches again
   ---
   ```
 
-  Body:
-  - the operator's ask and what was built;
-  - what was not built: Ctrl+C is not disabled, and why;
+  The body covers:
+  - what was built, and that Ctrl+C is not disabled;
   - #1097;
-  - the limits: F10 is taken from the harness on charter's server; no key inside your own tmux;
-    the button needs `[frame] mouse`.
+  - the limits: F10 is taken from the harness on charter's server; no key or button inside your own
+    tmux; the button needs `[frame] mouse`; a detach charter cannot attribute does not happen.
 
-**Suggested PR title:** One gate closes charter: F10, the identity row's button and two F2 rows, and F2 → detach detaches again (#1097)
+**Suggested PR title:** One gate closes charter: F10, the identity row's button and two F2 rows, each detaching only the terminal that asked (#1097)
