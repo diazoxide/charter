@@ -5973,57 +5973,174 @@ def _turn_begin() -> None:
         pass
 
 
+#: The keys Codex's SessionStart input carries — exactly, because Codex declares that input
+#: with `deny_unknown_fields` (`codex-rs/hooks/src/schema.rs:486-497` at `rust-v0.147.0`).
+#: **Read from source and not yet seen on the wire.** A Codex that adds a field is recognised
+#: as no report: no link is recorded and resume is simply not offered for that chat until
+#: charter is updated, which is the closed direction (`docs/harnesses.md` says so).
+CODEX_SESSIONSTART_KEYS = frozenset({"session_id", "transcript_path", "cwd", "hook_event_name",
+                                     "model", "permission_mode", "source"})
+
+
+def sender(data: dict):
+    """Which harness sent this session report — decided by the report itself, never by
+    inherited environment (controller's rulings on task 1's Step 0 readings). A registry
+    `Harness`, or ``None``.
+
+    **The command cannot say**: Claude Code and Codex run the same plugin command
+    (`hooks/hooks.json`; Codex installs the same plugin). **Neither can `$CHARTER_HARNESS`**:
+    a harness nested in a chat inherits every `CHARTER_*` variable, `CLAUDECODE`, `CLAUDE_PID`
+    and `TMUX_PANE` (C5), so a `codex` run from a Claude chat's shell still says
+    `claude-code`.
+
+    * **Claude Code** when `$CLAUDE_CODE_SESSION_ID` equals the payload's `session_id`.
+      Measured in all 10 of charter's hooks on 2.1.272, at startup and after `/clear`, where
+      it changed with the id (C7). A nested non-Claude harness inherits the outer id and
+      reports its own, so it fails — inferred for `codex`, not measured. `os.getppid() ==
+      $CLAUDE_PID` is NOT asked: Claude runs hooks under `/bin/sh -c`, and a compound hook
+      command keeps one or two shells in between (C7).
+    * **Codex** when the payload's keys are exactly :data:`CODEX_SESSIONSTART_KEYS`. A Claude
+      Code payload carries more (`session_title`, `scratchpad_dir`), so the two never meet.
+    """
+    from .harness import claude_code, codex, registry
+    claimed = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if claimed and claimed == data.get("session_id"):
+        return registry.get(claude_code.NAME)
+    if frozenset(data) == CODEX_SESSIONSTART_KEYS:
+        return registry.get(codex.NAME)
+    return None
+
+
 def _record_harness_session(data: dict) -> None:
-    """Write down Claude Code's own session id for this chat. Best-effort, never raises.
+    """Record a SessionStart report against this chat's link, when it is the chat's own
+    harness reporting (#1101). Best-effort, never raises.
 
-    **This is #895's replacement writer, and it exists because the old one was deleted.**
-    Until then `frame.state.record_harness_session` had exactly one caller: the
-    `statusLine` command, the one process that saw the frame id in its environment and
-    Claude Code's session id in the JSON payload on its stdin. Charter no longer wires a
-    `statusLine`, so that process no longer runs — and without a second writer, no chat
-    would ever have an id again and `charter reopen` would answer *"reopens empty — no
-    session id recorded for this chat yet"* for every Claude Code chat, forever. That is a
-    feature going out silently, which the issue neither asked for nor mentioned.
+    **#895's replacement writer, and the writer of the tab-to-session link.** Claude Code's
+    `statusLine` used to be the one process that saw the frame id in its environment and the
+    harness's session id in its payload; charter stopped wiring one, and a hook sees both —
+    the chat id is `$CHARTER_SESSION_ID` (:func:`_chat_id`) and the harness's id arrives as
+    `session_id`. What a hook cannot bring back is the GAUGE (`context_window` reaches the
+    status line alone; `statusline.recorded_context_gauge` says so).
 
-    **A hook sees both ids too, which is the whole reason this is possible.** The chat id
-    is `$CHARTER_SESSION_ID` (:func:`_chat_id`, and the launcher puts it on the window),
-    and the harness's own id arrives in this hook's stdin payload as `session_id` — the
-    same field `_touch_piece`, `_trace` and `toolgate.snapshot` already read here. Nothing
-    new is measured and nothing new is spawned.
-
-    **What it cannot bring back is the GAUGE.** `context_window.current_usage` reaches the
-    `statusLine` command and nothing else — no hook has ever seen those numbers — so the
-    frame's `ctx NN%` / `cache NN%` really is gone with the key, and
-    `statusline.recorded_context_gauge` says so in full. The mapping and the usage history
-    were two things one process happened to write; only one of them a hook can write.
-
-    **Gated on Claude Code**, the same gate and the same idiom as :func:`_turn_begin`, so
-    that `state.harness_session`'s four-reasons-one-answer docstring stays true: nothing
-    else is handed a usage payload, and an id recorded for a harness `leave.resumable_
-    harness` will not offer a resume for would be a record nothing reads.
-
-    Earlier than the writer it replaces, and that is a small improvement rather than a
-    risk: the status line recorded on the chat's first TURN, and this records at
-    `sessionstart`, so a chat abandoned before its first prompt is now resumable too.
+    **Only the chat's own harness may change its link.** :func:`sender` names the harness
+    from the report, and the chat's recorded kind (`state.identity`, written by the launch
+    that started it) must be that harness — a Claude Code report in a Codex chat is a
+    `claude -p` from that chat's shell. Then :func:`_record_harness_report` decides whether
+    this report adopts, follows or is ignored.
     """
     chat = _chat_id()
     if not chat or not _in_a_plane():
         return
     try:
-        from .harness import claude_code
-        if os.environ.get("CHARTER_HARNESS") != claude_code.NAME:
-            return
-        # `data.get`, not `(data or {}).get`: `_read_stdin` returns a dict or `{}` and
-        # never `None`, and a payload that is somehow neither raises here into this
-        # function's own `except` — which is where it belongs. A second guard for a case
-        # the first one already covers is what the deletion sweep charges as a survivor.
-        sid = data.get("session_id")
-        if not sid:
-            return
         from .frame import state as frame_state
-        if frame_state.record_harness_session(chat, str(sid)):
-            frame_state.bump(chat)
+        h = sender(data)
+        # No `h is None` guard: `None.name` raises into this function's own `except`, which
+        # is exactly "no report" — a second guard for the same case is a survivor.
+        if frame_state.identity(chat).get("CHARTER_HARNESS") != h.name:
+            return
+        _record_harness_report(chat, h, data)
     except Exception:  # noqa: BLE001 - bookkeeping must never break a session
+        pass
+
+
+def _record_harness_report(chat: str, h, data: dict) -> None:
+    """Adopt, follow or ignore one report from *chat*'s own harness *h* (#1101).
+
+    **The id is held to `state.SESSION_ID_RE` first**, before it can take this start's
+    adoption: a malformed report must not use up the one report a start adopts. A non-string
+    id raises in `fullmatch`, into the caller's `except`.
+
+    **Claude Code** (`reports_harness_pid`) — adopt, follow, ignore, by `$CLAUDE_PID`:
+
+    * **adopt**: nothing adopted yet this start, and the report is of the id this start chose
+      (C1, and C3 for a resume) — or of any id, for a start that chose none because the
+      operator passed their own session flag. Its `$CLAUDE_PID` becomes the chat's harness
+      pid. **Learned from the report, never from `#{pane_pid}`**: behind a wrapper profile the
+      pane's pid is the wrapper's.
+    * **follow**: a different id from the adopted pid is `/clear` (C6) — the link moves, so
+      resume offers the conversation the operator is actually in, and the old conversation
+      is forgotten until this report's own is recorded.
+    * **ignore**: anything else — a different pid (a nested `claude`, C5), no pid, a report
+      before adoption of an id this start did not choose.
+
+    **Codex** — the first report of each start is adopted (`state.adopt_report`, O_EXCL),
+    and a later different id in that start is ignored: nothing in a Codex report tells a
+    nested run from `/new`, so `/new` is not followed. **A resumed start keeps the link it
+    resumed** (X3): its report is recorded only when it names that link.
+
+    A recorded report also keeps the conversation file it names (`state.record_conversation`,
+    which refuses anything but an absolute path). The frame is bumped only when the link
+    moved.
+    """
+    from .frame import state as frame_state
+    sid = data.get("session_id")
+    if not frame_state.SESSION_ID_RE.fullmatch(sid):
+        return
+    link = frame_state.kept_harness_session(chat)
+    if h.reports_harness_pid:
+        raw = os.environ.get("CLAUDE_PID", "")
+        pid = int(raw) if raw.isdigit() and int(raw) > 0 else None
+        adopted = frame_state.harness_pid(chat)
+        if adopted is None:
+            if pid is None or (link and sid != link):
+                return
+            frame_state.record_harness_pid(chat, pid)
+            frame_state.adopt_report(chat)
+        elif pid != adopted:
+            return
+        elif sid != link:
+            frame_state.clear_conversation(chat)
+    elif frame_state.resumed_start(chat):
+        frame_state.adopt_report(chat)
+        if sid != link:
+            return
+    elif not frame_state.adopt_report(chat):
+        return
+    if frame_state.record_harness_session(chat, sid):
+        frame_state.bump(chat)
+    frame_state.record_conversation(chat, data.get("transcript_path"))
+
+
+def _record_reported_session(data: dict) -> None:
+    """Record opencode's session, reported on a tool hook, against the chat whose harness
+    pane this hook runs in (#1101; open question 1, ruled (A)). Best-effort, never raises.
+
+    **A tool hook, because opencode has no session-start event** (`docs/frame.md`), and its
+    shim puts `input.sessionID` in the payload's `session_id` (O1). **Its chat is found by
+    pane**, because the shim overwrites `$CHARTER_SESSION_ID` with opencode's own id in every
+    hook subprocess, so :func:`_chat_id` names no chat here: `state.chat_in_pane` resolves
+    `$TMUX_PANE` against the harness panes charter recorded on the server `$TMUX` names, and
+    a pane two chats record resolves to none.
+
+    **Which harness is reporting comes from the shim's own call**, which sets
+    `CHARTER_HARNESS=opencode` in the command it runs, and it counts only against a chat
+    recorded as that kind: a Claude Code hook is not a tool-reporting harness, and an opencode
+    run from another harness's chat finds a chat of another kind in that pane. The first
+    report of each start is adopted; opencode's own new session inside one start is not
+    followed.
+
+    No shape guards on the pane or the server of their own: both are only compared with what
+    a launcher recorded, so a value of any other shape matches nothing, and a `None` harness
+    or chat raises into the `except` or reads as no kind.
+    """
+    if not _in_a_plane():
+        return
+    try:
+        from .frame import state as frame_state
+        from .harness import registry
+        h = registry.get(os.environ.get("CHARTER_HARNESS"))
+        if h.reports_session_at != "tool":
+            return
+        chat = frame_state.chat_in_pane(os.environ.get("TMUX_PANE", ""),
+                                        os.environ.get("TMUX", "").partition(",")[0])
+        if frame_state.identity(chat).get("CHARTER_HARNESS") != h.name:
+            return
+        sid = data.get("session_id")
+        if not frame_state.SESSION_ID_RE.fullmatch(sid):
+            return
+        if frame_state.adopt_report(chat) and frame_state.record_harness_session(chat, sid):
+            frame_state.bump(chat)
+    except Exception:  # noqa: BLE001 - bookkeeping must never break a turn
         pass
 
 
@@ -6215,6 +6332,7 @@ def pretooluse_read() -> int:
     """
     _turn_bump()      # this chat's turn is still going (`inflight.TURN_STALE_SECONDS`)
     data = _read_stdin()
+    _record_reported_session(data)   # opencode reports its session on a tool hook (#1101)
     _touch_piece(data)
     try:
         if (data.get("tool_name") or "") not in _CONTENT_TOOLS:
@@ -6338,6 +6456,7 @@ def pretooluse() -> int:
     So this reads the gate once, into *plane*, rather than returning early on it.
     """
     data = _read_stdin()
+    _record_reported_session(data)   # opencode reports its session on a tool hook (#1101)
     # One read, five decisions. A2/A3/A3b/A4 each used to ask `config.HAS_CONTROL_PLANE`
     # for themselves; asking once means the bookkeeping below cannot drift away from the
     # denials, which is exactly how six other handlers ended up never asking at all.
@@ -7636,6 +7755,7 @@ def posttooluse() -> int:
     from .frame import notify
     notify.plane_changed()
     data = _read_stdin()
+    _record_reported_session(data)   # opencode reports its session on a tool hook (#1101)
     _touch_piece(data)
     # The approval half of the `routing: require` edit nudge (`pretooluse_edit`), which asks
     # on THIS tool family. Before the file-path checks below, because an approval is a fact
@@ -7798,6 +7918,7 @@ def pretooluse_dispatch() -> int:
         return 0  # no personas to overlap, and `inflight.start` would write a claim file
     _turn_bump()      # this chat's turn is still going (`inflight.TURN_STALE_SECONDS`)
     data = _read_stdin()
+    _record_reported_session(data)   # opencode reports its session on a tool hook (#1101)
     # Clear the routing mark first — the dispatch IS the routing, and clearing ahead of the
     # early returns below means a read-only fan-out counts as routing too.
     _route_mark_clear(data.get("session_id"))
@@ -7875,7 +7996,9 @@ def posttooluse_bash() -> int:
     _turn_bump()      # this chat's turn is still going (`inflight.TURN_STALE_SECONDS`)
     from .frame import notify
     notify.plane_changed()
-    _ask_approved(_read_stdin())
+    data = _read_stdin()
+    _record_reported_session(data)   # opencode reports its session on a tool hook (#1101)
+    _ask_approved(data)
     return 0
 
 
@@ -7897,6 +8020,7 @@ def posttooluse_skill() -> int:
     from .frame import notify
     notify.plane_changed()
     data = _read_stdin()
+    _record_reported_session(data)   # opencode reports its session on a tool hook (#1101)
     _touch_piece(data)
     try:
         if (data.get("tool_name") or "") != "Skill":
@@ -7987,6 +8111,7 @@ def posttooluse_message() -> int:
     from .frame import notify
     notify.plane_changed()
     data = _read_stdin()
+    _record_reported_session(data)   # opencode reports its session on a tool hook (#1101)
     if (data.get("tool_name") or "") != "SendMessage":
         return 0
     target = ((data.get("tool_input") or {}).get("to") or "").strip()
@@ -8014,6 +8139,7 @@ def posttooluse_dispatch() -> int:
     from .frame import notify
     notify.plane_changed()
     data = _read_stdin()
+    _record_reported_session(data)   # opencode reports its session on a tool hook (#1101)
     # The approval half of the overlapping-dispatch nudge (`pretooluse_dispatch`). Before
     # the `subagent_type` check: an ask that was approved was approved whatever the tally
     # below can make of the payload.
@@ -8318,6 +8444,7 @@ def pretooluse_edit() -> int:
         return 0
     _turn_bump()      # this chat's turn is still going (`inflight.TURN_STALE_SECONDS`)
     data = _read_stdin()
+    _record_reported_session(data)   # opencode reports its session on a tool hook (#1101)
     # A hard deny, before the routing ask: this one is a permission question, and asking
     # the agent to approve a write that widens the agent's own permissions is no guard.
     state = _state_write_reason(data)

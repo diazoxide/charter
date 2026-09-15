@@ -20,12 +20,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands_frame, config, contain, profiles
+from charter import commands_frame, config, contain, hooks, profiles
 from charter.frame import launcher, leave, reopen, state, tmuxctl
 from charter.harness import claude_code, codex, opencode, registry
 from charter.harness.base import Harness
 from tests import _gitguard
-from tests._isolation import PersonaIso, make_plane, wired_as_today
+from tests._isolation import PersonaIso, PlaneIso, make_plane, run_hook, wired_as_today
 
 FID = "beta.1"
 
@@ -531,6 +531,358 @@ class TheLauncherAddsTheSession(PersonaIso, unittest.TestCase):
         self.assertTrue(ns.resume)
         ns = cli.build_parser().parse_args(["frame-launch", "--profile", "claude"])
         self.assertFalse(ns.resume)
+
+
+#: Codex's SessionStart input, key for key, as `codex-rs/hooks/src/schema.rs:486-497`
+#: declares it at `rust-v0.147.0` with `deny_unknown_fields` (read from source, not run).
+_CODEX_0_147_SESSIONSTART = {"session_id": "", "transcript_path": "", "cwd": "/w",
+                             "hook_event_name": "SessionStart", "model": "gpt-5.1-codex",
+                             "permission_mode": "default", "source": "startup"}
+
+
+def _codex_report(sid: str, path="/abs/rollout.jsonl") -> dict:
+    return {**_CODEX_0_147_SESSIONSTART, "session_id": sid, "transcript_path": path}
+
+
+def _claude_report(sid, path="/abs/t.jsonl", source="startup") -> dict:
+    """What Claude Code 2.1.272 hands a SessionStart hook (C1, C7): Codex's keys and more."""
+    return {"session_id": sid, "transcript_path": path, "cwd": "/w",
+            "hook_event_name": "SessionStart", "source": source, "model": "claude-x",
+            "session_title": "t · beta.1", "scratchpad_dir": "/tmp/s"}
+
+
+class ALinkFollowsOnlyTheChatsOwnHarness(PlaneIso, unittest.TestCase):
+    """Which harness sent a report comes from the report, never from inherited environment,
+    and only the chat's own harness may change its link (controller's rulings, C5–C7).
+
+    Every case states its whole environment (`clear=True`): a nested harness inherits every
+    `CHARTER_*` variable, `CLAUDE_PID` and `TMUX_PANE`, which is the point."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        _chat(FID, kind="claude-code")
+
+    def _hook(self, data: dict, **env) -> None:
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": FID, **env}, clear=True):
+            hooks._record_harness_session(data)
+
+    def _claude(self, sid, *, pid="100", env_sid=None, **kw) -> None:
+        env = {"CHARTER_HARNESS": "claude-code"}
+        if pid is not None:
+            env["CLAUDE_PID"] = pid
+        if env_sid is not False:
+            env["CLAUDE_CODE_SESSION_ID"] = sid if env_sid is None else env_sid
+        self._hook(_claude_report(sid, **kw), **env)
+
+    def _link(self):
+        return (state.kept_harness_session(FID), state.conversation(FID),
+                state.harness_pid(FID))
+
+    def _a_start(self, *, resumed=False) -> None:
+        """What the launcher's wrapper does as a harness starts."""
+        state.clear_adoption(FID)
+        state.record_start(FID, resumed=resumed)
+
+    def test_the_first_report_of_the_chosen_id_adopts_its_pid(self):
+        state.record_harness_session(FID, "u")
+        self._claude("u", path="/abs/t")
+        self.assertEqual(self._link(), ("u", "/abs/t", 100))
+        self.assertTrue(state.adopted(FID))
+
+    def test_a_resume_reporting_the_same_id_re_adopts(self):
+        state.record_harness_session(FID, "u")
+        self._claude("u")
+        self._a_start(resumed=True)
+        self._claude("u", pid="200", source="resume")
+        self.assertEqual(state.harness_pid(FID), 200)
+
+    def test_clear_from_the_adopted_pid_moves_the_link(self):
+        state.record_harness_session(FID, "u")
+        self._claude("u", path="/abs/u")
+        self._claude("v", path="/abs/v", source="clear")
+        self.assertEqual(self._link(), ("v", "/abs/v", 100))
+
+    def test_a_followed_link_forgets_the_old_conversation_until_its_own_is_named(self):
+        state.record_harness_session(FID, "u")
+        self._claude("u", path="/abs/u")
+        self._claude("v", path="relative.jsonl", source="clear")
+        self.assertEqual(self._link(), ("v", None, 100))
+
+    def test_a_nested_harness_is_ignored(self):
+        state.record_harness_session(FID, "u")
+        self._claude("u", path="/abs/u")
+        self._claude("w", pid="300", path="/abs/w")
+        self.assertEqual(self._link(), ("u", "/abs/u", 100))
+
+    def test_a_report_of_the_linked_id_from_the_adopted_pid_renames_its_conversation(self):
+        state.record_harness_session(FID, "u")
+        self._claude("u", path="/abs/u")
+        self._claude("u", path="/abs/u2", source="compact")
+        self.assertEqual(self._link(), ("u", "/abs/u2", 100))
+
+    def test_a_report_of_the_linked_id_from_another_pid_is_ignored(self):
+        state.record_harness_session(FID, "u")
+        self._claude("u", path="/abs/u")
+        self._claude("u", pid="300", path="/abs/elsewhere")
+        self.assertEqual(self._link(), ("u", "/abs/u", 100))
+
+    def test_a_report_without_claude_pid_after_adoption_is_ignored(self):
+        state.record_harness_session(FID, "u")
+        self._claude("u", path="/abs/u")
+        for sid in ("v", "u"):
+            with self.subTest(sid=sid):
+                self._claude(sid, pid=None, path="/abs/other")
+                self.assertEqual(self._link(), ("u", "/abs/u", 100))
+
+    def test_a_report_without_claude_pid_never_adopts(self):
+        for pid in (None, "0", "-5", "x", "²"):
+            with self.subTest(pid=pid):
+                self._claude("x", pid=pid)
+                self.assertEqual(self._link(), (None, None, None))
+                self.assertFalse(state.adopted(FID))
+
+    def test_a_report_of_another_id_before_adoption_is_ignored(self):
+        state.record_harness_session(FID, "u")
+        self._claude("w")
+        self.assertEqual(self._link(), ("u", None, None))
+        self.assertFalse(state.adopted(FID))
+
+    def test_a_start_that_chose_no_id_adopts_its_first_report(self):
+        self._claude("x")
+        self.assertEqual(self._link(), ("x", "/abs/t.jsonl", 100))
+
+    def test_codex_adopts_the_first_report_of_a_start_only(self):
+        state.record_identity(FID, {"CHARTER_HARNESS": "codex"})
+        env = {"CHARTER_HARNESS": "codex"}
+        self._hook(_codex_report("s1", "/abs/r1"), **env)
+        self.assertEqual(self._link(), ("s1", "/abs/r1", None))
+        self._hook(_codex_report("s2", "/abs/r2"), **env)
+        self.assertEqual(self._link(), ("s1", "/abs/r1", None))
+        self._a_start()
+        self._hook(_codex_report("s3", "/abs/r3"), **env)
+        self.assertEqual(self._link(), ("s3", "/abs/r3", None))
+
+    def test_a_codex_rollout_codex_names_null_records_the_link_and_no_file(self):
+        state.record_identity(FID, {"CHARTER_HARNESS": "codex"})
+        self._hook(_codex_report("s1", None))
+        self.assertEqual(self._link(), ("s1", None, None))
+
+    def test_a_malformed_first_report_does_not_take_the_starts_adoption(self):
+        state.record_identity(FID, {"CHARTER_HARNESS": "codex"})
+        self._hook(_codex_report("-rf"))
+        self.assertFalse(state.adopted(FID))
+        self._hook(_codex_report("s1"))
+        self.assertEqual(state.kept_harness_session(FID), "s1")
+
+    def test_a_resumed_codex_start_keeps_the_link_it_resumed(self):
+        """X3, read from source: a resumed root session reports the id it had. The rule
+        holds for either answer — a report naming another id is never adopted."""
+        state.record_identity(FID, {"CHARTER_HARNESS": "codex"})
+        state.record_harness_session(FID, "s1")
+        self._a_start(resumed=True)
+        self._hook(_codex_report("s9", "/abs/r9"))
+        self.assertEqual(self._link(), ("s1", None, None))
+        self._hook(_codex_report("s1", "/abs/r1"))
+        self.assertEqual(self._link(), ("s1", "/abs/r1", None))
+        self.assertTrue(state.adopted(FID), "the resumed start has adopted its report")
+
+    def test_a_nested_non_claude_report_is_ignored(self):
+        """C7, inferred for `codex` and not measured: a harness nested in a Claude chat
+        inherits the outer `CLAUDE_PID` and `CLAUDE_CODE_SESSION_ID`, and reports its own
+        id — so it is not a Claude Code report, and it is not this chat's kind."""
+        state.record_harness_session(FID, "u")
+        self._claude("u", path="/abs/u")
+        inherited = {"CHARTER_HARNESS": "claude-code", "CLAUDE_PID": "100",
+                     "CLAUDE_CODE_SESSION_ID": "u"}
+        for payload in (_codex_report("z"), _claude_report("z")):
+            with self.subTest(keys=sorted(payload)):
+                self._hook(payload, **inherited)
+                self.assertEqual(self._link(), ("u", "/abs/u", 100))
+
+    def test_a_session_id_variable_unequal_to_the_payload_is_not_a_claude_report(self):
+        self._claude("u2", env_sid="u")
+        self.assertEqual(self._link(), (None, None, None))
+        self._claude("u", env_sid="u")
+        self.assertEqual(self._link(), ("u", "/abs/t.jsonl", 100))
+
+    def test_a_missing_session_id_variable_never_adopts_and_is_ignored_after_adoption(self):
+        self._claude("u", env_sid=False)
+        self.assertEqual(self._link(), (None, None, None))
+        self._claude("u")
+        self._claude("v", env_sid=False, source="clear")
+        self.assertEqual(self._link(), ("u", "/abs/t.jsonl", 100))
+
+    def test_the_parent_pid_is_never_consulted(self):
+        """C7: `os.getppid() == CLAUDE_PID` held only for a lone hook command, because Claude
+        runs hooks under `/bin/sh -c` — so it is not a proof, and is not asked."""
+        with mock.patch.object(hooks.os, "getppid", side_effect=AssertionError("asked")):
+            self._claude("u")
+        self.assertEqual(self._link(), ("u", "/abs/t.jsonl", 100))
+
+    def test_charter_harness_never_decides_the_sender(self):
+        with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "codex",
+                                          "CLAUDE_CODE_SESSION_ID": "u"}, clear=True):
+            self.assertEqual(hooks.sender(_claude_report("u")).name, claude_code.NAME)
+        with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "claude-code"}, clear=True):
+            self.assertEqual(hooks.sender(_codex_report("s")).name, codex.NAME)
+            self.assertIsNone(hooks.sender(_claude_report("u")))
+            self.assertIsNone(hooks.sender({}), "no id and no variable is no report")
+
+    def test_a_codex_payload_with_an_unknown_key_is_no_report(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(hooks.sender({**_codex_report("s"), "turn_id": "t1"}))
+            missing = _codex_report("s")
+            del missing["permission_mode"]
+            self.assertIsNone(hooks.sender(missing))
+
+    def test_a_codex_0_147_sessionstart_payload_is_a_codex_report(self):
+        """Pins `CODEX_SESSIONSTART_KEYS` against the source it was read from: a set edited
+        without re-reading `schema.rs` goes red here, not silently on the plane."""
+        self.assertEqual(hooks.CODEX_SESSIONSTART_KEYS, frozenset(_CODEX_0_147_SESSIONSTART))
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(hooks.sender(_codex_report("s")).name, codex.NAME)
+
+    def test_the_chats_recorded_kind_must_be_the_sender(self):
+        for kind in ("opencode", "codex", ""):
+            with self.subTest(kind=kind):
+                state.record_identity(FID, {"CHARTER_HARNESS": kind})
+                self._claude("u")
+                self.assertEqual(self._link(), (None, None, None))
+
+    def test_an_id_that_could_be_read_as_a_flag_is_refused(self):
+        for sid in ("-rf", "a b", "x" * 200, ""):
+            with self.subTest(sid=sid):
+                self._claude(sid)
+                self.assertEqual(self._link(), (None, None, None))
+                self.assertFalse(state.adopted(FID))
+        self._claude(7, env_sid="7")
+        self.assertEqual(self._link(), (None, None, None))
+
+    def test_a_relative_or_nul_path_is_refused(self):
+        for path in ("t.jsonl", "/a\x00b", "/" + "x" * 5000):
+            with self.subTest(path=path):
+                state.clear_adoption(FID)
+                self._claude("u", path=path)
+                self.assertEqual(self._link(), ("u", None, 100))
+
+    def test_a_link_that_moves_wakes_the_frame(self):
+        before = state.version(FID)
+        self._claude("u")
+        moved = state.version(FID)
+        self.assertNotEqual(moved, before)
+        self._claude("u", path="/abs/other", source="compact")
+        self.assertEqual(state.version(FID), moved, "a report that moves nothing repaints nothing")
+
+    def test_outside_a_frame_or_a_plane_nothing_is_recorded(self):
+        with mock.patch.dict(os.environ, {"CHARTER_HARNESS": "claude-code", "CLAUDE_PID": "1",
+                                          "CLAUDE_CODE_SESSION_ID": "u"}, clear=True):
+            hooks._record_harness_session(_claude_report("u"))
+        self.assertEqual(self._link(), (None, None, None))
+        with mock.patch.object(hooks, "_in_a_plane", return_value=False):
+            self._claude("u")
+        self.assertEqual(self._link(), (None, None, None))
+
+    def test_the_hook_never_raises(self):
+        with mock.patch.object(state, "record_harness_session", side_effect=RuntimeError):
+            self.assertIsNone(self._claude("u"))
+            self.assertIsNone(self._opencode("ses_abc"))
+
+    # -- opencode: the tool hook, found by its pane (open question 1, ruled (A)) ---------- #
+
+    def _opencode(self, sid, *, pane="%4", tmux=None, harness="opencode", data=None):
+        env = {"CHARTER_HARNESS": harness, "CHARTER_SESSION_ID": sid, "TMUX_PANE": pane,
+               "TMUX": f"{tmuxctl.socket_path('srv')},1,0" if tmux is None else tmux}
+        with mock.patch.dict(os.environ, env, clear=True):
+            return hooks._record_reported_session(
+                data if data is not None else {"hook_event_name": "PreToolUse",
+                                               "session_id": sid, "cwd": "/w",
+                                               "tool_name": "Read", "tool_input": {}})
+
+    def _an_opencode_chat(self, fid="beta.2", pane="%4"):
+        _chat(fid, kind="opencode", pane=pane, server="srv")
+        return fid
+
+    def test_opencode_is_recorded_from_its_tool_hook_by_its_pane(self):
+        fid = self._an_opencode_chat()
+        self._opencode("ses_abcdef012345ABCDEFGHIJklmn")
+        self.assertEqual(state.kept_harness_session(fid), "ses_abcdef012345ABCDEFGHIJklmn")
+        self._opencode("ses_def")
+        self.assertEqual(state.kept_harness_session(fid), "ses_abcdef012345ABCDEFGHIJklmn")
+        self.assertIsNone(state.conversation(fid), "opencode names no transcript")
+
+    def test_a_pane_two_chats_record_resolves_to_none(self):
+        self._an_opencode_chat("beta.2")
+        self._an_opencode_chat("beta.3")
+        self._opencode("ses_abc")
+        for fid in ("beta.2", "beta.3"):
+            self.assertIsNone(state.kept_harness_session(fid))
+            self.assertFalse(state.adopted(fid))
+
+    def test_a_pane_charter_did_not_record_writes_nothing(self):
+        fid = self._an_opencode_chat()
+        for pane, tmux in (("%9", None), ("%4", f"{tmuxctl.socket_path('other')},1,0"),
+                           ("", None), ("%4", "")):
+            with self.subTest(pane=pane, tmux=tmux):
+                self._opencode("ses_abc", pane=pane, tmux=tmux)
+                self.assertIsNone(state.kept_harness_session(fid))
+
+    def test_a_tool_hook_of_a_harness_that_reports_at_sessionstart_writes_nothing(self):
+        fid = self._an_opencode_chat()
+        for harness in ("claude-code", "codex", "", "nosuch"):
+            with self.subTest(harness=harness):
+                self._opencode("ses_abc", harness=harness)
+                self.assertIsNone(state.kept_harness_session(fid))
+
+    def test_an_opencode_nested_in_another_harnesss_chat_writes_nothing(self):
+        _chat("beta.2", kind="claude-code", pane="%4", server="srv")
+        self._opencode("ses_abc")
+        self.assertIsNone(state.kept_harness_session("beta.2"))
+        self.assertFalse(state.adopted("beta.2"))
+
+    def test_a_malformed_opencode_id_does_not_take_the_starts_adoption(self):
+        fid = self._an_opencode_chat()
+        self._opencode("-rf")
+        self._opencode("x y")
+        self.assertFalse(state.adopted(fid))
+        self._opencode("ses_ok")
+        self.assertEqual(state.kept_harness_session(fid), "ses_ok")
+
+    def test_the_session_id_comes_from_the_payload_not_the_variable(self):
+        fid = self._an_opencode_chat()
+        env = {"CHARTER_HARNESS": "opencode", "CHARTER_SESSION_ID": "ses_var",
+               "TMUX_PANE": "%4", "TMUX": f"{tmuxctl.socket_path('srv')},1,0"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            hooks._record_reported_session({"session_id": "ses_payload"})
+        self.assertEqual(state.kept_harness_session(fid), "ses_payload")
+
+    def test_outside_a_plane_opencode_records_nothing(self):
+        fid = self._an_opencode_chat()
+        with mock.patch.object(hooks, "_in_a_plane", return_value=False):
+            self._opencode("ses_abc")
+        self.assertIsNone(state.kept_harness_session(fid))
+
+
+class EveryToolHookHearsOpencodesReport(PlaneIso, unittest.TestCase):
+    """opencode has no session-start event, so its first tool call is where its session is
+    reported — through whichever of charter's tool hooks its shim routes that tool to."""
+
+    HANDLERS = ("pretooluse", "pretooluse_read", "pretooluse_edit", "pretooluse_dispatch",
+                "posttooluse", "posttooluse_bash", "posttooluse_skill",
+                "posttooluse_message", "posttooluse_dispatch")
+
+    def test_each_hands_its_payload_over(self):
+        payload = {"hook_event_name": "PreToolUse", "session_id": "ses_abc", "cwd": str(self.tmp),
+                   "tool_name": "Read", "tool_input": {"file_path": str(self.tmp / "x")},
+                   "tool_response": {"output": ""}}
+        for name in self.HANDLERS:
+            with self.subTest(handler=name):
+                seen: list[dict] = []
+                with mock.patch.object(hooks, "_record_reported_session",
+                                       side_effect=seen.append), \
+                        mock.patch.dict(os.environ, {"PATH": os.environ.get("PATH", "")},
+                                        clear=True):
+                    run_hook(getattr(hooks, name), payload)
+                self.assertEqual(seen, [payload])
 
 
 class TheLinkTravelsThroughTheRecord(PersonaIso, unittest.TestCase):
