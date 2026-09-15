@@ -581,6 +581,18 @@ class ARestoredChatKeepsItsId(PersonaIso, unittest.TestCase):
         self.assertIn("kill-window -t @3", why)
         self.assertNotIn("\x1b", why)
 
+    def test_the_taken_sentence_is_these_words(self):
+        """Spelled out by hand, and the cases above cannot do it for this one: each of them
+        asserts the `what` and the `fix` it passed IN, so the template's own prose — what an
+        operator reads between them — was carried by no assertion at all. Measured: a retune
+        of this literal left every case green."""
+        self.assertEqual(
+            commands_frame.KEPT_ID_TAKEN.format(chat="beta.7", dir="/p/beta.7",
+                                                what="running", fix="close it"),
+            "charter reopen: beta.7 is not reopened — /p/beta.7 belongs to a chat that is "
+            "still running, so opening it would give two chats one id. It stays recorded; "
+            "close it, then run charter reopen again.")
+
     def test_the_unclaimed_sentence_is_these_words(self):
         """Spelled out by hand, so a reword is visible (`test_what_a_quit_says_is_spelled_
         where_it_is_asserted`'s rule): it is what an operator reads when a reopen could not
