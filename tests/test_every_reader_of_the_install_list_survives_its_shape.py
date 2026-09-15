@@ -112,6 +112,10 @@ class ListShapeCase(PersonaIso):
              {"version": 2, "plugins": {PID: [{**v, "projectPath": None}, v]}}),
             ("a version-1 plugin that is not an object", {"version": 1, "plugins": {PID: "x"}}),
             ("a version-1 plugin with no installPath", {"version": 1, "plugins": {PID: {"version": "1"}}}),
+            # Two plugins, so "every plugin is readable" and "some plugin is" answer differently
+            # (the deletion sweep's survivor on 25b38c4: `all` read the same as `any`).
+            ("a version-1 plugin charter cannot read before a valid one",
+             {"version": 1, "plugins": {"other@x": "x", PID: {"installPath": str(self.plugin)}}}),
         )
 
 
