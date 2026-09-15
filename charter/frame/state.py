@@ -930,6 +930,33 @@ def harness_pane(fid: str) -> str | None:
         return None
 
 
+def chat_in_pane(pane: str, server: str) -> str | None:
+    """The one chat of this plane whose harness pane charter recorded as *pane* on *server*,
+    or ``None``.
+
+    **For the hook that cannot name its chat** (ruled, open question 1 (A)): opencode's
+    plugin overwrites ``$CHARTER_SESSION_ID`` with opencode's own session id in every hook
+    subprocess, so the hook has only ``$TMUX_PANE`` and the server ``$TMUX`` names. A pane id
+    is unique on one server while it runs, and the record is a launcher's own
+    (:func:`record_harness_pane`).
+
+    **More than one chat recorded on that pane is none**: pane ids start again at ``%0`` when
+    a server restarts, so a closed chat's directory can still name a pane a new chat now
+    holds, and guessing between them is what this whole link refuses. The server is compared
+    as the socket each spelling names (`tmuxctl.same_server`), because ``$TMUX`` carries a
+    path and a record carries a name. An old ``{workspace}-{pid}`` frame is not a chat.
+    """
+    from . import chats
+    try:
+        names = [e.name for e in os.scandir(_root())]
+    except OSError:
+        return None
+    found = [n for n in names
+             if chats.is_chat(n) and harness_pane(n) == pane
+             and tmuxctl.same_server(frame_server(n) or tmuxctl.LEGACY_SOCKET, server)]
+    return found[0] if len(found) == 1 else None
+
+
 def record_harness_session(fid: str, sid: str) -> bool:
     """Write down the HARNESS's own session id for this frame. ``True`` when the recorded
     value actually changed.
@@ -974,7 +1001,10 @@ def record_harness_session(fid: str, sid: str) -> bool:
     different id.
     """
     sid = (sid or "").strip()
-    if not sid or harness_session(fid) == sid:
+    # **Held to a shape before it is kept** (#1101's link): the id goes on to be a harness
+    # argv word (`--resume <id>`), and it arrives in a hook payload a chat's own shell can
+    # write — so one starting with `-` would be read as a flag. An empty id fails the shape.
+    if not SESSION_ID_RE.fullmatch(sid) or harness_session(fid) == sid:
         return False
     d = frame_dir(fid, create=True)
     if d is None:
@@ -1082,6 +1112,173 @@ def kept_harness_session(fid: str) -> str | None:
         return (d / _KEPT_SESSION_FILE).read_text().strip() or None
     except (OSError, ValueError):
         return None
+
+
+#: What a harness session id may look like before charter keeps it or hands it to a harness.
+#: A letter or digit first, so no id can be read as a flag; then the alphabet every shipped
+#: harness's ids fit — Claude Code's and Codex's UUIDs, opencode's ``ses_…`` — and a length
+#: bound far past any of them.
+SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+
+#: The conversation file the harness itself named for this chat (a hook payload's
+#: ``transcript_path``). Only ever `stat`ed — charter opens, shows and passes it to nothing.
+_CONVERSATION_FILE = "conversation"
+
+#: The ``$CLAUDE_PID`` of the report that adopted this start's link (Claude Code only).
+_HARNESS_PID_FILE = "harness.pid"
+
+#: The claim, created with ``O_EXCL``, that this start has adopted its report.
+_ADOPTED_FILE = "session.adopted"
+
+#: Whether the current start resumed its link or started fresh — a Codex report reads it.
+_START_FILE = "session.start"
+
+
+def clear_harness_session(fid: str) -> None:
+    """Forget *fid*'s link — both halves of :func:`record_harness_session` — because a start
+    is about to be linked to a different conversation. Never raises."""
+    d = frame_dir(fid)
+    if d is None:
+        return
+    for name in ("session", _KEPT_SESSION_FILE):
+        try:
+            (d / name).unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+def record_conversation(fid: str, path) -> bool:
+    """Keep the conversation file a harness named for *fid*. ``True`` when it was kept.
+
+    **A path a hook payload carried is held to a shape and never opened**: absolute, no NUL,
+    and no longer than `contain.PATH_DISPLAY_LIMIT`. Anything else records nothing — the
+    payload is text a chat's own shell can write. What charter later does with it is one
+    `os.path.isfile`, when a surface is about to offer resume.
+
+    Never creates the chat's directory: a report about a chat that has none is a report about
+    no chat of this plane.
+    """
+    if (not isinstance(path, str) or not os.path.isabs(path) or "\x00" in path
+            or len(path) > contain.PATH_DISPLAY_LIMIT):
+        return False
+    d = frame_dir(fid)
+    if d is None:
+        return False
+    try:
+        config.replace_for(d / _CONVERSATION_FILE, f"{path}\n")
+    except OSError:
+        return False
+    return True
+
+
+def conversation(fid: str) -> str | None:
+    """The conversation file recorded for *fid*, or ``None``."""
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        return (d / _CONVERSATION_FILE).read_text().strip() or None
+    except (OSError, ValueError):
+        return None
+
+
+def clear_conversation(fid: str) -> None:
+    """Forget *fid*'s conversation file, because the link it belonged to has moved on."""
+    d = frame_dir(fid)
+    if d is None:
+        return
+    try:
+        (d / _CONVERSATION_FILE).unlink(missing_ok=True)
+    except OSError:
+        return
+
+
+def record_harness_pid(fid: str, pid: int) -> None:
+    """Keep the ``$CLAUDE_PID`` of the report that adopted *fid*'s link.
+
+    **Learned from that report, never from `#{pane_pid}`**: a profile's command may be a
+    wrapper that forks `claude`, and then the pane's pid is the wrapper's. Only a positive
+    pid is a process.
+    """
+    d = frame_dir(fid)
+    if d is None or pid <= 0:
+        return
+    try:
+        config.replace_for(d / _HARNESS_PID_FILE, f"{int(pid)}\n")
+    except OSError:
+        return
+
+
+def harness_pid(fid: str) -> int | None:
+    """The adopted harness pid for *fid*, or ``None`` when this start has adopted none."""
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        val = (d / _HARNESS_PID_FILE).read_text().strip()
+    except (OSError, ValueError):
+        return None
+    return int(val) if _ORDINAL_RE.fullmatch(val) and int(val) > 0 else None
+
+
+def adopt_report(fid: str) -> bool:
+    """Claim that this start has adopted its report. ``True`` only for the first caller.
+
+    `config.create_for`, which is ``O_EXCL``: two hook processes racing one start cannot both
+    be the first. Every start clears it (:func:`clear_adoption`), and nothing else does.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return False
+    try:
+        return config.create_for(d / _ADOPTED_FILE, "")
+    except OSError:
+        return False
+
+
+def adopted(fid: str) -> bool:
+    """Whether this start of *fid* has adopted a report."""
+    d = frame_dir(fid)
+    return d is not None and (d / _ADOPTED_FILE).is_file()
+
+
+def clear_adoption(fid: str) -> None:
+    """Forget this start's adoption and its harness pid, because a new start begins."""
+    d = frame_dir(fid)
+    if d is None:
+        return
+    for name in (_ADOPTED_FILE, _HARNESS_PID_FILE):
+        try:
+            (d / name).unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+def record_start(fid: str, *, resumed: bool) -> None:
+    """Write down whether *fid*'s current start resumed its link or started fresh.
+
+    A resumed Codex start keeps the link it resumed (X3, read from source at
+    `rust-v0.147.0`): a report naming another id is never adopted, and this is how the hook
+    that reads the report knows which start it is in.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return
+    try:
+        config.replace_for(d / _START_FILE, "resumed\n" if resumed else "fresh\n")
+    except OSError:
+        return
+
+
+def resumed_start(fid: str) -> bool:
+    """Whether *fid*'s current start resumed its link."""
+    d = frame_dir(fid)
+    if d is None:
+        return False
+    try:
+        return (d / _START_FILE).read_text().strip() == "resumed"
+    except (OSError, ValueError):
+        return False
 
 
 def record_server(fid: str, server: str) -> None:
