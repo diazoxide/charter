@@ -11,8 +11,9 @@ spec's open questions (decisions file, *Rulings on the spec's open questions*).
 `workspaces/harness-profiles/refs/exit-gate-decisions.md` in the plane.
 
 **Against:** `origin/main` `5ad755d` (0.62.0). Line anchors below are at that commit; re-anchor by
-symbol name. Open PRs #1100 and #1103 touch `_launch`, `launcher.py`, `chats.py` and the reopen path,
-so each task re-reads their merged diffs before it starts.
+symbol name. #1100 has merged since (`00d69f2`, which adds `tmuxctl.nothing_listening`). #1103 is still
+open and touches `_launch`, `launcher.py`, `chats.py` and the reopen path, so each task re-reads what has
+merged before it starts.
 
 **Closes:** #1097 (task 4) and #1101 (task 1).
 
@@ -259,8 +260,17 @@ and chooses:
   - the directory is dead;
   - it is reaped (`state.reap_chat`, which is `rmtree` plus `_forget_session`);
   - the claim is made again.
-- **The server does not answer at all:** that counts as no live pane for this chat only. It says
-  nothing about any other chat or server (#1100).
+- **The server does not answer:** that proves nothing (#1100, and the controller's second-review
+  ruling).
+  - **Gone.** Only a server that `tmuxctl.nothing_listening(server)` confirms is gone holds no panes
+    (`tmuxctl.py:347` on `main` since `00d69f2`). That means its socket answers `ENOENT` or
+    `ECONNREFUSED`. The directory is then reaped as above. `_plane_liveness` decides a reopen by the
+    same test.
+  - **Wedged.** A server that timed out, or failed any other way, may still be running the chat:
+    #1100 measured a SIGSTOP'd server timing out while its chats were live. So the chat is refused
+    with `KEPT_ID_TAKEN`, naming the directory and what clears it — a retry once that server answers,
+    or removing the directory once the operator knows the server is gone.
+  - **Only this chat.** Neither answer says anything about any other chat or server.
 - **Otherwise:** the chat is refused with `KEPT_ID_TAKEN`. The sentence names the directory, and the
   exact command that clears it: the `tmux … kill-window -t <window id>` of the live window it found,
   then `charter reopen`, or the retry once a live launcher finishes.
@@ -294,7 +304,7 @@ Three files are added, and none of them is ever opened, shown or passed to a com
 
 | Harness | Who chooses the id | Recorded when | Resumes with | The conversation exists when |
 |---|---|---|---|---|
-| Claude Code | charter: `--session-id <uuid> --name <name>` on every fresh start | by the launcher before the `exec`; adopted by the first SessionStart reporting that id (C1, and C3 for a resume) | `--resume <uuid> --name <name>`, which keeps the id and renames the session (C3) | the `transcript_path` a hook payload named is a file — after the first prompt, never at SessionStart (C1, C2) |
+| Claude Code | charter: `--session-id <uuid> --name <name>` on every fresh start | by the launcher before the `exec`; adopted by the first SessionStart reporting that id (C1, and C3 for a resume) | `--resume <uuid> --name <name>`, which keeps the id and renames the session (C3) | the `transcript_path` a hook payload named is a file — on a fresh start only after the first prompt (C1, C2); on a resume it is already a file at SessionStart (C3) |
 | Codex | Codex | at SessionStart, which Codex runs inside the **first turn**, not at launch (X1) | `codex resume <id>` (X2) | the `transcript_path` it named is a file; the rollout exists before the hook runs (X1) |
 | opencode | opencode | at the chat's first tool hook: `input.sessionID`, shaped `ses_…` (O1) | `opencode -s <id>`, run in the chat's recorded directory, because opencode looks the id up in the working directory (O2) | a tool hook has reported the id — opencode names no transcript file (`opencode.py:318-326` builds the payload without one) |
 
@@ -311,12 +321,43 @@ Three files are added, and none of them is ever opened, shown or passed to a com
 - **The operator's own session flag wins.** A launch whose arguments already carry the harness's
   session flag gets nothing added. For Claude Code those are `--session-id`, `--resume`, `-r`,
   `--continue`, `-c` and `--fork-session`. The link is then what the harness reports at SessionStart.
-- **Only the chat's own harness may change its link** (controller's ruling on task 1's Step 0
-  readings, 2026-09-15). A nested harness run from a chat's shell inherits every `CHARTER_*`
-  variable, `CLAUDECODE` and `TMUX_PANE`, so the environment cannot tell its report from the chat's
-  own (C5). Every start clears the per-start adoption (`session.adopted`, `harness.pid`); nothing
-  else does.
-  - **Claude Code — adopt, follow, ignore.**
+- **Only the chat's own harness may change its link** (controller's rulings on task 1's Step 0
+  readings and on the second spec review, 2026-09-15). Every start clears the per-start adoption
+  (`session.adopted`, `harness.pid`); nothing else does.
+  - **Which harness sent a report comes from the report's own invocation, never from inherited
+    environment.**
+    - **The command cannot tell them apart.** Claude Code and Codex run the same command, the
+      plugin's `charter hook sessionstart` (`hooks/hooks.json`); Codex installs the same plugin
+      (`codex.py:84-97`).
+    - **Neither can the environment.** A nested harness inherits every `CHARTER_*` variable,
+      `CLAUDECODE`, `CLAUDE_PID` and `TMUX_PANE` (C5). `CHARTER_HARNESS=codex` is set only for Codex's
+      shells (`codex.py:84-97`), so a `codex` run from a Claude chat's shell still carries
+      `CHARTER_HARNESS=claude-code` and the outer `CLAUDE_PID`.
+    - **A Claude Code report counts as the chat's own only when both of these hold** (decided by
+      C7):
+      1. **`CLAUDE_CODE_SESSION_ID == payload.session_id`.** C7 measured the variable equal to the
+         payload's `session_id` in all 10 of charter's hooks, at startup and after `/clear`, where it
+         changed to the new id. It rejects a nested non-Claude harness, which inherits the outer id
+         but reports its own. That is inferred for `codex` and not measured.
+      2. **The report's `CLAUDE_PID` relates to the chat** by adopt or follow, below.
+
+      A nested `claude` fails both: it reports a new id from its own pid (C5).
+    - **`os.getppid() == CLAUDE_PID` is not a proof** (C7).
+      - Claude runs every hook as `/bin/sh -c '<command>'`.
+      - The relation held for a lone command such as `charter hook sessionstart`.
+      - A compound command such as `charter workspace _reconcile >/dev/null 2>&1` leaves one or two
+        shells in between.
+      - So it depends on the shell, and dash on Linux may differ.
+    - **A Codex report** is one that is not a Claude Code report, and whose payload has exactly the keys
+      Codex declares for SessionStart with `deny_unknown_fields`
+      (`codex-rs/hooks/src/schema.rs:486-497`): `session_id`, `transcript_path`, `cwd`,
+      `hook_event_name`, `model`, `permission_mode`, `source`.
+    - **An opencode report** arrives only on the tool route, from the shim. The shim sets
+      `CHARTER_HARNESS=opencode` in the call it makes (`opencode.py:331-332`), with the payload it
+      builds (`opencode.py:318-326`).
+    - **The kind must match.** The chat's recorded kind (`state.identity`) must be the harness that
+      sent the report. A report from any other harness changes nothing.
+  - **Claude Code — adopt, follow, ignore.** Each step needs a proven Claude Code report (above).
     - **Adopt.** The first SessionStart whose `session_id` equals the chat's recorded id adopts that
       report's `CLAUDE_PID` as the chat's harness pid, written beside the link as `harness.pid`.
       That covers a launch (C1) and a resume, which reports the same id with `source=resume` (C3).
@@ -326,15 +367,26 @@ Three files are added, and none of them is ever opened, shown or passed to a com
       `CLAUDE_PID` equals the adopted pid. That is `/clear` (C6: `source=clear`, a new id, the same
       claude pid), so resume offers the conversation the operator is actually in. The pre-clear
       conversation is still resumable by its own id (C6); charter just stops offering it.
-    - **Ignore.** A report whose `CLAUDE_PID` differs from the adopted pid, or that carries none
-      after adoption, is a nested harness (C5: a nested `claude -p` reports a new id, and its
-      `CLAUDE_PID` is its own process). It is never recorded.
-    - **No pane-pid or wrapper assumption.** A profile's command may be a wrapper that forks
-      `claude`, so the pane's `#{pane_pid}` is not the claude pid; `CLAUDE_PID` is what Claude
-      Code hands its own hooks, and it equals the hook's `$PPID` (C5).
+    - **Ignore.** A report is ignored, and never recorded, when it:
+      - fails (1);
+      - carries a `CLAUDE_PID` other than the adopted pid with an id other than the recorded one — a
+        nested `claude` (C5);
+      - lacks either variable after adoption.
+
+      Before adoption, a report lacking either variable never adopts.
+    - **The adopted pid is learned from the adopting report, never from `#{pane_pid}`.** A profile's
+      command may be a wrapper that forks `claude`, and then the pane's pid is the wrapper's.
   - **Codex and opencode — the first report of a start.** Neither report carries a pid that tells a
-    nested run from `/new`, so the first id reported after a start is adopted (`session.adopted`,
+    nested run from `/new`, so the first id reported after a fresh start is adopted (`session.adopted`,
     created with `O_EXCL`), and a later different id in the same start is ignored.
+  - **A resumed Codex start keeps the link it resumed.** Read from source at `rust-v0.147.0` (X3,
+    `core/src/session/session.rs:570-594`): a resumed start keeps the thread's id, and takes its
+    session id from the resumed rollout's own `SessionMeta`, so a resumed root session reports the
+    id it had.
+    - The link stays the id `codex resume` was given, whichever id the resumed start reports.
+    - A report naming another id is never adopted, and its `transcript_path` is recorded only when
+      its id is the link.
+    - That holds for either answer X3 could have given.
 - **The launcher never infers an id** from a directory, a time or "the latest session". A report the
   rule above ignores changes nothing and is never recorded.
 - **Asked of the registry, not spelled per module.** `Harness` gains the members below. Today a resume
@@ -426,7 +478,8 @@ bind -n F10 run-shell '"$CHARTER_PY" -m charter frame-palette "#{client_name}" -
   persona head, `F2 palette` and the gate button — is reached through the `MouseDown1Pane` bind
   (`conf_text`, `tmuxctl.CLICK_KEY`).
   - The bind's panel branch records the clicking client on the panel pane before forwarding the
-    click: `set-option -p -t = @charter_presser "#{client_name}"`.
+    click: `set-option -F -p -t = @charter_presser "#{client_name}"`. `-F` expands the format at the
+    press, so the option holds the client's name and not the text `#{client_name}`.
   - The strip's handler reads its own pane's `@charter_presser` in one `display-message` and hands it
     on.
   - It never asks tmux for its last-active client.
@@ -503,6 +556,9 @@ charter · close · 2 to choose from
 **What ends a harness:** its process exits in a chat pane the launcher `exec`'d, for any reason. That
 includes `/exit`, a double Ctrl+C, Ctrl+D, a crash, and a signal from outside.
 
+No test or measurement depends on a double Ctrl+C ending a harness. C7 saw two `send-keys C-c` leave
+Claude running at startup, so task 2 uses `/exit`, or a stand-in harness.
+
 **`charter frame -- <cmd>` is not a harness and keeps today's ending** (ruled, open question 5).
 - A window started by the escape hatch records no profile (`_profile_name(None) == ""`,
   `commands_frame.py:5436-5443`).
@@ -554,18 +610,28 @@ includes `/exit`, a double Ctrl+C, Ctrl+D, a crash, and a signal from outside.
    - It runs from `launcher.attempt`'s `on_exec`, the one place every start reaches: a selector pick
      (`_picked`), the drawer's resume, a fresh start from the ended selector, a reopen, and every
      ordinary launch.
-   - Its undo claims `ended` again if the `exec` raises.
+   - `reset` answers whether it cleared an `ended` claim. Its undo claims `ended` again only when
+     `reset` cleared one and the `exec` then raised.
    - A resumed chat is then drawn live again: it confirms on close, and its next exit is presented
      again.
-6. **End of input is not Esc.**
+6. **End of input is not Esc, and neither is Ctrl+C.**
    - `overlay.Surface.run` answers `None` for both today (`overlay.py:865-905`). It now also records
      which one it was (`left`: a key, or end of input).
+   - **Ctrl+C decodes as its own key.**
+     - Today `decode` turns `\x03` into `escape` (`overlay.py:687-690`), so a stray third Ctrl+C after
+       a double-Ctrl+C `/exit` would close an ended tab for good. It becomes `ctrl-c`.
+     - Every surface that cancels on Ctrl+C today keeps doing so, through an explicit mapping
+       (`Surface.cancel_keys`): the `F2` palette with its pickers and confirmation drawers, the tab
+       menu, and the never-started selector, as #1103 left it.
+   - **On an ended selector and in the crash drawer, Ctrl+C does nothing.** No close, no mark, no
+     manifest change.
    - **Only a real Esc keystroke in an ended selector closes the tab.**
    - **End of input leaves the tab ended and open.** A closed pty, a killed server or a machine that
      went down all end input. The launcher exits and writes no closed mark, calls no
      `_forget_transcript`, and drops no manifest entry. The pane's own death then reaches
      `frame-ended`, which finds `ended` already claimed and does nothing.
-   - A pane that never started a harness keeps today's rule: its selector closes on either.
+   - A pane that never started a harness keeps today's rule: its selector closes on Esc, on Ctrl+C
+     and at end of input.
 
 **The launch's own early-death path is unchanged (#384).**
 - A harness dead before the chat is drawn is still reported and its window killed by `_launch`.
@@ -622,7 +688,7 @@ install. The reason is no longer an `attach` blocked forever, but a tab whose ex
   - It runs `cmd_close` in-process, not `_close_the_cancelled_chat`, which closes a pane that never
     became a chat and must not write the closed mark (`launcher.py:656-704`).
   - An ended tab was a chat, and forgetting it is what close means.
-  - End of input is not Esc (above).
+  - End of input and Ctrl+C are not Esc (above).
 
 ### Quit, and reopening ended tabs
 
@@ -675,7 +741,7 @@ install. The reason is no longer an `attach` blocked forever, but a tab whose ex
 > **Bounded, and each bound is checkable.**
 > - **Charter restarts nothing by itself.** Every harness start after an exit is an operator's Enter
 >   on a row. No timer, no retry, no automatic resume; an ended tab nobody switches to stays ended,
->   and end of input is never read as a choice.
+>   and neither end of input nor Ctrl+C is ever read as a choice.
 > - **Charter never types into a harness.** No `send-keys`, no `/rename`, no `/resume`. A resume is an
 >   argument at the `exec` (`--resume`, `resume`, `-s`), and a title reaches Claude Code as `--name`
 >   at the next `exec`.
@@ -737,14 +803,21 @@ install. The reason is no longer an `attach` blocked forever, but a tab whose ex
 > - A resume reports the same id and renames the session.
 > - A nested `claude` reports a new id from its own `CLAUDE_PID`.
 > - `/clear` reports a new id from the same `CLAUDE_PID`.
+> - Every Claude Code hook's `CLAUDE_CODE_SESSION_ID` equals its payload's `session_id`, at startup and
+>   after `/clear`, while a hook's parent is Claude only for a lone command: Claude runs hooks under
+>   `/bin/sh -c` (C7).
 > - Codex reports at its first turn, not at launch.
 > - `opencode -s` looks the id up in the working directory.
 >
 > **Consequences, including what they cost.**
 > - One more file and a lock under `.charter/frame/`, and ordinals only grow: a prefix hands out at
 >   most 99,999 ids in the life of a plane (`chats._MAX_ORDINAL_DIGITS`).
-> - The link is as trustworthy as the hook that writes it: a process that fakes both the payload and
->   `CLAUDE_PID` can point a tab at another conversation.
+> - A Claude Code report counts only when `CLAUDE_CODE_SESSION_ID` equals its payload's id, and its
+>   `CLAUDE_PID` either becomes the adopted pid through the recorded id or equals it. A parent-pid test
+>   was measured unreliable behind `/bin/sh -c`, and a nested non-Claude harness is rejected by
+>   inference, not by measurement.
+> - The link is as trustworthy as the hook that writes it: a process that fakes the payload,
+>   `CLAUDE_CODE_SESSION_ID` and `CLAUDE_PID` together can point a tab at another conversation.
 > - Claude Code's link follows `/clear`, so resume offers the conversation the operator is in; the
 >   pre-clear conversation is still in `claude --resume`'s own picker, but charter stops offering it.
 > - Codex and opencode carry no pid a hook can compare, so each start adopts its first reported id:
@@ -824,8 +897,10 @@ install. The reason is no longer an `attach` blocked forever, but a tab whose ex
     (`_plane_option_argv`).
 
   Its harness's exit leaves a dead pane with tmux's own `Pane is dead`, until the tab is closed.
-- **The session link is as trustworthy as the hook that writes it.** A process that forges both a
-  payload and `CLAUDE_PID` can point a tab's resume at another conversation.
+- **The session link is as trustworthy as the hook that writes it.** A process that forges a payload,
+  `CLAUDE_CODE_SESSION_ID` and `CLAUDE_PID` together can point a tab's resume at another conversation.
+  A nested non-Claude harness is rejected because it reports an id other than the one it inherited,
+  which is inferred for `codex` and not measured.
 - **After `/clear`, resume offers the new conversation.** The pre-clear one is still in Claude Code's
   own `claude --resume` picker (C6), but charter stops offering it.
 - **Codex and opencode follow no `/new`.** Neither report carries a pid a hook can compare, so each
@@ -886,8 +961,26 @@ install. The reason is no longer an `attach` blocked forever, but a tab whose ex
    - **O1 — opencode.** `tool.execute.before`'s input carries `sessionID`, shaped `ses_…`.
    - **O2 — opencode resume.** `opencode -s <id>` validates the id against the working directory
      (`src/cli/tui/validate-session.ts:7-28`), so resume must run in the chat's recorded directory.
+   - **X3 — a resumed Codex start.** Read from source at `rust-v0.147.0`, not run.
+     - It keeps the resumed thread's id, and reports the session id recorded in that rollout's own
+       `SessionMeta` (`core/src/session/session.rs:570-594`).
+     - For a root session that is the id it had, so `codex resume` accepts it again (X2).
+     - The link rule is written to hold either way.
+   - **C7 — which proof shows a Claude Code hook belongs to that Claude process.** Taken 2026-09-15
+     with charter's real hook command forms, claude 2.1.272, no prompt (`exit-gate-t1-step0.md`,
+     section C7, with raw evidence in `c7-evidence/`).
+     - **The session-id variable is a proof.** `CLAUDE_CODE_SESSION_ID` equalled the payload's
+       `session_id` in all 10 hooks, at startup and after `/clear`. After `/clear` it changed to the
+       new id, while `CLAUDE_PID` stayed the same.
+     - **The parent pid is not.** `os.getppid() == CLAUDE_PID` held only for a lone command, because
+       Claude runs hooks as `/bin/sh -c` and a compound command keeps one or two shells in between.
+     - **Not measured:** a nested `!` child, because `!` costs a model turn; and a nested `codex`,
+       which is inferred.
+     - **A note for task 2.** Two `send-keys C-c` did not end Claude at startup in that run. No test or
+       measurement may depend on a double Ctrl+C exiting: use `/exit` or a stand-in harness.
    - **What they settled, by the controller's ruling:**
-     - Claude Code's link adopts, follows `/clear` and ignores a nested harness, by `CLAUDE_PID`.
+     - Claude Code's link adopts, follows `/clear` and ignores a nested harness, by
+       `CLAUDE_CODE_SESSION_ID` and `CLAUDE_PID` together (C5, C6, C7).
      - Codex and opencode adopt the first report of each start.
      - A Codex chat has no link before its first turn.
      - opencode resumes only in its recorded directory.
@@ -899,7 +992,8 @@ install. The reason is no longer an `attach` blocked forever, but a tab whose ex
    - The hotkey and `F10` binds carry it too.
    - Task 4's G3 measures that the recorded name is the clicking client with two clients attached.
    - If it is not, task 4 stops and goes to the controller. A detach-all never ships.
-4. **`pane-died` on Linux for a pane whose status and signal both come back empty.** **Open.**
+4. **`pane-died` on Linux for a pane whose status and signal both come back empty.** **Open, and a
+   pre-merge gate on task 2** (controller's ruling).
    - *Evidence:* a cancelled selector pane on the CI runner was marked dead with both empty, and its
      window was still listed a minute later, with both hooks present
      (`launcher._close_the_cancelled_chat`'s docstring, `:660-669`). Whether a harness killed from
@@ -908,6 +1002,10 @@ install. The reason is no longer an `attach` blocked forever, but a tab whose ex
      fire, the controller rules on a fallback before task 2 merges. The candidate is the chat strip's
      panel running `frame-ended` for a chat whose pane its listing reports dead, which reads
      `#{pane_dead}`, a state, not content. The task does not invent one.
+   - *The gate, written into task 2:*
+     - the Linux CI case runs unskipped;
+     - its stand-in harness enters raw mode before it exits or is killed;
+     - it covers both exit 0 and `SIGKILL`.
 5. **Scope: `charter frame -- <cmd>`.** **Ruled: keep today's behaviour.** The window closes when the
    command exits, and the exit code is returned to the script, with no ended tab (*An ended tab*,
    above).
