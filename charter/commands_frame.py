@@ -1920,7 +1920,34 @@ def _live_chats(socket: str) -> set[str] | None:
     answer. A LIVE server with no chats on it is a different fact and answers with an
     empty set, which reaps exactly as it should.
 
-    A window with no such option prints an empty line, which the comprehension drops.
+    A window with no such option prints an empty chat field, which the reader drops.
+
+    **The same listing also answers which windows are transcript viewers, and that is
+    carried on the answer rather than read twice** (:class:`_LiveChats`, ruling: a viewer
+    must not outlive its chat). The launch sweeps a viewer whose chat is no longer live
+    BEFORE it reads liveness (`_sweep_orphan_transcripts`), and it must do so without a
+    second round trip — `tests/test_a_frame_sends_one_invocation_per_batch` pins the
+    launch at sixteen invocations — and without a tmux call the launch's stand-ins do not
+    already answer for: every launch fixture mocks THIS function and leaves `tmuxctl.run`
+    unmocked, so a read made anywhere else from `_launch` reaches a real socket and trips
+    `tests/_planeguard`. So :data:`_LIVE_CHATS_FORMAT` asks for the chat, the viewer's chat
+    and the window id in one `list-windows`, and the viewers ride out on the set. A
+    stand-in that answers a plain ``set()`` carries none, which is the right reading: it
+    listed nothing real, so there is nothing to sweep.
+
+    **`|` between the fields and not `\t`, and the parse test is the reason.** Every other
+    format in this module separates with a tab, arguing none of its fields can hold one.
+    That holds here too — but this reader's one-field form is spoken by every launch
+    stand-in (`tests/test_frame_launcher._FakeTmux` answers a bare chat id per line) and
+    `TheChatListIsParsedLineByLine` pins that a line with an edge of whitespace, TAB
+    included, still names its chat. Split on a tab, ``"\tdemo.2\t"`` is three fields with
+    an empty chat and loses the name; split on ``|`` it is one field, stripped, as pinned.
+    A chat id (`_FRAME_ID_RE`) and a window id (`@<digits>`) hold no ``|`` either, and
+    `str.strip` never eats one. Exactly three fields is the structured row; anything else
+    — a one-field stand-in line, or an option value somebody put a ``|`` in — is read as
+    the whole stripped line, which keeps `reap`'s list over-keeping (its safe direction)
+    and can never name a window to kill: a viewer is taken only from a three-field row
+    whose chat and window both hold to their own shapes, at #475's boundary.
 
     **Stripped once, tested once.** `_live_sessions` and `_live_windows` both spell
     ``{line.strip() for line in … if line.strip()}``, and the second call is an
@@ -1941,12 +1968,60 @@ def _live_chats(socket: str) -> set[str] | None:
     """
     out = tmuxctl.run("listing the chats already running",
                       tmuxctl.server_argv(socket, "list-windows", "-a", "-F",
-                                          f"#{{{_CHAT_OPTION}}}"),
+                                          _LIVE_CHATS_FORMAT),
                       timeout=5, report=False)
     if out.returncode != 0:
         return None
-    names = (line.strip() for line in out.stdout.splitlines())
-    return {name for name in names if name}
+    live = _LiveChats()
+    viewers: list[tuple[str, str]] = []
+    for line in out.stdout.splitlines():
+        parts = line.split(_LIVE_CHATS_SEP)
+        if len(parts) != 3:
+            name = line.strip()
+            if name:
+                live.add(name)
+            continue
+        chat, viewer_of, window = (p.strip() for p in parts)
+        if chat:
+            live.add(chat)
+        if (viewer_of and window and _FRAME_ID_RE.fullmatch(viewer_of)
+                and _WINDOW_ID_RE.fullmatch(window)):
+            viewers.append((viewer_of, window))
+    live.viewers = tuple(viewers)
+    return live
+
+
+#: The one field separator :func:`_live_chats` reads by — see its docstring for why this
+#: reader alone is not tab-separated.
+_LIVE_CHATS_SEP = "|"
+
+#: What :func:`_live_chats` asks of every window on a server, in ONE call: the chat the
+#: window draws (`_CHAT_OPTION`), the chat a transcript viewer was opened for
+#: (`_TRANSCRIPT_OPTION`) and the window id a viewer is killed by. Read once for both the
+#: liveness list and the orphan sweep, for the round-trip and stand-in reasons the
+#: function's docstring gives.
+_LIVE_CHATS_FORMAT = (f"#{{{_CHAT_OPTION}}}{_LIVE_CHATS_SEP}#{{{_TRANSCRIPT_OPTION}}}"
+                      f"{_LIVE_CHATS_SEP}#{{window_id}}")
+
+
+class _LiveChats(set):
+    """:func:`_live_chats`' answer: a set of live chat ids that also carries the transcript
+    viewers the same listing reported.
+
+    A `set`, and deliberately not a record beside one: every caller unions it
+    (``live_sessions | live_chats``), tests membership (``fid in live_chats``) or asks
+    ``is not None``, and every launch fixture stands it in with a plain ``set()`` — all of
+    which a set subclass keeps working unchanged. The viewers ride as an attribute the sweep
+    reads with a default, so a plain set answers "no viewers", which is what a stand-in that
+    listed nothing real should say.
+    """
+
+    __slots__ = ("viewers",)
+
+    def __init__(self, names=()):
+        super().__init__(names)
+        #: ``(chat the viewer was opened for, window id)`` per transcript viewer window.
+        self.viewers: tuple[tuple[str, str], ...] = ()
 
 
 #: What :func:`_chat_being_left` asks of every window on a server, in one call.
@@ -10530,36 +10605,23 @@ def _quit_record_held_back(doomed) -> bool:
     return m is not None and bool(m.frames) and m.writer != reopen_state.RECORDER
 
 
-#: What :func:`_transcript_windows` asks of every window on a server, in one call: the chat
-#: a transcript viewer was opened for (`_TRANSCRIPT_OPTION`) and the window it is. A window
-#: that is not a viewer prints an empty first field, which the reader drops. `\t` because a
-#: window id is `@<digits>` and a chat id is `_FRAME_ID_RE`'s alphabet — neither holds one.
-_TRANSCRIPT_SEAT_FORMAT = f"#{{{_TRANSCRIPT_OPTION}}}\t#{{window_id}}"
-
-
 def _transcript_windows(socket: str) -> list[tuple[str, str]]:
     """Every transcript viewer on *socket* as ``(chat it was opened for, window id)`` —
     rows charter cannot read dropped (ruling: a viewer must not outlive its chat).
 
-    One `list-windows -a`, and the chat id is held to `_FRAME_ID_RE` on the way out at
-    #475's boundary: the value came off a window option a chat could in principle set, and
-    it is about to be compared against a live-chat set and never itself a `-t` target — the
-    window id is. Never raises: a server that would not list its windows has no viewers this
-    can see, which is the same answer as a server with none.
+    :func:`_live_chats`' own listing, which carries the viewers it saw (:class:`_LiveChats`)
+    — one `list-windows -a` answers both the liveness list and this, and the chat id is
+    held to `_FRAME_ID_RE` there at #475's boundary: the value came off a window option a
+    chat could in principle set, and it is compared against a live-chat set while the
+    window id is the `-t` target. Never raises: a server that would not list its windows
+    has no viewers this can see, which is the same answer as a server with none — and a
+    stand-in that answers a plain ``set()`` carries none, for the same reason.
     """
-    out = tmuxctl.run("listing this plane's transcript viewers",
-                      tmuxctl.server_argv(socket, "list-windows", "-a", "-F",
-                                          _TRANSCRIPT_SEAT_FORMAT),
-                      timeout=5, report=False)
-    rows: list[tuple[str, str]] = []
-    for line in out.stdout.splitlines():
-        chat, _, window = line.partition("\t")
-        if chat and window and _FRAME_ID_RE.fullmatch(chat):
-            rows.append((chat, window))
-    return rows
+    live = _live_chats(socket)
+    return [] if live is None else list(getattr(live, "viewers", ()))
 
 
-def _kill_transcript_windows(socket: str, chats_set) -> None:
+def _kill_transcript_windows(socket: str, chats_set, rows=None) -> None:
     """Close every transcript viewer on *socket* opened for a chat in *chats_set*.
 
     **The teardown half of :data:`_TRANSCRIPT_OPTION`.** A viewer is its own window beside
@@ -10567,10 +10629,14 @@ def _kill_transcript_windows(socket: str, chats_set) -> None:
     a workspace's session alive with nothing charter recognised in it. Killed by the marker
     and never by the `transcript <fid>` window NAME: a name is not an identity
     (`_CHAT_OPTION`'s measurement), and `allow-rename on` output could move it. Best effort,
-    like every teardown here: a viewer tmux will not close is swept at the next launch."""
+    like every teardown here: a viewer tmux will not close is swept at the next launch.
+
+    *rows* is the viewer listing a caller already holds (`_sweep_orphan_transcripts`, off
+    the `_live_chats` answer it was handed), so the sweep costs no listing of its own; a
+    caller with none (`_stop_chats`) reads one here."""
     if not chats_set:
         return
-    for chat, window in _transcript_windows(socket):
+    for chat, window in (_transcript_windows(socket) if rows is None else rows):
         if chat in chats_set:
             tmuxctl.run(f"closing the transcript viewer of chat {chat}",
                         tmuxctl.server_argv(socket, "kill-window", "-t", window),
@@ -10591,13 +10657,19 @@ def _sweep_orphan_transcripts(socket: str, live_chats) -> None:
     (measured), so the orphan never reads as a live `_live_sessions` entry that blocks a
     restore or is refused as another plane's.
 
+    **No listing of its own** — the viewers come off *live_chats* itself (:class:`_LiveChats`,
+    the answer `_launch` was just handed), so a launch pays no round trip for the sweep and
+    makes no tmux call its stand-ins do not already answer for. A plain ``set`` carries no
+    viewers and sweeps nothing, which is right: nothing real was listed.
+
     ``live_chats is None`` is a server that would not list its windows: nothing is swept, for
     `_live_chats`' own reason — charter cannot tell an orphan from a chat it simply could not
     read, and killing on that answer would close a viewer of a chat that is running."""
     if live_chats is None:
         return
-    orphans = {chat for chat, _w in _transcript_windows(socket) if chat not in live_chats}
-    _kill_transcript_windows(socket, orphans)
+    viewers = tuple(getattr(live_chats, "viewers", ()))
+    orphans = {chat for chat, _w in viewers if chat not in live_chats}
+    _kill_transcript_windows(socket, orphans, rows=viewers)
 
 
 def _stop_chats(doomed, *, windows) -> int:
