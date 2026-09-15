@@ -983,6 +983,12 @@ class TestThereIsNoExpansionAndNoForge(unittest.TestCase):
         declarations, keyed per host — so the ban becomes an exact one: every `glob` in this
         module takes the literal `"*.jsonl"`, and a call that grew a repo pattern goes red
         here whatever it is spelled.
+
+        Since #1084 the log is listed by `change.read_log_files`, which names a directory it
+        could not list where a `glob` answered an empty list — so this module globs nothing,
+        and its one listing is that call. What that listing keeps (a host's `*.jsonl`, not a
+        stray file or a directory named like one) is pinned by what it returns, in
+        `test_a_memory_or_changes_directory_it_cannot_list_is_named`.
         """
         patterns = [ast.literal_eval(n.args[0])
                     for n in ast.walk(self._tree())
@@ -993,7 +999,8 @@ class TestThereIsNoExpansionAndNoForge(unittest.TestCase):
                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                  and n.func.attr == "glob"]
         self.assertEqual(len(globs), len(patterns), "a glob() with a computed pattern")
-        self.assertEqual(set(patterns), {"*.jsonl"})
+        self.assertLessEqual(set(patterns), {"*.jsonl"})
+        self.assertIn("read_log_files", self._called())
 
     def test_the_inventory_is_not_even_imported(self):
         self.assertNotIn("inventory", self._imports())
