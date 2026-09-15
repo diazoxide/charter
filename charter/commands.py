@@ -1614,13 +1614,25 @@ def _load_settings(root: Path) -> tuple[dict | None, Path]:
     settings yet is ordinary. A *malformed* one reads as ``None`` so callers refuse rather
     than repair: the operator's content is in there, and `_ensure_guard_hook` already keeps
     that restraint for the same file.
+
+    **Read as Claude Code reads it, because this reader feeds writers** (round 5 of the
+    review). Python's `json` accepts ``NaN``, ``Infinity`` and ``-Infinity`` and `JSON.parse`
+    refuses them, so a settings file holding one is a file Claude Code loads nothing from.
+    Read with plain `json.loads`, this handed such a file to `ensure_env_var` and
+    `add_permission_rule`, which rewrote it — `init` added `env.CHARTER_HARNESS` and a
+    `permissions.ask` entry to a file the host ignores, and then printed that it had left it
+    completely untouched. `_ensure_guard_hook` read the same file through the strict parser
+    and refused it, which is how one command came to do both. The rule is the one that
+    settles it: charter never writes back a file it did not read the way the host reads it.
     """
     p = _settings_path(root)
     if not p.exists():
         return {}, p
     try:
-        doc = json.loads(p.read_text())
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError, RecursionError):
+        doc = doctor._json_as_claude_code_parses(p.read_text())
+    except (OSError, ValueError, RecursionError):
+        # `UnicodeDecodeError` is a `ValueError`; `RecursionError` — a file nested too deeply
+        # to parse — is not.
         return None, p
     return (doc if isinstance(doc, dict) else None), p
 
@@ -1631,12 +1643,16 @@ def _load_json_settings(path: Path):
     `_load_settings` answers this for the plane's committed file specifically. This is the
     same restraint for any path: a missing file is an empty document, an unparseable one is
     somebody's to fix and charter reports it rather than overwriting it.
+
+    Parsed as Claude Code parses it, for `_load_settings`' reason and with the same force:
+    this is the loader `--local` rules are written through, and the two files differ only in
+    blast radius, so they must not differ in what charter is willing to write back.
     """
     if not path.exists():
         return {}, path
     try:
-        doc = json.loads(path.read_text())
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        doc = doctor._json_as_claude_code_parses(path.read_text())
+    except (OSError, ValueError, RecursionError):
         return None, path
     return (doc, path) if isinstance(doc, dict) else (None, path)
 
@@ -1688,8 +1704,6 @@ def add_permission_rule(root: Path, rule: str, bucket: str, local: bool = False,
         return "malformed", f"{path} (`permissions.{bucket}` is not a list)"
     if rule in entries:
         return "present", str(path)
-    if dry_run:
-        return "added", str(path)
     entries.append(rule)
     # Through `_json_style`, like the file's other writers. `init` reaches this function now
     # (the handoff's consent rule), and a plane whose settings are one compact line or
@@ -1697,8 +1711,26 @@ def add_permission_rule(root: Path, rule: str, bucket: str, local: bool = False,
     # `TestSettingsFormattingPreserved` is the pin.
     raw = path.read_text() if path.exists() else ""
     indent, separators = _json_style(raw) if raw else ("  ", (",", ": "))
+    try:
+        rewritten = json.dumps(settings, indent=indent, separators=separators) + "\n"
+    except RecursionError:
+        # Parsed, and too deep to write back out: 3.12's encoder recurses where its decoder did
+        # not (6,000 levels, measured; 3.14 does neither). `_ensure_guard_hook` and
+        # `ensure_env_var` caught this in round 4 and THIS writer did not, so `charter init`
+        # still died here — it reaches this function through `ensure_handoff_gate`, and
+        # `charter guard` reaches it through `_guard_apply` for every registered harness.
+        # Refused like any other file charter cannot write back, and before the `mkdir` below,
+        # so a refusal leaves not even a directory behind.
+        return "malformed", f"{path} (nested too deeply to write back)"
+    # AFTER the encode, because the encode is where this file is refused. `dry_run` is the write
+    # path minus the write (this method's contract), and a check that returned `added` here while
+    # the commit returned `malformed` is precisely the disagreement that contract exists to
+    # prevent: `_guard_apply` would decide the transaction was safe, commit it, and discover the
+    # refusal with the earlier harnesses already written.
+    if dry_run:
+        return "added", str(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(settings, indent=indent, separators=separators) + "\n")
+    path.write_text(rewritten)
     return "added", str(path)
 
 
@@ -2712,6 +2744,12 @@ def cmd_init(args) -> int:
         # shim with every guard cut out of it got listed as "already present" (#433).
         if status == "unvouched":
             unvouched.append(label)
+        elif status == "malformed":
+            # Neither written nor found: the harness refused the file. Listing it under
+            # "already present" says charter found its key in there, which is the #433 shape
+            # again — and it would print beside the sentence below saying the same file was
+            # left completely untouched. The refusal is reported where the file is named.
+            pass
         else:
             (created if status == "created" else present).append(label)
 

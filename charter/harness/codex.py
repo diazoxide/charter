@@ -120,7 +120,11 @@ def install(env: Mapping[str, str] | None = None) -> tuple[str, str]:
         try:
             raw = p.read_text()
             doc = tomllib.loads(raw)
-        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, RecursionError):
+            # `RecursionError` is a config nested too deeply to parse — measured on 3.12, where
+            # `tomllib.loads` raises it at 5,000 levels of inline array. It is not a
+            # `TOMLDecodeError`, and this read is what decides the append below, so letting it
+            # out would end `charter harness install` on a file charter can simply refuse.
             return "malformed", str(p)
         hooks = doc.get("hooks") or {}
         # `[hooks.state]` is Codex's own trust ledger, not a declaration — only actual

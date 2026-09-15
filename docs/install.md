@@ -198,6 +198,20 @@ start Claude Code from, so it sees the same variable.
   charter follows the change. If this session's own settings declare `charter hook pretooluse`,
   the row stays green instead, and says it could not tell whether a plugin also dispatches the
   guard.
+- **A plugin dispatches the guard when an entry Claude Code would RUN says so.** charter reads
+  the plugin's own `hooks/hooks.json` and looks for a `PreToolUse` entry of type `command` whose
+  command invokes the `pretooluse` handler. The guard's name anywhere else in that file — in a
+  `matcher`, beside the command rather than in it, under another event, or in a different handler
+  such as `charter hook pretooluse-read`, which guards Read and Grep — dispatches nothing and is
+  not counted. A `hooks.json` charter cannot parse as Claude Code parses it dispatches nothing
+  either, so `charter init` and `reinit` write the guard hook: the safe direction, since a guard
+  declared twice is harmless and reported, and one declared nowhere is a hole.
+- **A settings file charter cannot read is never written back.** `.claude/settings.json` and its
+  machine-local sibling are read exactly as Claude Code reads them, so a file holding `NaN`,
+  `Infinity` or `-Infinity` — which `JSON.parse` refuses, and Claude Code loads nothing from — is
+  one charter refuses too, as is one nested too deeply for Python to re-encode. `charter init`
+  names the file, writes nothing into it, and exits 1. `charter guard` writes no harness at all,
+  because it writes every harness or none.
 - **Three narrower Claude Code settings are not followed:**
   - `$CLAUDE_CODE_PLUGIN_CACHE_DIR` moves the installed-plugin list out of the config folder.
     With it set to anything but empty, `plane-root guard` says it could not tell which directory

@@ -1258,15 +1258,59 @@ def _plugin_declaring_guard(root: Path | None = None,
     return None
 
 
+#: The event charter's guard is wired to, and the handler it dispatches — the two things that
+#: make a `hooks.json` entry THIS guard rather than one of charter's other hooks. Spelled here
+#: because `commands._GUARD_HOOK` is the block that writes them and this is the reader that
+#: counts them; `wiring.CODEX_GUARD_HANDLER` is the same handler named for Codex's trust ledger.
+_GUARD_EVENT = "PreToolUse"
+_GUARD_HANDLER = "pretooluse"
+
+
 def _dispatches_guard(install_path: str) -> bool:
     """Does the plugin installed at *install_path* dispatch `charter hook pretooluse`?
 
     *install_path* is text out of a file a chat can write, so a missing directory, an unreadable
-    `hooks.json` and a NUL byte (``ValueError``) each answer no rather than raise."""
+    `hooks.json` and a NUL byte (``ValueError``) each answer no rather than raise.
+
+    **Decided from the entry Claude Code would RUN, not from the file's text** (round 5 of the
+    review). This asked whether the string `charter hook pretooluse` appeared anywhere in the
+    file, which counts it in four places that dispatch nothing: in a `matcher`, in a
+    `statusMessage` or any other key beside the command, under another event entirely, and in an
+    entry whose `type` says it is not a command. It also counted `charter hook pretooluse-read`,
+    which is a different handler guarding Read and Grep — so a plugin wiring only that one read
+    as wiring the Bash guard, and `init` then wrote no hook for a plane nothing guards.
+
+    The walk is `wiring._guard_positions`' — the same file, read the same way for Codex's trust
+    ledger — with every level checked for its type, because each is a line a chat can write. The
+    handler comes from `hooks._HOOK_CMD_RE` rather than a substring, which is what keeps one
+    handler's name from matching another's prefix.
+
+    A file charter cannot parse as Claude Code parses it dispatches nothing HERE, and that is the
+    safe direction rather than a claim: `init` then writes the guard hook, so a guard declared
+    twice is the worst case — harmless, and reported as *declared twice* — where reading a
+    dispatch that is not there leaves the plane root unguarded.
+    """
+    from . import hooks
+
     try:
-        return "charter hook pretooluse" in (Path(install_path) / "hooks" / "hooks.json").read_text()
+        text = (Path(install_path) / "hooks" / "hooks.json").read_text()
     except (OSError, ValueError):
         return False
+    try:
+        doc = _json_as_claude_code_parses(text)
+    except (ValueError, RecursionError):
+        return False
+    events = doc.get("hooks") if isinstance(doc, dict) else None
+    groups = events.get(_GUARD_EVENT) if isinstance(events, dict) else None
+    for group in groups if isinstance(groups, list) else ():
+        entries = group.get("hooks") if isinstance(group, dict) else None
+        for entry in entries if isinstance(entries, list) else ():
+            if not isinstance(entry, dict) or entry.get("type") != "command":
+                continue
+            command = entry.get("command")
+            if isinstance(command, str) and _GUARD_HANDLER in hooks._HOOK_CMD_RE.findall(command):
+                return True
+    return False
 
 
 def _line(value) -> str:

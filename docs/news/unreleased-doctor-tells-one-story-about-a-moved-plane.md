@@ -64,3 +64,29 @@ The same row also handles three more cases:
 
 In this row, charter now escapes a newline or a terminal escape in a path or plugin id it takes
 from the install list, and prints the rest as one line of plain text.
+
+**`charter init` no longer writes into a settings file Claude Code refuses.** `JSON.parse`
+refuses `NaN`, `Infinity` and `-Infinity`, so a `.claude/settings.json` holding one is a file
+Claude Code loads nothing from. `init` read it with Python's own parser, which accepts them, and
+wrote `env.CHARTER_HARNESS` and the `charter handoff` ask rule into it — and then printed that it
+had left the file completely untouched. Both halves are fixed. Charter now reads that file, and
+its machine-local sibling `.claude/settings.local.json`, exactly as Claude Code reads them, and a
+settings file charter cannot read that way is never rewritten: `init` names it, writes nothing
+into it, and exits 1.
+
+The same now holds for a settings file too deeply nested for Python to write back — on 3.12 a
+6,000-level file parses and then cannot be re-encoded. Every writer of a settings file refuses
+it and leaves the file byte for byte as it was: the plane-root guard hook, the harness `env`
+key, the `ask` and `allow` rules in both settings files, opencode's two `opencode.json` writers,
+and Codex's `config.toml`. Before this, `charter init` and `charter guard` died with a traceback
+on one — and `charter guard`, which writes every harness or none, could reach that traceback
+after it had already written the earlier harness.
+
+**`plane-root guard` reads a plugin's `hooks.json` as Claude Code runs it.** The row asked
+whether the text `charter hook pretooluse` appeared anywhere in that file. That counts it in a
+`matcher`, beside the command rather than in it, under another event entirely, in an entry Claude
+Code would not run as a command — and in `charter hook pretooluse-read`, which is a different
+handler guarding Read and Grep rather than Bash. So a plugin wiring only the read handler was
+read as wiring the Bash guard, and `init` then wrote no hook for a plane nothing guarded. The row
+now decides from the hook entry Claude Code would actually run. A `hooks.json` charter cannot
+parse dispatches nothing, and `init` writes the guard hook — the safe direction.
