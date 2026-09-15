@@ -10844,10 +10844,11 @@ def _plane_liveness() -> tuple[bool, tuple[str, ...]]:
     """Whether a chat of this plane is live on a server that answered, and which of this
     plane's servers could not say.
 
-    **The disk is asked first**, and it is a complete answer rather than an optimisation: a
-    live chat always has a directory, because `state.new_chat_id` claims its ordinal with
-    the `mkdir` (see that function). No directories is no chats, and it costs a `scandir`
-    instead of a `list-panes` per server.
+    **No chat directories asks no server anything**, without a check of its own: a live chat
+    always has a directory, because `state.new_chat_id` claims its ordinal with the `mkdir`
+    (see that function), and `_plane_servers` names only the servers a directory records. So
+    a plane with none reaches `_plane_live` with no server to ask and reads as not running
+    (`test_a_plane_with_no_chat_directories_asks_no_server_anything`).
 
     **Decided per server, and never from `_plane_live`'s ``None``** (#1088). That ``None``
     stands for the whole plane when ANY server refuses, which is the right lean for a quit
@@ -10866,8 +10867,6 @@ def _plane_liveness() -> tuple[bool, tuple[str, ...]]:
       chats. It is the second value, and `_reopen_plane` holds back the chats recorded on
       it and restores the rest.
     """
-    if not leave.plane_chats():
-        return False, ()
     servers = _plane_servers()
     _live, windows, _active = _plane_live(servers)
     unsure = tuple(server for server in servers
