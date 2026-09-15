@@ -294,7 +294,9 @@ exist", so it should be short enough that a newcomer reads all of it.
 growing notes file is written once and searched never. `charter workspace remember "…"`
 adds one; `charter recall <query>` searches **across every base at once** — workspace
 memory, persona memory, shared memory and refs — which is the only search you need to
-remember.
+remember. A base it could not read — a `memory/` at mode 000, a `refs/` subdirectory it
+cannot tell is one — is named in `charter doctor`'s sentence, never searched as if empty:
+what the other bases hold is still printed, and the command exits 1.
 
 **`workspace.json` is there from the start.** Every workspace has one — `workspace.ensure`
 writes it, saying which workspace this is and that it has no repos yet. The file exists to
@@ -331,7 +333,10 @@ change* — per host, describing merges made from one disk; a portable file desc
 local reality is the mismatch [ADR 0010](adr/0010-the-manifest-is-a-snapshot-not-an-inventory.md)
 dissects.
 
-`charter workspace live <name> --off` puts it back. `charter workspace save` is the manual
+`charter workspace live <name> --off` puts it back. A `changes/` it cannot list stops it
+before anything is untracked: the workspace stays LIVE, the directory is named, and it exits
+1, because going LOCAL around it would leave every change record in it committed. `charter
+workspace save` is the manual
 counterpart for a LIVE workspace whose writes were deferred with `--no-sync`. Writing to a
 LOCAL workspace tells you it stayed put, rather than letting you assume it travelled.
 
@@ -450,7 +455,9 @@ left out.
 
 - **`fork <src> <new>`** — a new workspace pre-loaded with the source's charter, manifest
   and memory, so a branch of the work starts with the context rather than without it.
-  Repos come with `--restore`, or on demand later.
+  Repos come with `--restore`, or on demand later. What it cannot read in the source — a
+  `memory/` or `todos/` it may not list, one file it may not open — is not copied: the line
+  that says it forked names what the fork does not have, each path follows, and it exits 1.
 - **`snapshot`** — pin the current repos *and branches* into `workspace.json`. Refuses
   while a repo has unpushed work, so a recorded branch is one `restore` can check out.
 - **`restore <name>`** — rebuild from that manifest on another machine: clone each repo,

@@ -357,9 +357,16 @@ def cmd_change_forget(args) -> int:
 
 
 def cmd_change_list(args) -> int:
-    """Every change in the workspace, one row each."""
+    """Every change in the workspace, one row each.
+
+    A `changes/` it could not list is named, with what clears it, and is never "No changes"
+    (#1084): the listing is not complete, so it exits 1 as it does for a record it could not
+    read."""
     ws = _workspace(args)
-    records, refused = change.all_for(ws)
+    records, refused, unread = change.read_all(ws)
+    if unread:
+        workspace.say_unread(unread)
+        return 1
     if not records and not refused:
         util.info(f"No changes in workspace '{ws}'. "
                   "Create one: charter change create <slug> --why \"…\"")
@@ -407,7 +414,15 @@ def cmd_change_show(args) -> int:
     # The derived half, and it prints nothing at all when no member resolves to a forge —
     # a change whose clones charter cannot ask about shows exactly the record, rather than a
     # block of "unknown" rows that look like an answer. Nothing here is written back.
-    observed = show_observed(ws, rec)
+    # A landing log it could not read is what tells "landed" from "merged outside charter", so the
+    # block is not guessed without it: the log is named, the rest of the record still prints, and
+    # the exit says the view is not whole (#1084).
+    unread_rc = 0
+    try:
+        observed = show_observed(ws, rec)
+    except workspace.CannotCheck as e:
+        workspace.say_unread(e.unread)
+        observed, unread_rc = [], 1
     if observed:
         print("")
         for line in observed:
@@ -420,7 +435,7 @@ def cmd_change_show(args) -> int:
         for e in rec["excluded"]:
             print(f"  {tui.pad(contain.one_line(e['repo']), w)}  "
                   f"{contain.one_line(e['why'])}  ({contain.one_line(e['at'])})")
-    return 0
+    return unread_rc
 
 
 # --------------------------------------------------------------------------- #
@@ -626,7 +641,10 @@ def stray_branches(ws: str) -> list[str]:
     separately and `doctor` says so — because guessing at branch names from a record that
     did not parse is the unearned diagnosis ADR 0009 forbids.
     """
-    records, _refused = change.all_for(ws)
+    # `read_all`, not `all_for`: a `changes/` it could not list contributes no names either, and
+    # `doctor`, this function's caller, has already named it from its own read (#1084) rather
+    # than losing the whole row to it here.
+    records, _refused, _unread = change.read_all(ws)
     wanted: dict[str, str] = {}          # branch name → the change that declares it
     members: set[str] = set()
     for rec in records:
@@ -1092,23 +1110,24 @@ def landings(ws: str, slug: str) -> dict:
     """``{repo: line}`` — the last landing charter declared for each of *slug*'s members.
 
     Every host's file, because a change is worked from more than one machine and a landing
-    declared on one of them is still a landing. Unreadable or malformed lines are skipped
-    rather than raising: this is bookkeeping beside git, and git is the thing being asked.
+    declared on one of them is still a landing. Malformed lines are skipped rather than
+    raising: this is bookkeeping beside git, and git is the thing being asked.
+
+    A part of the log charter could NOT read raises `workspace.CannotCheck` (#1084). Skipped, it
+    read as no line: gate (b) let a dependent through on the forge's word over a blocker whose
+    revert only the log shows, and `change show` called every landed member merged outside it.
     """
     out: dict = {}
-    d = change.log_dir(ws)
-    if contain.dir_refusal(d):
-        return out
-    for f in sorted(d.glob("*.jsonl")) if d.is_dir() else []:
-        # Both halves of #336, and they catch different things: `dir_refusal` above sees a
-        # link at `log/` itself — under which every file is an ordinary regular file with
-        # nothing to object to — and this one sees a link, a FIFO or an oversized file at
-        # one entry inside an ordinary directory.
-        if contain.file_refusal(f):
-            continue
+    # Both halves of #336 are asked by `change.read_log_files`, and they catch different things:
+    # `dir_refusal` sees a link at `log/` itself — under which every file is an ordinary regular
+    # file with nothing to object to — and `file_refusal` a link, a FIFO or an oversized file at
+    # one entry inside an ordinary directory.
+    files, unread = change.read_log_files(ws)
+    for f in files:
         try:
             text = f.read_text()
-        except OSError:
+        except OSError as e:
+            unread.append((f, e.errno))
             continue
         for raw in text.splitlines():
             try:
@@ -1117,6 +1136,8 @@ def landings(ws: str, slug: str) -> dict:
                 continue
             if isinstance(line, dict) and line.get("change") == slug and line.get("repo"):
                 out[line["repo"]] = line
+    if unread:
+        raise workspace.CannotCheck(unread)
     return out
 
 
@@ -1408,7 +1429,15 @@ def _land(ws: str, args, fields: dict) -> tuple[int, str]:
                        f"{contain.readable(repo)} --why \"…\"")
 
     # --- gate (b): every repo in `needs` has landed -----------------------------------
-    log = landings(ws, slug)
+    # The log is read only for a member that has blockers, and one it could not read refuses
+    # (#1084): it is what shows a blocker the forge calls merged has since been reverted, so
+    # without it the gate would pass on the forge's word alone. Exit 1, for what could not be
+    # read, rather than REFUSED, which is a decision about the request.
+    try:
+        log = landings(ws, slug) if m["needs"] else {}
+    except workspace.CannotCheck as e:
+        util.err(str(e))
+        return 1, "landing log unreadable"
     for need in m["needs"]:
         blocker = change.member(rec, need)
         if blocker is None:

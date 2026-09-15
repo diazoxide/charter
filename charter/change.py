@@ -194,21 +194,37 @@ def landings(ws: str, slug: str | None = None) -> list[dict]:
     what an append-only log collects. A line carrying a key charter does not read is
     skipped too — the closed-set rule of :func:`_closed`, in the shape a log can afford,
     because refusing the whole file would let one bad line hide every good one.
+
+    A part of the log charter could NOT read raises `workspace.CannotCheck` (#1084), where it
+    answered no landings; :func:`read_landings` names it beside the lines it did read.
     """
-    d = log_dir(ws)
-    if contain.dir_refusal(d):
-        return []
-    try:
-        files = sorted(d.glob("*.jsonl"))
-    except OSError:
-        # Listing an unreadable directory raises on Linux and yields nothing on macOS —
-        # `pieces.events` records a suite that went red on CI over exactly this line.
-        return []
+    lines, unread = read_landings(ws, slug)
+    if unread:
+        raise workspace.CannotCheck(unread)
+    return lines
+
+
+def read_log_files(ws: str) -> tuple[list[Path], list[tuple[Path, int | None]]]:
+    """Every host's ``*.jsonl`` under ``changes/log/`` charter may read, and beside them what it
+    could not look at — `workspace.read_files`, for both of the log's readers (#1084).
+
+    Both used to glob it, and a glob of a `log/` charter may not list is an empty list on 3.13+
+    (it raised on Linux before, and that was caught as the same empty answer). So "charter landed
+    nothing" and "charter could not look" were one reading."""
+    return workspace.read_files(log_dir(ws), lambda name: name.endswith(".jsonl"))
+
+
+def read_landings(ws: str, slug: str | None = None) -> tuple[list[dict],
+                                                            list[tuple[Path, int | None]]]:
+    """:func:`landings`, and beside them each part of the log it could not read — the directory,
+    or one host's file — with its errno (#1084)."""
+    files, unread = read_log_files(ws)
     out: list[dict] = []
     for f in files:
         try:
             text = f.read_text()
-        except OSError:
+        except OSError as e:
+            unread.append((f, e.errno))
             continue
         for raw in text.splitlines():
             try:
@@ -222,7 +238,7 @@ def landings(ws: str, slug: str | None = None) -> list[dict]:
             if slug is not None and obj["change"] != slug:
                 continue
             out.append(obj)
-    return sorted(out, key=lambda e: str(e.get("ts") or ""))
+    return sorted(out, key=lambda e: str(e.get("ts") or "")), unread
 
 
 def declared_landings(ws: str, slug: str) -> dict[str, dict]:
@@ -364,10 +380,14 @@ def has_records(ws: str) -> bool:
     private. Asking the sharp question here keeps that knowledge in the module that owns
     the record's shape.
     """
+    d = changes_dir(ws)
     try:
-        return any(p.name.endswith(".json") for p in changes_dir(ws).iterdir())
-    except OSError:
-        return False
+        return any(p.name.endswith(".json") for p in workspace.read_directory(d)[0])
+    except OSError as e:
+        # One it could not list is not one holding nothing (#1084). Answered False, `live --off`
+        # untracked the manifest and memory, went LOCAL, and left every record it could not see
+        # committed on a workspace the operator had just made private.
+        raise workspace.CannotCheck([(d, e.errno)]) from e
 
 
 def read(ws: str, slug: str) -> dict:
@@ -431,17 +451,35 @@ def all_for(ws: str) -> tuple[list[dict], list[tuple[str, str]]]:
     it silently passes off as absent. One bad file must not take the listing down, and it
     must not disappear either — those are the two failure modes, and returning only the
     good half picks one of them by accident.
+
+    A `changes/` it could not list raises `workspace.CannotCheck` (#1084): it read as an empty
+    list, so every change command said there were no changes. A caller that names what it could
+    not read asks :func:`read_all`.
+    """
+    records, refused, unread = read_all(ws)
+    if unread:
+        raise workspace.CannotCheck(unread)
+    return records, refused
+
+
+def read_all(ws: str) -> tuple[list[dict], list[tuple[str, str]], list[tuple[Path, int | None]]]:
+    """:func:`all_for`, and beside it the `changes/` it could not list, with its errno —
+    ``(records, refused, unread)`` (#1084).
+
+    Listed through `workspace.read_directory`, whose "not there" is the lazy-creation case (no
+    `changes/` yet) and whose every other refusal is a directory charter could not look at: mode
+    000 or 333, a symlink loop. Both used to be the one ``except OSError`` answering "no changes".
     """
     records: list[dict] = []
     refused: list[tuple[str, str]] = []
     d = changes_dir(ws)
     complaint = contain.dir_refusal(d)
     if complaint:
-        return records, [(DIRNAME, complaint)]
+        return records, [(DIRNAME, complaint)], []
     try:
-        names = sorted(p.name for p in d.iterdir())
-    except OSError:
-        return records, refused          # no changes/ yet: the lazy-creation case
+        names = [p.name for p in workspace.read_directory(d)[0]]
+    except OSError as e:
+        return records, refused, [(d, e.errno)]
     for name in names:
         if not name.endswith(".json"):
             continue                     # changes/log/, and anything else that is not one
@@ -450,7 +488,7 @@ def all_for(ws: str) -> tuple[list[dict], list[tuple[str, str]]]:
             records.append(read(ws, slug))
         except RecordError as exc:
             refused.append((slug, str(exc)))
-    return records, refused
+    return records, refused, []
 
 
 # --------------------------------------------------------------------------- #

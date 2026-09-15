@@ -177,6 +177,38 @@ class TestGateBTheBlockers(Landing):
         branches = [c[2] for c in self.forge.calls if c[0] == "request_for"]
         self.assertIn("change/api", branches)
 
+    def test_a_landing_log_it_could_not_list_refuses_rather_than_passing_the_blocker(self):
+        """The log is what shows a blocker the forge calls merged has since been reverted. Read as
+        empty, a log charter could not list let the dependent through on the forge's word (#1084)."""
+        from charter import config
+        from tests.test_a_memory_or_changes_directory_it_cannot_list_is_named import (
+            refusing_to_list)
+        slug = self.two_members()
+        self.forge.requests["change/api"] = base.Request(601, MERGED, "a1", "e0c9d13")
+        self.forge.requests["change/web"] = base.Request(14, OPEN, "w1")
+        log = change.log_dir("ws")
+        log.mkdir(parents=True)
+        with refusing_to_list(log):
+            code, out, err = self.land(slug, repo="web")
+        self.assertEqual(code, 1)
+        self.assertIn(f"{log.relative_to(config.ROOT).as_posix()} cannot be checked — restoring "
+                      f"read access to it clears this.", err)
+        self.assertNotIn("has not landed", err)
+        self.assertEqual([c for c in self.forge.calls if c[0] == "merge_change"], [])
+
+    def test_a_member_with_no_blockers_does_not_need_the_log_it_could_not_list(self):
+        """Nothing in gate (b) is asked of a member that waits on nobody, so a log charter could
+        not list is no reason to refuse it."""
+        from tests.test_a_memory_or_changes_directory_it_cannot_list_is_named import (
+            refusing_to_list)
+        slug = self.setup_change()
+        log = change.log_dir("ws")
+        log.mkdir(parents=True)
+        with refusing_to_list(log):
+            code, out, err = self.land(slug)
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("cannot be checked", err)
+
     def test_a_blocker_naming_a_non_member_is_refused_and_nothing_merges(self):
         """`write` refuses this ordering, so it is placed by hand — a record can arrive from
         an older charter or a hand edit, and the reader must not assume the writer ran. Two

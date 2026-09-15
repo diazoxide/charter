@@ -181,11 +181,31 @@ def files(mem_dir: Path) -> list[Path]:
     the plane's data (paid once — it is what catches a linked ``memory/`` whose contents
     are all ordinary files), and each entry must be a plain contained file (one ``lstat``
     each).
+
+    **A directory it could not look at is not an empty one** (#1084). `Path.glob` answered ``[]``
+    for a `memory/` it may not list, so `charter recall` said "No memories match" of a search that
+    never looked. This raises :class:`workspace.CannotCheck` instead, naming what it could not
+    read; a caller with a partial answer to give asks :func:`read_files`.
     """
-    if not mem_dir.exists() or contain.dir_refusal(mem_dir):
-        return []
-    return sorted(p for p in mem_dir.glob("*.md")
-                  if p.name != "MEMORY.md" and not contain.file_refusal(p))
+    found, unread = read_files(mem_dir)
+    if unread:
+        from . import workspace
+        raise workspace.CannotCheck(unread)
+    return found
+
+
+def read_files(mem_dir: Path) -> tuple[list[Path], list[tuple[Path, int | None]]]:
+    """:func:`files`, and beside them what could not be read, with its errno — ``(files,
+    unread)``, in `workspace.read_directory`'s shape and through it (#1084).
+
+    *unread* is *mem_dir* itself when it cannot be listed (mode 000 or 333, a link loop, a parent
+    charter may not search), or each entry whose own ``lstat`` is refused (a directory at mode
+    666). A directory that is not there, or that containment refuses, is ``([], [])``, as before:
+    the first holds nothing, and the second is `contain`'s refusal, which `doctor` names on its
+    own terms.
+    """
+    from . import workspace
+    return workspace.read_files(mem_dir, lambda name: name != "MEMORY.md" and name.endswith(".md"))
 
 
 #: A memory FILENAME is a bare slug — no slash, space or colon. Matching only that
@@ -267,9 +287,36 @@ def index_size(mem_dir: Path) -> int:
 
 
 def entries(mem_dir: Path) -> list[tuple[Path, str, str]]:
-    """(path, title, text) per memory; title = first '# ' line, else the file stem."""
+    """(path, title, text) per memory; title = first '# ' line, else the file stem.
+
+    Raises :class:`workspace.CannotCheck` for what it could not list, as :func:`files` does."""
+    return _entries_of(files(mem_dir))
+
+
+def read_entries(mem_dir: Path) -> tuple[list[tuple[Path, str, str]],
+                                         list[tuple[Path, int | None]]]:
+    """:func:`entries`, and beside them what could not be read — :func:`read_files`' shape."""
+    found, unread = read_files(mem_dir)
+    return _entries_of(found), unread
+
+
+def gather(dirs, unread: list | None = None) -> list[tuple[Path, str, str]]:
+    """The entries of every one of *dirs*. With an *unread* list, each directory it could not
+    read is added to it and the rest are still read; without one, the first raises (#1084)."""
+    ents = []
+    for d in dirs:
+        if unread is None:
+            ents += entries(d)
+            continue
+        found, missed = read_entries(d)
+        ents += found
+        unread.extend(missed)
+    return ents
+
+
+def _entries_of(paths: list[Path]) -> list[tuple[Path, str, str]]:
     out = []
-    for p in files(mem_dir):
+    for p in paths:
         try:
             text = p.read_text()
         except OSError:
@@ -317,7 +364,8 @@ def dropped_terms(s: str) -> list[str]:
     return [t for t in raw if len(t) < 2 or t in _STOPWORDS]
 
 
-def search(dirs, query: str, limit: int = 8) -> list[tuple[Path, str, int]]:
+def search(dirs, query: str, limit: int = 8,
+           unread: list | None = None) -> list[tuple[Path, str, int]]:
     """Keyword-rank memories across one or more *dirs* against *query* (stdlib, no
     vectors). Title hits weigh 3×. Returns [(path, title, score)] best-first.
 
@@ -326,14 +374,16 @@ def search(dirs, query: str, limit: int = 8) -> list[tuple[Path, str, int]]:
     hits every "dbname" in the corpus. Prefixes still count — "version" matches
     "versioned" — which is the cheap half of stemming without the maintenance of the
     other half.
+
+    A directory it could not list is added to *unread* and the rest are still searched; with
+    no *unread* list to name it in, the search refuses (:class:`workspace.CannotCheck`) rather
+    than rank what it did not read as nothing (#1084).
     """
     terms = _terms(query)
     if not terms:
         return []
     pats = [(t, re.compile(rf"\b{re.escape(t)}\w*")) for t in terms]
-    ents = []
-    for d in dirs:
-        ents += entries(d)
+    ents = gather(dirs, unread)
     scored = []
     for p, title, text in ents:
         low, tl = text.lower(), title.lower()
@@ -355,11 +405,12 @@ def wordset(text: str) -> set[str]:
     return {w for w in re.split(r"\W+", text.lower()) if len(w) > 3}
 
 
-def duplicates(dirs, threshold: float = 0.5) -> list[tuple[float, Path, str, Path, str]]:
-    """Near-duplicate memory pairs by Jaccard word overlap ≥ *threshold* across *dirs*."""
-    ents = []
-    for d in dirs:
-        ents += entries(d)
+def duplicates(dirs, threshold: float = 0.5,
+               unread: list | None = None) -> list[tuple[float, Path, str, Path, str]]:
+    """Near-duplicate memory pairs by Jaccard word overlap ≥ *threshold* across *dirs*.
+
+    What it could not list goes to *unread*, or refuses without one — :func:`search`'s rule."""
+    ents = gather(dirs, unread)
     sets = [(p, title, wordset(text)) for p, title, text in ents]
     dupes = []
     for i in range(len(sets)):
@@ -383,7 +434,16 @@ def resolve(mem_dir: Path, ident: str) -> Path | None:
     # The direct hit asks the filesystem rather than the listing, so it needs the listing's
     # gate spelled out: without it `forget`/`show` would reach a file `files()` refuses,
     # which is the same read arriving by a shorter route (#336).
-    if p.exists() and not (contain.dir_refusal(mem_dir) or contain.file_refusal(p)):
+    #
+    # `contain` is the WHOLE question, and the `Path.exists()` that stood in front of it is
+    # gone (#1084). It could reject nothing the refusal does not: `file_refusal` answers
+    # ``None`` only for a contained regular file — which is there, by construction — and
+    # answers a refusal, never a raise, for every path a `stat` does not answer for (missing,
+    # dangling, refused, a link loop, a NUL in the name). What it cost was real: `exists()`
+    # raised for a store at mode 000 on 3.11–3.13, and raises `ValueError` for a NUL on every
+    # interpreter, both past every handler here. A directory charter could not list is named
+    # by the listing below.
+    if not (contain.dir_refusal(mem_dir) or contain.file_refusal(p)):
         return p
     hits = [q for q in files(mem_dir) if q.name == name or q.name.endswith(f"-{name}")]
     return hits[0] if hits else None
