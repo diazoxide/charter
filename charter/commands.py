@@ -224,9 +224,11 @@ def cmd_docs(args) -> int:
     (config.DOCS_DIR / "topology.md").write_text(render.topology_md(doc) + "\n")
     util.ok(f"Generated docs/topology.md ({len(doc['repos'])} repos)")
 
-    if refresh_readme_personas():
+    # The topology is written either way; the exit says the roster could not be refreshed (#1084).
+    unread: list = []
+    if refresh_readme_personas(unread):
         util.ok("Refreshed the persona roster block in README.md")
-    return 0
+    return 1 if unread else 0
 
 
 def cmd_browser_install(args) -> int:
@@ -326,10 +328,13 @@ def cmd_docs_show(args) -> int:
     return 0
 
 
-def refresh_readme_personas() -> bool:
+def refresh_readme_personas(unread: list | None = None) -> bool:
     """Rewrite the generated persona-roster block in README.md. Returns True when the
     file actually changed, so callers (and git) stay quiet on a no-op. Best-effort: a
-    README without the markers, or an unreadable one, is left exactly as it is."""
+    README without the markers, or an unreadable one, is left exactly as it is.
+
+    A persona memory directory it could not list is named, and added to *unread* for a caller
+    whose exit says so (#1084)."""
     p = config.ROOT / "README.md"
     try:
         cur = p.read_text()
@@ -342,6 +347,8 @@ def refresh_readme_personas() -> bool:
         # list is no count to write into a committed file, so README is left as it is and the
         # directory is named (#1084) — it used to go in as 0.
         workspace.say_unread(e.unread)
+        if unread is not None:
+            unread.extend(e.unread)
         return False
     if new is None or new == cur:
         return False
@@ -3110,6 +3117,8 @@ def cmd_recall(args) -> int:
     workspace.say_unread(got.unread)
     skipped = (f"; {len(got.unread)} base(s) not searched — charter could not read them"
                if got.unread else "")
+    # Everything it could read is still shown; the exit says the search was not whole.
+    rc = 1 if got.unread else 0
     truncated = bool(limit) and len(got.hits) > limit
     results = got.hits[:limit] if limit else got.hits
     if not results:
@@ -3124,14 +3133,14 @@ def cmd_recall(args) -> int:
                 util.info(f"Nothing searchable in {q!r} — {dropped} "
                           f"{'is' if len(_ms.dropped_terms(q)) == 1 else 'are'} too short "
                           f"or too common to rank. Try a distinctive word.")
-                return 0
+                return rc
         where = "every workspace" if all_ws else ", ".join(scopes)
         when = f" recorded since {since}" if since else ""
         util.info(f"No memories {'match ' + repr(q) if q else 'yet'} across {where}{when}"
                   f"{skipped}.")
         if got.undated:
             util.info(f"{got.undated} undated memory(ies) skipped — no recorded date to compare.")
-        return 0
+        return rc
     # Sized from the values it holds, measured in CELLS (#592). This column was ALREADY
     # sized from the data, which is the half a constant gets wrong — and it still
     # misaligned, because `len` counts characters and a terminal lays out cells. A base
@@ -3176,7 +3185,7 @@ def cmd_recall(args) -> int:
         # missing date would read as corruption rather than as the filter not applying.
         util.info(f"{got.undated_refs} ref doc(s) not searched — `--since` filters by "
                   f"recorded date and refs carry none. Drop --since to include them.")
-    return 0
+    return rc
 
 
 def cmd_git_policy(args) -> int:

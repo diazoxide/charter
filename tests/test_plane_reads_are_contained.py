@@ -146,7 +146,7 @@ class PlaneReadsAreContained(PersonaIso):
         self.assertIn(CANARY, (refs / "linked" / "elsewhere.md").read_text(),
                       "precondition: rglob's is_dir() follows this link")
 
-        self.assertNotIn(refs / "linked", recall._ref_dirs(refs))
+        self.assertNotIn(refs / "linked", recall._ref_dirs(refs, []))
         hits = recall.recall("elsewhere", persona_name="reader", scopes=("refs",)).hits
         self.assertEqual([], [h.path.name for h in hits])
 

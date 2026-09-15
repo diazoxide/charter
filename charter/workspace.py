@@ -2326,6 +2326,37 @@ def read_directory(d: Path, keep=None) -> tuple[list[Path], list[tuple[Path, int
     return kept, unread
 
 
+def read_files(d: Path, wanted) -> tuple[list[Path], list[tuple[Path, int | None]]]:
+    """The plain files in *d* whose name *wanted* accepts and that charter may read, sorted, and
+    beside them each it could not look at, with its errno — ``(files, unread)`` (#1084).
+
+    The one listing `memstore.read_files` and both readers of a change's landing log share, so none
+    of them reads "could not list" as "nothing there": `Path.glob` answered an empty list for a
+    directory it may not list. *unread* is *d* itself when it cannot be listed (mode 000 or 333, a
+    link loop, a parent charter may not search), or each wanted entry whose own ``lstat`` is
+    refused (a directory at mode 666). A *d* that is not there, or that containment refuses, is
+    ``([], [])``: the first holds nothing, and the second is `contain`'s refusal, which `doctor`
+    names on its own terms. So is an entry containment refuses — a link, a FIFO, a file past the
+    bound (#336)."""
+    if contain.dir_refusal(d):
+        return [], []
+
+    def keep(p: Path) -> tuple[bool | None, int | None]:
+        if not wanted(p.name):
+            return False, None
+        if not contain.file_refusal(p):
+            return True, None
+        # Refused: asked why only here, so a readable directory pays no second `lstat`. An entry
+        # whose `lstat` is refused is one charter could not look at, not one it refused.
+        seen, code = _existence(p)
+        return (None, code) if seen is None else (False, None)
+
+    try:
+        return read_directory(d, keep)
+    except OSError as e:
+        return [], [(d, e.errno)]
+
+
 def _stopped_at(p: Path, code: int) -> Path:
     """The shallowest directory above *p* whose own `stat` meets *code* — else *p* itself, whose
     check already met it.
@@ -3014,18 +3045,33 @@ def cannot_check_workspace(name: str, code: int | None) -> str:
             f"{uncheckable_fix(code, wd, wd)}.")
 
 
+def unread_name(path) -> str:
+    """How a path charter could not check is named — from the plane's root when it is inside it —
+    contained, so the name cannot add a line to whatever prints it (#1084).
+
+    The path is often an entry's own FILENAME: in a directory at mode 666 each memory charter
+    cannot `stat` is named, and a filename is whatever a chat wrote. Printed as it was, a newline
+    in one wrote a line of its own into the SessionStart briefing, onto stderr and into `doctor`'s
+    row, and an escape reached the terminal. `contain.readable` rather than `one_line`, because the
+    sentence sends someone to fix this path and a name made of characters with no glyph would name
+    nothing; at the path budget, because a clipped path is one the reader cannot go to."""
+    try:
+        named = Path(path).relative_to(config.ROOT).as_posix()
+    except ValueError:
+        named = str(path)
+    return contain.readable(named, limit=contain.PATH_DISPLAY_LIMIT)
+
+
 def cannot_check(path: Path, code: int | None) -> str:
     """`doctor`'s clause for a path it could not check — ``<path> cannot be checked — <what
     clears it>`` — with no full stop, so a row can join several.
 
     The one wording for a directory charter could not look at (#1043): `doctor` joins these
     beside a verdict, and since #1084 a command that searched or listed around one prints it as a
-    sentence (:class:`CannotCheck`). *path* is named from the plane's root when it is inside it."""
-    try:
-        named = Path(path).relative_to(config.ROOT).as_posix()
-    except ValueError:
-        named = str(path)
-    return f"{named} cannot be checked — {uncheckable_fix(code, path)}"
+    sentence (:class:`CannotCheck`). *path* is named by :func:`unread_name` and contained here,
+    once, so no caller can print what this names without it — the remedy's path included."""
+    shown = contain.readable(path, limit=contain.PATH_DISPLAY_LIMIT)
+    return f"{unread_name(path)} cannot be checked — {uncheckable_fix(code, shown)}"
 
 
 def say_unread(unread) -> None:

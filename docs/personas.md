@@ -158,7 +158,10 @@ moment it's written, not at the end of a session. Ephemeral memory is gitignored
 session-scoped scratch, pruned automatically once the session ends. Read it back with
 `charter persona recall devops [--query "kubeconfig"]`, or search everything at once
 (this persona's own memory, the shared namespace, and the active workspace's journal
-together) with `charter recall "<keywords>"`.
+together) with `charter recall "<keywords>"`. Both name a memory directory they could not
+read rather than answer as though it were empty, print what the others held, and exit 1.
+`charter persona show` counts such a directory, or a `refs/` it could not list, as `?`,
+still prints the charter, and exits 1 too.
 
 ## Dispatching a persona as a sub-agent
 

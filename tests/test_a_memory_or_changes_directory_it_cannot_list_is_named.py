@@ -18,6 +18,7 @@ from __future__ import annotations
 import contextlib
 import errno
 import io
+import json
 import os
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -26,8 +27,10 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import (change, cli, commands, commands_change, commands_persona, commands_workspace,
-                     config, curate, doctor, hooks, memstore, persona, recall, workspace)
+                     config, curate, doctor, hooks, memstore, persona, recall, todos, workspace)
 from tests._isolation import PersonaIso, make_plane
+from tests.test_a_workspace_listing_names_what_it_cannot_look_at import (BOTH_INTERPRETERS,
+                                                                         unsearchable)
 
 AS_ROOT = os.geteuid() == 0
 
@@ -246,8 +249,6 @@ class DoctorsMemoryRow(TwoMemoryDirectories):
     DETAIL = "; workspaces/alpha/memory/{} cannot be checked"
 
     def test_on_either_interpreter_each_memory_it_cannot_stat_is_named(self):
-        from tests.test_a_workspace_listing_names_what_it_cannot_look_at import (
-            BOTH_INTERPRETERS, unsearchable)
         for answers in BOTH_INTERPRETERS:
             with self.subTest(answers=answers):
                 with unsearchable(self.alpha, answers):
@@ -286,7 +287,8 @@ class RecallNamesTheBaseItCouldNotSearch(TwoMemoryDirectories):
                                        persona_name="dev").unread, [])
         for query in ("keycloak", "absent"):
             with self.subTest(query=query):
-                _, _, err = self.recall_cmd(query)
+                rc, _, err = self.recall_cmd(query)
+                self.assertEqual(rc, 0)
                 self.assertNotIn("not searched", err)
                 self.assertNotIn("cannot be checked", err)
 
@@ -295,10 +297,11 @@ class RecallNamesTheBaseItCouldNotSearch(TwoMemoryDirectories):
                    workspace="alpha", all_workspaces=False, since=None, limit=8, full=False)
 
     @unittest.skipIf(AS_ROOT, "root lists a directory whatever its mode")
-    def test_charter_recall_names_it_beside_what_it_found(self):
+    def test_charter_recall_names_it_beside_what_it_found_and_exits_1(self):
+        """Everything it could read is printed, and the exit says the search was not whole."""
         locked(self, self.alpha)
         rc, out, err = self.recall_cmd("keycloak")
-        self.assertEqual(rc, 0)
+        self.assertEqual(rc, 1)
         self.assertIn("shared keycloak convention", out)
         self.assertIn(sentence("workspaces/alpha/memory"), err)
         self.assertIn("1 memory(ies) across workspace, persona, shared, refs; 1 base(s) not "
@@ -306,7 +309,8 @@ class RecallNamesTheBaseItCouldNotSearch(TwoMemoryDirectories):
 
     def test_with_no_hit_it_does_not_say_nothing_matches(self):
         with refusing_to_list(self.alpha):
-            _, _, err = self.recall_cmd("rotates")
+            rc, _, err = self.recall_cmd("rotates")
+        self.assertEqual(rc, 1)
         self.assertIn(sentence("workspaces/alpha/memory"), err)
         self.assertNotIn("No memories match 'rotates' across workspace, persona, shared, refs.",
                          err)
@@ -361,22 +365,25 @@ class PersonaRecall(PersonaIso):
     def test_a_query_names_the_directory_it_could_not_search(self):
         persona.remember("dev", "shared keycloak convention", shared=True)
         with refusing_to_list(self.own):
-            _, out, err = run(commands_persona.cmd_persona_recall, name="dev", query="keycloak",
-                              log=8)
+            rc, out, err = run(commands_persona.cmd_persona_recall, name="dev", query="keycloak",
+                               log=8)
+        self.assertEqual(rc, 1)
         self.assertIn("shared keycloak convention", out)
         self.assertIn(sentence("personas/dev/memory"), err)
 
     def test_a_query_with_no_hit_does_not_say_there_is_no_memory_of_it(self):
         with refusing_to_list(self.own):
-            _, _, err = run(commands_persona.cmd_persona_recall, name="dev", query="keycloak",
-                            log=8)
+            rc, _, err = run(commands_persona.cmd_persona_recall, name="dev", query="keycloak",
+                             log=8)
+        self.assertEqual(rc, 1)
         self.assertIn(sentence("personas/dev/memory"), err)
         self.assertNotIn("no memory of 'keycloak'", err)
 
     @unittest.skipIf(AS_ROOT, "root lists a directory whatever its mode")
     def test_the_listing_does_not_say_it_has_no_memories_yet(self):
         locked(self, self.own)
-        _, _, err = run(commands_persona.cmd_persona_recall, name="dev", query=None, log=8)
+        rc, _, err = run(commands_persona.cmd_persona_recall, name="dev", query=None, log=8)
+        self.assertEqual(rc, 1)
         self.assertIn(sentence("personas/dev/memory"), err)
         self.assertNotIn("has no memories yet", err)
 
@@ -399,26 +406,41 @@ class PersonaRecall(PersonaIso):
         _, _, err = run(commands_persona.cmd_persona_recall, name="fresh", query=None, log=8)
         self.assertIn("persona 'fresh' has no memories yet.", err)
 
-    def test_a_readable_persona_names_nothing(self):
-        _, out, err = run(commands_persona.cmd_persona_recall, name="dev", query="absent", log=8)
+    def test_a_readable_persona_names_nothing_and_exits_0(self):
+        for query in ("keycloak", "absent", None):
+            with self.subTest(query=query):
+                rc, out, err = run(commands_persona.cmd_persona_recall, name="dev", query=query,
+                                   log=8)
+                self.assertEqual(rc, 0)
+                self.assertNotIn("cannot be checked", err)
+        _, _, err = run(commands_persona.cmd_persona_recall, name="dev", query="absent", log=8)
         self.assertIn("no memory of 'absent' for 'dev'.", err)
-        self.assertNotIn("cannot be checked", err)
 
 
 class WorkspaceRecall(TwoMemoryDirectories):
     @unittest.skipIf(AS_ROOT, "root lists a directory whatever its mode")
     def test_the_listing_names_it_and_does_not_say_there_are_none_yet(self):
         locked(self, self.alpha)
-        _, _, err = run(commands_workspace.cmd_workspace_recall, workspace="alpha", query=None)
+        rc, _, err = run(commands_workspace.cmd_workspace_recall, workspace="alpha", query=None)
+        self.assertEqual(rc, 1)
         self.assertIn(sentence("workspaces/alpha/memory"), err)
         self.assertNotIn("has no memories yet", err)
 
     def test_a_query_names_it_and_does_not_say_nothing_matches(self):
         with refusing_to_list(self.alpha):
-            _, _, err = run(commands_workspace.cmd_workspace_recall, workspace="alpha",
-                            query="keycloak")
+            rc, _, err = run(commands_workspace.cmd_workspace_recall, workspace="alpha",
+                             query="keycloak")
+        self.assertEqual(rc, 1)
         self.assertIn(sentence("workspaces/alpha/memory"), err)
         self.assertNotIn("No memories in 'alpha' match", err)
+
+    def test_a_readable_workspace_exits_0(self):
+        for query in ("keycloak", "absent", None):
+            with self.subTest(query=query):
+                rc, _, err = run(commands_workspace.cmd_workspace_recall, workspace="alpha",
+                                 query=query)
+                self.assertEqual(rc, 0)
+                self.assertNotIn("cannot be checked", err)
 
 
 class AnIndexWriterDoesNotWorkFromAnUnlistedDirectory(TwoMemoryDirectories):
@@ -443,20 +465,28 @@ class AnIndexWriterDoesNotWorkFromAnUnlistedDirectory(TwoMemoryDirectories):
         memstore.write(self.beta, "the keycloak token in beta rotates yearly", title="again",
                        timestamped=True)
         with refusing_to_list(self.alpha):
-            _, out, err = run(commands_workspace.cmd_workspace_optimize, name=None, all=True,
-                              apply=False, stale_days=90)
+            rc, out, err = run(commands_workspace.cmd_workspace_optimize, name=None, all=True,
+                               apply=False, stale_days=90)
+        self.assertEqual(rc, 1)
         self.assertIn(sentence("workspaces/alpha/memory"), err)
         self.assertIn("◆ beta", out)
+        rc, _, _ = run(commands_workspace.cmd_workspace_optimize, name=None, all=True,
+                       apply=False, stale_days=90)
+        self.assertEqual(rc, 0)
 
     def test_persona_optimize_names_it_and_goes_on_to_the_next(self):
         self.make_persona("dev", role="Dev")
         persona.remember("dev", "own keycloak deploy fact")
         persona.remember("dev", "shared keycloak convention", shared=True)
         with refusing_to_list(persona.memory_dir("dev")):
-            _, out, err = run(commands_persona.cmd_persona_optimize, name=None, all=True,
-                              apply=False, stale_days=90)
+            rc, out, err = run(commands_persona.cmd_persona_optimize, name=None, all=True,
+                               apply=False, stale_days=90)
+        self.assertEqual(rc, 1)
         self.assertIn(sentence("personas/dev/memory"), err)
         self.assertIn("◆ _shared", out)
+        rc, _, _ = run(commands_persona.cmd_persona_optimize, name=None, all=True,
+                       apply=False, stale_days=90)
+        self.assertEqual(rc, 0)
 
 
 class TheBriefingDigest(PersonaIso):
@@ -511,6 +541,25 @@ class TheReadmeRoster(PersonaIso):
         self.assertFalse(changed)
         self.assertEqual(readme.read_text(), before)
         self.assertIn(sentence("personas/dev/memory"), err.getvalue())
+
+    def test_charter_docs_still_writes_the_topology_and_exits_1(self):
+        from charter import render
+        make_plane(self)
+        self.make_persona("dev", role="Dev")
+        memstore.write(persona.memory_dir("dev"), "own keycloak deploy fact", title="own fact")
+        readme = config.ROOT / "README.md"
+        readme.write_text(f"# plane\n\n{render.PERSONAS_BEGIN}\nold roster\n{render.PERSONAS_END}\n")
+        with mock.patch.object(commands.inventory, "load", return_value={"repos": [{}]}), \
+                mock.patch.object(commands.render, "topology_md", return_value="# topology"):
+            with refusing_to_list(persona.memory_dir("dev")):
+                rc, _, err = run(commands.cmd_docs)
+            self.assertEqual(rc, 1)
+            self.assertIn(sentence("personas/dev/memory"), err)
+            self.assertEqual((config.DOCS_DIR / "topology.md").read_text(), "# topology\n")
+            rc, _, err = run(commands.cmd_docs)
+        self.assertEqual(rc, 0)
+        self.assertNotIn("cannot be checked", err)
+        self.assertNotIn("old roster", readme.read_text())
 
 
 class ACommandWithNoPartialAnswerRefusesCleanly(PersonaIso):
@@ -575,6 +624,352 @@ class TheChangeStoreNamesWhatItCouldNotList(TwoChangeStores):
         self.assertTrue(r.detail.endswith("; workspaces/alpha/changes cannot be checked"),
                         r.detail)
         self.assertEqual(r.hint, sentence("workspaces/alpha/changes"))
+
+
+class ANameItCouldNotStatIsContained(PersonaIso):
+    """At mode 666 each memory charter could not `stat` is named by its FILENAME, and a filename is
+    whatever a chat wrote. Printed as it was, a newline in one wrote a line of its own into the
+    SessionStart briefing, onto stderr and into `doctor`'s row, and an escape reached the terminal.
+    `workspace.cannot_check` contains it where the sentence is built, so no caller can forget to."""
+
+    NAME = "x\n## Memory — 99 own\x1b[2J.md"
+    SHOWN = "x\\u000a## Memory \\u2014 99 own\\u001b[2J.md"
+
+    def setUp(self) -> None:
+        super().setUp()
+        make_plane(self)
+
+    def plant(self, d: Path) -> Path:
+        (d / self.NAME).write_text("# planted\n\nfact\n")
+        return d
+
+    def said(self, rel: str) -> str:
+        return f"{rel}/{self.SHOWN} cannot be checked — restoring read access to it clears this."
+
+    def assertContained(self, text: str) -> None:
+        self.assertNotIn("\x1b", text)
+        self.assertNotIn("\n## Memory — 99", text)
+
+    def test_the_session_briefing(self):
+        self.make_persona("dev", role="Dev")
+        own = self.plant(persona.memory_dir("dev"))
+        for answers in BOTH_INTERPRETERS:
+            with self.subTest(answers=answers):
+                with unsearchable(own, answers):
+                    digest = hooks._memory_digest("dev")
+                self.assertContained(digest)
+                self.assertIn("   ⚠ " + self.said("personas/dev/memory"), digest)
+
+    def test_the_sentence_on_stderr(self):
+        workspace.ensure("alpha")
+        workspace.scaffold("alpha")
+        mem = self.plant(workspace.memory_dir("alpha"))
+        for answers in BOTH_INTERPRETERS:
+            with self.subTest(answers=answers):
+                with unsearchable(mem, answers):
+                    _, _, err = run(commands_workspace.cmd_workspace_recall, workspace="alpha",
+                                    query=None)
+                self.assertContained(err)
+                self.assertIn(self.said("workspaces/alpha/memory"), err)
+
+    def test_doctors_row(self):
+        workspace.ensure("alpha")
+        workspace.scaffold("alpha")
+        mem = self.plant(workspace.memory_dir("alpha"))
+        for answers in BOTH_INTERPRETERS:
+            with self.subTest(answers=answers):
+                with unsearchable(mem, answers):
+                    r = doctor.check_memory_indexes()
+                self.assertContained(r.detail + r.hint)
+                self.assertNotIn("\n", r.detail + r.hint)
+                self.assertTrue(r.detail.endswith(
+                    f"; workspaces/alpha/memory/{self.SHOWN} cannot be checked"), r.detail)
+                self.assertIn(self.said("workspaces/alpha/memory"), r.hint)
+
+
+class LiveOffDoesNotGoPrivateAroundAChangesDirectoryItCouldNotList(TwoChangeStores):
+    """`_ws_meta_paths` asks `change.has_records` whether `changes/` goes to git. One it could not
+    list answered no, so `workspace live --off` untracked the manifest and memory, went LOCAL, and
+    left every change record committed on a workspace the operator had just made private."""
+
+    def test_has_records_names_it_rather_than_answering_none(self):
+        with refusing_to_list(self.alpha):
+            with self.assertRaises(workspace.CannotCheck) as cm:
+                change.has_records("alpha")
+        self.assertEqual(str(cm.exception), sentence("workspaces/alpha/changes"))
+
+    def test_a_readable_absent_or_emptied_store_still_answers(self):
+        self.assertTrue(change.has_records("beta"))
+        workspace.ensure("gamma")
+        self.assertFalse(change.has_records("gamma"))
+        (change.changes_dir("beta") / "notes.txt").write_text("x")
+        change.forget("beta", "beta-api")
+        self.assertFalse(change.has_records("beta"))
+
+    def test_live_off_untracks_nothing_stays_live_and_exits_1(self):
+        workspace.set_live("alpha", True)
+        err = io.StringIO()
+        with mock.patch.object(commands_workspace, "_git") as git, refusing_to_list(self.alpha), \
+                redirect_stderr(err), redirect_stdout(io.StringIO()):
+            rc = cli.main(["workspace", "live", "alpha", "--off"])
+        self.assertEqual(rc, 1)
+        self.assertIn(sentence("workspaces/alpha/changes"), err.getvalue())
+        git.assert_not_called()
+        self.assertTrue(workspace.is_live("alpha"))
+
+
+class RefsNameWhatTheyCouldNotRead(PersonaIso):
+    """Refs nest, so `recall` offers each directory under `refs/` as a base of its own
+    (`recall._ref_dirs`). It found them with `rglob`, which leaves out a directory it cannot tell
+    is one, after `base.exists()`, which raises on 3.11–3.13 under a parent charter may not search
+    and answers False on 3.14. A runbook in either was a runbook recall said nothing about."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        make_plane(self)
+        self.make_persona("dev", role="Dev")
+        self.refs = persona.refs_dir("dev")
+        (self.refs / "release").mkdir(parents=True)
+        (self.refs / "release" / "keycloak.md").write_text("# keycloak prerequisites\n\nrealm\n")
+        (self.refs / "runbook.md").write_text("# runbook\n\nkeycloak restarts\n")
+
+    def recall(self):
+        return recall.recall("keycloak", persona_name="dev", scopes=("refs",))
+
+    def test_a_readable_tree_offers_every_directory_and_does_not_follow_a_link(self):
+        """A link back up the tree is offered and not walked: `rglob` never descended into one,
+        and walking it would never end."""
+        self.assertEqual(sorted(h.path.name for h in self.recall().hits),
+                         ["keycloak.md", "runbook.md"])
+        self.assertEqual(self.recall().unread, [])
+        (self.refs / "again").symlink_to(self.refs, target_is_directory=True)
+        unread: list = []
+        self.assertEqual(recall._ref_dirs(self.refs, unread),
+                         [self.refs, self.refs / "again", self.refs / "release"])
+        self.assertEqual(recall._ref_dirs(self.tmp / "nowhere", unread), [])
+        self.assertEqual(unread, [])
+
+    def test_a_directory_it_can_tell_is_one_and_cannot_list_is_offered_and_named_once(self):
+        """Not raised out of the walk: listing it is `memstore.read_files`' job, and that names it."""
+        release = self.refs / "release"
+        with refusing_to_list(release):
+            got = self.recall()
+        self.assertIn("runbook.md", [h.path.name for h in got.hits])
+        self.assertEqual(got.unread, [(release, errno.EACCES)])
+
+    def test_a_refs_directory_linked_out_of_the_plane_is_not_walked(self):
+        """#336 at the top of the walk: under a `refs/` that is itself a link out, every directory
+        is one containment would refuse one at a time, after the walk had listed each of them."""
+        import shutil
+        import tempfile
+        outside = Path(tempfile.mkdtemp(prefix="edm-outside-"))
+        self.addCleanup(shutil.rmtree, outside, ignore_errors=True)
+        (outside / "nested").mkdir()
+        linked = config.PERSONAS_DIR / "reader" / "refs"
+        linked.parent.mkdir(parents=True)
+        linked.symlink_to(outside, target_is_directory=True)
+        unread: list = []
+        self.assertEqual(recall._ref_dirs(linked, unread), [])
+        self.assertEqual(unread, [])
+
+    def test_an_entry_whose_kind_it_could_not_tell_is_named_once(self):
+        for answers in BOTH_INTERPRETERS:
+            with self.subTest(answers=answers):
+                with unsearchable(self.refs, answers):
+                    got = self.recall()
+                # `README.md` is the one `persona.scaffold_memory` writes into every `refs/`.
+                self.assertEqual(got.unread, [(self.refs / "README.md", errno.EACCES),
+                                              (self.refs / "release", errno.EACCES),
+                                              (self.refs / "runbook.md", errno.EACCES)])
+
+    def test_refs_under_a_persona_directory_it_cannot_search_are_named(self):
+        for answers in BOTH_INTERPRETERS:
+            with self.subTest(answers=answers):
+                with unsearchable(config.PERSONAS_DIR / "dev", answers):
+                    got = self.recall()
+                    with self.assertRaises(workspace.CannotCheck):
+                        recall.sources(persona_name="dev", scopes=("refs",))
+                self.assertEqual(got.unread, [(self.refs, errno.EACCES)])
+
+    @unittest.skipIf(AS_ROOT, "root searches a directory whatever its mode")
+    def test_charter_recall_over_a_real_refs_at_mode_666(self):
+        locked(self, self.refs, 0o666)
+        rc, _, err = run(commands.cmd_recall, query="keycloak", scope="refs", ephemeral=False,
+                         persona="dev", workspace=None, all_workspaces=False, since=None,
+                         limit=8, full=False)
+        self.assertEqual(rc, 1)
+        self.assertIn(sentence("personas/dev/refs/release"), err)
+        self.assertEqual(err.count(sentence("personas/dev/refs/runbook.md")), 1)
+
+
+class PersonaShow(PersonaIso):
+    """`persona show` counts each memory quadrant and the refs beside the charter. A memory it could
+    not list raised out of the command before the charter body was printed; refs it could not list
+    were `glob`bed as none."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        make_plane(self)
+        self.make_persona("dev", role="Dev")
+        memstore.write(persona.memory_dir("dev"), "own keycloak deploy fact", title="own fact")
+        self.refs = persona.refs_dir("dev")
+        self.refs.mkdir(parents=True, exist_ok=True)
+
+    def show(self):
+        return run(commands_persona.cmd_persona_show, name="dev")
+
+    def test_a_memory_it_could_not_list_is_a_question_mark_and_the_body_still_prints(self):
+        with refusing_to_list(persona.memory_dir("dev")):
+            rc, out, err = self.show()
+        self.assertEqual(rc, 1)
+        self.assertIn("memory:  ? own · 0 shared (persistent) · 0 ephemeral · 0 refs", out)
+        self.assertIn("charter body", out)
+        self.assertIn(sentence("personas/dev/memory"), err)
+
+    def test_refs_it_could_not_list_are_not_counted_as_none(self):
+        with refusing_to_list(self.refs):
+            rc, out, err = self.show()
+        self.assertEqual(rc, 1)
+        self.assertIn("memory:  1 own · 0 shared (persistent) · 0 ephemeral · ? refs", out)
+        self.assertIn("charter body", out)
+        self.assertIn(sentence("personas/dev/refs"), err)
+
+    def test_a_readable_persona_is_counted_and_exits_0(self):
+        (self.refs / "README.md").write_text("# refs\n")
+        (self.refs / "runbook.md").write_text("# runbook\n")
+        rc, out, err = self.show()
+        self.assertEqual(rc, 0)
+        self.assertIn("memory:  1 own · 0 shared (persistent) · 0 ephemeral · 1 refs", out)
+        self.assertNotIn("cannot be checked", err)
+
+
+class TheLandingLogNamesWhatItCouldNotRead(TwoChangeStores):
+    """`changes/log/` holds what charter declared it landed. Both of its readers globbed it, and a
+    glob of a directory charter may not list is empty: `change land` let a dependent through over a
+    blocker whose revert only the log could show, `change revert` said charter had landed nothing,
+    `change show` read every member as landed outside charter, and `doctor` checked no landing and
+    said so as OK."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.log = change.log_dir("alpha")
+        self.log.mkdir(parents=True)
+        (self.log / "h.jsonl").write_text(json.dumps(
+            {"ts": "t", "change": "alpha-api", "repo": "r", "number": 1, "merge": "e0c9d13",
+             "head": "h"}) + "\n")
+
+    def test_both_readers_name_a_log_directory_they_could_not_list(self):
+        with refusing_to_list(self.log):
+            self.assertEqual(change.read_landings("alpha"), ([], [(self.log, errno.EACCES)]))
+            for read in (lambda: change.landings("alpha"),
+                         lambda: commands_change.landings("alpha", "alpha-api")):
+                with self.assertRaises(workspace.CannotCheck) as cm:
+                    read()
+                self.assertEqual(str(cm.exception), sentence("workspaces/alpha/changes/log"))
+
+    @unittest.skipIf(AS_ROOT, "root reads a file whatever its mode")
+    def test_a_log_file_it_could_not_open_is_named_not_skipped(self):
+        f = locked(self, self.log / "h.jsonl")
+        self.assertEqual(change.read_landings("alpha"), ([], [(f, errno.EACCES)]))
+        with self.assertRaises(workspace.CannotCheck) as cm:
+            commands_change.landings("alpha", "alpha-api")
+        self.assertEqual(str(cm.exception), sentence("workspaces/alpha/changes/log/h.jsonl"))
+
+    def test_a_readable_log_names_nothing(self):
+        (self.log / "notes.txt").write_text("not a log\n")
+        (self.log / "old.jsonl").mkdir()
+        lines, unread = change.read_landings("alpha")
+        self.assertEqual(([line["merge"] for line in lines], unread), (["e0c9d13"], []))
+        self.assertEqual(list(commands_change.landings("alpha", "alpha-api")), ["r"])
+        self.assertEqual(change.read_landings("beta"), ([], []))
+
+    def test_change_show_prints_the_record_names_the_log_and_exits_1(self):
+        with refusing_to_list(self.log):
+            rc, out, err = run(commands_change.cmd_change_show, workspace="alpha",
+                               change="alpha-api")
+        self.assertEqual(rc, 1)
+        self.assertIn("why: API 1 -> 2", out)
+        self.assertIn(sentence("workspaces/alpha/changes/log"), err)
+        rc, _, err = run(commands_change.cmd_change_show, workspace="alpha", change="alpha-api")
+        self.assertEqual(rc, 0)
+        self.assertNotIn("cannot be checked", err)
+
+    def test_change_revert_names_it_rather_than_saying_nothing_landed(self):
+        err = io.StringIO()
+        with refusing_to_list(self.log), redirect_stderr(err), redirect_stdout(io.StringIO()):
+            rc = cli.main(["change", "revert", "alpha-api", "-w", "alpha"])
+        self.assertEqual(rc, 1)
+        self.assertIn(sentence("workspaces/alpha/changes/log"), err.getvalue())
+        self.assertNotIn("nothing to revert", err.getvalue())
+
+    def test_doctor_names_it_beside_the_verdict(self):
+        with refusing_to_list(self.log):
+            r = doctor.check_changes()
+        self.assertEqual(r.status, doctor.WARN, r)
+        self.assertTrue(r.detail.endswith("; workspaces/alpha/changes/log cannot be checked"),
+                        r.detail)
+        self.assertEqual(r.hint, sentence("workspaces/alpha/changes/log"))
+
+
+class AForkSaysWhatItDidNotCarry(TwoMemoryDirectories):
+    """`workspace fork` copies the source's charter, memory and todos with `shutil.copytree`. One it
+    could not read raised out of the command as a charter bug — after `copytree` had already given
+    a directory at mode 666 its mode, so the fork's own memory was no longer writable. Now each
+    piece is carried or named, and the sentence that says it forked says what it did not carry."""
+
+    def fork(self):
+        return run(commands_workspace.cmd_workspace_fork, src="alpha", new="gamma", live=False,
+                   restore=False)
+
+    def fork_note(self) -> str:
+        return "\n".join(p.read_text() for p in memstore.files(workspace.memory_dir("gamma")))
+
+    def test_a_memory_directory_it_could_not_list_is_named_and_the_rest_is_carried(self):
+        todos.add("alpha", "finish the keycloak rotation")
+        with refusing_to_list(self.alpha):
+            rc, _, err = self.fork()
+        self.assertEqual(rc, 1)
+        self.assertIn("Forked 'alpha' → 'gamma' (LOCAL) without the memory charter could not read "
+                      "in 'alpha':", err)
+        self.assertIn(sentence("workspaces/alpha/memory"), err)
+        self.assertNotIn("charter + context + memo copied", err)
+        self.assertNotIn("charter bug", err)
+        self.assertEqual(todos.count_open("gamma"), 1)
+        self.assertIn("without the memory charter could not read there", self.fork_note())
+
+    @unittest.skipIf(AS_ROOT, "root searches a directory whatever its mode")
+    def test_todos_at_mode_666_are_each_named_and_the_fork_stays_usable(self):
+        todos.add("alpha", "finish the keycloak rotation")
+        names = sorted(p.name for p in todos.todos_dir("alpha").iterdir())
+        locked(self, todos.todos_dir("alpha"), 0o666)
+        rc, _, err = self.fork()
+        self.assertEqual(rc, 1)
+        self.assertIn("Forked 'alpha' → 'gamma' (LOCAL) without the todos charter could not read "
+                      "in 'alpha':", err)
+        for name in names:
+            self.assertIn(sentence(f"workspaces/alpha/todos/{name}"), err)
+        self.assertEqual(len(memstore.files(workspace.memory_dir("gamma"))), 2)
+        self.assertIn("keycloak token policy", self.fork_note())
+
+    @unittest.skipIf(AS_ROOT, "root reads a file whatever its mode")
+    def test_a_memory_it_could_not_open_is_named_and_its_neighbours_are_carried(self):
+        second = memstore.write(self.alpha, "a second fact", title="second", timestamped=True)
+        locked(self, self.alpha_file)
+        rc, _, err = self.fork()
+        self.assertEqual(rc, 1)
+        self.assertIn(sentence(f"workspaces/alpha/memory/{self.alpha_file.name}"), err)
+        self.assertIn("without the memory charter could not read in 'alpha':", err)
+        self.assertTrue((workspace.memory_dir("gamma") / second.name).exists())
+
+    def test_a_readable_source_is_carried_whole_and_exits_0(self):
+        todos.add("alpha", "finish the keycloak rotation")
+        rc, _, err = self.fork()
+        self.assertEqual(rc, 0)
+        self.assertIn("Forked 'alpha' → 'gamma' — charter + context + memo copied (LOCAL).", err)
+        self.assertNotIn("could not read", err)
+        self.assertIn("inherited its vision, context, glossary, and memo", self.fork_note())
+        self.assertIn("keycloak token policy", self.fork_note())
+        self.assertEqual(todos.count_open("gamma"), 1)
 
 
 if __name__ == "__main__":

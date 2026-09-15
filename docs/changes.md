@@ -68,6 +68,14 @@ sha. A member the forge calls merged with no log line is landed **and divergent*
 with a log line git no longer contains is not landed any more, and nothing had to notice or
 update a flag for that to become true.
 
+A log charter cannot read — a `changes/log/` it may not list, or one host's file it may not
+open — is named, never read as no landings. `charter change land` refuses a member that has
+blockers and exits 1, because the log is what shows a blocker the forge calls merged has since
+been reverted; a member with no blockers does not need it. `charter change show` prints the
+record without the derived block and exits 1, `charter change revert` exits 1 rather than
+saying nothing has landed, and `charter doctor` names the log beside its `changes` verdict and
+does not ask the divergences that are read against it.
+
 ## What charter refuses, collected
 
 The refusals are the design, so they are in one place.

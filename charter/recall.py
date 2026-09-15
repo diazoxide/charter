@@ -14,6 +14,7 @@ assembly of *which* dirs are in scope and tags each result with where it came fr
 from __future__ import annotations
 
 import datetime
+import os
 import re
 from pathlib import Path
 from typing import NamedTuple
@@ -90,7 +91,7 @@ def parse_since(value: str, today: datetime.date | None = None) -> datetime.date
 
 def sources(session_id: str | None = None, persona_name: str | None = None,
             workspace_name: str | None = None, scopes=DEFAULT_SCOPES,
-            all_workspaces: bool = False) -> list[tuple[str, Path]]:
+            all_workspaces: bool = False, unread: list | None = None) -> list[tuple[str, Path]]:
     """``[(source_label, memory_dir)]`` for the requested scopes in the current context.
     Resolves the active workspace/persona unless overridden. Skips a scope with no owner
     (e.g. no active persona → no persona/ephemeral rows).
@@ -99,9 +100,14 @@ def sources(session_id: str | None = None, persona_name: str | None = None,
     LIVE alike (that setting governs what is committed, not what you may search on your own
     machine). Persona and shared memory are not workspace-scoped, so they stay single rows;
     emitting them once per workspace would multiply every role fact by the workspace count.
+
+    What it could not read under a `refs/` goes to *unread*, and the rest is still offered; with
+    no *unread* list to name it in, this refuses (`workspace.CannotCheck`) rather than offer part
+    of the refs as all of them — `memstore.search`'s rule (#1084).
     """
     from . import workspace as ws_mod, persona as p_mod
     out: list[tuple[str, Path]] = []
+    missed: list[tuple[Path, int | None]] = []
     if "workspace" in scopes:
         if all_workspaces:
             for ws in ws_mod.list_workspaces():
@@ -121,14 +127,19 @@ def sources(session_id: str | None = None, persona_name: str | None = None,
         # than recorded facts. Its own scope so `--scope persona` can still mean only
         # memory — the one thing someone narrowing scope usually wants (#178).
         if name:
-            for d in _ref_dirs(p_mod.refs_dir(name)):
+            for d in _ref_dirs(p_mod.refs_dir(name), missed):
                 out.append((f"refs:{name}", d))
-        for d in _ref_dirs(p_mod.refs_dir(config.SHARED_PERSONA, shared=True)):
+        for d in _ref_dirs(p_mod.refs_dir(config.SHARED_PERSONA, shared=True), missed):
             out.append(("refs:shared", d))
+    if unread is None:
+        if missed:
+            raise ws_mod.CannotCheck(missed)
+    else:
+        unread.extend(missed)
     return out
 
 
-def _ref_dirs(base: Path) -> list[Path]:
+def _ref_dirs(base: Path, unread: list) -> list[Path]:
     """*base* and every directory under it.
 
     Refs NEST — the reporting plane's own example is `refs/release/keycloak-prerequisites.md`
@@ -144,14 +155,40 @@ def _ref_dirs(base: Path) -> list[Path]:
     link at the top of `refs/` is enough, and the label this module derives for anything
     read out of it degrades to ``?``, which is the provenance the reader would most want to
     be right (#336).
+
+    **Walked with `workspace.read_directory`, not `rglob`** (#1084). `rglob` left out every entry
+    it could not tell is a directory — under a `refs/` at mode 666, all of them — and the
+    `base.exists()` in front of it raised on 3.11–3.13 for a `refs/` under a persona directory
+    charter may not search, and answered False on 3.14. Each entry whose kind it cannot tell, and
+    a *base* it cannot `stat`, goes to *unread*. A directory it can tell is one and cannot list is
+    still offered: listing it is `memstore.read_files`' job, and that names it. A link to a
+    directory is offered and not walked, as `rglob` walked none — one back up the tree would never
+    end.
     """
-    if not base.exists() or contain.dir_refusal(base):
+    from . import workspace
+    there, code = workspace._directory(base)
+    if there is None:
+        unread.append((base, code))
         return []
-    try:
-        return [base, *(d for d in sorted(base.rglob("*"))
-                        if d.is_dir() and not contain.dir_refusal(d))]
-    except OSError:
-        return [base]
+    if not there or contain.dir_refusal(base):
+        return []
+    out = [base]
+
+    def walk(d: Path) -> None:
+        try:
+            subdirs, missed = workspace.read_directory(d, workspace._directory)
+        except OSError:
+            return
+        unread.extend(missed)
+        for sub in subdirs:
+            if contain.dir_refusal(sub):
+                continue
+            out.append(sub)
+            if not os.path.islink(sub):
+                walk(sub)
+
+    walk(base)
+    return out
 
 
 def _label_of(path: Path, srcs: list[tuple[str, Path]]) -> str:
@@ -181,12 +218,17 @@ def recall(query: str | None = None, session_id: str | None = None, limit: int =
     A base it could not read is searched around, not through: the hits are what the others held,
     and :attr:`Recalled.unread` names each one it could not, for the caller to say (#1084).
     """
+    unread: list[tuple[Path, int | None]] = []
     srcs = sources(session_id=session_id, persona_name=persona_name,
                    workspace_name=workspace_name, scopes=scopes,
-                   all_workspaces=all_workspaces)
+                   all_workspaces=all_workspaces, unread=unread)
     dirs = [d for _lbl, d in srcs]
     undated = undated_refs = 0
-    unread: list[tuple[Path, int | None]] = []
+
+    def _named() -> list[tuple[Path, int | None]]:
+        # Once each: a `.md` in a `refs/` it could not search is met by the walk that looks for
+        # directories and again by the listing that looks for memories, and is one thing unread.
+        return list(dict.fromkeys(unread))
 
     def _dated(p: Path) -> datetime.date | None:
         try:
@@ -206,7 +248,7 @@ def recall(query: str | None = None, session_id: str | None = None, limit: int =
                     undated += d is None
                 continue
             rows.append(Hit(lbl, p, title, score, d))
-        return Recalled(rows[:limit] if limit else rows, undated, undated_refs, unread)
+        return Recalled(rows[:limit] if limit else rows, undated, undated_refs, _named())
 
     items: list[tuple[datetime.date, Hit]] = []
     for lbl, d in srcs:
@@ -225,4 +267,4 @@ def recall(query: str | None = None, session_id: str | None = None, limit: int =
             items.append((dt or datetime.date.min, Hit(lbl, p, title, 0, dt)))
     items.sort(key=lambda x: x[0], reverse=True)
     rows = [h for _dt, h in items]
-    return Recalled(rows[:limit] if limit else rows, undated, undated_refs, unread)
+    return Recalled(rows[:limit] if limit else rows, undated, undated_refs, _named())

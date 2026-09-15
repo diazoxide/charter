@@ -99,13 +99,13 @@ def _beside_unread(result: Result, unread) -> Result:
     Beside and not instead: the verdict is still true of what was read (#1014). One spelling for
     every row that lists workspaces (#1043), so a path one row names is named the same in the
     next. *unread* is ``(path, errno)`` pairs, each path inside the plane."""
-    from . import config as _config
     from . import workspace as _workspace
     if not unread:
         return result
-    named = [p.relative_to(_config.ROOT).as_posix() for p, _ in unread]
-    # `workspace.cannot_check`, the clause a command prints as a sentence (#1084), so the two
-    # cannot drift apart.
+    # Both named by `workspace`, which contains the name: a path here can be a filename a chat
+    # wrote, and a newline in it wrote a row of its own (#1084). `cannot_check` is also the clause
+    # a command prints as a sentence, so the two cannot drift apart.
+    named = [_workspace.unread_name(p) for p, _ in unread]
     cannot = "; ".join(_workspace.cannot_check(p, code) for p, code in unread) + "."
     return Result(result.name, WARN if result.status == OK else result.status,
                   detail=f"{result.detail}; {', '.join(named)} cannot be checked",
@@ -2996,7 +2996,12 @@ def _changes_result(unread: list) -> Result:
             total += len(records)
             for slug, complaint in refused:
                 unreadable.append(f"{ws}/{contain.readable(slug)}: {complaint}")
-            for rec in records:
+            # So is a landing log it could not read, and the divergences read against that log
+            # are not asked without it (#1084): as no landing, a member charter did land was
+            # reported as merged outside charter, and one since reverted was not reported at all.
+            _lines, log_missed = _change.read_landings(ws)
+            unread.extend(log_missed)
+            for rec in ([] if log_missed else records):
                 for line in _cc.divergences(ws, rec):
                     found.append(f"{ws}/{rec['change']}: {line}")
             for line in _cc.stray_branches(ws):

@@ -205,23 +205,7 @@ def read_files(mem_dir: Path) -> tuple[list[Path], list[tuple[Path, int | None]]
     own terms.
     """
     from . import workspace
-    if contain.dir_refusal(mem_dir):
-        return [], []
-
-    def keep(p: Path) -> tuple[bool | None, int | None]:
-        if p.name == "MEMORY.md" or not p.name.endswith(".md"):
-            return False, None
-        if not contain.file_refusal(p):
-            return True, None
-        # Refused: asked why only here, so a readable store pays no second `lstat`. An entry
-        # whose `lstat` is refused is one charter could not look at, not "not a memory".
-        seen, errno_ = workspace._existence(p)
-        return (None, errno_) if seen is None else (False, None)
-
-    try:
-        return workspace.read_directory(mem_dir, keep)
-    except OSError as e:
-        return [], [(mem_dir, e.errno)]
+    return workspace.read_files(mem_dir, lambda name: name != "MEMORY.md" and name.endswith(".md"))
 
 
 #: A memory FILENAME is a bare slug — no slash, space or colon. Matching only that

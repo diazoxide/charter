@@ -27,13 +27,14 @@ no merge sha, and charter will not pick the merge commit that looks about right 
 
 from __future__ import annotations
 
+import errno
 import io
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import change, commands_change
+from charter import change, commands_change, workspace
 from tests._changerepo import ChangeRepoCase, git, sha
 
 SLUG = "component-api-2"
@@ -533,12 +534,18 @@ class TestTheLogIsUntrustedToo(RevertCase):
         self.assertEqual(change.landings(self.WS), [])
         self.assertEqual(change.declared_landings(self.WS, "c"), {})
 
-    def test_a_log_that_cannot_be_read_answers_empty_rather_than_raising(self):
-        """This feeds a report and a frame pane, both of which must render whatever they
-        find. Listing an unreadable directory raises on Linux and yields nothing on
-        macOS — `pieces.events` records a suite that went red on CI over that line."""
-        with mock.patch.object(change.Path, "glob", side_effect=OSError("nope")):
-            self.assertEqual(change.landings(self.WS), [])
+    def test_a_log_that_cannot_be_listed_is_named_rather_than_answering_empty(self):
+        """Answered empty, it read as "charter landed nothing", and `revert` said so (#1084).
+        `read_landings` names the directory beside what it read, and `landings`, which has no
+        partial answer, refuses. The frame pane that reads it still renders: it catches
+        whatever this raises and shows no landings, as it does for every other failure."""
+        d = change.log_dir(self.WS)
+        d.mkdir(parents=True)
+        with mock.patch.object(change.workspace, "read_directory",
+                               side_effect=PermissionError(errno.EACCES, "nope")):
+            self.assertEqual(change.read_landings(self.WS), ([], [(d, errno.EACCES)]))
+            with self.assertRaises(workspace.CannotCheck):
+                change.landings(self.WS)
 
     def test_the_log_is_line_delimited_and_append_only(self):
         """Two landings are two lines, and the second does not rewrite the first."""

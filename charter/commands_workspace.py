@@ -704,6 +704,7 @@ def cmd_workspace_optimize(args) -> int:
     apply = getattr(args, "apply", False)
     stale_days = getattr(args, "stale_days", 90)
     total_actions = 0
+    unread: list = []
     for n in names:
         mdir = workspace.memory_dir(n)
         if not mdir.exists():
@@ -713,6 +714,7 @@ def cmd_workspace_optimize(args) -> int:
         except workspace.CannotCheck as e:
             # Named, and the next one read (#1084) — `cmd_persona_optimize`'s rule.
             workspace.say_unread(e.unread)
+            unread.extend(e.unread)
             continue
         if rep["total"] == 0:
             continue
@@ -747,7 +749,8 @@ def cmd_workspace_optimize(args) -> int:
                   "(exact-dup collapse + index repair); proposals always stay manual.")
     elif total_actions == 0:
         util.info("\nNo safe ops to apply — the journal is already tidy.")
-    return 0
+    # Every other journal was curated; the exit says one was not (#1084).
+    return 1 if unread else 0
 
 
 def _work_at_risk(name: str) -> list[str]:
@@ -1566,7 +1569,7 @@ def cmd_workspace_recall(args) -> int:
     results = workspace.recall(name, query, unread=unread)
     workspace.say_unread(unread)
     if unread:
-        return 0          # its one directory: nothing was read, and the sentence said so
+        return 1          # its one directory: nothing was read; the sentence and the exit say so
     if not results:
         if query:
             util.info(f"No memories in '{name}' match '{query}'.")
@@ -1621,6 +1624,42 @@ def cmd_workspace_vision(args) -> int:
     return 0
 
 
+def _carry(src: Path, dst: Path) -> list[tuple[Path, int | None]]:
+    """Copy *src* — a file, or a directory and everything under it — to *dst* for `fork`, and
+    return each path in it charter could not read, with its errno (#1084). ``[]`` when *src* is
+    not there.
+
+    `shutil.copytree` of a directory charter could not list raised out of `fork` as a charter bug.
+    Of one at mode 666 it copied nothing and then gave the fork's copy that mode before raising,
+    so the fork's own memory was no longer writable. So a directory is listed first, and not
+    copied at all when it cannot be or when an entry's own `lstat` is refused. What `copytree`
+    still meets file by file — a memory at mode 000, a subdirectory it cannot list — is named from
+    the errors it collects, and every other file is copied."""
+    # A path it cannot `stat` is copied as a file, not answered here: the copy meets the same
+    # refusal with the same errno, so a branch for it could reject nothing the copy does not.
+    kind, _code = workspace._directory(src)
+    if not kind:                         # a file, nothing at all, or a path it cannot `stat`
+        try:
+            shutil.copyfile(src, dst)
+        except FileNotFoundError:
+            return []
+        except OSError as e:
+            return [(src, e.errno)]
+        return []
+    try:
+        unread = workspace.read_directory(src, workspace._existence)[1]
+    except OSError as e:
+        return [(src, e.errno)]
+    if unread:
+        return unread
+    try:
+        shutil.copytree(src, dst, dirs_exist_ok=True)
+    except shutil.Error as e:
+        return list(dict.fromkeys((Path(s), workspace._existence(Path(s), follow=True)[1])
+                                  for s, _dst, _why in e.args[0]))
+    return []
+
+
 def cmd_workspace_fork(args) -> int:
     """Fork a workspace: create <new> pre-loaded with <src>'s context — the living
     charter (workspace.md: vision, context, glossary), the manifest (repos+branches),
@@ -1644,12 +1683,9 @@ def cmd_workspace_fork(args) -> int:
 
     workspace.ensure(new)
     workspace.scaffold(new)  # baseline; the charter is overwritten from src below
-    src_charter = workspace.charter_file(src)
-    if src_charter.exists():
-        shutil.copyfile(src_charter, workspace.charter_file(new))
-    src_mem = workspace.memory_dir(src)
-    if src_mem.exists():
-        shutil.copytree(src_mem, workspace.memory_dir(new), dirs_exist_ok=True)
+    # Each piece is carried or named, never raised over (#1084) — see `_carry`.
+    carried = {"charter": _carry(workspace.charter_file(src), workspace.charter_file(new)),
+               "memory": _carry(workspace.memory_dir(src), workspace.memory_dir(new))}
     # Open todos travel with the memory, and for the same reason: a fork exists so someone
     # can pick the task up with full context, and what is still to be done is the most
     # actionable part of that. Inheriting everything the task LEARNED while dropping
@@ -1661,9 +1697,10 @@ def cmd_workspace_fork(args) -> int:
     # which would restamp every todo with today's date and hide a three-week-old intent
     # behind a fresh one — age is the only ranking this feature has. Closed todos never
     # arise, since finishing one deletes it.
-    src_todos = todos.todos_dir(src)
-    if src_todos.exists():
-        shutil.copytree(src_todos, todos.todos_dir(new), dirs_exist_ok=True)
+    carried["todos"] = _carry(todos.todos_dir(src), todos.todos_dir(new))
+    missed = [pair for pairs in carried.values() for pair in pairs]
+    parts = [piece for piece, pairs in carried.items() if pairs]
+    not_carried = " and ".join(filter(None, (", ".join(parts[:-1]), parts[-1]))) if parts else ""
     # Membership comes from BOTH sources — see `workspace.merge_repo_rows`. Reading the
     # manifest alone made a fork of an un-snapshotted workspace inherit nothing while
     # `status` cheerfully reported its clones (#81).
@@ -1678,12 +1715,26 @@ def cmd_workspace_fork(args) -> int:
         m["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
         m["updated_by"] = _git_user()
         workspace.write_manifest(new, m)
-    workspace.note(new, f"Forked from '{src}' — inherited its vision, context, glossary, and memo.")
+    # The fork's own note says what it did not inherit, so a later reader of its memory is not told
+    # it holds context it never received (#1084).
+    if missed:
+        workspace.note(new, f"Forked from '{src}' — without the {not_carried} charter could not "
+                            f"read there.")
+    else:
+        workspace.note(new, f"Forked from '{src}' — inherited its vision, context, glossary, and memo.")
 
-    if getattr(args, "live", False):
+    live = getattr(args, "live", False)
+    if live:
         workspace.set_live(new, True)
-    util.ok(f"Forked '{src}' → '{new}' — charter + context + memo copied "
-            f"({'LIVE' if getattr(args, 'live', False) else 'LOCAL'}).")
+    if missed:
+        # Not "copied": the sentence says what the fork does not have, each path follows, and the
+        # exit at the end says it (#1084).
+        util.warn(f"Forked '{src}' → '{new}' ({'LIVE' if live else 'LOCAL'}) without the "
+                  f"{not_carried} charter could not read in '{src}':")
+        workspace.say_unread(missed)
+    else:
+        util.ok(f"Forked '{src}' → '{new}' — charter + context + memo copied "
+                f"({'LIVE' if live else 'LOCAL'}).")
     inherited = todos.count_open(new)
     if inherited:
         # Said out loud because the two lists are independent from here: whoever forked
@@ -1702,16 +1753,16 @@ def cmd_workspace_fork(args) -> int:
                   f"snapshot {src}` records them properly.")
     if getattr(args, "restore", False) and repos:
         util.info(f"Cloning {len(repos)} inherited repo(s)…")
-        return cmd_workspace_restore(SimpleNamespace(name=new, on_demand=False))
+        return cmd_workspace_restore(SimpleNamespace(name=new, on_demand=False)) or int(bool(missed))
     if repos:
         util.info(f"Clone its {len(repos)} inherited repo(s): charter workspace restore {new}  "
                   f"(or re-run fork with --restore).")
     else:
         util.info(f"No repos on '{src}' — neither a snapshot nor clones on disk. "
                   f"Clone into the fork: charter clone <repo> -w {new}")
-    if getattr(args, "live", False):
+    if live:
         util.info(f"Share the fork: charter workspace save {new}")
-    return 0
+    return 1 if missed else 0
 
 
 #: Baseline components a LIVE workspace actually shares (see the managed block in
