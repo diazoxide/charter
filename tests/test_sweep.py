@@ -3476,8 +3476,25 @@ class AMutationThatNeverAppliedIsNotASurvivor(unittest.TestCase):
 
     def test_the_cache_is_still_shared_between_runs(self):
         """Keyed by a hash of the tree, so two runs of one checkout want the same map and
-        paying for it twice is pure loss. Only the sandboxes are private."""
-        self.assertNotIn(str(os.getpid()), str(sweep.workdir_for(Path.cwd(), None)))
+        paying for it twice is pure loss. Only the sandboxes are private.
+
+        Asked of a second process, which is what "between runs" means. It used to be asked
+        by looking for this process's pid in the path — `assertNotIn(str(os.getpid()),
+        str(workdir_for(Path.cwd(), None)))` — and that is a lottery ticket, not a test
+        (#1073): a pid is four or five decimal digits and the workdir ends in twelve hex
+        ones. Inside the sweep the cwd is the sweep's own sandbox, `run-<sweep pid>/ref`,
+        so the digest was new on every run, and once in a few tens of thousands of runs it
+        spelled the test's pid. PR #1069's unmutated baseline was that run: the shard
+        refused the whole pull request, and a re-run of the same commit was green.
+        """
+        here = sweep.workdir_for(self.tmp, None)
+        another_run = subprocess.run(
+            [sys.executable, "-c",
+             "import sys\nfrom pathlib import Path\nfrom tools import sweep\n"
+             "print(sweep.workdir_for(Path(sys.argv[1]), None))", str(self.tmp)],
+            cwd=str(Path(sweep.__file__).resolve().parent.parent), check=True,
+            capture_output=True, text=True)
+        self.assertEqual(Path(another_run.stdout.strip()), here)
 
     def test_a_run_with_one_is_not_a_clean_exit(self):
         m = self._mutation()
