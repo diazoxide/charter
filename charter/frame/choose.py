@@ -362,7 +362,8 @@ def arrivals_now() -> frozenset[str]:
 #: What `F2 → chat` says on the row of a chat on another tmux server — the words half of
 #: `slots._OFF_SERVER_MARK`'s glyph, and it names the way back on because a picker row has
 #: the column to (ruling 46; `chats.OTHER_SERVER` says the same in a refusal).
-OTHER_SERVER_NOTE = "on another server — charter frame-quit, then charter"
+OTHER_SERVER_NOTE = ("on another server — charter frame-quit stops every chat, "
+                     "charter reopen brings them back")
 
 
 def _note(noun: str, name: str, arrived=frozenset(), off_server=frozenset()) -> str:

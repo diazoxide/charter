@@ -361,6 +361,27 @@ class EveryRefusalComesBeforeAnythingStarts(_AChatInAlpha):
         self.assertEqual(len(self.launched), 1)
         self.assertNotIn("another plane", got.message)
 
+    # The refusal is KEPT for a shared server (ruling 46), and a background open never lands
+    # on one today — so the case is stood up by answering "this is not the plane's own
+    # server", which is the documented condition and the only way the guard can be reached.
+
+    def test_on_a_shared_server_an_unprovable_session_of_the_name_is_refused(self):
+        self.sessions = {"beta"}
+        with mock.patch.object(commands_frame, "_is_own_plane_server", return_value=False):
+            got = self._open()
+        self.assertIn("probably another plane's", got.message)
+        self.assertEqual(self.launched, [])
+
+    def test_on_a_shared_server_a_session_this_plane_can_prove_is_joined(self):
+        """The `_plane_session(...) is None` half: a session this plane's own chat records
+        prove is its own is joined even where another plane could have one."""
+        self.beta_seat = "%5"
+        _a_chat("beta.2", ws="beta", pane="%5")
+        self.sessions = {"beta"}
+        with mock.patch.object(commands_frame, "_is_own_plane_server", return_value=False):
+            got = self._open()
+        self.assertIs(got.ok, True, got.message)
+
     def _sessions_on(self, answers: dict[str, str]):
         """A stand-in that answers `list-sessions` per SERVER, and everything else as the
         class's own does."""

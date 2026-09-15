@@ -247,15 +247,52 @@ class TheKillIsAimedAtAWindowTmuxJustNamed(PersonaIso, unittest.TestCase):
             self.assertEqual(
                 commands_frame._stop_chats(doomed, windows={SERVER: {"alpha.1": "@3"}}), 1)
 
-        # One kill, aimed at the window id from the listing. `_stop_chats` also lists the
-        # server's transcript viewers to take a stopped chat's own with it (there are none
-        # here), so the KILL is asserted rather than the raw call count.
-        kills = [c for c in seen if "kill-window" in c]
-        self.assertEqual(len(kills), 1)
-        self.assertIn("@3", kills[0])
-        self.assertNotIn("alpha", kills[0], "a session name would be another plane's")
-        self.assertNotIn("kill-server", kills[0])
-        self.assertNotIn("kill-session", kills[0])
+        # The exact sequence, and nothing else: the kill aimed at the window id from the
+        # listing, then ONE `list-windows` for the stopped chat's transcript viewers (there
+        # are none here). A stray extra call, a session-name target or a `kill-session`
+        # anywhere in it would each fail this.
+        self.assertEqual(len(seen), 2, seen)
+        self.assertEqual(seen[0][-3:], ["kill-window", "-t", "@3"], seen[0])
+        self.assertNotIn("alpha", seen[0], "a session name would be another plane's")
+        self.assertIn("list-windows", seen[1], seen[1])
+        for call in seen:
+            self.assertNotIn("kill-server", call)
+            self.assertNotIn("kill-session", call)
+
+    def _this_plane_rows(self, *pairs):
+        mine = commands_frame._this_plane()
+        return [(chat, window, mine) for chat, window in pairs]
+
+    def test_nothing_to_kill_asks_tmux_nothing(self):
+        """An empty set returns before any listing — the same "asks tmux nothing" the case
+        above holds for a teardown that found no window."""
+        with mock.patch.object(commands_frame.tmuxctl, "run") as run:
+            commands_frame._kill_transcript_windows(SERVER, set())
+            run.assert_not_called()
+
+    def test_only_the_named_chats_viewer_is_killed(self):
+        """`chat not in chats_set` is a guard on what a kill aims at: two of this plane's
+        viewers in the listing, one named — one `kill-window`, at that one's window."""
+        seen = []
+        rows = self._this_plane_rows(("a.1", "@1"), ("b.1", "@2"))
+        with mock.patch.object(commands_frame.tmuxctl, "run",
+                               side_effect=lambda why, argv, **kw: seen.append(argv)):
+            commands_frame._kill_transcript_windows(SERVER, {"a.1"}, rows=rows)
+        self.assertEqual([c[-3:] for c in seen], [["kill-window", "-t", "@1"]], seen)
+
+    def test_rows_a_caller_holds_are_used_and_the_server_is_not_listed_again(self):
+        """*rows* is honoured: the sweep hands the listing it already has, and a second
+        `list-windows` would both cost the launch a round trip and aim at whatever a later
+        listing said instead of the answer the decision was made on."""
+        seen = []
+        rows = self._this_plane_rows(("a.1", "@7"))
+        with mock.patch.object(commands_frame.tmuxctl, "run",
+                               side_effect=lambda why, argv, **kw: seen.append(argv)), \
+                mock.patch.object(commands_frame, "_transcript_windows",
+                                  return_value=self._this_plane_rows(("a.1", "@9"))) as listed:
+            commands_frame._kill_transcript_windows(SERVER, {"a.1"}, rows=rows)
+        listed.assert_not_called()
+        self.assertEqual([c[-3:] for c in seen], [["kill-window", "-t", "@7"]], seen)
 
     def test_a_chat_with_no_window_in_the_listing_is_not_aimed_at(self):
         """A stopped chat with no window in the listing is aimed at nothing — and the viewer

@@ -481,6 +481,29 @@ class TheTranscriptOpensInAWindowOfItsOwn(PersonaIso, unittest.TestCase):
         self.assertEqual([w for w, n in self._windows().items() if "transcript" in n],
                          [second])
 
+    def test_an_unstamped_window_is_not_a_viewer_on_this_planes_own_server_either(self):
+        """A window carrying `@charter_transcript` and no viewer stamp is left alone on the
+        plane's OWN server too — by a close of its chat and by the orphan sweep — even with
+        the session's `@charter_plane` naming this very plane. There is no own-server
+        exception: a stamp-less window is not a viewer anywhere."""
+        chat_pane = self._chat_with_a_transcript()
+        sid = self._tmux("display-message", "-p", "-t", chat_pane, "#{session_id}")
+        stray = self._tmux("new-window", "-d", "-t", sid, "-n", "transcript alpha_2.1",
+                           "-P", "-F", "#{window_id}", "sh", "-c", "exec cat")
+        self._tmux("set-option", "-w", "-t", stray, commands_frame._TRANSCRIPT_OPTION,
+                   "alpha_2.1")
+        self._tmux("set-option", "-t", sid, commands_frame._PLANE_OPTION,
+                   str(config.STATE_DIR))
+        with mock.patch.object(tmuxctl, "plane_socket", return_value=self.socket):
+            self.assertEqual(commands_frame.cmd_close(
+                SimpleNamespace(chat="", chat_id="alpha_2.1")), 0)
+            self.assertIn(stray, self._windows_now(),
+                          "a close killed a stamp-less window on the plane's own server")
+            commands_frame._sweep_orphan_transcripts(
+                self.socket, commands_frame._live_chats(self.socket))
+        self.assertIn(stray, self._windows_now(),
+                      "the sweep killed a stamp-less window on the plane's own server")
+
 @unittest.skipUnless(_HAS_TMUX, "needs a real tmux")
 class TwoPlanesOnOneServer(PersonaIso, unittest.TestCase):
     """§3.3, and the one case a single-plane test is blind to.
@@ -658,7 +681,8 @@ class TwoPlanesTranscriptViewersOnOneSharedServer(PersonaIso, unittest.TestCase)
 
     def _windows(self):
         out = self._tmux("list-windows", "-a", "-F",
-                         "#{window_id}\t#{@charter_transcript}\t#{@charter_plane}", check=False)
+                         "#{window_id}\t#{@charter_transcript}\t#{@charter_viewer_plane}",
+                         check=False)
         return {w.split("\t")[0]: w.split("\t") for w in out.splitlines() if "\t" in w}
 
     def _plant(self, root, *, first: bool) -> tuple[str, str]:
@@ -678,9 +702,11 @@ class TwoPlanesTranscriptViewersOnOneSharedServer(PersonaIso, unittest.TestCase)
         viewer = self._tmux("new-window", "-d", "-t", self.ws, "-n",
                             f"transcript {self.fid}", "-P", "-F", "#{window_id}",
                             "sh", "-c", "exec cat")
+        # The viewer's own plane stamp first, then the chat mark — `cmd_transcript`'s order.
+        self._tmux("set-option", "-w", "-t", viewer, commands_frame._VIEWER_PLANE_OPTION,
+                   plane)
         self._tmux("set-option", "-w", "-t", viewer, commands_frame._TRANSCRIPT_OPTION,
                    self.fid)
-        self._tmux("set-option", "-w", "-t", viewer, commands_frame._PLANE_OPTION, plane)
         state.frame_dir(self.fid, create=True)
         state.record_server(self.fid, self.socket)
         state.record_workspace(self.fid, self.ws)
@@ -727,6 +753,67 @@ class TwoPlanesTranscriptViewersOnOneSharedServer(PersonaIso, unittest.TestCase)
                 SimpleNamespace(chat=self.fid)), 0)
         self.assertIn(b_viewer, self._windows(),
                       "plane A opening its own transcript killed plane B's viewer")
+
+    def test_plane_As_own_stamped_viewer_does_die_on_As_close_and_quit(self):
+        """**The positive control.** Without it the three "B survives" cases pass on code
+        that kills nothing at all. A's own viewer — stamped with A's plane — goes on A's
+        close, and on A's quit, while B's stays both times."""
+        for verb in ("close", "quit"):
+            with self.subTest(verb=verb):
+                self.setUp()
+                self._plant(self.a_root, first=True)
+                self._plant(self.b_root, first=False)
+                a_viewer = self._viewer_of(self.a_root)
+                b_viewer = self._viewer_of(self.b_root)
+                config.use(self.a_root)
+                if verb == "close":
+                    self.assertEqual(commands_frame.cmd_close(
+                        SimpleNamespace(chat="", chat_id=self.fid)), 0)
+                else:
+                    commands_frame.cmd_quit(SimpleNamespace(chat=self.fid))
+                windows = self._windows()
+                self.assertNotIn(a_viewer, windows,
+                                 f"plane A's {verb} left its own stamped viewer standing")
+                self.assertIn(b_viewer, windows, f"plane A's {verb} killed plane B's viewer")
+                self.doCleanups()
+
+    def _unstamped_window_in_As_session(self) -> str:
+        """A window carrying `@charter_transcript` for A's chat id and NO viewer stamp, in
+        the session A created — whose SESSION-level `@charter_plane` is A's. Through tmux's
+        window-then-session fallback `#{@charter_plane}` on this window reads A's plane, which
+        is exactly what a viewer must never be recognised by."""
+        config.use(self.a_root)
+        window = self._tmux("new-window", "-d", "-t", self.ws, "-n",
+                            f"transcript {self.fid}", "-P", "-F", "#{window_id}",
+                            "sh", "-c", "exec cat")
+        self._tmux("set-option", "-w", "-t", window, commands_frame._TRANSCRIPT_OPTION,
+                   self.fid)
+        # The session marker, as the launch that CREATED the session wrote it.
+        self._tmux("set-option", "-t", self.ws, commands_frame._PLANE_OPTION,
+                   str(config.STATE_DIR))
+        return window
+
+    def test_an_unstamped_window_survives_As_close_quit_and_transcript_on_a_shared_server(self):
+        """**Ruling: a window that never got both options is not a viewer.** It is never
+        swept and never killed — not even though its session's own `@charter_plane` is A's,
+        which a `#{@charter_plane}` read would have handed A as the window's plane."""
+        for verb in ("close", "quit", "transcript"):
+            with self.subTest(verb=verb):
+                self.setUp()
+                self._plant(self.a_root, first=True)
+                stray = self._unstamped_window_in_As_session()
+                config.use(self.a_root)
+                if verb == "close":
+                    commands_frame.cmd_close(SimpleNamespace(chat="", chat_id=self.fid))
+                elif verb == "quit":
+                    commands_frame.cmd_quit(SimpleNamespace(chat=self.fid))
+                else:
+                    config.write_for(reopen.transcript_path(self.fid), "OLD TEXT\n")
+                    with mock.patch.object(tmuxctl, "plane_socket", return_value=self.socket):
+                        commands_frame.cmd_transcript(SimpleNamespace(chat=self.fid))
+                self.assertIn(stray, self._windows(),
+                              f"plane A's {verb} killed a window carrying only the chat mark")
+                self.doCleanups()
 
 
 if __name__ == "__main__":       # pragma: no cover

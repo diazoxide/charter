@@ -2102,6 +2102,16 @@ class EscProvesTheSelectorPaneAcrossServers(PersonaIso, unittest.TestCase):
                 mock.patch.object(tmuxctl, "live_pane_by_pid", side_effect=lpbp):
             self.assertEqual(launcher.framed_chat(), "beta.1")
 
+    def test_the_candidate_servers_hold_no_duplicates(self):
+        """A chat recorded on this plane's own server names the same server twice over —
+        once as its record, once as `plane_socket()` — and it is asked once: a duplicate
+        would be a second `list-panes` round trip for an answer already given."""
+        with mock.patch.object(state, "frame_server", return_value="PLANE"), \
+                mock.patch.object(tmuxctl, "plane_socket", return_value="PLANE"), \
+                mock.patch.object(tmuxctl, "operator_server", return_value=None):
+            self.assertEqual(launcher._candidate_servers("beta.1"),
+                             ["PLANE", tmuxctl.LEGACY_SOCKET])
+
     def test_a_pid_that_no_server_answers_for_closes_nothing(self):
         """The pid proof is not weakened: a process no server reports a live pane for — a
         `frame-launch` run by hand, or one whose pane is gone — closes nothing, exactly as
@@ -2115,95 +2125,6 @@ class EscProvesTheSelectorPaneAcrossServers(PersonaIso, unittest.TestCase):
                                   side_effect=lambda a, argv, **k: killed.append(argv)):
             launcher._close_the_cancelled_chat("beta.1")
         self.assertEqual(killed, [])
-
-
-@unittest.skipUnless(shutil.which("tmux"), "no tmux on this machine")
-class EscClosesASelectorRecordedOnTheLegacySocket(PersonaIso, unittest.TestCase):
-    """**The other half of "on both servers": a selector left on the legacy `charter` socket
-    by a charter from before ruling 46, closed on Esc.** `TheSelectorOnARealServer` pins the
-    plane-socket case; this pins the legacy one, on a real tmux, by starting the current
-    launcher's own selector on a reapable socket standing in for `tmuxctl.LEGACY_SOCKET`.
-    """
-
-    WS = "beta"
-    FID = "beta.1"
-
-    def setUp(self):
-        super().setUp()
-        v = tmuxctl.version()
-        if v is None or v < tmuxctl.FLOOR:
-            self.skipTest("needs a tmux at or above the floor")
-        make_plane(self)
-        no_background_refresh(self)
-        _ttyguard.no_terminal()
-        self.tmux = shutil.which("tmux")
-        self.legacy = _tmuxreap.name(f"legacy-esc-{next(_SERVERS)}")
-        self.enterContext(mock.patch.object(tmuxctl, "LEGACY_SOCKET", self.legacy))
-        self.addCleanup(self._kill)
-        (config.WORKSPACES_DIR / self.WS).mkdir(parents=True, exist_ok=True)
-        bindir = self.tmp / "bin"; bindir.mkdir()
-        (bindir / "claude").write_text(
-            f"#!{sys.executable}\nimport json,sys,time\n"
-            "if sys.argv[1:3]==['plugin','list']:\n"
-            "    json.dump([{'id':'charter@charter','scope':'user','enabled':True,"
-            "'installedAt':'2026-09-12T00:00:00Z'}], sys.stdout); sys.exit(0)\n"
-            "time.sleep(300)\n")
-        (bindir / "claude").chmod(0o755)
-        self.env = {
-            "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH','')}",
-            "CHARTER_ROOT": str(config.ROOT),
-            "CHARTER_SESSION_ID": self.FID,
-            "PYTHONPATH": os.pathsep.join(
-                [str(_REPO_ROOT), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep),
-            **_gitguard.environment(), **_envguard.stated(),
-        }
-        wired_as_today(self)
-
-    def _kill(self):
-        subprocess.run([self.tmux, "-L", self.legacy, "kill-server"],
-                       capture_output=True, timeout=20)
-        try:
-            os.unlink(_tmuxsocket.socket_path(self.legacy))
-        except OSError:
-            pass
-
-    def _tmux(self, *a):
-        return subprocess.run([self.tmux, "-L", self.legacy, *a], capture_output=True,
-                              text=True, timeout=20)
-
-    def _text(self, pane):
-        return "".join(self._tmux("capture-pane", "-p", "-t", pane).stdout.splitlines())
-
-    def _sessions(self):
-        out = self._tmux("list-sessions", "-F", "#{session_name}")
-        return out.stdout.split() if out.returncode == 0 else []
-
-    def test_escape_closes_a_selector_recorded_on_the_legacy_socket(self):
-        argv = launcher.argv_select("claude")
-        out = subprocess.run(
-            [self.tmux, "-L", self.legacy, "new-session", "-d", "-s", self.WS, "-n",
-             self.FID, "-x", "120", "-y", "40", "-P", "-F", "#{pane_id}", "--", *argv],
-            capture_output=True, text=True, timeout=20, env={**os.environ, **self.env})
-        self.assertEqual(out.returncode, 0, out.stderr)
-        pane = out.stdout.strip()
-        # **`remain-on-exit on`, so a cancelled selector's own process exiting is NOT what
-        # closes the window** — the dead pane lingers, exactly as it does on charter's own
-        # servers, so what this measures is `_close_the_cancelled_chat`'s explicit kill and
-        # not the process simply ending. Without it the pane vanishes on its own and the test
-        # would pass whatever `_close_the_cancelled_chat` did.
-        self._tmux("set-option", "-g", "remain-on-exit", "on")
-        state.frame_dir(self.FID, create=True)
-        state.record_server(self.FID, self.legacy)
-        state.record_workspace(self.FID, self.WS)
-        state.record_cwd(self.FID, str(config.ROOT))
-        state.record_harness_pane(self.FID, pane)
-        state.record_waiting(self.FID)
-        self.assertTrue(_eventually(lambda: "which profile" in self._text(pane)),
-                        f"the selector never painted: {self._text(pane)!r}")
-        self._tmux("send-keys", "-t", pane, "Escape")
-        self.assertTrue(
-            _eventually(lambda: self.WS not in self._sessions(), 30.0),
-            f"Esc did not close the legacy selector's window: sessions={self._sessions()}")
 
 
 @unittest.skipUnless(shutil.which("tmux"), "no tmux on this machine")

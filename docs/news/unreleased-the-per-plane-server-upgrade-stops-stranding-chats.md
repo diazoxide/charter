@@ -12,8 +12,10 @@ edges, all fixed here.
 tmux servers, so pressing a tab for a chat that is still on the old server can only refuse.
 The chat strip now marks such a tab (a `~` where an ordinary idle tab is blank), `F2 → chat`
 says "on another server" on its row, and the refusal names the way back on rather than
-stopping at a dead end: quit that frame with `charter frame-quit` typed in its project, and
-`charter` brings its chats back on this plane's own server.
+stopping at a dead end — and says what that way costs: `charter frame-quit`, typed in this
+project, records and stops every chat of the project on every server, the one you are in
+included, and `charter reopen` (or `charter`) then brings them all back on this plane's own
+server.
 
 **Esc closes a new chat's profile selector again — on either server.** A selector opened for a
 chat whose recorded server did not match where its pane actually was (an upgrade-day skew)
@@ -36,5 +38,7 @@ chat it was opened for on close and quit, and a viewer left over by a crash on t
 own server is swept before the next launch reads what is live. A viewer stranded on the
 legacy `charter` socket or inside a tmux you run yourself — the servers two projects share —
 is left for you to close by hand, because charter will not close a window there by a chat id
-that another project may share; each viewer carries a marker naming the project that opened
-it, so a close in one project never reaches another's.
+that another project may share. Each viewer is stamped on its own window with the project that
+opened it, a stamp no session carries, and only a viewer whose stamp is this project's is ever
+killed, so a close in one project never reaches another's; a window that has the transcript
+mark but never got its stamp is not a viewer to charter and simply stays.

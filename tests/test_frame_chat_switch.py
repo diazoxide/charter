@@ -580,6 +580,16 @@ class TheCheckSaysWhichRefusalFired(PersonaIso, unittest.TestCase):
         # The chat you are on is not off-server, so its row does not carry the note.
         self.assertNotEqual(rows["api.1"].note, choose.OTHER_SERVER_NOTE)
 
+    def test_a_picker_for_any_other_noun_never_scans_for_off_server_chats(self):
+        """`chats.off_server` is a `.charter/frame/` scan, and only a CHAT row reads its
+        answer — so a workspace, persona or change picker opening must not pay for it."""
+        for noun in (choose.WORKSPACE, choose.PERSONA, choose.CHANGE):
+            with self.subTest(noun=noun), \
+                    mock.patch.object(chats, "off_server",
+                                      side_effect=AssertionError("scanned")) as scan:
+                choose.roster(noun, "api.1")
+                scan.assert_not_called()
+
     def test_a_name_outside_the_alphabet_is_refused_as_a_name(self):
         out = chats.check("api.1", "api.2;kill-server")
         self.assertFalse(out.ok)
@@ -637,7 +647,8 @@ class TheCheckSaysWhichRefusalFired(PersonaIso, unittest.TestCase):
         # chat is on another server AND names the way back on — quit that frame, then charter.
         self.assertIn("on another tmux server", out.message)
         self.assertIn("charter frame-quit", out.message)
-        self.assertIn("`charter` brings its chats back", out.message)
+        self.assertIn("every chat", out.message, "quit is plane-wide, and the refusal says so")
+        self.assertIn("charter reopen", out.message)
 
     def test_a_chat_whose_server_charter_never_recorded_is_refused_too(self):
         """A missing marker resolves to `tmuxctl.LEGACY_SOCKET`, the server a chat older than

@@ -382,6 +382,23 @@ class OnItsOwnServerALiveSessionOfTheNameIsJoinedNotRefused(_OpensBeta):
         self._run_with_live_name({"alpha", "something-else"})
         self.assertEqual(len(self.launched), 1)
 
+    # The refusal is KEPT for a shared server, where the tab path cannot reach it today (the
+    # legacy socket and an operator's tmux are refused earlier). Stood up by answering "this
+    # is not the plane's own server", which is the documented condition it guards.
+
+    def test_on_a_shared_server_a_live_session_of_the_name_is_refused_as_another_planes(self):
+        with mock.patch("charter.commands_frame._is_own_plane_server", return_value=False):
+            s = self._run_with_live_name({"beta"})
+        self.assertEqual(self.launched, [], "it launched into a session it cannot prove is its own")
+        self.assertEqual(s.switched, [])
+        self.assertIn("another plane", self.said.call_args[0][1])
+
+    def test_on_a_shared_server_an_unrelated_live_session_does_not_block_the_open(self):
+        """The `in _live_sessions` half: only the workspace's OWN name blocks."""
+        with mock.patch("charter.commands_frame._is_own_plane_server", return_value=False):
+            self._run_with_live_name({"alpha", "something-else"})
+        self.assertEqual(len(self.launched), 1)
+
 
 class TheOpenStartsOnTheProfileTheOperatorIsAlreadyIn(_OpensBeta):
     """Which profile a tab opens ON — the one question a click cannot carry, and no longer

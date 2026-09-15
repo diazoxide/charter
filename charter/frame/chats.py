@@ -480,9 +480,11 @@ ONLY_CHAT = ("this workspace has one chat — open another with `charter <harnes
 #: frame-quit` typed in its project, and `charter` (or `charter reopen`) brings its chats
 #: back on this plane's own server, where this frame can reach them.
 OTHER_SERVER = ("chat '{shown}' is on another tmux server — a charter upgrade left this "
-                "frame's chats split across servers, and a client cannot move between "
-                "them. Quit that frame with `charter frame-quit` typed in its project, "
-                "then `charter` brings its chats back on this plane's own server.")
+                "project's chats split across servers, and a client cannot move between "
+                "them. `charter frame-quit`, typed in this project, records and stops "
+                "every chat of the project on every server, this one included; `charter "
+                "reopen` (or `charter`) then brings them all back on the project's own "
+                "server.")
 
 
 def off_server(fid: str) -> set[str]:

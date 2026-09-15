@@ -1291,6 +1291,17 @@ class TheChatBarReadsThePlane(PersonaIso, unittest.TestCase):
         row = _plain(slots.chats_bar("api.1", 200)[0])
         self.assertNotIn(slots._OFF_SERVER_MARK, row, f"an off-server mark with none off: {row!r}")
 
+    def test_a_read_that_raises_costs_the_strip_only_its_off_server_marks(self):
+        """This module's rule for every read on the repaint path — never raises — for the
+        off-server read: a `chats.off_server_of` that throws leaves the strip drawn with
+        every name and no mark, rather than a panel that lost its pane."""
+        _plant("api.1", workspace="api")
+        _plant("api.2", workspace="api")
+        with mock.patch("charter.frame.chats.off_server_of", side_effect=RuntimeError("no")):
+            row = _plain(slots.chats_bar("api.1", 200)[0])
+        self.assertIn("api.2", row)
+        self.assertNotIn(slots._OFF_SERVER_MARK, row)
+
 
 class TheWorkspaceBarReadsTheFrame(PersonaIso, unittest.TestCase):
     def test_it_marks_the_workspace_the_FRAME_is_on_not_this_process(self):

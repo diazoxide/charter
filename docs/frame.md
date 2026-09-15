@@ -702,9 +702,10 @@ The per-plane server upgrade can leave a frame's chats split across two servers 
 open before the upgrade stay on the legacy `charter` server, and every chat opened since is on
 this plane's own — and a client cannot move between servers. Such a tab is marked with a `~`
 where an ordinary idle tab is blank, `F2 → chat` says *on another server* on its row, and the
-refusal names the way back on: quit that frame with `charter frame-quit` typed in its project,
-and `charter` (or `charter reopen`) brings its chats back on this plane's own server, where
-this frame can reach them.
+refusal names the way back on. That way is plane-wide, and the refusal says so: `charter
+frame-quit`, typed in this project, records and stops **every** chat of the project on every
+server — the frame you are typing in included — and `charter reopen` (or `charter`) then brings
+them all back on this plane's own server, where one frame can reach every one of them.
 
 ### Where a switch says what it did
 
@@ -1364,9 +1365,12 @@ a workspace's tmux session alive with nothing charter recognises in it. On the s
 projects share — the legacy `charter` socket from before the per-plane upgrade, and a tmux you
 run yourself — a stranded viewer is left for you to close, because two projects can hold a
 chat of the same name there and charter will not close a window by a chat id that might be the
-other project's; each viewer is stamped with the project that opened it, so the sweep and the
-close only ever act on this project's own. Opening a transcript twice for one chat replaces
-the first viewer rather than stacking a second.
+other project's. Each viewer is stamped, on its own window, with the project that opened it —
+a stamp no session carries, so nothing can supply it on a window's behalf — and a close, a quit
+or the sweep kills only a viewer whose stamp is this project's: one project's close never
+reaches another's viewer. A window that has the transcript mark but never got its stamp is not
+a viewer to charter at all; it is never killed and never swept, it just stays. Opening a
+transcript twice for one chat replaces the first viewer rather than stacking a second.
 
 **`F2 → chat: close` stops one chat and marks it so nothing brings it back.** That is the
 whole difference from quit: quit records, close forgets. It exists because charter reads "no
