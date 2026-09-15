@@ -499,6 +499,33 @@ class WhatARunningPlaneRecordsIsWhatAQuitRecords(PersonaIso, unittest.TestCase):
 
         cap.assert_not_called()
 
+    def test_a_running_planes_record_is_signed_by_the_recorder_and_a_quits_by_the_quit(self):
+        """**The signature is what the hold-back reads** (ruling 46, `reopen.QUIT`'s note).
+        A quit's record names chats it has just killed, and each one's resume id is in that
+        file and nowhere else; a running plane's names chats still on screen and is rewritten
+        every quiet period. While a launch holds its restore back because a chat of this
+        plane still runs on the old shared server, `record.recording` must not put the
+        running plane over the quit's — and `writer` is the only thing that tells them apart.
+        Signed `RECORDER` both ways, the recorder would overwrite the irreplaceable one.
+        """
+        _plant("alpha.1", ws="alpha", sid="conv-1")
+
+        with mock.patch.object(commands_frame, "_chat_seats") as seats:
+            seats.return_value = _seats({"alpha.1": "@0"}, set())
+            self.assertTrue(commands_frame.record_the_plane_now("alpha.1"))
+        self.assertEqual(reopen.read().writer, reopen.RECORDER)
+
+        with mock.patch.object(commands_frame, "_chat_seats") as seats, \
+                mock.patch.object(commands_frame, "_capture_transcript",
+                                  return_value=False):
+            seats.return_value = _seats({"alpha.1": "@0"}, set())
+            self.assertEqual(
+                commands_frame._record_the_plane(
+                    leave.stopping(leave.plan(live={"alpha.1"}, focus="alpha")),
+                    focus="alpha", active=set(),
+                    windows={tmuxctl.plane_socket(): {"alpha.1": "@0"}}), 1)
+        self.assertEqual(reopen.read().writer, reopen.QUIT)
+
     def test_it_names_the_capture_a_quit_already_left_on_disk(self):
         """Not capturing is not the same as forgetting. A quit that captured and then had
         its manifest overwritten by this would lose the offer — so the field names the file
