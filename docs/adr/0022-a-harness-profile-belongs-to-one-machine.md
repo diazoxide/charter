@@ -87,6 +87,9 @@ export whatever it likes, and charter sees a program name.
 
 ## Unwired refuses to launch, built-ins included
 
+*Narrowed by the amendment of 2026-09-15 below: a launch now wires the folder itself where
+charter can do that alone, and refuses only where it cannot.*
+
 Measured on claude 2.1.268, codex-cli 0.147.0 and opencode 1.18.23, in throwaway folders with
 no login: **a harness pointed at another config folder loads none of charter's wiring.**
 Claude Code lists no charter plugin — not even "enabled but not installed" — even in a
@@ -186,8 +189,9 @@ Two refusals are worth recording with their reasons, because both look like fuss
 - **A full overlay in the local file.** An ignored file that could restate `[[forge]]` would
   move plane policy with no trace in git.
 - **A vault reference in `env`.** The value lands on the harness process either way.
-- **Setup at launch.** A click would write a plugin into a second account unasked, and Codex
-  ignores hooks nobody approved, so the click would not even work.
+- **Setup at launch.** *(Narrowed 2026-09-15 — see the amendment below.)* A click would
+  write a plugin into a second account unasked, and Codex ignores hooks nobody approved, so
+  the click would not even work.
 - **The selector before tmux, beside the workspace prompt.** A profile belongs to one chat,
   and there is no chat yet at that point.
 - **A `charter harness add` command.** Above: it cannot be approval.
@@ -227,3 +231,85 @@ Two refusals are worth recording with their reasons, because both look like fuss
   been run against it.
 - **opencode also reads `~/.opencode/` whatever `XDG_CONFIG_HOME` says** — a possible home
   for a shim that would survive a profile switch, and it is unmeasured.
+
+## Amendment, 2026-09-15: a profile that is not wired is wired, not refused, where charter can do it alone
+
+The proof run of the feature above (#1004) did what the record promised: `charter claude-alt`
+→ approved → `✗ profile 'claude-alt' is not wired — charter@charter is not installed in
+~/.claude-alt … Wire it: charter harness install claude-alt`. The operator read the fix and
+asked why charter had not run it. The answer this record gave — *a click would write a
+plugin into a second account unasked* — turned out to name the wrong hazard. The plugin is
+what makes that chat a guarded one; a click that refuses to install it protects the folder
+from the very thing the operator declared the profile to get. So the rule moved, and the
+operator chose **no question**: the approval prompt already stands for the command, and a
+second yes about the plugin would be asking permission to enforce the rule.
+
+**What a launch now does** (`wiring.wired_or_refusal`, one home for every path — before
+tmux, in the pane before its `exec`, a reopen, a handoff). Where its probe finds a *definite*
+unwired answer and the kind's install can finish on its own — Claude Code's plugin into the
+profile's config folder, opencode's shim into its config home — it runs the same install
+`charter harness install <name>` runs, says one line where that path's operator is looking
+(`✓ charter: wired 'claude-alt' — installed charter@charter into /Users/you/.claude-alt`),
+asks the harness again, remembers that fresh answer for the selector, and goes on. The
+install happens at the first of a start's two probes, so the second finds the folder wired.
+The selector draws such a profile as a row that starts, `not wired yet — Enter installs
+charter@charter into …`; `charter doctor` still only probes, and its hint says the next launch
+installs it.
+
+**How this narrows #857's rule rather than breaking it.** That rule is *installing software
+because some unrelated command ran* — `charter workspace list` must not install a plugin.
+The launch of `claude-alt` is the related command: the plugin goes into the folder that
+profile names and no other, for the chat that profile is about to start, after the operator
+approved that profile's command, and it is said in one line. Nothing about an unrelated
+command changed.
+
+**What still refuses, and why each line is where it is.**
+
+- **An unknown answer** — a probe that timed out, exited non-zero or would not parse. Not
+  installed over: "charter could not look" is not "charter looked and the guard is absent",
+  and installing over an unknown state is how a second copy appears (ADR 0009, ruling 12).
+- **A profile charter may not act for** — not yet approved, or in a `charter.local.toml` git
+  would commit. The probe gate stays first and untouched: nothing is asked or written.
+- **An install that failed** — any step that did not report a write. The refusal names what
+  the install said, then `charter harness install <name>`, which prints the whole of it.
+  Nothing is remembered as wired on a guess; what the cache gets is the second probe's answer.
+- **A fix that is not the install** — a plugin installed and disabled, a foreign file in
+  opencode's realm. The install would answer *present* and change nothing (review 7's loop),
+  so the launch refuses with the fix that does.
+- **Codex, by construction.** Its hook trust is granted only inside a Codex session. Charter
+  writes its half — the `shell_environment_policy` line — and the launch stops with Codex's
+  own steps, as `charter harness install codex` ends. The selector's row stays refused.
+
+**Measured before it was built** (2026-09-15, claude 2.1.272, opencode 1.18.23, throwaway
+folders and cwd, two runs). `claude plugin marketplace add` into an empty
+`CLAUDE_CONFIG_DIR` took 7 s and 18 s — a git clone of charter's repository from GitHub, so
+it needs the network and is paced by it, and no login: the folder held no
+`.credentials.json` and no account in its `.claude.json`, and no API key was in the
+environment — and `plugin install` 0.8 s and 1.3 s; a repeat `install` answered "already
+installed" in 0.5 s, and the probe after it took 150 ms. Run twice at once against one empty
+folder (two `add` + `install` sequences from two threads), both sequences exited 0, one
+installed and the other found it present, `installed_plugins.json` and
+`known_marketplaces.json` each parsed with one entry, and the probe saw one enabled entry.
+A clean sample and one sample, so a **lock** under `.charter/` (`flock`, keyed by the
+profile as approved) makes it the rule: the second launch waits, then finds the first one's
+work in place and says that rather than *installed*. The opencode shim is four files
+(8 KB, `plugin/charter.ts` the bulk of it) written in 35 ms with nothing spawned;
+opencode's own first `debug config` in a fresh config home took 8 s (it installs its
+dependencies into it), then 450 ms.
+
+**What this costs, stated.**
+
+- A launch is now a writer into a second account's config folder. Bounded by the five
+  refusals above, by the approval prompt in front of it, and by the one line it says; but a
+  chat can write `charter.local.toml`, and a profile it declares and the operator approves
+  will have the plugin installed into whatever folder its `env` names on the next launch.
+  That is the approval's meaning, applied — and the reason the prompt shows the environment.
+- The install waits on the network. The first `charter claude-alt` on a machine pays the
+  clone (7-18 s measured), and `charter reopen` of an unwired chat pays it before that chat
+  comes back. A launch with no network refuses, naming what `claude` said.
+- The line for `charter <profile>` typed at a terminal lands on stderr just before tmux
+  covers the screen, so it is read when the frame exits. Every other path — the pane,
+  `--no-frame`, a handoff's tool output, `charter reopen`'s report — shows it at once.
+- `wiring.refusal`, the probe-only sentence, is gone: a caller that must never install has
+  `wiring.detect` and `wiring.sentence`, which is what `charter harness install` and `doctor`
+  already use.

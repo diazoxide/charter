@@ -51,7 +51,7 @@ from tests.test_a_workspace_tab_opens_what_it_names import _a_chat, _OpensBeta, 
 
 #: Ruling 10, and the reason is inherited with the fixture: `ALaunchThatAttachesClearsTheMark`
 #: re-runs `TheLaunchOpensWithoutMovingAnyone`'s real `_launch`, whose own module stands in
-#: `wiring.refusal` — but a module fixture belongs to the module that runs it, so here the
+#: `wiring.wired_or_refusal` — but a module fixture belongs to the module that runs it, so here the
 #: suite's `claude` guard read every one of those launches as "could not tell" and refused
 #: it. No test in this module is about wiring.
 _WIRED = None

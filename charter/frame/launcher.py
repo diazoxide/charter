@@ -311,6 +311,16 @@ def refusal(p: profiles.Profile, *, root: Path, attended: bool,
     never reads `wiring.cached`, because that file is as writable by a chat as
     `charter.local.toml` is (ruling 21).
 
+    **And a definite unwired answer is wired here, not refused** (ruling 47): the probe is
+    `wiring.wired_or_refusal`, which runs the same install `charter harness install` runs
+    where the kind's install can finish on its own, asks again and comes back with nothing
+    to refuse — and with one line, said on this process's stderr (:func:`say_wired`), about
+    what went into which folder. That is the pane's own screen before the harness takes it,
+    the terminal for `--no-frame`, a handoff's tool output, and for `charter <profile>`
+    the terminal the frame is about to cover. The install happens at the FIRST probe that
+    sees UNWIRED, whichever path that is, so the second of A3's two probes finds it wired.
+    An UNKNOWN, a failed install and Codex still refuse with `KIND_WIRING`.
+
     *probe* ``False`` leaves the wiring link off, and exactly one caller passes it:
     `commands_frame._launch` for an open whose caller has just asked this whole chain for
     itself — a `+`, a tab, a reopen, a handoff — so that a start pays the probe twice (once
@@ -342,10 +352,19 @@ def refusal(p: profiles.Profile, *, root: Path, attended: bool,
     # plane's into `workspaces/<ws>/`. A caller that knows the workspace says so; the
     # launcher in the pane, and `_launch` before tmux, are already standing there, which is
     # what `Path.cwd()` means here.
-    why = wiring.refusal(p, cwd=Path.cwd() if cwd is None else cwd)
-    if why:
-        return Refusal(KIND_WIRING, why, REFUSED_EXIT)
+    answer = wiring.wired_or_refusal(p, cwd=Path.cwd() if cwd is None else cwd, root=root)
+    if answer.wired:
+        say_wired(answer.wired)
+    if answer.refusal:
+        return Refusal(KIND_WIRING, answer.refusal, REFUSED_EXIT)
     return None
+
+
+def say_wired(line: str) -> None:
+    """Say that a launch just wired a profile — `wiring.WIRED_NOW`'s line, on charter's own
+    terms. One home, because it is the one thing a launch prints that is not a refusal and
+    every path that installs has to say it the same way (ruling 47)."""
+    util.ok(f"charter: {line}")
 
 
 def _approval_refusal(p: profiles.Profile, *, attended: bool) -> Refusal | None:

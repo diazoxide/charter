@@ -11252,13 +11252,19 @@ def _reopen_one(c, *, quiet: bool = False) -> "Reopening | None":
     # **Unwired, by name, for the approval check's reason** (ruling 10): without this the
     # chat is started, its launcher refuses in a pane nobody is at, and the operator reads
     # "did not come back (launcher returned 3)". Asked of the directory the chat comes back
-    # in, which is what Claude Code resolves `enabled` at. It stays in the manifest, so
-    # wiring the profile and running `charter reopen` again brings it back.
+    # in, which is what Claude Code resolves `enabled` at. **Wired here where charter can**
+    # (ruling 47): this is the first probe of the reopen, so it is the one that installs,
+    # and the line about it is reported here, where a reopen says everything else — the
+    # pane's own probe then finds the folder wired. What charter could not wire stays in the
+    # manifest, so wiring it and running `charter reopen` again brings it back.
     from . import wiring
 
-    unwired = wiring.refusal(p, cwd=where)
-    if unwired:
-        _report(quiet, util.warn, f"charter reopen: {c.chat} is not reopened — {unwired}")
+    answer = wiring.wired_or_refusal(p, cwd=where, root=config.ROOT)
+    if answer.wired:
+        _report(quiet, util.ok, f"charter reopen: {answer.wired}")
+    if answer.refusal:
+        _report(quiet, util.warn,
+                f"charter reopen: {c.chat} is not reopened — {answer.refusal}")
         return None
     if not _same_directory(where, c.cwd):
         # "its workspace directory" is a claim, so it is only made where it is true: the

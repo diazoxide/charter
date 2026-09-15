@@ -13,10 +13,17 @@ against claude 2.1.269, codex-cli 0.147.0 and opencode 1.18.23, in throwaway fol
   shells get no `$CHARTER_HARNESS`.
 
 So a chat started on such a profile *looks* guarded and is not, which is the failure this
-module exists to stop. A profile that is not wired refuses to launch and prints the fix —
-**built-ins included** (ruling 10): `charter codex` on a plane where nobody wired Codex now
-refuses where it used to start, because a chat that looks guarded and is not is the same
-failure whichever profile started it.
+module exists to stop. **A profile that is not wired is wired, not refused, where charter
+can do it alone** (ruling 47): a launch that finds a DEFINITE unwired answer runs the same
+install `charter harness install <name>` runs, says in one line what it installed where,
+asks again, and goes on (:func:`wired_or_refusal`). Where charter cannot — an UNKNOWN, a
+profile it may not act for, an install that failed, and Codex, whose hook trust only a
+person inside a Codex session can grant — it refuses and prints the fix, **built-ins
+included** (ruling 10): `charter codex` on a plane where nobody wired Codex refuses where it
+used to start, because a chat that looks guarded and is not is the same failure whichever
+profile started it. That narrows #857's rule ("installing software because some unrelated
+command ran") rather than breaking it: the launch of that very harness is the related
+command, and the line says so where the operator is looking.
 
 **Wiring is detected by ASKING the harness under the profile's own environment**, never by
 reading the profile's variable names. One account can be reached through variables that do
@@ -41,7 +48,7 @@ session start, and that mode builds no profile row and calls nothing here.
 **A launch never trusts the cache** (review B2, ruling 21). :func:`cached` is for the
 selector's rows and nothing else: the file sits under `.charter/`, which no path guard
 covers (ADR 0014 — a path pattern is host policy), so a chat can write it, compute its key,
-and date an entry ahead. :func:`refusal` always probes.
+and date an entry ahead. :func:`wired_or_refusal` always probes.
 
 **What a :class:`Wiring` carries is escaped and never clipped.** Every surface that shows
 one bounds it its own way (ruling 45): a refusal sentence with a fixed marker, a `doctor`
@@ -50,6 +57,7 @@ row by saying how much it hid — and a row cannot count what was already cut be
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -122,6 +130,31 @@ NOT_WIRED = ("profile '{name}' is not wired — {detail}, so a chat on it would 
 CANNOT_TELL = ("charter could not ask {kind} whether profile '{name}' is wired ({detail}), "
                "so it will not start it unguarded. Nothing was started. Run "
                "charter harness install {name}, or check by hand: {probe}")
+#: The launch tried the install and a step of it did not do what it does (ruling 47). It
+#: names what the install said, because that is the one thing `charter harness install`
+#: run by hand would add — and then names that command, which prints the whole of it.
+COULD_NOT_WIRE = ("profile '{name}' is not wired, and charter could not wire it — {said}. "
+                  "Nothing was started. Wire it by hand: {fix}")
+
+#: The one line a launch says when it wired a profile (ruling 47; no "charter:" prefix,
+#: each caller's own). Software went into somebody's folder, so it says what and where;
+#: and a launch whose own install found the work already done says THAT, because two
+#: launches of one unwired profile at once are serialised (:func:`_serialised`) and the
+#: second one installed nothing.
+WIRED_NOW = "wired '{name}' — installed {what}"
+WIRED_FOUND = "wired '{name}' — {what} was already in place"
+
+#: `doctor`'s hint on a row the next launch will wire: the fix first, because a clipped
+#: row keeps its head (ruling 45), then the fact that pressing Enter is also the fix.
+NEXT_LAUNCH_WIRES = "{fix} — or start it: the next launch installs {what} itself"
+
+#: The install statuses that are charter reporting what it DID. Everything else —
+#: `unvouched`, `unavailable`, `unknown`, `failed`, `refused`, `malformed`, `doubled`, and
+#: any status a harness adds later — is a fault a launch refuses on (ruling 47) and `init`
+#: warns about (`commands._WIRED_NOTES`, pinned equal). Listed this way round so a new
+#: status fails loud rather than quiet. :data:`WROTE` is the half that changed a file.
+WROTE = frozenset({"created", "installed", "refreshed", "added"})
+DID = WROTE | {"present", "current"}
 
 CODEX_POLICY_BY_HAND = (
     "{path} already has a [shell_environment_policy] table without charter's line, and "
@@ -151,6 +184,18 @@ class Wiring(NamedTuple):
     detail: str
     #: The command that would fix it; ``""`` when wired. Escaped, never clipped.
     fix: str
+
+
+class Answer(NamedTuple):
+    """What a launch is told by :func:`wired_or_refusal`: whether it may go on, and what
+    charter installed on the way — two fields, because "it may start" and "software went
+    into a folder" are both things the operator is owed a sentence about."""
+
+    #: Why the profile may not start, or ``""`` when it may.
+    refusal: str
+    #: :data:`WIRED_NOW` or :data:`WIRED_FOUND` when this call wired the profile; ``""``
+    #: when it had nothing to install — which is every launch of a wired profile.
+    wired: str
 
 
 def _whole(value) -> str:
@@ -299,19 +344,84 @@ def _asked(p: profiles.Profile, *, cwd) -> Wiring:
                       f"({_whole(e)})", _install_fix(p))
 
 
-def refusal(p: profiles.Profile, *, cwd) -> str:
-    """Why *p* may not start, or ``""``. Always a fresh probe (review B2).
+def wired_or_refusal(p: profiles.Profile, *, cwd, root: Path) -> Answer:
+    """Wire *p* if charter can, then answer: why *p* may not start, or that it may — and
+    what was installed on the way. **The one home for every launch path** (ruling 47): the
+    check before tmux, the pane before its `exec`, a reopen, a handoff. One function, so no
+    path wires and another refuses over the same folder.
 
-    An UNKNOWN refuses with its own sentence (ruling 12) rather than sharing the unwired
-    one: "charter looked and the guard is absent" and "charter could not look" are
-    different things to be told, and only one of them has `charter harness install` as its
-    whole answer. A profile charter may not ask about at all is told why in the launcher's
-    and Task 3's own words, and nothing else.
+    Always a fresh probe (review B2), and the gate first: a profile charter may not run a
+    command for (:func:`_not_asked`) is told why in the launcher's and Task 3's own words,
+    and nothing is asked or written for it. Then:
+
+    * **WIRED** — nothing to say, ``Answer("", "")``.
+    * **UNKNOWN** — refused with its own sentence (ruling 12), and **never installed
+      over**: "charter could not look" is not "charter looked and the guard is absent", and
+      installing over an unknown state is how a second copy appears (`plugincache.install`
+      keeps the same rule for `init`).
+    * **UNWIRED** — the kind's own wire runs (:func:`_wire`, what `charter harness install`
+      runs), one launch at a time per profile (:func:`_serialised`), and the folder is asked
+      again. Wired now: the fresh answer is remembered for the selector's next paint and the
+      launch goes on, with one line about what went where. Still not: a refusal — naming
+      what the install said where a step of it faulted (:data:`COULD_NOT_WIRE`), else the
+      fresh probe's own sentence, which for Codex is Codex's own steps. **Never remembered
+      as wired on a guess**: what is remembered is what the second probe said.
+
+    A3 holds — a start pays two probes — because the install happens at the FIRST probe
+    that sees UNWIRED, and the second finds the folder wired. Codex is the exception by
+    construction: charter writes its part and the second probe still says unwired, because
+    hook trust is granted only inside a Codex session.
     """
     why, _fix = _not_asked(p)
     if why:
-        return why
-    return sentence(p, _asked(p, cwd=cwd))
+        return Answer(why, "")
+    w = _asked(p, cwd=cwd)
+    if w.state != UNWIRED:
+        return Answer(sentence(p, w), "")
+    # UNWIRED is a kind's own answer, so the kind is in the table: an unknown kind is an
+    # UNKNOWN (`_asked`) and returned above.
+    kind = _KINDS[p.harness]
+    with _serialised(p):
+        did = _wire(p, root)
+        again = _asked(p, cwd=cwd)
+    remember(p, cwd=cwd, w=again)
+    name = contain.readable(p.name)
+    if again.state == WIRED:
+        what = kind.installs(environment(p))
+        line = WIRED_NOW if any(status in WROTE for status, _d in did) else WIRED_FOUND
+        return Answer("", line.format(name=name, what=what))
+    faults = [f"{status}: {detail}" for status, detail in did if status not in DID]
+    if faults:
+        return Answer(COULD_NOT_WIRE.format(name=name, said=said("; ".join(faults)),
+                                            fix=said(again.fix or _install_fix(p))), "")
+    return Answer(sentence(p, again), "")
+
+
+def would_install(p: profiles.Profile, w: Wiring) -> str:
+    """What a launch of *p* would install for the answer *w* — `charter@charter into
+    <folder>` — or ``""`` for an answer a launch would not install over.
+
+    The selector's word for a row that starts rather than refuses, and `doctor`'s for a
+    hint that says the next launch is also the fix. Three things have to hold, and each is
+    a case that stays refused without it: the answer is a definite UNWIRED; the kind's
+    wire can finish on its own (Codex's cannot — trust is a person's, inside a session);
+    and the fix charter named IS the install, because for a plugin that is installed and
+    disabled, or a foreign file in opencode's realm, the install answers `present` and
+    changes nothing (review 7's loop), so the row keeps the sentence with the fix that does.
+    """
+    kind = _KINDS.get(p.harness)
+    if (kind is None or not kind.automatic or w.state != UNWIRED
+            or w.fix != _install_fix(p)):
+        return ""
+    return kind.installs(environment(p))
+
+
+def hint(p: profiles.Profile, w: Wiring) -> str:
+    """*w*'s fix for a `doctor` row — with the fact that the next launch installs it too,
+    where that is true (:func:`would_install`). `doctor` itself probes and never installs
+    (ruling 11), so the sentence is about the launch and not about the row."""
+    what = would_install(p, w)
+    return NEXT_LAUNCH_WIRES.format(fix=w.fix, what=what) if what else w.fix
 
 
 def sentence(p: profiles.Profile, w: Wiring) -> str:
@@ -805,6 +915,13 @@ def install(p: profiles.Profile, root: Path) -> list[tuple[str, str]]:
     why, _fix = _not_asked(p)
     if why:
         return [("refused", why)]
+    return _wire(p, root)
+
+
+def _wire(p: profiles.Profile, root: Path) -> list[tuple[str, str]]:
+    """:func:`install` past its gate: the kind's own wire, and nothing that raises. The
+    one thing a launch that found a definite UNWIRED runs (:func:`wired_or_refusal`), so
+    `charter harness install` and the launch cannot install two different ways."""
     kind = _KINDS.get(p.harness)
     if kind is None:
         return [("unavailable", f"charter has no wiring for {_whole(p.kind)}")]
@@ -816,6 +933,35 @@ def install(p: profiles.Profile, root: Path) -> list[tuple[str, str]]:
     except ValueError as e:
         return [("failed", f"charter could not wire under this profile's environment "
                            f"({_whole(e)})")]
+
+
+@contextlib.contextmanager
+def _serialised(p: profiles.Profile):
+    """One launch installs into *p*'s folder at a time.
+
+    Measured 2026-09-15 (claude 2.1.272, two `marketplace add` + `plugin install` sequences
+    at once into one empty `CLAUDE_CONFIG_DIR`): both exited 0, one installed and the other
+    answered "already installed", and both manifests parsed with one entry — a clean sample,
+    and one sample. The lock is what makes it the rule: a second launch of the same unwired
+    profile waits here, and its own install then finds the first one's work in place
+    (:data:`WIRED_FOUND`) instead of racing a clone of 7-18 seconds into the same folder.
+
+    `flock`, under `.charter/`, keyed by the profile as approved — two launches of one
+    profile on one plane share it; closing the file releases it. **Best effort**, like the
+    cache beside it: a state directory charter cannot write is a launch that installs
+    unserialised, not one that refuses over a lock file.
+    """
+    import fcntl
+    from . import profiletrust
+
+    digest = hashlib.sha256(json.dumps({**profiletrust.fingerprint(p), "name": p.name},
+                                       sort_keys=True).encode()).hexdigest()[:16]
+    lock = Path(config.STATE_DIR) / "locks" / f"harness-wiring-{digest}.lock"
+    with contextlib.ExitStack() as stack:
+        with contextlib.suppress(OSError):
+            config.private_mkdir(lock.parent)
+            fcntl.flock(stack.enter_context(config.open_for(lock, "w")), fcntl.LOCK_EX)
+        yield
 
 
 def _claude_wire(p: profiles.Profile, root: Path, env: dict) -> list[tuple[str, str]]:
@@ -830,6 +976,24 @@ def _opencode_wire(p: profiles.Profile, root: Path, env: dict) -> list[tuple[str
     return opencode.OpenCodeHarness().wire(root, env=env)
 
 
+# What each kind's wire puts where — the object of "installed …" in the launch's one line,
+# of "Enter installs …" on a selector row and of `doctor`'s hint. Each folder is contained:
+# it is built out of the profile's own `env` (ruling 35).
+
+
+def _claude_installs(env: Mapping[str, str]) -> str:
+    return f"{plugincache.PLUGIN_ID} into {_whole(claude_code.config_home(env))}"
+
+
+def _codex_installs(env: Mapping[str, str]) -> str:
+    return (f"charter's line (CHARTER_HARNESS = \"{codex.NAME}\") into "
+            f"{_whole(codex.config_path(env))}")
+
+
+def _opencode_installs(env: Mapping[str, str]) -> str:
+    return f"charter's shim {opencode.SHIM_PATH} into {_whole(opencode.global_dir(env))}"
+
+
 class _Kind(NamedTuple):
     """Everything this module knows about one harness kind, in one row (C: one table in
     place of four `p.harness ==` ladders, which had to agree and were free not to)."""
@@ -842,13 +1006,20 @@ class _Kind(NamedTuple):
     stamped: Callable[[Mapping[str, str], Path], list[Path]]
     #: ``(profile, root, env) -> (status, label) pairs``.
     wire: Callable[[profiles.Profile, Path, dict], list[tuple[str, str]]]
+    #: ``env -> "what into where"``: what :attr:`wire` puts in the folder *env* names.
+    installs: Callable[[Mapping[str, str]], str]
+    #: Can :attr:`wire` finish on its own, so that a launch wires rather than refuses
+    #: (ruling 47)? False for Codex: its hook trust is granted only inside a Codex session,
+    #: so charter writes its part and the launch still stops with Codex's own steps.
+    automatic: bool
 
 
 _KINDS: dict[str, _Kind] = {
     claude_code.NAME: _Kind(("plugin", "list", "--json"), _claude, _claude_stamps,
-                            _claude_wire),
-    codex.NAME: _Kind((), _codex, _codex_stamps, _codex_wire),
-    opencode.NAME: _Kind(("debug", "config"), _opencode, _opencode_stamps, _opencode_wire),
+                            _claude_wire, _claude_installs, True),
+    codex.NAME: _Kind((), _codex, _codex_stamps, _codex_wire, _codex_installs, False),
+    opencode.NAME: _Kind(("debug", "config"), _opencode, _opencode_stamps, _opencode_wire,
+                         _opencode_installs, True),
 }
 
 

@@ -89,9 +89,9 @@ three. The program charter looks for before it starts anything is the wrapper �
 **The wrapper has to pass its arguments on**, and not only yours: charter asks the harness
 whether its plugin is wired by running the profile's own command with the harness's probe
 after it — `plugin list --json` for Claude Code, `debug config` for opencode (see *Per
-profile — wired, or it refuses to start*, below) — so `ccs work plugin list --json` has to
-reach `claude`. A wrapper that swallows arguments reads as a profile charter could not ask,
-and it refuses to start.
+profile — wired automatically, or it refuses*, below) — so `ccs work plugin list --json` has
+to reach `claude`. A wrapper that swallows arguments reads as a profile charter could not
+ask, and it refuses to start.
 
 **There is no `charter harness add`.** A profile is added by editing `charter.local.toml`. A
 chat can run a command as easily as it can edit a file, so a command could never stand for
@@ -138,11 +138,15 @@ charter can install for you: Claude Code's charter plugin, at `project` scope, f
 it is creating. Codex is the exception (below) — its wiring is machine-global, so it waits
 to be asked by name.
 
-**`init` and `charter doctor --fix`, and nothing else.** Installation never happens as a
-side effect of an ordinary command: `charter workspace list` does not install software, and
-`charter reinit` — which re-runs the *wiring* — does not either. Both doors are commands
-somebody typed, which is the same shape `charter harness install codex` has and the same
-reason charter refuses to write `~/.claude/settings.json` unasked.
+**`init`, `charter doctor --fix`, `charter harness install` — and the launch of the very
+harness the install is for.** Installation never happens as a side effect of an *unrelated*
+command: `charter workspace list` does not install software, and `charter reinit` — which
+re-runs the *wiring* — does not either. The first three doors are commands somebody typed,
+which is the same shape `charter harness install codex` has and the same reason charter
+refuses to write `~/.claude/settings.json` unasked. The fourth is `charter claude-alt` finding
+that `~/.claude-alt` has no charter plugin: the plugin is what makes that chat a guarded one,
+so the launch installs it, says so, and only then starts (*Per profile — wired automatically,
+or it refuses*, below).
 
 **Plus one generated file per workspace, and only for Claude Code.** Claude Code reads
 project settings from the session's working directory and does not walk up, so a chat
@@ -223,7 +227,7 @@ is **capability** — agents, skills, commands — and three things are delibera
 - **`CLAUDE.md` or any equivalent**, because a guest hides its own files and does not
   narrate the host's.
 
-### Per profile — wired, or it refuses to start
+### Per profile — wired automatically, or it refuses
 
 A profile points a harness at another config folder, and **every kind loses charter's wiring
 when its folder moves**. Measured in throwaway folders against claude 2.1.269, codex-cli
@@ -232,17 +236,64 @@ merely disabled, it is unknown to that folder, because the marketplace is known 
 folder it was added in. Under an empty `$CODEX_HOME` there is no plugin, no hook trust and
 no `shell_environment_policy`. Under a throwaway `$XDG_CONFIG_HOME` opencode has no shim.
 
-So a chat started on such a profile would look guarded and not be, and charter refuses it:
+So a chat started on such a profile would look guarded and not be. **Where charter can wire
+the folder by itself, the launch does it** rather than refusing: a Claude Code profile gets
+charter's plugin installed into its config folder — the same `claude plugin marketplace add`
+and `claude plugin install charter@charter --scope project` that `charter harness install
+<name>` runs — and an opencode profile gets the shim written into its config home. One line
+says so, where you are looking — the pane, before the harness takes it; the terminal, for
+`--no-frame`; the tool output, for a handoff; `charter reopen`'s own report:
 
 ```
-charter: profile 'claude-alt' is not wired — charter@charter is not installed in
-/Users/you/.claude-alt for /plane/workspaces/w, so a chat on it would run without charter's
-guard. Nothing was started. Wire it: charter harness install claude-alt
+✓ charter: wired 'claude-alt' — installed charter@charter into /Users/you/.claude-alt
 ```
 
-**This includes the built-ins.** `charter codex` on a plane where nobody wired Codex, and
-`charter opencode` where `init` never wrote the shim, now refuse where they used to start:
-a chat that looks guarded and is not is the same failure whichever profile started it. No
+Then charter asks the harness again, and only a folder that now answers *wired* starts a
+chat. It is the launch of that very harness that installs, which is what keeps the standing
+rule — nothing installs software as a side effect of an unrelated command — intact: the
+command is `charter claude-alt`, and the plugin is what makes `claude-alt` a guarded chat.
+There is no question in between; the one that stands for your approval of the profile's
+command (`run this? [y/N]`) has already been answered, or the launch never got this far.
+
+**What it costs.** Measured 2026-09-15 with claude 2.1.272 against an empty folder, twice:
+`marketplace add` 7 s and 18 s — it clones charter's repository from GitHub, so it needs the
+network and is paced by it, and no login (the folder held no credentials and no account,
+and the environment carried no API key) — and `plugin install` 0.8 s and 1.3 s; a second
+launch pays nothing, because its probe (150 ms) finds the folder wired. The opencode shim is
+four files written in 35 ms with nothing spawned; opencode's own first `debug config` in a
+fresh config home took 8 s (it installs its dependencies there), then 450 ms. Two launches
+of one unwired profile at once are serialised with a lock under `.charter/`: the second
+waits, then finds the first one's work in place and says that instead of *installed*.
+
+**What still refuses**, each with the fix in the same sentence:
+
+- **Codex — by construction.** Charter writes its half, the `shell_environment_policy` line,
+  into `$CODEX_HOME/config.toml`; the plugin install and the hook approval are Codex's own
+  commands and a prompt only a person inside a Codex session can answer, so the launch stops
+  and prints them with `CODEX_HOME=` in front, exactly as `charter harness install codex`
+  ends. The selector's row for such a profile stays refused with those steps.
+- **A folder charter could not ask** — a probe that timed out, exited non-zero or answered
+  something unparseable. An unknown is not a pass, and it is not installed over either:
+  installing over an unknown state is how a second copy appears.
+- **A profile charter may not run a command for** — not approved yet, or in a
+  `charter.local.toml` git would commit. Nothing is probed and nothing is written.
+- **An install that failed** — no network, a `claude` that refused a step. The refusal names
+  what the install said, and `charter harness install <name>` prints the whole of it:
+
+  ```
+  charter: profile 'claude-alt' is not wired, and charter could not wire it — failed: `claude
+  plugin install charter@charter --scope project -y` failed: <what claude said>. Nothing was
+  started. Wire it by hand: charter harness install claude-alt
+  ```
+
+- **A fix that is not the install** — the plugin is installed and disabled, or another file
+  shares opencode's plugin realm. The install would find its work present and change nothing,
+  so the launch refuses with the fix that does: the `claude plugin enable` below, or moving
+  the file.
+
+**This includes the built-ins.** `charter codex` on a plane where nobody wired Codex refuses
+with Codex's steps; `charter opencode` where `init` never wrote the shim writes it and starts.
+A chat that looks guarded and is not is the same failure whichever profile started it, and no
 flag launches one unguarded.
 
 **Wiring is detected by asking the harness under the profile's own environment**, never
@@ -261,6 +312,8 @@ and 178 ms against a full one; `opencode debug config` 631 ms and 718 ms; Codex 
 file. A launch pays it twice — once before tmux and once in the pane — and always freshly.
 The `+`, a workspace tab, `charter reopen` and a handoff ask before they open anything, so
 their refusal has somewhere to be said, and the pane asks again; nothing in between does.
+The install happens at whichever of the two first finds the folder unwired — the opener's —
+and the pane's then finds it wired, so a start still pays two probes and one install.
 
 **Nothing is asked of a profile charter may not run.** A probe runs the profile's own
 command, so it waits for the same two things a launch does: git would not commit
@@ -299,7 +352,17 @@ Three details that decide answers, all measured on 2026-09-12:
 unparseable — is also a refusal, with the probe to run by hand printed beside it. An unknown
 is not a pass.
 
-**What each command does per profile:**
+**What each surface does per profile:**
+
+- The **profile selector** lists a Claude Code or opencode profile whose folder lacks the
+  plugin as a row that starts, reading `not wired yet — Enter installs charter@charter into
+  /Users/you/.claude-alt`; Enter runs the launch, and the launch installs. A row charter
+  cannot wire alone — Codex without trust, a disabled plugin, a folder it could not ask —
+  stays refused with the sentence above.
+- The **launch** — `charter <profile>`, the pane, `--no-frame`, `charter reopen`, a handoff —
+  installs at its first probe and says the one line where that path's operator is looking.
+  For `charter <profile>` typed at a terminal that line lands just before the frame covers the
+  screen, and is there when the frame exits.
 
 - `charter init` installs for every approved Claude Code and opencode profile, the same two
   doors an install may come through. A Codex profile is reported as opt-in.
@@ -313,7 +376,9 @@ is not a pass.
   whether that worked — and exits non-zero when it did
   not, which is the ordinary outcome for Codex, whose plugin install and hook approval are
   Codex's own commands. Charter prints them with `CODEX_HOME=` in front.
-- `charter doctor` shows a row per profile and probes them concurrently.
+- `charter doctor` shows a row per profile and probes them concurrently; it never installs.
+  Its hint on an unwired Claude Code or opencode profile names `charter harness install
+  <name>` and adds that the next launch installs it itself.
   `charter doctor --preflight`, which the SessionStart hook runs, probes nothing and shows
   no profile row: a probe costs a subprocess and writes into somebody's account folder, and
   a hook's whole budget is 20 seconds.

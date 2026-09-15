@@ -693,33 +693,47 @@ profile this machine has.
 ### The profile is wired
 
 Charter's guard lives in the harness's own config folder, and a profile names another one.
-**A profile whose folder does not carry charter's wiring refuses to launch**, prints what is
-missing and names the command that fixes it. Asking runs the profile's own command, so it
-is asked only once you have approved that command — a new `claude-alt` shows
-`run this? [y/N]` first, and a yes is followed by this, not by a chat:
+**A profile whose folder does not carry charter's wiring is wired by the launch where
+charter can do that alone, and refuses to start where it cannot.** Asking runs the
+profile's own command, so it is asked only once you have approved that command — a new
+`claude-alt` shows `run this? [y/N]` first. A yes is followed by one line and then the chat:
 
 ```
-charter: profile 'claude-alt' is not wired — charter@charter is not installed in
-/Users/you/.claude-alt for /plane/workspaces/w, so a chat on it would run without charter's
-guard. Nothing was started. Wire it: charter harness install claude-alt
+✓ charter: wired 'claude-alt' — installed charter@charter into /Users/you/.claude-alt
+```
+
+That is the same install `charter harness install claude-alt` runs, into the folder the
+profile names and no other, and charter asks the harness again before it starts anything:
+only a folder that now answers *wired* gets a chat. An opencode profile gets its shim the
+same way. **Codex does not** — its hooks are trusted only inside a Codex session — so
+charter writes its half of the wiring and the launch stops with Codex's own steps:
+
+```
+charter: profile 'codex-alt' is not wired — /Users/you/.codex-alt/config.toml: charter@charter
+is not an enabled plugin; no copy of charter@charter under … places charter's guard hook, so
+there is no guard to trust, so a chat on it would run without charter's guard. Nothing was
+started. Wire it: CODEX_HOME=/Users/you/.codex-alt codex plugin marketplace add …
 ```
 
 **No flag launches one unguarded**, and the rule covers the built-ins: `charter codex` on a
-plane where nobody wired Codex, and `charter opencode` where `init` never wrote the shim,
-refuse the same way. A chat that looks guarded and is not is the same failure whichever
-profile started it.
+plane where nobody wired Codex refuses this way, and `charter opencode` where `init` never
+wrote the shim writes it and starts. A chat that looks guarded and is not is the same
+failure whichever profile started it.
 
 A probe that cannot answer — it timed out, exited non-zero, or said something charter could
-not read — refuses too, and prints the probe to run by hand. An unknown is not a pass.
+not read — refuses, prints the probe to run by hand, and installs nothing over the doubt. An
+unknown is not a pass. An install that fails refuses too, naming what the install said, and
+so does a folder whose fix is not the install (a plugin installed and disabled).
 
 Every launch asks freshly, before tmux and again in the pane — a `+`, a tab, `charter
-reopen` and a handoff ask before they open anything, and the pane asks again. It never
-reads the remembered answer under `.charter/`: that file is as writable by a chat as
-`charter.local.toml` is, and it exists to draw rows, not to start chats.
+reopen` and a handoff ask before they open anything, and the pane asks again. The install
+happens at the first of those that finds the folder unwired, and the second finds it wired.
+A launch never reads the remembered answer under `.charter/`: that file is as writable by a
+chat as `charter.local.toml` is, and it exists to draw rows, not to start chats.
 
-What "wired" means per kind, what each of `init`, `reinit` and `charter harness install`
-does about it, and the measured cost of each probe are in
-[harnesses.md](harnesses.md#per-profile--wired-or-it-refuses-to-start).
+What "wired" means per kind, what the launch, `init`, `reinit`, `charter harness install`
+and the selector each do about it, and the measured cost of each probe and of the install
+are in [harnesses.md](harnesses.md#per-profile--wired-automatically-or-it-refuses).
 
 ### `default` — bare `charter`
 

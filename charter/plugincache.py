@@ -365,10 +365,13 @@ def install(project, scope: str = INSTALL_SCOPE, *, env: dict | None = None,
       this is for, and installing over an unknown state is how a second copy appears.
     * ``failed`` — a step ran and did not succeed.
 
-    **Only ever called from a command a person typed** — `charter init` and `charter doctor
-    --fix`. Nothing here may be reached as a side effect of `charter workspace list`:
-    installing software because some unrelated command ran is #857's surprise, and the same
-    reason charter refuses to write `~/.claude/settings.json` unasked.
+    **Only ever called for the thing it installs for** — `charter init`, `charter doctor
+    --fix` and `charter harness install`, each a command a person typed, and since ruling 47
+    the launch of a profile whose own config folder lacks the plugin
+    (`wiring.wired_or_refusal`), where the plugin is what makes that chat a guarded one.
+    Nothing here may be reached as a side effect of `charter workspace list`: installing
+    software because some UNRELATED command ran is #857's surprise, and the same reason
+    charter refuses to write `~/.claude/settings.json` unasked.
     """
     # The PATH the steps below will run under, as `_claude_json` asks it (A2): a profile
     # whose program lives only on its own `PATH` is installed for, not called unavailable.
