@@ -1,4 +1,5 @@
-"""Every reader of Claude Code's install list survives every shape of it.
+"""Every reader of Claude Code's install list survives every shape of it, and reads as reaching
+only a list that matches Claude Code 2.1.272's schema exactly.
 
 `<config folder>/plugins/installed_plugins.json` is Claude Code's file, and a chat can write it.
 0.62.0 read it in three places that assumed the shape Claude Code writes, and a list in any
@@ -9,20 +10,23 @@ other shape raised out of all of them:
   session start;
 * `charter init` and `charter reinit` raised in `_ensure_guard_hook`.
 
-The shapes: a top-level array, `plugins` that is not an object, a record anywhere that is not
-an object, a version-1 list, records that are a number.
+**The schema** is read from Claude Code 2.1.272's schema — the version-2 install list's zod
+objects in that binary — and measured against the same binary in throwaway folders. A list that
+does not match it is refused whole: Claude Code logs "Failed to load installed_plugins.json" and
+loads no plugin. The refusing checks: `version` is the literal 2; `plugins` is an object whose
+keys are `plugin@marketplace` (`[A-Za-z0-9][-A-Za-z0-9._]*` on each side) and whose values are
+arrays; every record is an object with a `scope` among `managed`, `user`, `project`, `local`
+and a string `installPath`; `projectPath`, `version`, `installedAt`, `lastUpdated`,
+`gitCommitSha` and `resolvedVersion` are strings when present, and `auto` a boolean. Unknown
+keys, and `claudeaiPluginId`, `archiveSha256`, `sourceCommand`, `sourceProducerPath` and
+`previousProducerPaths` of any type, the schema drops (`.catch(void 0)`) and loads — measured.
 
-Measured on Claude Code 2.1.272 in throwaway folders: Claude Code checks the whole list before it
-loads anything. `version` must be 1 or 2; `plugins` an object of arrays; every record, under
-any plugin id, an object whose `scope` is `managed`, `user`, `project` or `local`, whose
-`installPath` is a string, and whose `projectPath`, when present, is a string. Any other shape
-and it logs "Failed to load installed_plugins.json" and loads no plugin at all. A version-1
-list it migrates at start-up, each plugin becoming one `user`-scope install, and loads.
-
-So `doctor` says it could not tell, and `init`/`reinit` write the guard hook as though no
-plugin dispatched it. That is the safe direction for wiring: a guard declared twice runs
-twice, which is harmless and which `doctor` reports; a guard declared nowhere is the unguarded
-plane this family of checks exists for.
+Any other list is "could not tell", a version-1 list included: 2.1.272 migrates one, and loads
+it from a path it computes rather than the `installPath` in the file, which is not a reading
+charter keeps. So `doctor` warns, and `init`/`reinit` write the guard hook as though no plugin
+dispatched it — the safe direction: a guard declared twice runs twice, which is harmless and
+reported; a guard declared nowhere is a hole. A newer Claude Code that changes the schema gets
+the same answer until charter follows it.
 """
 
 from __future__ import annotations
@@ -41,6 +45,17 @@ from tests._isolation import PersonaIso
 
 OK, WARN = doctor.OK, doctor.WARN
 PID = "charter@charter"
+REPO = Path(__file__).resolve().parents[1]
+
+#: Where the schema these tests hold charter to comes from. `docs/install.md` names it too, so a
+#: reader can tell which Claude Code the rows were written against.
+SCHEMA_SOURCE = "read from Claude Code 2.1.272's schema"
+
+#: The fields 2.1.272's version-2 record types and refuses on a wrong type, besides `scope` and
+#: `installPath`: optional strings, and one optional boolean. Hand-spelled from that schema.
+OPTIONAL_STRINGS = ("projectPath", "version", "installedAt", "lastUpdated", "gitCommitSha",
+                    "resolvedVersion")
+OPTIONAL_BOOLEAN = "auto"
 
 #: Hand-spelled, never imported from the module under test.
 _PRETOOLUSE = {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
@@ -82,41 +97,52 @@ class ListShapeCase(PersonaIso):
         return {"scope": "project", "projectPath": str(project or self.plane),
                 "installPath": str(self.plugin)}
 
+    def full(self) -> dict:
+        """A record with every field the schema types, each of the type it requires."""
+        return {**self.valid(), "version": "0.62.0", "installedAt": "2026-09-15T13:04:28.952Z",
+                "lastUpdated": "2026-09-15T13:04:28.952Z",
+                "gitCommitSha": "5ad755d681b7e74b9bdf137b2f3270b282f34e1e",
+                "resolvedVersion": "0.62.0", "auto": True}
+
+    def listed(self, *records, **others) -> dict:
+        return {"version": 2, "plugins": {**others, PID: list(records)}}
+
     def shapes(self):
-        """Every shape 0.62.0 raised on or 2.1.272 refuses, a record Claude Code cannot read
-        always FIRST — the position the old readers met before any record they could."""
+        """Every list 2.1.272 refuses, 0.62.0 raised on, or charter does not read — a record
+        Claude Code cannot read always FIRST, the position the old readers met first."""
         v = self.valid()
-        return (
+        rows = [
             ("not JSON", "{not json"),
+            ("nested 200,000 deep", "[" * 200000),
             ("a top-level array", []),
             ("plugins an array", {"version": 2, "plugins": []}),
             ("plugins a string", {"version": 2, "plugins": "x"}),
             ("no version", {"plugins": {PID: [v]}}),
-            # Shaped as version 1 would be, so it is `true`, and not the shape, that refuses it.
-            ("version true", {"version": True, "plugins": {PID: {"installPath": str(self.plugin)}}}),
+            ("version true", {"version": True, "plugins": {PID: [v]}}),
             ("version 3", {"version": 3, "plugins": {PID: [v]}}),
+            ("a version-1 list, which Claude Code migrates and charter does not read",
+             {"version": 1, "plugins": {PID: {"version": "0.62.0",
+                                              "installedAt": "2026-09-15T13:04:28.952Z",
+                                              "installPath": str(self.plugin)}}}),
             ("records a number", {"version": 2, "plugins": {PID: 1}}),
             ("records an object", {"version": 2, "plugins": {PID: v}}),
-            ("a string record first", {"version": 2, "plugins": {PID: ["junk", v]}}),
-            ("a null record first", {"version": 2, "plugins": {PID: [None, v]}}),
-            ("a number record first", {"version": 2, "plugins": {PID: [7, v]}}),
-            ("a record Claude Code cannot read under another plugin",
-             {"version": 2, "plugins": {"other@x": ["junk"], PID: [v]}}),
-            ("an unknown scope first",
-             {"version": 2, "plugins": {PID: [{**v, "scope": "workspace"}, v]}}),
-            ("no installPath first",
-             {"version": 2, "plugins": {PID: [{"scope": "project", "projectPath": str(self.plane)}, v]}}),
-            ("an installPath that is a number first",
-             {"version": 2, "plugins": {PID: [{**v, "installPath": 5}, v]}}),
-            ("a null projectPath first",
-             {"version": 2, "plugins": {PID: [{**v, "projectPath": None}, v]}}),
-            ("a version-1 plugin that is not an object", {"version": 1, "plugins": {PID: "x"}}),
-            ("a version-1 plugin with no installPath", {"version": 1, "plugins": {PID: {"version": "1"}}}),
-            # Two plugins, so "every plugin is readable" and "some plugin is" answer differently
-            # (the deletion sweep's survivor on 25b38c4: `all` read the same as `any`).
-            ("a version-1 plugin charter cannot read before a valid one",
-             {"version": 1, "plugins": {"other@x": "x", PID: {"installPath": str(self.plugin)}}}),
-        )
+            ("a string record first", self.listed("junk", v)),
+            ("a null record first", self.listed(None, v)),
+            ("a number record first", self.listed(7, v)),
+            ("a record Claude Code cannot read under another plugin", self.listed(v, **{"other@x": ["junk"]})),
+            ("an unknown scope first", self.listed({**v, "scope": "workspace"}, v)),
+            ("no scope first", self.listed({k: x for k, x in v.items() if k != "scope"}, v)),
+            ("no installPath first", self.listed({k: x for k, x in v.items() if k != "installPath"}, v)),
+            ("installPath a number first", self.listed({**v, "installPath": 5}, v)),
+            ("projectPath null first", self.listed({**v, "projectPath": None}, v)),
+            (f"{OPTIONAL_BOOLEAN} a string first", self.listed({**v, OPTIONAL_BOOLEAN: "yes"}, v)),
+            (f"{OPTIONAL_BOOLEAN} a number first", self.listed({**v, OPTIONAL_BOOLEAN: 1}, v)),
+        ]
+        rows += [(f"{field} a number first", self.listed({**v, field: 5}, v))
+                 for field in OPTIONAL_STRINGS]
+        rows += [(f"the plugin id {key!r} beside charter's", self.listed(v, **{key: [v]}))
+                 for key in ("noat", "a@b@c", "-a@b", "a@", "a b@c", ".a@b")]
+        return rows
 
 
 class TestEveryEntryPointSurvivesEveryShape(ListShapeCase):
@@ -157,6 +183,33 @@ class TestEveryEntryPointSurvivesEveryShape(ListShapeCase):
                 self.assertEqual(status, "created")
                 self.assertIn("charter hook pretooluse",
                               (config.ROOT / ".claude" / "settings.json").read_text())
+
+
+class TestAListThatMatchesTheSchemaReachesTheSession(ListShapeCase):
+    """The controls: without them every test above passes on a reader that refuses everything."""
+
+    def assert_reaches(self, doc) -> None:
+        self.enable()
+        self.write(self.manifest, doc)
+        guardseen.mark(harness="claude-code", source=guardseen.PLUGIN)
+        r = doctor.check_guard_wired()
+        self.assertEqual(r.status, OK, f"{r.detail} {r.hint}")
+        self.assertEqual(commands._ensure_guard_hook(self.plane)[0], "present")
+
+    def test_a_record_with_every_typed_field_right(self):
+        self.assert_reaches(self.listed(self.full()))
+
+    def test_fields_the_schema_drops_rather_than_refuses(self):
+        """Measured: each of these, wrongly typed, and a key the schema does not name, loads."""
+        self.assert_reaches(self.listed({
+            **self.full(), "claudeaiPluginId": 5, "archiveSha256": 5, "sourceCommand": 5,
+            "sourceProducerPath": 5, "previousProducerPaths": 5, "somethingNew": 1}))
+
+    def test_a_plugin_id_the_schema_accepts_beside_charters(self):
+        self.assert_reaches(self.listed(self.full(), **{"a-b_c.d@m-1.x": [self.valid()]}))
+
+    def test_the_docs_name_the_schema_they_follow(self):
+        self.assertIn(SCHEMA_SOURCE, (REPO / "docs" / "install.md").read_text())
 
 
 class TestAListClaudeCodeReadsIsReadTheSameWay(ListShapeCase):
@@ -206,20 +259,17 @@ class TestAListClaudeCodeReadsIsReadTheSameWay(ListShapeCase):
         self.assertEqual(commands._ensure_guard_hook(self.plane)[0], "created")
 
 
-class TestAVersionOneListIsReadAsClaudeCodeMigratesIt(ListShapeCase):
-    """Measured: 2.1.272 rewrites a version-1 list at start-up, each plugin becoming one
-    `user`-scope install, and loads it in that same session."""
+class TestASettingsFileNestedTooDeepIsUnreadable(ListShapeCase):
+    """The same `RecursionError` from the other file the guard lookup parses. An unreadable
+    settings file enables nothing, and `_ensure_guard_hook` leaves it alone as malformed."""
 
-    def test_its_plugin_is_installed_for_every_directory(self):
-        self.enable()
-        self.write(self.manifest, {"version": 1, "plugins": {PID: {
-            "version": "0.62.0", "installedAt": "2026-09-15T13:04:28.952Z",
-            "installPath": str(self.plugin)}}})
-        self.assertEqual(doctor._plugin_declaring_guard(), PID)
-        guardseen.mark(harness="claude-code", source=guardseen.PLUGIN)
+    def test_the_guard_row_and_inits_guard_check_survive_it(self):
+        self.write(self.manifest, {"version": 2, "plugins": {PID: [self.valid()]}})
+        self.write(config.ROOT / ".claude" / "settings.json", "[" * 200000)
         r = doctor.check_guard_wired()
-        self.assertEqual(r.status, OK, f"{r.detail} {r.hint}")
-        self.assertEqual(commands._ensure_guard_hook(self.plane)[0], "present")
+        self.assertEqual(r.status, WARN, f"{r.detail} {r.hint}")
+        self.assertIn("pretooluse is not wired", r.detail)
+        self.assertEqual(commands._ensure_guard_hook(self.plane)[0], "malformed")
 
 
 class TestAListClaudeCodeReadsFromElsewhereIsCouldNotTell(ListShapeCase):

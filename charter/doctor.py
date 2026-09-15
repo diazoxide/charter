@@ -11,6 +11,7 @@ import concurrent.futures as cf
 import json
 import os
 import platform
+import re
 import shutil
 import sys
 from dataclasses import dataclass
@@ -1144,7 +1145,7 @@ def _settings_docs(root: Path | None = None, folder: Path | None = None) -> list
     for p in _settings_files(root, folder):
         try:
             doc = json.loads(p.read_text())
-        except (OSError, ValueError, UnicodeDecodeError):
+        except (OSError, ValueError, UnicodeDecodeError, RecursionError):
             continue
         if isinstance(doc, dict):
             out.append(doc)
@@ -1244,24 +1245,46 @@ def _install_list(folder: Path | None = None) -> Path:
 #: The scopes Claude Code 2.1.272 accepts in its install list, as its schema spells them.
 _INSTALL_SCOPES = ("managed", "user", "project", "local")
 
+#: A plugin id as that schema requires it: ``plugin@marketplace``, each side
+#: ``[A-Za-z0-9][-A-Za-z0-9._]*``. Matched with ``fullmatch``, because JavaScript's ``$`` allows
+#: no trailing newline and Python's does.
+_PLUGIN_ID = re.compile(r"[A-Za-z0-9][-A-Za-z0-9._]*@[A-Za-z0-9][-A-Za-z0-9._]*")
+
+#: The fields that schema types on a version-2 install, besides the ``scope`` and ``installPath``
+#: every install must have, and refuses the whole list over when one holds the wrong type. All of
+#: them are optional: a record with only ``scope``, ``projectPath`` and ``installPath`` loads
+#: (measured). The fields it drops instead of refusing (``.catch(void 0)``: ``claudeaiPluginId``,
+#: ``archiveSha256``, ``sourceCommand``, ``sourceProducerPath``, ``previousProducerPaths``) and the
+#: keys it does not name load whatever they hold — measured — so nothing here asks about them.
+_OPTIONAL_STRINGS = ("projectPath", "version", "installedAt", "lastUpdated", "gitCommitSha",
+                     "resolvedVersion")
+_OPTIONAL_BOOLEANS = ("auto",)
+
 
 def _installed_plugins(folder: Path | None = None) -> tuple[dict[str, list[dict]], str | None]:
-    """Claude Code's install records by plugin id, as far as Claude Code itself reads them.
+    """Claude Code's install records by plugin id, when the list matches Claude Code 2.1.272's
+    version-2 schema exactly.
 
-    ``(records, None)``, each record an object with a ``scope`` and an ``installPath`` string; no
-    list at all is ``({}, None)``, because nothing is installed there. ``({}, why)`` when charter
-    could not tell what Claude Code has installed, *why* being a clause that names the file.
+    ``(records, None)``; no list at all is ``({}, None)``, because nothing is installed there.
+    ``({}, why)`` when charter could not tell what Claude Code has installed, *why* being a clause
+    that names the file.
 
-    **As 2.1.272 reads it, measured** (2026-09-15, throwaway folders). Claude Code checks the whole
-    list before it loads anything: ``version`` 1 or 2; ``plugins`` an object of arrays; every
-    record, under any plugin id, an object whose ``scope`` is one of :data:`_INSTALL_SCOPES`, whose
-    ``installPath`` is a string, and whose ``projectPath``, when present, is a string. In any other
-    shape it loads no plugin at all. A version-1 list it rewrites at start-up, each plugin becoming
-    one ``user``-scope install, and loads — so that is what this returns for one.
+    **Read from Claude Code 2.1.272's schema** — the version-2 install list's zod objects in that
+    binary — and measured against the same binary in throwaway folders (2026-09-15). Claude Code
+    checks the whole list before it loads anything, and a list that does not match loads no plugin
+    at all. :func:`_as_claude_code_reads` asks exactly what that schema refuses on.
+
+    **Any other list is "could not tell", a version-1 list included.** 2.1.272 migrates one, but
+    loads it from a path it computes from the plugin id and version rather than from the
+    ``installPath`` in the file, and charter keeps no reading of that. A newer Claude Code that
+    changes the schema gets the same answer until charter follows the change: `doctor` warns, and
+    `commands._ensure_guard_hook` writes the settings hook — a guard declared twice is harmless
+    and reported, a guard declared nowhere is a hole.
 
     **Never raises, and every reader of the list reads it here.** 0.62.0's readers assumed the
     shape Claude Code writes; a list in another shape crashed `charter doctor` with no rows, the
-    SessionStart preflight at every session start, and `charter init` and `reinit`.
+    SessionStart preflight at every session start, and `charter init` and `reinit`. A list nested
+    too deeply to parse raises `RecursionError`, which is not a `ValueError`.
 
     ``$CLAUDE_CODE_PLUGIN_CACHE_DIR`` moves the list out of the config folder — measured: set, `claude
     plugin list --json` lists none of the folder's installs; set empty, Claude Code ignores it.
@@ -1277,37 +1300,34 @@ def _installed_plugins(folder: Path | None = None) -> tuple[dict[str, list[dict]
         return {}, None
     except OSError as e:
         return {}, f"{shown} could not be read ({type(e).__name__})"
-    except ValueError:
-        return {}, f"{shown} is not JSON"
+    except (ValueError, RecursionError):
+        return {}, f"{shown} is not JSON charter can parse"
     installs = _as_claude_code_reads(doc)
     if installs is None:
-        return {}, f"{shown} is not in the shape Claude Code reads"
+        return {}, f"{shown} is not in the shape Claude Code 2.1.272 reads"
     return installs, None
 
 
 def _as_claude_code_reads(doc) -> dict[str, list[dict]] | None:
-    """*doc*'s install records as 2.1.272 reads them, or ``None`` for a list it refuses whole."""
-    if not isinstance(doc, dict):
+    """*doc*'s install records when it matches 2.1.272's version-2 schema, or ``None``."""
+    if not isinstance(doc, dict) or doc.get("version") != 2:
         return None
-    plugins, version = doc.get("plugins"), doc.get("version")
-    # `True == 1` in Python, and JSON `true` is not a version Claude Code accepts.
-    if not isinstance(plugins, dict) or isinstance(version, bool):
+    plugins = doc.get("plugins")
+    if not isinstance(plugins, dict):
         return None
-    if version == 1:
-        if all(isinstance(p, dict) and isinstance(p.get("installPath"), str)
-               for p in plugins.values()):
-            return {pid: [{"scope": "user", "installPath": p["installPath"]}]
-                    for pid, p in plugins.items()}
-        return None
-    if version != 2:
-        return None
-    for records in plugins.values():
-        if not isinstance(records, list) or not all(
-                isinstance(r, dict) and r.get("scope") in _INSTALL_SCOPES
-                and isinstance(r.get("installPath"), str)
-                and isinstance(r.get("projectPath", ""), str) for r in records):
+    for pid, records in plugins.items():
+        if not (_PLUGIN_ID.fullmatch(pid) and isinstance(records, list)
+                and all(_claude_code_reads_install(r) for r in records)):
             return None
     return plugins
+
+
+def _claude_code_reads_install(record) -> bool:
+    """Does one install record match 2.1.272's schema for it?"""
+    return (isinstance(record, dict) and record.get("scope") in _INSTALL_SCOPES
+            and isinstance(record.get("installPath"), str)
+            and all(isinstance(record[k], str) for k in _OPTIONAL_STRINGS if k in record)
+            and all(isinstance(record[k], bool) for k in _OPTIONAL_BOOLEANS if k in record))
 
 
 #: How `check_guard_wired` names the plugin when THIS process was launched by it
@@ -1317,15 +1337,17 @@ def _as_claude_code_reads(doc) -> dict[str, list[dict]] | None:
 _LAUNCHED_BY_THE_PLUGIN = "Claude Code plugin"
 
 
-def _plugin_standing(pid: str | None) -> tuple[list[str], list[str], str | None]:
+def _plugin_standing(pid: str | None) -> tuple[str | None, list[str], list[str], str | None]:
     """Is *pid* — the enabled plugin `_plugin_declaring_guard` found — installed, with its files,
-    for a session here? ``(elsewhere, gone, doubt)``, each shown as one line of text:
+    for a session here? ``(placed, elsewhere, gone, doubt)``, each shown as one line of text:
 
+    * *placed* — the plugin id the answer is about: *pid*, or charter's own when none was found,
+      so a sentence names the plugin it placed and never an id nothing found;
     * *elsewhere* — the directories its installs are recorded for, when none reaches this session;
     * *gone* — the install paths of installs that reach it but whose files are not there;
     * *doubt* — why charter could not tell, naming the file.
 
-    All empty when it is, or when there is nothing to ask.
+    All but *placed* empty when it is, or when there is nothing to ask.
 
     **Enabled here is not installed here.** A plane that has MOVED keeps the record for its old
     path while its own settings go on enabling the plugin, and a session at the new path loads
@@ -1341,7 +1363,7 @@ def _plugin_standing(pid: str | None) -> tuple[list[str], list[str], str | None]
     """
     from . import config as _config, plugincache
 
-    nothing: tuple[list[str], list[str], str | None] = ([], [], None)
+    nothing: tuple[str | None, list[str], list[str], str | None] = (pid, [], [], None)
     if pid == _LAUNCHED_BY_THE_PLUGIN:
         return nothing
     enabled = _enabled_plugin_ids()
@@ -1349,12 +1371,13 @@ def _plugin_standing(pid: str | None) -> tuple[list[str], list[str], str | None]
         return nothing
     installs, doubt = _installed_plugins()
     if doubt:
-        return [], [], doubt
+        return pid, [], [], doubt
     if not pid and plugincache.PLUGIN_ID not in enabled:
         return nothing
-    records = installs.get(pid or plugincache.PLUGIN_ID)
+    placed = pid or plugincache.PLUGIN_ID
+    records = installs.get(placed)
     if pid and not records:
-        return [], [], f"{_line(util.short_path(_install_list()))} lists no install of {_line(pid)}"
+        return pid, [], [], f"{_line(util.short_path(_install_list()))} lists no install of {_line(pid)}"
     here = session_root()
     plane = _canonical(Path(_config.ROOT))
     elsewhere: list[str] = []
@@ -1366,7 +1389,7 @@ def _plugin_standing(pid: str | None) -> tuple[list[str], list[str], str | None]
             return nothing
         else:
             gone.append(_line(util.short_path(record["installPath"])))
-    return elsewhere, gone, None
+    return placed, elsewhere, gone, None
 
 
 def _install_reaches(record: dict, here: Path, plane: Path) -> bool:
@@ -1769,8 +1792,16 @@ def check_guard_wired() -> Result:
     # whatever the list says, so nothing read from the list may tell the reader no hook runs here.
     # Then, before the doubled branch — whose advice is to delete the one declaration a session
     # here may be loading — could not tell, files gone, installed elsewhere.
-    elsewhere, gone, doubt = _plugin_standing(plugin)
-    if declared and (doubt or gone or elsewhere):
+    placed, elsewhere, gone, doubt = _plugin_standing(plugin)
+    if declared and doubt:
+        # Green, because the block runs; and honest about the one thing it cannot tell — whether a
+        # plugin dispatches the guard as well, which is the second declaration `init` writes the
+        # hook knowing it may make (round 3 of the review).
+        return Result(name, OK,
+                      detail=f"wired ({_line(declared[0])}) — the declaration a session here "
+                             f"loads; charter could not tell whether an enabled plugin also "
+                             f"dispatches it here: {doubt}")
+    if declared and (gone or elsewhere):
         return Result(name, OK,
                       detail=f"wired ({_line(declared[0])}) — the declaration a session here "
                              f"loads; the install list does not show a plugin loading it here too")
@@ -1790,7 +1821,7 @@ def check_guard_wired() -> Result:
     if gone:
         return Result(
             name, WARN,
-            detail=f"enabled plugin {named} is installed for a session here, but its files are "
+            detail=f"enabled plugin {_line(placed)} is installed for a session here, but its files are "
                    f"gone ({', '.join(gone[:2])}), so Claude Code loads nothing from it — branch "
                    f"moves in the plane root are NOT refused",
             hint=f"Claude Code puts an install's missing files back when it lists its plugins "
@@ -1799,7 +1830,7 @@ def check_guard_wired() -> Result:
     if elsewhere:
         return Result(
             name, WARN,
-            detail=f"enabled plugin {named} is installed for {', '.join(elsewhere[:2])} and not "
+            detail=f"enabled plugin {_line(placed)} is installed for {', '.join(elsewhere[:2])} and not "
                    f"for this directory, so no charter hook runs in a session here — branch "
                    f"moves in the plane root are NOT refused",
             hint=f"A project- or local-scope install belongs to the directory it was installed "

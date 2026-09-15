@@ -38,13 +38,18 @@ reinit` stopped. The shapes are:
 A chat can write that file.
 
 Measured on 2.1.272, Claude Code checks the whole list before it loads anything, and a single
-record it cannot read makes it load no plugin at all. Now charter reads the list the same way:
+record it cannot read makes it load no plugin at all. Charter now reads the list only as Claude
+Code 2.1.272's schema defines it: `version` 2, plugin ids of the form `plugin@marketplace`, and
+every field that schema types holding the type it requires. For any other list, including a
+version-1 list and one nested too deeply to parse:
 
 - `plane-root guard` says it could not tell which directory the plugin is installed for, and names
-  the file.
+  the file. If this session's settings declare the guard, the row stays green and says it could
+  not tell whether a plugin also dispatches it.
 - `charter init` and `reinit` write the guard hook as though no plugin dispatched it. A guard
   declared twice is harmless and `doctor` reports it; a guard declared nowhere is not.
-- A version-1 list, which Claude Code turns into user-scope installs, is read that way too.
+
+A newer Claude Code that changes the schema gets the same answer until charter follows the change.
 
 The same row also handles three more cases:
 

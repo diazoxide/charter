@@ -1253,7 +1253,9 @@ def _ensure_guard_hook(root: Path) -> tuple[str, Path | None]:
     raw = p.read_text()
     try:
         settings = json.loads(raw)
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, RecursionError):
+        # `RecursionError` is a file nested too deeply to parse, and not a `ValueError`: left
+        # alone as malformed, like any other settings file this cannot read.
         return "malformed", p
     if not isinstance(settings, dict):
         return "malformed", p

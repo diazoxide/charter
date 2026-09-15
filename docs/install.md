@@ -185,10 +185,24 @@ start Claude Code from, so it sees the same variable.
   sightings. Claude Code resolves it against its own working directory, which charter cannot
   see, so nothing can be compared with it. Set it to an absolute path; running a command
   changes nothing there.
+- **`plane-root guard` reads Claude Code's install list only as Claude Code 2.1.272 defines it.**
+  The rules are read from Claude Code 2.1.272's schema and measured against that version:
+  - `version` is 2, and each plugin id has the form `plugin@marketplace`.
+  - Each install has a `scope` and an `installPath`.
+  - Every other field the schema types (`projectPath`, `version`, `installedAt`, `lastUpdated`,
+    `gitCommitSha`, `resolvedVersion` and `auto`) has the type the schema requires.
+
+  For any other list, a version-1 list included, the row says it could not tell which directory
+  the plugin is installed for, and `charter init` and `reinit` write the guard hook as though no
+  plugin dispatched it. A newer Claude Code that changes the schema gets the same answer until
+  charter follows the change. If this session's own settings declare `charter hook pretooluse`,
+  the row stays green instead, and says it could not tell whether a plugin also dispatches the
+  guard.
 - **Three narrower Claude Code settings are not followed:**
   - `$CLAUDE_CODE_PLUGIN_CACHE_DIR` moves the installed-plugin list out of the config folder.
     With it set to anything but empty, `plane-root guard` says it could not tell which directory
-    the plugin is installed for. `charter init` and `reinit` write the guard hook as though no
+    the plugin is installed for. If this session's settings declare the guard, the row stays
+    green and says that instead. `charter init` and `reinit` write the guard hook as though no
     plugin dispatched it.
   - `$CLAUDE_CODE_USE_COWORK_PLUGINS` renames `plugins/` to `cowork_plugins/` and
     `settings.json` to `cowork_settings.json`. The guard rows still read the ordinary names, so

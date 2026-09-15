@@ -476,8 +476,11 @@ class TestNothingTakenFromTheListReachesTheTerminalRaw(MovedPlaneCase):
         self.assert_contained(doctor.check_guard_wired())
 
     def test_a_plugin_id(self):
+        """Not as a key in the list: 2.1.272's schema refuses that id, so a list holding it is one
+        charter cannot read and never prints. The id reaches the row from the declaration, and
+        the row names it as the plugin the list holds no install of."""
         pid = f"evil{self.HOSTILE}@x"
-        self.records(self.record(self.old), pid=pid)
+        self.records(self.record(self.old))
         with self.declared_a_moment_ago(pid):
             self.assert_contained(doctor.check_guard_wired())
 
@@ -516,6 +519,49 @@ class TestOnlyAnEnabledPluginIsLookedUp(MovedPlaneCase):
         """No plugin id was found, because the list could not be read to find one."""
         self.write(self.manifest, "{not json")
         self.assert_could_not_tell(doctor.check_guard_wired())
+
+
+class TestTheRowNamesOnlyAPluginItFound(MovedPlaneCase):
+    """With no `hooks.json` left anywhere, `_plugin_declaring_guard` finds no plugin, and the row
+    places charter's own. It names that id, and never one nothing found ("enabled plugin None",
+    round 3 of the review)."""
+
+    def test_its_files_gone_everywhere(self):
+        self.records({**self.record(self.plane), "installPath": self.gone})
+        self.assertEqual(
+            doctor.check_guard_wired().detail,
+            f"enabled plugin charter@charter is installed for a session here, but its files are "
+            f"gone ({self.gone}), so Claude Code loads nothing from it — branch moves in the plane "
+            f"root are NOT refused")
+
+    def test_installed_elsewhere_with_its_files_gone(self):
+        self.records({**self.record(self.old), "installPath": self.gone})
+        self.assertEqual(
+            doctor.check_guard_wired().detail,
+            f"enabled plugin charter@charter is installed for {self.old} and not for this "
+            f"directory, so no charter hook runs in a session here — branch moves in the plane "
+            f"root are NOT refused")
+
+
+class TestASettingsBlockBesideCouldNotTellSaysWhatItCannotTell(MovedPlaneCase):
+    """The block runs, so the row is green; whether a plugin dispatches the guard as well is what
+    charter could not tell, and a second declaration is what that would make. The row says so
+    rather than implying there is only one."""
+
+    def test_it_says_it_could_not_tell_whether_a_plugin_dispatches_it_too(self):
+        self.settings_block()
+        self.records("junk", self.record(self.old))
+        r = doctor.check_guard_wired()
+        self.assertEqual(r.status, OK, self.text(r))
+        self.assertIn("could not tell whether an enabled plugin also dispatches it here", r.detail)
+        self.assertIn("installed_plugins.json", r.detail)
+
+    def test_beside_files_that_are_gone_it_says_nothing_it_does_not_know(self):
+        self.settings_block()
+        self.records({**self.record(self.plane), "installPath": self.gone})
+        r = doctor.check_guard_wired()
+        self.assertEqual(r.status, OK, self.text(r))
+        self.assertNotIn("could not tell", r.detail)
 
 
 class TestBothRowsTellTheSameStory(MovedPlaneCase):
