@@ -273,7 +273,7 @@ The PR copies the table into its description.
 | C2 | the same, after one prompt | **pass** | the transcript file exists |
 | C3 | `claude --resume <uuid> --name "t2 · beta.1"` | **pass** | the conversation comes back, with the **same** `session_id`, `source=resume`, and the new name written with no prompt. A fresh `claude --resume` picker lists `t2 · beta.1`. The in-session `/resume` hides the current session |
 | C4 | `claude --resume <uuid> --session-id <other>` | **recorded** | refused (`--session-id can only be used with --continue or --resume if --fork-session is also specified`, exit 1). Charter never combines them |
-| C5 | a nested `claude -p` from a chat's Bash tool | **recorded** | a new `session_id` and its own SessionStart. The environment is identical (`CLAUDECODE`, `TMUX_PANE`, `CHARTER_*` inherited). `CLAUDE_PID` differs: 44188 for the outer harness, 44929 for the nested one, each equal to its hook's `$PPID` |
+| C5 | a nested `claude -p` from a chat's Bash tool | **recorded** | a new `session_id` and its own SessionStart. The environment is identical (`CLAUDECODE`, `TMUX_PANE`, `CHARTER_*` inherited). `CLAUDE_PID` differs: 44188 for the outer harness, 44929 for the nested one. Each equalled its hook's `$PPID` there, but only because that hook command was a lone command (C7) |
 | C6 | `/clear` | **recorded** | SessionStart with `source=clear`, a **new** `session_id` and the same `CLAUDE_PID`. `claude --resume <original uuid>` still brings back the pre-clear conversation |
 | X1 | Codex SessionStart | **pass**, read from source | `session_id` and `transcript_path` (`codex-rs/hooks/src/schema.rs:486-497`); the rollout exists before the hook runs (`core/src/session/mod.rs:4074-4085`). SessionStart runs at the **first turn**, not at launch (`core/src/session/turn.rs:233`, `:457`) |
 | X2 | `codex resume <id>` | **pass**, read from source | a UUID is looked up exactly (`tui/src/lib.rs:626-659`); a non-UUID falls through to a name lookup |
@@ -727,6 +727,7 @@ Class `ALinkFollowsOnlyTheChatsOwnHarness(PersonaIso, unittest.TestCase)` — `o
 | `test_the_parent_pid_is_never_consulted` | `os.getppid` patched to raise → an adopting report still adopts (C7: not a proof) |
 | `test_charter_harness_never_decides_the_sender` | env `CHARTER_HARNESS=codex`, a Claude report whose proof holds → Claude Code; env `CHARTER_HARNESS=claude-code`, a Codex-shaped payload and no proof → Codex |
 | `test_a_codex_payload_with_an_unknown_key_is_no_report` | Codex's keys plus `turn_id` → `sender` is `None` |
+| `test_a_codex_0_147_sessionstart_payload_is_a_codex_report` | a fixture built key for key from `codex-rs/hooks/src/schema.rs:486-497` at `rust-v0.147.0`, with the version in the fixture's name → `sender` is Codex. It pins `CODEX_SESSIONSTART_KEYS` against the source it was read from: a set edited without re-reading goes red here, not silently on the plane |
 | `test_a_resumed_codex_start_keeps_the_link_it_resumed` | a start recorded `resumed`, link `s1`: a report `s1` → link `s1`, transcript recorded; a report `s9` → link `s1`, transcript not recorded (X3, both answers) |
 | `test_an_id_that_could_be_read_as_a_flag_is_refused` | `"-rf"`, `"a b"`, `"x" * 200`, `""` → nothing |
 | `test_a_relative_or_nul_path_is_refused` | `"t.jsonl"`, `"/a\x00b"`, a 5000-byte path → no conversation |
@@ -842,7 +843,12 @@ in both directions. A hit about pids or pane ids is not this task's.
   - The quit example (`:1167-1176`): the opencode row reads `conversation resumes`.
   - `**Resume is Claude Code only…**` (`:1325-1334`) becomes the table below, in prose.
 - **`docs/harnesses.md`** `## What each harness lets charter offer` (`:105`) gains the resume table,
-  with Step 0's versions:
+  with Step 0's versions. Beneath it, a note:
+  - Charter recognises a Codex report by the exact key set of Codex's SessionStart input, read from
+    source at codex-cli 0.147.0 and not yet seen on the wire.
+  - A Codex that adds a field is recognised as no report. The failure is closed: no link is recorded,
+    so resume is simply not offered for that chat until charter is updated.
+  - A missing resume row is the only sign.
 
   | Harness | Link | Offered when | Resumes with | Limits |
   |---|---|---|---|---|

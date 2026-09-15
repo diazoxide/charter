@@ -950,8 +950,9 @@ install. The reason is no longer an `attach` blocked forever, but a tab whose ex
      combines them.
    - **C5 — a nested harness.** A nested `claude -p` reports its own SessionStart with a new
      `session_id`, and its hook descends from the outer claude. The environment cannot tell the two
-     apart: `CLAUDECODE`, `TMUX_PANE` and `CHARTER_*` are all inherited. `CLAUDE_PID` does, and it
-     equals each hook's `$PPID`.
+     apart: `CLAUDECODE`, `TMUX_PANE` and `CHARTER_*` are all inherited. `CLAUDE_PID` does: a nested
+     `claude` sets its own. It equals the hook's `$PPID` only for a lone hook command. C7 found one
+     or two `/bin/sh` in between for compound ones, so charter never uses the parent pid.
    - **C6 — `/clear`.** It reports `source=clear`, a new `session_id` and the same `CLAUDE_PID`.
      `claude --resume <original uuid>` still brings back the pre-clear conversation.
    - **X1 — Codex.** SessionStart carries `session_id` and `transcript_path`, and the rollout exists
