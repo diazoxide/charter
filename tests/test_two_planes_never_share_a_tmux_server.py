@@ -488,8 +488,9 @@ class TwoPlanesMixedInOneSessionBeforeTheUpgrade(_OnTheSharedServer, unittest.Te
         the one thing a mixed session is — two windows of one chat id under one session.
         The plane column is the session's, plane A's, on both rows."""
         docs = (_REPO_ROOT / "docs" / "frame.md").read_text()
-        news = (_REPO_ROOT / "docs" / "news" /
-                "unreleased-two-projects-never-share-a-tmux-server.md").read_text()
+        # By slug, not by version: a release stamps this entry's filename.
+        news = next((_REPO_ROOT / "docs" / "news")
+                    .glob("*-two-projects-never-share-a-tmux-server.md")).read_text()
         lines = [ln.strip() for ln in docs.splitlines()
                  if ln.strip().startswith("tmux -L charter list-")]
         self.assertEqual(len(lines), 1, lines)

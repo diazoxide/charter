@@ -503,7 +503,7 @@ plane's own: `tmux -L charter-plane-<12 hex>`, the hex taken from a sha256 of th
 state directory (`.charter/`, or wherever `$CHARTER_HOME` puts it). Both projects can have
 a `default` workspace open, and they are two sessions on two servers — not one session with
 the other project's chats inside it, under the first project's panels, key bindings, hooks
-and palette. That is what charter did through 0.61.1: every plane shared one server,
+and palette. That is what charter did through 0.61.0: every plane shared one server,
 `charter`, and a launch joined a workspace's session by its name
 ([ADR 0023](adr/0023-one-tmux-server-per-plane.md)).
 
