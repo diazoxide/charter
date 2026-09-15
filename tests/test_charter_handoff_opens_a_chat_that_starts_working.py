@@ -26,6 +26,7 @@ import unittest
 from unittest import mock
 
 from charter import commands_frame, config, dispatch, handoff, hooks, todos, workspace
+from charter.frame import tmuxctl
 from charter.frame import state
 
 from tests._isolation import PersonaIso, PlaneIso, no_background_refresh, run_hook
@@ -469,7 +470,7 @@ class AHandedOffChatIsBornInItsWorkspace(PlaneIso):
         no_background_refresh(self)
         workspace.ensure("beta")
         state.frame_dir("beta.1", create=True)
-        state.record_server("beta.1", commands_frame.SOCKET)
+        state.record_server("beta.1", tmuxctl.plane_socket())
         state.record_workspace("beta.1", "beta")
         state.record_identity("beta.1", {"CHARTER_WORKSPACE": "",
                                          "CHARTER_HARNESS": "claude-code"})

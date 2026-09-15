@@ -29,6 +29,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, inflight, util
+from charter.frame import tmuxctl
 from charter import workspace as ws_mod
 from charter.frame import chats, leave, reopen, state
 
@@ -84,7 +85,7 @@ _UNSET = object()
 
 def _doomed(**kw):
     base = dict(chat="alpha.1", workspace="alpha", persona="", harness="claude-code",
-                cwd="/tmp", resume="", server=commands_frame.SOCKET, live=True,
+                cwd="/tmp", resume="", server=tmuxctl.plane_socket(), live=True,
                 active=False, exit_code=None, closed=False, homeless=False,
                 cwd_gone=False, cwd_outside=False)
     base.update(kw)
@@ -288,23 +289,26 @@ class AQuitRecordsWhatItCanAndSaysWhatItCouldNot(PersonaIso):
                          "the manifest lands, and it names nobody")
         with mock.patch.object(util, "err") as said:
             self.assertEqual(commands_frame.cmd_reopen(SimpleNamespace()), 1)
-        self.assertEqual(said.call_args[0][0], commands_frame.NOTHING_RECORDED)
+        self.assertEqual(said.call_args[0][0], commands_frame.NOTHING_RECORDED.format(
+            attach=f"`tmux -L {tmuxctl.plane_socket()} attach`"))
 
     def test_a_pane_record_charter_cannot_use_captures_nothing(self):
         """`_PANE_ID_RE.fullmatch(pane_id)` — a `%N` and nothing else. A record written by
         a server that has since restarted names a pane belonging to somebody else, and
         capturing THAT would put another chat's screen in this one's transcript."""
+        # No `server` record, so the chat is the legacy server's (ruling 46) — which is
+        # where the quit looks for its window and captures its pane.
         state.frame_dir("alpha.1", create=True)
         state.record_harness_pane("alpha.1", "%1")
         good, seen = self._record([_doomed(chat="alpha.1")],
-                                  windows={commands_frame.SOCKET: {"alpha.1": None}})
-        self.assertEqual(seen, [(commands_frame.SOCKET, "%1")])
+                                  windows={tmuxctl.LEGACY_SOCKET: {"alpha.1": None}})
+        self.assertEqual(seen, [(tmuxctl.LEGACY_SOCKET, "%1")])
         self.assertEqual(reopen.read().all_chats()[0].transcript, "alpha.1.transcript")
 
         reopen.forget()
         state.record_harness_pane("alpha.1", "not-a-pane")
         _kept, seen = self._record([_doomed(chat="alpha.1")],
-                                   windows={commands_frame.SOCKET: {"alpha.1": None}})
+                                   windows={tmuxctl.LEGACY_SOCKET: {"alpha.1": None}})
 
         self.assertEqual(seen, [], "nothing was captured")
         self.assertEqual(reopen.read().all_chats()[0].transcript, "",
@@ -318,7 +322,7 @@ class AQuitRecordsWhatItCanAndSaysWhatItCouldNot(PersonaIso):
         self.assertIsNone(state.harness_pane("alpha.1"))
 
         kept, seen = self._record([_doomed(chat="alpha.1")],
-                                  windows={commands_frame.SOCKET: {"alpha.1": None}})
+                                  windows={tmuxctl.LEGACY_SOCKET: {"alpha.1": None}})
 
         self.assertEqual(seen, [])
         self.assertEqual(kept, 1)
@@ -331,7 +335,7 @@ class AQuitRecordsWhatItCanAndSaysWhatItCouldNot(PersonaIso):
         state.record_harness_pane("alpha.1", "%1")
 
         kept, seen = self._record([_doomed(chat="alpha.1")],
-                                  windows={commands_frame.SOCKET: {}})
+                                  windows={tmuxctl.LEGACY_SOCKET: {}})
 
         self.assertEqual(seen, [])
         self.assertEqual(kept, 1)
@@ -345,7 +349,7 @@ class AQuitRecordsWhatItCanAndSaysWhatItCouldNot(PersonaIso):
         with mock.patch.object(commands_frame.reopen_state, "transcript_path",
                                return_value=None):
             kept, seen = self._record([_doomed(chat="alpha.1")],
-                                      windows={commands_frame.SOCKET: {"alpha.1": None}})
+                                      windows={tmuxctl.LEGACY_SOCKET: {"alpha.1": None}})
 
         self.assertEqual(seen, [])
         self.assertEqual(kept, 1)
@@ -939,7 +943,7 @@ class TheCaptureRefusesAServerThatSaidNothing(PersonaIso):
 
         with mock.patch.object(commands_frame.tmuxctl, "run", return_value=answer):
             self.assertFalse(commands_frame._capture_transcript(
-                commands_frame.SOCKET, "%1", dest))
+                tmuxctl.plane_socket(), "%1", dest))
 
         self.assertFalse(dest.exists())
 
@@ -972,7 +976,7 @@ class TheCaptureRefusesAServerThatSaidNothing(PersonaIso):
 
         with mock.patch.object(commands_frame.tmuxctl, "run", return_value=answer):
             self.assertTrue(commands_frame._capture_transcript(
-                commands_frame.SOCKET, "%1", dest))
+                tmuxctl.plane_socket(), "%1", dest))
 
         got = dest.read_text()          # would raise if half a character were written
         self.assertNotIn("\ufffd", got, "dropped, not replaced with a noise glyph")
@@ -988,7 +992,7 @@ class TheCaptureRefusesAServerThatSaidNothing(PersonaIso):
 
         with mock.patch.object(commands_frame.tmuxctl, "run", return_value=answer):
             self.assertTrue(commands_frame._capture_transcript(
-                commands_frame.SOCKET, "%1", dest))
+                tmuxctl.plane_socket(), "%1", dest))
 
         self.assertEqual(dest.read_text(), "\n  hello\n\n")
 

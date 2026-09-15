@@ -127,7 +127,7 @@ class _ARealChatOnARealServer(PersonaIso):
         _ttyguard.no_terminal()
         self.tmux = shutil.which("tmux")
         self.socket = _tmuxreap.name(f"{self.SLUG}-{next(_SERVERS)}")
-        self.enterContext(mock.patch.object(commands_frame, "SOCKET", self.socket))
+        self.enterContext(mock.patch.object(tmuxctl, "plane_socket", return_value=self.socket))
         self.addCleanup(self._reap_the_server)
         # A detached `charter frame-gather` outlives the case and is refused by
         # `tests/_planeguard`; what is asked here is what tmux does.

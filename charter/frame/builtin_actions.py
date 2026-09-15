@@ -100,21 +100,17 @@ NO_LAYOUT = ("charter has no record of this frame's harness pane, so it cannot m
 
 
 def _server(fid: str) -> str:
-    """Which tmux *fid* lives on — its own record, else charter's private one.
+    """Which tmux *fid* lives on — its own record, else the legacy shared socket.
 
     The same fallback every other frame command spells (`state.frame_server(fid) or
-    SOCKET`), asked in one place here so an action that ASKS about the server and an
-    action that COMMANDS it cannot answer differently. A frame with no recorded server is
-    a frame launched by a charter that predates `state.record_server`, and charter's own
-    socket is where it will be — never "nowhere", which would make `_detachable` report an
-    operator's tmux for a frame that is not in one.
-
-    Imported lazily: `commands_frame` imports this module at load, so the name has to be
-    reached at call time or the two would be a cycle. It is defined there because that is
-    where the server is STARTED.
+    tmuxctl.LEGACY_SOCKET`), asked in one place here so an action that ASKS about the
+    server and an action that COMMANDS it cannot answer differently. A frame with no
+    recorded server is a frame launched by a charter that predates `state.record_server`,
+    and the one server every plane shared then is where it will be — never "nowhere", which
+    would make `_detachable` report an operator's tmux for a frame that is not in one, and
+    never this plane's own server, which did not exist when that frame started.
     """
-    from ..commands_frame import SOCKET
-    return state.frame_server(fid) or SOCKET
+    return state.frame_server(fid) or tmuxctl.LEGACY_SOCKET
 
 
 def _detach(fid: str):

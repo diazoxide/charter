@@ -646,8 +646,8 @@ class ALaunchAndASwitchSpendWhatTheyMeasured(PersonaIso, unittest.TestCase):
         """One four-panel `cmd_chat` from `api.1` to `api.2`, and the fake it spent."""
         _plant("api.1", workspace="api", pane="%1")
         _plant("api.2", workspace="api", pane="%2")
-        state.record_server("api.1", commands_frame.SOCKET)
-        state.record_server("api.2", commands_frame.SOCKET)
+        state.record_server("api.1", tmuxctl.plane_socket())
+        state.record_server("api.2", tmuxctl.plane_socket())
         state.record_panes("api.1", panels={"top": "%3", "bottom": "%4",
                                             "right": "%5", "repos": "%6"})
         fake = _FakeServer(size="200:50")

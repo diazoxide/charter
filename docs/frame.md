@@ -483,9 +483,8 @@ whose program exits is destroyed along with its hook. Charter sets that one opti
 **window it opened** and nowhere else, so panes in your own windows still close the way they
 always did.
 
-Charter never touches `~/.tmux.conf` — the frame's settings go into a private server of
-charter's own (`tmux -L charter`), one server shared by every frame on the machine. On it,
-a **workspace is a session** and a **chat is a window** in that session: `charter claude`
+Charter never touches `~/.tmux.conf` — the frame's settings go into a private tmux server
+of charter's own, **one per plane**. On it, a **workspace is a session** and a **chat is a window** in that session: `charter claude`
 in a workspace that already has one open adds a second chat beside it rather than starting
 a second session (unless somebody is attached to it — see below), and the two run side by
 side with their own harnesses, their own personas and their own tool ceilings. A chat's id
@@ -496,6 +495,63 @@ chat.
 One chat's harness dying ends **that chat's window** and nothing else; the other chats in
 the workspace keep running. When the last chat's window goes, so does the session, which is
 what returns `charter claude` to your shell.
+
+### Two projects open at once do not share a tmux server
+
+Run charter in two projects side by side and each plane's frames are on a server of that
+plane's own: `tmux -L charter-plane-<12 hex>`, the hex taken from a sha256 of the plane's
+state directory (`.charter/`, or wherever `$CHARTER_HOME` puts it). Both projects can have
+a `default` workspace open, and they are two sessions on two servers — not one session with
+the other project's chats inside it, under the first project's panels, key bindings, hooks
+and palette. That is what charter did through 0.61.1: every plane shared one server,
+`charter`, and a launch joined a workspace's session by its name
+([ADR 0023](adr/0023-one-tmux-server-per-plane.md)).
+
+The name is not something you need to remember. A detach prints the reattach command with
+the plane's own socket in it, and `charter` typed in that project attaches to a frame started
+on that server. Two directories that share one `$CHARTER_HOME` are one plane, and share one
+server. The cost is one tmux server process per plane that has a frame open.
+
+**A frame started before you upgraded keeps running where it is.** It is on the old shared
+server, `charter`, and every chat records which server it is on — so close, quit, a panel
+that dies, a resize and a switch between its chats all still reach it there. A chat old
+enough to record no server at all is looked for on `charter` too. Nothing new is ever
+started on `charter`, and that has three consequences worth knowing before you meet them:
+
+- **`charter` does not reattach it.** `charter` looks on this plane's own server, where that
+  frame is not. With a quit record to put back, it refuses to restore it beside the old
+  frame, says so, and leaves the record alone. Without one, it opens a new chat on the plane's
+  own server. `tmux -L charter attach` reaches the old frame. `charter reopen` names that
+  server in its refusal when a live chat is there.
+- **It cannot open a chat.** `+`, and a tab for a workspace it has no session for, would
+  open on the plane's own server, where that frame cannot show them, so they refuse and say
+  so.
+- **Its F2 may not be yours.** A key binding belongs to the whole server, and the palette on
+  `charter` runs with the environment of whichever project's launch started that server, so
+  on a machine where two projects shared it, F2 can act for the other one.
+
+So the way off the old server is typed in the project, not pressed in the frame:
+`charter frame-quit` in that project records and stops its chats on `charter`, and `charter`
+then puts them back on the project's own server, resuming each conversation that can be.
+`charter -w <workspace>` opens a chat there straight away if you would rather not stop
+anything yet.
+
+**Two projects mixed in one session on `charter`.** Before the upgrade, the second project
+to open `default` joined the first one's session as a window, and that session carries the
+first project's plane marker. You can see it, one row per window:
+
+```
+tmux -L charter list-windows -a -F '#{session_name} #{window_id} #{@charter_chat} #{@charter_plane}'
+```
+
+A mixed session is two windows under one session name carrying the same chat id — both
+projects' first chat is `default.1` — and one `.charter` path on both rows, because the plane
+column is the session's and names whichever project created it, so it cannot say whose window
+is whose. Charter tells the windows apart by the pane each project's own launcher recorded,
+not by that marker, so `charter frame-quit` in either project, in either order, stops that
+project's windows and no others. Once both projects have quit and the listing shows no chats,
+`tmux -L charter kill-server` ends the old server. Not before: a chat it ends without a quit
+was never recorded, and `charter reopen` cannot bring it back.
 
 **Opening a workspace you already have open puts you in it rather than beside it.** A tmux
 session has one current window, so two terminals attached to one workspace look at the same
@@ -524,9 +580,10 @@ behind you.
 Only a launch that asked for nothing but the workspace is answered by focusing one.
 
 Which workspace is yours is decided on **this plane's own chat directories, never on a
-session name**. One tmux server serves every plane on the machine and session names are bare
-workspace names, so `default` — a name every plane has — names one session that any of them
-might have opened. Charter matches on the pane id its own launcher wrote down for a chat in
+session name**. A plane's own server holds only its own sessions, but the old shared server
+and a tmux you run yourself can hold several planes' at once, and session names are bare
+workspace names, so `default` — a name every plane has — can name a session any of them
+opened. Charter matches on the pane id its own launcher wrote down for a chat in
 `.charter/frame/`, which the server minted and only one plane holds. A workspace this plane
 has never opened is never focused, whatever another plane happens to be calling its own.
 
@@ -550,9 +607,10 @@ window keeps stale geometry. You land on whichever chat that workspace was last 
 which is tmux's own answer and not a record charter keeps.
 
 **Switching is restricted to workspaces of this plane, and anything else is refused by
-name.** One tmux server serves every plane on the machine: the operator's own socket had
-eleven sessions from three different projects on it the day this was written, and `default`
-is a name every plane has. Crossing to another plane's session would cross every isolation
+name.** Before each plane had a server of its own, one server served every plane on the
+machine: the operator's own socket had eleven sessions from three different projects on it
+the day this was written, and `default` is a name every plane has. Frames started then are
+still on it until they end. Crossing to another plane's session would cross every isolation
 boundary charter has — a different `CHARTER_ROOT`, different personas, different vaults,
 different memory — so charter will not do it by accident and will not do it on purpose.
 
@@ -1094,7 +1152,10 @@ checks before it builds anything, and falls back to its own private server.
 
 **Closing the window detaches, and that is the exit that costs nothing.** tmux sessions
 survive a client leaving, so the common way out loses nothing and needs no resume: the
-harnesses keep running and `tmux -L charter attach -t <workspace>` puts you back. A terminal
+harnesses keep running and `charter` in that project puts you back — or the
+`tmux -L charter-plane-<hex> attach -t <workspace>` the detach printed. A frame started before
+the upgrade is the exception, on the old `charter` server; see *Two projects open at once do
+not share a tmux server* above. A terminal
 that dies, a lid that closes and an ssh connection that drops all do this. `F2 → detach` is
 the same thing without needing to know tmux's prefix key.
 
@@ -1201,7 +1262,8 @@ leaves the record alone.
 **It refuses a plane that is already running, too.** The record describes the plane as it is
 now (see below), so reopening a live one would put a second copy of every chat beside the
 first, with a new id each so nothing on screen tells them apart. Attach to what is there
-(`tmux -L charter attach`) or quit it first. The record is left alone either way.
+(`tmux -L charter-plane-<hex> attach`, which the refusal spells out with this plane's own
+socket) or quit it first. The record is left alone either way.
 
 ### The plane is recorded as it changes, and `charter` puts it back
 
@@ -2809,7 +2871,8 @@ frame can do, drawn by charter in a pane of its own. Type to narrow it, arrow ke
 Enter to run, Escape to leave. It exists only on charter's own server; inside a tmux you
 already have, charter binds no key at all (see above). However you detach — the palette's
 own row, or tmux's own prefix key — charter notices the session is still running and prints
-how to get back in (`tmux -L charter attach -t <workspace>`) rather than leaving you to
+how to get back in (`tmux -L charter-plane-<hex> attach -t <workspace>`, this plane's own
+socket) rather than leaving you to
 remember the flags. The workspace is the session; tmux puts you back on whichever of its
 chats was last in front of you.
 

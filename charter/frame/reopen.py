@@ -70,6 +70,24 @@ VERSION = 1
 #: in step, and `.transcript` cannot be an ordinal so it cannot be a chat id either.
 TRANSCRIPT_SUFFIX = ".transcript"
 
+#: Who wrote the manifest — a QUIT, or the frame process RECORDING the plane as it runs
+#: (#845) — carried in the file so a reader can tell the two apart (ruling 46).
+#:
+#: **They are two records with two lifetimes, and one of them is irreplaceable.** A running
+#: plane's record describes chats that are on screen; the recorder writes it again on the
+#: next quiet period, and losing one copy costs nothing. A quit's record describes chats
+#: that are DEAD — killed by that quit, their directories reaped — and each one's resume id
+#: is in that file and nowhere else. While a launch holds its restore back because a chat of
+#: this plane still runs on the old shared server, the recorder must not write the running
+#: plane over that record, and this field is how it tells which it is looking at.
+#:
+#: **A manifest that names no writer is a quit's.** Every manifest before this field was
+#: read as one thing and is protected as the more valuable of the two: on upgrade day the
+#: record on disk is the OLD charter's quit, which is exactly the record the hold-back is
+#: for, and reading its missing field as "the recorder's" would lose it on the first tick.
+QUIT = "quit"
+RECORDER = "recorder"
+
 
 class Chat(NamedTuple):
     """One chat a quit recorded, as a reopen reads it back.
@@ -166,6 +184,9 @@ class Manifest(NamedTuple):
     at: int
     focus: str
     frames: tuple[Frame, ...]
+    #: :data:`QUIT` or :data:`RECORDER`. Defaulted to the quit's for the constructors that
+    #: predate it, and because that is the reading a missing field gets on the way in.
+    writer: str = QUIT
 
     def all_chats(self) -> tuple[Chat, ...]:
         """Every chat in every frame, in the order a reopen rebuilds them."""
@@ -216,8 +237,14 @@ def _usable(chat: Chat) -> bool:
                 and ws_mod.valid_name(chat.workspace))
 
 
-def write(frames, *, focus: str, at: int | None = None) -> bool:
+def write(frames, *, focus: str, at: int | None = None, writer: str = QUIT) -> bool:
     """Record *frames* as the plane to put back. ``True`` when it landed.
+
+    *writer* says who is writing — :data:`QUIT` unless the caller is the recorder, which is
+    the one caller that may be about to write over something it must not
+    (`commands_frame.record_the_plane_now`). A rewrite of a manifest that was read carries
+    its writer through unchanged (`_consume`, `_forget_transcript`): taking one chat out of a
+    quit's record does not make it the recorder's.
 
     **Called BEFORE anything is killed**, and that ordering is the record rather than a
     tidiness — the same rule `trace._trace_secret_use` keeps for the same reason: a record
@@ -262,6 +289,7 @@ def write(frames, *, focus: str, at: int | None = None) -> bool:
         "version": VERSION,
         "at": int(time.time() if at is None else at),
         "focus": focus,
+        "writer": writer,
         "frames": [{"workspace": f.workspace,
                     "chats": [c._asdict() for c in f.chats]} for f in frames],
     }
@@ -310,7 +338,11 @@ def read() -> Manifest | None:
     at = raw.get("at")
     return Manifest(at=at if isinstance(at, int) else 0,
                     focus=focus if isinstance(focus, str) else "",
-                    frames=tuple(frames))
+                    frames=tuple(frames),
+                    # The recorder's only when it says so. A missing field is a manifest
+                    # from before the field, and anything else is a value this charter
+                    # did not write — both read as a quit's, the one that cannot be redone.
+                    writer=RECORDER if raw.get("writer") == RECORDER else QUIT)
 
 
 def _chat(raw) -> Chat | None:

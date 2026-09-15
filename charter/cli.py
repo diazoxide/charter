@@ -1207,8 +1207,8 @@ def _add_frame_parsers(sub) -> None:
     #
     # **It takes no target, and that is the design rather than an omission.** Quit is
     # plane-scoped — the operator's own words were "all harness sessions will be closed" —
-    # and §3.3 bounds it from the other side: one tmux server serves every plane on the
-    # machine and session names carry no plane, so the set of things it stops can only come
+    # and §3.3 bounds it from the other side: a tmux server can hold more than one plane (the
+    # legacy shared socket, an operator's own tmux) and session names carry no plane, so the set of things it stops can only come
     # from this plane's own chat directories. `--chat` is where the keypress came FROM, for
     # `frame-toggle`'s reason, and is used only to decide which workspace a later
     # `charter reopen` puts the operator back on.

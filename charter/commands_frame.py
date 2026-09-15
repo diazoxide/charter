@@ -9,7 +9,7 @@ where there is no frame in the way.
 
 **There are TWO paths through this module, and almost everything below is about the
 first.** Started from a plain terminal, charter runs the frame as a SESSION on a private
-server of its own (`SOCKET`) and blocks in `attach`. Started from inside a tmux the
+server of this plane's own (`tmuxctl.plane_socket`) and blocks in `attach`. Started from inside a tmux the
 operator already has (`$TMUX`, read by `tmuxctl.operator_server`), it runs the frame as a
 WINDOW on THEIR server, writes not one option or key binding of theirs, and watches the
 harness pane instead of attaching — see `_launch_in_operator_tmux`, which is where every
@@ -18,8 +18,8 @@ below — the private server, `-f` versus `source-file`, both `pane-died` hooks,
 install race they close — describe the FIRST path only; the second has no hooks at all,
 for a reason `_launch_in_operator_tmux` gives.
 
-**Every frame on charter's own server shares one tmux server (`SOCKET`), and a WORKSPACE
-is a session on it while a CHAT is one window in that session.** A frame used to BE the
+**Every frame of one plane shares that plane's tmux server (`tmuxctl.plane_socket`), and a
+WORKSPACE is a session on it while a CHAT is one window in that session.** A frame used to BE the
 session, named by the frame id; it is now the window, named by the chat id, with the
 session named after the workspace the chats belong to. That single choice is what makes the
 rest of this module non-obvious, and it is why the session-scoped/hook-installing config reaches tmux through
@@ -167,10 +167,13 @@ from .frame import slots as frame_slots
 # the value are two different things and the value is the one the reader is following.
 from .frame import chrome as chrome_mod
 
-#: One shared tmux server for every frame this machine runs, sessions (not servers) told
-#: apart by name — the frame id. Never the operator's own default socket: a frame's
-#: config (`conf_text`) is charter's, not something to lay over `~/.tmux.conf`.
-SOCKET = "charter"
+#: There is no module-level socket any more, and that is ruling 46 rather than a rename.
+#: This was `SOCKET = "charter"` — "one shared tmux server for every frame this machine
+#: runs", whose note only ever meant *never the operator's own default socket*. Sessions
+#: were once unique by frame id; once a session was named by its workspace, one server for
+#: every plane let two planes' `default` meet in one session. The server a frame starts on
+#: is `tmuxctl.plane_socket()`, asked per call; the server a chat IS on is its own record,
+#: `state.frame_server`, with `tmuxctl.LEGACY_SOCKET` for a chat started before either.
 
 #: Terminal size assumed when `os.get_terminal_size()` cannot report one even though
 #: `sys.stdout.isatty()` said yes (seen from a harness invoked under a test/CI wrapper
@@ -181,7 +184,7 @@ SOCKET = "charter"
 _FALLBACK_SIZE = (80, 24)
 
 #: The placeholder loaded via `session_argv`'s `-f`, in effect ONLY if this call happens
-#: to start a brand-new tmux server on `SOCKET` (see the module docstring: `-f` is
+#: to start a brand-new tmux server on the plane's socket (see the module docstring: `-f` is
 #: ignored otherwise — which is also why `cmd_launch` arms this same setting a second,
 #: direct way when a server is already running; see the "by construction" comment
 #: there). `remain-on-exit` alone, deliberately global (`-g`, not scoped to this one
@@ -222,8 +225,9 @@ _CHAT_OPTION = "@charter_chat"
 #: The SESSION option that says which plane a workspace session belongs to — §4b's plane
 #: marker, and the answer to a question `#{session_name}` cannot be asked.
 #:
-#: **One tmux server serves every plane on this machine (`SOCKET`) and a session's name is
-#: a bare workspace name.** Measured on the operator's own socket while this was written:
+#: **One tmux server served every plane on this machine (`tmuxctl.LEGACY_SOCKET`) and a
+#: session's name is a bare workspace name.** Measured on the operator's own socket while
+#: this was written:
 #: eleven sessions from three different projects, and `default` — `DEFAULT_WORKSPACE`, a
 #: name every plane has whether anybody chose it or not — is one of them. So a
 #: `switch-client -t default` decided on a name can put an operator in another project's
@@ -231,6 +235,13 @@ _CHAT_OPTION = "@charter_chat"
 #: different persona set, different vaults, different memory. That is the correctness
 #: problem §4b's switch is built around, and it is why `_plane_session` never resolves a
 #: name.
+#:
+#: **Still asked now that each plane has a server of its own** (ruling 46), because two
+#: places are still shared: the legacy socket, where frames started before that ruling keep
+#: running with several planes' sessions side by side, and an operator's own tmux, where
+#: two planes' chats are windows in one server — which is why a launch there writes this
+#: marker on its chat's WINDOW (`_plane_window_option_argv`), and why a format that reads
+#: it resolves pane, then window, then session.
 #:
 #: **The value is `config.STATE_DIR` and not `config.ROOT`, which is a narrower claim and
 #: the true one.** What makes two charters one plane, for every read on this path, is
@@ -820,7 +831,7 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
     `hotkey` opens this frame's own palette (§4h — `F2` IS the palette; there is no menu
     beside it): `bind -n {hotkey} run-shell '"$CHARTER_PY" -m charter frame-palette'`. A
     key BINDING has no per-session form the way `status`/`mouse`/`history-limit` above do
-    — key tables are server-wide in tmux, so every frame on `SOCKET` ends up sharing this
+    — key tables are server-wide in tmux, so every frame on a plane's server ends up sharing this
     exact bind text, "last launched wins" exactly like `escape-time`/`remain-on-exit`/the
     `WheelUpPane` bind two lines down already do. That is only safe here because the
     action itself carries no frame identity: `charter frame-palette` (`cmd_palette`)
@@ -884,7 +895,7 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
 
     This also satisfies correction 2's "only in charter's own server" rule by
     construction rather than by discipline at each call site: `conf_text`'s only caller
-    (`cmd_launch`) sources this text against `SOCKET`, charter's own private server —
+    (`cmd_launch`) sources this text against the plane's own private server —
     never the operator's own default socket (see this module's own docstring, "Never the
     operator's own default socket").
 
@@ -1187,7 +1198,7 @@ def _charter_pythonsafepath_env_argv(*, socket: str, session: str) -> list[str]:
 
     `"$CHARTER_PY" -m charter ...` — the hotkey bind (`conf_text`) — is a shell TEMPLATE
     shared by every session on
-    `SOCKET`, built once and never per-invocation; there is nowhere in it to splice a
+    a plane's server, built once and never per-invocation; there is nowhere in it to splice a
     `-P` without re-embedding per-machine text, the exact construction `conf_text`'s own
     docstring already bans for `status_path`. `PYTHONSAFEPATH=1` is `-P`'s own
     environment-variable form — carried the identical session-scoped way
@@ -1202,7 +1213,7 @@ def _charter_pythonsafepath_env_argv(*, socket: str, session: str) -> list[str]:
     would break that contract for a caller that only wanted the interpreter path.
 
     `tmuxctl.server_argv` like every other builder here, even though the only caller
-    passes `SOCKET`: this module addresses two servers now, one by name and one by socket
+    passes the plane's socket: this module addresses two servers now, one by name and one by socket
     path, and a hand-built `-L` is correct only until somebody reuses the builder from
     `_launch_in_operator_tmux` — where it would quietly aim a `set-environment` at
     charter's own private server instead of failing.
@@ -1238,10 +1249,10 @@ def _session_id_env_argv(*, socket: str, session: str, chat: str) -> list[str]:
     `cmd_palette` (the hotkey bind's own action) and every action it starts read
     `$CHARTER_SESSION_ID` back out of a `run-shell`-spawned process's environment — the same out-of-band shape `_exit_path_env_argv` already uses for
     `status_path`, and for the identical reason: this is what lets `conf_text`'s bind
-    stay a single, frame-agnostic line shared by every session on `SOCKET` (see its own
+    stay a single, frame-agnostic line shared by every session on a plane's server (see its own
     docstring) while still resolving the RIGHT frame at the moment the key fires.
 
-    Without this call, `run-shell` fired from a LATER frame sharing `SOCKET` does not
+    Without this call, `run-shell` fired from a LATER frame sharing the server does not
     fall back to "no id" — it falls back to the FIRST frame's own id, silently. Verified
     by hand against tmux 3.7c: a second session started on an already-running server,
     `run-shell`'d with no override of its own, reported the FIRST frame's
@@ -1312,7 +1323,8 @@ def _this_plane() -> str:
     return str(config.STATE_DIR)
 
 
-def _plane_option_argv(*, socket: str, harness_pane: str) -> list[str] | None:
+def _plane_option_argv(*, socket: str, harness_pane: str,
+                       window: bool = False) -> list[str] | None:
     """`set-option`: write which PLANE this session belongs to. ``None`` to refuse.
 
     :func:`_chat_option_argv` one scope out, and the differences between them are all
@@ -1341,11 +1353,23 @@ def _plane_option_argv(*, socket: str, harness_pane: str) -> list[str] | None:
       would add a field and a newline would add a row, and either would be read as a
       server answering some other format. A plane whose path holds one is left unmarked
       rather than marked wrongly, which costs it §4b's veto and nothing else.
+
+    *window* writes the same marker on the chat's WINDOW instead (`-w`), for the one server
+    where a session is not charter's to mark: an operator's own tmux, where
+    `_launch_in_operator_tmux` opens every chat as a window in whatever session they were
+    in. Two planes launched inside one operator tmux put two `default.1` windows on one
+    server, and :func:`_chat_seats` — which aims every close and quit — could only tell
+    them apart by a marker (#933); a session option there would be written on the
+    operator's session, which that path promises never to do. A window option on the
+    window charter opened is `_chat_option_argv`'s own move, and `#{@charter_plane}`
+    resolves pane, then window, then session, so every reader of the session marker reads
+    this one without a change.
     """
     value = _this_plane()
     if not value or any(c in value for c in "\t\r\n"):
         return None
-    return tmuxctl.server_argv(socket, "set-option", "-t", harness_pane,
+    scope = ["-w"] if window else []
+    return tmuxctl.server_argv(socket, "set-option", *scope, "-t", harness_pane,
                                _PLANE_OPTION, value)
 
 
@@ -1898,7 +1922,15 @@ def _live_chats(socket: str) -> set[str] | None:
 #: `\t` because none of the three can contain one: `#{session_id}` is `$<digits>`,
 #: `#{window_active}` is `0` or `1`, and a chat id is held to `_FRAME_ID_RE`'s alphabet
 #: on the way back out.
-_WINDOW_SEAT_FORMAT = f"#{{session_id}}\t#{{window_active}}\t#{{{_CHAT_OPTION}}}"
+#:
+#: **The fourth field is :data:`_PLANE_OPTION`**, for :data:`_CHAT_PANE_FORMAT`'s reason
+#: (#933) at a second reader: two planes' chats share ids by construction, and they still
+#: share a server in two places — the legacy socket and an operator's own tmux. A launch
+#: there looking for its own chat by id could find the other plane's `default.2` first, take
+#: THAT window's session for its own, and tear down the panels of whatever chat the other
+#: plane had on screen. :func:`_window_seats` drops a row whose marker names another plane.
+_WINDOW_SEAT_FORMAT = (f"#{{session_id}}\t#{{window_active}}\t#{{{_CHAT_OPTION}}}"
+                       f"\t#{{{_PLANE_OPTION}}}")
 
 
 def _chat_being_left(socket: str, *, beside: str) -> str:
@@ -1952,15 +1984,20 @@ def _window_seats(socket: str, why: str) -> list[list[str]]:
 
     **No branch on the return code**, which is the shape both callers had: a listing that
     failed has an empty stdout and falls out as "no seats and therefore no answer" — the
-    same sentence, said once. **Exactly three fields**, because `#{@charter_chat}` is an
+    same sentence, said once. **Exactly four fields**, because `#{@charter_chat}` is an
     option and an option's value is whatever somebody set: one holding a tab of its own
-    would otherwise have its first half read as a chat id.
+    would otherwise have its first half read as a chat id. Handed back as three — the
+    marker has done its work once the row is known to be this plane's.
     """
     out = tmuxctl.run(why, tmuxctl.server_argv(socket, "list-windows", "-a", "-F",
                                                _WINDOW_SEAT_FORMAT),
                       timeout=5, report=False)
-    return [s for s in (line.split("\t") for line in out.stdout.splitlines())
-            if len(s) == 3]
+    # Another plane's row is dropped, an UNMARKED one kept — `_chat_seats`' asymmetry and
+    # its reason: a session an older charter made carries no marker, and reading that as
+    # "not mine" would lose every chat on it.
+    ours = ("", _this_plane())
+    return [s[:3] for s in (line.split("\t") for line in out.stdout.splitlines())
+            if len(s) == 4 and s[3] in ours]
 
 
 def _chat_showing(seats: list[list[str]], session: str | None) -> str:
@@ -1993,9 +2030,9 @@ def _chat_showing(seats: list[list[str]], session: str | None) -> str:
 #:
 #: The first two fields are tmux's OWN ids and neither of them is a name —
 #: :data:`_WINDOW_SEAT_FORMAT`'s rule one noun over, and here it is the whole correctness
-#: argument rather than a target-grammar convenience. One tmux server serves every plane
-#: on this machine (:data:`SOCKET`), session names are bare workspace names, and `default`
-#: is a name EVERY plane has, so `#{session_name}` cannot say whose session it is.
+#: argument rather than a target-grammar convenience. One tmux server served every plane
+#: on this machine (`tmuxctl.LEGACY_SOCKET`, where frames started before ruling 46 still
+#: run), session names are bare workspace names, and `default` is a name EVERY plane has, so `#{session_name}` cannot say whose session it is.
 #: `#{pane_id}` can: a pane id is minted by the server, and the only plane holding one is
 #: the plane whose launcher wrote it down (`state.record_harness_pane`).
 #:
@@ -2049,6 +2086,16 @@ def _plane_session(socket: str, *, ws: str) -> tuple[str, str] | None:
     with each: a workspace this plane has never opened has no chat directory, reaches no
     tmux call at all, and can never be confused with anybody's.
 
+    **Only the chats whose record names *socket*, because a pane id is minted per SERVER**
+    (ruling 46). While one server held every chat a plane had, "a pane id this plane wrote
+    down" and "a pane id on this server" were one set. With a server per plane and frames
+    from before that still on `tmuxctl.LEGACY_SOCKET`, one plane holds pane ids from two
+    servers, and each server counts from `%0`: a legacy chat of `default` recorded `%3`, and
+    `%3` on this plane's new server is a chat of `api`. Matched across servers, that answers
+    `api`'s session for `default` — a focus that attaches to the wrong workspace and a
+    switch that moves a client into it. `tmuxctl.same_server`, so a record spelled as a
+    path (#812) still counts for the server it names.
+
     Measured on tmux 3.7c and at the 3.2 floor, identically on both: `list-panes -a` lists
     every pane on the server with its own session id, and a session-scoped user option
     resolves in that pane format.
@@ -2056,7 +2103,8 @@ def _plane_session(socket: str, *, ws: str) -> tuple[str, str] | None:
     mine: dict[str, str] = {}
     for chat in chats.of_workspace(ws):
         pane = state.harness_pane(chat)
-        if pane is not None:
+        here = state.frame_server(chat) or tmuxctl.LEGACY_SOCKET
+        if pane is not None and tmuxctl.same_server(here, socket):
             mine[pane] = chat
     if not mine:
         return None
@@ -2150,7 +2198,7 @@ def _frame_is_live(socket: str, fid: str) -> bool:
     #812 a comparison of SERVERS rather than of spellings, so charter's own socket read
     out of `$TMUX` as a path is not mistaken for somebody else's — and it decides what
     the SECOND question is:
-    `cmd_respawn` asked `_live_sessions(SOCKET)` unconditionally, which on the operator's
+    `cmd_respawn` asked `_live_sessions` of charter's socket unconditionally, which on the operator's
     server is a question about a server that is not theirs: it answers "no such session"
     for a frame that is on screen, so a panel that died there could never have been
     brought back even once the hook reached charter.
@@ -3173,7 +3221,7 @@ def _panel_mark_argv(*, socket: str, pane_id: str) -> list[str]:
     keyboard. Nothing here reaches a screen.
 
     **Written on BOTH servers, and inside the operator's own tmux it marks a pane nothing
-    reads.** `conf_text` is sourced only against charter's private `SOCKET` — charter does
+    reads.** `conf_text` is sourced only against a plane's private server — charter does
     not rebind keys in a server it does not own, and `_launch_in_operator_tmux` is
     explicit that it must not — so inside an operator's tmux this is a user option on a
     pane charter created, carrying charter's namespace, dying with the pane, and changing
@@ -3590,6 +3638,15 @@ def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
         util.err(UNNAMED_CHAT_WINDOW.format(chat=fid))
         _close_window()
         return 1
+    # And whose chat it is, on the same window (`_plane_option_argv`'s *window*): another
+    # plane launched inside this same tmux has chats with these same ids, and a close or a
+    # quit aims `kill-window` by id. A warning and not a failure, for the private path's
+    # reason — what is lost is a veto, and the chat still runs.
+    marked = _plane_option_argv(socket=socket, harness_pane=harness_pane, window=True)
+    if marked is None or tmuxctl.run("marking the chat's window with its plane",
+                                     marked).returncode != 0:
+        util.warn("charter frame: continuing without it — a close or quit on another "
+                  "plane in this tmux cannot tell this chat from its own of the same id")
 
     # Before the harness exists, not after: this is what keeps the pane (and its
     # `#{pane_dead_status}`) in place once the harness exits, and there is no way to
@@ -3763,6 +3820,54 @@ def _cancelled_selector(fid: str) -> int:
 
     state.record_exit(fid, selector.CANCELLED_EXIT)
     return selector.CANCELLED_EXIT
+
+
+def _reap_the_legacy_server() -> bool:
+    """Reap `tmuxctl.LEGACY_SOCKET` for this plane's frames, and say whether any are left.
+
+    **Ruling 46's legacy rule, from the side that bounds `.charter/frame/`.** A frame
+    started before each plane had a tmux server of its own is on the one server every plane
+    shared, and its directory records that server — or records none, which is the same
+    server (`state.frame_server`). `state.reap` only removes a directory for the server it
+    is given, so a launch that reaped only this plane's own server would keep every such
+    directory for good once its chat had ended.
+
+    **Asked only while one of this plane's directories points there**, which is one small
+    file read per directory and no tmux at all for the ordinary plane: once the last legacy
+    frame is gone this costs nothing, and a machine that never ran a charter older than
+    ruling 46 never sends the legacy server a command.
+
+    The same two readings `cmd_launch` takes of its own server — sessions, and the chats
+    kept alive, here :func:`_legacy_keep`'s pane-checked list, because that server holds
+    other planes' chats of the same ids — and the same rule for when they may be trusted: a
+    server that listed sessions and then would not list its panes cannot say which chats are
+    live, and is not reaped on that answer.
+
+    True when any directory still points at the legacy server afterwards — a frame still
+    running there, or one charter could not ask about — which `cmd_launch` reads as "this
+    plane is live" before it restores anything.
+    """
+    if not _points_at_the_legacy_server():
+        return False
+    sessions = _live_sessions(tmuxctl.LEGACY_SOCKET)
+    chats = _legacy_keep()
+    if chats is not None or not sessions:
+        state.reap(sessions | (chats or set()), server=tmuxctl.LEGACY_SOCKET)
+    return _points_at_the_legacy_server()
+
+
+def _points_at_the_legacy_server() -> bool:
+    """Does any frame directory on this plane belong to `tmuxctl.LEGACY_SOCKET`?
+
+    Every directory rather than `leave.plane_chats`' chat-shaped ones, because the frames
+    old enough to have no server record at all are also old enough to predate chat ids.
+    """
+    try:
+        names = [e.name for e in os.scandir(state._root()) if e.is_dir()]
+    except OSError:
+        return False
+    return any((state.frame_server(n) or tmuxctl.LEGACY_SOCKET) == tmuxctl.LEGACY_SOCKET
+               for n in names)
 
 
 def _reap_this_server(socket: str) -> None:
@@ -4593,7 +4698,7 @@ def _arm_panel_respawn(socket: str, *, fid: str, panes: dict[str, str],
     command here: a panel that cannot be armed for respawn is still a panel that came up.
 
     **This used to refuse outright on the operator's server, and #408 is that refusal.**
-    `cmd_respawn` and `_panel_died_hook_argv` both spelled `-L SOCKET` by hand, so arming
+    `cmd_respawn` and `_panel_died_hook_argv` both spelled `-L charter` by hand, so arming
     a panel inside the operator's tmux would have installed a hook aimed at a different
     server; backing out was right at the time and left a panel that dies there dead for
     the life of the frame, with no message, no respawn and no backoff. Both ends now build
@@ -4992,7 +5097,10 @@ def _focus_workspace(session_id: str, chat: str, *, ws: str, picked: bool) -> in
     # operator stays, so a clear on the far side of it would leave the workspace marked for
     # the whole time they were reading it and drop the mark as they left.
     _looked_at(ws)
-    attached = tmuxctl.interact(SOCKET, ["attach", "-t", session_id])
+    # This plane's own server, because that is the only one `_workspace_to_focus` and
+    # `_plane_session` were asked about by the launch that called this.
+    socket = tmuxctl.plane_socket()
+    attached = tmuxctl.interact(socket, ["attach", "-t", session_id])
     if attached.returncode != 0:
         tmuxctl.report_failure("attaching to the frame", attached.args, attached)
         return attached.returncode
@@ -5000,7 +5108,7 @@ def _focus_workspace(session_id: str, chat: str, *, ws: str, picked: bool) -> in
     # client left, the session did not. Named by the WORKSPACE, because that is what an
     # operator types — the `$id` above is charter's own way of being sure which one.
     util.info(f"charter frame: detached — the harness is still running.\n"
-              f"  reattach with: tmux -L {SOCKET} attach -t "
+              f"  reattach with: tmux -L {socket} attach -t "
               f"{state.workspace_prefix(ws)}")
     return 0
 
@@ -5209,6 +5317,20 @@ def _restores_the_plane(args) -> bool:
 #: Silence is not the alternative — that is #752's defect exactly, a frame quietly drawing
 #: less than it should.
 RESTORED_ALL = "charter: restored the {n} chat(s) this plane last recorded"
+
+#: What a launch says when a chat of this plane still runs on the legacy server (ruling 46),
+#: so the record is neither restored beside it nor recorded over.
+RESTORE_HELD_BACK = (
+    "charter: this plane's record was not put back, because a chat of this plane started "
+    "before the upgrade is still running on the old shared tmux server (`tmux -L charter`). "
+    "The record is left in place, and this terminal will not record over it. Stop that frame "
+    "with `charter frame-quit` in this project, then run `charter` again.")
+
+
+def _has_a_record() -> bool:
+    """Whether a quit or a running plane left a record with anything in it to put back."""
+    m = reopen_state.read()
+    return m is not None and bool(m.frames)
 
 #: The same line when part of the plane did not come back — **the rest, named, on the one
 #: line**. Refusing the whole restore over one chat was the alternative, and it makes one
@@ -5592,8 +5714,18 @@ def _launch(args) -> int:
     # one workspace as a window inside ANOTHER workspace's session, whose every workspace
     # tab then refused with #812's own sentence. The one-way door was reachable by typing
     # as well as by clicking, and both doors are the same defect.
+    #
+    # **The private server is THIS PLANE's, and never one every plane shares** (ruling 46).
+    # Everything below decides whether to start a session or join one by the workspace's
+    # bare NAME (`session in live_sessions`), and on one server for the whole machine that
+    # question was answerable across planes: a second plane's `default` became a window in
+    # the first plane's `default`, with the first plane's panels, hooks, binds and palette
+    # (measured, `tests/test_two_planes_never_share_a_tmux_server.py`). A server named after
+    # this plane's state directory holds only this plane's sessions, so a name is an
+    # identity on it. Asked once, here, so the whole launch aims one server.
+    socket = tmuxctl.plane_socket()
     inside = tmuxctl.operator_server()
-    if inside is not None and tmuxctl.is_operator_socket(inside[0], own=SOCKET):
+    if inside is not None and tmuxctl.is_operator_socket(inside[0], own=socket):
         rc = _launch_in_operator_tmux(inside[0], inside[1], ws=ws, argv=argv,
                                       display=display, profile=_profile_name(p),
                                       h=h, v=v, picked=picked, selecting=selecting)
@@ -5607,12 +5739,12 @@ def _launch(args) -> int:
     # also narrows (though does not close) the same race for a sibling frame's `exit`
     # file: less time between "session gone" and "directory removed" for a sibling's own
     # launcher to lose the read.
-    live_sessions = _live_sessions(SOCKET)
+    live_sessions = _live_sessions(socket)
     # Both, and neither is redundant: a CHAT's directory is kept only by the chat id its
     # window carries (`_live_chats` — a chat's id holds no launcher pid for `reap`'s
     # second rule to abstain in its favour), and a frame launched by a charter that
     # predates chats is still a SESSION named by its id and is kept only by that list.
-    live_chats = _live_chats(SOCKET)
+    live_chats = _live_chats(socket)
     # A server that listed SESSIONS and then would not list its windows is a server
     # charter cannot tell the live chats of, and reaping on that answer deletes the state
     # of chats that are running — the version file their panels poll and the exit code
@@ -5624,8 +5756,8 @@ def _launch(args) -> int:
     if live_sessions:
         # Arm `remain-on-exit` by construction here, not by coincidence. The placeholder
         # `-f` config above only takes effect if THIS `new-session` call is what starts
-        # the tmux server — but a server on `SOCKET` may already be running for a reason
-        # that has nothing to do with charter (an operator's own `tmux -L charter
+        # the tmux server — but a server on this socket may already be running for a reason
+        # that has nothing to do with charter (an operator's own `tmux -L <that name>
         # new-session`, say), in which case `-f` is silently ignored and remain-on-exit
         # stays at tmux's own default (off) until SOME charter frame happens to
         # `source-file` it. Verified by hand: without this, a harness that dies in the
@@ -5634,9 +5766,14 @@ def _launch(args) -> int:
         # still wrong, and worth closing the same way the placeholder closes the
         # first-frame-ever case.
         tmuxctl.run("arming remain-on-exit ahead of an already-running server",
-                    tmuxctl.server_argv(SOCKET, "set", "-g", "remain-on-exit", "on"))
+                    tmuxctl.server_argv(socket, "set", "-g", "remain-on-exit", "on"))
     if can_reap:
-        state.reap(live_before, server=SOCKET)
+        state.reap(live_before, server=socket)
+    # **And the server this plane's older frames are still on**, which this plane's own
+    # server cannot answer for (ruling 46). A chat started before each plane had a server of
+    # its own is live or dead on `tmuxctl.LEGACY_SOCKET`, and `state.reap` leaves it to a
+    # reap of THAT server — so without this one its directory would outlive it forever.
+    still_on_the_legacy_server = _reap_the_legacy_server()
 
     # **Put the recorded plane back** (#845), and the gate that matters is `not
     # live_before` rather than anything about this workspace. With recording on, the record
@@ -5657,10 +5794,35 @@ def _launch(args) -> int:
     # **Before open-or-focus**, which is unreachable on this branch anyway — nothing is live
     # for a client to be looking at — but stated in this order because it is the order the
     # two questions are asked in: is there a plane to put back, then is there one to join.
-    if not live_before and _restores_the_plane(args):
+    #
+    # **Nothing live on this plane's server is no longer "nothing live anywhere on this
+    # plane"**, and the second half of the gate is what makes it so again: a frame started
+    # before the upgrade is running on the legacy server, which `live_before` never asked,
+    # and restoring beside it would put a second copy of each of its chats on screen.
+    if not live_before and not still_on_the_legacy_server and _restores_the_plane(args):
         rc = _restore_the_plane(args)
         if rc is not None:
             return rc
+    elif not live_before and _restores_the_plane(args) and _has_a_record():
+        # **Held back, and the record kept.** The one copy of what a quit left — each chat's
+        # resume id among it — is the manifest, and this launch is about to open a fresh chat
+        # under a recorder that writes the plane as it now stands, over it. Stopped before the
+        # chat is claimed, and said, so `charter` after that old frame is quit still has
+        # something to put back.
+        #
+        # **The stop is this launch's, and the record's own guard is at the write**
+        # (`_quit_record_held_back`): the recorder has been ticking since the top of
+        # `cmd_launch`, so a plane written while the operator sat at the workspace picker
+        # above had already landed over the quit before this line; and a second `charter` in
+        # this project finds the fresh chat live and never reaches this branch at all.
+        #
+        # Each conjunct is its own case and none stands in for another: `not live_before`
+        # because a live plane was not held back by anything, it is running, and this
+        # sentence would name the wrong reason; `_restores_the_plane` because a launch that
+        # declined to restore (`--fresh`, a `rest`) had nothing not put back; and
+        # `_has_a_record` because with nothing recorded there is nothing kept to speak of.
+        record.stop()
+        util.warn(RESTORE_HELD_BACK)
 
     # **Open or focus** (§4k), and it is asked HERE — after the reap, before the
     # allocation — for both of its neighbours' reasons. After the reap, so the chat
@@ -5710,8 +5872,8 @@ def _launch(args) -> int:
     # is the whole defect this feature exists to close, arriving through the door it opened.
     # `+` is how you add one.
     if not rest and _wants_attach(args):
-        focus = (_plane_session(SOCKET, ws=ws) if selecting
-                 else _workspace_to_focus(SOCKET, ws=ws))
+        focus = (_plane_session(socket, ws=ws) if selecting
+                 else _workspace_to_focus(socket, ws=ws))
         if focus is not None:
             return _focus_workspace(*focus, ws=ws, picked=picked)
 
@@ -5771,7 +5933,7 @@ def _launch(args) -> int:
     # And the `server` marker is rewritten for the same reason: an adopted directory
     # may name the OTHER server, and a stale marker would make `reap` on this one skip
     # a frame that is now genuinely ours.
-    state.record_server(fid, SOCKET)
+    state.record_server(fid, socket)
     # And the workspace this frame is FOR — rewritten for the same reason, and the one
     # thing here no process inside the frame can work out for itself (#512; see
     # `state.record_workspace`).
@@ -5880,7 +6042,7 @@ def _launch(args) -> int:
 
     # `env=` and not merely `tmuxctl.run(env=env)` below: the second only sets what the
     # tmux CLIENT runs with, and a client's environment reaches the new pane ONLY when
-    # this call is what starts the server. Every frame after the first on `SOCKET` finds
+    # this call is what starts the server. Every frame after the first on the plane's server finds
     # it already running, and its harness would inherit the FIRST frame's
     # `$CHARTER_SESSION_ID` — #411, measured against tmux 3.7c; see `layout.session_argv`.
     #
@@ -5912,12 +6074,12 @@ def _launch(args) -> int:
     joining = session in live_sessions
     if joining:
         start_cmd = layout.chat_window_argv(
-            socket=SOCKET, session=session, chat=fid, cwd=launch_cwd,
+            socket=socket, session=session, chat=fid, cwd=launch_cwd,
             harness_argv=argv, env=_frame_identity_env(env))
         started_what = "adding a chat to the workspace"
     else:
         start_cmd = layout.session_argv(
-            session=session, conf=str(conf_path), socket=SOCKET, cols=cols, rows=rows,
+            session=session, conf=str(conf_path), socket=socket, cols=cols, rows=rows,
             harness_argv=argv, chat=fid,
             env=_frame_identity_env(env) if v >= tmuxctl.SESSION_ENV_FLOOR else None)
         started_what = "starting the frame"
@@ -5965,7 +6127,7 @@ def _launch(args) -> int:
     # liveness list (`_live_chats`), the write hook's `#{@charter_chat}`, and the binds
     # `conf_text` writes. Armed before either hook, so the hook that names it cannot fire
     # against a window that has not been told yet.
-    named = _chat_option_argv(socket=SOCKET, harness_pane=harness_pane, chat=fid)
+    named = _chat_option_argv(socket=socket, harness_pane=harness_pane, chat=fid)
     if named is None:
         util.warn(f"charter frame: {fid!r} is not a shape tmux can carry as a window "
                   "option — this chat's state may be reaped while it is still running")
@@ -5976,13 +6138,16 @@ def _launch(args) -> int:
               "recorded")
     # And which PLANE the session belongs to — §4b's marker, written by the launch that
     # CREATED the session and by no other. `joining` is the same NAME test three dozen
-    # lines up, which is exactly the cross-plane collision this marker records: a launch
-    # that joined a session it did not make may be standing in another plane's session,
-    # and re-marking it there would relabel that plane's frame as this one's. A warning
+    # lines up, which on the one server every plane shared was exactly the cross-plane
+    # collision this marker records: a launch that joined a session it did not make could
+    # be standing in another plane's session, and re-marking it there would relabel that
+    # plane's frame as this one's. A plane's own server (ruling 46) cannot hold another
+    # plane's session, so the marker is now belt and braces here and load-bearing on the
+    # legacy server and in an operator's tmux. A warning
     # rather than a failure, because what is lost is a veto and not the switch: an
     # unmarked session is still found by the pane records `_plane_session` starts from.
     if not joining:
-        marked = _plane_option_argv(socket=SOCKET, harness_pane=harness_pane)
+        marked = _plane_option_argv(socket=socket, harness_pane=harness_pane)
         if marked is None:
             util.warn("charter frame: this plane's state directory is not a shape tmux "
                       "can carry as an option — a workspace switch cannot tell this "
@@ -6001,7 +6166,7 @@ def _launch(args) -> int:
                                history_limit=frame["history_limit"], session=session,
                                toggles=instance.frame_toggles(frame)))
     _tell("loading the frame's config",
-          tmuxctl.server_argv(SOCKET, "source-file", str(conf_path)),
+          tmuxctl.server_argv(socket, "source-file", str(conf_path)),
           "charter frame: continuing without it — mouse/history-limit/hotkey "
           "settings may not be in effect for this frame")
 
@@ -6014,7 +6179,7 @@ def _launch(args) -> int:
     # benign too. Right here, beside `source-file`, so all three mouse keys are installed
     # by the same batch and a reader looking for charter's mouse handling finds it in one
     # place rather than two.
-    menu = _menu_button_bind_argv(socket=SOCKET, env=env)
+    menu = _menu_button_bind_argv(socket=socket, env=env)
     if menu is not None:
         _tell("binding the menu button off the panels",
               menu,
@@ -6022,7 +6187,7 @@ def _launch(args) -> int:
               "move the keyboard off the harness")
 
     _tell("carrying the exit-status path",
-          _exit_path_env_argv(socket=SOCKET, session=session,
+          _exit_path_env_argv(socket=socket, session=session,
                               frame_root=str(frame_root)),
           "charter frame: continuing without it — the exit code may not be "
           "recorded for this frame")
@@ -6031,10 +6196,10 @@ def _launch(args) -> int:
     # bind's action (`charter frame-palette`) and every action the palette starts resolve
     # `$CHARTER_SESSION_ID` from a `run-shell`-spawned process's environment, and without
     # this call a frame beyond the first sharing
-    # `SOCKET` would silently resolve the FIRST frame's id instead of its own (see
+    # the server would silently resolve the FIRST frame's id instead of its own (see
     # `_session_id_env_argv`'s own docstring for what was verified by hand).
     _tell("carrying the frame id to its own palette",
-          _session_id_env_argv(socket=SOCKET, session=session, chat=fid),
+          _session_id_env_argv(socket=socket, session=session, chat=fid),
           "charter frame: continuing without it — the palette may not find "
           "this frame's own actions")
 
@@ -6043,17 +6208,17 @@ def _launch(args) -> int:
     # on the tmux server's own `$PATH`, and `run-shell` reports the resulting 127 by
     # printing it INTO THE HARNESS PANE — see `conf_text`'s own docstring.
     _tell("carrying charter's own interpreter to the palette",
-          _charter_py_env_argv(socket=SOCKET, session=session),
+          _charter_py_env_argv(socket=socket, session=session),
           "charter frame: continuing without it — the palette may not open "
           "on this frame")
 
     # The escape hatch's other half. `conf_text`'s bind carries no identity — it reads a
     # WINDOW option, and this is what puts this frame's own answer in it, so a key table
-    # every frame on `SOCKET` shares still returns each presser to their OWN harness (see
+    # every frame on the server shares still returns each presser to their OWN harness (see
     # `frame/overlay.py`). Armed the moment the harness pane exists and before any panel
     # is split, because a frame with panes and no way back to the harness is exactly the
     # state the hatch is for.
-    hatch = overlay.arm_hatch_argv(SOCKET, harness=harness_pane)
+    hatch = overlay.arm_hatch_argv(socket, harness=harness_pane)
     if hatch is None:
         util.warn("charter frame: tmux did not report this frame's harness as a pane id "
                   f"— the {overlay.HATCH_KEY} escape hatch will not be armed for it")
@@ -6067,7 +6232,7 @@ def _launch(args) -> int:
     # the hotkey template above has no room for a per-invocation flag — see
     # `_charter_pythonsafepath_env_argv`'s own docstring.
     _tell("carrying PYTHONSAFEPATH to the palette",
-          _charter_pythonsafepath_env_argv(socket=SOCKET, session=session),
+          _charter_pythonsafepath_env_argv(socket=socket, session=session),
           "charter frame: continuing without it — the palette may import "
           "the wrong charter if this pane's directory has its own `charter/` "
           "package")
@@ -6078,7 +6243,7 @@ def _launch(args) -> int:
     # (`frame/builtin_actions.build`), so there is no snapshot left to keep in step.
 
     _tell("installing the exit-status hook",
-          _pane_died_write_hook_argv(socket=SOCKET, harness_pane=harness_pane),
+          _pane_died_write_hook_argv(socket=socket, harness_pane=harness_pane),
           "charter frame: continuing without it — the exit code may not be "
           "recorded for this frame")
 
@@ -6087,7 +6252,7 @@ def _launch(args) -> int:
     # at all, further down — so its position is kept rather than its result guessed at.
     teardown_at = _tell(
         "installing the chat-teardown hook",
-        _pane_died_teardown_hook_argv(socket=SOCKET, harness_pane=harness_pane),
+        _pane_died_teardown_hook_argv(socket=socket, harness_pane=harness_pane),
         "")
 
     told = tmuxctl.write_all("telling the frame's window and session what they are",
@@ -6108,7 +6273,7 @@ def _launch(args) -> int:
     # directly, immediately, closes it: if the pane is already dead, the job the hooks
     # would have done (record the code, end the session) is finished right here, and
     # `attach` is never even called against a session already known to be over.
-    code = _query_pane_dead_status(SOCKET, harness_pane)
+    code = _query_pane_dead_status(socket, harness_pane)
     # **What the pane's own launcher decided, for an open nobody is watching** (ruling 42).
     # Measured 2026-09-11: the eager ask above completes 6-14 ms after the start while a
     # Python launcher's first line runs at 19-22 ms, so it rarely catches a launcher that
@@ -6131,7 +6296,7 @@ def _launch(args) -> int:
     # the pane's own reading still stands.
     refused = ""
     if p is not None and not attended:
-        recorded, refused = _await_the_launcher(SOCKET, fid, harness_pane)
+        recorded, refused = _await_the_launcher(socket, fid, harness_pane)
         if recorded is not None:
             code = recorded
     def nothing_ever_ran_here() -> bool:
@@ -6180,7 +6345,7 @@ def _launch(args) -> int:
             # it wrote was its stdout — charter repeating that onto stderr would be
             # inventing output on the wrong stream. Its exit code is the whole message.
             util.err(early_death_message(display, code,
-                                         _pane_last_words(SOCKET, harness_pane)))
+                                         _pane_last_words(socket, harness_pane)))
         # `kill-window` targeting the harness PANE, never `kill-session` on the workspace:
         # this chat's window is what is over, and the workspace may hold other chats whose
         # harnesses are mid-turn. Measured on tmux 3.7c and on tmux 3.2 that `kill-window
@@ -6188,7 +6353,7 @@ def _launch(args) -> int:
         # LAST window destroys the session — so the ordinary one-chat case ends exactly as
         # it did.
         tmuxctl.run("ending the chat after an early death",
-                    tmuxctl.server_argv(SOCKET, "kill-window", "-t", harness_pane),
+                    tmuxctl.server_argv(socket, "kill-window", "-t", harness_pane),
                     env=env)
 
     attach = None
@@ -6206,7 +6371,7 @@ def _launch(args) -> int:
                      "failed to install, so a crash later would block `attach` forever "
                      "with nothing to end the session. The harness is still running, "
                      f"detached; reattach manually if you must: "
-                     f"tmux -L {SOCKET} attach -t {session}")
+                     f"tmux -L {socket} attach -t {session}")
         else:
             # `pane_env` on this path too, since #411: a panel splits off a server that
             # may have been started by ANOTHER launcher, so `$CHARTER_WORKSPACE` and
@@ -6214,11 +6379,11 @@ def _launch(args) -> int:
             # Identity only — a `-e` is argv (see `_frame_identity_env`) — and withheld
             # below `PANE_ENV_FLOOR`, where `split-window` cannot parse the flag.
             panes = _draw_panels(
-                SOCKET, slots=slots, fid=fid, harness_pane=harness_pane, env=env, v=v,
+                socket, slots=slots, fid=fid, harness_pane=harness_pane, env=env, v=v,
                 pane_env=_pane_identity_env(env, v),
                 sizes=_launch_sizes(fid, slots, window_cols=cols,
                                     window_rows=rows))
-            _arm_panel_respawn(SOCKET, fid=fid, panes=panes, env=env)
+            _arm_panel_respawn(socket, fid=fid, panes=panes, env=env)
 
             # The chat this launch just built is the one the operator asked for, so it
             # is the one their client lands on. `new-window` created it detached (`-d`),
@@ -6243,10 +6408,10 @@ def _launch(args) -> int:
             # **Nor does a background open** (`_opening`): the chat it builds is not the one
             # anybody is looking at, and the chat the operator IS looking at keeps its panels.
             if _reopening(args) is None and _opening(args) is None:
-                leaving = _chat_being_left(SOCKET, beside=fid)
+                leaving = _chat_being_left(socket, beside=fid)
                 selected = tmuxctl.run(
                     "selecting the chat",
-                    tmuxctl.server_argv(SOCKET, "select-window", "-t", harness_pane),
+                    tmuxctl.server_argv(socket, "select-window", "-t", harness_pane),
                     env=env)
                 # And the chat the client has just left loses its panels — `cmd_chat` step
                 # 2's rule, applied where the situation is made rather than only where it
@@ -6258,7 +6423,7 @@ def _launch(args) -> int:
                 # failed select would kill the panels of the chat the operator is still
                 # looking at.
                 if selected.returncode == 0:
-                    _drop_panels(SOCKET, leaving)
+                    _drop_panels(socket, leaving)
 
             # `split-window` makes the newly created pane the ACTIVE one by default, so
             # after every slot has been drawn, the LAST panel drawn — not the harness —
@@ -6273,7 +6438,7 @@ def _launch(args) -> int:
             # included: the target session's current window is the same before and after
             # (`tests/test_a_background_chat_really_starts_on_its_brief.py`).
             tmuxctl.run("focusing the harness pane",
-                        tmuxctl.server_argv(SOCKET, "select-pane", "-t", harness_pane),
+                        tmuxctl.server_argv(socket, "select-pane", "-t", harness_pane),
                         env=env)
 
             # **A reopen does not attach either, and exactly once rather than N times.**
@@ -6296,7 +6461,7 @@ def _launch(args) -> int:
                 # `tmuxctl.interact`, not `tmuxctl.run`: no capture and no timeout — this
                 # IS the operator's own terminal for as long as the harness runs, not an
                 # admin command whose output (or lifetime) charter should own.
-                attach = tmuxctl.interact(SOCKET, ["attach", "-t", session], env=env)
+                attach = tmuxctl.interact(socket, ["attach", "-t", session], env=env)
 
             code = state.exit_code(fid)
             if code is None:
@@ -6304,7 +6469,7 @@ def _launch(args) -> int:
                 # seen yet (the harness was still alive at that point and died later —
                 # the ordinary case, caught here by the hooks, or a rarer one where they
                 # never actually reached the server despite reporting success).
-                code = _query_pane_dead_status(SOCKET, harness_pane)
+                code = _query_pane_dead_status(socket, harness_pane)
 
     # The claim is given up before the reap that exists to collect it (#685). The marker
     # `state.new_chat_id` wrote says "a launcher is still working on this directory", and
@@ -6322,11 +6487,11 @@ def _launch(args) -> int:
     # the real flow it was.
     started_nothing = nothing_ever_ran_here()
     state.clear_claim(fid)
-    after_sessions = _live_sessions(SOCKET)
-    after_chats = _live_chats(SOCKET)
+    after_sessions = _live_sessions(socket)
+    after_chats = _live_chats(socket)
     live_after = after_sessions | (after_chats or set())
     if after_chats is not None or not after_sessions:
-        state.reap(live_after, server=SOCKET)
+        state.reap(live_after, server=socket)
     # **The one place the operator can be told a quit happened, and it is not the quit.**
     # `charter: quit` runs detached with its three streams on `/dev/null`
     # (`builtin_actions._spawn`), so whatever it prints is read by nothing; and by the time
@@ -6377,7 +6542,7 @@ def _launch(args) -> int:
         # chat is a window inside it, and tmux puts the client back on whichever window
         # was last current.
         util.info(f"charter frame: detached — the harness is still running.\n"
-                 f"  reattach with: tmux -L {SOCKET} attach -t {session}")
+                 f"  reattach with: tmux -L {socket} attach -t {session}")
         return 0
     if attach is not None and attach.returncode != 0:
         # Nothing was recorded, tmux is not still tracking this session, AND `attach`
@@ -7129,7 +7294,7 @@ def cmd_resize(args) -> int:
     panes = state.panes(fid)
     if not panes:
         return 0
-    socket = state.frame_server(fid) or SOCKET
+    socket = state.frame_server(fid) or tmuxctl.LEGACY_SOCKET
     measured = _measure_window(socket, harness_pane)
     if measured is None:
         return 0
@@ -7203,7 +7368,7 @@ def cmd_density(args) -> int:
     Started by a palette row (`frame/builtin_actions.py`), and typeable by hand from
     inside a frame. The frame is resolved from `$CHARTER_SESSION_ID` exactly as
     `cmd_palette` and `cmd_respawn` resolve theirs — never from anything baked into an
-    action, since one bind is shared by every frame on `SOCKET`.
+    action, since one bind is shared by every frame on a plane's server.
 
     **charter.toml is not touched, and that is the whole design.** `[frame] density` sets
     what a frame STARTS at; this changes what one running frame IS. Charter's rule is that
@@ -7364,7 +7529,7 @@ def _relayout_target(fid: str):
     v = tmuxctl.version()
     if v is None:
         return None
-    return (state.frame_server(fid) or SOCKET), harness_pane, v
+    return (state.frame_server(fid) or tmuxctl.LEGACY_SOCKET), harness_pane, v
 
 
 def _apply_arrangement(fid: str, *, where, want: list[str],
@@ -7493,7 +7658,7 @@ def cmd_chrome(args) -> int:
     Started by a palette row (`frame/builtin_actions.py`), and typeable by hand from
     inside a frame. The frame is resolved from `$CHARTER_SESSION_ID` exactly as
     `cmd_density`, `cmd_toggle`, `cmd_palette` and `cmd_respawn` resolve theirs, since one
-    bind text is shared by every frame on `SOCKET`.
+    bind text is shared by every frame on a plane's server.
 
     **Nothing splits, and that is the whole difference from `cmd_density`.** The surface
     is a pane option and tmux repaints from it on the spot — measured on an attached
@@ -7555,7 +7720,7 @@ def cmd_chrome(args) -> int:
     if not panes:
         return 0
     state.record_chrome(fid, level)
-    socket = state.frame_server(fid) or SOCKET
+    socket = state.frame_server(fid) or tmuxctl.LEGACY_SOCKET
     # Asked once for the whole keypress rather than per pane, and asked at all because
     # #631 made this function version-dependent where it was not before: above
     # `tmuxctl.PANE_BORDER_FLOOR` each panel carries its own edges and the window's stay
@@ -7632,7 +7797,7 @@ def cmd_toggle(args) -> int:
     Fired by that component's own `bind -n` (`conf_text`), and typeable by hand from
     inside a frame. The chat is resolved by :func:`_pressers_chat` — the `--chat` the bind
     carries out of the presser's own window, falling back to `$CHARTER_SESSION_ID` —
-    because one bind text is shared by every frame on `SOCKET` and a session now holds
+    because one bind text is shared by every frame on a plane's server and a session now holds
     several chats.
 
     **charter.toml is not touched**, and every word of `cmd_density`'s argument for that
@@ -7730,7 +7895,7 @@ def cmd_bar_rows(args) -> int:
     Fired by `layout.BAR_ROWS_KEY`'s own `bind -n` (:func:`conf_text`), and typeable by
     hand from inside a frame. The chat is resolved by :func:`_pressers_chat` — the
     `--chat` the bind carries out of the presser's own window, falling back to
-    `$CHARTER_SESSION_ID` — because one bind text is shared by every frame on `SOCKET`.
+    `$CHARTER_SESSION_ID` — because one bind text is shared by every frame on a plane's server.
 
     **charter.toml is not touched**, and every word of :func:`cmd_toggle`'s argument for
     that applies unchanged: `[[frame.component]] size` says what a strip STARTS at (#687),
@@ -7875,7 +8040,7 @@ def cmd_chat(args) -> int:
 
     Started DETACHED by a palette row (:func:`_draw_palette`), and typeable by hand from
     inside a frame. The chat the keypress came from is :func:`_pressers_chat`'s, for its
-    reason: one bind text is shared by every frame on `SOCKET`, and a session now holds
+    reason: one bind text is shared by every frame on a plane's server, and a session now holds
     several chats.
 
     **Four steps, and every one of them is an existing path** (spec §3.7):
@@ -7979,7 +8144,7 @@ def cmd_chat(args) -> int:
     if not out.ok:
         _say_on_screen(fid, out.message)
         return 0
-    socket = state.frame_server(fid) or SOCKET
+    socket = state.frame_server(fid) or tmuxctl.LEGACY_SOCKET
     # `chats.pane_of` and never a bare `state.harness_pane`: the read is the same one
     # `chats.check` made a moment ago, so this is a SECOND reading of a record that can
     # have moved — a reap, a relaunch — and the fallback the sweep found here turned that
@@ -8409,12 +8574,20 @@ def _open_workspace(fid: str, ws: str, *, socket: str,
     reported success but left nothing on the server is caught here rather than switching a
     client at a session id charter made up.
     """
+    # **A frame on the legacy server cannot open a workspace it can switch to** (ruling 46):
+    # the launch lands on this plane's own server and `switch-client` cannot cross servers.
+    # Refused before anything starts, rather than opening a chat nobody can see and then
+    # reporting that nothing opened — see :data:`BEFORE_THIS_PLANES_SERVER`.
+    if tmuxctl.same_server(socket, tmuxctl.LEGACY_SOCKET):
+        _say_on_screen(fid, BEFORE_THIS_PLANES_SERVER.format(what=f"'{ws}'", ws=ws))
+        return None
     # **The name must be free on the whole MACHINE, not merely unresolved on this plane**,
     # and this guard is what keeps #793's cross-plane guarantee across the new door into
     # the launcher. `_plane_session` answered ``None`` a moment ago, and that means "this
     # plane cannot prove a session of this name is its own" — NOT "no such session". One
-    # tmux server serves every plane on this machine (eleven sessions from three projects
-    # on the operator's own socket the week this was written), and `cmd_launch` decides
+    # tmux server served every plane on this machine when this was written (eleven
+    # sessions from three projects on the operator's own socket), and it still does on the
+    # legacy socket ruling 46 left behind; and `cmd_launch` decides
     # between starting a session and joining one with `if session in live_sessions:`, a
     # NAME test over all of them. So an open that skipped this would add a chat window to
     # another plane's live session — another project's frame, across every isolation
@@ -8593,8 +8766,8 @@ def _switch_client(fid: str, ws: str, *, said: str) -> None:
     argument — the shape this repository's deletion sweep reports and this repository
     deletes.
     """
-    socket = state.frame_server(fid) or SOCKET
-    if tmuxctl.is_operator_socket(socket, own=SOCKET):
+    socket = state.frame_server(fid) or tmuxctl.LEGACY_SOCKET
+    if tmuxctl.is_operator_socket(socket):
         # **This is #812's refusal, and it is still here because the reasoning was never
         # the defect.** What was wrong was the premise: `is_operator_socket` was a
         # leading-slash test, and a chat launched inside one of charter's own panes
@@ -8738,7 +8911,7 @@ def _switch_client(fid: str, ws: str, *, said: str) -> None:
 def _pressers_chat(args) -> str:
     """Which chat the keypress that started this process was fired in.
 
-    **One bind text is shared by every frame on `SOCKET`, and a session now holds several
+    **One bind text is shared by every frame on a plane's server, and a session now holds several
     chats, so neither half of this is optional.** `--chat` is `#{@charter_chat}` expanded
     by tmux in the presser's own window (`conf_text`), which is the only source that can
     tell two chats of one session apart: measured on tmux 3.7c and on 3.2, a `run-shell`
@@ -8792,7 +8965,7 @@ def cmd_palette(args) -> int:
     **The bind carries the presser's client and nothing else** (see `conf_text`). The
     frame is resolved from `$CHARTER_SESSION_ID` at the moment the key fires, exactly as
     `cmd_density`, `cmd_switch` and `cmd_respawn` resolve theirs, because one bind is
-    shared by every frame on `SOCKET`.
+    shared by every frame on a plane's server.
 
     **Always 0.** `run-shell` reports a non-zero command by printing it INTO THE HARNESS
     PANE and dropping that pane into copy-mode — charter drawing in the one rectangle ADR
@@ -8876,7 +9049,7 @@ def _open_palette(args) -> int:
     """
     fid = _pressers_chat(args)
     harness = state.harness_pane(fid) or ""
-    socket = state.frame_server(fid) or SOCKET
+    socket = state.frame_server(fid) or tmuxctl.LEGACY_SOCKET
     v = tmuxctl.version()
     if v is None:
         return 0
@@ -9033,7 +9206,7 @@ def _draw_palette(args) -> int:
     which is the frame's existing spinner and not a second clock.
     """
     fid = os.environ.get("CHARTER_SESSION_ID", "")
-    socket = state.frame_server(fid) or SOCKET
+    socket = state.frame_server(fid) or tmuxctl.LEGACY_SOCKET
     harness = state.harness_pane(fid) or ""
     # **This process's own rectangle, read ONCE and used twice** — by :func:`_picker`, to
     # unzoom a one-chat confirmation into the drawer it is (#921, #927), and by
@@ -9465,7 +9638,7 @@ def cmd_switch(args) -> int:
 
     The frame is resolved from `$CHARTER_SESSION_ID` exactly as `cmd_density`,
     `cmd_palette` and `cmd_respawn` resolve theirs, and for the same reason: one bind is
-    shared by every frame on `SOCKET`, so the frame a command acts on is resolved at the
+    shared by every frame on a plane's server, so the frame a command acts on is resolved at the
     moment it runs, never baked into anything.
 
     The decision is `frame/switch.py`'s and the tmux half is this function's: which frame,
@@ -9617,8 +9790,8 @@ def cmd_respawn(args) -> int:
     no-op for the same reason: there is no screen left to report it on that is not the
     agent's own.
 
-    **Which server, and #408.** This resolved nothing: it spelled `["tmux", "-L", SOCKET,
-    …]` and asked `_live_sessions(SOCKET)`, so a hook fired inside the operator's own tmux
+    **Which server, and #408.** This resolved nothing: it spelled `["tmux", "-L", "charter",
+    …]` and asked `_live_sessions` of that socket, so a hook fired inside the operator's own tmux
     would have talked to charter's private server about a session that is not there — the
     other half of the mismatch `_panel_died_hook_argv` had. The server comes from
     `state.frame_server(fid)`, which the launcher records for every frame on either socket,
@@ -9666,7 +9839,7 @@ def cmd_respawn(args) -> int:
         return 0
     if not _PANE_ID_RE.fullmatch(args.pane or ""):
         return 0
-    socket = state.frame_server(fid) or SOCKET
+    socket = state.frame_server(fid) or tmuxctl.LEGACY_SOCKET
     attempt = state.respawn_attempt(fid, args.slot)
     if attempt is None or attempt > _RESPAWN_ATTEMPTS:
         return 0
@@ -9803,10 +9976,57 @@ def _capture_transcript(socket: str, pane_id: str, dest) -> bool:
 #: was every plane's — and chat ids collide by construction, because `default.1` is the id
 #: every plane's first chat gets (`DEFAULT_WORKSPACE_FALLBACK`). Measured on the reporting
 #: operator's own socket: three planes, each with a `default.1` on disk. A session option
-#: resolves in a `list-windows` format exactly as it does in `list-panes`' — see
-#: :data:`_PANE_SEAT_FORMAT`, which asks the same marker the same way for the same reason.
-_CHAT_WINDOW_FORMAT = (f"#{{{_CHAT_OPTION}}}\t#{{window_id}}\t#{{window_active}}"
-                       f"\t#{{{_PLANE_OPTION}}}")
+#: resolves in a `list-panes` format — see :data:`_PANE_SEAT_FORMAT`, which asks the same
+#: marker the same way for the same reason.
+#:
+#: **The fifth field is the PANE, and the listing is `list-panes` for it** (ruling 46). A
+#: session marker names the plane whose launch CREATED the session, and before each plane had
+#: a server of its own a second plane's `default` joined that session as a window — so on the
+#: legacy server a mixed session's marker names plane A for plane B's windows too. Vetoed on
+#: the marker alone, plane B's quit stopped none of its own windows there; matched on the id
+#: alone, plane A's quit killed plane B's `default.1`, listed after its own. The pane id is
+#: the one reading neither can be wrong about: tmux minted it and each plane's own launcher
+#: wrote down its own chat's (`state.record_harness_pane`). `#{@charter_chat}`,
+#: `#{window_active}` and a session option all resolve in a pane's format — measured for
+#: `tmuxctl._PANE_PID_FORMAT` and :data:`_PANE_SEAT_FORMAT` on 3.7c and at the 3.2 floor.
+_CHAT_PANE_FORMAT = (f"#{{{_CHAT_OPTION}}}\t#{{window_id}}\t#{{window_active}}"
+                     f"\t#{{{_PLANE_OPTION}}}\t#{{pane_id}}")
+
+
+def _chat_pane_rows(socket: str) -> list[list[str]] | None:
+    """Every pane on *socket* as a :data:`_CHAT_PANE_FORMAT` row, or ``None`` when the server
+    would not answer. Rows of any other width are dropped: `@charter_chat` is an option, and
+    one holding a tab of its own would otherwise shift every field after it."""
+    out = tmuxctl.run("listing the chats this plane has open",
+                      tmuxctl.server_argv(socket, "list-panes", "-a", "-F",
+                                          _CHAT_PANE_FORMAT),
+                      timeout=5, report=False)
+    if out.returncode != 0:
+        return None
+    return [f for f in (line.split("\t") for line in out.stdout.splitlines()) if len(f) == 5]
+
+
+def _this_planes_claim(chat: str, socket: str) -> str | bool | None:
+    """What this plane's own records say about *chat* on *socket*.
+
+    ``False`` when this plane has a chat of that id and its record names another server, so
+    a window of that id here is somebody else's; otherwise the harness pane its launcher
+    wrote down; ``None`` when there is no pane this plane can vouch for — no chat of that id
+    here, or one whose launcher predates `state.record_harness_pane`. **One answer for those
+    two, because both readers ask one question of them**: `_chat_seats` and `_legacy_keep`
+    each test the claim for truth and then compare it to the pane in hand, and a chat with
+    no pane record decides nothing either way, exactly as an absent chat does. This read
+    ``state.harness_pane(chat) or ""`` for the second case, and the deletion sweep found the
+    fallback indistinguishable from its absence — correctly: `harness_pane` never answers
+    ``""``, and no caller told ``""`` from ``None``. *chat* has already been held to
+    `_FRAME_ID_RE`, because it is about to be a directory name.
+    """
+    d = state.frame_dir(chat)
+    if d is None or not d.is_dir():
+        return None
+    if not tmuxctl.same_server(state.frame_server(chat) or tmuxctl.LEGACY_SOCKET, socket):
+        return False
+    return state.harness_pane(chat)
 
 
 def _chat_seats(socket: str) -> list[tuple[str, str, bool]] | None:
@@ -9833,7 +10053,8 @@ def _chat_seats(socket: str) -> list[tuple[str, str, bool]] | None:
 
     **A window whose marker names ANOTHER plane is not this plane's chat, however well its
     id matches — #933.** This function's own docstring said "every chat *socket* reports"
-    and meant it: one tmux server carries every plane on the machine (§3.3), so a listing
+    and meant it: one tmux server carried every plane on the machine (§3.3) — and still does
+    on the legacy socket and in an operator's own tmux after ruling 46 — so a listing
     filtered by nothing answered with all of them, and the ids collide by construction —
     `default` is `DEFAULT_WORKSPACE_FALLBACK` and every plane's first chat is `default.1`.
     What that cost is two things, and the second is the one worth naming twice:
@@ -9852,25 +10073,80 @@ def _chat_seats(socket: str) -> list[tuple[str, str, bool]] | None:
     nothing and killed nothing while saying it had done both, which is exactly the tri-state
     above, arrived at from the other side. A marker that names a DIFFERENT plane is a veto.
     That asymmetry is the whole of why this is a filter and not a match.
+
+    **Where this plane recorded the chat's harness pane, the pane decides — on
+    `tmuxctl.LEGACY_SOCKET`, and there alone** (ruling 46; :data:`_CHAT_PANE_FORMAT` has the
+    measurement). A chat this plane holds on ANOTHER server is not this window, whatever its
+    id. Everywhere else a marker naming another plane still vetoes a matching pane, and the
+    difference is what the marker can be wrong about:
+
+    * on the legacy server the marker is the SESSION's, written by the launch that CREATED
+      that session — so in a session a second plane joined it names the wrong plane for that
+      plane's own windows, which is the whole reason the pane decides there;
+    * everywhere else charter marks what it made for the chat it made it for: its own WINDOW
+      inside an operator's tmux, and its own session on a server that is this plane's alone.
+      A marker there naming another plane is never wrong about the window it is on, and it
+      is the one reading that survives a server RESTART: pane ids start again at `%0`, so a
+      record from before one can match a live pane it has nothing to do with. Measured on a
+      real operator-style server: a stale `%1` of this plane against another plane's first
+      chat, where the kill and the capture both went to that plane's window.
+
+    Residual, on the legacy server only: a charter old enough to predate the marker leaves
+    windows carrying none, and nothing charter now runs starts that server.
     """
-    out = tmuxctl.run("listing the chats this plane has open",
-                      tmuxctl.server_argv(socket, "list-windows", "-a", "-F",
-                                          _CHAT_WINDOW_FORMAT),
-                      timeout=5, report=False)
-    if out.returncode != 0:
+    rows = _chat_pane_rows(socket)
+    if rows is None:
         return None
+    on_the_legacy_server = tmuxctl.same_server(socket, tmuxctl.LEGACY_SOCKET)
     seats: list[tuple[str, str, bool]] = []
+    seen: set[tuple[str, str]] = set()
+    claims: dict[str, str | bool | None] = {}
     ours = _this_plane()
-    for line in out.stdout.splitlines():
-        fields = line.split("\t")
-        if len(fields) != 4:
+    for chat, window, active, plane, pane in rows:
+        if not (_FRAME_ID_RE.fullmatch(chat) and _WINDOW_ID_RE.fullmatch(window)):
             continue
-        chat, window, active, plane = fields
-        if plane not in ("", ours):
+        if chat not in claims:
+            claims[chat] = _this_planes_claim(chat, socket)
+        claim = claims[chat]
+        if claim is False or (claim and pane != claim):
             continue
-        if _FRAME_ID_RE.fullmatch(chat) and _WINDOW_ID_RE.fullmatch(window):
+        if plane not in ("", ours) and not (claim and on_the_legacy_server):
+            continue
+        # One row per PANE, so a window of panels answers once per panel: the first row of a
+        # window is the one that counts, and they all say the same.
+        if (chat, window) not in seen:
+            seen.add((chat, window))
             seats.append((chat, window, active == "1"))
     return seats
+
+
+def _legacy_keep() -> set[str] | None:
+    """The chat ids the legacy server keeps alive for `state.reap` — ``None`` when it would not
+    answer.
+
+    A KEEP list, so it leans the way `_live_chats` does and over-keeps rather than delete a
+    running chat's state: no marker veto at all, because a mixed session's marker names the
+    wrong plane for half its windows. **But a chat this plane recorded a pane for is kept
+    only by THAT pane.** `_live_chats` kept plane A's quit `default.1` alive because plane
+    B's `default.1` was running in the same session, which held every legacy directory, so
+    `cmd_launch` read plane A as still running, skipped its restore and opened a fresh chat
+    instead.
+    """
+    rows = _chat_pane_rows(tmuxctl.LEGACY_SOCKET)
+    if rows is None:
+        return None
+    keep: set[str] = set()
+    for chat, _window, _active, _plane, pane in rows:
+        # The keep list becomes `state.reap`'s live set and is compared against directory
+        # names, so a value off a tmux option that is not in the alphabet — a pane carrying
+        # no `@charter_chat` prints an empty one — is never an entry in it.
+        if not _FRAME_ID_RE.fullmatch(chat):
+            continue
+        claim = _this_planes_claim(chat, tmuxctl.LEGACY_SOCKET)
+        if claim and pane != claim:
+            continue
+        keep.add(chat)
+    return keep
 
 
 def _plane_live(servers) -> tuple[set[str] | None, dict[str, dict[str, str]], set[str]]:
@@ -9909,20 +10185,31 @@ def _plane_live(servers) -> tuple[set[str] | None, dict[str, dict[str, str]], se
 
 
 def _plane_servers() -> list[str]:
-    """Every tmux server this plane's chats say they are on, charter's own first.
+    """Every tmux server this plane's chats say they are on, this plane's own first.
 
-    Charter's own socket is always included, even on a plane whose every chat records
-    another: it is where a chat with no recorded server will be (`builtin_actions._server`'s
-    own fallback, spelled the same way), and asking it costs one `list-windows` against a
-    socket that may not even have a server — which answers rc 1 and is read as "nothing
-    live there" by the caller.
+    **Only the servers a chat points at — this plane's own included** (ruling 46). This
+    used to list charter's own socket unconditionally, because that was where a chat with
+    no recorded server would be. That chat now resolves to `tmuxctl.LEGACY_SOCKET`, spelled
+    the same way `builtin_actions._server` spells it, so it is asked through the record like
+    every other server, and only while some chat of this plane points there.
+
+    **And the plane's own server is not asked when nothing points at it, which is measured
+    rather than tidy.** A server nothing has started does not answer "no windows": tmux 3.7c
+    exits 1 (`error connecting to … (No such file or directory)`), `_chat_seats` reads that
+    as a server that would not answer, and `_plane_live` turns one such server into
+    "charter could not ask" for the whole plane. On the day of the upgrade — frames still
+    running on the legacy server, nothing yet on the plane's own — a `charter reopen`
+    asked both, got that answer, read the plane as not running, and launched a second copy
+    of a chat that was on screen (`test_two_planes_never_share_a_tmux_server`).
     """
-    found = [SOCKET]
+    own = tmuxctl.plane_socket()
+    found: list[str] = []
     for fid in leave.plane_chats():
-        server = state.frame_server(fid) or SOCKET
+        server = state.frame_server(fid) or tmuxctl.LEGACY_SOCKET
         if server not in found:
             found.append(server)
-    return found
+    # Stable, so every other server keeps the order the chats named it in.
+    return sorted(found, key=lambda server: server != own)
 
 
 def _warn_about(p, *, on: str, verb: str) -> None:
@@ -9970,7 +10257,9 @@ def cmd_quit(args) -> int:
        once the work behind it is genuinely stopped.
 
     **Plane-scoped, and that is §3.3's doing rather than a widening.** One tmux server
-    serves every plane on the machine and session names carry no plane, so `kill-server`
+    served every plane on the machine — ruling 46 gave each plane its own, but the legacy
+    socket and an operator's own tmux still hold several — and session names carry no
+    plane, so `kill-server`
     would take another plane's frames and `kill-session -t default` would take whichever
     plane's `default` tmux resolved first. The set of things this stops is exactly *the
     chats this plane has directories for*, which is the only filter that can be trusted.
@@ -10057,7 +10346,7 @@ def _record_the_plane(doomed, *, focus: str, active, windows,
             # (`leave.NOT_REOPENED`), and `cmd_quit`'s own line says how many of how many
             # were kept.
             continue
-        server = state.frame_server(c.chat) or SOCKET
+        server = state.frame_server(c.chat) or tmuxctl.LEGACY_SOCKET
         transcript = ""
         dest = reopen_state.transcript_path(c.chat)
         pane_id = state.harness_pane(c.chat) or ""
@@ -10087,7 +10376,10 @@ def _record_the_plane(doomed, *, focus: str, active, windows,
             brief=state.brief(c.chat) or ""))
     for ws in order:
         frames.append(reopen_state.Frame(workspace=ws, chats=tuple(entries[ws])))
-    if not reopen_state.write(frames, focus=focus):
+    # Signed by who is writing (`reopen.QUIT`'s note): `capture` is true for exactly the
+    # caller that is a quit, and the recorder is the one reader of the signature.
+    if not reopen_state.write(frames, focus=focus, writer=reopen_state.QUIT if capture
+                              else reopen_state.RECORDER):
         return None
     if capture:
         # Keyed on what was RECORDED and not on what was stopped: a transcript is a file in
@@ -10115,6 +10407,17 @@ def record_the_plane_now(chat: str) -> bool:
     empty write. It is the state a plane is in for the instant between a quit's manifest and
     the launcher noticing its attach ended, and replacing a quit's record with an empty one
     there would destroy exactly the thing this feature exists to keep.
+
+    **And a quit's record is not written over while a chat of this plane is still on the
+    old shared server** (ruling 46) — :func:`_quit_record_held_back`. That is the state
+    `_launch` holds a restore back in: the record's chats are dead and their resume ids are
+    in that file alone, so the plane as it now stands must not replace it until a restore
+    has consumed it. The launch stops its own recorder for that reason, and this is the
+    same rule at the write itself, because the launch's stop is not the only way here: the
+    recorder ticks from the top of `cmd_launch`, so an operator sitting at the workspace
+    picker for a few seconds had the plane written before the hold-back line was reached;
+    and a second `charter` in the same project, finding the plane live on its own server
+    and so never reaching that line, recorded the fresh chat over the quit. Measured both.
     """
     # **Asked of the disk before it is asked of tmux.** A plane with no chat directories has
     # nothing to record whatever a server says, and this runs on a poll: `_plane_live` is a
@@ -10130,8 +10433,31 @@ def record_the_plane_now(chat: str) -> bool:
     doomed = leave.stopping(leave.plan(live=live, focus=focus))
     if not doomed:
         return False
+    if _quit_record_held_back(doomed):
+        return False
     return _record_the_plane(doomed, focus=focus, active=active, windows=windows,
                              capture=False) is not None
+
+
+def _quit_record_held_back(doomed) -> bool:
+    """Is the record on disk a quit's that no restore has consumed, while a chat of this
+    plane is still on `tmuxctl.LEGACY_SOCKET`?
+
+    *doomed* is `leave.stopping`'s answer — the chats live, or that charter could not ask
+    about, each carrying the server its directory records — so "still on the legacy server"
+    is read off the same listing the record would be written from, and `_launch`'s own
+    hold-back (`still_on_the_legacy_server`, asked after a reap) and this cannot disagree
+    about whether the plane is in that state. A chat with no server record is on the legacy
+    server, as everywhere (`state.frame_server`).
+
+    The record is asked second: it is a file read, and on the ordinary plane nothing points
+    at the legacy server, so the ordinary tick never pays it.
+    """
+    if not any(tmuxctl.same_server(c.server or tmuxctl.LEGACY_SOCKET, tmuxctl.LEGACY_SOCKET)
+               for c in doomed):
+        return False
+    m = reopen_state.read()
+    return m is not None and bool(m.frames) and m.writer != reopen_state.RECORDER
 
 
 def _stop_chats(doomed, *, windows) -> int:
@@ -10150,7 +10476,7 @@ def _stop_chats(doomed, *, windows) -> int:
     """
     stopped = 0
     for c in doomed:
-        server = state.frame_server(c.chat) or SOCKET
+        server = state.frame_server(c.chat) or tmuxctl.LEGACY_SOCKET
         window = windows.get(server, {}).get(c.chat, "")
         if not window:
             continue
@@ -10388,7 +10714,8 @@ def _forget_transcript(fid: str) -> None:
         frames = [reopen_state.Frame(workspace=f.workspace,
                                      chats=tuple(c for c in f.chats if c.chat != fid))
                   for f in m.frames]
-        reopen_state.write([f for f in frames if f.chats], focus=m.focus, at=m.at)
+        reopen_state.write([f for f in frames if f.chats], focus=m.focus, at=m.at,
+                           writer=m.writer)
     reopen_state.prune_transcripts(
         {c.chat for c in (reopen_state.read() or reopen_state.Manifest(
             at=0, focus="", frames=())).all_chats()})
@@ -10491,8 +10818,8 @@ def _restore_recorded_chat(rec, fid: str) -> None:
 REOPEN_ON_A_LIVE_PLANE = (
     "charter reopen: this plane is already running — reopening it would open a second copy "
     "of every chat, and a reopened chat gets a new id, so nothing on screen would tell the "
-    "copies apart. Attach to what is there (`tmux -L charter attach`), or quit it first "
-    "(`F2 → charter: quit`). Nothing was reopened, and the record is left in place.")
+    "copies apart. Attach to what is there ({attach}), or quit it first (`charter frame-quit` "
+    "in this project). Nothing was reopened, and the record is left in place.")
 
 
 def _plane_is_running() -> bool:
@@ -10522,7 +10849,26 @@ def _plane_is_running() -> bool:
 NOTHING_RECORDED = (
     "charter reopen: nothing recorded to put back. A plane is recorded when you quit it "
     "(`F2 → charter: quit`); a terminal that closed on its own only detached, so its "
-    "harnesses are still running — `tmux -L charter attach` reaches them.")
+    "harnesses are still running — {attach} reaches them.")
+
+
+def _attach_route() -> str:
+    """How to reach this plane's running chats, as the command or commands to type.
+
+    **The server each live chat is ON, and this plane's own only when none is live** (ruling
+    46). A chat that detached before the upgrade is still on the old shared server, and a
+    sentence naming `charter-plane-…` for it would send the operator to a server with
+    nothing on it. Asked the way a quit asks — this plane's chats, per server they record,
+    plane-checked by `_chat_seats` — so the route and a quit cannot disagree about where a
+    chat is. A server spelled as a path (an operator's own tmux) is named with `-S`.
+    """
+    servers = _plane_servers()
+    _live, windows, _active = _plane_live(servers)
+    mine = set(leave.plane_chats())
+    on = [server for server in servers if mine & set(windows.get(server, {}))]
+    return " or ".join(
+        "`" + " ".join(tmuxctl.server_argv(server, "attach", interactive=True)) + "`"
+        for server in (on or [tmuxctl.plane_socket()]))
 
 
 def cmd_reopen(args) -> int:
@@ -10585,7 +10931,7 @@ def _reopen_plane(args) -> int:
     """
     m = reopen_state.read()
     if m is None or not m.frames:
-        util.err(NOTHING_RECORDED)
+        util.err(NOTHING_RECORDED.format(attach=_attach_route()))
         return 1
     # **Before anything is started**, and it is the #687/#690 shape rather than politeness:
     # `cmd_launch` answers a non-tty stdout with `bypass(argv)`, which is an `os.execvp`.
@@ -10634,7 +10980,7 @@ def _reopen_plane(args) -> int:
     # only with nothing live (`cmd_launch`'s `not live_before`), so this is a second reading
     # of one rule rather than a second rule.
     if _plane_is_running():
-        util.err(REOPEN_ON_A_LIVE_PLANE)
+        util.err(REOPEN_ON_A_LIVE_PLANE.format(attach=_attach_route()))
         return 1
     quiet = getattr(args, "quiet", False)
     back: list[Reopening] = []
@@ -10702,7 +11048,7 @@ def _consume(m, done, *, quiet: bool = False) -> None:
     if not left:
         reopen_state.forget()
         return
-    if reopen_state.write(left, focus=m.focus, at=m.at):
+    if reopen_state.write(left, focus=m.focus, at=m.at, writer=m.writer):
         _report(quiet, util.warn,
                 f"charter reopen: {sum(len(f.chats) for f in left)} chat(s) still "
                 "recorded — `charter reopen` again to retry just those")
@@ -10995,13 +11341,16 @@ def _attach_after_reopen(m, back) -> int:
     # `_reopen_one`: every chat a reopen builds passes through that function, and the last
     # one to run is not the one the operator ends up on.
     record.focus_on(wanted.fid)
+    # This plane's own server: every chat a reopen brings back is a new launch, and a new
+    # launch starts nowhere else — not on the server the chat was quit from.
+    socket = tmuxctl.plane_socket()
     session = state.workspace_prefix(wanted.chat.workspace)
     pane_id = state.harness_pane(wanted.fid) or ""
     if _PANE_ID_RE.fullmatch(pane_id):
         tmuxctl.run("putting you back on the chat you left",
-                    tmuxctl.server_argv(SOCKET, "select-window", "-t", pane_id),
+                    tmuxctl.server_argv(socket, "select-window", "-t", pane_id),
                     report=False)
-    attached = tmuxctl.interact(SOCKET, ["attach", "-t", session])
+    attached = tmuxctl.interact(socket, ["attach", "-t", session])
     if attached.returncode != 0:
         tmuxctl.report_failure("attaching to the reopened frame", attached.args, attached)
         return attached.returncode
@@ -11071,7 +11420,7 @@ def cmd_transcript(args) -> int:
         _say_on_screen(fid, "charter has no usable record of this chat's harness pane, so "
                             "it cannot place a window beside it — relaunch this chat")
         return 0
-    socket = state.frame_server(fid) or SOCKET
+    socket = state.frame_server(fid) or tmuxctl.LEGACY_SOCKET
     # **The target is the SESSION ID, and every other spelling was measured failing.** This
     # is the #664/#695 shape and it cost a hand-run to find: `kill-window -t %N` resolves a
     # pane to its own window, so `new-window -t %N` looks like it should too. It does not.
@@ -11193,9 +11542,9 @@ NO_CHAT_HERE = ("this frame is a window in a tmux you already had, where charter
 
 #: What it says when this plane cannot prove the workspace's session is its own.
 #:
-#: **§3.3's guarantee, at a new door.** One tmux server serves every plane on this machine
+#: **§3.3's guarantee, at a new door.** One tmux server served every plane on this machine
 #: (eleven sessions from three projects on the operator's own socket the week this was
-#: written) and `cmd_launch` decides between starting a session and joining one with
+#: written; since ruling 46 only the legacy socket still does) and `cmd_launch` decides between starting a session and joining one with
 #: `if session in live_sessions:`, a NAME test over all of them. So a `+` that ran the
 #: launcher without this check could add a window to ANOTHER plane's live session — another
 #: project's frame, across every isolation boundary charter has. `_plane_session` is the
@@ -11205,6 +11554,32 @@ NO_CHAT_HERE = ("this frame is a window in a tmux you already had, where charter
 #: prove is ours.
 NO_SESSION_HERE = ("charter cannot prove this workspace's tmux session is this plane's, so "
                    "it will not add a chat to it — it is probably another plane's")
+
+#: What a chat on the LEGACY server is told when it asks for a new chat beside it (ruling 46).
+#:
+#: **A new chat opens on this plane's own server, and this frame is not on it.** A frame
+#: started before each plane had a tmux server of its own is still on
+#: `tmuxctl.LEGACY_SOCKET`, and it keeps running there until it ends. Opening its `+` or a
+#: workspace tab on that server would be the defect the ruling ends — a launch there joins
+#: a session by its bare workspace name, which another plane may hold. Opening it on this
+#: plane's server instead would start a harness nobody can see from here, and a switch
+#: cannot move a client between two servers. So it is refused, before anything starts, with
+#: the two routes that do work: `charter frame-quit` records this plane and stops its old
+#: chats, and `charter` then puts them back on its own server (`[frame] restore`); or
+#: `charter -w <workspace>` from a terminal opens one there now.
+#:
+#: **`charter frame-quit` typed in the project, and not `F2 → charter: quit`.** A key binding
+#: is server-wide, and the palette's `run-shell` takes `$CHARTER_ROOT` from the environment
+#: of whichever launch STARTED that shared server — so on it, F2 can act for another
+#: project. A command typed in this project's own directory resolves this plane, and its quit
+#: finds this plane's windows by the pane each one recorded (`_chat_seats`), in a session
+#: another plane made as much as in its own.
+BEFORE_THIS_PLANES_SERVER = (
+    "cannot open {what} from this frame: it was started before charter gave each plane a "
+    "tmux server of its own, and a new chat opens on this plane's server, where this frame "
+    "cannot show it. Nothing was opened — `charter frame-quit`, typed in this project, stops "
+    "and records this plane's old chats, and `charter` then puts them back on its own "
+    "server; or run `charter -w {ws}` in a terminal.")
 
 
 def cmd_new_chat(args) -> int:
@@ -11265,11 +11640,14 @@ def cmd_new_chat(args) -> int:
         util.err("charter frame-new-chat: no frame — run it inside a charter frame, or "
                  "pass --chat <id>")
         return 0
-    socket = state.frame_server(fid) or SOCKET
-    if tmuxctl.is_operator_socket(socket, own=SOCKET):
+    socket = state.frame_server(fid) or tmuxctl.LEGACY_SOCKET
+    if tmuxctl.is_operator_socket(socket):
         _say_on_screen(fid, NO_CHAT_HERE)
         return 0
     ws = state.workspace_for(fid)
+    if tmuxctl.same_server(socket, tmuxctl.LEGACY_SOCKET):
+        _say_on_screen(fid, BEFORE_THIS_PLANES_SERVER.format(what="another chat", ws=ws))
+        return 0
     seat = _plane_session(socket, ws=ws)
     if seat is None:
         _say_on_screen(fid, NO_SESSION_HERE)
@@ -11472,8 +11850,8 @@ def _how_a_background_open_would_go(ws: str, *, caller: str, first_message: str,
     size = len(os.fsencode(first_message))
     if size > FIRST_MESSAGE_MAX_BYTES:
         return LONG_FIRST_MESSAGE.format(n=size, max=FIRST_MESSAGE_MAX_BYTES), None, None
-    socket = state.frame_server(caller) or SOCKET
-    if tmuxctl.is_operator_socket(socket, own=SOCKET):
+    socket = state.frame_server(caller) or tmuxctl.LEGACY_SOCKET
+    if tmuxctl.is_operator_socket(socket):
         return NO_BACKGROUND_CHAT_HERE, None, None
     p, why = _same_profile_as(caller)
     if p is None:
@@ -11496,8 +11874,13 @@ def _how_a_background_open_would_go(ws: str, *, caller: str, first_message: str,
     if h.first_message_argv("x y") is None:
         return UNMEASURED_FIRST_MESSAGE.format(ws=ws, harness=h.name), None, None
     prefix = state.workspace_prefix(ws)
-    if _plane_session(socket, ws=ws) is None and prefix in _live_sessions(socket):
-        return NOT_THIS_PLANES_SESSION.format(ws=ws, socket=socket, prefix=prefix), None, None
+    # Asked of the server the chat will OPEN on, which is this plane's own and not
+    # necessarily the caller's: a caller still on the legacy server (ruling 46) opens its
+    # handoff on the new one, and a name test against the server it will not join refuses
+    # the wrong session or passes the wrong one.
+    home = tmuxctl.plane_socket()
+    if _plane_session(home, ws=ws) is None and prefix in _live_sessions(home):
+        return NOT_THIS_PLANES_SESSION.format(ws=ws, socket=home, prefix=prefix), None, None
     return "", p, h
 
 
@@ -11545,7 +11928,7 @@ def open_in_background(ws: str, *, caller: str, first_message: str,
         ws, caller=caller, first_message=first_message, probe=False)
     if refusal:
         return Opened(False, "", refusal)
-    socket = state.frame_server(caller) or SOCKET
+    socket = state.frame_server(caller) or tmuxctl.LEGACY_SOCKET
     pane = chats.pane_of(caller)
     if pane is None:
         seat = _plane_session(socket, ws=ws)

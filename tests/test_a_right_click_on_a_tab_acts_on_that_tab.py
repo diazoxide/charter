@@ -39,6 +39,7 @@ import unittest
 from unittest import mock
 
 from charter import commands_frame, tui, util
+from charter.frame import tmuxctl
 from charter.frame import (builtin_actions, builtins, component, leave, overlay,
                            palette, slots, state, tabmenu)
 
@@ -553,7 +554,7 @@ class TheRowIdsAreNotActionIdsAndTheFallbacksAreReachable(PersonaIso, unittest.T
         harness pane. `None` is not `""`: it would reach a tmux target as the four
         characters `None`, naming a pane that cannot exist, where `""` is what every
         charter reader already treats as absent."""
-        self.assertEqual(tabmenu.handback({}), ("", commands_frame.SOCKET, "", ""))
+        self.assertEqual(tabmenu.handback({}), ("", tmuxctl.LEGACY_SOCKET, "", ""))
 
     def test_the_reachable_half_is_a_frame_id_that_came_back_empty(self):
         """**Which of these fallbacks production really reaches, measured rather than
@@ -572,7 +573,7 @@ class TheRowIdsAreNotActionIdsAndTheFallbacksAreReachable(PersonaIso, unittest.T
         """
         self.assertEqual(
             tabmenu.handback({"CHARTER_SESSION_ID": "", "TMUX_PANE": "%3"}),
-            ("", commands_frame.SOCKET, "", "%3"))
+            ("", tmuxctl.LEGACY_SOCKET, "", "%3"))
 
     def test_a_pane_that_was_told_everything_uses_what_it_was_told(self):
         _plant("api.1", workspace="api", pane="%7")

@@ -24,9 +24,10 @@ version charter is developed on are still hand-run — 3.7c and the 3.2 floor
 (`tmuxctl.FLOOR`), which is why nothing here carries a version gate — and CI is a third
 machine's answer on top of that, worth having precisely because it is a different one.
 
-**Its own socket, reaped.** `commands_frame.SOCKET` is patched per class: the operator's own
-frame runs on the bare `charter` socket with sessions from several projects on it, and a test
-that killed windows there would kill their work. `tests/_tmuxreap` collects what a killed run
+**Its own socket, reaped.** `tmuxctl.plane_socket` is patched per class: the operator's own
+frames run on their plane's `charter-plane-<hex>` socket, or on the bare `charter` one with
+sessions from several projects on it, and a test that killed windows there would kill their
+work. `tests/_tmuxreap` collects what a killed run
 leaves behind.
 """
 
@@ -62,7 +63,7 @@ class ARealQuitStopsRealChats(PersonaIso, unittest.TestCase):
         super().setUp()
         make_plane(self)
         self.socket = _tmuxreap.name(f"quit-{next(_SERVERS)}")
-        self.enterContext(mock.patch.object(commands_frame, "SOCKET", self.socket))
+        self.enterContext(mock.patch.object(tmuxctl, "plane_socket", return_value=self.socket))
         self.addCleanup(self._kill_server)
 
     def _kill_server(self):
@@ -291,7 +292,7 @@ class TheTranscriptOpensInAWindowOfItsOwn(PersonaIso, unittest.TestCase):
         self._chat_with_a_transcript()
         before = self._windows()
 
-        with mock.patch.object(commands_frame, "SOCKET", self.socket):
+        with mock.patch.object(tmuxctl, "plane_socket", return_value=self.socket):
             self.assertEqual(commands_frame.cmd_transcript(
                 SimpleNamespace(chat="alpha_2.1")), 0)
 
@@ -368,7 +369,7 @@ class TheTranscriptOpensInAWindowOfItsOwn(PersonaIso, unittest.TestCase):
     def test_the_chats_own_window_is_left_exactly_as_it_was(self):
         pane = self._chat_with_a_transcript()
 
-        with mock.patch.object(commands_frame, "SOCKET", self.socket):
+        with mock.patch.object(tmuxctl, "plane_socket", return_value=self.socket):
             commands_frame.cmd_transcript(SimpleNamespace(chat="alpha_2.1"))
 
         # Nothing is written into the harness's pane — ADR 0018's half that this change
@@ -386,7 +387,7 @@ class TheTranscriptOpensInAWindowOfItsOwn(PersonaIso, unittest.TestCase):
         reopen.transcript_path("alpha_2.1").unlink()
         before = self._windows()
 
-        with mock.patch.object(commands_frame, "SOCKET", self.socket), \
+        with mock.patch.object(tmuxctl, "plane_socket", return_value=self.socket), \
                 mock.patch.object(commands_frame, "_say_on_screen") as said:
             self.assertEqual(commands_frame.cmd_transcript(
                 SimpleNamespace(chat="alpha_2.1")), 0)
@@ -466,7 +467,7 @@ class TwoPlanesOnOneServer(PersonaIso, unittest.TestCase):
         b_pane = self._plant_chat(f"{ws}.2", session=ws, first=False)
 
         # Both windows are in one session, on one server, with two different planes' state.
-        with mock.patch.object(commands_frame, "SOCKET", self.socket):
+        with mock.patch.object(tmuxctl, "plane_socket", return_value=self.socket):
             self._use(self.tmp)
             self.assertEqual(commands_frame.cmd_quit(
                 SimpleNamespace(chat=f"{ws}.1")), 0)
@@ -486,7 +487,7 @@ class TwoPlanesOnOneServer(PersonaIso, unittest.TestCase):
         self._use(self.b_root)
         self._plant_chat(f"{ws}.2", session=ws, first=False)
 
-        with mock.patch.object(commands_frame, "SOCKET", self.socket):
+        with mock.patch.object(tmuxctl, "plane_socket", return_value=self.socket):
             self._use(self.tmp)
             commands_frame.cmd_quit(SimpleNamespace(chat=f"{ws}.1"))
             recorded_a = [c.chat for c in reopen.read().all_chats()]
@@ -507,7 +508,7 @@ class TwoPlanesOnOneServer(PersonaIso, unittest.TestCase):
             seen.append(argv)
             return real(why, argv, **kw)
 
-        with mock.patch.object(commands_frame, "SOCKET", self.socket), \
+        with mock.patch.object(tmuxctl, "plane_socket", return_value=self.socket), \
                 mock.patch.object(commands_frame.tmuxctl, "run", side_effect=_watch):
             commands_frame.cmd_quit(SimpleNamespace(chat=f"{ws}.1"))
 

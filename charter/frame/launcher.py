@@ -517,16 +517,14 @@ def framed_chat() -> str | None:
     chat = os.environ.get("CHARTER_SESSION_ID")
     if not chat:
         return None
-    from ..commands_frame import SOCKET
-
-    server = state.frame_server(chat) or SOCKET
+    server = state.frame_server(chat) or tmuxctl.LEGACY_SOCKET
     row = tmuxctl.live_pane_by_pid(server, os.getpid())
     if row is not None:
         # The window NAME on charter's own server, the `@charter_chat` option on the
         # operator's — where a name is only a label anything may rewrite (ruling 33). Read
         # by name off `tmuxctl.LivePane`, because which of the two proves a chat is the one
         # thing here it would be worst to get subtly wrong.
-        proof = row.chat if tmuxctl.is_operator_socket(server, own=SOCKET) else row.window
+        proof = row.chat if tmuxctl.is_operator_socket(server) else row.window
         if proof == chat:
             return chat
     util.err(f"charter: {UNPROVEN_CHAT.format(chat=contain.readable(chat))}")
@@ -678,9 +676,7 @@ def _close_the_cancelled_chat(fid: str | None) -> None:
     """
     if fid is None:
         return
-    from ..commands_frame import SOCKET
-
-    server = state.frame_server(fid) or SOCKET
+    server = state.frame_server(fid) or tmuxctl.LEGACY_SOCKET
     row = tmuxctl.live_pane_by_pid(server, os.getpid())
     if row is None or not row.pane:
         return

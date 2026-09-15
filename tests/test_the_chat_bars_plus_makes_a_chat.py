@@ -34,6 +34,7 @@ import unittest
 from unittest import mock
 
 from charter import commands_frame, config
+from charter.frame import tmuxctl
 from charter.frame import state
 
 from tests._isolation import PersonaIso, wired_as_today
@@ -73,7 +74,7 @@ def _a_chat(fid: str, *, ws: str, pane: str | None = "%1",
     """
     state.frame_dir(fid, create=True)
     state.record_workspace(fid, ws)
-    state.record_server(fid, socket or commands_frame.SOCKET)
+    state.record_server(fid, socket or tmuxctl.plane_socket())
     state.record_identity(fid, {"CHARTER_HARNESS": harness})
     if pane is not None:
         state.record_harness_pane(fid, pane)
@@ -361,6 +362,40 @@ class ThePressSaysWhyWhenItWillNotMakeAChat(_APlusOnAFrameInAlpha):
         self.assertIn("another plane's", said[0])
         self.assertEqual(said, [commands_frame.NO_SESSION_HERE],
                          "the constant and the sentence have come apart")
+
+    def test_a_frame_on_the_server_every_plane_used_to_share_opens_nothing(self):
+        """**Ruling 46.** A frame started before each plane had a tmux server of its own is
+        still on the shared one, and a new chat now opens on this plane's own server —
+        where this frame cannot show it, and a switch cannot follow it. So the `+` refuses
+        before a harness starts, and names the two routes that work: `charter frame-quit`
+        typed in the project and then `charter`, which puts the plane back on its own
+        server, or `charter -w` from a terminal. Not F2: on the shared server the palette
+        can act for whichever project started that server."""
+        state.record_server(self.FID, tmuxctl.LEGACY_SOCKET)
+        self.assertEqual(self._press(), 0)
+        self.assertEqual(self.launched, [], "a chat was opened where this frame cannot show it")
+        said = self._sentences()
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("started before charter gave each plane a tmux server of its own",
+                      said[0])
+        self.assertIn("Nothing was opened", said[0])
+        self.assertIn("`charter frame-quit`, typed in this project", said[0])
+        self.assertIn("charter -w alpha", said[0])
+        self.assertEqual(said, [commands_frame.BEFORE_THIS_PLANES_SERVER.format(
+            what="another chat", ws="alpha")])
+
+    def test_a_frame_with_no_server_record_is_on_the_shared_server_too(self):
+        state.frame_dir(self.FID).joinpath("server").unlink()
+        self.assertIsNone(state.frame_server(self.FID))
+        self.assertEqual(self._press(), 0)
+        self.assertEqual(self.launched, [])
+
+    def test_the_shared_server_spelled_as_a_path_is_refused_too(self):
+        """The refusal is asked of the SERVER, for #812's reason: a launch from one of that
+        frame's own panes records the socket the way `$TMUX` spells it."""
+        state.record_server(self.FID, tmuxctl.socket_path(tmuxctl.LEGACY_SOCKET))
+        self.assertEqual(self._press(), 0)
+        self.assertEqual(self.launched, [], self._sentences())
 
     def test_a_chat_recording_no_launchable_harness_opens_the_selector_anyway(self):
         """**The stop that is gone.** A chat recording no profile charter can launch, on a

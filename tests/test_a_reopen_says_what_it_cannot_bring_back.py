@@ -29,12 +29,15 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, persona
+from charter.frame import tmuxctl
 from charter import workspace as ws_mod
 from charter.frame import leave, reopen, state
 
 from tests._isolation import PersonaIso, wired_as_today
 
-SERVER = commands_frame.SOCKET
+#: A server these chats record, standing in for a plane's own. A NAME no test starts a
+#: server on: nothing here reaches tmux, and `tests._planeguard` refuses the shape if one did.
+SERVER = "charter-plane-5e77e45e77e4"
 
 
 #: Ruling 10: a reopen asks whether each chat's profile is wired before it starts it

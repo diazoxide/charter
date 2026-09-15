@@ -1082,7 +1082,9 @@ class Respawn(PersonaIso, unittest.TestCase):
         fid = f"f-{dead.pid}"
         state.bump(fid)
         fake = _RespawnTmux(live=(fid,))
-        state.reap(set(), server=commands_frame.SOCKET)
+        # No server recorded: a frame from before the record, which is the legacy
+        # server's to reap (ruling 46).
+        state.reap(set(), server=tmuxctl.LEGACY_SOCKET)
         self.assertFalse(state.frame_dir(fid).exists(), "the fixture was not reaped")
 
         rc = _respawn(fake, fid=fid)
@@ -1138,16 +1140,29 @@ class Respawn(PersonaIso, unittest.TestCase):
         """The other direction, so the test above cannot be satisfied by a `-S` for
         everything: charter's own server is a NAME and `list-sessions` is the right
         question there."""
+        state.record_server("f-1", tmuxctl.plane_socket())
         fake = _RespawnTmux()
         _respawn(fake, on_argv=True)
         self.assertEqual(_tmuxchain.head(fake.liveness[0]),
-                         tmuxctl.server_argv(commands_frame.SOCKET))
+                         tmuxctl.server_argv(tmuxctl.plane_socket()))
         # Two questions, both of charter's own server: the chat ids its windows carry
         # (`@charter_chat`), and — for a frame launched by a charter that predates chats
         # and is still a session named by its id — `list-sessions`.
         self.assertTrue(any("list-sessions" in c for c in fake.liveness), fake.liveness)
         self.assertEqual(_tmuxchain.head(fake.respawns[0]),
-                         tmuxctl.server_argv(commands_frame.SOCKET))
+                         tmuxctl.server_argv(tmuxctl.plane_socket()))
+
+    def test_a_frame_with_no_recorded_server_is_reached_on_the_legacy_socket(self):
+        """Ruling 46's legacy rule at a panel's door: a frame with no `server` record was
+        started by a charter that ran every frame on the one server every plane shared,
+        and that is where its panel is brought back — never this plane's own server,
+        which did not exist when it started."""
+        fake = _RespawnTmux()
+        _respawn(fake, on_argv=True)
+        self.assertEqual(_tmuxchain.head(fake.liveness[0]),
+                         tmuxctl.server_argv(tmuxctl.LEGACY_SOCKET))
+        self.assertEqual(_tmuxchain.head(fake.respawns[0]),
+                         tmuxctl.server_argv(tmuxctl.LEGACY_SOCKET))
 
     def test_an_operators_server_that_does_not_answer_is_not_respawned_into(self):
         """`_live_windows` answers `None` when the server did not answer at all, which
@@ -1729,6 +1744,17 @@ class _FakeTmux:
             return subprocess.CompletedProcess(cmd, self.mark_rc, stdout="",
                                                stderr="" if self.mark_rc == 0
                                                else "cannot set")
+        if commands_frame._CHAT_PANE_FORMAT in cmd:
+            # The legacy server's keep list (`_legacy_keep`, ruling 46): the same live chats
+            # the `list-windows` branch below reports, one row per chat, each on the pane its
+            # own directory recorded — this fake is one server, so a chat live here is live
+            # with the pane its launcher wrote down.
+            live = set(self.pre_existing_chats)
+            if self.fid and self.still_live:
+                live.add(self.fid)
+            rows = [f"{chat}\t@0\t1\t\t{state.harness_pane(chat) or '%0'}"
+                    for chat in sorted(live)]
+            return subprocess.CompletedProcess(cmd, 0, stdout="\n".join(rows), stderr="")
         if "list-panes" in cmd:
             # #714's reconciliation asking the window what it holds. The target is always
             # in its own answer — tmux lists the window CONTAINING it — and it is a pane
@@ -1874,7 +1900,8 @@ class _FakeTmux:
         return "\n".join(rows) + "\n"
 
     def _seats(self) -> str:
-        """One row per window of this session, in `_WINDOW_SEAT_FORMAT`'s three fields.
+        """One row per window of this session, in `_WINDOW_SEAT_FORMAT`'s four fields —
+        the fourth, the plane marker, left unset as a session an older charter made.
 
         `current_chat` is which chat the CLIENT is on when this launch starts, and
         ``None`` means "this launch's own", which is the first-chat-of-a-workspace case:
@@ -1885,7 +1912,7 @@ class _FakeTmux:
         rows = [(chat, chat == current) for chat in sorted(self.pre_existing_chats)]
         if self.fid:
             rows.append((self.fid, self.fid == current))
-        return "\n".join(f"$0\t{'1' if active else '0'}\t{chat}"
+        return "\n".join(f"$0\t{'1' if active else '0'}\t{chat}\t"
                           for chat, active in rows)
 
 
@@ -2100,7 +2127,7 @@ class AWorkspaceIsASessionAndAChatIsAWindow(PersonaIso, unittest.TestCase):
         # on disk. Both, because they answer different questions — the window is what
         # `reap` keeps the record for, the directory is what the allocator has to step
         # over.
-        state.record_server("demo.1", commands_frame.SOCKET)
+        state.record_server("demo.1", tmuxctl.plane_socket())
         fake = _FakeTmux(exit_code=0, still_live=True,
                          pre_existing_sessions=("demo",),
                          pre_existing_chats=("demo.1",))
@@ -2185,7 +2212,7 @@ class AWorkspaceIsASessionAndAChatIsAWindow(PersonaIso, unittest.TestCase):
         workspace is not dragged onto a half-built one. Selecting it afterwards is what
         pays that back — and it targets the harness PANE, which tmux resolves to its own
         window (measured on tmux 3.7c and 3.2)."""
-        state.record_server("demo.1", commands_frame.SOCKET)
+        state.record_server("demo.1", tmuxctl.plane_socket())
         fake = _FakeTmux(exit_code=0, still_live=True,
                          pre_existing_sessions=("demo",),
                          pre_existing_chats=("demo.1",))
@@ -2208,7 +2235,7 @@ class AWorkspaceIsASessionAndAChatIsAWindow(PersonaIso, unittest.TestCase):
         The live chat here is a SIBLING's, deliberately: this launch's own id is allocated
         after the reap, so a launcher that reaped everything would not be visible in its
         own directory."""
-        state.record_server("demo.1", commands_frame.SOCKET)
+        state.record_server("demo.1", tmuxctl.plane_socket())
         state.record_exit("demo.1", 42)
         fake = _FakeTmux(exit_code=0, still_live=True,
                          pre_existing_sessions=("demo",), list_windows_rc=1)
@@ -2222,7 +2249,7 @@ class AWorkspaceIsASessionAndAChatIsAWindow(PersonaIso, unittest.TestCase):
         session list is not silence, it is the answer. Nothing recorded against a server
         that is not running is live — a reboot leaves exactly that — so the stale
         directory goes, which is `reap`'s whole job."""
-        state.record_server("stale.1", commands_frame.SOCKET)
+        state.record_server("stale.1", tmuxctl.plane_socket())
         state.bump("stale.1")
         fake = _FakeTmux(exit_code=0, still_live=True, list_windows_rc=1)
         _launch(fake)
@@ -2293,7 +2320,7 @@ class TheSessionIsMarkedWithItsPlane(PersonaIso, unittest.TestCase):
         cross-plane collision this marker records — so a launch that joined may be standing
         in another plane's session, and re-marking it there would relabel that plane's
         frame as this one's."""
-        state.record_server("demo.1", commands_frame.SOCKET)
+        state.record_server("demo.1", tmuxctl.plane_socket())
         fake = _FakeTmux(exit_code=0, still_live=True,
                          pre_existing_sessions=("demo",),
                          pre_existing_chats=("demo.1",))
@@ -2602,7 +2629,7 @@ class ALaunchTakesThePanelsOfTheChatItLeaves(PersonaIso, unittest.TestCase):
     def _first_chat_open(self, **kw) -> _FakeTmux:
         """A workspace that already has `demo.1` open, with the client on it and two
         panels recorded — the state a second `charter claude` finds."""
-        state.record_server("demo.1", commands_frame.SOCKET)
+        state.record_server("demo.1", tmuxctl.plane_socket())
         state.record_harness_pane("demo.1", "%1")
         state.record_panes("demo.1", panels={"top": "%3", "bottom": "%4"})
         # And the same two panes on the SERVER, because that is where #714's
@@ -2679,17 +2706,17 @@ class ALaunchTakesThePanelsOfTheChatItLeaves(PersonaIso, unittest.TestCase):
             self.assertNotIn("%1;kill-server", cmd)
         self.assertEqual(self._killed(fake), [])
 
-    def test_a_seat_row_that_is_not_three_fields_answers_nothing(self):
+    def test_a_seat_row_that_is_not_four_fields_answers_nothing(self):
         """`@charter_chat` is an OPTION and an option\'s value is whatever somebody set.
-        A value holding a tab of its own would split into four fields, and without the
+        A value holding a tab of its own would split into five fields, and without the
         count filter the first half would be read as a chat id and torn down.
 
         Asked of the reader directly, because there is no way to get a malformed row past
         a real tmux and every route from the top would refuse for a different reason —
         which is the "a guard that passes because a different guard caught it" shape.
         """
-        for rows in ("$0\t1\tdemo.9\textra\n$0\t0\tdemo.1",
-                     "$0\t1\n$0\t0\tdemo.1",
+        for rows in ("$0\t1\tdemo.9\textra\t\n$0\t0\tdemo.1\t",
+                     "$0\t1\t\n$0\t0\tdemo.1\t",
                      ""):
             with self.subTest(rows=rows):
                 fake = _SeatReader(rows)
@@ -2697,6 +2724,28 @@ class ALaunchTakesThePanelsOfTheChatItLeaves(PersonaIso, unittest.TestCase):
                                 side_effect=fake):
                     self.assertEqual(
                         commands_frame._chat_being_left("charter", beside="demo.1"), "")
+
+    def test_another_planes_window_of_the_same_id_is_not_where_this_launch_stands(self):
+        """Ruling 46, at the reader that finds a launch\'s own window by its chat id. Two
+        planes\' chats share ids by construction and still share a server on the legacy
+        socket and in an operator\'s tmux; the other plane\'s `demo.1` listed FIRST would
+        hand this launch that plane\'s session, and the chat on screen there — `demo.7` —
+        would lose its panels to a launch it has nothing to do with. The marker vetoes the
+        row; an unmarked one (a session an older charter made) is still read."""
+        ours = str(config.STATE_DIR)
+        rows = ("$9\t1\tdemo.7\t/another/plane/.charter\n"
+                "$9\t0\tdemo.1\t/another/plane/.charter\n"
+                f"$0\t1\tdemo.3\t{ours}\n"
+                f"$0\t0\tdemo.1\t{ours}")
+        with mock.patch("charter.commands_frame.subprocess.run",
+                        side_effect=_SeatReader(rows)):
+            self.assertEqual(commands_frame._chat_being_left("charter", beside="demo.1"),
+                             "demo.3")
+        unmarked = "$0\t1\tdemo.3\t\n$0\t0\tdemo.1\t"
+        with mock.patch("charter.commands_frame.subprocess.run",
+                        side_effect=_SeatReader(unmarked)):
+            self.assertEqual(commands_frame._chat_being_left("charter", beside="demo.1"),
+                             "demo.3")
 
     def test_a_chat_id_outside_the_alphabet_answers_nothing(self):
         """#475\'s rule where this value enters charter\'s vocabulary: it came off a tmux
@@ -2711,7 +2760,7 @@ class ALaunchTakesThePanelsOfTheChatItLeaves(PersonaIso, unittest.TestCase):
         for hostile in ("../../etc", "demo 9", "demo.9;kill-server", "demo\x1b[31m",
                         " demo.9 "):
             with self.subTest(hostile=hostile):
-                fake = _SeatReader(f"$0\t1\t{hostile}\n$0\t0\tdemo.1")
+                fake = _SeatReader(f"$0\t1\t{hostile}\t\n$0\t0\tdemo.1\t")
                 with mock.patch("charter.commands_frame.subprocess.run",
                                 side_effect=fake):
                     self.assertEqual(
@@ -3209,6 +3258,29 @@ class Launch(PersonaIso, unittest.TestCase):
         fake = _FakeTmux(exit_code=17, attach_rc=0)
         rc = _launch(fake)
         self.assertEqual(rc, 17)
+
+    def test_a_harness_that_died_unrecorded_during_attach_is_asked_about_once_more(self):
+        """The SECOND ask, after `attach` has returned. The write hook records the code in
+        the ordinary case; a hook that reported success and never fired leaves no `exit`
+        file behind and a dead pane that `remain-on-exit` kept — so the launcher asks tmux
+        itself once more, and tmux's own answer is the code. Without that ask a real crash
+        would come back as `attach`'s own 0, the failure this module exists to stop, through
+        the one gap the eager ask before `attach` cannot see.
+
+        The fake answers "alive" before the attach, as tmux does for a harness that has not
+        died yet, and "dead, status 9" after it; nothing writes the `exit` file."""
+        class _DiesUnrecordedDuringAttach(_FakeTmux):
+            attached = False
+
+            def __call__(self, cmd, **kwargs):
+                if "attach" in cmd:
+                    self.attached = True
+                if "display-message" in cmd and self.attached:
+                    return subprocess.CompletedProcess(cmd, 0, stdout="1:9", stderr="")
+                return super().__call__(cmd, **kwargs)
+
+        rc = _launch(_DiesUnrecordedDuringAttach(attach_rc=0))
+        self.assertEqual(rc, 9)
 
     def test_a_death_that_races_the_hooks_own_install_is_recovered(self):
         """Critical 1: `new-session` starts the harness immediately; the hooks that
@@ -5238,7 +5310,8 @@ class _FakeOperatorTmux:
                  new_window_rc=0, arm_rc=0, chrome_rc=0, respawn_rc=0, panel_rc=0,
                  panel_pane_ids=None, window_panes=None, resize_hook_rc=0,
                  select_rc=0, kill_rc=0,
-                 pane_capture="", capture_rc=0, chat_option_rc=0, chat_list_rc=0):
+                 pane_capture="", capture_rc=0, chat_option_rc=0, chat_list_rc=0,
+                 plane_option_rc=0):
         self.window_id = window_id
         self.pane_id = pane_id
         self.polls_alive = polls_alive
@@ -5275,6 +5348,8 @@ class _FakeOperatorTmux:
         #: chats — the two questions `_reap_this_server` asks, and the one state in which
         #: charter cannot tell which chats are live and must not reap.
         self.chat_list_rc = chat_list_rc
+        self.plane_option_rc = plane_option_rc
+        self.plane_marks: list[list[str]] = []
         self.calls: list[list[str]] = []
         self.status_queries = 0
         self.window_killed = False
@@ -5301,8 +5376,8 @@ class _FakeOperatorTmux:
             # `_FakeTmux._seats`' reason: both formats carry `@charter_chat` and they are
             # different questions. The window the operator is ON is one of THEIRS unless
             # a test says otherwise, which is why the default row draws no chat at all.
-            return self._ok(cmd, stdout=f"$0\t1\t{self.current_chat}\n"
-                                        f"$0\t0\t{_frame_id()}")
+            return self._ok(cmd, stdout=f"$0\t1\t{self.current_chat}\t\n"
+                                        f"$0\t0\t{_frame_id()}\t")
         if "list-windows" in cmd:
             if self.list_windows_rc != 0:
                 return subprocess.CompletedProcess(
@@ -5334,6 +5409,14 @@ class _FakeOperatorTmux:
             # the reason the hatch option is: the value is a plain id.
             return subprocess.CompletedProcess(cmd, self.chat_option_rc, stdout="",
                                                stderr="" if self.chat_option_rc == 0
+                                               else "cannot set")
+        if commands_frame._PLANE_OPTION in cmd:
+            # Whose chat this window is (ruling 46): recorded, with the scope it was
+            # written at, because on THEIR server a session option would be a write of
+            # theirs and a window option on charter's own window is not.
+            self.plane_marks.append(list(cmd))
+            return subprocess.CompletedProcess(cmd, self.plane_option_rc, stdout="",
+                                               stderr="" if self.plane_option_rc == 0
                                                else "cannot set")
         if "new-window" in cmd:
             if self.new_window_rc != 0:
@@ -5874,6 +5957,9 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         stale = _frame_id()
         gather.save(stale, {"gathered_at": 1.0, "workspace": "from-a-dead-frame",
                             "current_repo": None, "repos": [], "worktrees": []})
+        # A dead frame of THIS path, which recorded this server: a directory with no
+        # record belongs to the legacy socket's reap since ruling 46, not to this one.
+        state.record_server(stale, OPERATOR_SOCKET)
 
         fake = _FakeOperatorTmux(exit_code=0)
         _launch_inside(fake)
@@ -5978,6 +6064,30 @@ class LaunchInsideTmux(PersonaIso, unittest.TestCase):
         self.assertIn("-w", cmd)
         self.assertEqual(cmd[cmd.index("-t") + 1], "%7")
         self.assertEqual(cmd[-1], _frame_id())
+
+    def test_whose_chat_it_is_is_written_on_the_window_and_never_on_their_session(self):
+        """Ruling 46. Two planes launched inside one operator tmux put two `default.1`
+        windows on one server, and a close or a quit aims `kill-window` by chat id — so the
+        plane marker has to be on charter's own WINDOW (`-w`). The session is theirs, and a
+        session option there is a write of theirs this path promises never to make."""
+        fake = _FakeOperatorTmux(exit_code=0, pane_id="%7", pane_vanishes=True)
+        _launch_inside(fake)
+        self.assertEqual(len(fake.plane_marks), 1, fake.calls)
+        cmd = fake.plane_marks[0]
+        self.assertEqual(_tmuxchain.head(cmd), tmuxctl.server_argv(OPERATOR_SOCKET))
+        self.assertIn("-w", cmd)
+        self.assertEqual(cmd[cmd.index("-t") + 1], "%7")
+        self.assertEqual(cmd[-1], str(config.STATE_DIR))
+
+    def test_a_marker_tmux_will_not_take_is_said_and_the_chat_still_runs(self):
+        fake = _FakeOperatorTmux(exit_code=0, pane_id="%7", pane_vanishes=True,
+                                 plane_option_rc=1)
+        warned = []
+        with mock.patch.object(commands_frame.util, "warn", side_effect=warned.append):
+            _launch_inside(fake)
+        self.assertTrue(any("another plane in this tmux" in w for w in warned), warned)
+        self.assertTrue(any("respawn-pane" in c for c in fake.calls),
+                        "the harness was never started")
 
     def test_the_harness_pane_is_recorded_on_this_path_too(self):
         """ADR 0019's suppression asks `state.harness_pane(fid)` whether the process

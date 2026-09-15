@@ -235,11 +235,13 @@ GitHub shows the README (an `<img>` 830 px wide, headless Chrome at 1x and 2x) t
 current chats. `✢` reads as a `+`. All three are one cell wide, so the choice moves no column.
 
 **Both of the script's tmux servers are private, with or without `--full`.** Charter's frame
-server is `-L charter`, a module constant every frame on a machine shares, and the capture
-used to launch onto it — the operator's live server — then pick its own session back out of
-theirs to kill it. It now points `$TMUX_TMPDIR`, which tmux and `frame/tmuxctl.socket_path`
-both honour, at a directory it makes under `/tmp`, so `-L charter` inside the capture is a
-server of its own, killed whole on exit. Under `/tmp` and not `<scratch-dir>` because a
+server is the plane's own, `-L charter-plane-<12 hex>` from a hash of the plane's state
+directory; it used to be `-L charter`, one server every frame on a machine shared, and the
+capture launched onto it — the operator's live server — then picked its own session back out
+of theirs to kill it. It now points `$TMUX_TMPDIR`, which tmux and `frame/tmuxctl.socket_path`
+both honour, at a directory it makes under `/tmp`, so the demo plane's server inside the
+capture is a server of its own, killed whole on exit. The script asks this tree's charter for
+that server's name once the demo plane exists, rather than spelling the hash a second time. Under `/tmp` and not `<scratch-dir>` because a
 socket path has to fit a `sockaddr_un`, 104 bytes on macOS: a scratch directory under Claude
 Code's per-session temp path put the socket at 146, and tmux refused it. The same run plants
 the newer-charter check's cooldown lock in the plane, so no panel's gather forks a request to

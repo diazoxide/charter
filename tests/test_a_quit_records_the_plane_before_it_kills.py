@@ -42,11 +42,14 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, inflight
+from charter.frame import tmuxctl
 from charter.frame import chats, leave, reopen, state
 
 from tests._isolation import PersonaIso
 
-SERVER = commands_frame.SOCKET
+#: A server these chats record, standing in for a plane's own. A NAME no test starts a
+#: server on: nothing here reaches tmux, and `tests._planeguard` refuses the shape if one did.
+SERVER = "charter-plane-5e77e45e77e4"
 
 
 def _seats(windows, active):
@@ -426,17 +429,36 @@ class EachServerIsAskedOnceAndTheFocusIsWhereYouWere(PersonaIso, unittest.TestCa
         self.assertEqual(servers, [SERVER])
         self.assertEqual(len(servers), len(set(servers)))
 
-    def test_charters_own_socket_is_listed_even_when_no_chat_records_it(self):
-        # It is where a chat with no recorded server will be — `builtin_actions._server`'s
-        # own fallback, spelled the same way.
+    def test_a_server_no_chat_records_is_not_asked_not_even_the_planes_own(self):
+        # Ruling 46: a server nothing has started answers rc 1, which `_plane_live` reads as
+        # "could not ask" for the whole plane — so asking one nothing points at costs a quit
+        # its reading of every chat that IS somewhere.
         state.frame_dir("alpha.9", create=True)
         state.record_server("alpha.9", "somebody-elses-socket")
         state.record_workspace("alpha.9", "alpha")
 
         servers = commands_frame._plane_servers()
 
-        self.assertEqual(servers[0], SERVER)
-        self.assertIn("somebody-elses-socket", servers)
+        self.assertEqual(servers, ["somebody-elses-socket"])
+
+    def test_the_planes_own_server_is_asked_first_when_a_chat_points_at_it(self):
+        for fid, server in (("alpha.1", "somebody-elses-socket"),
+                            ("alpha.2", tmuxctl.plane_socket())):
+            state.frame_dir(fid, create=True)
+            state.record_server(fid, server)
+            state.record_workspace(fid, "alpha")
+
+        self.assertEqual(commands_frame._plane_servers(),
+                         [tmuxctl.plane_socket(), "somebody-elses-socket"])
+
+    def test_the_legacy_server_is_asked_while_a_chat_has_no_record(self):
+        # A chat with no `server` file was started before the record existed, on the one
+        # server every plane shared — and a quit that did not ask it would record that chat
+        # as stopped and kill nothing.
+        state.frame_dir("alpha.9", create=True)
+        state.record_workspace("alpha.9", "alpha")
+
+        self.assertEqual(commands_frame._plane_servers(), [tmuxctl.LEGACY_SOCKET])
 
     def test_a_quit_typed_outside_a_frame_records_no_focus(self):
         # `(state.own_workspace(fid) or "") if fid else ""` — the `else`. Without it the
@@ -789,13 +811,13 @@ class TheWindowListingRefusesWhatItCannotRead(PersonaIso, unittest.TestCase):
     already cost this project a `kill-server` armed on every window resize.
     """
 
-    def _seats_from(self, stdout):
+    def _seats_from(self, stdout, server=SERVER):
         run, _seen = _answers(stdout)
         with mock.patch.object(commands_frame.tmuxctl, "run", side_effect=run):
-            return commands_frame._chat_seats(SERVER)
+            return commands_frame._chat_seats(server)
 
     def test_a_well_formed_listing_is_read_whole(self):
-        seats = self._seats_from("alpha.1\t@0\t1\t\nalpha.2\t@3\t0\t\n")
+        seats = self._seats_from("alpha.1\t@0\t1\t\t%0\nalpha.2\t@3\t0\t\t%3\n")
 
         self.assertEqual(seats, [("alpha.1", "@0", True), ("alpha.2", "@3", False)])
 
@@ -803,25 +825,25 @@ class TheWindowListingRefusesWhatItCannotRead(PersonaIso, unittest.TestCase):
         # A window with no `@charter_chat` prints an empty first field, and a format that
         # ever changed shape would arrive here as a row of the wrong width. Neither is a
         # seat, and neither may be read as one by index.
-        seats = self._seats_from("alpha.1\t@0\t1\t\n"
+        seats = self._seats_from("alpha.1\t@0\t1\t\t%0\n"
                                  "only-two\t@1\n"
-                                 "a\tb\tc\n"
-                                 "a\tb\tc\td\te\n"
+                                 "a\tb\tc\td\n"
+                                 "a\tb\tc\td\te\tf\n"
                                  "\n")
 
         self.assertEqual(seats, [("alpha.1", "@0", True)])
 
     def test_a_chat_id_outside_the_alphabet_is_dropped(self):
-        seats = self._seats_from("alpha.1;kill-server\t@0\t1\t\nalpha.2\t@1\t0\t\n")
+        seats = self._seats_from("alpha.1;kill-server\t@0\t1\t\t%0\nalpha.2\t@1\t0\t\t%1\n")
 
         self.assertEqual(seats, [("alpha.2", "@1", False)])
 
     def test_a_window_id_that_is_not_tmuxs_own_shape_is_dropped(self):
         # The window id is what `_stop_chats` aims `kill-window` at. Anything that is not
         # `@<digits>` is a target charter did not get from tmux.
-        seats = self._seats_from("alpha.1\t$0\t1\t\n"
-                                 "alpha.2\tnot-a-window\t1\t\n"
-                                 "alpha.3\t@7\t1\t\n")
+        seats = self._seats_from("alpha.1\t$0\t1\t\t%0\n"
+                                 "alpha.2\tnot-a-window\t1\t\t%1\n"
+                                 "alpha.3\t@7\t1\t\t%7\n")
 
         self.assertEqual(seats, [("alpha.3", "@7", True)])
 
@@ -829,24 +851,32 @@ class TheWindowListingRefusesWhatItCannotRead(PersonaIso, unittest.TestCase):
         # `#{window_active}` is `0` or `1`. Anything else is not a claim charter may read as
         # "this is the chat the operator was looking at" — that answer decides which tab a
         # reopen puts them back on.
-        seats = self._seats_from("alpha.1\t@0\t1\t\nalpha.2\t@1\t0\t\n"
-                                 "alpha.3\t@2\ttrue\t\n")
+        seats = self._seats_from("alpha.1\t@0\t1\t\t%0\nalpha.2\t@1\t0\t\t%1\n"
+                                 "alpha.3\t@2\ttrue\t\t%2\n")
 
         self.assertEqual([c for c, _w, showing in seats if showing], ["alpha.1"])
+
+    def test_a_window_of_panels_is_one_seat(self):
+        """One row per PANE since ruling 46, so a chat with four panels answers five times;
+        the map a kill is aimed by holds its window once."""
+        seats = self._seats_from("alpha.1\t@0\t1\t\t%0\nalpha.1\t@0\t1\t\t%4\n"
+                                 "alpha.1\t@0\t1\t\t%5\n")
+
+        self.assertEqual(seats, [("alpha.1", "@0", True)])
 
     # -- the plane marker, #933 --------------------------------------------- #
 
     def test_a_window_marked_for_another_plane_is_not_a_seat(self):
         """**The whole of #933 at the boundary it was lost at.**
 
-        One tmux server carries every plane on the machine (§3.3) and `default.1` is the id
+        One tmux server carried every plane on the machine (§3.3) and `default.1` is the id
         every plane's first chat gets, so a listing filtered by nothing answered with all of
         them. What that costs is `_stop_chats`, which aims `kill-window` at
         ``windows[server][chat]`` — one entry per id, last row wins — so a close on this
         plane could kill another plane's window.
         """
-        seats = self._seats_from(f"default.1\t@0\t1\t/somewhere/else/.charter\n"
-                                 f"default.1\t@9\t1\t{commands_frame._this_plane()}\n")
+        seats = self._seats_from(f"default.1\t@0\t1\t/somewhere/else/.charter\t%0\n"
+                                 f"default.1\t@9\t1\t{commands_frame._this_plane()}\t%9\n")
 
         self.assertEqual(seats, [("default.1", "@9", True)],
                          "another plane's window is still in the map a kill is aimed by")
@@ -856,7 +886,7 @@ class TheWindowListingRefusesWhatItCannotRead(PersonaIso, unittest.TestCase):
         carries no marker, and reading that as "not mine" would make every pre-marker frame
         read as dead — a quit that recorded nothing and killed nothing while saying it had
         done both."""
-        seats = self._seats_from("alpha.1\t@0\t1\t\n")
+        seats = self._seats_from("alpha.1\t@0\t1\t\t%0\n")
 
         self.assertEqual(seats, [("alpha.1", "@0", True)])
 
@@ -864,9 +894,85 @@ class TheWindowListingRefusesWhatItCannotRead(PersonaIso, unittest.TestCase):
         """The control the veto needs: a filter that dropped everything would pass the case
         above and be the tri-state defect it exists to prevent."""
         seats = self._seats_from(
-            f"alpha.1\t@0\t1\t{commands_frame._this_plane()}\n")
+            f"alpha.1\t@0\t1\t{commands_frame._this_plane()}\t%0\n")
 
         self.assertEqual(seats, [("alpha.1", "@0", True)])
+
+    # -- the pane record, ruling 46 ------------------------------------------ #
+
+    def test_a_recorded_pane_decides_over_another_planes_session_marker(self):
+        """**A mixed session from before the upgrade, and only there.** Plane A's launch made
+        that session and marked it; this plane's `default.1` joined it as a window, so its
+        window reads plane A's marker. The pane this plane's launcher wrote down is the
+        reading that is right: it is this plane's window, and a quit that skipped it stopped
+        nothing of its own."""
+        _plant("default.1", ws="default")
+        state.record_server("default.1", tmuxctl.LEGACY_SOCKET)
+        state.record_harness_pane("default.1", "%7")
+        seats = self._seats_from("default.1\t@0\t1\t/plane/a/.charter\t%0\n"
+                                 "default.1\t@7\t0\t/plane/a/.charter\t%7\n",
+                                 server=tmuxctl.LEGACY_SOCKET)
+
+        self.assertEqual(seats, [("default.1", "@7", False)])
+
+    def test_a_marker_for_another_plane_vetoes_a_matching_pane_off_the_legacy_server(self):
+        """**A server restart mints pane ids from `%0` again**, so a record from before one
+        can match a live pane it has nothing to do with — measured inside an operator's tmux,
+        where the kill and the capture both went to another plane's window. Off the legacy
+        socket charter marks what it made for the chat it made it for (its own WINDOW in an
+        operator's tmux, its own session on a server that is this plane's alone), so a marker
+        naming another plane is never wrong about the window it is on, and it wins."""
+        _plant("default.1", ws="default")
+        state.record_harness_pane("default.1", "%1")
+        seats = self._seats_from("default.1\t@0\t1\t/plane/b/.charter\t%1\n")
+
+        self.assertEqual(seats, [])
+        self.assertEqual(
+            self._seats_from("default.1\t@0\t1\t\t%1\n"), [("default.1", "@0", True)],
+            "an unmarked window is still this plane's by the pane it recorded")
+
+    def test_a_window_whose_pane_is_not_the_recorded_one_is_not_this_chat(self):
+        """The same session from plane A's side: both windows carry `default.1` and this
+        plane's marker, and the one listed LAST is the other plane's. Aimed by id alone, the
+        quit killed that one and left its own."""
+        _plant("default.1", ws="default")
+        state.record_harness_pane("default.1", "%0")
+        ours = commands_frame._this_plane()
+        seats = self._seats_from(f"default.1\t@0\t1\t{ours}\t%0\n"
+                                 f"default.1\t@7\t0\t{ours}\t%7\n")
+
+        self.assertEqual(seats, [("default.1", "@0", True)])
+
+    def test_a_chat_this_plane_holds_on_another_server_is_not_a_window_here(self):
+        _plant("default.1", ws="default")
+        state.record_server("default.1", "somewhere-else")
+        seats = self._seats_from("default.1\t@0\t1\t\t%1\n")
+
+        self.assertEqual(seats, [])
+
+    def test_the_claim_is_one_answer_for_no_chat_and_for_a_chat_with_no_pane_record(self):
+        """`_this_planes_claim`: the two readers test the claim for truth and then compare
+        it to a pane, so an absent chat and a chat whose launcher wrote no pane are one
+        reading — nothing this plane can vouch for. It answered ``""`` for the second and the
+        sweep found that fallback indistinguishable from its absence; it is gone."""
+        _plant("default.1", ws="default")
+        (state.frame_dir("default.1") / "harness").unlink()
+        _plant("default.2", ws="default", pane="%4")
+
+        self.assertIsNone(commands_frame._this_planes_claim("default.1", SERVER))
+        self.assertIsNone(commands_frame._this_planes_claim("default.9", SERVER))
+        self.assertEqual(commands_frame._this_planes_claim("default.2", SERVER), "%4")
+        self.assertIs(commands_frame._this_planes_claim("default.2", "somewhere-else"),
+                      False)
+
+    def test_a_chat_with_no_pane_record_falls_back_to_the_marker(self):
+        _plant("default.1", ws="default")
+        (state.frame_dir("default.1") / "harness").unlink()
+        self.assertIsNone(state.harness_pane("default.1"))
+        seats = self._seats_from("default.1\t@0\t1\t/plane/a/.charter\t%0\n"
+                                 "default.1\t@1\t0\t\t%1\n")
+
+        self.assertEqual(seats, [("default.1", "@1", False)])
 
     def test_a_server_that_would_not_answer_is_none_and_not_empty(self):
         run, _seen = _answers("", returncode=1)
@@ -883,8 +989,52 @@ class TheWindowListingRefusesWhatItCannotRead(PersonaIso, unittest.TestCase):
             commands_frame._chat_seats(SERVER)
 
         self.assertEqual(len(seen), 1, "two calls for one listing is two answers")
-        self.assertIn("list-windows", seen[0])
-        self.assertIn(commands_frame._CHAT_WINDOW_FORMAT, seen[0])
+        self.assertIn("list-panes", seen[0])
+        self.assertIn(commands_frame._CHAT_PANE_FORMAT, seen[0])
+
+
+class TheLegacyServersKeepListIsCheckedByPane(PersonaIso, unittest.TestCase):
+    """`commands_frame._legacy_keep` — what keeps a directory the legacy server's reap would
+    otherwise take (ruling 46)."""
+
+    def _keep(self, stdout, returncode=0):
+        run, _seen = _answers(stdout, returncode)
+        with mock.patch.object(commands_frame.tmuxctl, "run", side_effect=run):
+            return commands_frame._legacy_keep()
+
+    def _plant_on_legacy(self, fid, pane):
+        _plant(fid, ws="default")
+        state.record_server(fid, tmuxctl.LEGACY_SOCKET)
+        state.record_harness_pane(fid, pane)
+
+    def test_another_planes_live_chat_of_the_same_id_keeps_nothing_of_this_plane(self):
+        """The reporter's upgrade: this plane quit its `default.1`, another plane's
+        `default.1` still runs there. Keeping by id alone kept this plane's dead directory,
+        so `charter` read the plane as live and never put it back."""
+        self._plant_on_legacy("default.1", "%0")
+        self.assertEqual(self._keep("default.1\t@7\t1\t/plane/b/.charter\t%7\n"), set())
+
+    def test_this_planes_own_pane_keeps_it_whatever_the_session_marker_says(self):
+        """A KEEP list leans towards keeping: a mixed session's marker names the wrong plane
+        for half its windows, and a running chat whose state is reaped loses the exit code its
+        launcher has not read."""
+        self._plant_on_legacy("default.1", "%7")
+        self.assertEqual(self._keep("default.1\t@7\t1\t/plane/b/.charter\t%7\n"),
+                         {"default.1"})
+
+    def test_a_chat_this_plane_has_no_pane_record_for_is_kept_by_its_id(self):
+        self.assertEqual(self._keep("old.1\t@0\t1\t/plane/b/.charter\t%0\n"), {"old.1"})
+
+    def test_a_value_outside_the_alphabet_is_never_a_keep_entry(self):
+        """The keep list is handed to `state.reap` as its live set and compared against
+        directory names there, so what goes in it is #475's boundary: a pane carrying no
+        `@charter_chat` prints an empty first field, and a value off a tmux option is not
+        a name charter got from itself. Neither is an entry, whatever the pane column says."""
+        self.assertEqual(self._keep("\t@0\t1\t\t%0\n"
+                                    "old.1;kill-server\t@1\t1\t\t%1\n"), set())
+
+    def test_a_server_that_would_not_answer_keeps_nothing_it_can_vouch_for(self):
+        self.assertIsNone(self._keep("", returncode=1))
 
 
 class OneServerRefusingMakesTheWholePlaneUnknown(PersonaIso, unittest.TestCase):
@@ -1166,7 +1316,11 @@ class WhatIsOnDiskIsAFormatAndNotAnImplementationDetail(PersonaIso, unittest.Tes
         reopen.write([self._one()], focus="alpha", at=1700000000)
 
         raw = json.loads(reopen.path().read_text())
-        self.assertEqual(sorted(raw), ["at", "focus", "frames", "version"])
+        # `writer` joined the top level when the recorder had to tell a quit's record from
+        # its own (ruling 46), on the same terms as the per-chat fields below: `version`
+        # stays 1, and a manifest without the key reads as a QUIT's — the older and the
+        # irreplaceable of the two — which is the case pinned two tests down.
+        self.assertEqual(sorted(raw), ["at", "focus", "frames", "version", "writer"])
         self.assertEqual(raw["at"], 1700000000)
         self.assertEqual(raw["focus"], "alpha")
         self.assertEqual(sorted(raw["frames"][0]), ["chats", "workspace"])
@@ -1183,6 +1337,33 @@ class WhatIsOnDiskIsAFormatAndNotAnImplementationDetail(PersonaIso, unittest.Tes
             sorted(raw["frames"][0]["chats"][0]),
             ["active", "brief", "chat", "cwd", "harness", "persona", "profile", "resume",
              "transcript", "workspace"])
+
+    def test_the_writer_is_spelled_quit_or_recorder(self):
+        """Two words on disk, and a quit's is the default: `_record_the_plane` is the one
+        caller that says otherwise, for the running plane's record."""
+        reopen.write([self._one()], focus="alpha")
+        self.assertEqual(json.loads(reopen.path().read_text())["writer"], "quit")
+
+        reopen.write([self._one()], focus="alpha", writer=reopen.RECORDER)
+        self.assertEqual(json.loads(reopen.path().read_text())["writer"], "recorder")
+        self.assertEqual(reopen.read().writer, "recorder")
+
+    def test_a_manifest_that_names_no_writer_or_an_unknown_one_reads_as_a_quits(self):
+        """The migration case is the one that matters most here: on the day of the upgrade
+        the record on disk is the OLD charter's quit — which is exactly the record the
+        recorder must not write over while a chat is still on the shared server — and it has
+        no `writer` at all. Reading that as the recorder's would lose it on the first tick.
+        An unknown value is a manifest this charter did not write, and reads the same way."""
+        reopen.write([self._one()], focus="alpha", writer=reopen.RECORDER)
+        raw = json.loads(reopen.path().read_text())
+
+        del raw["writer"]
+        reopen.path().write_text(json.dumps(raw))
+        self.assertEqual(reopen.read().writer, "quit")
+
+        raw["writer"] = "panel"
+        reopen.path().write_text(json.dumps(raw))
+        self.assertEqual(reopen.read().writer, "quit")
 
     def test_at_is_a_whole_number_of_seconds_and_defaults_to_now(self):
         # `int(...)`, so a float clock never reaches the file: `at` is read back through an

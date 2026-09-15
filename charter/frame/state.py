@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from .. import config, contain
+from . import tmuxctl
 
 #: Anything outside this becomes an underscore. Only used to MINT an id in
 #: :func:`frame_id` — never to rewrite one handed to :func:`frame_dir`, which resolves
@@ -845,10 +846,15 @@ def kept_harness_session(fid: str) -> str | None:
 def record_server(fid: str, server: str) -> None:
     """Write down which tmux server this frame's session (or window) lives on.
 
-    Charter runs frames on two servers now: its own private one (``tmux -L charter``,
-    where a frame is a SESSION named by frame id) and, when charter is started from
-    inside a tmux the operator already has, theirs (``tmux -S <socket>``, where a frame
-    is a WINDOW named by frame id). Neither server's liveness list mentions the other's
+    Charter runs frames on two servers now: the plane's own private one
+    (``tmux -L charter-plane-<hex>``, `tmuxctl.plane_socket`, where a workspace is a SESSION
+    and a chat a window in it) and, when charter is started from inside a tmux the operator
+    already has, theirs (``tmux -S <socket>``, where a chat is a WINDOW).
+
+    **And this record is what lets a frame outlive the server charter would start it on
+    today** (ruling 46). Frames started before each plane had a server of its own are on
+    `tmuxctl.LEGACY_SOCKET`; every close, quit, switch and panel asks the chat's record
+    rather than the plane's socket, so those frames keep working until they end. Neither server's liveness list mentions the other's
     frames, so :func:`reap` needs to know which server each directory belongs to before
     it can decide that "not live" means "dead" rather than "not this server's".
 
@@ -871,8 +877,9 @@ def frame_server(fid: str) -> str | None:
 
     ``None`` is the migration case and nothing else: every frame this charter starts
     records one (see :func:`record_server`), so a directory without the marker was
-    written by a charter that only ever ran frames on its own private server. See
-    :func:`reap` for what that means there.
+    written by a charter that only ever ran frames on its own private server — the one
+    every plane shared, `tmuxctl.LEGACY_SOCKET`, which is what every reader falls back to.
+    See :func:`reap` for what that means there.
     """
     d = frame_dir(fid)
     if d is None:
@@ -2705,10 +2712,15 @@ def reap(live: set[str], *, server: str) -> list[str]:
     wrong status) while the frame is still on screen. *server* is matched against
     :func:`frame_server`, which the launcher records when it creates the directory.
 
-    A directory with NO recorded server matches every one, and that is the migration
-    case rather than a loophole: only a charter that predates :func:`record_server`
-    leaves one, every such frame was on the private server, and refusing to reap them
-    would trade one release's transient wrongness for a permanent leak.
+    A directory with NO recorded server belongs to `tmuxctl.LEGACY_SOCKET`, and that is the
+    migration case rather than a loophole: only a charter that predates
+    :func:`record_server` leaves one, and every such frame was on the one private server
+    every plane shared. It used to match every server, which was the same answer while
+    there was one private server. With one per plane (ruling 46) it is not: a reap of this
+    plane's NEW server, which has never heard of that frame, would delete the state of a
+    chat still running on the old one. So it is reaped by a reap of the legacy server —
+    `commands_frame._reap_the_legacy_server` runs one while any of this plane's chats point
+    there — and by no other.
 
     **And never on a live session alone either, because a frame outlives its session
     (#383).** Between a harness exiting and its launcher reading :func:`exit_code`, the
@@ -2786,8 +2798,7 @@ def reap(live: set[str], *, server: str) -> list[str]:
         # running on this one (#383), or the directory may be a claim that is not a frame
         # yet (#685) — either because its marker has not landed (it holds nothing at all)
         # or because it has (a live pid is in it).
-        owner = frame_server(d.name)
-        if owner is not None and owner != server:
+        if (frame_server(d.name) or tmuxctl.LEGACY_SOCKET) != server:
             continue
         try:
             claimed = next(d.iterdir(), None) is None
