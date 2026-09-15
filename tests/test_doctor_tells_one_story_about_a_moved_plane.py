@@ -90,6 +90,169 @@ class MovedPlaneCase(PersonaIso):
     def text(r) -> str:
         return f"{r.detail} {r.hint or ''}"
 
+    @property
+    def manifest(self) -> Path:
+        return self.home / ".claude" / "plugins" / "installed_plugins.json"
+
+    def record(self, project, scope: str = "project") -> dict:
+        return {"scope": scope, "projectPath": str(project), "installPath": str(self.plugin)}
+
+    def records(self, *entries) -> None:
+        """charter@charter's install records exactly as given, shapes Claude Code never writes
+        included."""
+        self.write(self.manifest, {"version": 2, "plugins": {"charter@charter": list(entries)}})
+
+    def declared_a_moment_ago(self):
+        """`_plugin_declaring_guard` found the plugin in this same manifest a moment ago."""
+        return mock.patch.object(doctor, "_plugin_declaring_guard", return_value="charter@charter")
+
+    def assert_could_not_tell(self, r) -> None:
+        """A sentence that says charter could not tell, names the file, and names the list that
+        can answer — not a traceback, and not the row's answer to a question it did not ask."""
+        self.assertEqual(r.status, WARN, self.text(r))
+        self.assertIn("could not tell", r.detail)
+        self.assertIn("installed_plugins.json", r.detail)
+        self.assertIn("claude plugin list --json", r.hint)
+        self.assertIn(_FIX, r.hint)
+
+
+class TestAManifestCharterCannotReadIsCouldNotTell(MovedPlaneCase):
+    """A file charter did not write, in a shape it did not expect, reads as "could not tell" with
+    a sentence: never a traceback, and never a pass over the question it could not answer.
+
+    No shape of the whole file here can come from the read that found the plugin, because
+    `_plugin_declaring_guard` finds nothing in any of them. They arrive when the file changes
+    between that read and this one, as it does while `claude plugin install` rewrites it — so the
+    declaration is stubbed, because it was true a moment ago. Each case carries a sighting from the
+    plugin, which on its own would turn the row green.
+    """
+
+    ABSENT, A_DIRECTORY = object(), object()
+
+    def row_over(self, raw):
+        if self.manifest.is_dir():
+            shutil.rmtree(self.manifest)
+        elif self.manifest.exists():
+            self.manifest.unlink()
+        if raw is self.A_DIRECTORY:
+            self.manifest.mkdir(parents=True)
+        elif isinstance(raw, bytes):
+            self.manifest.parent.mkdir(parents=True, exist_ok=True)
+            self.manifest.write_bytes(raw)
+        elif raw is not self.ABSENT:
+            self.write(self.manifest, raw)
+        self.a_sighting_from_the_plugin()
+        with self.declared_a_moment_ago():
+            return doctor.check_guard_wired()
+
+    def test_a_manifest_that_is_not_readable_json(self):
+        for label, raw in (("absent", self.ABSENT), ("a directory", self.A_DIRECTORY),
+                           ("empty", ""), ("not JSON", "{not json"),
+                           ("not UTF-8", b"\xff\xfe")):
+            with self.subTest(label):
+                self.assert_could_not_tell(self.row_over(raw))
+
+    def test_a_manifest_in_a_shape_claude_code_does_not_write(self):
+        for label, raw in (
+                ("a list", "[]"), ("a string", '"x"'), ("null", "null"),
+                ("plugins null", {"plugins": None}), ("plugins a list", {"plugins": []}),
+                ("plugins a string", {"plugins": "x"}),
+                ("no record of the plugin", {"plugins": {}}),
+                ("its records null", {"plugins": {"charter@charter": None}}),
+                ("its records a dict", {"plugins": {"charter@charter": {"scope": "user"}}}),
+                ("its records a string", {"plugins": {"charter@charter": "user"}}),
+                ("its records a number", {"plugins": {"charter@charter": 1}}),
+                ("its records empty", {"plugins": {"charter@charter": []}})):
+            with self.subTest(label):
+                self.assert_could_not_tell(self.row_over(raw))
+
+
+class TestARecordCharterCannotReadIsCouldNotTell(MovedPlaneCase):
+    """The same rule one level down, with the declaration real: a readable record for another
+    directory comes first, so `_plugin_declaring_guard` finds the plugin, and what follows it is a
+    record charter cannot place. That record could be the install for this directory, so the row
+    cannot say the plugin is installed only elsewhere."""
+
+    def test_a_record_that_cannot_be_placed_beside_one_for_another_directory(self):
+        elsewhere = self.record(self.old)
+        for label, entries in (
+                ("a string", (elsewhere, "junk")),
+                ("null", (elsewhere, None)),
+                ("null first", (None, elsewhere)),
+                ("no projectPath", (elsewhere, {"scope": "project"})),
+                ("an empty projectPath", (elsewhere, {"scope": "project", "projectPath": ""})),
+                ("a projectPath that is a number", (elsewhere, {"scope": "local", "projectPath": 7})),
+                ("a projectPath with a NUL byte",
+                 (elsewhere, {"scope": "project", "projectPath": "/x\x00y"})),
+                ("a scope Claude Code does not write",
+                 (elsewhere, {"scope": "workspace", "projectPath": str(self.plane)})),
+                ("no scope", (elsewhere, {"projectPath": str(self.plane)}))):
+            with self.subTest(label):
+                self.records(*entries)
+                self.a_sighting_from_the_plugin()
+                self.assert_could_not_tell(doctor.check_guard_wired())
+
+    def test_a_readable_record_that_reaches_the_session_answers_whatever_else_is_there(self):
+        """One record this session loads settles it: the rest cannot un-install it."""
+        self.records(None, self.record(self.plane), "junk", {"scope": "workspace"})
+        self.a_sighting_from_the_plugin()
+        r = doctor.check_guard_wired()
+        self.assertEqual(r.status, OK, self.text(r))
+
+
+class TestEachScopeIsReadAsClaudeCodeReadsIt(MovedPlaneCase):
+    """2.1.272 knows four scopes — `managed`, `user`, `project`, `local` — and binds only the last
+    two to a directory."""
+
+    def test_a_local_scope_install_is_bound_to_its_directory_as_a_project_one_is(self):
+        """Measured: `claude plugin install --scope local` records `"scope": "local"` and the
+        directory, enables the plugin in that directory's `settings.local.json`, and after `mv` a
+        session at the new path runs none of the six hooks it ran before."""
+        self.installed_for(self.old, scope="local")
+        r = doctor.check_guard_wired()
+        self.assertEqual(r.status, WARN)
+        self.assertIn(self.old.name, r.detail)
+        self.assertNotIn("could not tell", r.detail)
+        self.assertIn(_FIX, r.hint)
+
+    def test_a_local_scope_install_for_this_plane_reaches_it(self):
+        self.installed_for(self.plane, scope="local")
+        self.a_sighting_from_the_plugin()
+        r = doctor.check_guard_wired()
+        self.assertEqual(r.status, OK, self.text(r))
+
+    def test_a_managed_install_reaches_every_directory(self):
+        self.installed_for(self.old, scope="managed")
+        self.a_sighting_from_the_plugin()
+        r = doctor.check_guard_wired()
+        self.assertEqual(r.status, OK, self.text(r))
+
+
+class TestOnlyADeclaredPluginIdIsLookedUp(MovedPlaneCase):
+    """The record lookup is for a plugin id `_plugin_declaring_guard` found in settings, and for
+    nothing else `check_guard_wired` calls a plugin."""
+
+    def test_running_under_the_plugin_is_proof_no_record_can_overrule(self):
+        """`$CLAUDE_PLUGIN_ROOT` is set only for a process the plugin launched, so the plugin is
+        loaded in this very session. The row spells that `wired (Claude Code plugin)`, and the same
+        label is how the row knows not to look the plugin up in the manifest — so it is pinned
+        here, whole: a reword that reached one use and not the other would send this session's
+        proof to a lookup that, over this manifest, could not tell."""
+        self.write(self.manifest, "{not json")
+        with mock.patch.dict(os.environ, {"CLAUDE_PLUGIN_ROOT": str(self.plugin)}):
+            r = doctor.check_guard_wired()
+        self.assertEqual((r.status, r.detail), (OK, "wired (Claude Code plugin)"))
+
+    def test_no_plugin_id_is_the_unwired_row_and_not_could_not_tell(self):
+        self.write(self.manifest, "{not json")
+        for label, found in (("none", None), ("empty", "")):
+            with self.subTest(label), \
+                    mock.patch.object(doctor, "_plugin_declaring_guard", return_value=found):
+                r = doctor.check_guard_wired()
+            self.assertEqual(r.status, WARN)
+            self.assertIn("pretooluse is not wired", r.detail)
+            self.assertNotIn("could not tell", r.detail)
+
 
 class TestTheGuardRowAsksWhichDirectoryTheInstallBelongsTo(MovedPlaneCase):
     def test_an_install_recorded_for_the_old_path_does_not_guard_a_session_here(self):

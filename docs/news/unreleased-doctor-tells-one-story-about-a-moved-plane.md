@@ -24,6 +24,12 @@ Now the guard row warns, names the path the install is recorded for, and gives t
 Run `charter doctor --fix` from the plane. It installs the plugin for the new path, and the next
 session there runs charter's hooks again, including sessions in the plane's workspaces.
 
+The row reads that path from Claude Code's `plugins/installed_plugins.json`. If that file cannot
+be read, is not the JSON Claude Code writes, or holds an install record charter cannot place,
+the row warns that it could not tell which directory the plugin is installed for and names the
+file. It points you at `claude plugin list --json`, which `charter doctor --fix` also reads. It
+no longer answers as if it had read the file.
+
 If the plane's own `.claude/settings.json` also declares `charter hook pretooluse`, the row no
 longer calls that block a duplicate to delete. On a moved plane it is the only declaration a
 session there loads, so the row stays green and says so.

@@ -53,6 +53,13 @@ class _Plane(unittest.TestCase):
         # entry — the developer's real `~/.claude` — whose manifest `plane-root guard` reads.
         self.enterContext(mock.patch.dict("os.environ", {"HOME": str(self.root / "home")},
                                           clear=True))
+        # The install record behind the declaration the tests below stub, for this plane:
+        # `plane-root guard` asks which directory the plugin is installed for, and a declaration
+        # with no record behind it is a manifest charter cannot read.
+        man = self.root / "home" / ".claude" / "plugins" / "installed_plugins.json"
+        man.parent.mkdir(parents=True)
+        man.write_text(json.dumps({"version": 2, "plugins": {"charter@charter": [
+            {"scope": "project", "projectPath": str(self.root)}]}}))
         self.dispatching = self.enterContext(
             mock.patch.object(doctor, "_plugin_declaring_guard", return_value=None))
         self.enterContext(mock.patch.object(doctor, "_settings_files",

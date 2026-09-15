@@ -19,6 +19,7 @@ with an age, never a verdict (ADR 0013).
 """
 from __future__ import annotations
 
+import json
 import os
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -56,7 +57,14 @@ class GuardCase(PersonaIso):
                         "these tests are about a session rooted at the plane")
 
     def plugin_enabled(self):
-        """The plugin is enabled in settings — declared, and loaded only at session start."""
+        """The plugin is enabled in settings — declared, and loaded only at session start — and
+        installed for this plane. The record is written because `plane-root guard` asks which
+        directory the install belongs to, and a declaration with no record behind it is a manifest
+        charter cannot read."""
+        man = self.tmp / "home" / ".claude" / "plugins" / "installed_plugins.json"
+        man.parent.mkdir(parents=True, exist_ok=True)
+        man.write_text(json.dumps({"version": 2, "plugins": {"charter@charter": [
+            {"scope": "project", "projectPath": str(config.ROOT)}]}}))
         return mock.patch.object(doctor, "_plugin_declaring_guard", return_value="charter@charter")
 
     def running_under_plugin(self):
