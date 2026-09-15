@@ -1684,7 +1684,9 @@ def cmd_workspace_fork(args) -> int:
     workspace.ensure(new)
     workspace.scaffold(new)  # baseline; the charter is overwritten from src below
     # Each piece is carried or named, never raised over (#1084) — see `_carry`.
-    carried = {"charter": _carry(workspace.charter_file(src), workspace.charter_file(new)),
+    # Named by what the operator would look for, and not "charter": the sentence already says
+    # which program could not read it.
+    carried = {"workspace.md": _carry(workspace.charter_file(src), workspace.charter_file(new)),
                "memory": _carry(workspace.memory_dir(src), workspace.memory_dir(new))}
     # Open todos travel with the memory, and for the same reason: a fork exists so someone
     # can pick the task up with full context, and what is still to be done is the most

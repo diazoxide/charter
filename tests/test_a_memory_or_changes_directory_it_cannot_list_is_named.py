@@ -917,9 +917,21 @@ class AForkSaysWhatItDidNotCarry(TwoMemoryDirectories):
     a directory at mode 666 its mode, so the fork's own memory was no longer writable. Now each
     piece is carried or named, and the sentence that says it forked says what it did not carry."""
 
-    def fork(self):
-        return run(commands_workspace.cmd_workspace_fork, src="alpha", new="gamma", live=False,
+    def fork(self, live: bool = False, new: str = "gamma"):
+        return run(commands_workspace.cmd_workspace_fork, src="alpha", new=new, live=live,
                    restore=False)
+
+    def test_either_sentence_says_a_live_fork_is_live(self):
+        """What the fork is — LIVE or LOCAL — is in the sentence whether or not it carried
+        everything, and a LIVE one is not reported as LOCAL."""
+        rc, _, err = self.fork(live=True)
+        self.assertEqual(rc, 0)
+        self.assertIn("Forked 'alpha' → 'gamma' — charter + context + memo copied (LIVE).", err)
+        with refusing_to_list(self.alpha):
+            rc, _, err = self.fork(live=True, new="delta")
+        self.assertEqual(rc, 1)
+        self.assertIn("Forked 'alpha' → 'delta' (LIVE) without the memory charter could not read "
+                      "in 'alpha':", err)
 
     def fork_note(self) -> str:
         return "\n".join(p.read_text() for p in memstore.files(workspace.memory_dir("gamma")))
@@ -950,6 +962,24 @@ class AForkSaysWhatItDidNotCarry(TwoMemoryDirectories):
             self.assertIn(sentence(f"workspaces/alpha/todos/{name}"), err)
         self.assertEqual(len(memstore.files(workspace.memory_dir("gamma"))), 2)
         self.assertIn("keycloak token policy", self.fork_note())
+        # The fork's own todo list takes a todo: nothing gave it the source's mode 666.
+        todos.add("gamma", "pick the rotation up in the fork")
+        self.assertEqual(todos.count_open("gamma"), 1)
+
+    @unittest.skipIf(AS_ROOT, "root reads a file whatever its mode")
+    def test_every_piece_it_could_not_read_is_listed_in_the_one_sentence(self):
+        """Three pieces, so the list is spelled out whole: the first two joined by a comma, the
+        last by "and"."""
+        todos.add("alpha", "finish the keycloak rotation")
+        locked(self, workspace.charter_file("alpha"))
+        locked(self, todos.todos_dir("alpha"))
+        with refusing_to_list(self.alpha):
+            rc, _, err = self.fork()
+        self.assertEqual(rc, 1)
+        self.assertIn("Forked 'alpha' → 'gamma' (LOCAL) without the workspace.md, memory and todos "
+                      "charter could not read in 'alpha':", err)
+        self.assertIn(sentence("workspaces/alpha/workspace.md"), err)
+        self.assertIn(sentence("workspaces/alpha/todos"), err)
 
     @unittest.skipIf(AS_ROOT, "root reads a file whatever its mode")
     def test_a_memory_it_could_not_open_is_named_and_its_neighbours_are_carried(self):
