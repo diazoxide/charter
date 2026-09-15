@@ -113,6 +113,10 @@ class _ARealChatOnARealServer(PersonaIso):
     SLUG = "pane-becomes-harness"
     #: What the recorder exits with once it has written its file. `None` keeps it alive.
     EXIT_WITH: int | None = None
+    #: How long a launch may sit in `_wait_for_harness` here before it is a failure. Twice
+    #: the longest wait any case in this module makes on purpose, and two orders of
+    #: magnitude under the sweep's 900 s subset timeout, which is the bound it replaces.
+    HARNESS_WAIT_SECONDS = 30.0
 
     def setUp(self) -> None:
         super().setUp()
@@ -122,6 +126,7 @@ class _ARealChatOnARealServer(PersonaIso):
                           f"; this machine has {v}")
         make_plane(self)
         no_background_refresh(self)
+        self._bound_the_wait_for_harness()
         # A launch with no terminal of its own: `attach=False`, the way a tab or a handoff
         # drives it, and the state `os.get_terminal_size()` raising is the seam for.
         _ttyguard.no_terminal()
@@ -185,6 +190,40 @@ class _ARealChatOnARealServer(PersonaIso):
             # in the frame, and a panel on a fresh plane forks a PyPI check without it (#945).
             **_envguard.stated(),
         }, clear=True))
+
+    def _bound_the_wait_for_harness(self) -> None:
+        """`_wait_for_harness` with a deadline, because the real one has none by design.
+
+        Inside an operator's tmux the launch stays awake for the life of the frame
+        (`_launch_in_operator_tmux`), and `_wait_for_harness` is `while True` until the
+        pane dies or goes. Right for `charter claude` in somebody's tmux; a hang in this
+        module for any pane that never ends. **Measured by the deletion sweep** on PR #998
+        (run 34732660388, `69cd3a9`): its `disable-branch` on `_launch`'s `if selecting:` —
+        every launch opens the profile selector — put a selector waiting for a key into
+        `ARefusalInsideTheOperatorsOwnTmux`'s pane, and the shard sat in this wait for its
+        whole 900 s subset timeout, `ran: 0`, twice. A mutation the suite cannot answer in
+        bounded time is a line the sweep cannot pin; the thirteen other modules the map
+        lists for `_launch` all answered that one in 2-32 s.
+
+        The real function still gives the answer — called the moment the pane is not alive,
+        which is where it returns at once — so what every case asserts is unchanged. Only
+        the alive spin is bounded, and it ends the way this module's other waits do: a
+        failure that says what was on the pane.
+        """
+        real = commands_frame._wait_for_harness
+
+        def bounded(socket: str, harness_pane: str) -> int | None:
+            deadline = time.monotonic() + self.HARNESS_WAIT_SECONDS
+            while time.monotonic() < deadline:
+                if commands_frame._pane_state(socket, harness_pane)[0] != commands_frame._ALIVE:
+                    return real(socket, harness_pane)
+                time.sleep(commands_frame._POLL_SECONDS)
+            self.fail(f"the harness pane was still running after "
+                      f"{self.HARNESS_WAIT_SECONDS:g}s, and nothing in this module should "
+                      f"outlive that: {commands_frame._pane_last_words(socket, harness_pane)!r}")
+
+        self.enterContext(mock.patch.object(commands_frame, "_wait_for_harness",
+                                            side_effect=bounded))
 
     def _reap_the_server(self) -> None:
         subprocess.run([self.tmux, "-L", self.socket, "kill-server"],
@@ -623,6 +662,37 @@ class ARefusalInsideTheOperatorsOwnTmux(_ARealChatOnARealServer, unittest.TestCa
             [self.tmux, "-L", self.op_name, "list-windows", "-a", "-F", "#{window_name}"],
             capture_output=True, text=True, timeout=20).stdout.split()
         self.assertNotIn("beta.1", windows, f"the frame's window was left behind: {windows}")
+
+
+@unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
+class APaneThatNeverEndsIsAFailureHereAndNotAHang(_ARealChatOnARealServer,
+                                                    unittest.TestCase):
+    """`_bound_the_wait_for_harness`, pinned — the guard that turns the sweep's 900 s
+    "not measured" into a red with the pane on it. The pane here is a fake that is always
+    alive, because the real thing this stands for is the selector the mutation put there,
+    and that took 30 s per case to say the same."""
+
+    SLUG = "pane-never-ends"
+    HARNESS_WAIT_SECONDS = 0.5
+
+    def test_the_wait_ends_in_its_budget_and_says_what_the_pane_shows(self):
+        self.enterContext(mock.patch.object(commands_frame, "_pane_state",
+                                            return_value=(commands_frame._ALIVE, None)))
+        self.enterContext(mock.patch.object(commands_frame, "_pane_last_words",
+                                            return_value=["charter · which profile?"]))
+        started = time.monotonic()
+        with self.assertRaises(AssertionError) as caught:
+            commands_frame._wait_for_harness(self.socket, "%1")
+        self.assertLess(time.monotonic() - started, 10.0)
+        self.assertIn("still running after 0.5s", str(caught.exception))
+        self.assertIn("which profile?", str(caught.exception))
+
+    def test_a_pane_that_ends_gets_the_real_answer(self):
+        """The bound is on the alive spin alone: a pane that dies is answered by
+        `_wait_for_harness` itself, code included, so no case's assertion moved."""
+        self.enterContext(mock.patch.object(commands_frame, "_pane_state",
+                                            return_value=(commands_frame._DEAD, 7)))
+        self.assertEqual(commands_frame._wait_for_harness(self.socket, "%1"), 7)
 
 
 if __name__ == "__main__":
