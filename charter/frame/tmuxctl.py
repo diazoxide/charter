@@ -344,6 +344,43 @@ def same_server(a: str | None, b: str | None) -> bool:
     return _resolved(a) == _resolved(b)
 
 
+def nothing_listening(server: str) -> bool:
+    """Is there provably no tmux server on *server* — nothing bound to its socket at all?
+
+    Asked of a server that has just refused a command, to tell the two reasons apart
+    (#1088). **A server that is GONE** — killed by hand, crashed, or never started — has no
+    chats running on it: tmux 3.7c answers ``no server running on …`` for a socket file a
+    `kill-server` or a SIGKILL left behind, and ``error connecting to … (No such file or
+    directory)`` for one that was never made, and a connect here gives ``ECONNREFUSED`` and
+    ``ENOENT`` for the same two. **A server that is WEDGED** is still there, and so may be
+    its chats: measured on a SIGSTOP'd server, the connect was accepted while `list-panes`
+    sat past its timeout.
+
+    **Only those two refusals are "nothing here"**, and every other outcome — an accepted
+    connect, a permission error, a path too long for `sun_path` — is "there may be". Only
+    a False answer can start a chat a second time, so an answer charter cannot prove is
+    False. One `AF_UNIX` connect rather than a tmux command: it is the question a tmux
+    client asks first, it costs microseconds, and it starts no server. The same act as
+    `tests/_tmuxreap._listening`, for the same reasons.
+
+    Residual: a server still running after its socket file was DELETED — a temp cleaner,
+    say — reads as gone. Nothing can reach its chats then, charter or tmux itself, until
+    `kill -USR1` makes the socket again.
+    """
+    import errno
+    import socket
+
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        probe.settimeout(0.5)
+        probe.connect(_resolved(server))
+    except OSError as exc:
+        return exc.errno in (errno.ENOENT, errno.ECONNREFUSED)
+    finally:
+        probe.close()
+    return False
+
+
 def _resolved(server: str) -> str:
     """*server* as the socket FILE it names, whichever of the two spellings it is.
 

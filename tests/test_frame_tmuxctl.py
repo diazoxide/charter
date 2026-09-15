@@ -498,6 +498,59 @@ class TwoSpellingsOfOneSocket(unittest.TestCase):
                              f"/nowhere-tmux/tmux-{os.getuid()}/charter")
 
 
+class AServerThatIsGoneIsNotAServerThatIsWedged(unittest.TestCase):
+    """#1088: `nothing_listening`, the one reading that lets a refusal say "no chats here".
+
+    Real `AF_UNIX` sockets in a short scratch directory, and no tmux: the question is about
+    the socket file, and a listening socket is what a running server — wedged or not — is
+    from the outside. A SIGSTOP'd tmux server accepted the connect while its `list-panes`
+    timed out, measured on 3.7c; a `kill-server` and a SIGKILL each left the file behind
+    refusing connects.
+    """
+
+    def setUp(self) -> None:
+        import socket as socket_mod
+        self.socket_mod = socket_mod
+        # `/tmp` and not `tempfile.gettempdir()`: macOS answers a `/var/folders/…` path
+        # long enough to push a socket past `sun_path`'s 104 bytes on its own.
+        self.dir = tempfile.mkdtemp(dir="/tmp", prefix="gone-")
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.dir, True))
+
+    def _bound(self, name: str, *, listening: bool) -> str:
+        path = os.path.join(self.dir, name)
+        sock = self.socket_mod.socket(self.socket_mod.AF_UNIX, self.socket_mod.SOCK_STREAM)
+        sock.bind(path)
+        if listening:
+            sock.listen(1)
+            self.addCleanup(sock.close)
+        else:
+            sock.close()                  # the file stays, as a killed server leaves it
+        return path
+
+    def test_a_socket_something_listens_on_is_not_gone(self):
+        self.assertFalse(tmuxctl.nothing_listening(self._bound("up", listening=True)))
+
+    def test_a_socket_file_nothing_listens_on_is_gone(self):
+        self.assertTrue(tmuxctl.nothing_listening(self._bound("killed", listening=False)))
+
+    def test_no_socket_file_at_all_is_gone(self):
+        self.assertTrue(tmuxctl.nothing_listening(os.path.join(self.dir, "never-started")))
+
+    def test_a_name_is_asked_at_the_file_tmux_would_use_for_it(self):
+        with mock.patch.dict(os.environ, {"TMUX_TMPDIR": self.dir}, clear=False):
+            sockets = os.path.join(self.dir, f"tmux-{os.getuid()}")
+            os.mkdir(sockets)
+            self._bound(os.path.join(sockets, "plane"), listening=True)
+
+            self.assertFalse(tmuxctl.nothing_listening("plane"))
+            self.assertTrue(tmuxctl.nothing_listening("another-plane"))
+
+    def test_a_refusal_that_is_not_one_of_the_two_is_not_proof(self):
+        """A path `connect` cannot even try — past `sun_path` — says nothing about whether
+        a server is there, and only a proof may answer True."""
+        self.assertFalse(tmuxctl.nothing_listening("/tmp/" + "x" * 200))
+
+
 class WhoseServerIsIt(unittest.TestCase):
     """`is_operator_socket` — the question `frame/slots.py` and
     `commands_frame._switch_workspace` ask, and the one #812 was answered wrongly.

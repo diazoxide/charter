@@ -393,6 +393,29 @@ class AFrameStartedBeforeTheUpgrade(_OnTheSharedServer, unittest.TestCase):
         launch.assert_not_called()
         self.assertTrue(any("already running" in s for s in said), said)
 
+    def test_a_reopen_with_one_dead_server_still_sees_the_chat_live_on_the_other(self):
+        """#1088: the plane's own server killed by hand, a chat still running on the shared
+        one. The dead server says nothing about the live chat, so the reopen is refused."""
+        self._old_chat("default.1", first=True, record=True)
+        own = tmuxctl.plane_socket()
+        _tmux(own, "new-session", "-d", "-s", WS, "sh", "-c", "exec cat")
+        state.frame_dir("default.2", create=True)
+        state.record_server("default.2", own)
+        state.record_workspace("default.2", WS)
+        self.assertEqual(_tmux(own, "kill-server").returncode, 0)
+        reopen.write([reopen.Frame(workspace=WS, chats=tuple(
+            reopen.Chat(chat=fid, workspace=WS, persona="", harness="claude-code",
+                        cwd="", resume="", transcript="", active=fid == "default.1")
+            for fid in ("default.1", "default.2")))], focus=WS)
+
+        said: list[str] = []
+        with mock.patch("sys.stdout.isatty", return_value=True), \
+                mock.patch.object(commands_frame.util, "err", side_effect=said.append), \
+                mock.patch.object(commands_frame, "cmd_launch") as launch:
+            self.assertEqual(commands_frame.cmd_reopen(SimpleNamespace()), 1)
+        launch.assert_not_called()
+        self.assertTrue(any("already running" in s for s in said), said)
+
     def test_a_new_launch_starts_on_the_planes_own_server_and_leaves_the_old_one(self):
         """Nothing new ever starts on the shared server — a session there is joined by its
         bare name, which is the defect — and the old frame keeps running beside it."""
