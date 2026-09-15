@@ -1252,10 +1252,11 @@ def _ensure_guard_hook(root: Path) -> tuple[str, Path | None]:
         return "created", None
     raw = p.read_text()
     try:
-        settings = json.loads(raw)
-    except (OSError, json.JSONDecodeError, RecursionError):
-        # `RecursionError` is a file nested too deeply to parse, and not a `ValueError`: left
-        # alone as malformed, like any other settings file this cannot read.
+        settings = doctor._json_as_claude_code_parses(raw)
+    except (OSError, ValueError, RecursionError):
+        # Parsed as Claude Code parses it, so `NaN` and `Infinity` are refused like any other
+        # text that is not JSON. `RecursionError` is a file nested too deeply to parse, and not a
+        # `ValueError`. Either way it is left alone as malformed, like any file this cannot read.
         return "malformed", p
     if not isinstance(settings, dict):
         return "malformed", p
@@ -1269,11 +1270,25 @@ def _ensure_guard_hook(root: Path) -> tuple[str, Path | None]:
         return "present", None
     settings.setdefault("hooks", {}).setdefault("PreToolUse", []).append(_GUARD_HOOK)
     indent, separators = _json_style(raw)
-    rewritten = json.dumps(settings, indent=indent, separators=separators)
+    try:
+        rewritten = json.dumps(settings, indent=indent, separators=separators)
+    except RecursionError:
+        # Parsed, and too deep to write back out: 3.12's encoder recurses where its decoder did
+        # not (6,000 levels, measured). Left completely untouched, like a file it cannot read.
+        return "malformed", p
     if raw.endswith("\n"):
         rewritten += "\n"
     p.write_text(rewritten)
     return "created", None
+
+
+def _settings_left_untouched(path) -> str:
+    """The one sentence `init` and `reinit` say about a settings file `_ensure_guard_hook` would
+    not rewrite, its path contained: a path is text somebody else's commit created, and a newline
+    in it would write a second line in charter's voice."""
+    return contain.path_sentence(
+        "{path} is not a settings file charter can read and write back as JSON — left it "
+        "completely untouched. Wire the plane-root guard yourself:", path=path)
 
 
 def _json_style(text: str) -> tuple[str | None, tuple[str, str]]:
@@ -1605,7 +1620,7 @@ def _load_settings(root: Path) -> tuple[dict | None, Path]:
         return {}, p
     try:
         doc = json.loads(p.read_text())
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError, RecursionError):
         return None, p
     return (doc if isinstance(doc, dict) else None), p
 
@@ -2207,7 +2222,12 @@ def ensure_env_var(root: Path, key: str, value: str) -> tuple[str, Path | None]:
     settings["env"] = env
     raw = p.read_text() if p.exists() else ""
     indent, separators = _json_style(raw)
-    rewritten = json.dumps(settings, indent=indent, separators=separators)
+    try:
+        rewritten = json.dumps(settings, indent=indent, separators=separators)
+    except RecursionError:
+        # Parsed, and too deep to write back out: 3.12's encoder recurses where its decoder did
+        # not (6,000 levels, measured). Left completely untouched, like a file it cannot read.
+        return "malformed", p
     if raw.endswith("\n"):
         rewritten += "\n"
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -2755,8 +2775,7 @@ def cmd_init(args) -> int:
     elif gh_status == "present":
         present.append(".claude/settings.json (plane-root guard already wired)")
     elif gh_status == "malformed":
-        util.warn(f"{gh_detail} is not valid JSON — left it completely untouched. Wire the "
-                  f"plane-root guard yourself:\n{_hooks_snippet()}")
+        util.warn(f"{_settings_left_untouched(gh_detail)}\n{_hooks_snippet()}")
     elif gh_status == "blocked":
         blocked.append((".claude", gh_detail))
 
@@ -2893,8 +2912,7 @@ def cmd_reinit(args) -> int:
     elif gh_status == "present":
         present.append(".claude/settings.json (plane-root guard already wired)")
     elif gh_status == "malformed":
-        util.warn(f"{gh_detail} is not valid JSON — left it completely untouched. Wire the "
-                  f"plane-root guard yourself:\n{_hooks_snippet()}")
+        util.warn(f"{_settings_left_untouched(gh_detail)}\n{_hooks_snippet()}")
 
     if blocked:
         for d, p in blocked:

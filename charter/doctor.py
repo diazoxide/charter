@@ -1128,6 +1128,38 @@ def _claude_folder(folder: Path | None) -> Path:
     return Path(folder) if folder is not None else _claude_code.config_home()
 
 
+def _refuse_json_constant(name: str):
+    raise ValueError(f"{name} is not JSON")
+
+
+def _json_as_claude_code_parses(text: str):
+    """*text* parsed as `JSON.parse` parses it — how Claude Code reads its install list.
+
+    Python's `json` also accepts ``NaN``, ``Infinity`` and ``-Infinity``, which `JSON.parse`
+    refuses. So a file holding one read as valid here and as nothing to Claude Code: a ``NaN`` in
+    a field the schema drops made `init` answer "present" and write no hook (round 4 of the
+    review). Refused here like any other text that is not JSON, with a `ValueError`. A document
+    nested too deeply still raises `RecursionError`, which is not one; every caller catches both.
+
+    **The one parser** for Claude Code's install list, and for the settings file whose hook block
+    and `enabledPlugins` the guard row and `commands._ensure_guard_hook` count.
+    """
+    return json.loads(text, parse_constant=_refuse_json_constant)
+
+
+def _declares_guard_hook(path: Path) -> bool:
+    """Does the settings file at *path* declare `charter hook pretooluse`, in a file Claude Code
+    can read? The text is matched as it always was, but a file `JSON.parse` refuses, or one that is
+    not an object, declares nothing, because Claude Code loads nothing from it (round 4 of the
+    review: `Infinity` beside a hook block read as wired)."""
+    try:
+        text = path.read_text()
+        return ("charter hook pretooluse" in text
+                and isinstance(_json_as_claude_code_parses(text), dict))
+    except (OSError, ValueError, RecursionError):
+        return False
+
+
 def _settings_docs(root: Path | None = None, folder: Path | None = None) -> list[dict]:
     """Every settings document the host resolves from *root*, parsed, unreadable ones dropped.
 
@@ -1144,7 +1176,7 @@ def _settings_docs(root: Path | None = None, folder: Path | None = None) -> list
     out: list[dict] = []
     for p in _settings_files(root, folder):
         try:
-            doc = json.loads(p.read_text())
+            doc = _json_as_claude_code_parses(p.read_text())
         except (OSError, ValueError, UnicodeDecodeError, RecursionError):
             continue
         if isinstance(doc, dict):
@@ -1156,7 +1188,12 @@ def _enabled_plugin_ids(root: Path | None = None, folder: Path | None = None) ->
     """Plugin ids the host has ENABLED. Installed is not enabled (#177)."""
     out: set[str] = set()
     for doc in _settings_docs(root, folder):
-        for pid, on in (doc.get("enabledPlugins") or {}).items():
+        enabled = doc.get("enabledPlugins")
+        # Not an object — a list, a string, a number — enables no plugin from that file. A list
+        # raised `AttributeError` out of the guard row and `init` (round 4 of the review).
+        if not isinstance(enabled, dict):
+            continue
+        for pid, on in enabled.items():
             if on:
                 out.add(pid)
     return out
@@ -1295,7 +1332,7 @@ def _installed_plugins(folder: Path | None = None) -> tuple[dict[str, list[dict]
         return {}, (f"$CLAUDE_CODE_PLUGIN_CACHE_DIR is set, so Claude Code reads its install list "
                     f"there and not {shown}")
     try:
-        doc = json.loads(_install_list(folder).read_text())
+        doc = _json_as_claude_code_parses(_install_list(folder).read_text())
     except FileNotFoundError:
         return {}, None
     except OSError as e:
@@ -1385,7 +1422,7 @@ def _plugin_standing(pid: str | None) -> tuple[str | None, list[str], list[str],
     for record in records or []:
         if not _install_reaches(record, here, plane):
             elsewhere.append(_recorded_dir(record))
-        elif Path(record["installPath"]).is_dir():
+        elif _files_there(record["installPath"]):
             return nothing
         else:
             gone.append(_line(util.short_path(record["installPath"])))
@@ -1420,6 +1457,21 @@ def _recorded_dir(record: dict) -> str:
     """The directory an install is recorded for, as one line — "no directory" for none."""
     recorded = record.get("projectPath")
     return _line(util.short_path(recorded)) if recorded else "no directory"
+
+
+def _files_there(install_path: str) -> bool:
+    """Is *install_path* a directory, as far as asking can confirm?
+
+    Claude Code accepts any string here, and `Path.is_dir` raises `OSError` 63 (name too long) for
+    a component over 255 bytes on Python 3.11–3.13 — measured on 3.12; 3.14 answers False — and
+    `_checks()` has no per-check guard, so that took `charter doctor` and the preflight down (round
+    4 of the review). Files that cannot be confirmed are files gone: the row warns, and `init`
+    writes the hook.
+    """
+    try:
+        return Path(install_path).is_dir()
+    except OSError:
+        return False
 
 
 def _named(items: list[str]) -> str:
@@ -1771,13 +1823,7 @@ def check_guard_wired() -> Result:
     # A plugin id is a key in files a chat can write, so every sentence prints it contained.
     named = _line(plugin)
 
-    declared = []
-    for p in _settings_files():
-        try:
-            if "charter hook pretooluse" in p.read_text():
-                declared.append(p)
-        except (OSError, UnicodeDecodeError):
-            continue
+    declared = [p for p in _settings_files() if _declares_guard_hook(p)]
 
     # ENABLED is not INSTALLED HERE, and INSTALLED is not LOADED. A project-scope install belongs
     # to the directory it was installed from, and a plane that has moved keeps the old record
@@ -2161,8 +2207,7 @@ def check_guard_seen() -> Result:
         # reader to conclude the surviving declaration is working (#261). An unrecorded
         # source predates the field and stays unqualified: unknown is not suspect.
         src = _seen.last_source()
-        settings_declare = any("charter hook pretooluse" in _read_text(p)
-                               for p in _settings_files())
+        settings_declare = any(_declares_guard_hook(p) for p in _settings_files())
         # Narrow deliberately: `settings` is also what a Codex or opencode dispatch records,
         # and those declarations live in files this check never reads (`~/.codex/config.toml`),
         # so "no settings file declares it" alone would warn at planes that are wired fine.

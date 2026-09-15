@@ -464,7 +464,39 @@ class TestNothingTakenFromTheListReachesTheTerminalRaw(MovedPlaneCase):
         self.assertIn("[2Jboom", r.detail, "contained, not dropped")
         rendered = r.render()
         self.assertNotIn("\x1b[2J", rendered)
-        self.assertEqual(rendered.count("\n"), 1, rendered)
+        # A WARN row carries its hint on one line more; an OK row prints no hint at all.
+        self.assertEqual(rendered.count("\n"), 1 if r.status == WARN else 0, rendered)
+
+    def listed_as(self, pid, *records):
+        """The list as the reader hands it on, holding *pid*. 2.1.272's schema refuses an id like
+        this one as a key, so no real list brings it to these sentences — which is why each is
+        pinned here: it is the sentence, not the list, that keeps an id on one line (round 4 of
+        the review)."""
+        return mock.patch.object(doctor, "_installed_plugins",
+                                 return_value=({pid: list(records)}, None))
+
+    def test_the_id_in_has_fired_here(self):
+        pid = f"evil{self.HOSTILE}@x"
+        self.a_sighting_from_the_plugin()
+        with self.declared_a_moment_ago(pid), self.listed_as(pid, self.record(self.plane)):
+            r = doctor.check_guard_wired()
+        self.assertIn("has fired here", r.detail)
+        self.assert_contained(r)
+
+    def test_the_id_in_its_files_are_gone(self):
+        pid = f"evil{self.HOSTILE}@x"
+        gone = {**self.record(self.plane), "installPath": self.gone}
+        with self.declared_a_moment_ago(pid), self.listed_as(pid, gone):
+            r = doctor.check_guard_wired()
+        self.assertIn("files are gone", r.detail)
+        self.assert_contained(r)
+
+    def test_the_id_in_installed_elsewhere(self):
+        pid = f"evil{self.HOSTILE}@x"
+        with self.declared_a_moment_ago(pid), self.listed_as(pid, self.record(self.old)):
+            r = doctor.check_guard_wired()
+        self.assertIn("and not for this directory", r.detail)
+        self.assert_contained(r)
 
     def test_a_projectPath(self):
         self.installed_for(f"{self.old}{self.HOSTILE}")
