@@ -156,6 +156,21 @@ class TestASightingDoesNotOutliveItsDeclaration(GuardCase):
         self.assertEqual(r.status, doctor.OK)
         self.assertIn("last ran", r.detail)
 
+    def test_a_sighting_with_no_recorded_source_is_not_read_as_one_from_settings(self):
+        """The same unknown provenance, where a guess would change the answer: an enabled
+        plugin declares the guard and no settings file does, which is exactly the state the
+        removed-settings-block warning is for. A sighting that never said where it came from
+        is not a sighting from settings, so it must not be told it came from a declaration
+        that is no longer there. The test above never enables a plugin, so that branch never
+        ran and reading `None` as `settings` survived review of #970 (M8)."""
+        guardseen.path().parent.mkdir(parents=True, exist_ok=True)
+        guardseen.path().write_text('{"ts": "2026-08-18T00:00:00+00:00", "harness": "opencode"}')
+        with self.plugin_enabled(), self.not_running_under_plugin():
+            r = doctor.check_guard_seen()
+        self.assertEqual(r.status, doctor.OK)
+        self.assertIn("last ran", r.detail)
+        self.assertNotIn("no longer", (r.detail + " " + (r.hint or "")).lower())
+
 
 if __name__ == "__main__":
     unittest.main()
