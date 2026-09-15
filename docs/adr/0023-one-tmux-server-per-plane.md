@@ -3,7 +3,7 @@
 An operator ran charter in two projects at once. Their frames mixed, and one project's
 harness profiles showed in the other.
 
-Read in `charter/commands_frame.py` as it stood at 0.61.1: every frame on the machine ran on
+Read in `charter/commands_frame.py` as it stood at 0.61.0: every frame on the machine ran on
 one tmux server, `SOCKET = "charter"`. A frame's session is named by its bare workspace
 (`state.workspace_prefix`), and `_launch` decided whether to start a session or join one by
 that name — `joining = session in live_sessions`, where `live_sessions` listed every session
