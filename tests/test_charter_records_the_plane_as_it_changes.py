@@ -1470,10 +1470,13 @@ class AReopenOntoARunningPlaneIsRefused(PersonaIso, unittest.TestCase):
         self.assertIn("edm-test-", str(config.STATE_DIR))
         reopen.write([_frame("alpha", "alpha.1")], focus="alpha")
 
-    def _reopen(self, *, seats, gone=lambda server: True):
+    def _reopen(self, *, seats, gone=lambda server: True, starts=True):
         """*gone* is `tmuxctl.nothing_listening` per server — asked only of a server whose
-        seats are ``None`` — so no case is decided by a socket file on this machine."""
+        seats are ``None`` — so no case is decided by a socket file on this machine. *starts*
+        False is a launch that ran and put nothing back."""
         def _launcher(args):
+            if not starts:
+                return 1
             args.reopening.fid = "alpha.9"
             return 0
 
@@ -1592,6 +1595,20 @@ class AReopenOntoARunningPlaneIsRefused(PersonaIso, unittest.TestCase):
         launch.assert_not_called()
         self.assertIn("charter reopen: alpha.1 not reopened", out)
         self.assertNotIn("could be started", out)
+        self.assertEqual([c.chat for c in reopen.read().all_chats()], ["alpha.1"])
+
+    def test_a_record_nothing_held_back_that_starts_nothing_says_it_could_not(self):
+        """The other side of the case above. Nothing was held back and every launch was
+        tried and put nothing back, so the operator is told none could be started and the
+        record stays to try again. Without it a reopen that did nothing says nothing."""
+        _plant("alpha.1", ws="alpha")
+
+        rc, out, launch = self._reopen(seats=[], starts=False)
+
+        self.assertEqual(rc, 1)
+        launch.assert_called()
+        self.assertIn("charter reopen: none of the recorded chats could be started — the "
+                      "record is left in place so this can be tried again.", out)
         self.assertEqual([c.chat for c in reopen.read().all_chats()], ["alpha.1"])
 
     def test_a_chat_with_no_server_record_is_held_back_when_the_legacy_server_is_wedged(self):
