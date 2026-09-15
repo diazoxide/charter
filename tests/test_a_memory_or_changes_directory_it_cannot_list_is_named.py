@@ -672,6 +672,16 @@ class ANameItCouldNotStatIsContained(PersonaIso):
                 self.assertContained(err)
                 self.assertIn(self.said("workspaces/alpha/memory"), err)
 
+    def test_the_remedy_for_a_link_loop_repeats_the_path_contained_too(self):
+        """ELOOP's remedy names the link again, from the filesystem root — the second place the
+        same name is printed in one sentence."""
+        loop = config.ROOT / "workspaces" / "alpha" / "memory" / self.NAME
+        said = workspace.cannot_check(loop, errno.ELOOP)
+        self.assertContained(said)
+        self.assertNotIn("\n", said)
+        self.assertEqual(said, f"workspaces/alpha/memory/{self.SHOWN} cannot be checked — fix the "
+                               f"symlink loop at {config.ROOT}/workspaces/alpha/memory/{self.SHOWN}")
+
     def test_doctors_row(self):
         workspace.ensure("alpha")
         workspace.scaffold("alpha")
@@ -927,6 +937,7 @@ class AForkSaysWhatItDidNotCarry(TwoMemoryDirectories):
         rc, _, err = self.fork(live=True)
         self.assertEqual(rc, 0)
         self.assertIn("Forked 'alpha' → 'gamma' — charter + context + memo copied (LIVE).", err)
+        self.assertIn("Share the fork: charter workspace save gamma", err)
         with refusing_to_list(self.alpha):
             rc, _, err = self.fork(live=True, new="delta")
         self.assertEqual(rc, 1)
@@ -997,6 +1008,7 @@ class AForkSaysWhatItDidNotCarry(TwoMemoryDirectories):
         self.assertEqual(rc, 0)
         self.assertIn("Forked 'alpha' → 'gamma' — charter + context + memo copied (LOCAL).", err)
         self.assertNotIn("could not read", err)
+        self.assertNotIn("Share the fork", err)
         self.assertIn("inherited its vision, context, glossary, and memo", self.fork_note())
         self.assertIn("keycloak token policy", self.fork_note())
         self.assertEqual(todos.count_open("gamma"), 1)
