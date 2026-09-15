@@ -294,6 +294,26 @@ class TheKillIsAimedAtAWindowTmuxJustNamed(PersonaIso, unittest.TestCase):
         listed.assert_not_called()
         self.assertEqual([c[-3:] for c in seen], [["kill-window", "-t", "@7"]], seen)
 
+    # -- the viewer's plane stamp: what a viewer kill is vetoed on -------------------------
+
+    def test_a_viewer_stamp_is_the_planes_state_directory_on_the_viewers_own_window(self):
+        with mock.patch.object(commands_frame, "_this_plane", return_value="/planes/a"):
+            argv = commands_frame._viewer_plane_option_argv(socket=SERVER, window="@7")
+        self.assertEqual(argv[-6:], ["set-option", "-w", "-t", "@7",
+                                     commands_frame._VIEWER_PLANE_OPTION, "/planes/a"])
+
+    def test_a_plane_path_the_listing_could_not_carry_stamps_nothing(self):
+        """The stamp is read back through a tab-separated `list-windows` format, so a path
+        holding ANY ONE of a tab, a carriage return or a newline would be read as another
+        field or another row — each alone is refused, and so is an empty value. A refused
+        stamp opens a plain pager window charter never kills, never a viewer it might kill
+        wrongly (`_TRANSCRIPT_OPTION`'s ordering)."""
+        for value in ("/planes/a\tb", "/planes/a\rb", "/planes/a\nb", ""):
+            with self.subTest(value=value), \
+                    mock.patch.object(commands_frame, "_this_plane", return_value=value):
+                self.assertIsNone(
+                    commands_frame._viewer_plane_option_argv(socket=SERVER, window="@7"))
+
     def test_a_chat_with_no_window_in_the_listing_is_not_aimed_at(self):
         """A stopped chat with no window in the listing is aimed at nothing — and the viewer
         sweep is asked ONLY for chats a `kill-window` actually hit, so a teardown that found

@@ -504,6 +504,18 @@ class TheTranscriptOpensInAWindowOfItsOwn(PersonaIso, unittest.TestCase):
         self.assertIn(stray, self._windows_now(),
                       "the sweep killed a stamp-less window on the plane's own server")
 
+    def test_the_sweep_leaves_the_viewer_of_a_chat_that_is_still_live(self):
+        """A sweep takes orphans only. The chat here is live — its harness pane is running —
+        so its viewer is the window somebody may be reading, and `_sweep_orphan_transcripts`
+        must leave it exactly where it is."""
+        self._chat_with_a_transcript()
+        viewer = self._open_a_viewer()
+        with mock.patch.object(tmuxctl, "plane_socket", return_value=self.socket):
+            commands_frame._sweep_orphan_transcripts(
+                self.socket, commands_frame._live_chats(self.socket))
+        self.assertIn(viewer, self._windows_now(),
+                      "the sweep killed the viewer of a chat that is still live")
+
 @unittest.skipUnless(_HAS_TMUX, "needs a real tmux")
 class TwoPlanesOnOneServer(PersonaIso, unittest.TestCase):
     """§3.3, and the one case a single-plane test is blind to.

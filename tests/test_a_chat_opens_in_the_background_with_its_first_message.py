@@ -382,6 +382,16 @@ class EveryRefusalComesBeforeAnythingStarts(_AChatInAlpha):
             got = self._open()
         self.assertIs(got.ok, True, got.message)
 
+    def test_on_a_shared_server_a_name_nobody_holds_is_opened(self):
+        """The `prefix in _live_sessions(home)` half: the refusal is about a session of THIS
+        name that another plane may hold. With no session of the name live at all, there
+        is nothing to be somebody else's, and the open starts one — however unprovable an
+        absent session is."""
+        with mock.patch.object(commands_frame, "_is_own_plane_server", return_value=False):
+            got = self._open()
+        self.assertIs(got.ok, True, got.message)
+        self.assertEqual(len(self.launched), 1)
+
     def _sessions_on(self, answers: dict[str, str]):
         """A stand-in that answers `list-sessions` per SERVER, and everything else as the
         class's own does."""

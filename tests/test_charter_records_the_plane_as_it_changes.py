@@ -892,6 +892,18 @@ class TheLauncherTakesTheDecision(PersonaIso, unittest.TestCase):
         self.assertTrue(any("ended.9" in cs for cs in swept),
                         f"the launch did not sweep a viewer whose chat had ended: {swept}")
 
+    def test_a_launch_leaves_the_viewer_of_a_chat_that_is_still_live(self):
+        """The other half of the sweep, and the one that makes it a SWEEP rather than a
+        purge: a viewer whose chat is live is exactly the window an operator is reading
+        beside a running chat, and the launch must not aim at it. Pins the `chat not in
+        live_chats` filter — with it gone, every viewer on the server is killed at launch."""
+        live = commands_frame._LiveChats({"alpha.1"})
+        live.viewers = (("alpha.1", "@9", str(config.STATE_DIR)),)
+        swept: list = []
+        self._launch(live_obj=live, kill_viewers=swept)
+        self.assertFalse(any("alpha.1" in cs for cs in swept),
+                         f"the launch swept the viewer of a chat that is live: {swept}")
+
     def test_the_restore_is_the_quiet_one(self):
         """An operator who typed `charter reopen` is reading. An operator who typed
         `charter` wanted a terminal, so the same wall of per-chat lines there is noise at
