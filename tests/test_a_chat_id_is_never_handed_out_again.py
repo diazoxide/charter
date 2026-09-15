@@ -693,5 +693,36 @@ class AClosedChatsLeftoversAreNeverInherited(PersonaIso, unittest.TestCase):
         self.assertTrue(reopen.transcript_path(self.old).is_file())
 
 
+_REPO = Path(__file__).resolve().parents[1]
+
+
+class TheRecordIsWrittenDown(unittest.TestCase):
+    """The decision and its costs, read off the repository root — never through `config`,
+    which points at whichever plane ran the suite (CONTRIBUTING, #785)."""
+
+    def _adr(self) -> str:
+        found = sorted((_REPO / "docs" / "adr").glob(
+            "*-a-chat-id-names-one-chat-and-one-harness-session.md"))
+        self.assertEqual(len(found), 1, found)
+        return found[0].read_text()
+
+    def test_one_adr_records_the_decision(self):
+        self.assertTrue(self._adr().startswith("# "))
+
+    def test_its_costs_are_written_down(self):
+        """The half a decision record is usually missing: what the link trusts, what it
+        does not follow, and how many ids a prefix can ever hand out."""
+        text = self._adr()
+        for cost in ("CLAUDE_PID", "/new", "99,999"):
+            with self.subTest(cost=cost):
+                self.assertIn(cost, text)
+
+    def test_the_vocabulary_says_an_id_is_handed_out_once(self):
+        context = (_REPO / "CONTEXT.md").read_text()
+        chat = context.split("**Chat**:", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("handed out once", chat)
+        self.assertIn("harness session", chat)
+
+
 if __name__ == "__main__":
     unittest.main()

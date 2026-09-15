@@ -1176,10 +1176,10 @@ what that chat will and will not get back.
 
 ```
 quit · 5 to choose from
->   quit — stop 4 chats in 3 workspaces; 2 of 4 can resume the conversation
+>   quit — stop 4 chats in 3 workspaces; 3 of 4 can resume the conversation
     alpha.1 · claude            conversation resumes
-  * alpha.2 · claude            reopens empty — no session id recorded for this chat yet
-    api.1 · opencode            reopens empty — opencode records no session id to resume …
+  * alpha.2 · claude            reopens empty — no conversation recorded for this chat yet
+    api.1 · opencode            conversation resumes
     gone.3 · claude-work        conversation resumes · workspace 'gone' is gone — reopen…
 
   up/down move   enter choose   esc cancel   F12 back to the harness
@@ -1196,9 +1196,13 @@ to record it is exactly the invasive quit this exists to prevent, so that refuse
 nothing.
 
 **`charter reopen` puts the recorded plane back.** Every workspace, every chat, each one's
-persona and the directory it belongs in — and, for Claude Code, the conversation, by
-resuming it. It attaches you to the workspace you pressed quit in, on the chat that was in
-front of you. The record describes one quit and is consumed chat by chat, so running it
+persona and the directory it belongs in — and the conversation, by resuming it, wherever the
+chat's harness has one to resume. It attaches you to the workspace you pressed quit in, on the
+chat that was in front of you. **A reopened chat comes back under its own id**, and a closed
+chat's id is never handed out again, so nothing a new chat opens under — a transcript, a quit
+record — can be an earlier chat's. A chat whose id is still held by a running pane of this
+plane, or recorded on a tmux server that did not answer, is not reopened: it stays recorded,
+and the line says what clears it. The record describes one quit and is consumed chat by chat, so running it
 twice does not double your tabs — and if some chat could not be started, exactly that chat
 stays recorded, so a second `charter reopen` retries just it.
 
@@ -1332,14 +1336,17 @@ want to walk away from costs you nothing you had. `charter claude --fresh` says 
 thing about a named harness. The record is still there for `charter reopen` when you want
 it.
 
-**Resume is Claude Code only, and the warning says so per chat.** Charter records a harness's
-own session id from the chat's `sessionstart` hook — Claude Code is the only harness that
-supplies one anywhere charter can read it, so it is the only harness whose conversation
-charter can ask for back. (It came off the status line's stdin payload until 0.57.0, when
-charter stopped wiring one; a hook holds the same two ids, so nothing about resume
-changed.) A chat that
-cannot be resumed still comes back: its directory, its workspace and its persona return, and
-only the conversation is gone. A chat whose *workspace* has been deleted comes back too, into
+**Every tab is linked to one harness session, and the warning says per chat whether it
+resumes.** Claude Code is handed the id charter chose when it starts (`--session-id <uuid>
+--name <chat id>`), and comes back with `--resume <id> --name <chat id>` — once its first
+prompt has written a transcript, and following `/clear`. Codex is linked to the first id it
+reports in a start, which it does at its first turn, and comes back with `codex resume <id>`.
+opencode is linked to the first id its tool hooks report, and comes back with `opencode -s
+<id>` — but only in the directory it ran in, because opencode looks the id up there; a chat
+that comes back elsewhere reopens empty and says why. None of the ids crosses tmux: the
+launcher adds them in the pane, from the chat's own record. `docs/harnesses.md` has the table
+and each harness's limits. A chat that cannot be resumed still comes back: its directory, its
+workspace and its persona return, and only the conversation is gone. A chat whose *workspace* has been deleted comes back too, into
 a remade and empty one, and says the workspace was missing; charter never quietly re-homes a
 chat, and a workspace it re-makes is the chat's own.
 
