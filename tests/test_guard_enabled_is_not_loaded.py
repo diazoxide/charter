@@ -152,6 +152,19 @@ class TestASightingDoesNotOutliveItsDeclaration(GuardCase):
             r = doctor.check_guard_seen()
         self.assertIn("no longer", (r.detail + " " + (r.hint or "")).lower())
 
+    def test_a_declaration_still_present_beside_an_enabled_plugin_reads_normally(self):
+        """One settings file declaring the hook is enough to keep the sighting's declaration
+        present, whatever the plane's other settings files hold. Here the plugin is enabled too,
+        and with it the one case where "no longer there" could be said — the deletion sweep's
+        survivor on 7385d3a read `any` of those files the same as `all` of them."""
+        self._settings_declare()
+        self.seen(guardseen.SETTINGS)
+        with self.plugin_enabled(), self.not_running_under_plugin():
+            r = doctor.check_guard_seen()
+        self.assertEqual(r.status, doctor.OK, f"{r.detail} {r.hint}")
+        self.assertIn("last ran", r.detail)
+        self.assertNotIn("no longer", r.detail)
+
     def test_a_sighting_from_a_declaration_still_present_reads_normally(self):
         self._settings_declare()
         self.seen(guardseen.SETTINGS)
