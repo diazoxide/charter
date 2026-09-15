@@ -343,23 +343,21 @@ class NoWorkspaceIsEverCreatedByAClick(_OpensBeta):
         self.assertFalse(getattr(self.launched[0], "pick", False))
 
 
-class AnOpenNeverLandsInAnotherPlanesSession(_OpensBeta):
-    """The cross-plane guarantee #793 built, kept across the new door into `cmd_launch`.
+class OnItsOwnServerALiveSessionOfTheNameIsJoinedNotRefused(_OpensBeta):
+    """**Ruling 46: on this plane's OWN per-plane server, a session named for the workspace
+    is this plane's, so the tab joins it — it does not refuse it as 'probably another
+    plane's'.**
 
-    **This is the hazard the open introduces, and it is not hypothetical.** One tmux server
-    serves every plane on the machine — eleven sessions from three projects on the
-    operator's own socket the week this was written — and `cmd_launch` decides whether to
-    start a session or add a window to one with ``if session in live_sessions:``, which is
-    a **name** test over that whole machine. `_plane_session` having just answered ``None``
-    does not mean the name is free; it means *this plane cannot prove the session is its
-    own*, and those are different facts whenever two planes share a workspace name.
-
-    Left unguarded, a click on `shared` in plane B would have added a chat window to plane
-    A's live `shared` session — another project's frame, across every isolation boundary
-    charter has — and then failed the `@charter_plane` veto on the way back out, so the
-    operator would have been told the open failed while a window sat in somebody else's
-    session. §3.3 names exactly this: *"Open-or-focus must match on this plane's chat
-    directories, never on a live session name."*
+    The cross-plane hazard #793's guard was built for cannot occur on a per-plane server.
+    `_live_sessions(this plane's socket)` lists only THIS plane's sessions: plane A's
+    `shared` session lives on plane A's own `charter-plane-<hash-of-A>` socket, invisible to
+    plane B's socket entirely. So the guarantee now lives in the per-plane socket itself, and
+    `cmd_launch`'s `if session in live_sessions:` is a name test over one plane's own server.
+    The 'probably another plane's' refusal is KEPT for the servers where another plane still
+    can have a session of that name — the legacy shared socket (reached first by
+    `BEFORE_THIS_PLANES_SERVER`) and an operator's own tmux (refused by the caller). Measured
+    on the operator's machine, read-only: the tab refused a `marketing` session that carried
+    THIS plane's own `@charter_plane`, which is the false premise this fix removes.
     """
 
     def _run_with_live_name(self, names, **kw):
@@ -367,23 +365,38 @@ class AnOpenNeverLandsInAnotherPlanesSession(_OpensBeta):
                         return_value=set(names)):
             return self._run(**kw)
 
-    def test_a_name_already_live_on_the_machine_is_not_opened(self):
+    def test_a_live_session_of_this_workspaces_name_is_joined_not_refused(self):
+        """The operator's own bug: pressing the tab for a workspace whose session is already
+        running on THIS plane's server opened a chat in it, rather than refusing it as
+        another plane's."""
         s = self._run_with_live_name({"beta"})
-        self.assertEqual(self.launched, [], "it launched into a session it does not own")
-        self.assertEqual(s.switched, [])
-
-    def test_it_says_the_name_is_taken_rather_than_that_the_open_failed(self):
-        """The operator can act on this one — it is their own machine and their own other
-        project — so the sentence has to say which fact stopped it."""
-        self._run_with_live_name({"beta"})
-        said = self.said.call_args[0][1]
-        self.assertIn("beta", said)
-        self.assertIn("another plane", said)
+        self.assertEqual(len(self.launched), 1,
+                         "the tab refused a session on its own plane's server")
+        self.assertEqual(s.switched, [("/dev/ttys001", "$2")])
+        for call in self.said.call_args_list:
+            self.assertNotIn("another plane", call[0][1])
 
     def test_an_unrelated_live_session_does_not_block_the_open(self):
-        """The guard is the workspace's OWN session name and nothing broader: a machine
-        with other charter frames running on it is the ordinary case, not a refusal."""
+        """A machine with other charter frames running on it is the ordinary case, not a
+        refusal — and never was, whatever names are live."""
         self._run_with_live_name({"alpha", "something-else"})
+        self.assertEqual(len(self.launched), 1)
+
+    # The refusal is KEPT for a shared server, where the tab path cannot reach it today (the
+    # legacy socket and an operator's tmux are refused earlier). Stood up by answering "this
+    # is not the plane's own server", which is the documented condition it guards.
+
+    def test_on_a_shared_server_a_live_session_of_the_name_is_refused_as_another_planes(self):
+        with mock.patch("charter.commands_frame._is_own_plane_server", return_value=False):
+            s = self._run_with_live_name({"beta"})
+        self.assertEqual(self.launched, [], "it launched into a session it cannot prove is its own")
+        self.assertEqual(s.switched, [])
+        self.assertIn("another plane", self.said.call_args[0][1])
+
+    def test_on_a_shared_server_an_unrelated_live_session_does_not_block_the_open(self):
+        """The `in _live_sessions` half: only the workspace's OWN name blocks."""
+        with mock.patch("charter.commands_frame._is_own_plane_server", return_value=False):
+            self._run_with_live_name({"alpha", "something-else"})
         self.assertEqual(len(self.launched), 1)
 
 

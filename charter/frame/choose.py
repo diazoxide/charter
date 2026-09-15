@@ -321,8 +321,13 @@ def roster(noun: str, fid: str) -> Roster:
     # `os.scandir`, and asking it forty times to build forty rows would be the per-name
     # read `slots._workspace_counts` records paying for and then stopped paying.
     arrived = arrivals_now() if noun == WORKSPACE else frozenset()
+    # **The chats a switch from here cannot reach**, read once for the whole roster for
+    # `arrived`'s reason (ruling 46). A tab you cannot switch to must not read as an
+    # ordinary row: `F2 → chat` says so per row, exactly as the strip marks it and
+    # `chats.check` refuses it, and all three read the same `chats.off_server`.
+    off = chats.off_server(fid) if noun == CHAT else frozenset()
     rows = tuple(overlay.Row(id=NAME_ID.format(noun, i), title=n, mark=(n == now),
-                             note=_note(noun, n, arrived))
+                             note=_note(noun, n, arrived, off))
                  for i, n in enumerate(names))
     return Roster(noun=noun, rows=rows, names=names)
 
@@ -354,7 +359,14 @@ def arrivals_now() -> frozenset[str]:
         return frozenset()
 
 
-def _note(noun: str, name: str, arrived=frozenset()) -> str:
+#: What `F2 → chat` says on the row of a chat on another tmux server — the words half of
+#: `slots._OFF_SERVER_MARK`'s glyph, and it names the way back on because a picker row has
+#: the column to (ruling 46; `chats.OTHER_SERVER` says the same in a refusal).
+OTHER_SERVER_NOTE = ("on another server — charter frame-quit stops every chat, "
+                     "charter reopen brings them back")
+
+
+def _note(noun: str, name: str, arrived=frozenset(), off_server=frozenset()) -> str:
     """What *name*'s row carries in its note column, or ``""``.
 
     One function rather than a branch inside :func:`roster`'s comprehension, so that
@@ -380,10 +392,18 @@ def _note(noun: str, name: str, arrived=frozenset()) -> str:
     """
     if noun == WORKSPACE:
         return ARRIVED_NOTE if name in arrived else ""
+    if noun != CHAT:
+        return ""
+    # **A chat on another server says so, and nothing else.** The harness a chat runs is
+    # useful for choosing between two you can reach; for one you cannot, the fact that
+    # matters — and the only one that names a fix — is that it is on another server. Placed
+    # over the harness for `slots._mark_cell`'s reason, one surface over (ruling 46).
+    if name in off_server:
+        return OTHER_SERVER_NOTE
     # The PROFILE first, because that is what the operator named the way this chat runs —
     # two chats of one kind may be two accounts. A chat from before profiles has only its
     # harness, which is what it recorded.
-    return (chats.profile_of(name) or chats.harness_of(name)) if noun == CHAT else ""
+    return chats.profile_of(name) or chats.harness_of(name)
 
 
 def labelled(roster: Roster, reason: str = "") -> tuple[overlay.Row, ...]:

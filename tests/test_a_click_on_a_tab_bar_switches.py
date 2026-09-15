@@ -175,7 +175,9 @@ class AClickOnAChatTabStartsTheChatSwitch(_ABarThatWasDrawn, unittest.TestCase):
             self.spawned, [(util.self_relaunch_argv("frame-chat", "api.3"), "api.1")])
         refused = chats.check("api.1", "api.3")
         self.assertFalse(refused.ok)
-        self.assertIn("not on this frame's tmux server", refused.message)
+        # A tab you cannot switch to names its own fix (ruling 46).
+        self.assertIn("on another tmux server", refused.message)
+        self.assertIn("charter frame-quit", refused.message)
 
 
 class AClickOnAWorkspaceTabStartsTheWorkspaceSwitch(_ABarThatWasDrawn,

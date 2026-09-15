@@ -348,11 +348,49 @@ class EveryRefusalComesBeforeAnythingStarts(_AChatInAlpha):
         self.assertIn("has not measured how claude-code", got.message)
         self.assertEqual(self.launched, [])
 
-    def test_a_session_this_plane_cannot_prove_is_its_own_is_refused(self):
+    def test_a_session_of_the_name_on_this_planes_own_server_is_joined(self):
+        """**Ruling 46.** A background open lands on this plane's OWN per-plane server, where
+        the only sessions are this plane's — so a session named for the workspace is ours and
+        the open JOINS it (adding a chat), even when no chat directory can prove it (an
+        orphaned transcript session, or a chat whose harness-pane record was lost). It is no
+        longer refused as 'probably another plane's': that refusal is kept for the shared
+        servers, where a background open never lands."""
         self.sessions = {"beta"}
         got = self._open()
+        self.assertIs(got.ok, True, got.message)
+        self.assertEqual(len(self.launched), 1)
+        self.assertNotIn("another plane", got.message)
+
+    # The refusal is KEPT for a shared server (ruling 46), and a background open never lands
+    # on one today — so the case is stood up by answering "this is not the plane's own
+    # server", which is the documented condition and the only way the guard can be reached.
+
+    def test_on_a_shared_server_an_unprovable_session_of_the_name_is_refused(self):
+        self.sessions = {"beta"}
+        with mock.patch.object(commands_frame, "_is_own_plane_server", return_value=False):
+            got = self._open()
         self.assertIn("probably another plane's", got.message)
         self.assertEqual(self.launched, [])
+
+    def test_on_a_shared_server_a_session_this_plane_can_prove_is_joined(self):
+        """The `_plane_session(...) is None` half: a session this plane's own chat records
+        prove is its own is joined even where another plane could have one."""
+        self.beta_seat = "%5"
+        _a_chat("beta.2", ws="beta", pane="%5")
+        self.sessions = {"beta"}
+        with mock.patch.object(commands_frame, "_is_own_plane_server", return_value=False):
+            got = self._open()
+        self.assertIs(got.ok, True, got.message)
+
+    def test_on_a_shared_server_a_name_nobody_holds_is_opened(self):
+        """The `prefix in _live_sessions(home)` half: the refusal is about a session of THIS
+        name that another plane may hold. With no session of the name live at all, there
+        is nothing to be somebody else's, and the open starts one — however unprovable an
+        absent session is."""
+        with mock.patch.object(commands_frame, "_is_own_plane_server", return_value=False):
+            got = self._open()
+        self.assertIs(got.ok, True, got.message)
+        self.assertEqual(len(self.launched), 1)
 
     def _sessions_on(self, answers: dict[str, str]):
         """A stand-in that answers `list-sessions` per SERVER, and everything else as the
@@ -363,18 +401,18 @@ class EveryRefusalComesBeforeAnythingStarts(_AChatInAlpha):
             return self._tmux(cmd, **kw)
         return tmux
 
-    def test_the_name_is_asked_of_the_server_the_chat_will_open_on(self):
+    def test_a_session_of_the_name_on_the_open_server_is_joined_not_refused(self):
         """**Ruling 46.** A handoff from a frame still on the shared server opens its chat on
-        this plane's OWN server, so that is where a session of the same name would be joined
-        — and the refusal has to be asked there, not of the server the caller is on."""
+        this plane's OWN server, so that is where a session of the same name would be joined —
+        and there it is this plane's, so the open joins it rather than refusing. The name is
+        still asked of the server the chat opens on (`plane_socket`), not the caller's."""
         state.record_server(self.CALLER, tmuxctl.LEGACY_SOCKET)
         own = tmuxctl.plane_socket()
         with mock.patch("charter.commands_frame.subprocess.run",
                         side_effect=self._sessions_on({own: "beta\n"})):
             said = commands_frame.background_refusal("beta", caller=self.CALLER,
                                                      first_message="fix the widget please")
-        self.assertIn("probably another plane's", said)
-        self.assertIn(f"tmux -L {own} attach -t beta", said)
+        self.assertEqual(said, "", "a session on this plane's own server was refused")
 
     def test_a_name_taken_only_on_the_shared_server_does_not_refuse(self):
         state.record_server(self.CALLER, tmuxctl.LEGACY_SOCKET)
@@ -431,8 +469,10 @@ class EveryRefusalComesBeforeAnythingStarts(_AChatInAlpha):
         self.assertIs(self._open().ok, False)
 
     def test_the_refusal_check_writes_nothing(self):
-        """Task 2 asks this before any write of its own, so it must make none itself."""
-        self.sessions = {"beta"}
+        """Task 2 asks this before any write of its own, so it must make none itself. Driven
+        through a refusal that still fires — a caller inside the operator's own tmux — because
+        the 'probably another plane's' one no longer does on this plane's own server."""
+        state.record_server(self.CALLER, _tmuxsocket.OPERATOR_SOCKET)
 
         def listings():
             return (sorted(os.listdir(state._root())),
@@ -440,7 +480,7 @@ class EveryRefusalComesBeforeAnythingStarts(_AChatInAlpha):
                      for ws in sorted(os.listdir(config.WORKSPACES_DIR))})
 
         before = listings()
-        self.assertIn("probably another plane's", self._refusal())
+        self.assertIn("a tmux you already had", self._refusal())
         self.assertEqual(listings(), before)
 
     def test_each_refusal_says_a_different_thing(self):
@@ -458,10 +498,11 @@ class EveryRefusalComesBeforeAnythingStarts(_AChatInAlpha):
         with mock.patch.object(claude_code.ClaudeCodeHarness, "first_message_argv",
                                return_value=None):
             said.append(self._refusal())
-        self.sessions = {"beta"}
-        said.append(self._refusal())
+        # The 'probably another plane's' refusal is no longer reachable from a background
+        # open: it lands on this plane's OWN server, where a session of the name is joined,
+        # not refused (ruling 46). So eight distinct refusals remain, each still a sentence.
         self.assertTrue(all(said), said)
-        self.assertEqual(len(set(said)), 9, said)
+        self.assertEqual(len(set(said)), 8, said)
 
 
 class OnlyAnOpeningIsReadAsOne(unittest.TestCase):

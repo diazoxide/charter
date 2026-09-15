@@ -536,9 +536,9 @@ def framed_chat() -> str | None:
     chat = os.environ.get("CHARTER_SESSION_ID")
     if not chat:
         return None
-    server = state.frame_server(chat) or tmuxctl.LEGACY_SOCKET
-    row = tmuxctl.live_pane_by_pid(server, os.getpid())
-    if row is not None:
+    found = _prove_this_pane(chat)
+    if found is not None:
+        server, row = found
         # The window NAME on charter's own server, the `@charter_chat` option on the
         # operator's — where a name is only a label anything may rewrite (ruling 33). Read
         # by name off `tmuxctl.LivePane`, because which of the two proves a chat is the one
@@ -547,6 +547,62 @@ def framed_chat() -> str | None:
         if proof == chat:
             return chat
     util.err(f"charter: {UNPROVEN_CHAT.format(chat=contain.readable(chat))}")
+    return None
+
+
+def _candidate_servers(chat: str | None) -> list[str]:
+    """The tmux servers a chat of THIS plane can be running on, recorded one first.
+
+    **Ruling 46 split one plane's chats across servers, and a pane that asked only the
+    server its record NAMES could not be proven if that record was wrong.** A chat opened
+    at the selector records the plane's own server before its pane exists, and every
+    normal launch keeps the two in step — but the operator's own machine, mid-upgrade,
+    carried chats whose recorded server no longer matched where their pane was, and Esc
+    (`_close_the_cancelled_chat`) then asked one server, found nothing, and closed
+    nothing. So the pane is proven against the servers this plane's chats can be on, the
+    recorded one first, rather than a single guessed one.
+
+    **The pid proof is not weakened by asking more servers — it is what makes asking them
+    safe.** `tmuxctl.live_pane_by_pid` matches a LIVE pane whose `#{pane_pid}` is this
+    process's own pid, and a pid is one pane on the machine, so at most one of these
+    servers can answer and it is the one the pane is really on. Probing the legacy or an
+    operator's shared server therefore cannot reach another plane's window (ruling 46's
+    veto rules are untouched): only THIS process's own pane carries this process's pid.
+
+    Recorded server first (the ordinary case answers on the first ask), then this plane's
+    own private server (where a new chat's selector runs), then an operator's tmux if this
+    process is inside one, then the legacy shared server. Deduplicated and empties dropped.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+
+    def add(server: str | None) -> None:
+        if server and server not in seen:
+            seen.add(server)
+            out.append(server)
+
+    if chat:
+        add(state.frame_server(chat))
+    add(tmuxctl.plane_socket())
+    inside = tmuxctl.operator_server()
+    if inside is not None:
+        add(inside[0])
+    add(tmuxctl.LEGACY_SOCKET)
+    return out
+
+
+def _prove_this_pane(chat: str | None) -> tuple[str, "tmuxctl.LivePane"] | None:
+    """The server this process's pid is a live pane of, and that pane — or ``None``.
+
+    :func:`_candidate_servers`' pid proof made total: the first candidate server that
+    reports a LIVE pane with this process's `#{pane_pid}` is the one the pane is really
+    on. ``None`` when no server does, which is the honest answer a launch with no frame
+    gets and the one an unprovable claim gets.
+    """
+    for server in _candidate_servers(chat):
+        row = tmuxctl.live_pane_by_pid(server, os.getpid())
+        if row is not None:
+            return server, row
     return None
 
 
@@ -695,9 +751,11 @@ def _close_the_cancelled_chat(fid: str | None) -> None:
     """
     if fid is None:
         return
-    server = state.frame_server(fid) or tmuxctl.LEGACY_SOCKET
-    row = tmuxctl.live_pane_by_pid(server, os.getpid())
-    if row is None or not row.pane:
+    found = _prove_this_pane(fid)
+    if found is None:
+        return
+    server, row = found
+    if not row.pane:
         return
     tmuxctl.run("closing the chat the operator cancelled",
                 tmuxctl.server_argv(server, "kill-window", "-t", row.pane),

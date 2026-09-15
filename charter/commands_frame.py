@@ -266,6 +266,43 @@ _CHAT_OPTION = "@charter_chat"
 #: split.
 _PLANE_OPTION = "@charter_plane"
 
+#: The window option a transcript viewer carries, holding the chat it was opened for
+#: (`cmd_transcript`, ruling: a transcript viewer must not outlive its chat).
+#:
+#: **A viewer is a WINDOW, not a chat, and this is how the two are told apart.** The pager
+#: opens in its own `new-window` beside the chat (`_offer`/`cmd_transcript`), so it carries
+#: no `@charter_chat` and no chat directory names it — which is exactly why an orphaned one
+#: kept a workspace's tmux session alive with nothing charter recognised in it, and defect 3
+#: then refused that session as another plane's. Marked per viewer with its own chat's id, it
+#: is killed when that chat is closed, quit or reaped (`_kill_transcript_windows`,
+#: `_stop_chats`, `_sweep_orphan_transcripts`), and a session left holding only viewers is
+#: swept before any launch reads liveness. The value is a chat id, `_FRAME_ID_RE`'s closed
+#: alphabet, held on the way back out for #475's reason at #475's boundary.
+#:
+#: **Written second, and only once :data:`_VIEWER_PLANE_OPTION` has taken.** A window that
+#: carries this and not the plane stamp is not a viewer to charter: it is never swept and
+#: never killed, it just stays. That ordering is the whole guard against a half-marked window.
+_TRANSCRIPT_OPTION = "@charter_transcript"
+
+#: The window option a transcript viewer carries naming the PLANE that opened it — a
+#: viewer-only option that no session ever carries, so nothing can supply it by fallback.
+#:
+#: **Not :data:`_PLANE_OPTION`, and the difference is the whole of the guard.** tmux resolves
+#: `#{@charter_plane}` window first, then SESSION (the measurement at `_PLANE_OPTION`), and on
+#: the legacy `charter` socket a session created by plane A carries A's marker while plane B's
+#: chat joined it before ruling 46 (#933). A viewer of B's whose own window stamp was missing —
+#: a raced or failed `set-option` — would read A's marker through that fallback, and A's close,
+#: quit or transcript would kill it. A name no session is ever given has no fallback to fall
+#: through: `#{@charter_viewer_plane}` on a window is that window's own value or nothing.
+#:
+#: **Set FIRST.** `cmd_transcript` writes this before :data:`_TRANSCRIPT_OPTION`, and writes
+#: the second only when this one succeeded, so the two states a viewer window can be in are
+#: "fully marked" and "a plain pager window charter leaves alone". The listing (`_live_chats`)
+#: and the kill (`_kill_transcript_windows`) recognise a viewer only with BOTH present and this
+#: one equal to `_this_plane()`. The value is a state-directory path, held to the same
+#: no-tab-no-newline round trip `_plane_option_argv` holds its own to (`_viewer_plane_option_argv`).
+_VIEWER_PLANE_OPTION = "@charter_viewer_plane"
+
 #: The second value carried the same out-of-band way, for the same reason: the
 #: interpreter the hotkey bind runs charter with. Owned by `tmuxctl` so every module
 #: that spells the name reaches one definition; see `_charter_py_env_argv` and
@@ -1373,6 +1410,31 @@ def _plane_option_argv(*, socket: str, harness_pane: str,
                                _PLANE_OPTION, value)
 
 
+def _viewer_plane_option_argv(*, socket: str, window: str) -> list[str] | None:
+    """`set-option -w`: stamp transcript viewer *window* with the plane that opened it —
+    :data:`_VIEWER_PLANE_OPTION`. ``None`` to refuse.
+
+    :func:`_plane_option_argv` for a viewer, and the two differences are its reasons:
+
+    * **Its own option name**, never `_PLANE_OPTION`, so a session marker cannot stand in
+      for a missing window stamp through tmux's window-then-session fallback — see the
+      constant for the #933 shape that closes.
+    * **Always window-scoped**, because a viewer IS a window and the session it sits in is a
+      workspace's, holding other windows that are not viewers.
+
+    The refusal is the same round-trip one: the value is read back through a tab-separated
+    `list-windows` format (`_LIVE_CHATS_FORMAT`), so a path holding a tab or a newline would
+    be read as another field or another row, and such a plane leaves its viewers unstamped —
+    which, by :data:`_TRANSCRIPT_OPTION`'s ordering, means it opens plain pager windows
+    charter never kills, rather than viewers charter might kill wrongly.
+    """
+    value = _this_plane()
+    if not value or any(c in value for c in "\t\r\n"):
+        return None
+    return tmuxctl.server_argv(socket, "set-option", "-w", "-t", window,
+                               _VIEWER_PLANE_OPTION, value)
+
+
 def _pane_died_write_hook_argv(*, socket: str, harness_pane: str) -> list[str]:
     """`pane-died[0]`: writes the harness's real exit status, out of band.
 
@@ -1721,6 +1783,30 @@ def _resize_hook_argv(*, socket: str, harness_pane: str, fid: str) -> list[str] 
                                "window-resized", action)
 
 
+def _is_own_plane_server(socket: str) -> bool:
+    """Is *socket* THIS plane's own per-plane tmux server — not the legacy shared socket and
+    not an operator's own tmux? (ruling 46, ADR 0023)
+
+    **The whole of what makes a "probably another plane's" refusal wrong.** Two places still
+    hold several planes' chats in one server — `tmuxctl.LEGACY_SOCKET`, and a tmux the
+    operator runs — and there a session named for a workspace may indeed be another plane's,
+    so `cmd_launch`'s `if session in live_sessions:` name test cannot tell whose it is and the
+    refusal stands. On a `charter-plane-<hex>` server named after THIS plane's state directory
+    (`tmuxctl.plane_socket`), the only sessions that exist are this plane's — measured on the
+    operator's own machine: its `marketing` session there carried `@charter_plane` naming this
+    plane. So a session of the workspace's name is this plane's, and the tab joins it rather
+    than refusing.
+
+    `tmuxctl.same_server` so a socket spelled as a path (#812) still counts for the server it
+    names; and the two exclusions are belt-and-braces — `plane_socket` is never the legacy
+    name and never an operator's socket — so a reader adding a third shared server sees where
+    the veto is decided.
+    """
+    return (tmuxctl.same_server(socket, tmuxctl.plane_socket())
+            and not tmuxctl.same_server(socket, tmuxctl.LEGACY_SOCKET)
+            and not tmuxctl.is_operator_socket(socket))
+
+
 def _live_sessions(socket: str) -> set[str]:
     """Every session name `tmux -L socket list-sessions` currently reports.
 
@@ -1882,7 +1968,41 @@ def _live_chats(socket: str) -> set[str] | None:
     answer. A LIVE server with no chats on it is a different fact and answers with an
     empty set, which reaps exactly as it should.
 
-    A window with no such option prints an empty line, which the comprehension drops.
+    A window with no such option prints an empty chat field, which the reader drops.
+
+    **The same listing also answers which windows are transcript viewers, and that is
+    carried on the answer rather than read twice** (:class:`_LiveChats`, ruling: a viewer
+    must not outlive its chat). The launch sweeps a viewer whose chat is no longer live
+    BEFORE it reads liveness (`_sweep_orphan_transcripts`), and it must do so without a
+    second round trip — `tests/test_a_frame_sends_one_invocation_per_batch` pins the
+    launch at sixteen invocations — and without a tmux call the launch's stand-ins do not
+    already answer for: every launch fixture mocks THIS function and leaves `tmuxctl.run`
+    unmocked, so a read made anywhere else from `_launch` reaches a real socket and trips
+    `tests/_planeguard`. So :data:`_LIVE_CHATS_FORMAT` asks for the chat, the viewer's chat,
+    the window id AND the plane that opened the viewer in one `list-windows`, and the
+    viewers ride out on the set. A stand-in that answers a plain ``set()`` carries none,
+    which is the right reading: it listed nothing real, so there is nothing to sweep.
+
+    **The viewer's plane rides along because chat ids collide on a shared server** (#933).
+    Two planes both hold `default.1`, and this listing reads EVERY window on the legacy
+    socket and inside an operator's tmux — so a viewer matched by its chat id alone would
+    let one plane's close kill another plane's viewer window. The viewer's own plane stamp
+    (`_VIEWER_PLANE_OPTION`, a window-only option no session carries, so no fallback can
+    supply it) is what `_kill_transcript_windows` vetoes on, exactly as `_chat_seats` does
+    for the chat kill: an id match is acted on only when the stamp is this plane's. **A row
+    is a viewer only with BOTH options present**: a window carrying `@charter_transcript`
+    and no stamp is not a viewer to charter — never swept, never killed, it just stays.
+
+    **`\t` between the fields, like every other format here, and :data:`_LIVE_CHATS_FIELDS`
+    is what keeps the parse test green.** A one-field stand-in line splits to one part and
+    even ``"\tdemo.2\t"`` splits to three — neither is four — so both fall to the whole-line
+    read, and `TheChatListIsParsedLineByLine` still holds that a line with a TAB at its edge
+    names its chat. The plane marker is the widest field and `_plane_option_argv` refuses one
+    holding a tab or newline, so a tab cannot split a plane PATH; the three ids hold none
+    either. Exactly four fields is the structured row; anything else is the whole stripped
+    line, which keeps `reap`'s list over-keeping (its safe direction) and can never name a
+    window to kill — a viewer is taken only from a four-field row whose chat and window both
+    hold their own shapes, at #475's boundary.
 
     **Stripped once, tested once.** `_live_sessions` and `_live_windows` both spell
     ``{line.strip() for line in … if line.strip()}``, and the second call is an
@@ -1903,12 +2023,87 @@ def _live_chats(socket: str) -> set[str] | None:
     """
     out = tmuxctl.run("listing the chats already running",
                       tmuxctl.server_argv(socket, "list-windows", "-a", "-F",
-                                          f"#{{{_CHAT_OPTION}}}"),
+                                          _LIVE_CHATS_FORMAT),
                       timeout=5, report=False)
     if out.returncode != 0:
         return None
-    names = (line.strip() for line in out.stdout.splitlines())
-    return {name for name in names if name}
+    live = _LiveChats()
+    viewers: list[tuple[str, str, str]] = []
+    for line in out.stdout.splitlines():
+        parts = line.split(_LIVE_CHATS_SEP)
+        if len(parts) != _LIVE_CHATS_FIELDS:
+            # A one-field stand-in line (`tests/test_frame_launcher._FakeTmux` answers a
+            # bare chat id per line), or any row that is not the structured shape — read as
+            # the whole stripped line, which keeps `reap`'s keep list over-keeping (its safe
+            # direction) and can never name a window to kill.
+            name = line.strip()
+            if name:
+                live.add(name)
+            continue
+        chat, viewer_of, window, plane = (p.strip() for p in parts)
+        if chat:
+            live.add(chat)
+        # A viewer is taken only from a full row whose chat and window both hold their own
+        # shapes, at #475's boundary. Its plane marker rides along — empty for a viewer an
+        # older charter opened — and `_kill_transcript_windows` is what decides, per server,
+        # whether an id match on a shared server is this plane's to act on (#933).
+        #
+        # No `viewer_of and window and` in front of the two matches: each pattern already
+        # refuses the empty string (`_FRAME_ID_RE` is one-or-more, `_WINDOW_ID_RE` is `@`
+        # plus digits), so a truthiness test beside it is a guard no input can make
+        # observable — the deletion sweep reported both halves, and the matches alone are
+        # what `TheChatListIsParsedLineByLine` pins. The stamp IS tested for presence: it is
+        # a free path with no shape to match, and its absence is what makes a window not a
+        # viewer (`_VIEWER_PLANE_OPTION`).
+        if plane and _FRAME_ID_RE.fullmatch(viewer_of) and _WINDOW_ID_RE.fullmatch(window):
+            viewers.append((viewer_of, window, plane))
+    live.viewers = tuple(viewers)
+    return live
+
+
+#: `\t`, like every other format in this module — the plane marker is the widest field and
+#: `_plane_option_argv` refuses one holding a tab or a newline, so a tab cannot split a plane
+#: PATH into two fields, and a chat id, a viewer's chat id and a `@<digits>` window id hold
+#: none either. A one-field stand-in line splits to one part, and even ``"\tdemo.2\t"``
+#: splits to three — neither is :data:`_LIVE_CHATS_FIELDS`, so both fall to the whole-line
+#: read and `tests/test_frame_launcher.TheChatListIsParsedLineByLine` stays green.
+_LIVE_CHATS_SEP = "\t"
+
+#: How many fields :data:`_LIVE_CHATS_FORMAT` produces. A line with any other count is a
+#: stand-in's one-field line or an unreadable row, read as the whole stripped line.
+_LIVE_CHATS_FIELDS = 4
+
+#: What :func:`_live_chats` asks of every window on a server, in ONE call: the chat the
+#: window draws (`_CHAT_OPTION`), the chat a transcript viewer was opened for
+#: (`_TRANSCRIPT_OPTION`), the window id a viewer is killed by, and the viewer's own plane
+#: stamp (`_VIEWER_PLANE_OPTION` — never `_PLANE_OPTION`, which a session can supply by
+#: fallback). Read once for the liveness list, the orphan sweep and the per-plane veto that
+#: keeps a shared server's colliding chat ids (`default.1`) from letting one plane kill
+#: another's viewer (#933) — for the round-trip and stand-in reasons the function's
+#: docstring gives.
+_LIVE_CHATS_FORMAT = (f"#{{{_CHAT_OPTION}}}{_LIVE_CHATS_SEP}#{{{_TRANSCRIPT_OPTION}}}"
+                      f"{_LIVE_CHATS_SEP}#{{window_id}}{_LIVE_CHATS_SEP}"
+                      f"#{{{_VIEWER_PLANE_OPTION}}}")
+
+
+class _LiveChats(set):
+    """:func:`_live_chats`' answer: a set of live chat ids that also carries the transcript
+    viewers the same listing reported.
+
+    A `set`, and deliberately not a record beside one: every caller unions it
+    (``live_sessions | live_chats``), tests membership (``fid in live_chats``) or asks
+    ``is not None``, and every launch fixture stands it in with a plain ``set()`` — all of
+    which a set subclass keeps working unchanged. The viewers ride as an attribute the sweep
+    reads with a default, so a plain set answers "no viewers", which is what a stand-in that
+    listed nothing real should say.
+    """
+
+    __slots__ = ("viewers",)
+
+    def __init__(self, names=()):
+        super().__init__(names)
+        #: ``(chat the viewer was opened for, window id, plane marker)`` per viewer window.
+        self.viewers: tuple[tuple[str, str, str], ...] = ()
 
 
 #: What :func:`_chat_being_left` asks of every window on a server, in one call.
@@ -5742,12 +5937,22 @@ def _launch(args) -> int:
     # also narrows (though does not close) the same race for a sibling frame's `exit`
     # file: less time between "session gone" and "directory removed" for a sibling's own
     # launcher to lose the read.
-    live_sessions = _live_sessions(socket)
+    #
     # Both, and neither is redundant: a CHAT's directory is kept only by the chat id its
     # window carries (`_live_chats` — a chat's id holds no launcher pid for `reap`'s
     # second rule to abstain in its favour), and a frame launched by a charter that
     # predates chats is still a SESSION named by its id and is kept only by that list.
     live_chats = _live_chats(socket)
+    # **Orphaned transcript viewers go before liveness is read** (ruling: a viewer must not
+    # outlive its chat, and a session left holding only viewers is not a live workspace). A
+    # harness that died on its own left its viewer window standing (tmux's `pane-died` hook
+    # cannot reliably reach a sibling window), and that window kept the workspace's session
+    # alive — which the launch below would then read as a live session and hold a restore
+    # back for, or a workspace tab would refuse as another plane's. Killing the viewer removes
+    # that session (its last window), so `_live_sessions` below no longer sees it. Read of
+    # `_live_chats` unchanged by the sweep: a viewer carries no `@charter_chat`.
+    _sweep_orphan_transcripts(socket, live_chats)
+    live_sessions = _live_sessions(socket)
     # A server that listed SESSIONS and then would not list its windows is a server
     # charter cannot tell the live chats of, and reaping on that answer deletes the state
     # of chats that are running — the version file their panels poll and the exit code
@@ -8603,11 +8808,26 @@ def _open_workspace(fid: str, ws: str, *, socket: str,
     # session. §3.3: "Open-or-focus must match on this plane's chat directories, never on a
     # live session name."
     #
-    # Deliberately refusing a session this plane may actually own but cannot PROVE it owns
-    # — a chat whose `harness_pane` record was lost, or one an older charter left unmarked.
-    # Both are recoverable by attaching to it by hand; a window in another project's frame
-    # is not, and the asymmetry decides which way an uncertain answer falls.
-    if state.workspace_prefix(ws) in _live_sessions(socket):
+    # **Only where another plane CAN have a session of that name** (ruling 46). On the
+    # legacy shared socket and inside an operator's own tmux, a session named for the
+    # workspace may be another project's frame — `cmd_launch`'s `if session in
+    # live_sessions:` is a NAME test over every session on that server, so an open that
+    # skipped this would add a chat window to another plane's live session across every
+    # isolation boundary charter has, and then fail the `@charter_plane` veto on the way back
+    # out, leaving the operator told the open failed with a window in somebody else's session
+    # (§3.3). On THIS plane's own per-plane server, the only sessions are this plane's, so a
+    # session of the workspace's name is ours and `cmd_launch` JOINS it below (adding a chat
+    # if it has none) — measured on the operator's machine, where the tab refused a
+    # `marketing` session carrying this plane's own `@charter_plane`. `_is_own_plane_server`
+    # is the whole difference, and the refusal is kept exactly as it was for the shared
+    # servers where it is still right.
+    #
+    # It still, on those shared servers, refuses a session this plane may actually own but
+    # cannot PROVE it owns — a chat whose `harness_pane` record was lost, or one an older
+    # charter left unmarked. Both are recoverable by attaching by hand; a window in another
+    # project's frame is not, and the asymmetry decides which way an uncertain answer falls.
+    if (not _is_own_plane_server(socket)
+            and state.workspace_prefix(ws) in _live_sessions(socket)):
         _say_on_screen(fid, f"cannot open '{ws}': a session of that name is already "
                             "running on this machine and this plane cannot prove it is "
                             f"its own — it is probably another plane's. Attach to it by "
@@ -10467,6 +10687,89 @@ def _quit_record_held_back(doomed) -> bool:
     return m is not None and bool(m.frames) and m.writer != reopen_state.RECORDER
 
 
+def _transcript_windows(socket: str) -> list[tuple[str, str, str]]:
+    """Every transcript viewer on *socket* as ``(chat it was opened for, window id, plane)``
+    — rows charter cannot read dropped (ruling: a viewer must not outlive its chat).
+
+    :func:`_live_chats`' own listing, which carries the viewers it saw (:class:`_LiveChats`)
+    — one `list-windows -a` answers both the liveness list and this, and the chat id is
+    held to `_FRAME_ID_RE` there at #475's boundary: the value came off a window option a
+    chat could in principle set, and it is compared against a live-chat set while the
+    window id is the `-t` target. Never raises, and with no branch for it: a server that
+    would not list its windows answers ``None``, a stand-in answers a plain ``set()``, and
+    `getattr`'s default reads both as "no viewers" — the same answer as a server with none.
+    A separate `is None` arm said the same thing twice, which the deletion sweep reported.
+    """
+    return list(getattr(_live_chats(socket), "viewers", ()))
+
+
+def _kill_transcript_windows(socket: str, chats_set, rows=None) -> None:
+    """Close every transcript viewer on *socket* opened for a chat in *chats_set* that this
+    plane may act on.
+
+    **The teardown half of :data:`_TRANSCRIPT_OPTION`.** A viewer is its own window beside
+    the chat, so closing the chat's window leaves it standing — which is the orphan that kept
+    a workspace's session alive with nothing charter recognised in it. Killed by the marker
+    and never by the `transcript <fid>` window NAME: a name is not an identity
+    (`_CHAT_OPTION`'s measurement), and `allow-rename on` output could move it. Best effort,
+    like every teardown here: a viewer tmux will not close is swept at the next launch.
+
+    **Vetoed by the viewer's own plane stamp, exactly as the chat kill is vetoed by its
+    marker** (#933). `_live_chats` reads every window on the legacy socket and inside an
+    operator's tmux, where two planes both hold `default.1`, so a viewer matched by its chat id
+    alone would let plane A's close kill plane B's viewer window (and any panes the operator
+    split into it). A viewer is killed only when its `_VIEWER_PLANE_OPTION` is THIS plane's —
+    on every server, this plane's own included. There is no exception for a stamp-less window:
+    the listing does not carry one as a viewer at all (`_live_chats`), and no released charter
+    ever wrote `@charter_transcript` without the stamp, so there is no "older viewer" to
+    reach. A window charter cannot prove is its own viewer is left standing, and the operator
+    closes it by hand as they would any window charter does not own.
+
+    *rows* is the viewer listing a caller already holds (`_sweep_orphan_transcripts`, off
+    the `_live_chats` answer it was handed), so the sweep costs no listing of its own; a
+    caller with none (`_stop_chats`) reads one here."""
+    if not chats_set:
+        return
+    mine = _this_plane()
+    for chat, window, plane in (_transcript_windows(socket) if rows is None else rows):
+        if chat not in chats_set:
+            continue
+        if plane == mine:
+            tmuxctl.run(f"closing the transcript viewer of chat {chat}",
+                        tmuxctl.server_argv(socket, "kill-window", "-t", window),
+                        timeout=10, report=False)
+
+
+def _sweep_orphan_transcripts(socket: str, live_chats) -> None:
+    """Close every transcript viewer on *socket* whose chat is no longer a live chat.
+
+    **The pane-died half, and the "not a live workspace" guarantee** (ruling: a viewer must
+    not outlive its chat, and a session left holding only viewers is not a live workspace for
+    any open, focus, reap or restore decision). Close and quit kill a chat's viewer at the
+    moment they kill the chat (`_kill_transcript_windows`, `_stop_chats`); a harness that
+    DIES on its own is torn down by tmux's own `pane-died` hook, which kills the chat's
+    window and cannot reliably reach a sibling one (measured on tmux 3.7c: a `pane-died` hook
+    aimed at another window does not fire it). So the viewer it leaves is swept HERE, before a
+    launch reads liveness — killing the last window of a session removes the session
+    (measured), so the orphan never reads as a live `_live_sessions` entry that blocks a
+    restore or is refused as another plane's.
+
+    **No listing of its own** — the viewers come off *live_chats* itself (:class:`_LiveChats`,
+    the answer `_launch` was just handed), so a launch pays no round trip for the sweep and
+    makes no tmux call its stand-ins do not already answer for. A plain ``set`` carries no
+    viewers and sweeps nothing, which is right: nothing real was listed.
+
+    ``live_chats is None`` — a server that would not list its windows — sweeps nothing, and
+    needs no branch of its own to: the viewers come off that same answer, so a ``None`` carries
+    no rows, the orphan set is empty, and nothing is aimed at. That is also the reading
+    `_live_chats` asks for — charter cannot tell an orphan from a chat it simply could not
+    read — arrived at by having nothing to read rather than by a guard the sweep reported as
+    equivalent to its absence."""
+    viewers = tuple(getattr(live_chats, "viewers", ()))
+    orphans = {chat for chat, _w, _p in viewers if chat not in live_chats}
+    _kill_transcript_windows(socket, orphans, rows=viewers)
+
+
 def _stop_chats(doomed, *, windows) -> int:
     """`kill-window` each of *doomed*, on its own server. How many tmux accepted.
 
@@ -10482,6 +10785,7 @@ def _stop_chats(doomed, *, windows) -> int:
     stopped, and it stays in the manifest because it was open when the plane was last read.
     """
     stopped = 0
+    killed_on: dict[str, set[str]] = {}
     for c in doomed:
         server = state.frame_server(c.chat) or tmuxctl.LEGACY_SOCKET
         window = windows.get(server, {}).get(c.chat, "")
@@ -10492,6 +10796,17 @@ def _stop_chats(doomed, *, windows) -> int:
                           timeout=10, report=False)
         if out.returncode == 0:
             stopped += 1
+        killed_on.setdefault(server, set()).add(c.chat)
+    # **A stopped chat's transcript viewer goes with it** (ruling: a viewer must not outlive
+    # its chat). The viewer is its own window beside the chat, so the `kill-window` above
+    # leaves it standing — the orphan that then kept the workspace's session alive with
+    # nothing charter recognised in it. Per server, because a close or a quit can reach chats
+    # on the legacy socket and this plane's own at once — and ONLY for chats whose window this
+    # actually aimed at, so a teardown that found nothing to stop asks tmux nothing (a chat
+    # already gone leaves its viewer, if any, to `_sweep_orphan_transcripts` at the next
+    # launch). `_kill_transcript_windows` vetoes each viewer by its own plane marker (#933).
+    for server, chatset in killed_on.items():
+        _kill_transcript_windows(server, chatset)
     return stopped
 
 
@@ -11519,17 +11834,45 @@ def cmd_transcript(args) -> int:
                             f"cannot place a window there — the captured text is at {path}")
         return 0
     session_id, _window_id = place
+    # **One viewer per chat, so the marked window this ties to the chat is unambiguous**
+    # (ruling: a transcript viewer must not outlive its chat). A second press would otherwise
+    # leave a first viewer behind for this same chat, and the teardown that kills "this
+    # chat's viewers" would have two to find where the operator meant one. Killed on this
+    # chat's own server, by the marker and not by name.
+    _kill_transcript_windows(socket, {fid})
     # `--` and an argv, never a joined string: tmux shell-interprets a single argument and
     # does not interpret separate ones (`harness.base.launch_argv`'s own measured rule), and
     # the path here is charter's own file under a state directory whose name carries the
-    # plane's.
+    # plane's. `-P -F #{window_id}` so the viewer can be MARKED as this chat's — the whole of
+    # how it is told from a chat and killed when the chat ends (:data:`_TRANSCRIPT_OPTION`).
     opened = tmuxctl.run(
         "opening this chat's previous transcript",
         tmuxctl.server_argv(socket, "new-window", "-t", session_id, "-n",
-                            f"transcript {fid}", "--", *_PAGER, str(path)))
+                            f"transcript {fid}", "-P", "-F", "#{window_id}",
+                            "--", *_PAGER, str(path)))
     if opened.returncode != 0:
         _say_on_screen(fid, f"tmux would not open a window for the transcript — it is at "
                             f"{path}")
+        return 0
+    viewer = opened.stdout.strip()
+    if viewer:
+        # **Two window options, the plane stamp FIRST, and the chat mark only once the stamp
+        # has taken** (#933, :data:`_VIEWER_PLANE_OPTION`). The stamp is what lets
+        # `_kill_transcript_windows` tell this plane's `default.1` viewer from another plane's
+        # on the legacy socket or in an operator's tmux, and it is a viewer-only option so no
+        # session marker can stand in for it by fallback. Written in this order so a window
+        # can only ever be fully marked or a plain pager window: one carrying the chat mark
+        # without the stamp would be a viewer charter cannot place, and a raced or refused
+        # write must leave a window charter never kills, not one it might kill wrongly.
+        stamp = _viewer_plane_option_argv(socket=socket, window=viewer)
+        stamped = stamp is not None and tmuxctl.run(
+            "stamping this chat's transcript viewer with its plane", stamp,
+            report=False).returncode == 0
+        if stamped:
+            tmuxctl.run("marking this chat's transcript viewer",
+                        tmuxctl.server_argv(socket, "set-option", "-w", "-t", viewer,
+                                            _TRANSCRIPT_OPTION, fid),
+                        report=False)
     return 0
 
 
@@ -11955,7 +12298,15 @@ def _how_a_background_open_would_go(ws: str, *, caller: str, first_message: str,
     # handoff on the new one, and a name test against the server it will not join refuses
     # the wrong session or passes the wrong one.
     home = tmuxctl.plane_socket()
-    if _plane_session(home, ws=ws) is None and prefix in _live_sessions(home):
+    # **And never a "probably another plane's" refusal on that own server** (ruling 46):
+    # `home` is `plane_socket`, named for this plane's state directory, so a session of the
+    # workspace's name there is this plane's and the open JOINS it (`_open_workspace`'s guard
+    # read the other way round, same `_is_own_plane_server`). The refusal is kept for the
+    # shared servers, where a session of that name may be another plane's — but a background
+    # open always lands on this plane's own server, so it is not reachable from here today
+    # and the guard documents where it would be.
+    if (not _is_own_plane_server(home)
+            and _plane_session(home, ws=ws) is None and prefix in _live_sessions(home)):
         return NOT_THIS_PLANES_SESSION.format(ws=ws, socket=home, prefix=prefix), None, None
     return "", p, h
 

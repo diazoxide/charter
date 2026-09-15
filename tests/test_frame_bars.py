@@ -1266,6 +1266,42 @@ class TheChatBarReadsThePlane(PersonaIso, unittest.TestCase):
         with mock.patch("os.scandir", side_effect=OSError("nope")):
             self.assertEqual(slots.chats_bar("", 200), [])
 
+    def test_a_chat_on_another_server_is_marked_not_drawn_as_an_ordinary_tab(self):
+        """**Ruling 46: a tab you cannot switch to must not read as an ordinary one.** A
+        charter upgrade splits a plane's chats across the legacy socket and this plane's own
+        server, and `select-window` cannot cross them — so the strip marks the off-server
+        chat with `slots._OFF_SERVER_MARK` where an ordinary idle tab draws a blank."""
+        _plant("api.1", workspace="api")
+        _plant("api.2", workspace="api")
+        state.record_server("api.1", "charter-plane-aaaaaaaaaaaa")   # this frame's server
+        state.record_server("api.2", "charter")                      # left on the legacy one
+        row = _plain(slots.chats_bar("api.1", 200)[0])
+        self.assertIn(f"{slots._OFF_SERVER_MARK}api.2", row,
+                      f"the off-server chat was not marked: {row!r}")
+        # And the chat you ARE on keeps its `*`, never the off-server mark.
+        self.assertIn("*api.1", row)
+
+    def test_chats_all_on_this_frames_server_carry_no_off_server_mark(self):
+        """The control: with both chats on one server, nothing is off-server and the mark is
+        absent — so the mark means what it says rather than appearing on every strip."""
+        _plant("api.1", workspace="api")
+        _plant("api.2", workspace="api")
+        state.record_server("api.1", "charter-plane-aaaaaaaaaaaa")
+        state.record_server("api.2", "charter-plane-aaaaaaaaaaaa")
+        row = _plain(slots.chats_bar("api.1", 200)[0])
+        self.assertNotIn(slots._OFF_SERVER_MARK, row, f"an off-server mark with none off: {row!r}")
+
+    def test_a_read_that_raises_costs_the_strip_only_its_off_server_marks(self):
+        """This module's rule for every read on the repaint path — never raises — for the
+        off-server read: a `chats.off_server_of` that throws leaves the strip drawn with
+        every name and no mark, rather than a panel that lost its pane."""
+        _plant("api.1", workspace="api")
+        _plant("api.2", workspace="api")
+        with mock.patch("charter.frame.chats.off_server_of", side_effect=RuntimeError("no")):
+            row = _plain(slots.chats_bar("api.1", 200)[0])
+        self.assertIn("api.2", row)
+        self.assertNotIn(slots._OFF_SERVER_MARK, row)
+
 
 class TheWorkspaceBarReadsTheFrame(PersonaIso, unittest.TestCase):
     def test_it_marks_the_workspace_the_FRAME_is_on_not_this_process(self):

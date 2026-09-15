@@ -2181,17 +2181,23 @@ class AWorkspaceIsASessionAndAChatIsAWindow(PersonaIso, unittest.TestCase):
                          "refuses rather than degrades")
 
     def test_the_reap_set_carries_the_chats_as_well_as_the_sessions(self):
-        """A chat's id holds no launcher pid, so `list-windows -F '#{@charter_chat}'` is
-        the only thing that can keep its directory — and an old frame is still a SESSION
-        named by its id, so `list-sessions` is still asked too. Both, or one of the two
-        shapes is reaped while it is running."""
+        """A chat's id holds no launcher pid, so a `list-windows -F` that asks the
+        `@charter_chat` option is the only thing that can keep its directory — and an old
+        frame is still a SESSION named by its id, so `list-sessions` is still asked too.
+        Both, or one of the two shapes is reaped while it is running.
+
+        The option is asked FOR, not matched as the whole format: `_live_chats` reads the
+        chat, the transcript viewer's chat and the window id in one listing
+        (`_LIVE_CHATS_FORMAT`), so the launch pays one round trip for liveness and the
+        orphan sweep together. What this pins is which OPTION liveness comes from, and
+        that no format reaches for the window NAME instead."""
         fake = _FakeTmux(exit_code=0, still_live=True)
         _launch(fake)
         formats = [c[c.index("-F") + 1] for c in fake.calls
                    if "list-windows" in c and "-F" in c]
-        self.assertIn("#{@charter_chat}", formats,
-                      "liveness was not asked of the chat option")
-        self.assertNotIn("#{window_name}", formats,
+        self.assertTrue(any("#{@charter_chat}" in f for f in formats),
+                        f"liveness was not asked of the chat option: {formats}")
+        self.assertFalse(any("#{window_name}" in f for f in formats),
                          "a window NAME is not an identity — a pane with "
                          "`allow-rename on` takes it, measured on tmux 3.7c and 3.2")
         self.assertTrue([c for c in fake.calls if "list-sessions" in c])
@@ -2445,6 +2451,49 @@ class TheChatListIsParsedLineByLine(unittest.TestCase):
         done = subprocess.CompletedProcess(["tmux"], 1, stdout="", stderr="no server")
         with mock.patch.object(commands_frame.tmuxctl, "run", return_value=done):
             self.assertIsNone(commands_frame._live_chats("charter"))
+
+    # -- the structured four-field row, one field at a time -----------------------------
+    #
+    # Real tmux prints every window as `chat \t viewer's chat \t window id \t viewer stamp`
+    # (`_LIVE_CHATS_FORMAT`). Each guard on the viewer half is pinned on its own: the
+    # deletion sweep reported them as a masked cluster where each looked equivalent alone.
+
+    def _row(self, chat="", viewer_of="", window="", plane=""):
+        return f"{chat}\t{viewer_of}\t{window}\t{plane}\n"
+
+    def test_a_structured_row_names_its_chat_and_its_viewer(self):
+        """The control: a chat window and a fully marked viewer, read as one of each."""
+        live = self._reading(self._row("demo.1", "", "@0", "")
+                             + self._row("", "demo.1", "@3", "/plane"))
+        self.assertEqual(live, {"demo.1"})
+        self.assertEqual(live.viewers, (("demo.1", "@3", "/plane"),))
+
+    def test_each_field_is_stripped_on_both_edges(self):
+        """`strip`, not `lstrip`: a chat field with a trailing space still names the chat
+        a directory is called, and a viewer's chat with one still matches its id."""
+        live = self._reading(self._row("demo.1 ", "", "@0", "")
+                             + self._row("", "demo.1 ", " @3", "/plane"))
+        self.assertEqual(live, {"demo.1"})
+        self.assertEqual(live.viewers, (("demo.1", "@3", "/plane"),))
+
+    def test_a_viewers_chat_outside_the_id_alphabet_is_no_viewer(self):
+        """`_FRAME_ID_RE` on the viewer's chat: the value came off a window option, and it
+        is about to be a key into a kill set (#475's boundary)."""
+        live = self._reading(self._row("", "demo;kill-server", "@3", "/plane"))
+        self.assertEqual(live.viewers, ())
+
+    def test_a_viewers_window_that_is_not_a_window_id_is_no_viewer(self):
+        """`_WINDOW_ID_RE` on the window: it is the `-t` a `kill-window` is aimed at."""
+        for bad in ("%3", "@3;kill-server", "3", "@"):
+            with self.subTest(window=bad):
+                live = self._reading(self._row("", "demo.1", bad, "/plane"))
+                self.assertEqual(live.viewers, (), bad)
+
+    def test_a_row_with_the_chat_mark_and_no_viewer_stamp_is_no_viewer(self):
+        """Both options or nothing: a window carrying `@charter_transcript` without the
+        viewer's plane stamp is not a viewer to charter — never swept, never killed."""
+        live = self._reading(self._row("", "demo.1", "@3", ""))
+        self.assertEqual(live.viewers, ())
 
 
 class ThePresserOwnChatIsWhatTheBindCarries(unittest.TestCase):

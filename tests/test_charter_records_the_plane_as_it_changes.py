@@ -800,22 +800,27 @@ class TheLauncherTakesTheDecision(PersonaIso, unittest.TestCase):
             return self._launch(**kw)
 
     def _launch(self, *, chats_live=(), reopen_rc=0, legacy_live=(), claim=None,
-                choose=None, seats=None, gone=True, **kw):
+                choose=None, seats=None, gone=True, live_obj=None, kill_viewers=None,
+                **kw):
         """*choose* stands in for the workspace picker and *claim* for `state.new_chat_id`
         — the two moments a case can act inside the launch, before and after the hold-back
         line. *seats* is what `_chat_seats` answers per server, for a case whose recorder
         reads the plane; by default every server has nothing, and no tmux is asked.
         ``None`` for *chats_live* or *legacy_live* is that server refusing its listing, and
-        *gone* is what `tmuxctl.nothing_listening` then says of every server."""
+        *gone* is what `tmuxctl.nothing_listening` then says of every server.
+
+        *live_obj* is what `_live_chats` returns, for a case that needs the viewers a
+        `_LiveChats` carries (it wins over *chats_live*); *kill_viewers* records
+        `_kill_transcript_windows`' argument, so a case can pin that the launch sweeps an
+        orphaned transcript viewer."""
         said = io.StringIO()
         self.said = said
-        with redirect_stderr(said), mock.patch.multiple(commands_frame,
-                                 _live_sessions=mock.DEFAULT,
-                                 _live_chats=mock.DEFAULT,
-                                 _legacy_keep=mock.DEFAULT,
-                                 _choose_workspace=mock.DEFAULT,
-                                 _workspace_to_focus=mock.DEFAULT,
-                                 cmd_reopen=mock.DEFAULT) as m, \
+        patches = dict(_live_sessions=mock.DEFAULT, _live_chats=mock.DEFAULT,
+                       _legacy_keep=mock.DEFAULT, _choose_workspace=mock.DEFAULT,
+                       _workspace_to_focus=mock.DEFAULT, cmd_reopen=mock.DEFAULT)
+        if kill_viewers is not None:
+            patches["_kill_transcript_windows"] = mock.DEFAULT
+        with redirect_stderr(said), mock.patch.multiple(commands_frame, **patches) as m, \
                 mock.patch.object(commands_frame, "_chat_seats",
                                   side_effect=seats or (lambda socket: [])), \
                 mock.patch("charter.frame.state.new_chat_id",
@@ -828,7 +833,9 @@ class TheLauncherTakesTheDecision(PersonaIso, unittest.TestCase):
                            side_effect=lambda server: gone), \
                 mock.patch("sys.stdout.isatty", return_value=True):
             m["_live_sessions"].return_value = set()
-            m["_live_chats"].return_value = None if chats_live is None else set(chats_live)
+            m["_live_chats"].return_value = (
+                live_obj if live_obj is not None
+                else None if chats_live is None else set(chats_live))
             # The legacy server's keep list, which is plane-checked by pane (ruling 46).
             m["_legacy_keep"].return_value = (None if legacy_live is None
                                               else set(legacy_live))
@@ -837,6 +844,9 @@ class TheLauncherTakesTheDecision(PersonaIso, unittest.TestCase):
                 m["_choose_workspace"].side_effect = choose
             m["_workspace_to_focus"].return_value = None
             m["cmd_reopen"].return_value = reopen_rc
+            if kill_viewers is not None:
+                m["_kill_transcript_windows"].side_effect = (
+                    lambda socket, chatset, rows=None: kill_viewers.append(set(chatset)))
             rc = commands_frame.cmd_launch(_launch_args(**kw))
         return rc, m["cmd_reopen"]
 
@@ -867,6 +877,32 @@ class TheLauncherTakesTheDecision(PersonaIso, unittest.TestCase):
                 self._launch(legacy_live=None, gone=gone)
 
                 self.assertEqual(state.frame_dir("alpha.1").is_dir(), kept)
+
+    def test_a_launch_sweeps_a_transcript_viewer_whose_chat_has_ended(self):
+        """The launch reads what is live BEFORE it decides anything, and a transcript viewer
+        whose chat is no longer live is swept there (`_sweep_orphan_transcripts`) so its
+        window does not keep a workspace's session alive — otherwise a later tab refuses that
+        session as another plane's, and a restore is held back for it. Pins the CALL, not the
+        helper: `_live_chats` reports a viewer for a chat that is not live, and the launch has
+        to sweep it. Deleting the sweep from `_launch` leaves nothing recorded here."""
+        live = commands_frame._LiveChats({"alpha.1"})
+        live.viewers = (("ended.9", "@9", str(config.STATE_DIR)),)
+        swept: list = []
+        self._launch(live_obj=live, kill_viewers=swept)
+        self.assertTrue(any("ended.9" in cs for cs in swept),
+                        f"the launch did not sweep a viewer whose chat had ended: {swept}")
+
+    def test_a_launch_leaves_the_viewer_of_a_chat_that_is_still_live(self):
+        """The other half of the sweep, and the one that makes it a SWEEP rather than a
+        purge: a viewer whose chat is live is exactly the window an operator is reading
+        beside a running chat, and the launch must not aim at it. Pins the `chat not in
+        live_chats` filter — with it gone, every viewer on the server is killed at launch."""
+        live = commands_frame._LiveChats({"alpha.1"})
+        live.viewers = (("alpha.1", "@9", str(config.STATE_DIR)),)
+        swept: list = []
+        self._launch(live_obj=live, kill_viewers=swept)
+        self.assertFalse(any("alpha.1" in cs for cs in swept),
+                         f"the launch swept the viewer of a chat that is live: {swept}")
 
     def test_the_restore_is_the_quiet_one(self):
         """An operator who typed `charter reopen` is reading. An operator who typed

@@ -469,6 +469,54 @@ def others(fid: str) -> list[str]:
 ONLY_CHAT = ("this workspace has one chat — open another with `charter <harness>` in "
              "this workspace, and it joins this one as a second tab")
 
+#: What a switch to a chat on another tmux server is refused with — and it names the way
+#: out in the same breath (ruling: a tab you cannot switch to must name its own fix).
+#:
+#: **A charter upgrade split this frame's chats across two servers** (ruling 46, ADR 0023).
+#: Frames open when each plane got a tmux server of its own kept running on the legacy
+#: `charter` socket; every chat opened since is on this plane's own `charter-plane-<hex>`
+#: server. `select-window` cannot move a client between two servers, so a switch across
+#: them is refused — and the fix is real and documented: quit the old frame with `charter
+#: frame-quit` typed in its project, and `charter` (or `charter reopen`) brings its chats
+#: back on this plane's own server, where this frame can reach them.
+OTHER_SERVER = ("chat '{shown}' is on another tmux server — a charter upgrade left this "
+                "project's chats split across servers, and a client cannot move between "
+                "them. `charter frame-quit`, typed in this project, records and stops "
+                "every chat of the project on every server, this one included; `charter "
+                "reopen` (or `charter`) then brings them all back on the project's own "
+                "server.")
+
+
+def off_server(fid: str) -> set[str]:
+    """The chats in *fid*'s workspace that are on a DIFFERENT tmux server from *fid* — the
+    ones a switch from this frame cannot reach (ruling 46).
+
+    **A tab you cannot switch to must not read as an ordinary tab** (the strip marks these,
+    and :func:`check` refuses them by name). A chat's server is its own record, with
+    `tmuxctl.LEGACY_SOCKET` for a chat older than the record — the same resolution
+    :func:`check` and every teardown path make — so this and the refusal cannot come to
+    disagree about which side of the split a chat is on.
+
+    *fid* itself is never in the answer: it is the server everything else is compared
+    against, and a frame is always on its own server.
+
+    This scans (:func:`roster`), so the strip's hot path calls :func:`off_server_of` with the
+    roster it has already read; `F2 → chat` opens a palette and can afford the scan.
+    """
+    return off_server_of([c.id for c in roster(fid)], fid)
+
+
+def off_server_of(names: list[str], fid: str) -> set[str]:
+    """The names in *names* on a different tmux server from *fid* — :func:`off_server`
+    without the scan, for a caller that already has the workspace's chats in hand.
+
+    One definition of "which side of the split", so the strip that reads it on every repaint
+    (`slots.chats_bar`) and the palette that reads it when it opens (`choose.roster`) cannot
+    come to two answers. *fid* is dropped: a frame is always on its own server."""
+    here = state.frame_server(fid) or tmuxctl.LEGACY_SOCKET
+    return {n for n in names if n != fid
+            and not tmuxctl.same_server(state.frame_server(n) or tmuxctl.LEGACY_SOCKET, here)}
+
 
 def check(fid: str, chat: str) -> Outcome:
     """Whether frame *fid* may switch to *chat*, and the one line to say either way.
@@ -501,12 +549,13 @@ def check(fid: str, chat: str) -> Outcome:
       tmux, theirs), a chat can be open on each, and `state.frame_server` is the record
       that tells them apart. Pane ids are per-server — `%3` on one is somebody else's pane
       on the other — so a switch that crossed servers would aim a `select-window` at a
-      real, live, unrelated pane and be told it worked. Compared as recorded, with no
-      default filled in for a missing marker: every chat this charter launches records one
-      on both paths, so an absent value is a truncated record rather than a migration
-      (`of_workspace` already keeps old `{workspace}-{pid}` frames out of the roster
-      entirely), and "charter cannot tell" is the same answer as "somewhere else" for a
-      switch that is about to move a client.
+      real, live, unrelated pane and be told it worked. Compared with `tmuxctl.same_server`
+      and `tmuxctl.LEGACY_SOCKET` for a missing marker — the same resolution every teardown
+      path makes — so a chat with no record (older than the record) and one recorded
+      `charter` are read as the one legacy server they are both on, rather than as two
+      servers because one is spelled and one is blank; and a chat charter cannot switch to
+      is refused by name and named as splittable, with the way back on — quit that frame
+      with `charter frame-quit`, then `charter` — said in the same breath (:data:`OTHER_SERVER`).
     * **no usable harness pane** — the target's window cannot be named. `select-window`
       is aimed at the chat's own harness pane (measured on tmux 3.7c and 3.2: a pane id
       resolves to that pane's window), and `state.harness_pane` is the record that holds
@@ -538,9 +587,9 @@ def check(fid: str, chat: str) -> Outcome:
         return Outcome(False, f"no chat '{shown}' here — have: {_some(names)}")
     if chat == fid:
         return Outcome(False, f"already in chat '{shown}'")
-    if state.frame_server(chat) != state.frame_server(fid):
-        return Outcome(False, f"chat '{shown}' is not on this frame's tmux server, so "
-                              "charter cannot move this client to its window")
+    if not tmuxctl.same_server(state.frame_server(chat) or tmuxctl.LEGACY_SOCKET,
+                               state.frame_server(fid) or tmuxctl.LEGACY_SOCKET):
+        return Outcome(False, OTHER_SERVER.format(shown=shown))
     if pane_of(chat) is None:
         return Outcome(False, f"charter has no usable record of chat {shown}'s harness "
                               "pane, so it cannot find its window — relaunch that chat")

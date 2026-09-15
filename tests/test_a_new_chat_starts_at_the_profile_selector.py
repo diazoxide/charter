@@ -2034,5 +2034,208 @@ class TheSelectorOnARealServer(PersonaIso, unittest.TestCase):
         self.assertEqual(state.profile("beta.1"), "claude")
 
 
+class EscProvesTheSelectorPaneAcrossServers(PersonaIso, unittest.TestCase):
+    """**Ruling 46 split a plane's chats across servers, and Esc must still close the one it
+    is in — on either.** `_close_the_cancelled_chat` and `framed_chat` prove the pane by the
+    pid of the process asking (`tmuxctl.live_pane_by_pid`), which is one pane on the machine,
+    so the proof is unchanged in strength; what changed is that the recorded server is no
+    longer the only one asked. A chat whose record names the WRONG server — an upgrade-day
+    skew — used to leave Esc asking that server, finding nothing, and closing nothing.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.enterContext(mock.patch.dict(os.environ, {}, clear=True))
+
+    def _probe(self, planted):
+        """Stand `live_pane_by_pid` up to answer for exactly the server in *planted*."""
+        row = tmuxctl.LivePane("%7", "beta", "beta.1", "")
+        def lpbp(server, pid):
+            return row if (server == planted and pid == os.getpid()) else None
+        return lpbp, row
+
+    def test_close_probes_the_plane_socket_when_the_record_names_the_legacy_one(self):
+        """The RED case: the record says legacy, the pane is really on the plane socket. The
+        old single-server ask closed nothing; the probe finds the pane and kills its window
+        on the server it is actually on."""
+        lpbp, _row = self._probe("PLANE")
+        killed = []
+        with mock.patch.object(state, "frame_server", return_value=tmuxctl.LEGACY_SOCKET), \
+                mock.patch.object(tmuxctl, "plane_socket", return_value="PLANE"), \
+                mock.patch.object(tmuxctl, "operator_server", return_value=None), \
+                mock.patch.object(tmuxctl, "live_pane_by_pid", side_effect=lpbp), \
+                mock.patch.object(tmuxctl, "run",
+                                  side_effect=lambda a, argv, **k: killed.append(argv)):
+            launcher._close_the_cancelled_chat("beta.1")
+        self.assertEqual(len(killed), 1, "Esc closed nothing")
+        self.assertEqual(killed[0][-3:], ["kill-window", "-t", "%7"])
+        self.assertIn("PLANE", killed[0], "the window was killed on the wrong server")
+
+    def test_close_finds_the_pane_on_the_recorded_server_first(self):
+        """The ordinary case is unchanged: the recorded server is asked first and answers,
+        so a normally-launched chat closes on its own record without probing further."""
+        lpbp, _row = self._probe("charter-plane-recorded")
+        asked = []
+        def spy(server, pid):
+            asked.append(server)
+            return lpbp(server, pid)
+        killed = []
+        with mock.patch.object(state, "frame_server", return_value="charter-plane-recorded"), \
+                mock.patch.object(tmuxctl, "plane_socket", return_value="charter-plane-recorded"), \
+                mock.patch.object(tmuxctl, "operator_server", return_value=None), \
+                mock.patch.object(tmuxctl, "live_pane_by_pid", side_effect=spy), \
+                mock.patch.object(tmuxctl, "run",
+                                  side_effect=lambda a, argv, **k: killed.append(argv)):
+            launcher._close_the_cancelled_chat("beta.1")
+        self.assertEqual(asked[0], "charter-plane-recorded", "the record was not asked first")
+        self.assertEqual(len(killed), 1)
+
+    def test_framed_chat_proves_the_pane_on_the_plane_socket_despite_a_wrong_record(self):
+        """`framed_chat` proves the same way: the window name on charter's own server, found
+        on whichever candidate the pid matches — so a stale record does not cost the chat its
+        session id."""
+        lpbp, _row = self._probe("PLANE")
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "beta.1"}), \
+                mock.patch.object(state, "frame_server", return_value=tmuxctl.LEGACY_SOCKET), \
+                mock.patch.object(tmuxctl, "plane_socket", return_value="PLANE"), \
+                mock.patch.object(tmuxctl, "operator_server", return_value=None), \
+                mock.patch.object(tmuxctl, "live_pane_by_pid", side_effect=lpbp):
+            self.assertEqual(launcher.framed_chat(), "beta.1")
+
+    def test_the_candidate_servers_hold_no_duplicates(self):
+        """A chat recorded on this plane's own server names the same server twice over —
+        once as its record, once as `plane_socket()` — and it is asked once: a duplicate
+        would be a second `list-panes` round trip for an answer already given."""
+        with mock.patch.object(state, "frame_server", return_value="PLANE"), \
+                mock.patch.object(tmuxctl, "plane_socket", return_value="PLANE"), \
+                mock.patch.object(tmuxctl, "operator_server", return_value=None):
+            self.assertEqual(launcher._candidate_servers("beta.1"),
+                             ["PLANE", tmuxctl.LEGACY_SOCKET])
+
+    def test_a_pid_that_no_server_answers_for_closes_nothing(self):
+        """The pid proof is not weakened: a process no server reports a live pane for — a
+        `frame-launch` run by hand, or one whose pane is gone — closes nothing, exactly as
+        the single-server form did."""
+        killed = []
+        with mock.patch.object(state, "frame_server", return_value=tmuxctl.LEGACY_SOCKET), \
+                mock.patch.object(tmuxctl, "plane_socket", return_value="PLANE"), \
+                mock.patch.object(tmuxctl, "operator_server", return_value=None), \
+                mock.patch.object(tmuxctl, "live_pane_by_pid", return_value=None), \
+                mock.patch.object(tmuxctl, "run",
+                                  side_effect=lambda a, argv, **k: killed.append(argv)):
+            launcher._close_the_cancelled_chat("beta.1")
+        self.assertEqual(killed, [])
+
+
+@unittest.skipUnless(shutil.which("tmux"), "no tmux on this machine")
+class EscClosesASelectorWhoseRecordNamesAServerItsPaneIsNotOn(PersonaIso,
+                                                              unittest.TestCase):
+    """**The upgrade-day regression itself, on a real tmux — red on 0.62.0.** The field bug
+    was a chat whose recorded server is not the one its pane is actually on: `framed_chat`
+    and `_close_the_cancelled_chat` asked only `state.frame_server(fid) or LEGACY_SOCKET`,
+    found nothing there, and closed nothing — so Esc left the selector sitting forever.
+
+    The pane really runs on `self.here`; its record names `self.wrong`, a server it is NOT
+    on. On 0.62.0 Esc asks `self.wrong` and does nothing (RED). The fix proves the pane by
+    its own pid across the servers a chat can be on — and tmux itself sets `$TMUX` to the
+    server the pane is on, so `tmuxctl.operator_server()` names `self.here` and
+    `live_pane_by_pid` finds the pane there. **Neither the old code nor the fix ever probes
+    `tmuxctl.LEGACY_SOCKET` here**: the old code asks only the recorded `self.wrong` (a
+    non-empty record), and the fix finds the pane at the operator candidate — before LEGACY
+    — because the pane's own pid is on `self.here`. So this touches no server but its own two
+    reapable ones.
+    """
+
+    WS = "beta"
+    FID = "beta.1"
+
+    def setUp(self):
+        super().setUp()
+        v = tmuxctl.version()
+        if v is None or v < tmuxctl.FLOOR:
+            self.skipTest("needs a tmux at or above the floor")
+        make_plane(self)
+        no_background_refresh(self)
+        _ttyguard.no_terminal()
+        self.tmux = shutil.which("tmux")
+        self.here = _tmuxreap.name(f"skew-here-{next(_SERVERS)}")
+        # A reapable socket the pane is NOT on — never started, so a probe of it answers
+        # "no server" at once. This is the record's lie.
+        self.wrong = _tmuxreap.name(f"skew-wrong-{next(_SERVERS)}")
+        self.addCleanup(self._kill)
+        (config.WORKSPACES_DIR / self.WS).mkdir(parents=True, exist_ok=True)
+        bindir = self.tmp / "bin"; bindir.mkdir()
+        (bindir / "claude").write_text(
+            f"#!{sys.executable}\nimport json,sys,time\n"
+            "if sys.argv[1:3]==['plugin','list']:\n"
+            "    json.dump([{'id':'charter@charter','scope':'user','enabled':True,"
+            "'installedAt':'2026-09-12T00:00:00Z'}], sys.stdout); sys.exit(0)\n"
+            "time.sleep(300)\n")
+        (bindir / "claude").chmod(0o755)
+        self.env = {
+            "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH','')}",
+            "CHARTER_ROOT": str(config.ROOT),
+            "CHARTER_SESSION_ID": self.FID,
+            "PYTHONPATH": os.pathsep.join(
+                [str(_REPO_ROOT), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep),
+            **_gitguard.environment(), **_envguard.stated(),
+        }
+        wired_as_today(self)
+
+    def _kill(self):
+        for sock in (self.here, self.wrong):
+            subprocess.run([self.tmux, "-L", sock, "kill-server"],
+                           capture_output=True, timeout=20)
+            try:
+                os.unlink(_tmuxsocket.socket_path(sock))
+            except OSError:
+                pass
+
+    def _tmux(self, *a):
+        return subprocess.run([self.tmux, "-L", self.here, *a], capture_output=True,
+                              text=True, timeout=20)
+
+    def _text(self, pane):
+        return "".join(self._tmux("capture-pane", "-p", "-t", pane).stdout.splitlines())
+
+    def _sessions(self):
+        out = self._tmux("list-sessions", "-F", "#{session_name}")
+        return out.stdout.split() if out.returncode == 0 else []
+
+    def test_escape_closes_a_selector_whose_record_names_the_wrong_server(self):
+        argv = launcher.argv_select("claude")
+        # The pane really runs on `self.here`; tmux sets its own `$TMUX` to this server, which
+        # is what the fix's operator-candidate probe finds it by.
+        out = subprocess.run(
+            [self.tmux, "-L", self.here, "new-session", "-d", "-s", self.WS, "-n",
+             self.FID, "-x", "120", "-y", "40", "-P", "-F", "#{pane_id}", "--", *argv],
+            capture_output=True, text=True, timeout=20, env={**os.environ, **self.env})
+        self.assertEqual(out.returncode, 0, out.stderr)
+        pane = out.stdout.strip()
+        # **`remain-on-exit on`, so the launcher exiting on Esc does NOT close the window on
+        # its own** — the dead pane lingers, as on charter's own servers, so only
+        # `_close_the_cancelled_chat`'s explicit `kill-window` closes it. That is the whole
+        # point: on 0.62.0 it asks the wrong server and never issues that kill, so the window
+        # stays; without remain-on-exit the pane would vanish anyway and hide the bug.
+        self._tmux("set-option", "-g", "remain-on-exit", "on")
+        # `@charter_chat`, so `framed_chat`'s operator-socket proof (the option, not the
+        # window name) resolves to this chat when the pane is found on `self.here`.
+        self._tmux("set-option", "-w", "-t", pane, "@charter_chat", self.FID)
+        state.frame_dir(self.FID, create=True)
+        # THE SKEW: the record names a server the pane is not on.
+        state.record_server(self.FID, self.wrong)
+        state.record_workspace(self.FID, self.WS)
+        state.record_cwd(self.FID, str(config.ROOT))
+        state.record_harness_pane(self.FID, pane)
+        state.record_waiting(self.FID)
+        self.assertTrue(_eventually(lambda: "which profile" in self._text(pane)),
+                        f"the selector never painted: {self._text(pane)!r}")
+        self._tmux("send-keys", "-t", pane, "Escape")
+        self.assertTrue(
+            _eventually(lambda: self.WS not in self._sessions(), 30.0),
+            f"Esc did not close the window of a selector whose record named the wrong "
+            f"server: sessions={self._sessions()}")
+
+
 if __name__ == "__main__":
     unittest.main()
