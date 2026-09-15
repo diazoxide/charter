@@ -1228,6 +1228,53 @@ def _plugin_declaring_guard(root: Path | None = None,
     return None
 
 
+def _plugin_installed_elsewhere(pid: str) -> list[str]:
+    """The directories *pid* is installed for, when not one of its installs reaches a session
+    here — else ``[]``.
+
+    **Enabled here is not installed here.** Claude Code binds a ``project`` or ``local`` install
+    to the directory it ran in (``projectPath``), and 2.1.272's own test counts an install for a
+    session when its scope is ``user`` or ``managed``, when ``projectPath`` is the session's
+    directory, or when both resolve to the same repository root. So a plane that has MOVED keeps
+    a record for its old path, its own settings go on enabling the plugin, and a session at the
+    new path loads nothing — measured 2026-09-15 in throwaway folders (see
+    `tests/test_doctor_tells_one_story_about_a_moved_plane.py`).
+
+    The repository half is approximated as *inside the plane*, the one repository charter
+    installs for (`commands._run_doctor_fix` and `init` both install for `config.ROOT`), which is also
+    what makes a workspace chat reached by the plane's install. The approximation errs towards
+    saying nothing: only a record bound by an explicit ``projectPath`` to a directory that is
+    neither this session's nor inside the plane is evidence of elsewhere. A record with any
+    other scope, or no path, reaches — unknown is not suspect, the rule `guardseen.last_source`
+    keeps. So does an unreadable manifest: `_plugin_declaring_guard` read the same file a moment
+    ago, and a row is not the place to guess.
+    """
+    from . import config as _config
+
+    here = session_root()
+    plane = _canonical(Path(_config.ROOT))
+    manifest = _claude_folder(None) / "plugins" / "installed_plugins.json"
+    try:
+        entries = (json.loads(manifest.read_text()).get("plugins") or {}).get(pid) or []
+    except (OSError, ValueError, AttributeError):
+        return []
+    elsewhere: list[str] = []
+    for entry in entries if isinstance(entries, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        recorded = entry.get("projectPath")
+        if entry.get("scope") not in ("project", "local") or not isinstance(recorded, str):
+            return []
+        try:
+            at = _canonical(Path(recorded))
+        except ValueError:
+            return []
+        if at == here or at == plane or plane in at.parents:
+            return []
+        elsewhere.append(recorded)
+    return elsewhere
+
+
 def _named(items: list[str]) -> str:
     """*items* as English — ``a``, ``a and b``, ``a, b and c``."""
     if len(items) < 2:
@@ -1582,6 +1629,36 @@ def check_guard_wired() -> Result:
                 declared.append(p)
         except (OSError, UnicodeDecodeError):
             continue
+
+    # ENABLED is not INSTALLED HERE. A project-scope install belongs to the directory it was
+    # installed from, and a plane that has moved keeps the old record while its settings, which
+    # enable the plugin, move with it. Measured on Claude Code 2.1.272 (2026-09-15, throwaway
+    # folders): at the new path `claude plugin list --json` still lists the install, enabled,
+    # and a session there loads no plugin and runs none of charter's hooks. This row went on
+    # saying "wired for the NEXT session", whose remedy — restart — changes nothing, and with a
+    # sighting from before the move, green. `plugin install` was right all along; this is the
+    # same answer in this row's words, and it comes before the doubled branch below, whose
+    # advice is to delete the one declaration a session here does load.
+    elsewhere = (_plugin_installed_elsewhere(plugin)
+                 if plugin and plugin != "Claude Code plugin" else [])
+    if elsewhere:
+        old = ", ".join(util.short_path(p) for p in elsewhere[:2])
+        if declared:
+            return Result(name, OK,
+                          detail=f"wired ({declared[0]}) — enabled plugin {plugin} is installed "
+                                 f"for {old}, not here, so that file is the declaration a "
+                                 f"session here loads")
+        from . import plugincache
+        return Result(
+            name, WARN,
+            detail=f"enabled plugin {plugin} declares it, but Claude Code has it installed for "
+                   f"{old} and not for this directory, so no charter hook runs in a session "
+                   f"here — branch moves in the plane root are NOT refused",
+            hint=f"A project-scope install belongs to the directory it was installed from, and "
+                 f"a plane that has moved keeps the old record, so restarting changes nothing. "
+                 f"Run: {PLUGIN_FIX_CMD}  (installs `{plugincache.PLUGIN_ID}` for this plane, "
+                 f"as the `plugin install` row says). The plugin loads at the NEXT session, so "
+                 f"restart afterwards.")
 
     if plugin and declared:
         # Not broken — doubled, which is why nobody finds it: two denials for one command

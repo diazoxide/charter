@@ -40,6 +40,12 @@ class GuardCase(PersonaIso):
         # early without one. Asserted here rather than worked around, so the fixture says
         # out loud that these rows are about a real plane.
         self.enterContext(mock.patch.object(config, "HAS_CONTROL_PLANE", True))
+        # A home of its own, and the default config folder under it, so these rows read this
+        # test's manifest and user settings and never the developer's (#969). With project-scope
+        # installs for other planes in the real `~/.claude`, `plane-root guard` read them as
+        # this plane's plugin installed somewhere else.
+        self.enterContext(mock.patch.dict(os.environ, {"HOME": str(self.tmp / "home")}))
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)
         # Rooted at the plane, so `config.ROOT/.claude/settings.json` is the file the host
         # would actually read for this "session" (#851). Without it these tests write one
         # settings file and `check_guard_wired` reads another — the developer's own — which

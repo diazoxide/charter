@@ -48,8 +48,11 @@ class _Plane(unittest.TestCase):
         self.assertTrue(guardseen.path().is_relative_to(self.root),
                         f"guard sightings would be written to {guardseen.path()}, "
                         f"outside this test's own throwaway plane ({self.root})")
-        # No ambient plugin install and no plugin-owned process: each test says which.
-        self.enterContext(mock.patch.dict("os.environ", {}, clear=True))
+        # No ambient plugin install and no plugin-owned process: each test says which. A HOME
+        # of its own, because an environment with none sends `Path.home()` to the passwd
+        # entry — the developer's real `~/.claude` — whose manifest `plane-root guard` reads.
+        self.enterContext(mock.patch.dict("os.environ", {"HOME": str(self.root / "home")},
+                                          clear=True))
         self.dispatching = self.enterContext(
             mock.patch.object(doctor, "_plugin_declaring_guard", return_value=None))
         self.enterContext(mock.patch.object(doctor, "_settings_files",
