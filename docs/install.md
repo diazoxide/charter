@@ -185,14 +185,16 @@ start Claude Code from, so it sees the same variable.
   sightings. Claude Code resolves it against its own working directory, which charter cannot
   see, so nothing can be compared with it. Set it to an absolute path; running a command
   changes nothing there.
-- **Three narrower Claude Code settings are not followed**, so with any of them set these rows
-  read the wrong file:
+- **Three narrower Claude Code settings are not followed:**
   - `$CLAUDE_CODE_PLUGIN_CACHE_DIR` moves the installed-plugin list out of the config folder.
-    `plane-root guard` and `guard seen` still read `<config folder>/plugins/installed_plugins.json`.
+    With it set to anything but empty, `plane-root guard` says it could not tell which directory
+    the plugin is installed for. `charter init` and `reinit` write the guard hook as though no
+    plugin dispatched it.
   - `$CLAUDE_CODE_USE_COWORK_PLUGINS` renames `plugins/` to `cowork_plugins/` and
-    `settings.json` to `cowork_settings.json`. The guard rows still read the ordinary names.
+    `settings.json` to `cowork_settings.json`. The guard rows still read the ordinary names, so
+    with it set they read the wrong files.
   - `$CLAUDE_CODE_CUSTOM_OAUTH_URL` renames `.claude.json` to `.claude-custom-oauth.json`.
-    `mcp` still reads `.claude.json`.
+    `mcp` still reads `.claude.json`, so with it set that row reads the wrong file.
 
 By hand, if you would rather, or if `charter doctor --fix` could not (an old `claude`, no
 network):

@@ -1207,25 +1207,107 @@ def _plugin_declaring_guard(root: Path | None = None,
     # list`, which follows `$CLAUDE_CONFIG_DIR` — so one report said the plugin was not
     # installed for this plane and, rows earlier, that the guard it carries was wired. Under
     # that folder no charter hook ran at all: installed somewhere else read as installed here.
-    manifest = _claude_folder(folder) / "plugins" / "installed_plugins.json"
-    try:
-        doc = json.loads(manifest.read_text())
-    except (OSError, ValueError):
-        return None
-    for pid, entries in (doc.get("plugins") or {}).items():
-        if pid not in enabled:
-            continue
-        for entry in entries or []:
-            path = (entry or {}).get("installPath")
-            if not path:
-                continue
-            hooks_json = Path(path) / "hooks" / "hooks.json"
-            try:
-                if "charter hook pretooluse" in hooks_json.read_text():
-                    return pid
-            except (OSError, UnicodeDecodeError):
-                continue
+    #
+    # Through `_installed_plugins`, which never raises. This loop used to read the file itself and
+    # assumed the shape Claude Code writes, so a chat that wrote another one crashed `charter
+    # doctor`, the session preflight and `charter init`. A list charter cannot read declares
+    # nothing here — and `commands._ensure_guard_hook`, which asks this, then writes the guard
+    # hook: a guard declared twice runs twice and is reported, a guard declared nowhere is not.
+    installs, _doubt = _installed_plugins(folder)
+    for pid, records in installs.items():
+        if pid in enabled and any(_dispatches_guard(r["installPath"]) for r in records):
+            return pid
     return None
+
+
+def _dispatches_guard(install_path: str) -> bool:
+    """Does the plugin installed at *install_path* dispatch `charter hook pretooluse`?
+
+    *install_path* is text out of a file a chat can write, so a missing directory, an unreadable
+    `hooks.json` and a NUL byte (``ValueError``) each answer no rather than raise."""
+    try:
+        return "charter hook pretooluse" in (Path(install_path) / "hooks" / "hooks.json").read_text()
+    except (OSError, ValueError):
+        return False
+
+
+def _line(value) -> str:
+    """*value* — a path or an id taken from a file a chat can write, or from the environment — as
+    one line of printable text, so it can neither end a row nor drive the operator's terminal."""
+    return contain.readable(value, contain.PATH_DISPLAY_LIMIT)
+
+
+def _install_list(folder: Path | None = None) -> Path:
+    return _claude_folder(folder) / "plugins" / "installed_plugins.json"
+
+
+#: The scopes Claude Code 2.1.272 accepts in its install list, as its schema spells them.
+_INSTALL_SCOPES = ("managed", "user", "project", "local")
+
+
+def _installed_plugins(folder: Path | None = None) -> tuple[dict[str, list[dict]], str | None]:
+    """Claude Code's install records by plugin id, as far as Claude Code itself reads them.
+
+    ``(records, None)``, each record an object with a ``scope`` and an ``installPath`` string; no
+    list at all is ``({}, None)``, because nothing is installed there. ``({}, why)`` when charter
+    could not tell what Claude Code has installed, *why* being a clause that names the file.
+
+    **As 2.1.272 reads it, measured** (2026-09-15, throwaway folders). Claude Code checks the whole
+    list before it loads anything: ``version`` 1 or 2; ``plugins`` an object of arrays; every
+    record, under any plugin id, an object whose ``scope`` is one of :data:`_INSTALL_SCOPES`, whose
+    ``installPath`` is a string, and whose ``projectPath``, when present, is a string. In any other
+    shape it loads no plugin at all. A version-1 list it rewrites at start-up, each plugin becoming
+    one ``user``-scope install, and loads — so that is what this returns for one.
+
+    **Never raises, and every reader of the list reads it here.** 0.62.0's readers assumed the
+    shape Claude Code writes; a list in another shape crashed `charter doctor` with no rows, the
+    SessionStart preflight at every session start, and `charter init` and `reinit`.
+
+    ``$CLAUDE_CODE_PLUGIN_CACHE_DIR`` moves the list out of the config folder — measured: set, `claude
+    plugin list --json` lists none of the folder's installs; set empty, Claude Code ignores it.
+    Charter does not follow it, so with it set the file here is not the list Claude Code reads.
+    """
+    shown = _line(util.short_path(_install_list(folder)))
+    if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
+        return {}, (f"$CLAUDE_CODE_PLUGIN_CACHE_DIR is set, so Claude Code reads its install list "
+                    f"there and not {shown}")
+    try:
+        doc = json.loads(_install_list(folder).read_text())
+    except FileNotFoundError:
+        return {}, None
+    except OSError as e:
+        return {}, f"{shown} could not be read ({type(e).__name__})"
+    except ValueError:
+        return {}, f"{shown} is not JSON"
+    installs = _as_claude_code_reads(doc)
+    if installs is None:
+        return {}, f"{shown} is not in the shape Claude Code reads"
+    return installs, None
+
+
+def _as_claude_code_reads(doc) -> dict[str, list[dict]] | None:
+    """*doc*'s install records as 2.1.272 reads them, or ``None`` for a list it refuses whole."""
+    if not isinstance(doc, dict):
+        return None
+    plugins, version = doc.get("plugins"), doc.get("version")
+    # `True == 1` in Python, and JSON `true` is not a version Claude Code accepts.
+    if not isinstance(plugins, dict) or isinstance(version, bool):
+        return None
+    if version == 1:
+        if all(isinstance(p, dict) and isinstance(p.get("installPath"), str)
+               for p in plugins.values()):
+            return {pid: [{"scope": "user", "installPath": p["installPath"]}]
+                    for pid, p in plugins.items()}
+        return None
+    if version != 2:
+        return None
+    for records in plugins.values():
+        if not isinstance(records, list) or not all(
+                isinstance(r, dict) and r.get("scope") in _INSTALL_SCOPES
+                and isinstance(r.get("installPath"), str)
+                and isinstance(r.get("projectPath", ""), str) for r in records):
+            return None
+    return plugins
 
 
 #: How `check_guard_wired` names the plugin when THIS process was launched by it
@@ -1235,70 +1317,86 @@ def _plugin_declaring_guard(root: Path | None = None,
 _LAUNCHED_BY_THE_PLUGIN = "Claude Code plugin"
 
 
-def _plugin_installed_elsewhere(pid: str) -> tuple[list[str], str | None]:
-    """Where *pid* is installed, when no install of it reaches a session here.
+def _plugin_standing(pid: str | None) -> tuple[list[str], list[str], str | None]:
+    """Is *pid* — the enabled plugin `_plugin_declaring_guard` found — installed, with its files,
+    for a session here? ``(elsewhere, gone, doubt)``, each shown as one line of text:
 
-    ``(directories, None)`` when every install record is bound to another directory, ``([],
-    None)`` when one reaches this session, and ``([], why)`` when charter could not tell, *why*
-    being a clause that names the file.
+    * *elsewhere* — the directories its installs are recorded for, when none reaches this session;
+    * *gone* — the install paths of installs that reach it but whose files are not there;
+    * *doubt* — why charter could not tell, naming the file.
 
-    **Enabled here is not installed here.** Claude Code binds a ``project`` or ``local`` install
-    to the directory it ran in (``projectPath``). 2.1.272 knows four scopes and counts an install
-    for a session when its scope is ``user`` or ``managed``, when ``projectPath`` is the session's
-    directory, or when both resolve to the same repository root. So a plane that has MOVED keeps
-    a record for its old path, its own settings go on enabling the plugin, and a session at the
-    new path loads nothing — measured 2026-09-15 in throwaway folders, at ``project`` scope and at
-    ``local`` (see `tests/test_doctor_tells_one_story_about_a_moved_plane.py`).
+    All empty when it is, or when there is nothing to ask.
 
-    The repository half is approximated as *inside the plane*, the one repository charter
-    installs for (`commands._run_doctor_fix` and `init` both install for `config.ROOT`), which is
-    also what makes a workspace chat reached by the plane's install.
+    **Enabled here is not installed here.** A plane that has MOVED keeps the record for its old
+    path while its own settings go on enabling the plugin, and a session at the new path loads
+    nothing — measured 2026-09-15 on 2.1.272, at ``project`` scope and at ``local`` (see
+    `tests/test_doctor_tells_one_story_about_a_moved_plane.py`). :func:`_install_reaches` is the
+    rule. **And installed is not loaded:** an install that reaches the session but whose
+    ``installPath`` is not a directory loads nothing, measured too, unless another one that
+    reaches it still has its files.
 
-    **A file charter did not write, in a shape it did not expect, is "could not tell"**: never a
-    traceback, and never an answer to a question it could not read. That covers the whole file —
-    unreadable, not JSON, not the object Claude Code writes, no list of *pid*'s records — and any
-    one record charter cannot place: not an object, a scope 2.1.272 does not write, or a missing
-    or unusable ``projectPath``. Such a record could be the install for this directory. A record
-    that does reach this session settles it, whatever else is there. The whole-file shapes cannot
-    come from the read in `_plugin_declaring_guard` that found *pid*; they arrive when the file is
-    rewritten between the two reads, as `claude plugin install` rewrites it.
+    With no *pid*, two things are still worth saying: that the list could not be read — which is
+    why no plugin was found — and that charter's own plugin is enabled and installed here with
+    every file gone, which leaves no `hooks.json` to show it dispatches the guard.
     """
-    from . import config as _config
+    from . import config as _config, plugincache
 
+    nothing: tuple[list[str], list[str], str | None] = ([], [], None)
+    if pid == _LAUNCHED_BY_THE_PLUGIN:
+        return nothing
+    enabled = _enabled_plugin_ids()
+    if not (pid or enabled):
+        return nothing
+    installs, doubt = _installed_plugins()
+    if doubt:
+        return [], [], doubt
+    if not pid and plugincache.PLUGIN_ID not in enabled:
+        return nothing
+    records = installs.get(pid or plugincache.PLUGIN_ID)
+    if pid and not records:
+        return [], [], f"{_line(util.short_path(_install_list()))} lists no install of {_line(pid)}"
     here = session_root()
     plane = _canonical(Path(_config.ROOT))
-    manifest = _claude_folder(None) / "plugins" / "installed_plugins.json"
-    shown = util.short_path(manifest)
-    try:
-        doc = json.loads(manifest.read_text())
-    except OSError as e:
-        return [], f"{shown} could not be read ({type(e).__name__})"
-    except ValueError:
-        return [], f"{shown} is not JSON"
-    plugins = doc.get("plugins") if isinstance(doc, dict) else None
-    records = plugins.get(pid) if isinstance(plugins, dict) else None
-    if not isinstance(records, list) or not records:
-        return [], f"{shown} does not list {pid}'s installs"
     elsewhere: list[str] = []
-    unplaced = False
-    for entry in records:
-        scope = entry.get("scope") if isinstance(entry, dict) else None
-        if scope in ("user", "managed"):
-            return [], None
-        recorded = entry.get("projectPath") if scope in ("project", "local") else None
-        try:
-            at = _canonical(Path(recorded)) if isinstance(recorded, str) and recorded else None
-        except ValueError:
-            at = None
-        if at is None:
-            unplaced = True
-        elif at == here or at == plane or plane in at.parents:
-            return [], None
+    gone: list[str] = []
+    for record in records or []:
+        if not _install_reaches(record, here, plane):
+            elsewhere.append(_recorded_dir(record))
+        elif Path(record["installPath"]).is_dir():
+            return nothing
         else:
-            elsewhere.append(recorded)
-    if unplaced:
-        return [], f"{shown} holds an install record of {pid} that charter cannot place"
-    return elsewhere, None
+            gone.append(_line(util.short_path(record["installPath"])))
+    return elsewhere, gone, None
+
+
+def _install_reaches(record: dict, here: Path, plane: Path) -> bool:
+    """Does Claude Code count this install for a session at *here*?
+
+    2.1.272's own rule (``e1``): ``user`` and ``managed`` reach every directory; otherwise the
+    ``projectPath`` must be the session's directory or share its repository root, and a record
+    with no ``projectPath`` reaches none (``if(!e.projectPath)return!1``). Measured for a missing,
+    an empty and a NUL-bearing path: Claude Code loads the list and places that install nowhere.
+
+    The repository half is approximated as *inside the plane*, the one repository charter installs
+    for (`commands._run_doctor_fix` and `init` both install for `config.ROOT`), which is also what
+    makes a workspace chat reached by the plane's install.
+    """
+    if record["scope"] in ("user", "managed"):
+        return True
+    recorded = record.get("projectPath")
+    if not recorded:
+        return False
+    try:
+        at = _canonical(Path(recorded))
+    except ValueError:
+        return False
+    return at == here or at == plane or plane in at.parents
+
+
+def _recorded_dir(record: dict) -> str:
+    """The directory an install is recorded for, as one line — "no directory" for none."""
+    recorded = record.get("projectPath")
+    return _line(util.short_path(recorded)) if recorded else "no directory"
 
 
 def _named(items: list[str]) -> str:
@@ -1647,6 +1745,8 @@ def check_guard_wired() -> Result:
     # and left the guard declared twice — and enabled is not dispatched (#177).
     plugin = (_LAUNCHED_BY_THE_PLUGIN if os.environ.get("CLAUDE_PLUGIN_ROOT")
               else _plugin_declaring_guard())
+    # A plugin id is a key in files a chat can write, so every sentence prints it contained.
+    named = _line(plugin)
 
     declared = []
     for p in _settings_files():
@@ -1656,56 +1756,66 @@ def check_guard_wired() -> Result:
         except (OSError, UnicodeDecodeError):
             continue
 
-    # ENABLED is not INSTALLED HERE. A project-scope install belongs to the directory it was
-    # installed from, and a plane that has moved keeps the old record while its settings, which
-    # enable the plugin, move with it. Measured on Claude Code 2.1.272 (2026-09-15, throwaway
-    # folders): at the new path `claude plugin list --json` still lists the install, enabled,
-    # and a session there loads no plugin and runs none of charter's hooks. This row went on
-    # saying "wired for the NEXT session", whose remedy — restart — changes nothing, and with a
-    # sighting from before the move, green. `plugin install` was right all along; this is the
-    # same answer in this row's words, and it comes before the doubled branch below, whose
-    # advice is to delete the one declaration a session here does load. A manifest charter cannot
-    # read that far is said as such, before either: it could hold the record for this directory.
-    elsewhere, doubt = (_plugin_installed_elsewhere(plugin)
-                        if plugin and plugin != _LAUNCHED_BY_THE_PLUGIN else ([], None))
+    # ENABLED is not INSTALLED HERE, and INSTALLED is not LOADED. A project-scope install belongs
+    # to the directory it was installed from, and a plane that has moved keeps the old record
+    # while its settings, which enable the plugin, move with it. Measured on Claude Code 2.1.272
+    # (2026-09-15, throwaway folders): at the new path `claude plugin list --json` still lists the
+    # install, enabled, and a session there loads no plugin and runs none of charter's hooks; an
+    # install whose files are gone loads nothing either; and a list in a shape Claude Code does
+    # not read loads no plugin at all. This row said "wired for the NEXT session", whose remedy —
+    # restart — changes nothing, and with a sighting from before the move, green.
+    #
+    # A block in this session's own settings is asked about FIRST (the review of 30ab6ae): it runs
+    # whatever the list says, so nothing read from the list may tell the reader no hook runs here.
+    # Then, before the doubled branch — whose advice is to delete the one declaration a session
+    # here may be loading — could not tell, files gone, installed elsewhere.
+    elsewhere, gone, doubt = _plugin_standing(plugin)
+    if declared and (doubt or gone or elsewhere):
+        return Result(name, OK,
+                      detail=f"wired ({_line(declared[0])}) — the declaration a session here "
+                             f"loads; the install list does not show a plugin loading it here too")
+    from . import plugincache
     if doubt:
-        from . import plugincache
         return Result(
             name, WARN,
-            detail=f"enabled plugin {plugin} declares it, but charter could not tell which "
-                   f"directory it is installed for: {doubt}",
+            detail=f"charter could not tell whether the plugin enabled here is installed for "
+                   f"this directory: {doubt}",
             hint=f"Claude Code loads a project- or local-scope install only in the directory it "
-                 f"was installed from. Run `claude plugin list --json` here and read each "
-                 f"`projectPath`: if none is this plane and none has `user` or `managed` scope, no "
-                 f"charter hook runs here — run: {PLUGIN_FIX_CMD}  (installs "
-                 f"`{plugincache.PLUGIN_ID}` for this plane; it reads that list, not this file).")
-    if elsewhere:
-        old = ", ".join(util.short_path(p) for p in elsewhere[:2])
-        if declared:
-            return Result(name, OK,
-                          detail=f"wired ({declared[0]}) — enabled plugin {plugin} is installed "
-                                 f"for {old}, not here, so that file is the declaration a "
-                                 f"session here loads")
-        from . import plugincache
+                 f"was installed from or another directory of the same repository, and no plugin "
+                 f"at all from a list in a shape it does not read. Run `claude plugin list --json` "
+                 f"here and read each `projectPath`: if none is this plane or inside its "
+                 f"repository, and none has `user` or `managed` scope, no charter hook runs here — "
+                 f"run: {PLUGIN_FIX_CMD}  (installs `{plugincache.PLUGIN_ID}` for this plane; it "
+                 f"reads that list, not the file).")
+    if gone:
         return Result(
             name, WARN,
-            detail=f"enabled plugin {plugin} declares it, but Claude Code has it installed for "
-                   f"{old} and not for this directory, so no charter hook runs in a session "
-                   f"here — branch moves in the plane root are NOT refused",
-            hint=f"A project-scope install belongs to the directory it was installed from, and "
-                 f"a plane that has moved keeps the old record, so restarting changes nothing. "
-                 f"Run: {PLUGIN_FIX_CMD}  (installs `{plugincache.PLUGIN_ID}` for this plane, "
-                 f"as the `plugin install` row says). The plugin loads at the NEXT session, so "
-                 f"restart afterwards.")
+            detail=f"enabled plugin {named} is installed for a session here, but its files are "
+                   f"gone ({', '.join(gone[:2])}), so Claude Code loads nothing from it — branch "
+                   f"moves in the plane root are NOT refused",
+            hint=f"Claude Code puts an install's missing files back when it lists its plugins "
+                 f"(measured on 2.1.272), and a new session alone does not. Run: {PLUGIN_FIX_CMD}  "
+                 f"(it lists them) or `claude plugin list --json`, then start a new session.")
+    if elsewhere:
+        return Result(
+            name, WARN,
+            detail=f"enabled plugin {named} is installed for {', '.join(elsewhere[:2])} and not "
+                   f"for this directory, so no charter hook runs in a session here — branch "
+                   f"moves in the plane root are NOT refused",
+            hint=f"A project- or local-scope install belongs to the directory it was installed "
+                 f"from and the rest of that directory's repository, and a plane that has moved "
+                 f"keeps the old record, so restarting changes nothing. Run: {PLUGIN_FIX_CMD}  "
+                 f"(installs `{plugincache.PLUGIN_ID}` for this plane, as the `plugin install` "
+                 f"row says). The plugin loads at the NEXT session, so restart afterwards.")
 
     if plugin and declared:
         # Not broken — doubled, which is why nobody finds it: two denials for one command
         # read as one stubborn denial. 0.43.1 stopped `init` writing this; planes wired
         # before it still carry the copy, and charter will not delete from a file that is
         # the operator's and git-tracked.
-        where = ", ".join(str(p) for p in declared[:2])
+        where = ", ".join(_line(p) for p in declared[:2])
         return Result(name, WARN,
-                      detail=f"declared twice — the {plugin} dispatches it, and so does "
+                      detail=f"declared twice — the {named} dispatches it, and so does "
                              f"{where}",
                       hint=f"charter runs `hook pretooluse` once per declaration, so every "
                            f"Bash call is guarded twice. Remove the charter `hooks` block "
@@ -1733,27 +1843,27 @@ def check_guard_wired() -> Result:
             # the top of this row, is the one place that decides it, for `guard seen` too.
             if standing.doubt is None:
                 return Result(name, OK,
-                              detail=f"wired (enabled plugin {plugin}) — and it has fired here")
+                              detail=f"wired (enabled plugin {named}) — and it has fired here")
             # Something DID fire from the plugin, so "nothing has fired here yet" would be
             # false beside `guard seen`; and it cannot vouch for this folder, so a tick would
             # be false too. Neither a pass nor a claim that nothing fired (ADR 0009): the row
             # says which of the two it cannot tell, in `guardseen`'s words.
             return Result(
                 name, WARN,
-                detail=f"enabled plugin {plugin} declares it and a guard has fired from it, "
+                detail=f"enabled plugin {named} declares it and a guard has fired from it, "
                        f"but {standing.doubt}. Until a guard fires under the folder in use, "
                        f"nothing shows the plugin is loaded there",
                 hint=standing.hint)
         return Result(
             name, WARN,
-            detail=f"enabled plugin {plugin} declares it, but nothing has fired here yet — "
+            detail=f"enabled plugin {named} declares it, but nothing has fired here yet — "
                    f"a plugin's hooks load at session start, so this is wired for the NEXT "
                    f"session and THIS one may be unguarded",
             hint="Restart the session (or run a Bash command through it and re-check). If "
                  "you just removed a duplicate `hooks` block on this check's advice, that "
                  "was right — but it was the declaration this session actually had.")
     if declared:
-        return Result(name, OK, detail=f"wired ({declared[0]})")
+        return Result(name, OK, detail=f"wired ({_line(declared[0])})")
     # The remedy has to name a file THIS session reads. `charter reinit` writes the PLANE's
     # `.claude/settings.json`, and for a chat rooted at `workspaces/<ws>/` the host never
     # reads that file — so the old hint would have been followed, believed, and left the

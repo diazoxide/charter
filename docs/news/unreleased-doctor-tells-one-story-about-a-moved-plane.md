@@ -1,6 +1,6 @@
 ---
 version: unreleased
-headline: On a plane that has moved, `plane-root guard` names the old path the plugin is installed for, and `charter doctor --fix`
+headline: `plane-root guard` names where a moved plane's plugin is installed, and `doctor`, the session preflight and `init` survive any install list
 ---
 
 Claude Code binds a project-scope plugin install to the directory it was installed from. Move
@@ -18,18 +18,44 @@ Now the guard row warns, names the path the install is recorded for, and gives t
 `plugin install`:
 
 ```
-! plane-root guard  enabled plugin charter@charter declares it, but Claude Code has it installed for <old path> and not for this directory, so no charter hook runs in a session here — branch moves in the plane root are NOT refused
+! plane-root guard  enabled plugin charter@charter is installed for <old path> and not for this directory, so no charter hook runs in a session here — branch moves in the plane root are NOT refused
 ```
 
 Run `charter doctor --fix` from the plane. It installs the plugin for the new path, and the next
 session there runs charter's hooks again, including sessions in the plane's workspaces.
 
-The row reads that path from Claude Code's `plugins/installed_plugins.json`. If that file cannot
-be read, is not the JSON Claude Code writes, or holds an install record charter cannot place,
-the row warns that it could not tell which directory the plugin is installed for and names the
-file. It points you at `claude plugin list --json`, which `charter doctor --fix` also reads. It
-no longer answers as if it had read the file.
+**0.62.0 crashed on some install lists.** In these shapes, `plugins/installed_plugins.json` made
+`charter doctor` print a traceback and no rows. The SessionStart preflight printed "charter
+preflight failed" with that traceback at every session start, and `charter init` and `charter
+reinit` stopped. The shapes are:
 
-If the plane's own `.claude/settings.json` also declares `charter hook pretooluse`, the row no
-longer calls that block a duplicate to delete. On a moved plane it is the only declaration a
-session there loads, so the row stays green and says so.
+- a top-level array;
+- `plugins` that is not an object;
+- a record anywhere that is not an object;
+- a version-1 list;
+- records given as a number.
+
+A chat can write that file.
+
+Measured on 2.1.272, Claude Code checks the whole list before it loads anything, and a single
+record it cannot read makes it load no plugin at all. Now charter reads the list the same way:
+
+- `plane-root guard` says it could not tell which directory the plugin is installed for, and names
+  the file.
+- `charter init` and `reinit` write the guard hook as though no plugin dispatched it. A guard
+  declared twice is harmless and `doctor` reports it; a guard declared nowhere is not.
+- A version-1 list, which Claude Code turns into user-scope installs, is read that way too.
+
+The same row also handles three more cases:
+
+- **The install's files are gone.** Claude Code loads nothing from an install whose files are
+  gone. The row says so and names `charter doctor --fix`: listing the plugins puts the files back,
+  and a new session on its own does not.
+- **Your settings declare the guard.** If this session's `.claude/settings.json` declares
+  `charter hook pretooluse` itself, the row stays green whatever the install list says, because
+  that block runs either way.
+- **`$CLAUDE_CODE_PLUGIN_CACHE_DIR` is set.** Claude Code then reads its install list from that
+  directory, which charter does not follow, so the row says it could not tell.
+
+Paths and plugin ids taken from the install list now print as one line of plain text, so a
+newline or a terminal escape in them cannot add a line to the report or clear your screen.

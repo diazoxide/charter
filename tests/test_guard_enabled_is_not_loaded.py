@@ -63,8 +63,11 @@ class GuardCase(PersonaIso):
         charter cannot read."""
         man = self.tmp / "home" / ".claude" / "plugins" / "installed_plugins.json"
         man.parent.mkdir(parents=True, exist_ok=True)
+        # With its files: a record reaches a session only while its `installPath` is a directory.
+        files = self.tmp / "plugin-cache"
+        files.mkdir(exist_ok=True)
         man.write_text(json.dumps({"version": 2, "plugins": {"charter@charter": [
-            {"scope": "project", "projectPath": str(config.ROOT)}]}}))
+            {"scope": "project", "projectPath": str(config.ROOT), "installPath": str(files)}]}}))
         return mock.patch.object(doctor, "_plugin_declaring_guard", return_value="charter@charter")
 
     def running_under_plugin(self):
