@@ -2746,6 +2746,20 @@ class ALaunchWiresWhatItCanAndRefusesTheRest(_AWiringSeam, unittest.TestCase):
         self.assertEqual(got.wired, f"wired 'claude-work' — installed charter@charter into "
                                     f"{self.home / '.cw'}")
 
+    def test_a_wire_that_wrote_any_step_says_installed_and_one_that_wrote_none_says_already(self):
+        """The two sentences are two different facts, and a kind's wire answers per STEP:
+        Claude Code's is a marketplace add and a plugin install, so a folder that already
+        had the marketplace and needed the plugin comes back `present` beside `installed`.
+        `any` is the reading that matches what happened — charter did write something — and
+        `all` would call that folder one nobody touched. A folder where every step was
+        already in place is the other sentence, and it is the one a second launch says."""
+        with self.asked(NOT_INSTALLED, IS_WIRED), self.wire(("present", "a"),
+                                                            ("installed", "b")):
+            self.assertIn("— installed ", self.answer().wired)
+        with self.asked(NOT_INSTALLED, IS_WIRED), self.wire(("present", "a"),
+                                                            ("current", "b")):
+            self.assertIn("was already in place", self.answer().wired)
+
     def test_the_fresh_answer_is_remembered_for_the_selectors_next_paint(self):
         with self.asked(NOT_INSTALLED, IS_WIRED), self.wire(("installed", "ok")):
             self.answer()
