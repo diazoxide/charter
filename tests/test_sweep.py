@@ -7264,9 +7264,12 @@ class ASweepThatMeasuredNothingSaysWhichKindOfNothing(unittest.TestCase):
                                "--json", str(shards / "sweep-results-1.json"))
         self.assertEqual(code, 0, said)
         self.assertIn("the tree is RED before any mutation", said)
+        # A red baseline with nothing printed to quote (#1095) promises nothing it lacks.
+        self.assertNotIn("what it said", said)
         self.assertEqual(
             json.loads((shards / "sweep-results-1.json").read_text()),
-            {"refused": "the baseline is red", "detail": "tests.test_x.T.test_y"})
+            {"refused": "the baseline is red", "detail": "tests.test_x.T.test_y",
+             "evidence": ""})
         outputs = tmp / "outputs.txt"
         summary = tmp / "summary.md"
         code, said = self._cli(tmp, "--verdict", str(shards), "--shards", "1",
@@ -7296,6 +7299,361 @@ class _RedBaseline:
 
     def full(self):
         return sweep.Outcome(False, 11721, "tests.test_x.T.test_y")
+
+
+#: #1073's test, reduced to the assertion that went red on run 34766472895.
+_THE_1073_FLAKE = textwrap.dedent('''
+    import unittest
+
+
+    class AMutationThatNeverAppliedIsNotASurvivor(unittest.TestCase):
+        def test_the_cache_is_still_shared_between_runs(self):
+            workdir = "/tmp/charter-sweep-29171e0c"
+            self.assertNotIn("29171", workdir)
+''').lstrip()
+
+_THE_1073_ASSERTION = ("AssertionError: '29171' unexpectedly found in "
+                       "'/tmp/charter-sweep-29171e0c'")
+
+
+def _real_run(tests: dict[str, str]) -> sweep._Finished:
+    """What `python -m unittest` really prints for *tests*, run the way `Sandbox.full` runs it.
+
+    Real output and not a hand-written string, because what is under test is reading
+    unittest's own layout — and that layout is the interpreter's, which moves between the
+    four versions CI runs (the `^^^` lines drawn under a frame are one such difference).
+    """
+    tmp = Path(tempfile.mkdtemp(prefix="sweep-1095-"))
+    try:
+        (tmp / "tests").mkdir()
+        (tmp / "tests" / "__init__.py").write_text("")
+        for name, body in tests.items():
+            (tmp / "tests" / f"{name}.py").write_text(body)
+        done = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "tests",
+                               "-t", "."], cwd=tmp, text=True, timeout=120,
+                              env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"),
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    finally:
+        __import__("shutil").rmtree(tmp, ignore_errors=True)
+    return sweep._Finished(done.returncode, done.stdout)
+
+
+class ARedBaselineSaysWhy(unittest.TestCase):
+    """#1095. A red baseline named the failing test and dropped what it said.
+
+    Run 34766472895's shard log was the whole record of #1073: a test id, then two lines of
+    exclamation marks. The assertion unittest printed — `'29171' unexpectedly found in …` —
+    was in `Sandbox.run`'s `out` when `_verdict` read the ids off it, and went no further.
+    A flake a re-run does not reproduce leaves the log as the only evidence there will ever
+    be, so #1073 had to be rebuilt locally (#1093) before anything could be said about it.
+    """
+
+    _repo = ASweepThatMeasuredNothingSaysWhichKindOfNothing._repo
+    _cli = ASweepThatMeasuredNothingSaysWhichKindOfNothing._cli
+
+    @classmethod
+    def setUpClass(cls):
+        cls.flake = _real_run({"test_red": _THE_1073_FLAKE})
+        cls.shapes = _real_run({"test_red": _THE_1073_FLAKE, "test_shapes": _SHAPES})
+
+    def _set(self, **values):
+        for name, value in values.items():
+            real = getattr(sweep, name)
+            setattr(sweep, name, value)
+            self.addCleanup(setattr, sweep, name, real)
+
+    def _shard(self, said_by_the_suite: sweep._Finished, *more: str):
+        """One shard, end to end, whose unmutated baseline printed *said_by_the_suite*."""
+        tmp, base = self._repo(textwrap.dedent("""
+            def close(arm, pane):
+                if arm is None:
+                    return []
+                return [arm, pane]
+        """).lstrip())
+
+        class Box(_RedBaseline):
+            def full(self):
+                return sweep._verdict(said_by_the_suite)
+
+        self._set(load_map=lambda *a, **k: {}, Sandbox=Box)
+        shards = tmp / "shards"
+        shards.mkdir()
+        code, said = self._cli(tmp, "--gate", "--base", base, "--jobs", "1",
+                               "--shard", "1/1", "--workdir", str(tmp / "wd"),
+                               "--json", str(shards / "sweep-results-1.json"),
+                               *(a.replace("{tmp}", str(tmp)) for a in more))
+        return tmp, shards, code, said
+
+    # ----------------------------------------------------------------------------------
+    # Where #1073's evidence was dropped, and every place it now arrives.
+    # ----------------------------------------------------------------------------------
+
+    def test_the_shard_log_carries_the_assertion_and_not_only_the_name(self):
+        _, _, code, said = self._shard(self.flake)
+        self.assertEqual(code, 0, said)
+        self.assertIn("the tree is RED before any mutation", said)
+        self.assertIn(_THE_1073_ASSERTION, said)
+        # Behind the gutter, which is what keeps a printed `::warning` from being obeyed.
+        self.assertIn(f"    | {_THE_1073_ASSERTION}", said.splitlines())
+
+    def test_the_same_evidence_goes_into_the_shards_file_and_onto_the_merged_page(self):
+        """The shard's log is on another machine, and `Add up what the shards found` is the
+        job whose page the pull request links to — so the file carries it across."""
+        tmp, shards, code, said = self._shard(self.flake, "--summary", "{tmp}/shard.md")
+        self.assertEqual(code, 0, said)
+        written = json.loads((shards / "sweep-results-1.json").read_text())
+        self.assertEqual(written["refused"], sweep.RED_BASELINE)
+        self.assertIn(_THE_1073_ASSERTION, written["evidence"])
+        # A run that writes its own page (no merge step) says it there as well.
+        self.assertIn(sweep.fenced(written["evidence"]), (tmp / "shard.md").read_text())
+        summary = tmp / "summary.md"
+        code, merged = self._cli(tmp, "--verdict", str(shards), "--shards", "1",
+                                 "--ref", "HEAD", "--summary", str(summary))
+        self.assertEqual(code, 0, merged)
+        page = summary.read_text()
+        self.assertIn(sweep.fenced(written["evidence"]), page)
+        self.assertIn("| the baseline is red |", page)
+
+    def test_a_mutated_runs_row_is_what_it_always_was(self):
+        """The ruling's other half: only a red BASELINE says more. A mutation's red is read
+        as a set of test ids by `decide`, and its row carries `detail` and nothing new."""
+        red = sweep._verdict(self.flake)
+        self.assertIn(_THE_1073_ASSERTION, red.evidence)
+        m = sweep.Mutation(path="charter/a.py", line=1, end_line=1, operator="drop-if",
+                           question="?", before="x", after="y", symbol="f")
+        row = json.loads(sweep.as_json([sweep.Result(m, "pinned", red, red, [])]))[0]
+        self.assertEqual((set(row["subset"]), set(row["full"])),
+                         ({"green", "ran", "detail"}, {"green", "ran", "detail"}))
+        self.assertNotIn("unexpectedly found", json.dumps(row))
+
+    def test_a_green_run_carries_no_evidence(self):
+        passing = _real_run({"test_green": "import unittest\n\n\nclass G(unittest.TestCase):"
+                                           "\n    def test_ok(self):\n        pass\n"})
+        v = sweep._verdict(passing)
+        self.assertTrue(v.green, passing.stdout)
+        self.assertEqual(v.evidence, "")
+
+    def test_a_green_baseline_prints_nothing_new(self):
+        """End to end past the baseline, into the sweep, with the baseline green: the log
+        carries no gutter and no `what it said`, because there was nothing to say."""
+        passing = _real_run({"test_green": "import unittest\n\n\nclass G(unittest.TestCase):"
+                                           "\n    def test_ok(self):\n        pass\n"})
+
+        class Box(_RedBaseline):
+            def full(self):
+                return sweep._verdict(passing)
+
+            def apply(self, mutation):
+                raise sweep.NotApplied("not under test here")
+
+            def restore(self):
+                pass
+
+        tmp, base = self._repo("def close(arm, pane):\n    if arm is None:\n        return []\n"
+                               "    return [arm, pane]\n")
+        self._set(load_map=lambda *a, **k: {}, Sandbox=Box)
+        code, said = self._cli(tmp, "--gate", "--base", base, "--jobs", "1", "--shard", "1/1",
+                               "--workdir", str(tmp / "wd"), "--json", str(tmp / "r.json"))
+        self.assertIn("    Ran 1 tests — OK", said)
+        self.assertIn("NOT APPLIED", said)        # it got past the baseline and swept
+        self.assertNotIn("what it said", said)
+        self.assertFalse([line for line in said.splitlines() if line.startswith("    | ")],
+                         said)
+
+    # ----------------------------------------------------------------------------------
+    # What is kept of one failure, and the bounds (ruling 45: every cut is counted).
+    # ----------------------------------------------------------------------------------
+
+    def test_each_failure_keeps_its_header_its_last_frame_and_its_message(self):
+        said = sweep.failure_evidence(self.shapes.stdout)
+        self.assertIn("FAIL: test_the_cache_is_still_shared_between_runs (tests.test_red."
+                      "AMutationThatNeverAppliedIsNotASurvivor."
+                      "test_the_cache_is_still_shared_between_runs)", said.splitlines())
+        self.assertIn('    self.assertNotIn("29171", workdir)', said.splitlines())
+        self.assertIn(_THE_1073_ASSERTION, said.splitlines())
+        # An exception raised while handling another: the LAST traceback is the one kept.
+        self.assertIn("RuntimeError: while handling", said.splitlines())
+        # And every failure the run listed made it: 4 of them fit well inside the cap.
+        heads = [line for line in said.splitlines() if line.startswith(("FAIL: ", "ERROR: "))]
+        self.assertEqual(len(heads), 4, said)
+        # A test with a docstring prints it between the header and the rule; the traceback
+        # is still found under the rule.
+        self.assertTrue(any(line.startswith("AssertionError: 'needle' not found in")
+                            for line in said.splitlines()), said)
+        # The blank line unittest leaves after each traceback is not evidence, and would
+        # spend a line of the cap per failure.
+        self.assertNotIn("", said.splitlines())
+
+    def test_a_message_that_quotes_a_traceback_keeps_its_own_assertion_line(self):
+        """Frames are counted only BEFORE the exception line. A message quoting `File`
+        lines of its own — a test of this very function, failing — must not be read as
+        the traceback's last frames, or its `AssertionError:` line is the part cut."""
+        said = sweep.failure_evidence(_real_run({"test_quoting": textwrap.dedent('''
+            import unittest
+
+
+            class Quoting(unittest.TestCase):
+                def test_it(self):
+                    self.fail('it printed:\\n  File "a.py", line 1, in f\\n    g()\\n'
+                              '  File "b.py", line 2, in g\\n    h()')
+        ''').lstrip()}).stdout)
+        self.assertIn("AssertionError: it printed:", said.splitlines())
+        self.assertIn('  File "b.py", line 2, in g', said.splitlines())
+
+    def test_a_failure_inside_a_helper_keeps_the_tests_line_and_the_helpers(self):
+        """The last FRAMES, plural: an assertion made in a helper is read by the line that
+        made it and the test line that called it, and one frame alone drops the second."""
+        said = sweep.failure_evidence(_real_run({"test_helper": textwrap.dedent('''
+            import unittest
+
+
+            class Helper(unittest.TestCase):
+                def check(self, workdir):
+                    self.assertNotIn("29171", workdir)
+
+                def test_it(self):
+                    self.check("/tmp/charter-sweep-29171e0c")
+        ''').lstrip()}).stdout).splitlines()
+        self.assertIn('    self.check("/tmp/charter-sweep-29171e0c")', said)
+        self.assertIn('    self.assertNotIn("29171", workdir)', said)
+        self.assertIn(_THE_1073_ASSERTION, said)
+
+    def test_a_long_message_is_cut_after_its_assertion_line_and_says_by_how_much(self):
+        """One diff a thousand lines long must not take the room the next failure needs,
+        and must not lose the line that says what the assertion was."""
+        whole_run = sweep.failure_evidence(self.shapes.stdout)
+        self.assertIn("FAIL: test_one_enormous_line", whole_run)     # the one after it
+        limit = sweep.EVIDENCE_FAILURE_LINES
+        self._set(EVIDENCE_LINES=10 ** 6)
+        cut = _block(sweep.failure_evidence(self.shapes.stdout), "test_a_long_diff")
+        self._set(EVIDENCE_FAILURE_LINES=10 ** 6)
+        whole = _block(sweep.failure_evidence(self.shapes.stdout), "test_a_long_diff")
+        self.assertGreater(len(whole), limit + 20)
+        self.assertEqual(cut[:limit], whole[:limit])
+        self.assertEqual(cut[limit:], [f"… +{len(whole) - limit} lines not shown"])
+        self.assertTrue(any(line.startswith("AssertionError: 'line 0") for line in cut), cut)
+
+    def test_one_enormous_line_is_cut_and_says_by_how_much(self):
+        """`assertIn` prints the whole container it searched, on one line."""
+        prefix = "AssertionError: 'needle' not found in"
+        raw = next(line for line in self.shapes.stdout.splitlines() if line.startswith(prefix))
+        shown = next(line for line in sweep.failure_evidence(self.shapes.stdout).splitlines()
+                     if line.startswith(prefix))
+        width = sweep.EVIDENCE_WIDTH
+        self.assertGreater(len(raw), width * 10)
+        self.assertEqual(shown, raw[:width] + f"… +{len(raw) - width} not shown")
+
+    def test_five_hundred_failures_are_one_bounded_block_that_counts_what_it_left_out(self):
+        said = _real_run({"test_many": _FIVE_HUNDRED}).stdout
+        limit = sweep.EVIDENCE_LINES
+        cut = sweep.failure_evidence(said).splitlines()
+        self._set(EVIDENCE_LINES=10 ** 6)
+        whole = sweep.failure_evidence(said).splitlines()
+        self.assertGreater(len(whole), 500 * 3)
+        self.assertEqual(cut[:limit], whole[:limit])
+        self.assertEqual(cut[limit:], [f"… +{len(whole) - limit} lines not shown"])
+        self.assertIn("AssertionError: 0 != -1", cut)
+
+    def test_a_run_that_listed_no_failure_keeps_the_tail_of_what_it_printed(self):
+        """A runner that died before unittest could list a failure — no `Ran` line, no
+        `FAIL:` block — says why at the END of what it printed, so that is what is kept."""
+        printed = "".join(f"noise {n}\n" for n in range(100))
+        printed += "Fatal Python error: Segmentation fault\n\n"
+        v = sweep._verdict(_Completed(-11, printed))
+        limit = sweep.EVIDENCE_LINES
+        self.assertEqual(v.detail, "no tests ran")
+        self.assertEqual(v.evidence.splitlines(),
+                         [f"… +{101 - limit} lines not shown",
+                          *[f"noise {n}" for n in range(101 - limit, 100)],
+                          "Fatal Python error: Segmentation fault"])
+        # Output that ENDS on unittest's rule, with no header after it, is a tail too.
+        self.assertEqual(sweep.failure_evidence("died\n" + "=" * 70), "died\n" + "=" * 70)
+
+    def test_nothing_the_suite_printed_can_become_a_workflow_command_in_the_log(self):
+        """The Actions runner obeys any line whose first non-blank characters are `::`
+        (it trims before it looks), and this suite's own tests of `annotations` print
+        `::warning file=…` when they fail. A red baseline must not annotate the run."""
+        v = sweep._verdict(_real_run({"test_loud": _LOUD}))
+        logged = sweep.quoted(v.evidence)
+        self.assertIn("    | AssertionError: ::warning file=charter/a.py,line=1::x", logged)
+        self.assertIn("    | ::error::y", logged)
+        self.assertIn("    | \\x1b[31mred", logged)
+        for line in logged:
+            self.assertTrue(line.startswith("    | "), line)
+            self.assertFalse(line.lstrip().startswith(("::", "##[")), line)
+            self.assertNotRegex(line, r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+    def test_the_page_says_each_distinct_evidence_once_in_a_fence_it_cannot_close(self):
+        evidence = "FAIL: test_y (tests.test_x.T.test_y)\nAssertionError: '```' != ''"
+        gate = sweep.classify([], [sweep.Refusal(sweep.RED_BASELINE, "tests.test_x.T.test_y",
+                                                 evidence) for _ in range(5)])
+        page = sweep.gate_summary(gate, "a" * 40, "b" * 40, None, False, 0, 5)
+        self.assertEqual(page.count("AssertionError: '```' != ''"), 1)
+        self.assertIn("````text\n" + evidence + "\n````", page)
+        self.assertLess(page.index("| the baseline is red |"), page.index(evidence))
+        bare = sweep.gate_summary(sweep.classify([], [sweep.Refusal(sweep.RED_BASELINE, "t")]),
+                                  "a" * 40, "b" * 40, None, False, 0, 1)
+        self.assertNotIn("```", bare)
+        # And a file from a shard older than the field reads as a refusal with none.
+        _, why = sweep.shard_report('{"refused": "the baseline is red", "detail": "t"}')
+        self.assertEqual(why, sweep.Refusal(sweep.RED_BASELINE, "t", ""))
+
+
+_SHAPES = textwrap.dedent('''
+    import unittest
+
+
+    def helper(x):
+        return {"a": 1}[x]
+
+
+    class Shapes(unittest.TestCase):
+        maxDiff = None
+
+        def test_a_long_diff(self):
+            self.assertEqual("\\n".join(f"line {i}" for i in range(60)),
+                             "\\n".join(f"line {i}" for i in range(1, 61)))
+
+        def test_an_error_raised_while_handling_another(self):
+            try:
+                helper("b")
+            except KeyError:
+                raise RuntimeError("while handling")
+
+        def test_one_enormous_line(self):
+            """A docstring, which unittest prints between the header and its rule."""
+            self.assertIn("needle", "hay" * 5000)
+''').lstrip()
+
+_FIVE_HUNDRED = textwrap.dedent('''
+    import unittest
+
+
+    class Many(unittest.TestCase):
+        pass
+
+
+    for n in range(500):
+        setattr(Many, f"test_{n:03}", lambda self, n=n: self.assertEqual(n, -1))
+''').lstrip()
+
+_LOUD = textwrap.dedent('''
+    import unittest
+
+
+    class Loud(unittest.TestCase):
+        def test_an_assertion_that_prints_workflow_commands(self):
+            self.fail("::warning file=charter/a.py,line=1::x\\n##[error]boom\\n"
+                      "\\x1b[31mred\\r::error::y")
+''').lstrip()
+
+
+def _block(evidence: str, name: str) -> list[str]:
+    """The lines of *evidence* that belong to the failure whose header names *name*."""
+    lines = evidence.splitlines()
+    heads = [n for n, line in enumerate(lines) if line.startswith(("FAIL: ", "ERROR: "))]
+    start = next(n for n in heads if name in lines[n])
+    return lines[start:next((n for n in heads if n > start), len(lines))]
 
 
 if __name__ == "__main__":      # pragma: no cover

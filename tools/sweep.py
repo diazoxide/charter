@@ -1861,6 +1861,11 @@ class Outcome:
     #: The ids of the tests that failed. The verdict is read from the DIFFERENCE between
     #: this and what the same command failed on unmutated — never from the exit code.
     failing: frozenset = dataclasses.field(default_factory=frozenset)
+    #: What a red run printed about WHY, bounded (:func:`failure_evidence`, #1095), and
+    #: empty for a green one. Only a red BASELINE puts it where anybody reads it — the
+    #: shard's log, its refusal file and the merged page. A mutation's run is read as the
+    #: set above, and its row in `as_json` carries `detail` exactly as it did before.
+    evidence: str = ""
 
 
 @dataclasses.dataclass
@@ -2007,6 +2012,134 @@ def cap_holds(cap: int) -> bool:
 #: id is the stable name; a subtest's trailing `[value]` sits outside it.
 _FAIL_ID = re.compile(r"^(?:FAIL|ERROR):\s+\S+\s+\(([^)]+)\)", re.MULTILINE)
 
+#: How much of a red run's own output travels with its verdict (#1095).
+#:
+#: A red baseline used to name its failing test and drop what the test said, and for a
+#: flake a re-run does not reproduce, the shard's log is the only record there will ever
+#: be. #1073's test said `'29171' unexpectedly found in …` into `Sandbox.run`'s `out`; the
+#: log kept a test id, and the collision had to be rebuilt on another machine (#1093).
+#: Fixed numbers, because a budget the input can grow is no budget, and each one answers a
+#: different way a red tree floods a log:
+#:
+#: * :data:`EVIDENCE_FRAMES` — the traceback's last frames, which is where unittest leaves
+#:   the test's own line once it has hidden its own.
+#: * :data:`EVIDENCE_FAILURE_LINES` — one failure: header, frames, message. Kept from the
+#:   top, so the `AssertionError:` line always makes it and a diff a thousand lines long
+#:   cannot take the room the next failure needs.
+#: * :data:`EVIDENCE_LINES` — every failure together, whatever the tree: five hundred red
+#:   tests are the first few said in full and a count of the rest.
+#: * :data:`EVIDENCE_WIDTH` — one line. `assertIn` prints the whole container it searched.
+#:
+#: Every cut says how much it took — `… +N lines not shown`, `… +N not shown` — and none
+#: ends in a bare ellipsis (ruling 45): a reader cannot tell a clipped traceback from a
+#: whole one without the size.
+EVIDENCE_FRAMES = 2
+EVIDENCE_FAILURE_LINES = 12
+EVIDENCE_LINES = 40
+EVIDENCE_WIDTH = 300
+
+#: unittest's own rules around each failure it lists: `separator1` above the header,
+#: `separator2` between the header and the traceback, and again after the last one.
+_RULE_ABOVE = "=" * 70
+_RULE_BELOW = "-" * 70
+
+#: A C0 or C1 control character, or DEL — an escape sequence, a carriage return that
+#: redraws the line a reader is looking at. A tab is left alone.
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def _counted_lines(lines: list[str], limit: int) -> list[str]:
+    """The first *limit* of *lines*, and one more saying how many were not shown."""
+    if len(lines) <= limit:
+        return lines
+    return lines[:limit] + [f"… +{len(lines) - limit} lines not shown"]
+
+
+def _shown(line: str) -> str:
+    """One line of a run's output, as evidence: controls escaped, width counted."""
+    line = _CONTROL.sub(lambda m: f"\\x{ord(m.group()):02x}", line)
+    if len(line) <= EVIDENCE_WIDTH:
+        return line
+    return line[:EVIDENCE_WIDTH] + f"… +{len(line) - EVIDENCE_WIDTH} not shown"
+
+
+def _last_frames(body: list[str]) -> list[str]:
+    """One listed failure, from its last :data:`EVIDENCE_FRAMES` frames to its message's end.
+
+    The LAST `Traceback` in it, because an exception raised while handling another prints
+    both and the second is the one the test died of. Its frames are the indented lines up
+    to the first line that is not indented: that one is the exception, and everything
+    after it is the message — a diff's indented context lines included, which is why frames
+    are only counted before it.
+    """
+    starts = [n for n, line in enumerate(body) if line.startswith("Traceback (most recent")]
+    if not starts:
+        return body
+    frames: list[int] = []
+    for n in range(starts[-1] + 1, len(body)):
+        if not body[n].startswith(" "):
+            break
+        if body[n].startswith('  File "'):
+            frames.append(n)
+    return body[frames[-EVIDENCE_FRAMES:][0]:] if frames else body[starts[-1] + 1:]
+
+
+def failure_evidence(text: str) -> str:
+    """What a red run printed about WHY — the part :func:`_verdict`'s ids leave behind (#1095).
+
+    For every failure unittest listed: its `FAIL:`/`ERROR:` header, then its traceback from
+    the last frames to the end of its message, bounded as :data:`EVIDENCE_LINES` says. A run
+    that listed none — an interpreter that died before unittest could list anything — keeps
+    the TAIL of what it printed instead, because that is where a crash says why.
+    """
+    lines = text.splitlines()
+    said: list[str] = []
+    n = 0
+    while n < len(lines):
+        if lines[n] != _RULE_ABOVE or n + 1 == len(lines) or not _FAIL_ID.match(lines[n + 1]):
+            n += 1
+            continue
+        header, below = lines[n + 1], n + 2
+        # A test with a docstring prints its first line between the header and the rule.
+        while below < len(lines) and lines[below] != _RULE_BELOW:
+            below += 1
+        end = below + 1
+        while end < len(lines) and lines[end] not in (_RULE_ABOVE, _RULE_BELOW):
+            end += 1
+        body = lines[below + 1:end]
+        while body and not body[-1].strip():
+            body.pop()
+        said += _counted_lines([header, *_last_frames(body)], EVIDENCE_FAILURE_LINES)
+        n = end
+    if said:
+        said = _counted_lines(said, EVIDENCE_LINES)
+    else:
+        said = list(lines)
+        while said and not said[-1].strip():
+            said.pop()
+        if len(said) > EVIDENCE_LINES:
+            said = [f"… +{len(said) - EVIDENCE_LINES} lines not shown", *said[-EVIDENCE_LINES:]]
+    return "\n".join(_shown(line) for line in said)
+
+
+def quoted(evidence: str) -> list[str]:
+    """*evidence* as log lines, each behind a gutter that is not blank (#1095).
+
+    The gutter is load-bearing. The Actions runner obeys any log line whose first non-blank
+    characters are `::` as a workflow command — it trims leading whitespace before it looks
+    (`ActionCommand.TryParseV2` in actions/runner) — and this suite's own tests of
+    :func:`annotations` print `::warning file=…` when they fail. Indented, a red baseline's
+    evidence would annotate the run it is explaining; behind a `|` it is only read.
+    """
+    return [f"    | {line}" for line in evidence.splitlines()]
+
+
+def fenced(evidence: str) -> str:
+    """*evidence* as a Markdown code block that no line inside it can close early (#1095)."""
+    longest = max((len(run) for run in re.findall(r"`+", evidence)), default=0)
+    fence = "`" * max(3, longest + 1)
+    return f"{fence}text\n{evidence}\n{fence}"
+
 
 def _verdict(proc) -> Outcome:
     """What a run said, as the SET OF TESTS THAT FAILED — never as an exit code.
@@ -2029,10 +2162,12 @@ def _verdict(proc) -> Outcome:
     failing = frozenset(mm.group(1) for mm in _FAIL_ID.finditer(text))
     if ran == 0:
         # No `Ran N tests` line at all: the runner did not get far enough to answer.
-        return Outcome(False, 0, "no tests ran", conclusive=False, failing=failing)
+        return Outcome(False, 0, "no tests ran", conclusive=False, failing=failing,
+                       evidence=failure_evidence(text))
     if proc.returncode == 0:
         return Outcome(True, ran, "OK", failing=failing)
-    return Outcome(False, ran, _named(failing) or f"rc={proc.returncode}", failing=failing)
+    return Outcome(False, ran, _named(failing) or f"rc={proc.returncode}", failing=failing,
+                   evidence=failure_evidence(text))
 
 
 def _named(ids) -> str:
@@ -2977,9 +3112,13 @@ class Refusal:
 
     reason: str
     detail: str = ""
+    #: What the failing test printed — its last frames and its message, bounded by
+    #: :func:`failure_evidence` (#1095). `detail` says which test went red and this says
+    #: why; for a flake a re-run does not reproduce, it is the only record there will be.
+    evidence: str = ""
 
 
-def as_refusal(reason: str, detail: str = "") -> str:
+def as_refusal(reason: str, detail: str = "", evidence: str = "") -> str:
     """What a shard writes INSTEAD of results when it swept nothing on purpose (#920).
 
     An object where :func:`as_json` writes an array, so the two are told apart by shape
@@ -2992,7 +3131,7 @@ def as_refusal(reason: str, detail: str = "") -> str:
     one that did not report. That is a worse answer than this one and a better answer than
     a wrong one.
     """
-    return json.dumps({"refused": reason, "detail": detail}, indent=1)
+    return json.dumps({"refused": reason, "detail": detail, "evidence": evidence}, indent=1)
 
 
 # --------------------------------------------------------------------------------------
@@ -3962,6 +4101,19 @@ def gate_summary(gate: Gate, ref: str, base: str, elapsed: float | None,
         for r in sorted(gate.refused, key=lambda r: (r.reason, r.detail)):
             w(f"| {r.reason} | {f'`{r.detail}`' if r.detail else '—'} |")
         w("")
+        # What went red SAID (#1095), under the table and never in it: a cell is one line
+        # and this is a traceback. Once per distinct text — shards on one red tree ran one
+        # suite on the same bytes, and five copies of one assertion would bury a second.
+        said: dict[str, Refusal] = {}
+        for r in sorted(gate.refused, key=lambda r: (r.reason, r.detail)):
+            said.setdefault(r.evidence, r)
+        for evidence, r in said.items():
+            if evidence:
+                w(f"What the shard's run printed for "
+                  f"{f'`{r.detail}`' if r.detail else r.reason}:")
+                w("")
+                w(fenced(evidence))
+                w("")
     if missing:
         w("### Did not report — this page is not a count")
         w("")
@@ -4128,7 +4280,9 @@ def shard_report(payload: str) -> tuple[list[Result], Refusal | None]:
     """
     body = json.loads(payload)
     if isinstance(body, dict):
-        return [], Refusal(str(body["refused"]), str(body.get("detail", "")))
+        # `evidence` with a fallback for `detail`'s reason: a shard older than #1095 has none.
+        return [], Refusal(str(body["refused"]), str(body.get("detail", "")),
+                           str(body.get("evidence", "")))
     return results_from_rows(body), None
 
 
@@ -4510,11 +4664,20 @@ def main(argv: list[str] | None = None) -> int:
         if not baseline.green:
             log("  ! the tree is RED before any mutation. Every mutation below will look")
             log("  ! pinned for a reason that has nothing to do with the guard. Fix first.")
+            # And what it SAID, not only its name (#1095). For a flake a re-run does not
+            # reproduce, this log is the only record there will ever be: #1073's was a
+            # test id, and its assertion had to be rebuilt on another machine (#1093)
+            # before anything could be said about it. A green baseline never gets here.
+            if baseline.evidence:
+                log("  ! what it said:")
+                for line in quoted(baseline.evidence):
+                    log(line)
             if args.summary:
                 _append(args.summary,
                         "## Deletion sweep — not run\n\nThe tree is **red before any "
                         "mutation**, so every mutation would have looked pinned for a "
-                        f"reason that has nothing to do with any guard: {baseline.detail}\n")
+                        f"reason that has nothing to do with any guard: {baseline.detail}\n"
+                        + (f"\n{fenced(baseline.evidence)}\n" if baseline.evidence else ""))
             # **Written down and not left as silence (#920).** This return used to leave
             # no `--json` behind at all, and a shard that writes nothing is a shard that
             # never reported — so a refusal the log states in two exclamation marks
@@ -4522,7 +4685,8 @@ def main(argv: list[str] | None = None) -> int:
             # `no verdict: 1 of 1 shard did not report`. That is true of a runner that
             # vanished and it is false here: this shard ran, decided, and can say why.
             if args.json:
-                Path(args.json).write_text(as_refusal(RED_BASELINE, baseline.detail))
+                Path(args.json).write_text(as_refusal(RED_BASELINE, baseline.detail,
+                                                      baseline.evidence))
             # A reporting gate blocks nothing, and that has to include this. A red baseline
             # is a real problem and the summary above says so in the loudest terms the page
             # has — but failing a pull request over it, on a job whose numbers nobody has
