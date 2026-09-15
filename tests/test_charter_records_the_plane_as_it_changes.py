@@ -1494,8 +1494,8 @@ class AReopenOntoARunningPlaneIsRefused(PersonaIso, unittest.TestCase):
     The record used to exist only after a quit, so `charter reopen` never had a live plane
     to describe. It is written as the plane CHANGES now — so `charter reopen` typed out of
     habit, after closing a terminal (which only detaches), would put a second copy of every
-    running chat on the plane, with a fresh ordinal each so nothing on screen tells the
-    copies apart, and for Claude Code both copies resuming one conversation.
+    running chat on the plane, under the id the first copy still runs under (a reopen keeps
+    it, #1101), and both copies resuming one conversation.
 
     **The sentence is spelled out by hand**, and the refusal is asserted by what it did NOT
     do rather than only by what it said.
@@ -1545,8 +1545,8 @@ class AReopenOntoARunningPlaneIsRefused(PersonaIso, unittest.TestCase):
         launch.assert_not_called()
         self.assertIn(
             "charter reopen: this plane is already running — reopening it would open a "
-            "second copy of every chat, and a reopened chat gets a new id, so nothing on "
-            "screen would tell the copies apart. Attach to what is there (`tmux -L "
+            "second copy of every chat, under the id the first copy is still running under. "
+            "Attach to what is there (`tmux -L "
             f"{tmuxctl.plane_socket()} attach`), or quit it first (`charter frame-quit` in this "
             "project). Nothing was reopened, and the record is left in place.", out)
         self.assertIsNotNone(reopen.read(), "and the record is left to act on")

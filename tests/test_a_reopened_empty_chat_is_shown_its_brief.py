@@ -121,24 +121,30 @@ class TheRecordCarriesTheBrief(PersonaIso):
         self.assertEqual(self.first().brief, "")
 
 
-def rec(harness: str, resume: str, brief: str) -> reopen_state.Chat:
+def rec(harness: str, resume: str, brief: str, conversation: str = "") -> reopen_state.Chat:
     return reopen_state.Chat(chat="beta.1", workspace="beta", persona="", harness=harness,
                              cwd="", resume=resume, transcript="", active=False,
-                             profile="", brief=brief)
+                             profile="", brief=brief, conversation=conversation)
+
+
+#: A conversation file that exists — what a chat that resumes has named (#1101).
+_THERE = os.path.abspath(__file__)
 
 
 class AReopenOwesTheBriefOnlyWhenTheConversationIsGone(PersonaIso):
     def test_a_chat_that_reopens_empty_is_owed_its_brief(self):
-        """Codex writes no session id, so nothing can ask it for the conversation back."""
+        """A Codex chat that never took a turn has no link (X1), so nothing can ask for its
+        conversation back."""
         commands_frame._restore_recorded_chat(rec("codex", "", "B"), "beta.2")
         self.assertEqual(state.brief("beta.2"), "B")
         self.assertTrue(state.brief_owed("beta.2"))
 
     def test_a_claude_chat_that_resumes_keeps_its_brief_and_is_not_owed_it(self):
-        """The brief still moves onto the new id — a later quit has to record it again —
-        but the conversation carries it, so showing it would be charter repeating a
-        message the chat can already read."""
-        commands_frame._restore_recorded_chat(rec("claude-code", "sid-1", "B"), "beta.2")
+        """The brief is still written back under the chat's id — a later quit has to record
+        it again — but the conversation carries it, so showing it would be charter
+        repeating a message the chat can already read."""
+        commands_frame._restore_recorded_chat(rec("claude-code", "sid-1", "B", _THERE),
+                                              "beta.2")
         self.assertEqual(state.brief("beta.2"), "B")
         self.assertFalse(state.brief_owed("beta.2"))
 
@@ -147,11 +153,12 @@ class AReopenOwesTheBriefOnlyWhenTheConversationIsGone(PersonaIso):
         commands_frame._restore_recorded_chat(rec("claude-code", "", "B"), "beta.2")
         self.assertTrue(state.brief_owed("beta.2"))
 
-    def test_a_harness_that_cannot_resume_is_owed_its_brief_even_holding_an_id(self):
-        """The second half of `_resumes`. Only Claude Code takes `--resume`, so a recorded
-        id on any other harness is an id nothing will ever ask with — and a reopen that
+    def test_a_chat_whose_conversation_is_gone_is_owed_its_brief_even_holding_an_id(self):
+        """The second half of `_resumes` (`leave.conversation_exists`): a recorded link whose
+        conversation file is not there is a link nothing can resume — and a reopen that
         read the id alone would decide the conversation came back when it did not."""
-        commands_frame._restore_recorded_chat(rec("codex", "sid-1", "B"), "beta.2")
+        commands_frame._restore_recorded_chat(
+            rec("codex", "sid-1", "B", _THERE + ".gone"), "beta.2")
         self.assertTrue(state.brief_owed("beta.2"))
 
     def test_a_chat_with_no_brief_writes_nothing(self):
@@ -164,8 +171,8 @@ class AReopenOwesTheBriefOnlyWhenTheConversationIsGone(PersonaIso):
     def test_the_launch_and_the_brief_ask_one_question_about_resume(self):
         """`_resumes` exists because a reopen now asks "does this conversation come back"
         in two places. A second spelling is how the launch and the brief would come to
-        disagree — one passing `--resume` while the other decides the chat came back
-        empty, and the chat then gets its brief on top of its own transcript.
+        disagree — one asking the launcher to resume while the other decides the chat came
+        back empty, and the chat then gets its brief on top of its own transcript.
         """
         from charter.frame import launcher
 
@@ -186,6 +193,7 @@ class AReopenOwesTheBriefOnlyWhenTheConversationIsGone(PersonaIso):
             commands_frame._restore_recorded_chat(rec("claude-code", "sid-1", "B"),
                                                   "beta.2")
         self.assertEqual(launch.call_args.args[0].rest, [])
+        self.assertIs(launch.call_args.args[0].resume, False)
         self.assertTrue(state.brief_owed("beta.2"))
 
 

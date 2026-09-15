@@ -1427,9 +1427,10 @@ class WhereItAppears(_APlaneWithProfiles, unittest.TestCase):
     """
 
     #: The id a launch allocates here. `state.reap` takes the cold `beta.1` this fixture
-    #: leaves behind before `new_chat_id` walks upward from 1, so the new chat gets that
-    #: ordinal back — spelled out rather than inferred, because a case reading the wrong
-    #: chat's state is a case that passes for the wrong reason.
+    #: leaves behind before `new_chat_id` runs, and nothing that fixture writes is a trace
+    #: the allocator counts — no id record, no transcript, no quit record, no session marker
+    #: (#1101) — so the new chat is `beta.1` — spelled out rather than inferred, because a
+    #: case reading the wrong chat's state is a case that passes for the wrong reason.
     NEW = "beta.1"
 
     def setUp(self) -> None:
@@ -1790,7 +1791,7 @@ class WhereItAppears(_APlaneWithProfiles, unittest.TestCase):
         """An open nobody is at names its profile: there is no one there to pick."""
         args = commands_frame._reopen_args(
             SimpleNamespace(workspace="beta", persona="", cwd="", resume="", brief=""),
-            harness_name="claude", profile="claude-work", rest=[], reopening=None)
+            harness_name="claude", profile="claude-work", reopening=None, resume=False)
         self.assertFalse(getattr(args, "select", False))
         self.assertEqual(args.profile, "claude-work")
 

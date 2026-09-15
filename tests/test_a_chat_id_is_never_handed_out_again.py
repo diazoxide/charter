@@ -16,14 +16,16 @@ import fcntl
 import json
 import os
 import shutil
+import subprocess
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
-from charter import config
+from charter import commands_frame, config
 from charter.frame import chats, leave, reopen, state, tmuxctl
-from tests._isolation import PersonaIso
+from tests._isolation import PersonaIso, wired_as_today
 
 
 def _mark_file() -> Path:
@@ -416,6 +418,242 @@ class ARecordedIdIsClaimedExactly(PersonaIso, unittest.TestCase):
         for name in ("beta", "beta-7", "frame"):
             self.assertTrue((state._root() / name / "keep").is_file(), name)
         self.assertTrue((Path(config.SESSIONS_DIR) / "beta.workspace").is_file())
+
+
+THIS_PLANE = "/this/plane"
+
+
+class ARestoredChatKeepsItsId(PersonaIso, unittest.TestCase):
+    """A reopen claims exactly the recorded id. A directory still standing there is asked
+    about with ONE listing on the chat's recorded server before anything is reaped, and a
+    server that did not answer proves nothing (#1100's rule)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.rec = reopen.Chat(chat="beta.7", workspace="beta", persona="",
+                               harness="claude-code", cwd="", resume="", transcript="",
+                               active=False)
+        self.enterContext(mock.patch.object(commands_frame, "_this_plane",
+                                            return_value=THIS_PLANE))
+        self.rows = self.enterContext(mock.patch.object(commands_frame, "_chat_pane_rows",
+                                                        return_value=[]))
+        self.gone = self.enterContext(mock.patch.object(commands_frame.tmuxctl,
+                                                        "nothing_listening",
+                                                        return_value=False))
+        Path(config.SESSIONS_DIR).mkdir(parents=True, exist_ok=True)
+
+    def _surviving(self, chat="beta.7", server="srv"):
+        state.record_server(chat, server)
+        state.record_workspace(chat, "beta")
+        (Path(config.SESSIONS_DIR) / f"{chat}.workspace").write_text("beta\n")
+        return state.frame_dir(chat)
+
+    def test_a_directory_nobody_holds_is_claimed_without_asking_tmux(self):
+        self.assertEqual(commands_frame._claim_kept_id(self.rec), ("beta.7", ""))
+        self.rows.assert_not_called()
+
+    def test_a_surviving_directory_no_pane_proves_live_is_reaped_and_claimed(self):
+        d = self._surviving()
+        self.assertEqual(commands_frame._claim_kept_id(self.rec), ("beta.7", ""))
+        self.rows.assert_called_once_with("srv")
+        self.assertTrue(d.is_dir())
+        self.assertFalse((d / "server").exists(), "the directory is the new claim's")
+        self.assertEqual((d / "launcher").read_text().strip(), str(os.getpid()))
+        self.assertFalse((Path(config.SESSIONS_DIR) / "beta.7.workspace").exists())
+
+    def test_a_directory_with_no_server_record_is_asked_about_on_the_legacy_server(self):
+        self._surviving()
+        (state.frame_dir("beta.7") / "server").unlink()
+        commands_frame._claim_kept_id(self.rec)
+        self.rows.assert_called_once_with(tmuxctl.LEGACY_SOCKET)
+
+    def test_a_server_that_timed_out_refuses_and_leaves_the_directory(self):
+        d = self._surviving()
+        before = {p.name: p.read_bytes() for p in d.iterdir()}
+        self.rows.return_value = None
+        with mock.patch.object(state, "reap_chat") as reap:
+            fid, why = commands_frame._claim_kept_id(self.rec)
+        self.assertIsNone(fid)
+        self.assertIn(str(d), why)
+        self.assertIn("did not answer", why)
+        reap.assert_not_called()
+        self.assertEqual({p.name: p.read_bytes() for p in d.iterdir()}, before)
+        self.gone.assert_called_once_with("srv")
+
+    def test_a_server_that_is_gone_allows_the_reap_for_that_chat_only(self):
+        self._surviving("beta.7")
+        other = self._surviving("beta.8")
+        self.rows.return_value = None
+        self.gone.return_value = True
+        self.assertEqual(commands_frame._claim_kept_id(self.rec), ("beta.7", ""))
+        self.assertTrue((other / "server").is_file())
+        self.assertTrue((Path(config.SESSIONS_DIR) / "beta.8.workspace").is_file())
+
+    def test_a_server_that_answers_without_the_chat_allows_the_reap(self):
+        self._surviving()
+        self.rows.return_value = [["gamma.2", "@1", "1", THIS_PLANE, "%2"]]
+        self.assertEqual(commands_frame._claim_kept_id(self.rec), ("beta.7", ""))
+
+    def test_another_planes_pane_is_not_this_chats_life(self):
+        self._surviving()
+        self.rows.return_value = [["beta.7", "@3", "1", "/other/plane", "%4"]]
+        self.assertEqual(commands_frame._claim_kept_id(self.rec), ("beta.7", ""))
+
+    def test_an_unmarked_pane_is_not_this_chats_life(self):
+        self._surviving()
+        self.rows.return_value = [["beta.7", "@3", "1", "", "%4"]]
+        self.assertEqual(commands_frame._claim_kept_id(self.rec), ("beta.7", ""))
+
+    def test_a_live_pane_of_this_plane_refuses_naming_the_directory_and_the_command(self):
+        d = self._surviving()
+        self.rows.return_value = [["gamma.2", "@1", "1", THIS_PLANE, "%2"],
+                                  ["beta.7", "@3", "1", THIS_PLANE, "%4"]]
+        with mock.patch.object(state, "reap_chat") as reap:
+            fid, why = commands_frame._claim_kept_id(self.rec)
+        self.assertIsNone(fid)
+        self.assertIn(str(d), why)
+        self.assertIn("running", why)
+        self.assertIn("kill-window -t @3", why)
+        self.assertIn("srv", why)
+        reap.assert_not_called()
+        self.assertTrue((d / "server").is_file())
+
+    def test_a_live_launcher_claim_refuses_without_asking_tmux(self):
+        d = self._surviving()
+        (d / "launcher").write_text(f"{os.getpid()}\n")
+        fid, why = commands_frame._claim_kept_id(self.rec)
+        self.assertIsNone(fid)
+        self.assertIn("being started", why)
+        self.rows.assert_not_called()
+
+    def test_a_dead_launcher_claim_is_asked_about_like_any_other(self):
+        d = self._surviving()
+        (d / "launcher").write_text("999999999\n")
+        self.assertEqual(commands_frame._claim_kept_id(self.rec), ("beta.7", ""))
+        self.rows.assert_called_once()
+
+    def test_a_name_that_is_not_a_chat_id_asks_nothing_and_reaps_nothing(self):
+        state._root().mkdir(parents=True, exist_ok=True)
+        (state._root() / "beta").mkdir()
+        (state._root() / "beta" / "keep").write_text("x")
+        for name in ("beta", "..", "beta.x"):
+            with self.subTest(name=name):
+                fid, why = commands_frame._claim_kept_id(self.rec._replace(chat=name))
+                self.assertIsNone(fid)
+                self.assertIn("could not claim", why)
+        self.rows.assert_not_called()
+        self.assertTrue((state._root() / "beta" / "keep").is_file())
+
+    def test_a_claim_that_still_fails_after_the_reap_says_so(self):
+        self._surviving()
+        with mock.patch.object(state, "claim_chat_id", return_value=False):
+            fid, why = commands_frame._claim_kept_id(self.rec)
+        self.assertIsNone(fid)
+        self.assertIn("could not claim", why)
+
+    def test_an_ordinary_launch_never_takes_a_recorded_id(self):
+        reopen.write([reopen.Frame(workspace="beta", chats=(self.rec._replace(chat="beta.3"),))],
+                     focus="beta")
+        self.assertEqual(state.new_chat_id("beta"), "beta.4")
+
+
+class AReopenLaunchKeepsItsId(PersonaIso, unittest.TestCase):
+    """The real `_launch`, with tmux and every process it would start stood in — the patch
+    set `test_a_chat_opens_in_the_background_with_its_first_message` drives it with."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        wired_as_today(self)
+        self.enterContext(mock.patch.dict(os.environ, {}, clear=True))
+        self.enterContext(mock.patch.object(commands_frame, "_this_plane",
+                                            return_value=THIS_PLANE))
+        self.t = self.tmp / "t.jsonl"
+        self.t.write_text("{}\n")
+        self.argvs: list[list[str]] = []
+        self.at_window: dict = {}
+        self.said: list[str] = []
+
+    def _launch(self, rec, *, rows=(), resume=True):
+        r = commands_frame.Reopening(rec)
+        args = SimpleNamespace(harness="claude", profile="claude", rest=[], no_frame=False,
+                               workspace="beta", pick=False, reopening=r, resume=resume,
+                               size=(120, 40))
+
+        def run(action, argv, **kw):
+            self.argvs.append(list(argv))
+            if "new-window" in argv or "new-session" in argv:
+                self.at_window = dict(link=state.kept_harness_session(rec.chat),
+                                      conversation=state.conversation(rec.chat))
+            return subprocess.CompletedProcess(
+                argv, 0, "%9\n" if ("new-window" in argv or "new-session" in argv) else "", "")
+
+        def write_all(joint, writes, **kw):
+            return [subprocess.CompletedProcess(w.argv, 0, "", "") for w in writes]
+
+        with mock.patch("charter.commands_frame.shutil.which", return_value="/nowhere/claude"), \
+                mock.patch("sys.stdout.isatty", return_value=True), \
+                mock.patch("sys.stdin.isatty", return_value=False), \
+                mock.patch.object(commands_frame.tmuxctl, "version", return_value=(3, 7)), \
+                mock.patch.object(commands_frame.tmuxctl, "operator_server", return_value=None), \
+                mock.patch.object(commands_frame, "_live_sessions", return_value={"beta"}), \
+                mock.patch.object(commands_frame, "_live_chats", return_value=set()), \
+                mock.patch.object(commands_frame, "_chat_pane_rows", return_value=list(rows)), \
+                mock.patch.object(commands_frame.tmuxctl, "run", side_effect=run), \
+                mock.patch.object(commands_frame.tmuxctl, "write_all", side_effect=write_all), \
+                mock.patch.object(commands_frame.tmuxctl, "interact",
+                                  return_value=subprocess.CompletedProcess([], 0)), \
+                mock.patch.object(commands_frame, "_query_pane_dead_status", return_value=None), \
+                mock.patch.object(commands_frame, "_draw_panels", return_value={}), \
+                mock.patch.object(commands_frame, "_arm_panel_respawn"), \
+                mock.patch.object(commands_frame, "_spawn_gather"), \
+                mock.patch.object(commands_frame, "_chat_being_left", return_value="beta.0"), \
+                mock.patch.object(commands_frame, "_drop_panels"), \
+                mock.patch.object(commands_frame.util, "err", side_effect=self.said.append), \
+                mock.patch.object(commands_frame.state, "reap"):
+            rc = commands_frame._launch(args)
+        return rc, r
+
+    def _rec(self, **kw):
+        base = dict(chat="beta.7", workspace="beta", persona="", harness="claude-code", cwd="",
+                    resume="e8962ccc-d263-4996-9881-c774dc586d3f", transcript="",
+                    active=False, profile="claude", conversation=str(self.t))
+        base.update(kw)
+        return reopen.Chat(**base)
+
+    def test_a_reopen_launch_claims_the_recorded_id(self):
+        rc, r = self._launch(self._rec())
+        self.assertEqual(rc, 0, self.said)
+        self.assertEqual(r.fid, "beta.7")
+        windows = [a for a in self.argvs if "new-window" in a or "new-session" in a]
+        self.assertTrue(windows, self.argvs)
+        self.assertTrue(any("beta.7" in w for w in windows[0]), windows[0])
+
+    def test_a_restored_chat_has_its_link_and_conversation_before_tmux(self):
+        self._launch(self._rec())
+        self.assertEqual(self.at_window, dict(link="e8962ccc-d263-4996-9881-c774dc586d3f",
+                                              conversation=str(self.t)))
+
+    def test_the_resume_flag_rides_tmux_and_the_link_does_not(self):
+        self._launch(self._rec())
+        joined = [w for a in self.argvs for w in a]
+        self.assertIn("--resume", joined)
+        self.assertFalse(any("e8962ccc" in w for w in joined), self.argvs)
+
+    def test_a_reopen_that_is_not_resuming_asks_for_no_resume(self):
+        self._launch(self._rec(), resume=False)
+        self.assertNotIn("--resume", [w for a in self.argvs for w in a])
+
+    def test_a_refused_reopen_says_why_and_stays_recorded(self):
+        state.record_server("beta.7", "srv")
+        rec = self._rec()
+        reopen.write([reopen.Frame(workspace="beta", chats=(rec,))], focus="beta")
+        rc, r = self._launch(rec, rows=[["beta.7", "@3", "1", THIS_PLANE, "%4"]])
+        self.assertEqual(rc, 1)
+        self.assertEqual(r.fid, "")
+        self.assertTrue(any("kill-window -t @3" in s for s in self.said), self.said)
+        self.assertFalse([a for a in self.argvs if "new-window" in a or "new-session" in a])
+        commands_frame._consume(reopen.read(), set(), quiet=True)
+        self.assertEqual([c.chat for c in reopen.read().all_chats()], ["beta.7"])
 
 
 class AClosedChatsLeftoversAreNeverInherited(PersonaIso, unittest.TestCase):

@@ -768,12 +768,14 @@ class ReopeningOneChatSaysWhatItChanged(PersonaIso):
         self.assertIn(str(ws_mod.workspace_dir("alpha")), line)
 
     def test_a_chat_with_no_id_is_reported_as_coming_back_empty(self):
-        """`leave.RESUMES if rest else 'empty'`. Both halves, because the constant half was
-        the only one any case had ever rendered."""
+        """`leave.RESUMES if resume else 'empty'`. Both halves, because the constant half was
+        the only one any case had ever rendered. The resumed half names a conversation file
+        that exists: a chat is resumed only where it does (#1101)."""
         _out, said, _seen = self._reopen(_chat(resume=""))
         self.assertTrue(any("· empty" in s for s in said))
 
-        _out, said, _seen = self._reopen(_chat(resume="conv-1"))
+        _out, said, _seen = self._reopen(_chat(resume="conv-1",
+                                               conversation=os.path.abspath(__file__)))
         self.assertTrue(any(f"· {leave.RESUMES}" in s for s in said))
 
     def test_a_chat_whose_workspace_is_gone_is_reported_as_missing(self):
@@ -870,24 +872,17 @@ class RestoringAChatsRecordsChecksTheNameItWasGiven(PersonaIso):
                                               "alpha.1")
         self.assertEqual(persona_mod.for_session("alpha.1"), "steward")
 
-    def test_a_recycled_ordinal_moves_no_transcript_onto_itself(self):
-        """`old == new`. `new_chat_id` walks upward from 1 and `reap` frees the ordinals a
-        quit's chats held, so a reopen very often gets the SAME id back — and `os.replace`
-        of a file onto itself is a no-op on POSIX and not one everywhere."""
+    def test_a_restored_chats_transcript_stays_where_it_is(self):
+        """A reopen keeps the chat's id (#1101), so its capture is already under the id
+        `chat: previous transcript` asks for, and the restore moves nothing — the rename that
+        used to carry it onto a fresh ordinal, and its two guards, are gone with the fresh
+        ordinal."""
         config.write_for(reopen.transcript_path("alpha.1"), "what was on screen\n")
 
         commands_frame._restore_recorded_chat(_chat(chat="alpha.1"), "alpha.1")
 
         self.assertEqual(reopen.transcript_path("alpha.1").read_text(),
                          "what was on screen\n")
-
-    def test_a_recorded_id_that_cannot_name_a_transcript_moves_nothing(self):
-        """`old is None or new is None` — `transcript_path` refuses an id that is not a
-        chat id, and the recorded one comes off the manifest."""
-        with mock.patch.object(commands_frame.reopen_state, "transcript_path",
-                               side_effect=[None, None]):
-            self.assertIsNone(
-                commands_frame._restore_recorded_chat(_chat(chat="alpha.9"), "alpha.1"))
 
 
 class ATranscriptIsOfferedOnlyWhereThereIsOne(PersonaIso):
@@ -1194,15 +1189,18 @@ class TheLaunchHintCountsOnlyWhatCanResume(PersonaIso):
 
 
 class TheQuitSummaryCountsOnlyWhatCanResume(PersonaIso):
-    """`len([c for c in doomed if c.resume])` and the `any` beside it — the two places the
-    summary counts, both of which every fixture answered the same way."""
+    """The count of what can resume and the `any` beside it — the two places the summary
+    counts, both of which every fixture answered the same way. Since #1101 a chat counts
+    when `leave.conversation_exists` says so: a link, and the file its harness named."""
 
-    def test_the_count_is_of_the_chats_that_have_an_id(self):
-        p = leave.Plan(chats=(_doomed(chat="alpha.1", resume="conv-1"),
+    def test_the_count_is_of_the_chats_whose_conversation_exists(self):
+        here = os.path.abspath(__file__)
+        p = leave.Plan(chats=(_doomed(chat="alpha.1", resume="conv-1", conversation=here),
                               _doomed(chat="alpha.2", resume=""),
-                              _doomed(chat="alpha.3", resume="conv-3")), focus="alpha")
+                              _doomed(chat="alpha.3", resume="conv-3", conversation=here),
+                              _doomed(chat="alpha.4", resume="conv-4")), focus="alpha")
 
-        self.assertIn("2 of 3 can resume the conversation", leave.summary(p))
+        self.assertIn("2 of 4 can resume the conversation", leave.summary(p))
 
     def test_a_plane_where_nothing_can_resume_says_zero(self):
         p = leave.Plan(chats=(_doomed(chat="alpha.1", resume=""),), focus="alpha")

@@ -2272,8 +2272,8 @@ def clear_shape(fid: str) -> None:
       frame would come up with three rows of tab strip and a three-row-shorter harness,
       taken from somebody else's session, with nothing on screen to say why. That the
       height does not survive a restart is the feature's own stated promise (#880), so a
-      file inherited across a recycled id would break exactly the sentence the feature is
-      written to keep.
+      file inherited by a launch into the chat's own directory would break exactly the
+      sentence the feature is written to keep.
 
     * ``selection`` is the same keypress or the same click said about a ROW
       (:func:`record_selection`), and it inherits with the mildest of these consequences

@@ -1087,11 +1087,12 @@ class ThePanelDeliversToCharterSOwnComponent(PersonaIso, unittest.TestCase):
 class ASelectionBelongsToOneFrame(PersonaIso, unittest.TestCase):
     """`state.record_selection` / `state.selection` / `state.clear_shape`."""
 
-    def test_a_new_frame_claiming_a_recycled_id_does_not_inherit_a_selection(self):
-        """The mildest of the files `clear_shape` clears and the same shape: a brand-new
-        frame comes up with one repo highlighted and its detail on the attention row
-        because somebody pointed at it in a session that is over. The highlight is a claim
-        about an action this operator did not take."""
+    def test_a_launch_claiming_the_id_again_does_not_inherit_a_selection(self):
+        """The mildest of the files `clear_shape` clears and the same shape: a reopen keeps
+        the chat's id (#1101) and launches into its directory, and would come up with one
+        repo highlighted and its detail on the attention row because somebody pointed at it
+        in a session that is over. The highlight is a claim about an action this operator
+        did not take."""
         state.frame_dir(FID, create=True)
         state.record_selection(FID, "alpha")
         self.assertEqual(state.selection(FID), "alpha")

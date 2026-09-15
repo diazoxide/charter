@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, contain, hooks, profiles
+from charter import workspace as ws_mod
 from charter.frame import launcher, leave, reopen, state, tmuxctl
 from charter.harness import claude_code, codex, opencode, registry
 from charter.harness.base import Harness
@@ -883,6 +884,68 @@ class EveryToolHookHearsOpencodesReport(PlaneIso, unittest.TestCase):
                                         clear=True):
                     run_hook(getattr(hooks, name), payload)
                 self.assertEqual(seen, [payload])
+
+
+class AReopenAsksForTheConversationBack(PersonaIso, unittest.TestCase):
+    """`_reopen_one` asks the launcher for the conversation with `resume`, never by putting
+    the harness's own flag in `rest` — the launcher spells it per harness, from the record."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        make_plane(self)
+        wired_as_today(self)
+        self.t = self.tmp / "t.jsonl"
+        self.t.write_text("{}\n")
+        self.inside = ws_mod.ensure("beta")
+        self.elsewhere = self.tmp / "elsewhere"
+        self.elsewhere.mkdir()
+        self.launched: list = []
+
+    def _reopen(self, **kw):
+        c = _recorded(**{"cwd": str(self.inside), **kw})
+
+        def launch(args):
+            self.launched.append(args)
+            args.reopening.fid = args.reopening.chat.chat
+            return 0
+
+        said: list[str] = []
+        with mock.patch.object(commands_frame, "cmd_launch", side_effect=launch), \
+                mock.patch.object(commands_frame.util, "warn", side_effect=said.append), \
+                mock.patch.object(commands_frame.util, "info", side_effect=said.append):
+            self.assertIsNotNone(commands_frame._reopen_one(c))
+        (args,) = self.launched
+        return args, " ".join(said)
+
+    def test_a_reopen_hands_resume_to_the_launcher_not_rest(self):
+        args, said = self._reopen(resume="u1", conversation=str(self.t))
+        self.assertEqual((args.rest, args.resume), ([], True))
+        self.assertIn(leave.RESUMES, said)
+
+    def test_a_claude_chat_with_no_transcript_comes_back_empty(self):
+        args, said = self._reopen(resume="u1", conversation=str(self.tmp / "never.jsonl"))
+        self.assertEqual((args.rest, args.resume), ([], False))
+        self.assertNotIn(leave.RESUMES, said)
+
+    def test_a_harness_that_names_no_directory_resumes_wherever_it_comes_back(self):
+        args, _said = self._reopen(resume="u1", conversation=str(self.t),
+                                   cwd=str(self.elsewhere))
+        self.assertTrue(args.resume)
+
+    def test_opencode_resumes_in_its_recorded_directory(self):
+        args, said = self._reopen(harness="opencode", resume="ses_x")
+        self.assertTrue(args.resume)
+        self.assertIn(leave.RESUMES, said)
+
+    def test_opencode_resumes_only_in_its_recorded_directory(self):
+        """O2, read from source: `opencode -s <id>` looks the id up in the working
+        directory, so a chat a reopen moves into its workspace (#867) reopens empty — and
+        says why."""
+        args, said = self._reopen(harness="opencode", resume="ses_x", cwd=str(self.elsewhere))
+        self.assertFalse(args.resume)
+        self.assertIn("opencode", said)
+        self.assertIn("reopens empty", said)
+        self.assertNotIn(leave.RESUMES, said)
 
 
 class TheLinkTravelsThroughTheRecord(PersonaIso, unittest.TestCase):

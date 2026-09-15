@@ -299,8 +299,10 @@ class WhatAReopenPutsBack(PersonaIso, unittest.TestCase):
         """
         self.calls.append(SimpleNamespace(harness=args.harness, rest=list(args.rest),
                                           workspace=args.workspace, cwd=__import__(
-                                              "os").getcwd()))
-        fid = state.new_chat_id(args.workspace or "default")
+                                              "os").getcwd(), resume=args.resume))
+        # A reopen keeps the chat's own id (#1101): the launcher claims exactly it.
+        fid, why = commands_frame._claim_kept_id(args.reopening.chat)
+        assert fid is not None, why
         state.record_workspace(fid, args.workspace or "default")
         state.record_cwd(fid, __import__("os").getcwd())
         state.record_harness_pane(fid, "%7")
@@ -346,20 +348,24 @@ class WhatAReopenPutsBack(PersonaIso, unittest.TestCase):
             launch.assert_not_called()
         self.assertIsNotNone(reopen.read(), "and the record is left to try again")
 
-    def test_resume_is_appended_to_the_harness_argv_for_claude_with_an_id(self):
-        self._record(self._chat(resume="conv-1"))
-
-        self.assertEqual(self._reopen(), 0)
-
-        self.assertEqual(self.calls[0].rest, ["--resume", "conv-1"])
-        self.assertEqual(self.calls[0].harness, "claude")
-
-    def test_a_harness_that_records_no_id_is_never_handed_the_flag(self):
-        self._record(self._chat(harness="opencode", resume="conv-1"))
+    def test_resume_is_asked_of_the_launcher_for_claude_with_a_conversation(self):
+        """Asked as `resume`, not spelled into `rest` (#1101): the launcher reads the link in
+        the pane and says it the way each harness takes it."""
+        self._record(self._chat(resume="conv-1", conversation=_CONVERSATION))
 
         self.assertEqual(self._reopen(), 0)
 
         self.assertEqual(self.calls[0].rest, [])
+        self.assertIs(self.calls[0].resume, True)
+        self.assertEqual(self.calls[0].harness, "claude")
+
+    def test_a_chat_whose_conversation_is_gone_is_never_asked_to_resume(self):
+        self._record(self._chat(resume="conv-1", conversation="/nowhere/conv-1.jsonl"))
+
+        self.assertEqual(self._reopen(), 0)
+
+        self.assertEqual(self.calls[0].rest, [])
+        self.assertIs(self.calls[0].resume, False)
 
     def test_a_chat_with_no_id_still_comes_back_empty(self):
         self._record(self._chat(resume=""))
@@ -438,27 +444,28 @@ class WhatAReopenPutsBack(PersonaIso, unittest.TestCase):
 
         self.assertEqual(os.getcwd(), here)
 
-    def test_the_persona_pointer_follows_the_chat_onto_its_new_id(self):
-        # The recorded chat was `alpha.9`, so the pointer under `alpha.9` is about to name
-        # nothing — the reopened chat gets a fresh ordinal (`alpha.1` here) and the pointer
-        # has to be written under THAT id or the persona is silently lost.
+    def test_the_persona_pointer_is_written_back_under_the_chats_own_id(self):
+        # The reap that took `alpha.9`'s directory took its session pointer with it
+        # (`state._forget_session`), and an unpinned chat's persona lives nowhere else — so
+        # the reopen writes it back, under the id the chat keeps (#1101).
         self._record(self._chat(chat="alpha.9", persona="steward"))
-        self.assertIsNone(persona.for_session("alpha.1"))
+        self.assertIsNone(persona.for_session("alpha.9"))
 
         self.assertEqual(self._reopen(), 0)
 
-        self.assertEqual(persona.for_session("alpha.1"), "steward")
+        self.assertEqual(persona.for_session("alpha.9"), "steward")
 
-    def test_the_captured_transcript_follows_the_chat_onto_its_new_id(self):
+    def test_the_captured_transcript_stays_offered_under_the_chats_own_id(self):
         # The old chat's directory is gone (reaped), so the transcript is the only thing
-        # left of it — and the row that offers it looks the file up by the NEW chat's id.
+        # left of it — and the row that offers it looks the file up by the chat's id, which a
+        # reopen keeps (#1101), so nothing has to move.
         config.write_for(reopen.transcript_path("alpha.9"), "what was on screen\n")
         self._record(self._chat(chat="alpha.9", transcript="alpha.9.transcript"))
 
         self.assertEqual(self._reopen(), 0)
 
-        self.assertFalse(reopen.transcript_path("alpha.9").exists())
-        self.assertEqual(reopen.transcript_path("alpha.1").read_text(),
+        self.assertEqual(self.calls and state.frame_dir("alpha.9").is_dir(), True)
+        self.assertEqual(reopen.transcript_path("alpha.9").read_text(),
                          "what was on screen\n")
 
     def test_a_reopened_chat_draws_no_gauge_until_its_own_first_turn(self):
@@ -486,16 +493,16 @@ class WhatAReopenPutsBack(PersonaIso, unittest.TestCase):
         self.assertIsNone(state.harness_session(newest))
         self.assertIsNone(state.kept_harness_session(newest))
 
-    def test_the_manifest_outranks_a_stale_pointer_left_on_a_recycled_ordinal(self):
+    def test_the_manifest_outranks_a_stale_pointer_left_under_the_kept_id(self):
         """The dependency this design was written around, closed by #791 and pinned here.
 
-        **A reopen mints a FRESH chat id — and very often the SAME one.** `new_chat_id`
-        walks upward from 1 and `reap` frees the ordinals a quit's chats held, so
-        `alpha.1` quit and reopened is `alpha.1` again. That made the per-session pointer a
-        live hazard rather than a theoretical one: while `.charter/sessions/<fid>.workspace`
-        was a rung of `state.own_workspace`, a `charter workspace use gamma` typed inside
-        the OLD `alpha.1` would have decided the NEW `alpha.1`'s membership, over the
-        workspace the manifest recorded and the launcher wrote.
+        **A reopen keeps the chat's id** (#1101) — and before that it very often got the same
+        id back by accident, on a recycled ordinal. Either way `alpha.1` quit and reopened is
+        `alpha.1` again, which made the per-session pointer a live hazard rather than a
+        theoretical one: while `.charter/sessions/<fid>.workspace` was a rung of
+        `state.own_workspace`, a `charter workspace use gamma` typed inside `alpha.1` before
+        the quit would have decided the reopened chat's membership, over the workspace the
+        manifest recorded and the launcher wrote.
 
         #791 took that rung out (`own_workspace` is now the launch pin, then the record), so
         the manifest is authoritative. This plants exactly that stale pointer and asserts the

@@ -177,16 +177,17 @@ class ZeroBehaviourChange(PersonaIso, unittest.TestCase):
 class ItDoesNotOUTLIVETheChatItself(PersonaIso, unittest.TestCase):
     """The other end of "durable", and #731 is why it is asserted rather than assumed.
 
-    #731 is a recycled chat id inheriting the PREVIOUS frame's workspace pointer and lock:
-    `state.new_chat_id` frees an ordinal the moment its frame DIRECTORY is reaped, while
-    `.charter/sessions/<fid>.workspace` and `.lock` live somewhere else entirely and are
-    left behind — so `charter claude --workspace alpha` can come up labelled `gamma`.
+    #731 is a chat id inheriting the PREVIOUS frame's workspace pointer and lock: the frame
+    DIRECTORY is reaped, while `.charter/sessions/<fid>.workspace` and `.lock` live
+    somewhere else entirely and are left behind. When `state.new_chat_id` recycled ordinals
+    that reached any new chat; since #1101 an id is never handed out again, and the one
+    launch that claims it back is a reopen keeping its own id (`state.claim_chat_id`).
 
     **This file cannot do that, and the reason is structural rather than careful.** It
-    lives INSIDE `.charter/frame/<fid>/`, which is the very directory whose absence frees
-    the ordinal — `reap` removes it whole. So "the id is free" and "the durable session id
-    is gone" are one event, not two, and there is no window in which a new chat can be
-    handed an old one's harness session.
+    lives INSIDE `.charter/frame/<fid>/`, which `reap` removes whole. So "the directory is
+    gone" and "the durable session id is gone" are one event, not two: a claim of that id
+    starts with nothing, and the reopen writes the link back from the quit's record, never
+    from a leftover.
 
     That is the invariant a resume has to rest on, so it is pinned here rather than left as
     a property the design happens to have. It is also the exact contrast with #731: the
@@ -195,15 +196,17 @@ class ItDoesNotOUTLIVETheChatItself(PersonaIso, unittest.TestCase):
     way.
     """
 
-    def test_a_recycled_ordinal_cannot_inherit_the_previous_chats_durable_id(self):
+    def test_a_kept_id_claimed_after_the_reap_starts_without_the_durable_id(self):
         state.record_harness_session(FID, SID)
         self.assertEqual(state.kept_harness_session(FID), SID)
-        # The whole of what frees the ordinal, and the whole of what removes the file.
+        # The whole of what frees the directory, and the whole of what removes the file.
         self.assertEqual(state.reap(set(), server=state.frame_server(FID) or ""), [FID])
-        self.assertEqual(state.new_chat_id("demo"), FID,
-                         "the ordinal is only free because the directory went")
+        self.assertTrue(state.claim_chat_id(FID),
+                        "the id can only be claimed back because the directory went")
         self.assertIsNone(state.kept_harness_session(FID),
-                          "a new chat must not be handed the previous chat's session id")
+                          "a claim must not find the previous start's session id on disk")
+        self.assertNotEqual(state.new_chat_id("demo"), FID,
+                            "and no new chat is ever handed that id at all")
 
     def setUp(self) -> None:
         super().setUp()

@@ -4276,7 +4276,9 @@ class Launch(PersonaIso, unittest.TestCase):
 
         `state.new_chat_id` claims its ordinal with a `mkdir` that FAILS when the name is
         taken, so a launch cannot land on an occupied directory at all — the collision is
-        prevented rather than cleaned up after. Pinned as literals: workspace `demo`,
+        prevented rather than cleaned up after. Since #1101 it also starts ABOVE every id a
+        directory or the mark (`chat-ids.json`) carries, and raises the mark before the
+        `mkdir`, so `demo.1` is never even tried. Pinned as literals: workspace `demo`,
         `demo.1` already on disk, so the launch must take `demo.2`.
         """
         state.record_exit("demo.1", 99)

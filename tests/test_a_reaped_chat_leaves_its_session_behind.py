@@ -1,10 +1,11 @@
-"""#731, the surviving half: a recycled chat ordinal inherits the previous frame's
-per-session state.
+"""#731, the surviving half: a chat id claimed again inherits the previous frame's
+per-session state, unless the reap takes it.
 
-`state.new_chat_id` counts up from 1 and hands out the lowest FREE ordinal, and an
-ordinal is free the moment `state.reap` removes its directory — so a "fresh" chat id is
-very often a recycled NAME. Minting a new id is therefore not isolation; what makes the
-name mean a new chat is reaping the state keyed on the old one.
+When this was written `state.new_chat_id` handed out the lowest FREE ordinal, so a "fresh"
+chat id was very often a recycled NAME. Since #1101 an id is never handed out again, and the
+one launch that claims an id whose directory was reaped is a reopen keeping it
+(`state.claim_chat_id`) — so the cases below claim it back that way. Claiming a name is not
+isolation; what makes a claimed id start from nothing is reaping the state keyed on it.
 
 `reap` removed `.charter/frame/<fid>/` and nothing else. Everything charter keys on the
 charter session id lives one directory over, in `.charter/sessions/<fid>.*` — and inside
@@ -71,9 +72,17 @@ class _ReapedChat(PersonaIso):
         state.record_workspace(fid, ws)
         return fid
 
+    def claim_again(self, fid: str, ws: str = "alpha") -> str:
+        """Claim *fid* back after its directory was reaped — a reopen keeping its id, the
+        only launch that can meet the markers a reap would have left under it (#1101)."""
+        assert state.claim_chat_id(fid), fid
+        state.record_server(fid, SERVER)
+        state.record_workspace(fid, ws)
+        return fid
+
     def choose(self, fid: str, ws: str) -> None:
-        """A selection made inside the chat that disagrees with its launch, as the
-        predecessor on a recycled ordinal made it.
+        """A selection made inside the chat that disagrees with its launch, as the chat
+        made it before its directory was reaped.
 
         **Forced, since #936.** A chat's lock is its launch record, so an unforced switch
         out of its own workspace is refused and writes nothing, and every case below would
@@ -90,14 +99,16 @@ class _ReapedChat(PersonaIso):
             return state.reap(set(), server=SERVER)
 
 
-class ARecycledOrdinalStartsFromNothing(_ReapedChat):
-    def test_the_next_chat_takes_the_reaped_ordinal_back(self):
+class AKeptIdStartsFromNothing(_ReapedChat):
+    def test_a_reaped_id_comes_back_only_by_being_kept(self):
         """The premise every case below rests on, stated once so the rest are about
-        consequences rather than about whether the ordinal really is recycled."""
+        consequences rather than about whether the id really is the same: a new chat is
+        never handed it again, and a reopen claims exactly it."""
         first = self.open_chat()
         self.assertEqual(first, "alpha.1")
         self.assertEqual(self.reap_all(), ["alpha.1"])
-        self.assertEqual(self.open_chat(), "alpha.1")
+        self.assertEqual(self.open_chat(), "alpha.2")
+        self.assertEqual(self.claim_again(first), "alpha.1")
 
     def test_the_workspace_pointer_does_not_outlive_the_frame(self):
         fid = self.open_chat()
@@ -106,8 +117,8 @@ class ARecycledOrdinalStartsFromNothing(_ReapedChat):
 
         self.reap_all()
 
-        again = self.open_chat()
-        self.assertEqual(again, fid, "the ordinal must be recycled or this measures nothing")
+        again = self.claim_again(fid)
+        self.assertEqual(again, fid, "the id must be the same or this measures nothing")
         self.assertIsNone(workspace.for_session(again))
 
     def test_the_lock_does_not_outlive_the_frame(self):
@@ -125,9 +136,9 @@ class ARecycledOrdinalStartsFromNothing(_ReapedChat):
         self.assertTrue(lock.exists(), "the fixture wrote no lock, so this measures nothing")
 
         self.reap_all()
-        again = self.open_chat()
+        again = self.claim_again(fid)
 
-        self.assertEqual(again, fid, "the ordinal must be recycled or this measures nothing")
+        self.assertEqual(again, fid, "the id must be the same or this measures nothing")
         self.assertFalse(lock.exists())
         self.assertEqual(workspace.is_locked(again), "alpha")
 
@@ -139,7 +150,7 @@ class ARecycledOrdinalStartsFromNothing(_ReapedChat):
         self.assertEqual(workspace.resolve(session_id=fid), "gamma")
 
         self.reap_all()
-        again = self.open_chat()
+        again = self.claim_again(fid)
 
         self.assertNotEqual(workspace.resolve(session_id=again), "gamma")
 
@@ -197,9 +208,9 @@ class TheWholeFamilyGoesNotTwoSuffixes(_ReapedChat):
     def test_another_sessions_markers_are_left_alone(self):
         """The match is anchored AND dot-terminated, and both halves are reachable.
 
-        `alpha.10` is the tail half: `state.new_chat_id` counts to `_CHAT_ORDINAL_MAX`,
-        so a plane with ten chats in one workspace has `alpha.1` and `alpha.10` side by
-        side and one of them is live.
+        `alpha.10` is the tail half: `state.new_chat_id` counts to `ORDINAL_CEILING`,
+        so a plane that has opened ten chats in one workspace can have `alpha.1` and
+        `alpha.10` side by side and one of them live.
 
         `xalpha.1` is the head half, and it is why `startswith` rather than `in`: a chat
         id is `{workspace_prefix}.{n}`, `workspace_prefix` only maps characters into

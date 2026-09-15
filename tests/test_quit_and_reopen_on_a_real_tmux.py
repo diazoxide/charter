@@ -102,7 +102,9 @@ class ARealQuitStopsRealChats(PersonaIso, unittest.TestCase):
         state.record_cwd(fid, str(config.ROOT))
         state.record_identity(fid, {"CHARTER_HARNESS": "claude-code",
                                     "CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
-        state.record_harness_session(fid, f"conv-{fid}")
+        # No dot: a harness session id is held to `state.SESSION_ID_RE` before it is kept
+        # (#1101), because it reaches a harness argv — and a chat id carries one.
+        state.record_harness_session(fid, f"conv-{fid.replace('.', '-')}")
         # The pane has to have PRINTED before anything captures it, and a poll is the only
         # honest way to know: `new-window` returns when tmux has created the pane, not when
         # the process in it has run.
@@ -206,7 +208,7 @@ class ARealQuitStopsRealChats(PersonaIso, unittest.TestCase):
         self.assertEqual([c.chat for c in m.all_chats()], ["alpha.1", "alpha.2"])
         self.assertEqual(m.focus, "alpha")
         self.assertEqual([c.resume for c in m.all_chats()],
-                         ["conv-alpha.1", "conv-alpha.2"])
+                         ["conv-alpha-1", "conv-alpha-2"])
         for c in m.all_chats():
             self.assertEqual(c.transcript, f"{c.chat}{reopen.TRANSCRIPT_SUFFIX}")
             self.assertIn("ONE" if c.chat == "alpha.1" else "TWO",

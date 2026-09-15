@@ -300,41 +300,25 @@ class TheInflightTrackerNeverBreaksAQuit(_FrameRoot):
 
 
 class RestoringAChatsRecordsNeverFailsTheRelaunch(_FrameRoot):
-    """`_restore_recorded_chat`'s two clauses. Its docstring names both costs: *a persona
+    """`_restore_recorded_chat`'s persona clause. Its docstring names the cost: *a persona
     that could not be pointed at leaves the chat on the plane's default, which is visible on
-    its own panel; a transcript that could not be moved leaves the row with nothing to
-    offer. Neither is worth failing a relaunch over.*"""
+    its own panel* — not worth failing a relaunch over, and not worth losing the rest of the
+    restore over either. (The transcript clause beside it is gone: a reopen keeps the chat's
+    id, #1101, so there is no capture to move.)"""
 
-    def test_a_persona_pointer_that_cannot_be_written_still_moves_the_transcript(self):
+    def test_a_persona_pointer_that_cannot_be_written_still_restores_the_link(self):
         """The order matters and the assertion is the second half: the persona is attempted
-        first, so a clause that let its failure through would take the transcript with it.
+        first, so a clause that let its failure through would take the session link with it.
         `(OSError, ValueError)` is two names — `persona.set_active` answers `ValueError`
         for a name it will not take — so both are entered."""
-        old = reopen.transcript_path("alpha.9")
-        config.write_for(old, "what was on screen\n")
-        rec = self.chat(chat="alpha.9", persona="steward")
+        state.claim_chat_id("alpha.9")
+        rec = self.chat(chat="alpha.9", persona="steward")._replace(resume="conv-9")
 
         for boom in (_refuse, lambda *a, **k: (_ for _ in ()).throw(ValueError("no"))):
-            config.write_for(old, "what was on screen\n")
-            with mock.patch.object(persona, "set_active",
-                                   side_effect=boom):
-                self.assertIsNone(
-                    commands_frame._restore_recorded_chat(rec, "alpha.1"))
-            self.assertEqual(reopen.transcript_path("alpha.1").read_text(),
-                             "what was on screen\n")
-            reopen.transcript_path("alpha.1").unlink()
-
-    def test_a_transcript_that_cannot_be_moved_leaves_the_chat_relaunched(self):
-        config.write_for(reopen.transcript_path("alpha.9"), "what was on screen\n")
-        rec = self.chat(chat="alpha.9", persona="steward")
-        self.make_persona("steward")
-
-        with mock.patch.object(commands_frame.os, "replace", side_effect=_refuse):
-            self.assertIsNone(commands_frame._restore_recorded_chat(rec, "alpha.1"))
-
-        self.assertFalse(reopen.transcript_path("alpha.1").exists())
-        self.assertEqual(persona.for_session("alpha.1"), "steward",
-                         "the half that landed is kept")
+            state.clear_harness_session("alpha.9")
+            with mock.patch.object(persona, "set_active", side_effect=boom):
+                self.assertIsNone(commands_frame._restore_recorded_chat(rec, "alpha.9"))
+            self.assertEqual(state.kept_harness_session("alpha.9"), "conv-9")
 
 
 class AReopenThatCannotStandSomewhereSaysSo(_FrameRoot):
