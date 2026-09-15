@@ -24,6 +24,7 @@ asserted. The launcher's own behaviour is covered by its own tests and, on a rea
 
 from __future__ import annotations
 
+import os
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -59,6 +60,15 @@ def tearDownModule():
         _WIRED.stop()
 
 
+#: A conversation file that exists, standing in for the transcript Claude Code named. Since
+#: #1101's link a chat is promised its conversation only when that file is there
+#: (`leave.conversation_exists`, a `stat`); the cases here are about the other clauses, so
+#: an id means an id whose conversation exists unless a case says otherwise.
+#: `tests/test_a_tab_is_linked_to_one_harness_session.py` is where the file being absent is
+#: the subject.
+_CONVERSATION = os.path.abspath(__file__)
+
+
 def _doomed(**kw):
     """One `leave.Doomed` with every field defaulted, so a case states only what it is about.
 
@@ -68,7 +78,7 @@ def _doomed(**kw):
     base = dict(chat="alpha.1", workspace="alpha", persona="", harness="claude-code",
                 cwd="/tmp", resume="", server=SERVER, live=True, active=False,
                 exit_code=None, closed=False, homeless=False, cwd_gone=False,
-                cwd_outside=False)
+                cwd_outside=False, conversation=_CONVERSATION)
     base.update(kw)
     return leave.Doomed(**base)
 
@@ -86,17 +96,26 @@ class TheWarningNamesWhatEachChatLoses(PersonaIso, unittest.TestCase):
         self.assertEqual(leave.note(_doomed(harness="claude-code")),
                          leave.NO_RESUME_YET)
 
-    def test_another_harness_is_named_rather_than_left_as_reopens_empty(self):
-        note = leave.note(_doomed(harness="opencode"))
+    def test_a_harness_with_no_resume_is_named_rather_than_left_as_reopens_empty(self):
+        """No shipped harness is this one any more (#1101: Codex and opencode resume by
+        id), so the harness is a stand-in the registry answers `resume_argv` with `None`
+        for — the sentence is still owed to the next harness charter meets."""
+        from charter.harness import base, registry
 
-        self.assertIn("opencode", note)
-        self.assertEqual(note, leave.NO_RESUME_HARNESS.format(harness="opencode"))
+        class _NoResume(base.Harness):
+            name = "nosuch"
 
-    def test_only_claude_code_is_resumable_and_it_is_asked_of_the_registry(self):
-        from charter.harness import claude_code
+        with mock.patch.dict(registry.KINDS, {"nosuch": _NoResume}):
+            note = leave.note(_doomed(harness="nosuch"))
+
+        self.assertIn("nosuch", note)
+        self.assertEqual(note, leave.NO_RESUME_HARNESS.format(harness="nosuch"))
+
+    def test_every_shipped_harness_is_resumable_and_it_is_asked_of_the_registry(self):
+        from charter.harness import claude_code, codex, opencode
         self.assertTrue(leave.resumable_harness(claude_code.NAME))
-        self.assertFalse(leave.resumable_harness("opencode"))
-        self.assertFalse(leave.resumable_harness("codex"))
+        self.assertTrue(leave.resumable_harness(opencode.NAME))
+        self.assertTrue(leave.resumable_harness(codex.NAME))
         self.assertFalse(leave.resumable_harness(""))
 
     def test_a_missing_workspace_is_reported_and_never_re_homed(self):
@@ -196,7 +215,7 @@ class TheConfirmationIsAWarningNotAMenu(PersonaIso, unittest.TestCase):
             verb=leave.QUIT)
 
         self.assertEqual(rows[1].note, leave.RESUMES)
-        self.assertIn("opencode", rows[2].note)
+        self.assertEqual(rows[2].note, leave.NO_RESUME_YET)
 
     def test_the_chat_you_are_looking_at_is_marked(self):
         rows = leave.confirm_rows(self._plan(_doomed(active=True)), verb=leave.QUIT)

@@ -101,24 +101,22 @@ class Chat(NamedTuple):
     would answer.
     """
 
-    #: The chat id this WAS. Not the id it comes back as: `state.new_chat_id` allocates a
-    #: fresh ordinal on the way in (the old directory is reaped — see the module
-    #: docstring), so this is a name for the transcript and for what charter says on
-    #: screen, never a directory a reopen writes into.
+    #: The chat id this was, **and the id it comes back as** (#1101). A chat id is handed out
+    #: once per plane, and a reopen claims exactly this directory
+    #: (`commands_frame._claim_kept_id`) rather than allocating another — so the transcript,
+    #: the persona pointer and what charter says on screen all go on naming the same chat,
+    #: and nothing a new chat opens under can be this one's.
     chat: str
     #: The workspace it belonged to — `state.own_workspace`, the membership question
     #: (#733), never `workspace_for`. **It is the authoritative answer on the way back, and
     #: #791 is what makes that true rather than hopeful**: that change took the per-session
     #: `.charter/sessions/<fid>.workspace` pointer out of `own_workspace`'s ladder, which
-    #: matters here for a reason that is easy to miss — a reopen gets a FRESH ordinal, but
-    #: `new_chat_id` walks upward from 1 and `reap` frees the ordinals a quit's chats held,
-    #: so it very often gets the same NAME back. While the pointer was a rung, a previous
-    #: chat's `charter workspace use` would have outranked this record for the chat that
-    #: inherited its ordinal.
+    #: matters here because a reopen keeps the chat's id — a pointer left under it from
+    #: before the quit would otherwise have outranked this record.
     workspace: str
     #: The persona resolved for it, or ``""``. Its own per-session pointer, which a reopen
-    #: re-writes under the NEW id — an unpinned chat's persona lives nowhere else, and the
-    #: pointer is keyed on a fid that is about to stop existing.
+    #: re-writes under the chat's id — an unpinned chat's persona lives nowhere else, and the
+    #: reap took the pointer with the directory.
     persona: str
     #: `harness.base.name` — ``claude-code``, ``opencode``, ``codex`` — or ``""``. The
     #: harness's own identity and not its `cli_name`, because that is what
@@ -127,8 +125,8 @@ class Chat(NamedTuple):
     #: Where the harness was started, or ``""`` when charter never recorded one (a chat
     #: launched by a charter that predates `state.record_cwd`).
     cwd: str
-    #: The harness's own session id, or ``""``. Claude Code only: nothing else writes one
-    #: (§2.8), so nothing else can be asked for its conversation back.
+    #: The harness's own session id — the tab's link (#1101) — or ``""``. For Claude Code it
+    #: is the id charter chose; for Codex and opencode, the first id each start reported.
     resume: str
     #: The captured scrollback's file name in the frame root, or ``""``.
     transcript: str
@@ -158,6 +156,10 @@ class Chat(NamedTuple):
     #: **Never committed**, like the manifest it is in. `docs/handoff.md` states the bound:
     #: a brief reaches no committed file, no tally row and no tmux option.
     brief: str = ""
+    #: The conversation file the harness named for this chat, or ``""`` — the evidence
+    #: `leave.conversation_exists` stats before a reopen offers resume (#1101). Defaulted
+    #: like :attr:`profile`, so a record written by 0.62 still reads.
+    conversation: str = ""
 
 
 class Frame(NamedTuple):
@@ -359,7 +361,7 @@ def _chat(raw) -> Chat | None:
         return None
     text = {k: (raw.get(k) if isinstance(raw.get(k), str) else "")
             for k in ("chat", "workspace", "persona", "harness", "cwd", "resume",
-                      "transcript", "profile", "brief")}
+                      "transcript", "profile", "brief", "conversation")}
     return Chat(active=raw.get("active") is True, **text)
 
 

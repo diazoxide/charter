@@ -10595,7 +10595,7 @@ def _record_the_plane(doomed, *, focus: str, active, windows,
         entries[c.workspace].append(reopen_state.Chat(
             chat=c.chat, workspace=c.workspace, persona=c.persona, harness=c.harness,
             cwd=c.cwd, resume=c.resume, transcript=transcript,
-            active=c.chat in active, profile=c.profile,
+            active=c.chat in active, profile=c.profile, conversation=c.conversation,
             # Read here rather than carried on `Doomed`: it is not something the quit's
             # warning says anything about, and `leave.plan` reads one plane for the row an
             # operator is shown. `or ""` because `state.brief` answers `None` for the chats
@@ -11052,11 +11052,11 @@ def _resumes(c) -> bool:
     while the other decided the chat came back empty, and the chat then reading its brief on
     top of the transcript that already holds it.
 
-    Two conditions and both are load-bearing: a recorded id (only a chat that took a turn
-    has one) and a harness that takes the flag (`leave.resumable_harness` — Claude Code
-    alone, asked of the registry).
+    `leave.conversation_exists` is that answer (#1101): a recorded link, a harness that
+    resumes by id, and — for a harness that names its transcript — that file still there. A
+    Claude Code chat nobody typed in has a link and no conversation, and is not resumed.
     """
-    return bool(c.resume) and leave.resumable_harness(c.harness)
+    return leave.conversation_exists(c.harness, c.resume, c.conversation)
 
 
 def _restore_recorded_chat(rec, fid: str) -> None:

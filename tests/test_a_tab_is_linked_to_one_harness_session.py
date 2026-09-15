@@ -11,13 +11,16 @@ their tagged source, not run). The readings are copied into ADR 0024.
 
 from __future__ import annotations
 
+import json
 import os
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from charter import config, contain
-from charter.frame import state, tmuxctl
+from charter import commands_frame, config, contain
+from charter.frame import leave, reopen, state, tmuxctl
+from charter.harness import claude_code, codex, opencode, registry
+from charter.harness.base import Harness
 from tests._isolation import PersonaIso
 
 FID = "beta.1"
@@ -173,6 +176,191 @@ class AChatIsFoundByItsPane(PersonaIso, unittest.TestCase):
     def test_an_unlistable_frame_root_is_none(self):
         with mock.patch.object(state.os, "scandir", side_effect=OSError(13, "denied")):
             self.assertIsNone(state.chat_in_pane("%4", "srv"))
+
+
+class _NoResume(Harness):
+    """A harness charter has measured no resume for."""
+    name = "nosuch"
+
+
+class EachHarnessSaysHowItsSessionIsNamed(PersonaIso, unittest.TestCase):
+    """Asked of the registry: three harnesses need three spellings, so no single `extra` is
+    right for all of them — `first_message_argv`'s own reason for being a member."""
+
+    def test_claude_code(self):
+        h = registry.get(claude_code.NAME)
+        self.assertEqual(h.new_session_argv("u", "n"), ["--session-id", "u", "--name", "n"])
+        self.assertEqual(h.resume_argv("u", "n"), ["--resume", "u", "--name", "n"])
+        self.assertTrue(h.chooses_session_id)
+        self.assertTrue(h.reports_harness_pid)
+        self.assertTrue(h.names_its_transcript)
+        self.assertFalse(h.resume_needs_cwd)
+        self.assertEqual(h.reports_session_at, "sessionstart")
+        self.assertEqual(h.session_flags, ("--session-id", "--resume", "-r", "--continue",
+                                           "-c", "--fork-session"))
+
+    def test_codex(self):
+        h = registry.get(codex.NAME)
+        self.assertEqual(h.new_session_argv("s", "n"), [])
+        self.assertEqual(h.resume_argv("s", "n"), ["resume", "s"])
+        self.assertFalse(h.chooses_session_id)
+        self.assertFalse(h.reports_harness_pid)
+        self.assertTrue(h.names_its_transcript)
+        self.assertFalse(h.resume_needs_cwd)
+        self.assertEqual(h.reports_session_at, "sessionstart")
+        self.assertEqual(h.session_flags, ("resume", "fork"))
+
+    def test_opencode(self):
+        h = registry.get(opencode.NAME)
+        self.assertEqual(h.new_session_argv("s", "n"), [])
+        self.assertEqual(h.resume_argv("s", "n"), ["-s", "s"])
+        self.assertFalse(h.chooses_session_id)
+        self.assertFalse(h.reports_harness_pid)
+        self.assertFalse(h.names_its_transcript)
+        self.assertTrue(h.resume_needs_cwd)
+        self.assertEqual(h.reports_session_at, "tool")
+        self.assertEqual(h.session_flags, ("-s", "--session", "-c", "--continue"))
+
+    def test_a_harness_nobody_measured_offers_nothing(self):
+        h = _NoResume()
+        self.assertEqual(h.new_session_argv("s", "n"), [])
+        self.assertIsNone(h.resume_argv("s", "n"))
+        self.assertEqual(h.session_flags, ())
+        self.assertEqual(h.reports_session_at, "")
+        self.assertFalse(h.chooses_session_id or h.names_its_transcript
+                         or h.reports_harness_pid or h.resume_needs_cwd)
+
+    def test_resumable_is_the_registrys_answer(self):
+        for name in (claude_code.NAME, codex.NAME, opencode.NAME):
+            with self.subTest(harness=name):
+                self.assertTrue(leave.resumable_harness(name))
+        with mock.patch.dict(registry.KINDS, {"nosuch": _NoResume}):
+            self.assertFalse(leave.resumable_harness("nosuch"))
+            self.assertFalse(leave.conversation_exists("nosuch", "s1", ""))
+        self.assertFalse(leave.resumable_harness(""))
+        self.assertFalse(leave.resumable_harness("never-registered"))
+
+
+def _doomed(**kw):
+    base = dict(chat="beta.1", workspace="beta", persona="", harness="claude-code",
+                cwd="/tmp", resume="", server="srv", live=True, active=False,
+                exit_code=None, closed=False, homeless=False, cwd_gone=False,
+                cwd_outside=False)
+    base.update(kw)
+    return leave.Doomed(**base)
+
+
+def _recorded(**kw):
+    base = dict(chat="beta.1", workspace="beta", persona="", harness="claude-code", cwd="",
+                resume="", transcript="", active=False)
+    base.update(kw)
+    return reopen.Chat(**base)
+
+
+class ResumeIsOfferedOnlyWhereTheConversationExists(PersonaIso, unittest.TestCase):
+    """"The conversation exists" is a `stat`, asked when a surface is about to offer resume.
+    Charter reads nothing inside the file."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.t = self.tmp / "t.jsonl"
+        self.t.write_text("{}\n")
+
+    def test_a_named_transcript_that_is_a_file_resumes(self):
+        self.assertTrue(leave.conversation_exists("claude-code", "u1", str(self.t)))
+        self.assertEqual(leave._resume_clause(
+            _doomed(resume="u1", conversation=str(self.t))), leave.RESUMES)
+        self.assertTrue(commands_frame._resumes(
+            _recorded(resume="u1", conversation=str(self.t))))
+
+    def test_a_claude_chat_with_a_link_and_no_transcript_yet_does_not(self):
+        """C1: Claude Code reports the chosen id at SessionStart and writes no transcript
+        until the first prompt."""
+        for conv in (str(self.tmp / "not-yet.jsonl"), "", str(self.tmp)):
+            with self.subTest(conversation=conv):
+                self.assertFalse(leave.conversation_exists("claude-code", "u1", conv))
+                self.assertEqual(leave._resume_clause(
+                    _doomed(resume="u1", conversation=conv)), leave.NO_RESUME_YET)
+                self.assertFalse(commands_frame._resumes(
+                    _recorded(resume="u1", conversation=conv)))
+
+    def test_a_codex_chat_that_took_no_turn_has_no_link_and_no_resume(self):
+        """X1: Codex reports at its first turn, not at launch."""
+        self.assertFalse(leave.conversation_exists("codex", "", ""))
+        self.assertEqual(leave._resume_clause(_doomed(harness="codex")), leave.NO_RESUME_YET)
+        self.assertTrue(leave.conversation_exists("codex", "s1", str(self.t)))
+        self.assertFalse(leave.conversation_exists("codex", "s1", ""))
+
+    def test_an_opencode_report_is_enough(self):
+        """opencode names no transcript, so a reported session is the whole evidence."""
+        self.assertTrue(leave.conversation_exists("opencode", "ses_x", ""))
+        self.assertEqual(leave._resume_clause(_doomed(harness="opencode", resume="ses_x")),
+                         leave.RESUMES)
+
+    def test_no_link_is_never_a_resume(self):
+        for name in (claude_code.NAME, codex.NAME, opencode.NAME):
+            with self.subTest(harness=name):
+                self.assertFalse(leave.conversation_exists(name, "", str(self.t)))
+
+    def test_a_chat_charter_cannot_name_the_harness_of_is_not_offered_resume(self):
+        self.assertFalse(leave.conversation_exists("", "u1", str(self.t)))
+        self.assertEqual(leave._resume_clause(
+            _doomed(harness="", resume="u1", conversation=str(self.t))),
+            leave.NO_RESUME_UNKNOWN)
+
+    def test_a_harness_with_no_resume_is_named(self):
+        with mock.patch.dict(registry.KINDS, {"nosuch": _NoResume}):
+            self.assertEqual(leave._resume_clause(_doomed(harness="nosuch", resume="s1")),
+                             leave.NO_RESUME_HARNESS.format(harness="nosuch"))
+
+    def test_the_quit_summary_counts_what_can_resume(self):
+        p = leave.Plan(chats=(_doomed(chat="beta.1", resume="u1", conversation=str(self.t)),
+                              _doomed(chat="beta.2", resume="u2")), focus="beta")
+        self.assertIn("1 of 2 can resume", leave.summary(p))
+
+    def test_a_plan_carries_each_chats_conversation(self):
+        fid = state.new_chat_id("beta")
+        state.record_identity(fid, {"CHARTER_HARNESS": "claude-code"})
+        state.record_workspace(fid, "beta")
+        state.record_harness_session(fid, "u1")
+        state.record_conversation(fid, str(self.t))
+        (c,) = leave.plan(live={fid}, focus="beta").chats
+        self.assertEqual((c.resume, c.conversation), ("u1", str(self.t)))
+        state.clear_conversation(fid)
+        (c,) = leave.plan(live={fid}, focus="beta").chats
+        self.assertEqual(c.conversation, "")
+
+
+class TheLinkTravelsThroughTheRecord(PersonaIso, unittest.TestCase):
+
+    def test_the_record_carries_the_conversation_under_its_own_name(self):
+        c = _recorded(resume="u1", conversation="/abs/t.jsonl")
+        self.assertTrue(reopen.write([reopen.Frame(workspace="beta", chats=(c,))],
+                                     focus="beta"))
+        raw = json.loads(reopen.path().read_text())
+        self.assertEqual(raw["frames"][0]["chats"][0]["conversation"], "/abs/t.jsonl")
+        self.assertEqual(reopen.read().all_chats()[0].conversation, "/abs/t.jsonl")
+
+    def test_a_record_from_0_62_reads_as_no_conversation(self):
+        state._root().mkdir(parents=True, exist_ok=True)
+        reopen.path().write_text(json.dumps({"version": 1, "focus": "beta", "frames": [
+            {"workspace": "beta", "chats": [{"chat": "beta.1", "workspace": "beta",
+                                             "harness": "claude-code", "resume": "u1"}]}]}))
+        self.assertEqual(reopen.read().all_chats()[0].conversation, "")
+
+    def test_a_conversation_that_is_not_text_reads_as_none(self):
+        state._root().mkdir(parents=True, exist_ok=True)
+        reopen.path().write_text(json.dumps({"version": 1, "focus": "beta", "frames": [
+            {"workspace": "beta", "chats": [{"chat": "beta.1", "workspace": "beta",
+                                             "conversation": 7}]}]}))
+        self.assertEqual(reopen.read().all_chats()[0].conversation, "")
+
+    def test_a_quit_writes_down_each_chats_conversation(self):
+        n = commands_frame._record_the_plane(
+            [_doomed(resume="u1", conversation="/abs/t.jsonl")], focus="beta",
+            active=set(), windows={}, capture=False)
+        self.assertEqual(n, 1)
+        self.assertEqual(reopen.read().all_chats()[0].conversation, "/abs/t.jsonl")
 
 
 if __name__ == "__main__":

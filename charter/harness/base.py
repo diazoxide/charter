@@ -300,6 +300,53 @@ class Harness:
         """
         return None
 
+    # -- The session link (#1101, ADR 0024) ---------------------------------------------- #
+    #
+    # **Members, and the bar `leave.resumable_harness` used to refuse them on is met.** That
+    # bar was *"`launch_argv` is `[self.binary, *extra]` with no subclass override anywhere,
+    # so the pass-through IS the seam"*. It stops holding for `first_message_argv`'s reason:
+    # three harnesses need three spellings — `--resume <id> --name <name>`, `resume <id>`,
+    # `-s <id>` — so no single `extra` is right for all of them. Every value below is a
+    # reading of one harness version, and ADR 0024 records which.
+
+    #: Whether charter chooses this harness's session id and hands it over at the start, so
+    #: the link exists before the harness does. Where it cannot, the link is what the harness
+    #: reports.
+    chooses_session_id: bool = False
+
+    #: Whether the report names a conversation FILE (`transcript_path`) — which is then the
+    #: evidence that there is a conversation to resume (`leave.conversation_exists`).
+    names_its_transcript: bool = False
+
+    #: Whether a report's environment carries the harness's own pid (`$CLAUDE_PID`), which
+    #: is what tells the chat's harness from one nested inside it, and `/clear` from both.
+    reports_harness_pid: bool = False
+
+    #: Whether a resume looks the id up in the working directory, so a chat moved to another
+    #: directory cannot be resumed there.
+    resume_needs_cwd: bool = False
+
+    #: The arguments by which an operator already names a session themselves. A launch whose
+    #: own arguments carry one gets no session words added: the operator's flag wins, and the
+    #: link is what the harness then reports.
+    session_flags: tuple[str, ...] = ()
+
+    #: Where a report arrives: ``"sessionstart"`` (the hook), ``"tool"`` (a tool hook, for a
+    #: harness with no session-start event), or ``""`` for a harness that reports none.
+    reports_session_at: str = ""
+
+    def new_session_argv(self, sid: str, name: str) -> list[str]:
+        """The arguments that start a NEW session under the id charter chose, or ``[]`` for
+        a harness that chooses its own (:attr:`chooses_session_id`)."""
+        return []
+
+    def resume_argv(self, sid: str, name: str) -> list[str] | None:
+        """The arguments that bring the conversation *sid* back, or ``None`` when charter has
+        not measured how this harness resumes. *name* is the display name a harness that
+        takes one is given again at the resume; *sid* has already been held to
+        `state.SESSION_ID_RE`, so it cannot be read as a flag."""
+        return None
+
     def detect(self) -> bool:
         """Is this harness live, judged by its own native evidence?
 

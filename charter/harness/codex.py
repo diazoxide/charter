@@ -244,6 +244,23 @@ class CodexHarness(Harness):
         """
         return [text]
 
+    #: The session link (ADR 0024), **read from source at `rust-v0.147.0` and not run**:
+    #: SessionStart carries `session_id` and `transcript_path`, and the rollout exists before
+    #: the hook runs — but Codex runs it inside the FIRST TURN, not at launch (X1); `codex
+    #: resume <id>` looks that uuid up exactly (X2); a resumed root session reports the id it
+    #: had (X3). Codex chooses its own id, and names no flag to choose one or to name a
+    #: session (openai/codex#14482).
+    names_its_transcript = True
+    reports_session_at = "sessionstart"
+    #: `resume` and `fork` are subcommands, and either one in a launch's own arguments is the
+    #: operator naming the session.
+    session_flags = ("resume", "fork")
+
+    def resume_argv(self, sid: str, name: str) -> list[str] | None:
+        """`codex resume <id>` — by the uuid Codex reported. Never by name: Codex has no flag
+        to set one, so a name charter did not set cannot identify a session."""
+        return ["resume", sid]
+
     def upgrade(self, root: Path, *, dry_run: bool = False) -> tuple[str, str]:
         """Codex's own config block never needs moving; its PLUGIN does.
 
