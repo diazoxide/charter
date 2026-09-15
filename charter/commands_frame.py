@@ -5313,7 +5313,7 @@ def _focus_workspace(session_id: str, chat: str, *, ws: str, picked: bool) -> in
 
 
 class Reopening:
-    """One recorded chat on its way back, and the id it came back as.
+    """One recorded chat on its way back, and the id the launch claimed for it — its own.
 
     **The whole of the seam between `charter reopen` and the launcher**, carried on the
     `args` namespace `cmd_reopen` builds and read with `getattr` — which is `--probe`'s own
@@ -5322,12 +5322,12 @@ class Reopening:
     one, so it has no business in `charter claude --help`, and every existing caller of
     `cmd_launch` (production and test) constructs an `args` without this field.
 
-    **Mutable, and that is what it is for.** `cmd_launch` allocates the new chat id, and
-    the driver needs it back: to put the operator on the right tab at the end, and to
-    report which recorded chat became which live one. The alternative — reading the frame
-    root before and after and taking the difference — would be inferring an id from a
-    directory listing that a sibling launcher on the same plane is free to change, for a
-    fact the launcher itself has in hand.
+    **Mutable, and that is what it is for.** `cmd_launch` claims the recorded chat's own id
+    (`_claim_kept_id`, #1101) or refuses, and the driver needs to know which: to put the
+    operator on the right tab at the end, and to report which recorded chats came back.
+    The alternative — reading the frame root before and after and taking the difference —
+    would be inferring a claim from a directory listing that a sibling launcher on the same
+    plane is free to change, for a fact the launcher itself has in hand.
 
     :attr:`fid` stays ``""`` for a launch that never got as far as claiming one, which is
     exactly what makes "this chat did not come back" reportable rather than silent.

@@ -1020,10 +1020,10 @@ def record_harness_session(fid: str, sid: str) -> bool:
 def harness_session(fid: str) -> str | None:
     """The harness's own session id for *fid*, or ``None`` when charter does not know.
 
-    ``None`` for a frame whose harness is not Claude Code (nothing else is handed a
-    per-turn usage payload, so nothing else writes here), for a frame launched by a
-    charter that predates :func:`record_harness_session`, for a directory that is not a
-    frame's, and for a file that cannot be read.
+    ``None`` for a chat whose harness has not reported or been handed a session yet (a Codex
+    chat before its first turn, an opencode chat before its first tool call — #1101), for a
+    frame launched by a charter that predates :func:`record_harness_session`, for a
+    directory that is not a frame's, and for a file that cannot be read.
 
     Four reasons, deliberately one answer, because every caller does the same thing with
     it: **draw no gauge.** `frame/slots.py`'s own rule — a gauge that silently reads zero

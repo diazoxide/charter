@@ -65,9 +65,10 @@ VERSION = 1
 #: What a captured pane is written under — ``<chat id>.transcript`` in the frame root.
 #:
 #: The chat id is the whole name because a chat has at most ONE (§4f: *"the last capture per
-#: chat, not a history of them"*), and because a reopen RENAMES the file onto the new chat's
-#: id rather than writing a pointer to the old one. One naming rule, no second file to keep
-#: in step, and `.transcript` cannot be an ordinal so it cannot be a chat id either.
+#: chat, not a history of them"*), and because a reopened chat keeps its id (#1101), so the
+#: capture is already under the name `chat: previous transcript` asks for. One naming rule,
+#: no second file to keep in step, and `.transcript` cannot be an ordinal so it cannot be a
+#: chat id either — and since ids are never handed out again, no new chat can be offered it.
 TRANSCRIPT_SUFFIX = ".transcript"
 
 #: Who wrote the manifest — a QUIT, or the frame process RECORDING the plane as it runs
@@ -369,9 +370,8 @@ def forget() -> None:
     """Drop the manifest, because it has been acted on.
 
     **A manifest describes one quit and is consumed by one reopen.** Left in place, a second
-    `charter reopen` would open every chat a second time — and the operator would have no
-    way to tell the duplicate tabs from the real ones, because a reopened chat is a fresh
-    ordinal either way.
+    `charter reopen` would try to open every chat a second time, under ids the first
+    reopen already claimed (#1101).
 
     Never raises: a manifest that could not be removed costs a duplicated tab the operator
     can close, and a reopen that had already relaunched every harness must not report
