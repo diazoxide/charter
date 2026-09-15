@@ -752,10 +752,16 @@ class RefsNameWhatTheyCouldNotRead(PersonaIso):
         self.assertEqual(sorted(h.path.name for h in self.recall().hits),
                          ["keycloak.md", "runbook.md"])
         self.assertEqual(self.recall().unread, [])
+        # Walked below the first level: refs nest as deep as the curator likes.
+        (self.refs / "release" / "2026").mkdir()
+        (self.refs / "release" / "2026" / "rotation.md").write_text("# rotation\n\nkeycloak\n")
+        self.assertEqual(sorted(h.path.name for h in self.recall().hits),
+                         ["keycloak.md", "rotation.md", "runbook.md"])
         (self.refs / "again").symlink_to(self.refs, target_is_directory=True)
         unread: list = []
         self.assertEqual(recall._ref_dirs(self.refs, unread),
-                         [self.refs, self.refs / "again", self.refs / "release"])
+                         [self.refs, self.refs / "again", self.refs / "release",
+                          self.refs / "release" / "2026"])
         self.assertEqual(recall._ref_dirs(self.tmp / "nowhere", unread), [])
         self.assertEqual(unread, [])
 
