@@ -852,8 +852,10 @@ def check_profile_wiring(*, preflight: bool = False) -> list[Result]:
             if w.state == wiring.WIRED:
                 out.append(Result(name, OK, detail=_counted(w.detail)))
             elif w.state == wiring.UNWIRED:
+                # The fix, and — where the launch would install it itself (ruling 47) —
+                # that starting it is also the fix. `doctor` probes and never installs.
                 out.append(Result(name, WARN, detail=_counted(w.detail),
-                                  hint=_counted(w.fix)))
+                                  hint=_counted(wiring.hint(p, w))))
             else:
                 out.append(Result(name, WARN, detail=_counted(w.detail),
                                   hint=_NOT_CHECKED_HINT))

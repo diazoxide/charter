@@ -144,6 +144,10 @@ COULD_NOT_WIRE = ("profile '{name}' is not wired, and charter could not wire it 
 WIRED_NOW = "wired '{name}' — installed {what}"
 WIRED_FOUND = "wired '{name}' — {what} was already in place"
 
+#: `doctor`'s hint on a row the next launch will wire: the fix first, because a clipped
+#: row keeps its head (ruling 45), then the fact that pressing Enter is also the fix.
+NEXT_LAUNCH_WIRES = "{fix} — or start it: the next launch installs {what} itself"
+
 #: The install statuses that are charter reporting what it DID. Everything else —
 #: `unvouched`, `unavailable`, `unknown`, `failed`, `refused`, `malformed`, `doubled`, and
 #: any status a harness adds later — is a fault a launch refuses on (ruling 47) and `init`
@@ -391,6 +395,33 @@ def wired_or_refusal(p: profiles.Profile, *, cwd, root: Path) -> Answer:
         return Answer(COULD_NOT_WIRE.format(name=name, said=said("; ".join(faults)),
                                             fix=said(again.fix or _install_fix(p))), "")
     return Answer(sentence(p, again), "")
+
+
+def would_install(p: profiles.Profile, w: Wiring) -> str:
+    """What a launch of *p* would install for the answer *w* — `charter@charter into
+    <folder>` — or ``""`` for an answer a launch would not install over.
+
+    The selector's word for a row that starts rather than refuses, and `doctor`'s for a
+    hint that says the next launch is also the fix. Three things have to hold, and each is
+    a case that stays refused without it: the answer is a definite UNWIRED; the kind's
+    wire can finish on its own (Codex's cannot — trust is a person's, inside a session);
+    and the fix charter named IS the install, because for a plugin that is installed and
+    disabled, or a foreign file in opencode's realm, the install answers `present` and
+    changes nothing (review 7's loop), so the row keeps the sentence with the fix that does.
+    """
+    kind = _KINDS.get(p.harness)
+    if (kind is None or not kind.automatic or w.state != UNWIRED
+            or w.fix != _install_fix(p)):
+        return ""
+    return kind.installs(environment(p))
+
+
+def hint(p: profiles.Profile, w: Wiring) -> str:
+    """*w*'s fix for a `doctor` row — with the fact that the next launch installs it too,
+    where that is true (:func:`would_install`). `doctor` itself probes and never installs
+    (ruling 11), so the sentence is about the launch and not about the row."""
+    what = would_install(p, w)
+    return NEXT_LAUNCH_WIRES.format(fix=w.fix, what=what) if what else w.fix
 
 
 def sentence(p: profiles.Profile, w: Wiring) -> str:

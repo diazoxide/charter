@@ -378,13 +378,53 @@ class ARowSaysWhetherItIsWired(_APlaneWithProfiles, unittest.TestCase):
         # declared profile that runs it: `codex-pinned` runs `npx`, which is not "here".
         self.which.side_effect = lambda cmd, **kw: "/usr/bin/claude" if cmd == "claude" else None
 
-    def test_an_unwired_profile_is_refused_with_task_fours_sentence_and_its_fix(self):
+    def test_an_unwired_profile_charter_can_wire_starts_and_its_row_says_what_enter_installs(self):
+        """Ruling 47: a row whose only problem is an install charter runs itself is not
+        refused — Enter starts the launch, and the launch installs. The row says so, and
+        names what and where, because software is about to go into somebody's folder."""
         with spawns([], listing()):
+            row = self._row(self._rows(), WORK)
+        self.assertFalse(row.refused, row.note)
+        self.assertIn("not wired yet", row.note)
+        self.assertIn(f"charter@charter into {self.home / '.cw'}", row.note)
+        self.assertNotIn("charter harness install", row.note)
+
+    def test_a_disabled_plugin_stays_refused_with_the_enable(self):
+        """The install would find it present and change nothing (review 7's loop), so the
+        row keeps Task 4's sentence and its fix."""
+        with spawns([], listing(entry(scope="user", enabled=False))):
             row = self._row(self._rows(), WORK)
         self.assertTrue(row.refused)
         self.assertIn(f"profile '{WORK}' is not wired", row.note)
-        self.assertIn(f"charter harness install {WORK}", row.note)
-        self.assertIn("so a chat on it would run without charter's guard", row.note)
+        self.assertIn("plugin enable", row.note)
+
+    def test_a_codex_row_that_needs_trust_stays_refused_with_the_steps(self):
+        """Codex is the exception by construction: its hook trust is granted only inside a
+        Codex session, so no launch can finish the wiring and the row says the steps."""
+        from tests.test_a_profile_is_wired_or_refuses import codex_config, plugin_in_codex_cache
+
+        home = self.tmp / "cx"
+        home.mkdir()
+        plugin_in_codex_cache(home)
+        (home / "config.toml").write_text(codex_config(trust=False))
+        self.local.write_text(self.local.read_text() + f"""
+[harness.codex-alt]
+kind = "codex"
+command = ["codex"]
+env = {{ CODEX_HOME = "{home}" }}
+""")
+        approve_every_profile(self)
+        self.which.side_effect = lambda cmd, **kw: f"/usr/bin/{cmd}"
+        row = self._row(self._rows(), "codex-alt")
+        self.assertTrue(row.refused, row.note)
+        self.assertIn("profile 'codex-alt' is not wired", row.note)
+        self.assertIn("codex plugin", row.note)
+
+    def test_the_cursor_may_open_on_a_row_charter_will_wire(self):
+        """Ruling 18 read with ruling 47: Enter on this row does something."""
+        with spawns([], listing()):
+            listed = self._rows(start=WORK)
+        self.assertEqual(selector.opens_on(listed, WORK), WORK)
 
     def test_a_profile_charter_could_not_ask_is_refused_with_its_own_sentence(self):
         """Ruling 12: an unknown is not a pass, and "could not look" is not "looked and the

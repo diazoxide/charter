@@ -2122,11 +2122,13 @@ class DoctorHasARowPerProfile(PersonaIso, unittest.TestCase):
         self.assertEqual(row.hint, "")
 
     def test_an_unwired_row_names_the_install(self):
+        """First, so that a row clipped to the pane keeps the command (ruling 45); what
+        follows it is ruling 47's — `WhatALaunchWouldInstall` pins that half."""
         with spawns([], listing()):
             rows = {r.name: r for r in doctor.check_profile_wiring()}
         row = rows["profile claude-work"]
         self.assertEqual(row.status, doctor.WARN)
-        self.assertEqual(row.hint, "charter harness install claude-work")
+        self.assertTrue(row.hint.startswith("charter harness install claude-work"), row.hint)
 
     def test_an_unknown_row_says_the_check_could_not_run(self):
         with spawns([], "", rc=1):
@@ -2917,6 +2919,62 @@ class ALaunchWiresWhatItCanAndRefusesTheRest(_AWiringSeam, unittest.TestCase):
             got = self.answer()
         self.assertEqual(got.refusal, "")
         self.assertEqual(len(self.wired), 1)
+
+
+class WhatALaunchWouldInstall(_AWiringSeam, unittest.TestCase):
+    """`wiring.would_install`: the selector's and doctor's word for a row a launch will
+    wire on Enter — what, and into which folder — and ``""`` for every row it will not."""
+
+    def install_fix(self, p) -> str:
+        return f"charter harness install {p.name}"
+
+    def test_a_claude_folder_with_no_plugin_names_the_plugin_and_the_folder(self):
+        got = wiring.would_install(self.p, NOT_INSTALLED)
+        self.assertEqual(got, f"charter@charter into {self.home / '.cw'}")
+
+    def test_a_disabled_plugin_is_not_an_install(self):
+        self.assertEqual(wiring.would_install(self.p, DISABLED), "")
+
+    def test_wired_and_unknown_install_nothing(self):
+        self.assertEqual(wiring.would_install(self.p, IS_WIRED), "")
+        self.assertEqual(wiring.would_install(self.p, COULD_NOT_TELL), "")
+
+    def test_codex_is_never_automatic(self):
+        p = make_profile("codex-alt", kind="codex", env=[("CODEX_HOME", str(self.tmp / "cx"))])
+        w = wiring.Wiring(wiring.UNWIRED, "empty home", self.install_fix(p))
+        self.assertEqual(wiring.would_install(p, w), "")
+
+    def test_an_opencode_home_with_no_shim_names_the_shim_and_the_home(self):
+        p = make_profile("oc-alt", kind="opencode", env=[("XDG_CONFIG_HOME",
+                                                           str(self.tmp / "oc"))])
+        w = wiring.Wiring(wiring.UNWIRED, "opencode loads no plugin", self.install_fix(p))
+        got = wiring.would_install(p, w)
+        self.assertIn(str(opencode.SHIM_PATH), got)
+        self.assertIn(str(self.tmp / "oc" / "opencode"), got)
+
+    def test_a_foreign_plugin_in_opencodes_realm_is_not_an_install(self):
+        p = make_profile("oc-alt", kind="opencode")
+        w = wiring.Wiring(wiring.UNWIRED, "also holds aaa_boot.ts", "remove it, or move it")
+        self.assertEqual(wiring.would_install(p, w), "")
+
+    def test_the_answer_is_contained(self):
+        p = make_profile("x", env=[("CLAUDE_CONFIG_DIR", str(self.tmp / "c\x1b[2Kw"))])
+        got = wiring.would_install(p, NOT_INSTALLED._replace(fix=self.install_fix(p)))
+        self.assertNotIn("\x1b", got)
+        self.assertIn("c\\u001b[2Kw", got)
+
+    def test_doctors_hint_names_the_fix_and_that_the_next_launch_wires_it(self):
+        with spawns([], listing()):
+            row = {r.name: r for r in doctor.check_profile_wiring()}["profile claude-work"]
+        self.assertEqual(row.status, doctor.WARN)
+        self.assertIn("charter harness install claude-work", row.hint)
+        self.assertIn("next launch", row.hint)
+        self.assertIn("charter@charter", row.hint)
+
+    def test_doctors_hint_for_a_row_charter_cannot_wire_alone_is_the_fix_as_before(self):
+        with mock.patch.object(wiring, "detect", return_value=DISABLED):
+            row = {r.name: r for r in doctor.check_profile_wiring()}["profile claude-work"]
+        self.assertEqual(row.hint, DISABLED.fix)
 
 
 class EveryLaunchPathWiresAtItsFirstProbe(_ALaunchNamesAProfile, unittest.TestCase):

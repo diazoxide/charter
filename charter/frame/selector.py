@@ -82,6 +82,12 @@ NOT_ON_PATH = "not on PATH: {cmd}"
 #: be about to approve.
 NOT_APPROVED = "not approved yet ({state}) — Enter shows its command"
 
+#: The row of a profile whose only problem is an install charter runs itself (ruling 47).
+#: NOT refused — Enter starts the launch, and the launch is what installs — and it names
+#: what goes where (`wiring.would_install`), because software is about to go into
+#: somebody's folder and the row is the last place they read before it does.
+NOT_WIRED_YET = "not wired yet — Enter installs {what}"
+
 
 class Choice(NamedTuple):
     """The profile the operator picked. A type of its own rather than a bare string,
@@ -166,7 +172,12 @@ def states(ps: list[profiles.Profile], *, cwd: Path) -> dict[str, Pending | None
 
 
 def _wired(p: profiles.Profile, w: wiring.Wiring) -> Pending | None:
-    """*w* as a row state: nothing to say for a wired profile, a refusal for any other."""
+    """*w* as a row state: nothing to say for a wired profile; a row that starts, saying
+    what Enter installs, for one the launch will wire itself (ruling 47); a refusal for
+    any other — an UNKNOWN, a Codex home that needs trust, a fix that is not the install."""
+    what = wiring.would_install(p, w)
+    if what:
+        return Pending(False, NOT_WIRED_YET.format(what=what))
     why = wiring.sentence(p, w)
     return Pending(True, why) if why else None
 
