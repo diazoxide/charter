@@ -3361,6 +3361,22 @@ TAB_SPINNER = "✢✶✻✶"
 #: fact that persists until somebody looks, so it is the one the cell is spent on.
 _ARRIVED_MARK = "✶"
 
+#: What the chats strip draws in the mark cell for a chat on ANOTHER tmux server — one this
+#: frame cannot switch to (ruling 46; `chats.off_server`, `chats.check`'s `OTHER_SERVER`).
+#:
+#: **A tab you cannot switch to must not read as an ordinary tab.** A charter upgrade splits
+#: a plane's chats across the legacy `charter` socket and this plane's own
+#: `charter-plane-<hex>` server, and `select-window` cannot move a client between them — so
+#: pressing such a tab can only refuse. The mark says so before the press, and `F2 → chat`
+#: and the refusal both name the way back on (quit that frame, then `charter`).
+#:
+#: **ASCII and one cell, for :data:`_BAR_MARK`'s reason sharpened.** The mark is the one cell
+#: in front of every tab's name, so a glyph a terminal draws two cells wide shifts that tab's
+#: name and every tab after it — the column-shift :data:`_BAR_RULE` is ASCII to avoid. `~`
+#: is one cell on every terminal and reads as "not here". It never collides with the active
+#: `*`: the chat you are on is always on your own server (:func:`chats.off_server` drops it).
+_OFF_SERVER_MARK = "~"
+
 #: Columns a bar spends between two names. Two, so a name reads as one name — a single
 #: space runs `api.1 api.2` together at the widths where this matters most.
 #:
@@ -3922,14 +3938,22 @@ def _affordances(note: str, close: str) -> str:
 
 
 
-def _mark_cell(active: bool, arrived: bool, busy: bool, frame: str) -> str:
-    """The one cell in front of a tab's name, for the four things it can say.
+def _mark_cell(active: bool, arrived: bool, busy: bool, frame: str,
+               off_server: bool = False) -> str:
+    """The one cell in front of a tab's name, for the things it can say.
 
     `*` for the tab you are ON first and unconditionally (:data:`_BAR_MARK`), because under
-    `NO_COLOR` it is the only thing on the row answering "which tab am I on" and the other
-    two both have somewhere else to be read. Then the arrival, then the spinner, then a
-    blank — see :data:`_ARRIVED_MARK` for why that order and why no strip can ask for the
-    last two at once.
+    `NO_COLOR` it is the only thing on the row answering "which tab am I on" and the others
+    all have somewhere else to be read. Then off-server, then the arrival, then the spinner,
+    then a blank — see :data:`_ARRIVED_MARK` for why that order and why no strip can ask for
+    the last two at once.
+
+    **Off-server is placed above the spinner and the arrival, and that is a correctness
+    order rather than a taste one** (:data:`_OFF_SERVER_MARK`, ruling 46). A chat on another
+    tmux server cannot be switched to from here, so drawing it as `working` (a spinner an
+    operator would press to watch) or leaving it blank (an ordinary tab) is the exact "reads
+    as an ordinary tab" the mark exists to prevent. It never collides with `*`: the active
+    chat is always on this frame's own server (`chats.off_server` drops it).
 
     A function rather than a conditional expression inside the comprehension that calls it:
     the precedence IS the decision here, and one buried in a nested ternary is one the next
@@ -3937,6 +3961,8 @@ def _mark_cell(active: bool, arrived: bool, busy: bool, frame: str) -> str:
     """
     if active:
         return _BAR_MARK[0]
+    if off_server:
+        return _OFF_SERVER_MARK
     if arrived:
         return _ARRIVED_MARK
     if busy:
@@ -3946,7 +3972,7 @@ def _mark_cell(active: bool, arrived: bool, busy: bool, frame: str) -> str:
 
 def _bar(names: list[str], here: str, width: int, *,
          note: str = "", close: str = "", rows: int = 1, busy=(),
-         counts=None, arrived=frozenset()) -> list[str]:
+         counts=None, arrived=frozenset(), off_server=frozenset()) -> list[str]:
     """One bar: *names* with *here* marked, in *rows* x *width* cells.
 
     :func:`_compose` composes it and this is what PUBLISHES it — the one call that writes
@@ -3962,14 +3988,14 @@ def _bar(names: list[str], here: str, width: int, *,
     """
     lines, cols, more, add, close_cells = _compose(
         names, here, width, note=note, close=close, rows=rows, busy=busy, counts=counts,
-        arrived=arrived)
+        arrived=arrived, off_server=off_server)
     TABS.publish(cols, here, more, add, close_cells)
     return lines
 
 
 def _compose(names: list[str], here: str, width: int, *,
              note: str = "", close: str = "", rows: int = 1, busy=(), counts=None,
-             arrived=frozenset()):
+             arrived=frozenset(), off_server=frozenset()):
     """The strip *names*/*here* composes to, and the cells its tabs landed in.
 
     Answers ``(lines, columns, more, add, close)`` — the rows to draw, the ``(row, col)``
@@ -4232,7 +4258,7 @@ def _compose(names: list[str], here: str, width: int, *,
     # in front of it would change no output at all, only one `time.monotonic()`, which is
     # the equivalent mutant this repository deletes rather than documents.
     frame = tab_spinner_frame()
-    marked = [f"{_mark_cell(i == at, names[i] in arrived, names[i] in busy, frame)}{n}"
+    marked = [f"{_mark_cell(i == at, names[i] in arrived, names[i] in busy, frame, names[i] in off_server)}{n}"
               for i, n in enumerate(shown)]
     # **The same fields twice: one set to MEASURE and one set to DRAW.** `chrome.block`
     # adds no cell — `tui.width` counts no SGR — so the two are the same width by
@@ -4574,6 +4600,28 @@ def working_chats() -> frozenset:
         return frozenset()
 
 
+def _off_server(names: list, fid: str) -> frozenset:
+    """Which of *names* are on ANOTHER tmux server — ones this frame cannot switch to after a
+    charter upgrade split its chats across servers (ruling 46).
+
+    `chats.off_server_of` behind a guard, and a wrapper for :func:`working_chats`' reason,
+    which is this module's rule for every read on the repaint path: **never raises.** A
+    panel that threw out of `render` loses its pane, and a plane charter cannot read is "no
+    chats are off-server" — the strip drawn before the split existed, which is the safe
+    degrade rather than a hole in the frame. The mark it feeds only ever ADDS information
+    (`_mark_cell` draws a blank where this is empty), so a failed read costs the strip
+    nothing but the off-server marks.
+
+    *names* is the roster `chats_bar` has already read, so the strip does not scan
+    `.charter/frame/` a second time on the repaint the spinner already costs it — the split
+    is decided off the names in hand (`chats.off_server_of`)."""
+    from . import chats as chats_mod
+    try:
+        return frozenset(chats_mod.off_server_of(names, fid))
+    except Exception:  # noqa: BLE001 - a readout must never cost a pane
+        return frozenset()
+
+
 def _chats_strip(fid: str):
     """What the chat strip is a strip OF — its names, the one you are typing in, both of
     its affordances, and no count field.
@@ -4806,7 +4854,7 @@ def chats_bar(fid: str, width: int, rows: int = 1) -> list[str]:
     """
     names, here, note, close, counts = _chats_strip(fid)
     return _bar(names, here, width, note=note, close=close, rows=rows,
-                busy=working_chats(), counts=counts)
+                busy=working_chats(), counts=counts, off_server=_off_server(names, fid))
 
 
 def workspaces_bar(fid: str, width: int, rows: int = 1) -> list[str]:

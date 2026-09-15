@@ -555,6 +555,31 @@ class TheCheckSaysWhichRefusalFired(PersonaIso, unittest.TestCase):
         self._env.start()
         self.addCleanup(self._env.stop)
 
+    def test_off_server_is_the_chats_on_a_different_server_and_never_yourself(self):
+        """`chats.off_server`, the one reading the strip, `F2 → chat` and `check` all use so
+        they cannot disagree about which chats are unreachable (ruling 46)."""
+        state.record_server("api.1", tmuxctl.plane_socket())
+        state.record_server("api.2", tmuxctl.LEGACY_SOCKET)
+        self.assertEqual(chats.off_server("api.1"), {"api.2"})
+        # The frame is never off its own server, whichever way each is asked.
+        self.assertEqual(chats.off_server("api.2"), {"api.1"})
+
+    def test_two_chats_on_one_server_have_none_off_server(self):
+        state.record_server("api.1", tmuxctl.plane_socket())
+        state.record_server("api.2", tmuxctl.plane_socket())
+        self.assertEqual(chats.off_server("api.1"), set())
+
+    def test_f2_chat_says_an_off_server_row_is_off_server_and_names_the_way_out(self):
+        """The picker row of a chat on another server carries the way out, not its harness —
+        `choose._note` reads the same `chats.off_server` the strip and the refusal do."""
+        state.record_server("api.1", tmuxctl.plane_socket())
+        state.record_server("api.2", tmuxctl.LEGACY_SOCKET)
+        rows = {r.title: r for r in choose.roster(choose.CHAT, "api.1").rows}
+        self.assertEqual(rows["api.2"].note, choose.OTHER_SERVER_NOTE)
+        self.assertIn("charter frame-quit", rows["api.2"].note)
+        # The chat you are on is not off-server, so its row does not carry the note.
+        self.assertNotEqual(rows["api.1"].note, choose.OTHER_SERVER_NOTE)
+
     def test_a_name_outside_the_alphabet_is_refused_as_a_name(self):
         out = chats.check("api.1", "api.2;kill-server")
         self.assertFalse(out.ok)
@@ -608,18 +633,33 @@ class TheCheckSaysWhichRefusalFired(PersonaIso, unittest.TestCase):
         state.record_server("api.2", OPERATOR_SOCKET)
         out = chats.check("api.1", "api.2")
         self.assertFalse(out.ok)
-        self.assertIn("not on this frame's tmux server", out.message)
+        # **A tab you cannot switch to names its own fix** (ruling 46): the refusal says the
+        # chat is on another server AND names the way back on — quit that frame, then charter.
+        self.assertIn("on another tmux server", out.message)
+        self.assertIn("charter frame-quit", out.message)
+        self.assertIn("`charter` brings its chats back", out.message)
 
     def test_a_chat_whose_server_charter_never_recorded_is_refused_too(self):
-        """No default is filled in for a missing marker. Every chat this charter launches
-        records one on both paths, and `of_workspace` keeps pre-chat `{workspace}-{pid}`
-        frames out of the roster entirely — so an absent value is a truncated record, and
-        "charter cannot tell" is the same answer as "somewhere else" for something about
-        to move a client."""
+        """A missing marker resolves to `tmuxctl.LEGACY_SOCKET`, the server a chat older than
+        the record was only ever on — so a chat recorded on this plane's own server and one
+        with no record are on two servers and the switch is refused, with the way out named.
+        `of_workspace` keeps pre-chat `{workspace}-{pid}` frames out of the roster entirely,
+        so this is a truncated record rather than one of those."""
         state.record_server("api.1", tmuxctl.plane_socket())
         out = chats.check("api.1", "api.2")
         self.assertFalse(out.ok)
-        self.assertIn("not on this frame's tmux server", out.message)
+        self.assertIn("on another tmux server", out.message)
+        self.assertIn("charter frame-quit", out.message)
+
+    def test_two_legacy_chats_one_recorded_and_one_not_are_the_same_server(self):
+        """A chat recorded `charter` and one with no record are both on the legacy socket —
+        `tmuxctl.same_server` with the `LEGACY_SOCKET` fallback reads a blank and a spelled
+        `charter` as the one server they share, rather than as two because one is filled in.
+        The old raw `!=` refused this pair; `same_server` does not."""
+        state.record_server("api.1", tmuxctl.LEGACY_SOCKET)
+        # api.2 records no server at all — a chat older than the record.
+        out = chats.check("api.1", "api.2")
+        self.assertNotIn("on another tmux server", out.message)
 
     def test_a_switch_that_may_go_ahead_names_where_it_is_going(self):
         out = chats.check("api.1", "api.2")

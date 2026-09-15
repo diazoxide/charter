@@ -247,20 +247,33 @@ class TheKillIsAimedAtAWindowTmuxJustNamed(PersonaIso, unittest.TestCase):
             self.assertEqual(
                 commands_frame._stop_chats(doomed, windows={SERVER: {"alpha.1": "@3"}}), 1)
 
-        self.assertEqual(len(seen), 1)
-        self.assertIn("kill-window", seen[0])
-        self.assertIn("@3", seen[0])
-        self.assertNotIn("alpha", seen[0], "a session name would be another plane's")
-        self.assertNotIn("kill-server", seen[0])
-        self.assertNotIn("kill-session", seen[0])
+        # One kill, aimed at the window id from the listing. `_stop_chats` also lists the
+        # server's transcript viewers to take a stopped chat's own with it (there are none
+        # here), so the KILL is asserted rather than the raw call count.
+        kills = [c for c in seen if "kill-window" in c]
+        self.assertEqual(len(kills), 1)
+        self.assertIn("@3", kills[0])
+        self.assertNotIn("alpha", kills[0], "a session name would be another plane's")
+        self.assertNotIn("kill-server", kills[0])
+        self.assertNotIn("kill-session", kills[0])
 
     def test_a_chat_with_no_window_in_the_listing_is_not_aimed_at(self):
         _plant("alpha.1", ws="alpha")
         doomed = leave.stopping(leave.plan(live=None, focus="alpha"))
 
-        with mock.patch.object(commands_frame.tmuxctl, "run") as run:
+        seen = []
+
+        class _Out:
+            returncode = 0
+            stdout = ""
+
+        with mock.patch.object(commands_frame.tmuxctl, "run",
+                               side_effect=lambda why, argv, **kw: seen.append(argv) or _Out()):
             self.assertEqual(commands_frame._stop_chats(doomed, windows={}), 0)
-            run.assert_not_called()
+
+        # A stopped chat with no window in the listing is aimed at nothing — the only tmux
+        # calls are the (empty) transcript-viewer listings, never a `kill-window`.
+        self.assertEqual([c for c in seen if "kill-window" in c], [])
 
 
 if __name__ == "__main__":       # pragma: no cover

@@ -396,6 +396,91 @@ class TheTranscriptOpensInAWindowOfItsOwn(PersonaIso, unittest.TestCase):
         said.assert_called_once()
         self.assertEqual(said.call_args[0][1], commands_frame.NO_TRANSCRIPT)
 
+    def _windows_now(self) -> dict:
+        """:meth:`_windows`, but ``{}`` when the whole server is gone — killing a session's
+        last window ends the session and the server, which is a viewer being gone, not a
+        fault. `check=False` so the reader does not fail on that ordinary end-state."""
+        out = self._tmux("list-windows", "-a", "-F", "#{window_id}\t#{window_name}",
+                         check=False)
+        return dict(line.split("\t", 1) for line in out.splitlines() if "\t" in line)
+
+    def _sessions_now(self) -> str:
+        return self._tmux("list-sessions", "-F", "#{session_name}", check=False)
+
+    def _open_a_viewer(self) -> str:
+        """Open a transcript viewer for `alpha_2.1` and return its window id."""
+        before = set(self._windows_now())
+        with mock.patch.object(tmuxctl, "plane_socket", return_value=self.socket):
+            self.assertEqual(commands_frame.cmd_transcript(
+                SimpleNamespace(chat="alpha_2.1")), 0)
+        new = [w for w in self._windows_now() if w not in before]
+        self.assertEqual(len(new), 1, self._windows_now())
+        self.assertIn("transcript alpha_2.1", self._windows_now()[new[0]])
+        return new[0]
+
+    def test_closing_the_chat_takes_its_transcript_viewer_with_it(self):
+        """**The operator's bug (defect 4).** A viewer opens in its own window beside the
+        chat; when the chat is CLOSED, the viewer must go too — otherwise it keeps the
+        workspace's session alive with nothing charter recognises in it, which a later tab
+        then refuses as another plane's. Here the chat and its viewer are the session's two
+        windows, so closing the chat empties and removes the session."""
+        self._chat_with_a_transcript()
+        viewer = self._open_a_viewer()
+
+        with mock.patch.object(tmuxctl, "plane_socket", return_value=self.socket):
+            self.assertEqual(commands_frame.cmd_close(
+                SimpleNamespace(chat="", chat_id="alpha_2.1")), 0)
+
+        windows = self._windows_now()
+        self.assertNotIn(viewer, windows, "the transcript viewer outlived the closed chat")
+        self.assertFalse(any("transcript" in n for n in windows.values()), windows)
+        self.assertEqual(self._sessions_now(), "",
+                         "the closed chat's session was left alive by its viewer")
+
+    def test_quitting_the_chat_takes_its_transcript_viewer_with_it(self):
+        """The same, for quit — quit and close share `_stop_chats`, so a viewer that survived
+        one would survive the other."""
+        self._chat_with_a_transcript()
+        viewer = self._open_a_viewer()
+
+        with mock.patch.object(tmuxctl, "plane_socket", return_value=self.socket):
+            self.assertEqual(commands_frame.cmd_quit(SimpleNamespace(chat="alpha_2.1")), 0)
+
+        self.assertNotIn(viewer, self._windows_now(),
+                         "the transcript viewer outlived the quit chat")
+
+    def test_a_viewer_orphaned_by_a_dead_chat_is_swept_and_its_session_goes(self):
+        """**The pane-died path.** A harness that dies on its own is torn down by tmux's own
+        `pane-died` hook, which kills the chat's window and cannot reliably reach the sibling
+        viewer window — so the viewer is left an orphan. It is swept before the next launch
+        reads liveness, and killing its window (the session's last) removes the session, so it
+        never reads as a live workspace that blocks a restore or is refused as another plane's."""
+        chat_pane = self._chat_with_a_transcript()
+        viewer = self._open_a_viewer()
+        # The chat's harness pane dies and its window goes — the viewer window is left behind,
+        # keeping the `alpha_2` session alive with nothing charter recognises in it.
+        self._tmux("kill-window", "-t", chat_pane)
+        self.assertIn(viewer, self._windows_now(), "the fixture did not leave an orphan viewer")
+        self.assertIn("alpha_2", self._sessions_now())
+
+        commands_frame._sweep_orphan_transcripts(
+            self.socket, commands_frame._live_chats(self.socket))
+
+        self.assertNotIn(viewer, self._windows_now(), "the orphaned viewer was not swept")
+        self.assertEqual(self._sessions_now(), "",
+                         "the orphan viewer's session outlived it")
+
+    def test_a_second_viewer_for_one_chat_replaces_the_first(self):
+        """One viewer per chat: a second press closes the first, so the marked window the
+        teardown ties to the chat is unambiguous."""
+        self._chat_with_a_transcript()
+        first = self._open_a_viewer()
+        second = self._open_a_viewer()
+        self.assertNotEqual(first, second)
+        self.assertNotIn(first, self._windows(), "a second viewer left the first standing")
+        self.assertEqual([w for w, n in self._windows().items() if "transcript" in n],
+                         [second])
+
 @unittest.skipUnless(_HAS_TMUX, "needs a real tmux")
 class TwoPlanesOnOneServer(PersonaIso, unittest.TestCase):
     """§3.3, and the one case a single-plane test is blind to.
