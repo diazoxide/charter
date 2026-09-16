@@ -211,13 +211,25 @@ def argv(profile: str, rest: list[str], *, attended: bool, resume: bool = False)
                                    *(("--resume",) if resume else ()), "--", *rest)
 
 
-def argv_select(start: str | None) -> list[str]:
-    """What tmux is handed for a chat that has not picked a profile yet.
+def argv_select(start: str | None, *, ended: bool = False,
+                fresh: bool = False) -> list[str]:
+    """What tmux is handed for a chat that is showing the profile selector.
 
     Always `--attended`, and that is not an oversight beside :func:`argv`'s rule: a selector
     is a question, so the only open that may reach one is an open somebody is in front of.
     Every open nobody is at — reopen, a restored plane, a handoff — names its profile and
     gets :func:`argv` instead.
+
+    **`ended` is the one exception to that rule, and it does not break it.** A tab whose
+    harness exited draws this selector, and `charter reopen` may put such a tab back with
+    nobody in front of it — so this argv does reach an open nobody is at. Nothing starts
+    there: the pane paints a question and waits, and a harness begins only when somebody
+    switches to that tab and presses Enter. What `--ended` changes is what the operator
+    sees and what Esc means — a resume row, `esc close this tab`, and Ctrl+C doing nothing.
+
+    **`fresh` is that selector with the resume row withheld**, which is what the crash
+    drawer's *start fresh* respawns into. The row is suppressed rather than the conversation
+    forgotten: the link is still recorded, and the next exit offers it again.
 
     *start* is the row the cursor opens on and the row that is marked: the profile of the
     chat `+` was pressed from, else the plane's `[harness] default`, else nothing. It is a
@@ -225,7 +237,42 @@ def argv_select(start: str | None) -> list[str]:
     or environment crosses tmux by any route.
     """
     return util.self_relaunch_argv("frame-launch", "--select", "--attended",
+                                   *(("--ended",) if ended else ()),
+                                   *(("--fresh",) if fresh else ()),
                                    *(("--start", start) if start else ()))
+
+
+def resume_row(fid: str | None) -> "selector.Resume | None":
+    """The resume row for *fid*'s tab, or ``None`` when there is nothing to bring back.
+
+    **Asked at the moment of offering, never cached** (#1101). `leave.conversation_exists`
+    is one `stat` of a path the harness itself named, so a transcript deleted since the tab
+    ended is simply not offered — where a row built from a remembered answer would start a
+    harness on a conversation that is gone and leave the operator to work out why.
+
+    **The kind comes from the identity record, and falls back to the profile's.** A chat
+    restored by `charter reopen` has its profile written before tmux but may carry no
+    identity yet, and a resume row that vanished on a restored tab would be the one place
+    the feature is most needed — the chat came back precisely so its conversation could.
+
+    The title is the chat id here; task 3 composes `<title> · <id>` in its place. The note
+    names the harness and the first bytes of the link, so the row says WHICH conversation
+    rather than asking the operator to take charter's word for it.
+    """
+    from . import selector as selector_mod
+    from . import leave
+
+    if fid is None:
+        return None
+    kind = state.identity(fid).get("CHARTER_HARNESS", "")
+    if not kind:
+        p, _why = resolve(state.profile(fid) or "")
+        kind = p.harness if p is not None else ""
+    link = state.kept_harness_session(fid) or ""
+    if not leave.conversation_exists(kind, link, state.conversation(fid) or ""):
+        return None
+    return selector_mod.Resume(title=f"resume {fid}",
+                               note=f"{kind} · session {link[:8]}")
 
 
 def environment(p: profiles.Profile, base: Mapping[str, str], *,
@@ -909,9 +956,15 @@ def _select_in_pane(args, fid: str | None) -> int:
         while True:
             choice = selector.pick(cwd=Path(os.getcwd()), root=Path(config.ROOT),
                                    start=start, after=after)
-            if choice is None:
-                # Esc, or a stdin that ended. Nothing was started and the pane is still
-                # waiting — that marker stays, so a quit does not record this chat and
+            if choice is selector.KEY_CANCEL or choice is selector.END_OF_INPUT:
+                # Esc, Ctrl+C, or a stdin that ended. **A pane that never started a harness
+                # closes on all three**, which is the rule #1103 left and this task does not
+                # touch: nothing has run here, so there is no chat to keep and nothing an
+                # ended tab could offer instead. The selector a harness EXIT puts here is
+                # where the three come apart — see `_select_in_pane`'s ended branch.
+                #
+                # Nothing was started and the pane is still waiting — that marker stays, so
+                # a quit does not record this chat and
                 # `_launch` says nothing about an early death or a recorded plane.
                 #
                 # The window is closed HERE rather than left to the `pane-died` hook, which

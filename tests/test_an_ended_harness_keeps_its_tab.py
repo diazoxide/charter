@@ -25,10 +25,14 @@ tab's selector it does nothing; every other surface keeps its cancel behaviour.*
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from unittest import mock
 
+from charter import config
 from charter.frame import leave, overlay, palette, selector, state, tabmenu
 
-from tests._isolation import PersonaIso
+from tests._isolation import (PersonaIso, approve_every_profile, declare_profiles,
+                              make_plane, wired_as_today)
 
 
 #: A server these chats record, standing in for a plane's own. A NAME no test starts a
@@ -274,6 +278,143 @@ class TheDrawnMarkAndTheDrawer(PersonaIso, unittest.TestCase):
 
         self.assertFalse(state.was_drawn("../nope"))
         self.assertIsNone(state.drawer("../nope"))
+
+
+class TheSelectorAfterAnExit(PersonaIso, unittest.TestCase):
+    """**A clean exit puts the profile selector back in the chat's own pane**, with one row
+    the selector has never had: resume.
+
+    Decision 4's words are *back to the profile selector, with resume &lt;session name&gt;
+    preselected, then start fresh, then close tab*. The row is offered only when the
+    conversation actually exists (`leave.conversation_exists`), because a resume row that
+    starts an empty harness is an offer charter already knows it cannot honour.
+    """
+
+    RESUME = None                      # built in setUp, once the module is importable
+
+    def setUp(self) -> None:
+        super().setUp()
+        make_plane(self)
+        declare_profiles(self)
+        wired_as_today(self)
+        approve_every_profile(self)
+        self.have = selector.read(Path(config.ROOT))
+        # **`read` is stubbed for the cases that drive `pick`, and it is not tidiness.**
+        # `selector.read` runs `profiles.ignore_check`, which is a real `git status` child —
+        # the one subprocess profile code makes. Called once per loop of `pick`, on a plane
+        # this class rebuilds per case, it is both slow and the shape `CONTRIBUTING.md`
+        # warns hangs rather than fails when it inherits a signing config. What these cases
+        # are about is which row `pick` answers with, so the profiles are stated once.
+        self.enterContext(mock.patch.object(selector, "read", lambda root: self.have))
+        # **And `states` is stated, because detecting wiring RUNS each profile's command.**
+        # `wired_as_today` deliberately leaves that seam alone (it patches
+        # `wiring.wired_or_refusal`, one layer up), and the declared fixture profile is
+        # `npx -y @openai/codex@0.140.0` — so a row built here would shell out to npm and
+        # wait on the network. `None` per profile is `states`' own "nothing to say about
+        # this row", which is the ordinary runnable row these cases are about.
+        self.enterContext(mock.patch.object(
+            selector, "states", lambda ps, *, cwd: {p.name: None for p in ps}))
+        self.resume = selector.Resume(title="resume t2 · beta.1",
+                                      note="claude-code · session 4f3c9ab1")
+
+    def _listed(self, *, resume=None, start="claude-work"):
+        return selector.rows(self.have, cwd=Path(config.ROOT), start=start, resume=resume)
+
+    def _cancelled(self, left: str):
+        """`own_the_tty` answering a cancel, having recorded which key did it."""
+        def fake(surface, *_a, **_kw):
+            surface.left = left
+            return None
+        return fake
+
+    def test_resume_is_first_and_preselected(self):
+        """First because it is what the operator almost always wants after `/exit`, and
+        preselected because Enter must do the obvious thing on a surface that appeared by
+        itself. `opens_on` is what the cursor is placed by, so both halves are asserted."""
+        listed = self._listed(resume=self.resume)
+
+        self.assertEqual(listed[0].id, selector.RESUME_ID)
+        self.assertFalse(listed[0].refused)
+        self.assertEqual(selector.opens_on(listed, "claude-work", resume=self.resume),
+                         selector.RESUME_ID)
+
+    def test_the_resume_row_names_the_session_it_would_bring_back(self):
+        """A row that said only `resume` would be asking the operator to take charter's word
+        for which conversation comes back. The title is the session name and the note is the
+        harness and the first bytes of the link."""
+        listed = self._listed(resume=self.resume)
+
+        self.assertEqual(listed[0].title, "resume t2 · beta.1")
+        self.assertEqual(listed[0].note, "claude-code · session 4f3c9ab1")
+
+    def test_no_conversation_means_no_resume_row_at_all(self):
+        """Decision 4's third case: *no conversation yet → only start fresh and close*. The
+        row is absent rather than refused — there is nothing to say about a conversation
+        that was never started, and a refused row would be charter explaining itself about
+        a chat nobody has typed in."""
+        listed = self._listed(resume=None)
+
+        self.assertNotIn(selector.RESUME_ID, [r.id for r in listed])
+        self.assertEqual(selector.opens_on(listed, "claude-work"), "claude-work")
+
+    def test_the_footer_says_escape_closes_this_tab(self):
+        """The ordinary selector's Esc closes a chat that never started; this one closes a
+        chat that ran. The footer has to say which, because it is the same key."""
+        self.assertIn("esc close this tab", selector.FOOTER_ENDED)
+
+    def test_a_real_escape_and_end_of_input_come_back_as_different_answers(self):
+        """**The seam this whole task turns on.** Both are `own_the_tty` answering `None`;
+        one is the operator closing the tab for good and the other is their terminal going
+        away. `pick` answers two sentinels rather than one `None`, so the launcher cannot
+        treat a dropped pty as a decision."""
+        for left, want in ((overlay.LEFT_KEY, selector.KEY_CANCEL),
+                           (overlay.LEFT_EOF, selector.END_OF_INPUT)):
+            with self.subTest(left=left):
+                with mock.patch.object(selector.palette, "own_the_tty",
+                                       side_effect=self._cancelled(left)):
+                    answer = selector.pick(cwd=Path(config.ROOT), root=Path(config.ROOT),
+                                           start="claude-work", ended=True)
+                self.assertIs(answer, want)
+
+    def test_choosing_resume_asks_for_the_conversation_back(self):
+        """The row comes back as a `Choice` that says `resume`, never as a profile name the
+        caller would have to parse out of a title."""
+        def chose(surface, *_a, **_kw):
+            return next(r for r in surface.rows if r.id == selector.RESUME_ID)
+
+        with mock.patch.object(selector.palette, "own_the_tty", side_effect=chose):
+            answer = selector.pick(cwd=Path(config.ROOT), root=Path(config.ROOT),
+                                   start="claude-work", resume=self.resume, ended=True)
+
+        self.assertIsInstance(answer, selector.Choice)
+        self.assertTrue(answer.resume)
+        self.assertEqual(answer.profile, "claude-work")
+
+    def test_choosing_a_profile_row_starts_fresh(self):
+        """The control beside it: every other row is a fresh start, and `resume` is false —
+        which is what makes the launcher mint a new link rather than reuse the old one."""
+        def chose(surface, *_a, **_kw):
+            return next(r for r in surface.rows if r.id != selector.RESUME_ID)
+
+        with mock.patch.object(selector.palette, "own_the_tty", side_effect=chose):
+            answer = selector.pick(cwd=Path(config.ROOT), root=Path(config.ROOT),
+                                   start="claude-work", resume=self.resume, ended=True)
+
+        self.assertIsInstance(answer, selector.Choice)
+        self.assertFalse(answer.resume)
+
+    def test_ctrl_c_does_nothing_on_an_ended_selector(self):
+        """The ruling, at the surface that has to keep it: a double Ctrl+C is how Claude
+        Code exits, so the third press lands HERE — on the selector that replaced it — and
+        it must not close the tab the second press created."""
+        surface = selector.Selector(catalogue=_rows(), footer=selector.FOOTER_ENDED,
+                                    cancel_keys=("escape",))
+
+        chosen, _tty = _drive(surface, [b"\x03"])
+
+        self.assertIsNone(chosen)
+        self.assertEqual(surface.left, overlay.LEFT_EOF,
+                         "Ctrl+C cancelled the selector an ended tab draws")
 
 
 if __name__ == "__main__":
