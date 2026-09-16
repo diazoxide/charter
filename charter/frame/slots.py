@@ -3990,7 +3990,7 @@ def _mark_cell(active: bool, arrived: bool, busy: bool, frame: str,
 def _bar(names: list[str], here: str, width: int, *,
          note: str = "", close: str = "", rows: int = 1, busy=(),
          counts=None, arrived=frozenset(), off_server=frozenset(),
-         ended=frozenset()) -> list[str]:
+         ended=frozenset(), labels=None) -> list[str]:
     """One bar: *names* with *here* marked, in *rows* x *width* cells.
 
     :func:`_compose` composes it and this is what PUBLISHES it — the one call that writes
@@ -4001,24 +4001,32 @@ def _bar(names: list[str], here: str, width: int, *,
     the launcher's answer overwrite the panel's — a map describing a strip nobody is
     looking at.
 
-    *busy*, *counts* and *arrived* are :func:`_compose`'s and are passed straight through —
-    see there.
+    *busy*, *counts*, *arrived* and *labels* are :func:`_compose`'s and are passed straight
+    through — see there.
     """
     lines, cols, more, add, close_cells = _compose(
         names, here, width, note=note, close=close, rows=rows, busy=busy, counts=counts,
-        arrived=arrived, off_server=off_server, ended=ended)
+        arrived=arrived, off_server=off_server, ended=ended, labels=labels)
     TABS.publish(cols, here, more, add, close_cells)
     return lines
 
 
 def _compose(names: list[str], here: str, width: int, *,
              note: str = "", close: str = "", rows: int = 1, busy=(), counts=None,
-             arrived=frozenset(), off_server=frozenset(), ended=frozenset()):
+             arrived=frozenset(), off_server=frozenset(), ended=frozenset(), labels=None):
     """The strip *names*/*here* composes to, and the cells its tabs landed in.
 
     Answers ``(lines, columns, more, add, close)`` — the rows to draw, the ``(row, col)``
     map :meth:`_Tabs.publish` takes, and the three cell sets that are not tabs.
     :func:`_bar` is the caller that publishes; nothing here writes anything down.
+
+    **What is DRAWN and what is IDENTITY are two lists here, and *labels* is the seam**
+    (decision 11). A chat with a title draws that title in place of its id, and every other
+    thing this function does — which row is yours, which tab is busy, which has ended, which
+    cells the map gives each tab — is decided on the NAME. ``None`` is *draw the names*,
+    which is the workspaces strip and every caller that predates titles; a mapping is
+    consulted with the name as its own default, so a chat nobody named is unchanged down to
+    the column.
 
     *rows* is how many rows the PANE has, which the strip grows into only as far as its
     names need (#829). One is the shipped shape and every rung below is unchanged at it.
@@ -4245,7 +4253,18 @@ def _compose(names: list[str], here: str, width: int, *,
     # bug by whichever caller stops. The same split reaches :data:`TABS`, which is handed
     # the raw name beside the drawn field: a click has to switch to what is on disk.
     at = names.index(here) if here in names else -1
-    shown = [contain.one_line(n) for n in names]
+    # **The label is what is drawn and the NAME is what everything else is decided on.** A
+    # titled chat draws its title here (`chats.label_of`) and stays its id everywhere else in
+    # this function — the index above, the marks below, and the map `_Tabs.publish` is handed
+    # — which is decision 11's *the id keeps doing the linking* made structural rather than
+    # promised: a press on the words resolves to the chat, never to what it is called.
+    #
+    # `contain.one_line` over the result either way. For a NAME it is the containment this
+    # line has always been (#472); for a LABEL it is a no-op, because `chats.title_of` has
+    # already run `contain.readable` over it and what came back is printable ASCII — the
+    # bound has to sit there rather than here, since the same value also reaches a harness
+    # argv (`launcher.session_name`), which never passes through this function at all.
+    shown = [contain.one_line((labels or {}).get(n, n)) for n in names]
     # **The count rides the NAME's field, so the map gives its cells to that name's tab**
     # (#880): a press on `(5)` switches to the workspace it is the count of, which is the
     # only thing it could sensibly be about. Applied after `contain.one_line` and never
@@ -4683,14 +4702,21 @@ def _chats_rows(fid: str):
 
 
 def _strip_of(rows, fid: str):
-    """*rows* as the five fields :func:`_bar` and :func:`bar_rows_wanted` both unpack.
+    """*rows* as the six fields :func:`_bar` and :func:`bar_rows_wanted` both unpack.
 
     Split out so that "which names is this a strip of" is decided in ONE place while
     :func:`chats_bar` still gets at the roster records behind them — the sizer takes the
-    five fields and reads no marks (its own docstring's rule), and the renderer takes the
+    six fields and reads no marks (its own docstring's rule), and the renderer takes the
     marks off the same read.
+
+    **The labels are one of the six and not a renderer-only extra** (decision 11), because
+    the sizer composes the same ladder the renderer draws: a strip whose titles the LAUNCHER
+    could not see would be measured at the width of its ids and then drawn at the width of
+    its names, which is a pane sized for the wrong row. `Chat.title` was filled by
+    `chats.roster`, so this costs no read of its own.
     """
-    return [c.id for c in rows], fid, ADD_CHAT, CLOSE_CHAT, None
+    return ([c.id for c in rows], fid, ADD_CHAT, CLOSE_CHAT, None,
+            {c.id: c.title or c.id for c in rows})
 
 
 def _workspace_counts() -> dict:
@@ -4781,8 +4807,12 @@ def _workspaces_strip(fid: str):
     switches chats, and each chat held a frozen order of its own.
     """
     from . import switch as switch_mod
+    # **`{}` for the labels, and it is the honest answer rather than a placeholder** (decision
+    # 11): a workspace is not a chat and has no title. `_compose` reads a missing key as *draw
+    # the name*, so this strip composes byte for byte what it composed before titles existed
+    # — which is also what the ruling says about a workspace tab's SELECTOR, one surface over.
     return (switch_mod.workspaces(), switch_mod.current_workspace(fid), "", "",
-            _workspace_counts())
+            _workspace_counts(), {})
 
 
 #: The slots that draw a TAB STRIP, mapped to what each one is a strip of.
@@ -4863,13 +4893,13 @@ def bar_rows_wanted(fid: str, slot: str, *, pane_cols: int, cap: int) -> int:
     entry = BARS.get(slot)
     if entry is None:
         return 1
-    names, here, note, close, counts = entry(fid)
+    names, here, note, close, counts, labels = entry(fid)
     width = pane_cols - 2 * pad_for(slot, pane_cols)
     filled = 1
     for rows in range(1, cap + 1):
         lines, _cols, _more, _add, _close = _compose(names, here, width, note=note,
                                                      close=close, rows=rows,
-                                                     counts=counts)
+                                                     counts=counts, labels=labels)
         if len(lines) == rows:
             filled = rows
     return filled
@@ -4895,10 +4925,10 @@ def chats_bar(fid: str, width: int, rows: int = 1) -> list[str]:
     started working".
     """
     roster_rows = _chats_rows(fid)
-    names, here, note, close, counts = _strip_of(roster_rows, fid)
+    names, here, note, close, counts, labels = _strip_of(roster_rows, fid)
     return _bar(names, here, width, note=note, close=close, rows=rows,
                 busy=working_chats(), counts=counts, off_server=_off_server(names, fid),
-                ended=frozenset(c.id for c in roster_rows if c.ended))
+                ended=frozenset(c.id for c in roster_rows if c.ended), labels=labels)
 
 
 def workspaces_bar(fid: str, width: int, rows: int = 1) -> list[str]:
@@ -4915,9 +4945,9 @@ def workspaces_bar(fid: str, width: int, rows: int = 1) -> list[str]:
     nothing in the LAUNCHER knows or should know which workspace a chat was handed to, and
     a mark that changed the row count would resize a pane every time one landed.
     """
-    names, here, note, close, counts = _workspaces_strip(fid)
+    names, here, note, close, counts, labels = _workspaces_strip(fid)
     return _bar(names, here, width, note=note, close=close, rows=rows, counts=counts,
-                arrived=_arrived())
+                arrived=_arrived(), labels=labels)
 
 
 #: Which slots draw something that CHANGES ON ITS OWN, with no version bump and no

@@ -326,10 +326,26 @@ def roster(noun: str, fid: str) -> Roster:
     # ordinary row: `F2 → chat` says so per row, exactly as the strip marks it and
     # `chats.check` refuses it, and all three read the same `chats.off_server`.
     off = chats.off_server(fid) if noun == CHAT else frozenset()
-    rows = tuple(overlay.Row(id=NAME_ID.format(noun, i), title=n, mark=(n == now),
-                             note=_note(noun, n, arrived, off))
+    rows = tuple(overlay.Row(id=NAME_ID.format(noun, i), title=_title(noun, n),
+                             mark=(n == now), note=_note(noun, n, arrived, off))
                  for i, n in enumerate(names))
     return Roster(noun=noun, rows=rows, names=names)
+
+
+def _title(noun: str, name: str) -> str:
+    """What *name*'s row is DRAWN as — the bare name for every noun but a chat.
+
+    **A chat row names the id and then the title after it** (decision 11, ruling 1, and the
+    controller's ruling on where titles show). Never the title alone, and the reason is
+    reachability rather than taste: `palette.matches` filters on what is drawn, a picker's row
+    id is charter's own counter (`chat:n3`) and is deliberately not matched, so a row that
+    dropped its id would be a row nobody can reach by typing the name charter minted —
+    #732's defect with the two halves exchanged.
+
+    :attr:`Roster.names` is untouched, which is what keeps the switch honest: the title is on
+    screen and the ID is what `name_of` matches back and what `chats.check` is asked about.
+    """
+    return chats.named(name) if noun == CHAT else name
 
 
 #: What a workspace row says when a handoff landed there and nobody has looked yet.

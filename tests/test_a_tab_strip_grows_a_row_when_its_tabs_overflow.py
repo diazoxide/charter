@@ -103,7 +103,10 @@ def _strip(names=NAMES, here=HERE, note="", counts=None, close=""):
     `tests/test_the_chat_strip_says_closing_a_chat_is_possible.py`, where the property is
     that the pair is measured together rather than that a width is a particular number.
     """
-    return lambda fid: (list(names), here, note, close, counts)
+    # The sixth field is the per-id LABEL map a chat strip hands over (decision 11).
+    # `{}` here, which `slots._compose` reads as *draw the names*: this fixture is the
+    # ladder's arithmetic, and a title would measure the title rather than the ladder.
+    return lambda fid: (list(names), here, note, close, counts, {})
 
 
 class TheStripAsksForTheRowsItsNamesNeed(unittest.TestCase):

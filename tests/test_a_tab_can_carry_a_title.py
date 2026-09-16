@@ -28,8 +28,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import cli, commands_frame, contain
-from charter.frame import (builtin_actions, chats, leave, overlay, rename, state, tabmenu,
-                           tmuxctl)
+from charter.frame import (builtin_actions, chats, leave, overlay, rename, slots, state,
+                           tabmenu, tmuxctl)
 
 from tests._isolation import PersonaIso
 
@@ -545,3 +545,105 @@ class RenameFromTheTabMenuAndF2(_AWatchedSpawn, unittest.TestCase):
                 commands_frame.cmd_rename(args)
                 shown, _why = rename.normalized(typed)
                 self.assertEqual(state.title("beta.1"), shown or None)
+
+
+class WhereATitleIsShown(PersonaIso, unittest.TestCase):
+    """A title is drawn wherever a chat is named to a person, and NOWHERE else.
+
+    The controller's ruling on the spec's first review: the strip (in place of the id), then
+    after the id in the tab menu's label, the quit and close rows, the ended selector's resume
+    row and drawer, and the chat picker. A workspace tab's selector names profiles, not chats,
+    so it shows no chat's title at all.
+    """
+
+    def setUp(self):
+        super().setUp()
+        for chat in ("beta.1", "beta.2"):
+            _plant(chat)
+        slots.TABS.forget()
+        self.addCleanup(slots.TABS.forget)
+
+    def test_the_strip_draws_the_title_instead_of_the_id(self):
+        """Decision 11's *shown in: the strip*, and it is the one surface where the title
+        stands IN PLACE of the id: a strip is the row where every column is contested, and
+        `beta.1 - fix the widget` on fifteen tabs is a strip that cuts to a count and shows
+        neither."""
+        state.record_title("beta.1", "fix the widget")
+        row = slots.chats_bar("beta.1", 200)[0]
+        self.assertIn("fix the widget", row)
+        self.assertNotIn("beta.1", row)
+        self.assertIn("beta.2", row, "the untitled sibling stopped drawing its id")
+
+    def test_a_click_on_the_title_resolves_to_the_chat(self):
+        """**The map stays keyed by the id** (ruling 1). A press on the words has to reach the
+        chat, never what it is called — which is what makes the title display rather than
+        identity, structurally rather than by promise."""
+        state.record_title("beta.1", "fix the widget")
+        slots.chats_bar("beta.1", 200)
+        hit = {slots.TABS.tab_at(0, c) for c in range(200)}
+        self.assertIn("beta.1", hit, "a press on the title resolved to no chat")
+        self.assertEqual({h for h in hit if h}, {"beta.1", "beta.2"},
+                         "a cell resolved to something that is not a chat id")
+
+    def test_the_sizer_measures_the_label_the_renderer_draws(self):
+        """The sixth field is not a renderer-only extra: `bar_rows_wanted` runs in the
+        LAUNCHER and composes the same ladder, so a strip whose titles it could not see would
+        be measured at the width of its ids and drawn at the width of its names."""
+        # 60 columns: two bare ids fit on one row, and the two titles below need two. Narrower
+        # than that and the ladder has given up on both alike (it draws a count, then
+        # nothing), which is the same answer for both and would measure nothing.
+        narrow = slots.bar_rows_wanted("beta.1", "chats", pane_cols=60, cap=4)
+        self.assertEqual(narrow, 1)
+        state.record_title("beta.1", "fix the widget for the third time now")
+        state.record_title("beta.2", "and another long one that will not fit")
+        self.assertGreater(slots.bar_rows_wanted("beta.1", "chats", pane_cols=60, cap=4),
+                           narrow)
+
+    def test_the_workspaces_strip_is_unchanged(self):
+        """The pin. A workspace is not a chat and has no title, so this strip composes byte
+        for byte what it composed before titles existed."""
+        from charter.frame import switch as switch_mod
+        names, here, note, close, counts, labels = slots._workspaces_strip("beta.1")
+        self.assertEqual(labels, {})
+        self.assertEqual(names, switch_mod.workspaces())
+        state.record_title("beta.1", "fix the widget")
+        row = slots.workspaces_bar("beta.1", 200)[0]
+        self.assertNotIn("fix the widget", row)
+
+    def test_the_tab_menus_label_names_the_id_then_the_title(self):
+        """The operator right-clicked a tab that may be drawing nothing but the words they
+        chose, so the heading has to say which chat that is."""
+        state.record_title("beta.1", "fix it")
+        self.assertIn("fix it", tabmenu.label("beta.1"))
+        self.assertIn("beta.1", tabmenu.label("beta.1"))
+        self.assertEqual(tabmenu.label("beta.2"), "chat beta.2")
+
+    def test_the_chat_picker_names_the_id_then_the_title(self):
+        """`palette.matches` filters on what is DRAWN and a picker row's id is charter's own
+        counter, so a row that dropped the chat id would be a row nobody can reach by typing
+        the name charter minted."""
+        from charter.frame import choose
+        state.record_title("beta.2", "fix it")
+        roster = choose.roster(choose.CHAT, "beta.1")
+        titles = [r.title for r in roster.rows]
+        self.assertIn("beta.1", titles, "an untitled chat stopped drawing its bare id")
+        self.assertIn("beta.2 · fix it", titles)
+        self.assertEqual(list(roster.names), ["beta.1", "beta.2"],
+                         "the picker switched to a title instead of an id")
+        row = [r for r in roster.rows if "fix it" in r.title][0]
+        self.assertEqual(roster.name_of(row), "beta.2")
+
+    def test_only_a_chat_row_names_a_chats_title(self):
+        """**A title belongs to the noun it is a title of**, and the collision is real rather
+        than contrived: `persona.valid_name` admits `[a-z0-9._-]`, so a persona may be named
+        exactly like a chat id. A picker that asked `state.title` for every noun would draw one
+        chat's title on a persona's row — and would pay a file read per row for three nouns
+        that have none."""
+        from charter.frame import choose
+        state.record_title("beta.1", "secret plan")
+        self.make_persona("beta.1")
+        for noun in (choose.WORKSPACE, choose.PERSONA, choose.CHANGE):
+            with self.subTest(noun=noun):
+                for row in choose.roster(noun, "beta.1").rows:
+                    self.assertNotIn("secret plan", row.title)
+        self.assertIn("beta.1", [r.title for r in choose.roster(choose.PERSONA, "beta.1").rows])
