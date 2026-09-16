@@ -578,8 +578,16 @@ def _start_linked(fid: str | None, *, chosen: str, resumed: bool,
     offered as a resume. No `fid is None` guard: every `state` writer answers a `None` id
     with nothing, because `frame_dir(None)` names no directory.
     """
+    from . import ended as ended_mod
+
     link, conv = state.kept_harness_session(fid), state.conversation(fid)
     pid, was_adopted = state.harness_pid(fid), state.adopted(fid)
+    # **Every harness start clears the ended state, and this is the one place every start
+    # reaches** — ruling 1 of the exit gate. A selector pick, the drawer's resume, a fresh
+    # start from an ended tab, a reopen and every ordinary launch all arrive here, where
+    # four call sites each remembering three files would be four chances for a chat that is
+    # running again to keep a tab that says it has ended.
+    was_ended = ended_mod.reset(fid)
     state.clear_adoption(fid)
     state.record_start(fid, resumed=resumed)
     if chosen:
@@ -591,6 +599,12 @@ def _start_linked(fid: str | None, *, chosen: str, resumed: bool,
     after = then()
 
     def undo() -> None:
+        if was_ended:
+            # **Claimed again only where this start cleared a claim.** An `execvpe` that
+            # raised leaves the pane running nothing at all, so a tab that was ended is
+            # ended still. A tab that was NOT ended must not come back claimed, or a chat
+            # nothing has ever run in would close without asking.
+            state.claim_ended(fid)
         if link:
             state.record_harness_session(fid, link)
         else:

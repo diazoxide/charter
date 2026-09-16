@@ -87,6 +87,18 @@ TAB_OPTION = "--tab"
 TRANSCRIPT_ID = "tab:transcript"
 CLOSE_ID = "tab:close"
 
+#: The close row on a tab whose harness has already ended — an ACTION, not a doorway.
+#:
+#: **The warning exists to describe what stopping a running harness costs**, and an ended
+#: tab has none left to stop: its conversation is already over, and the only thing close
+#: still does is forget the chat, which is what the operator pressed the row to do. A
+#: confirmation there would be charter asking about a cost that is no longer being paid.
+#:
+#: Its own id rather than a flag on :data:`CLOSE_ID`, because the two rows behave
+#: differently at the one place it matters — :func:`opens` gives a doorway a surface, and
+#: this row has none — and an id is what both :func:`chose` and :func:`opens` dispatch on.
+CLOSE_NOW_ID = "tab:close-now"
+
 
 def label(target: str) -> str:
     """What the menu's header says before the operator types.
@@ -114,6 +126,17 @@ def close_title(target: str) -> str:
     same thing by both routes.
     """
     return f"chat: close {target} — stop it and do not bring it back"
+
+
+def close_now_title(target: str) -> str:
+    """The close row's title on an ended tab — and it says WHY it will not ask.
+
+    An operator who has pressed `chat: close` before has been shown a warning every time;
+    a row that suddenly closes on one keypress has to account for the difference, and the
+    reason is the whole of it: the harness has already ended, so there is nothing left to
+    stop. :func:`close_title`'s promise about not bringing it back is kept word for word.
+    """
+    return f"chat: close {target} — its harness has ended; do not bring it back"
 
 
 def wanted(args) -> str:
@@ -230,10 +253,16 @@ def catalogue(target: str) -> tuple[overlay.Row, ...]:
     """
     from . import builtin_actions
     has = builtin_actions._has_transcript(target)
+    # **Close stays LAST either way**, which is the ordering guard above rather than a
+    # detail of which row it is: an ended tab's close row acts on one keypress, so putting
+    # it anywhere but the bottom would be exactly the trap `leave.open_rows` avoids.
+    closing = (overlay.Row(id=CLOSE_ID, title=close_title(target))
+               if leave.needs_confirming(target)
+               else overlay.Row(id=CLOSE_NOW_ID, title=close_now_title(target)))
     return (
         overlay.Row(id=TRANSCRIPT_ID, title=transcript_title(target),
                     note="" if has else builtin_actions.NO_TRANSCRIPT, refused=not has),
-        overlay.Row(id=CLOSE_ID, title=close_title(target)),
+        closing,
     )
 
 
@@ -295,7 +324,10 @@ def chose(row, target: str, *, fid: str) -> bool:
     if row.id == TRANSCRIPT_ID:
         _spawn(util.self_relaunch_argv("frame-transcript", "--chat", target), fid=fid)
         return True
-    if leave.goes_through(row, leave.CLOSE):
+    if row.id == CLOSE_NOW_ID or leave.goes_through(row, leave.CLOSE):
+        # **The same teardown by both routes.** `CLOSE_NOW_ID` skips the WARNING, never the
+        # close: the mark, the transcript, the manifest entry and the window are
+        # `frame-close`'s, so an ended tab and a running one are forgotten identically.
         _spawn(util.self_relaunch_argv("frame-close", target, "--chat", fid), fid=fid)
         return True
     return False
