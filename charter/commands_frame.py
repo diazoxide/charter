@@ -6517,18 +6517,25 @@ def _launch(args) -> int:
     # from there into `chats.harness_of`, the chat strip and `_same_profile_as`. A chat that
     # has picked nothing records nothing, and `launcher._picked` writes the kind at the pick.
     if selecting:
-        # **A restored ended tab is the exception, and without it this line undid the record
-        # above.** `state.record_picked_kind` writes the kind this chat came back AS a few
-        # dozen lines up (decision 12), and `record_identity` below REPLACES the record
-        # rather than merging into it — so blanking the name here wiped that write, and a
-        # reopened ended tab recorded no kind at all.
+        # **A restored ended tab is the exception, and this line is now its kind's ONLY
+        # writer.** The kind used to be written twice: `state.record_picked_kind` a few dozen
+        # lines up (decision 12), and then `record_identity` below — which REPLACES the
+        # record rather than merging into it. So blanking the name here wiped that earlier
+        # write, and a reopened ended tab recorded no kind at all.
         #
         # It went unnoticed because `launcher.resume_row` falls back to resolving the chat's
         # profile when the identity holds no kind, so the row still appeared. The defect only
         # shows on a tab whose profile has since left the plane — which is exactly the chat
         # that most needs its conversation offered back, and the one case the fallback cannot
-        # answer. Found by the deletion sweep: the `h.name` expression above could not be
-        # pinned, because nothing downstream could observe it.
+        # answer. The deletion sweep is what found it: the earlier write could not be pinned,
+        # because nothing downstream could observe it.
+        #
+        # **That earlier write is gone now rather than repaired**, and its absence is the
+        # point: with two writers the second silently decided and the first only looked like
+        # a safety net. The sweep confirmed it was unobservable — both halves of its mutation,
+        # to `""` and to `h.name`, survived — and nothing between the two calls reads the
+        # identity record. One writer, pinned by `test_a_reopened_ended_tab_records_the_kind
+        # _it_came_back_as`.
         #
         # Review 12's rule is unchanged for every other selector: a chat that has picked
         # nothing records nothing, so the launching chat's kind cannot ride onto the new
