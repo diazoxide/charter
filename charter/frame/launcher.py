@@ -212,7 +212,7 @@ def argv(profile: str, rest: list[str], *, attended: bool, resume: bool = False)
 
 
 def argv_select(start: str | None, *, ended: bool = False,
-                fresh: bool = False) -> list[str]:
+                fresh: bool = False, titling: bool = False) -> list[str]:
     """What tmux is handed for a chat that is showing the profile selector.
 
     Always `--attended`, and that is not an oversight beside :func:`argv`'s rule: a selector
@@ -231,6 +231,13 @@ def argv_select(start: str | None, *, ended: bool = False,
     drawer's *start fresh* respawns into. The row is suppressed rather than the conversation
     forgotten: the link is still recorded, and the next exit offers it again.
 
+    **`titling` adds the row that names the new chat** (decision 11), and it is a FLAG and
+    nothing more: the title itself is typed in the pane and written there, so no person's
+    words cross tmux by this or any other route (`layout.CARRIABLE` is unchanged). Charter
+    passes it from the two opens that make a chat somebody is standing in front of — the `+`
+    and a workspace tab — and never with `ended`: an ended tab's selector is about a chat that
+    already exists and already has whatever name it was given.
+
     *start* is the row the cursor opens on and the row that is marked: the profile of the
     chat `+` was pressed from, else the plane's `[harness] default`, else nothing. It is a
     NAME and rides as an argument after the flag, like `--profile` — no profile's command
@@ -239,6 +246,7 @@ def argv_select(start: str | None, *, ended: bool = False,
     return util.self_relaunch_argv("frame-launch", "--select", "--attended",
                                    *(("--ended",) if ended else ()),
                                    *(("--fresh",) if fresh else ()),
+                                   *(("--title-row",) if titling else ()),
                                    *(("--start", start) if start else ()))
 
 
@@ -983,9 +991,17 @@ def _select_in_pane(args, fid: str | None) -> int:
         # next exit offers it again — it is simply not on offer in this pass.
         resume = (None if getattr(args, "fresh", False) else resume_row(fid)) if ended \
             else None
+        # **The title row, and the title so far.** It is offered only where the open that
+        # made this pane asked for it (`argv_select(titling=)`), which is the `+` and a
+        # workspace tab. `titled` is this loop's memory of what was typed, because
+        # `frame/selector.py` reads no chat's record — so the row can draw it back on the next
+        # pass, and a title given here is already on disk by then either way.
+        titling = getattr(args, "title_row", False)
+        titled = ""
         while True:
             choice = selector.pick(cwd=Path(os.getcwd()), root=Path(config.ROOT),
-                                   start=start, after=after, resume=resume, ended=ended)
+                                   start=start, after=after, resume=resume, ended=ended,
+                                   titling=titling, titled=titled)
             if ended and choice is selector.END_OF_INPUT:
                 # **End of input is not Esc, and this is the line that says so.** A closed
                 # pty, a killed tmux server or a machine that went down all end input here,
@@ -1021,6 +1037,22 @@ def _select_in_pane(args, fid: str | None) -> int:
                 # `_close_the_cancelled_chat`. Charter knows the operator cancelled.
                 _close_the_cancelled_chat(fid)
                 return selector.CANCELLED_EXIT
+            if isinstance(choice, selector.Titled):
+                # **Written here and now, before any profile is picked**, which is what makes
+                # the title the chat's own rather than the harness's: this process is standing
+                # in the chat's proven pane (`framed_chat`), the id exists, and a title
+                # recorded after the `exec` would be recorded by nobody — the launcher is the
+                # harness by then.
+                #
+                # **The row draws what LANDED, read back off the record rather than kept from
+                # what was typed.** They differ: the gate collapses whitespace, and a title it
+                # refuses leaves the record where it was. `chats.title_of` is the contained
+                # form every other surface draws, so the selector's row and the strip the chat
+                # gets a moment later cannot show two things.
+                from . import chats
+                state.record_title(fid, choice.text)
+                titled = chats.title_of(fid)
+                continue
             start = choice.profile
             p, why = resolve(choice.profile)
             if p is None:

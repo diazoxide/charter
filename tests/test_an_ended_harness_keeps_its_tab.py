@@ -33,7 +33,7 @@ from unittest import mock
 
 from charter import commands_frame, config, tui
 from charter.frame import (actions, builtin_actions, chats, choose, ended, launcher,
-                           leave, overlay, palette, reopen, selector, slots, state,
+                           leave, overlay, palette, rename, reopen, selector, slots, state,
                            tabmenu)
 
 from tests._isolation import (PersonaIso, approve_every_profile, declare_profiles,
@@ -1926,10 +1926,11 @@ class EveryRowThePaletteDrawsGoesSomewhere(PersonaIso, unittest.TestCase):
     The general form of the defect above, stated over the catalogue rather than over the one
     row that had it, so this class of bug cannot come back under a different id. A palette
     row ends in exactly one of two places: `_draw_palette` recognises it and acts on it
-    itself — a picker doorway (`choose.noun_of`), or one of `frame/leave.py`'s own rows
-    (`leave.is_row`) — or it is an action id and goes to `ActionRegistry.invoke`. There is
-    no third destination, and `invoke` answers an id it does not hold by refusing, which
-    reaches the operator as a failure notice for a keypress that was drawn as a working row.
+    itself — a picker doorway (`choose.noun_of`), one of `frame/leave.py`'s own rows
+    (`leave.is_row`), or `frame/rename.py`'s (`rename.is_row`) — or it is an action id and
+    goes to `ActionRegistry.invoke`. There is no third destination, and `invoke` answers an id
+    it does not hold by refusing, which reaches the operator as a failure notice for a
+    keypress that was drawn as a working row.
 
     **Asked through the same two seams `_draw_palette` asks**, never a list of ids this
     file keeps: a test that re-spelled which rows are dispatched locally would go on passing
@@ -1959,7 +1960,8 @@ class EveryRowThePaletteDrawsGoesSomewhere(PersonaIso, unittest.TestCase):
         self.assertTrue(rows, "the catalogue is empty, so this asserts nothing")
         out = []
         for row in rows:
-            if choose.noun_of(row) is not None or leave.is_row(row):
+            if (choose.noun_of(row) is not None or leave.is_row(row)
+                    or rename.is_row(row)):
                 continue        # `_draw_palette` acts on these itself, before `invoke`
             try:
                 reg.get(row.id)

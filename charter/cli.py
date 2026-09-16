@@ -1210,6 +1210,9 @@ def _add_frame_parsers(sub) -> None:
     # *start fresh* respawns into. The conversation is not forgotten, only not offered:
     # the link stays recorded and the next exit offers it again.
     fl.add_argument("--fresh", action="store_true")
+    # The selector with a row that names the new chat (decision 11). A flag and nothing else:
+    # the title is typed in the pane and written there, so no person's words cross tmux.
+    fl.add_argument("--title-row", dest="title_row", action="store_true")
     fl.add_argument("--start", dest="start", default="")
     fl.add_argument("--attended", action="store_true")
     # Ask for the chat's linked conversation back (#1101). A flag and nothing else: the

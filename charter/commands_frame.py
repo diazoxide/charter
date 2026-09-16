@@ -5954,7 +5954,14 @@ def _launch(args) -> int:
         return 2
     if selecting:
         argv = launcher.argv_select(_selector_start(args),
-                                    ended=getattr(args, "ended", False))
+                                    ended=getattr(args, "ended", False),
+                                    # The two opens that MAKE a chat somebody is standing in
+                                    # front of ask for the title row (`cmd_new_chat`,
+                                    # `_open_workspace`). A reopen names its profile and
+                                    # never reaches a selector at all; an ended tab's
+                                    # selector is about a chat that already has whatever name
+                                    # it was given.
+                                    titling=getattr(args, "titling", False))
         # What charter SHOWS if this window dies early: the selector, not
         # `python -P -m charter frame-launch --select`, which is an answer to a question
         # nobody asked (`launcher.display_command`'s own rule, one launch over).
@@ -9188,7 +9195,10 @@ def _open_workspace(fid: str, ws: str, *, socket: str,
     args = SimpleNamespace(harness="frame", profile=None, select=True,
                            start=p.name if p is not None else "",
                            rest=[], no_frame=False, workspace=ws, pick=False,
-                           attach=False, size=_window_size(socket, window))
+                           # A tab opens a chat somebody is standing in front of, so its
+                           # selector offers the row that names it (decision 11).
+                           attach=False, titling=True,
+                           size=_window_size(socket, window))
     here_dir = os.getcwd()
     try:
         os.chdir(root)
@@ -12723,7 +12733,9 @@ def cmd_new_chat(args) -> int:
     launch = SimpleNamespace(harness="frame", profile=None, select=True,
                              start=p.name if p is not None else "",
                              rest=[], no_frame=False, workspace=ws, pick=False,
-                             attach=False,
+                             # The `+` opens a chat somebody is standing in front of, so its
+                             # selector offers the row that names it (decision 11).
+                             attach=False, titling=True,
                              size=_window_size(socket, pane) if pane else None)
     here_dir = os.getcwd()
     try:

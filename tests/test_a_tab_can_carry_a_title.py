@@ -23,15 +23,18 @@ What this module pins, in the order the rulings state it:
 
 from __future__ import annotations
 
+import os
 import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import cli, commands_frame, contain
+from charter import cli, commands_frame, config, contain
 from charter.frame import (builtin_actions, chats, leave, overlay, rename, slots, state,
                            tabmenu, tmuxctl)
 
-from tests._isolation import PersonaIso
+from tests._isolation import (PersonaIso, approve_every_profile, declare_profiles,
+                              wired_as_today)
+from tests._ttyguard import no_terminal
 
 
 #: A server these chats record, standing in for a plane's own. A NAME no test starts a server
@@ -647,3 +650,139 @@ class WhereATitleIsShown(PersonaIso, unittest.TestCase):
                 for row in choose.roster(noun, "beta.1").rows:
                     self.assertNotIn("secret plan", row.title)
         self.assertIn("beta.1", [r.title for r in choose.roster(choose.PERSONA, "beta.1").rows])
+
+
+class ATitleAtThePlus(PersonaIso, unittest.TestCase):
+    """The selector's own title row — the `+` and a workspace tab, and nowhere else."""
+
+    def setUp(self):
+        super().setUp()
+        declare_profiles(self)
+        approve_every_profile(self)
+        wired_as_today(self)
+        _plant("beta.1")
+
+    def _rows(self, **kw):
+        from charter.frame import selector
+        have = selector.read(config.ROOT)
+        return selector.rows(have, cwd=config.ROOT, **kw)
+
+    def test_the_title_row_is_last_and_only_when_titling(self):
+        """Last, because `palette.aim` opens the cursor on the first row that can run: a row
+        at the top that starts no harness would spend the Enter of an operator who opened a
+        chat to start one."""
+        from charter.frame import selector
+        self.assertNotIn(selector.TITLE_ID, [r.id for r in self._rows()])
+        listed = self._rows(titling=True)
+        self.assertEqual(listed[-1].id, selector.TITLE_ID)
+        self.assertIn(selector.TITLE_NONE, listed[-1].title)
+
+    def test_the_cursor_never_opens_on_it(self):
+        """The half `palette.aim` decides. With any profile that can run, the cursor is on
+        that — and a list where nothing can start still opens on this row rather than on
+        nothing, which is `aim`'s own answer and is the right one: Enter always does
+        something."""
+        from charter.frame import palette, selector
+        listed = self._rows(titling=True)
+        self.assertNotEqual(listed[palette.aim(listed)].id, selector.TITLE_ID)
+
+    def test_a_list_where_nothing_can_start_still_says_so(self):
+        """The footer's summary counts only rows that can START a harness. The title row is
+        never refused, so without excluding it `NOTHING_TO_PICK` would stop being reachable
+        the day a chat could be named."""
+        from charter.frame import overlay, selector
+        refused = (overlay.Row(id="profile:x", title="x", note="nope", refused=True),
+                   overlay.Row(id=selector.TITLE_ID, title="title: (none)"))
+        self.assertIn(selector.NOTHING_TO_PICK, selector._footer(refused, None))
+
+    def test_the_plus_and_a_workspace_tab_ask_for_it_and_an_ended_tab_does_not(self):
+        """The call sites, which is where "where is a title offered" actually lives."""
+        from charter.frame import launcher
+        self.assertIn("--title-row", launcher.argv_select("claude", titling=True))
+        self.assertNotIn("--title-row", launcher.argv_select("claude"))
+        self.assertNotIn("--title-row", launcher.argv_select("claude", ended=True))
+        self.assertNotIn("--title-row",
+                         launcher.argv_select("claude", ended=True, fresh=True))
+
+    def test_the_launch_hands_the_flag_to_the_selectors_argv(self):
+        """The wire between the two call sites above and the pane: `cmd_launch` is where
+        `titling` becomes `--title-row`, and a launch that read the field and dropped it would
+        leave both of them green and the row absent.
+
+        `no_frame` refuses this launch one line LATER than the argv is built, so nothing here
+        reaches tmux, a terminal or a harness.
+        """
+        from charter.frame import launcher
+        seen: list[dict] = []
+
+        def _argv_select(start, **kw):
+            seen.append(kw)
+            return ["x"]
+
+        def _launch(titling):
+            with mock.patch.object(launcher, "argv_select", side_effect=_argv_select):
+                commands_frame.cmd_launch(SimpleNamespace(
+                    harness="frame", profile=None, select=True, start="", rest=[],
+                    no_frame=True, workspace="beta", pick=False, attach=False,
+                    size=None, ended=False, **({"titling": True} if titling else {})))
+
+        _launch(True)
+        _launch(False)
+        self.assertEqual([kw["titling"] for kw in seen], [True, False])
+
+    def test_the_title_is_recorded_in_the_pane_before_any_profile_starts(self):
+        """**Written by the process standing in the chat's own proven pane**, before the
+        `exec`: a title recorded after it would be recorded by nobody, because the launcher IS
+        the harness by then.
+
+        `selector.pick` is stood in for — this case is about what `_select_in_pane` does with
+        a `Titled`, not about a tty — and the `execvpe` fake is where the recording is
+        measured, which is the moment the pane stops being charter's.
+        """
+        from charter.frame import launcher, selector
+        seen: list[str | None] = []
+        answers = [selector.Titled("  fix   the widget "), selector.Choice("claude-work")]
+
+        def _pick(**kw):
+            seen.append(kw.get("titled"))
+            return answers.pop(0)
+
+        # Nobody is watching this run: `_refused_in_pane` asks whether stdin is a terminal
+        # before it waits for Enter, and an ambient answer would make the case block on a
+        # developer's machine and pass on CI (`tests/_ttyguard.py`).
+        no_terminal()
+        at_exec: list[str | None] = []
+
+        def _execvpe(cmd, argv, env):
+            at_exec.append(state.title("beta.1"))
+            raise OSError(2, "no")
+
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "beta.1"}, clear=False), \
+                mock.patch.object(launcher, "framed_chat", return_value="beta.1"), \
+                mock.patch.object(selector, "pick", side_effect=_pick), \
+                mock.patch.object(launcher.pane, "claim", return_value=None), \
+                mock.patch.object(launcher.pane, "release"), \
+                mock.patch("os.execvpe", side_effect=_execvpe):
+            launcher._select_in_pane(
+                SimpleNamespace(start="", ended=False, fresh=False, title_row=True),
+                "beta.1")
+
+        self.assertEqual(at_exec, ["fix the widget"])
+        self.assertEqual(seen, ["", "fix the widget"],
+                         "the row did not draw back the title that landed")
+
+    def test_a_chat_nobody_named_starts_exactly_as_it_did(self):
+        """The floor: a selector with no title row behaves as it did before this existed."""
+        from charter.frame import launcher, selector
+        no_terminal()
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "beta.1"}, clear=False), \
+                mock.patch.object(launcher, "framed_chat", return_value="beta.1"), \
+                mock.patch.object(selector, "pick",
+                                  return_value=selector.Choice("claude-work")) as pick, \
+                mock.patch.object(launcher.pane, "claim", return_value=None), \
+                mock.patch.object(launcher.pane, "release"), \
+                mock.patch("os.execvpe", side_effect=OSError(2, "no")):
+            launcher._select_in_pane(
+                SimpleNamespace(start="", ended=False, fresh=False), "beta.1")
+        self.assertFalse(pick.call_args.kwargs["titling"])
+        self.assertIsNone(state.title("beta.1"))
