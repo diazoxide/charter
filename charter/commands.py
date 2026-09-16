@@ -1266,8 +1266,11 @@ def _ensure_guard_hook(root: Path) -> tuple[str, Path | None]:
         return "created", None
     raw = p.read_text()
     try:
-        settings = json.loads(raw)
-    except (OSError, json.JSONDecodeError):
+        settings = doctor._json_as_claude_code_parses(raw)
+    except (OSError, ValueError, RecursionError):
+        # Parsed as Claude Code parses it, so `NaN` and `Infinity` are refused like any other
+        # text that is not JSON. `RecursionError` is a file nested too deeply to parse, and not a
+        # `ValueError`. Either way it is left alone as malformed, like any file this cannot read.
         return "malformed", p
     if not isinstance(settings, dict):
         return "malformed", p
@@ -1277,15 +1280,41 @@ def _ensure_guard_hook(root: Path) -> tuple[str, Path | None]:
     pre = (hooks_block or {}).get("PreToolUse") or []
     if not isinstance(pre, list):
         return "malformed", p
-    if any("charter hook pretooluse" in json.dumps(entry) for entry in pre):
+    # Structurally, through the reader `doctor` uses for a plugin's own `hooks.json` — the same
+    # question about the same shape, so one answer (round 6).
+    #
+    # This was `any("charter hook pretooluse" in json.dumps(entry) for entry in pre)`, and it was
+    # wrong in both directions. It counted the guard's text wherever it appeared — in a `matcher`,
+    # beside the command, in an entry Claude Code would not run — so `init` wrote no hook for a
+    # plane nothing guarded. And it re-encoded parsed data only in order to search it: a settings
+    # file whose `PreToolUse` entry nests past the C encoder's limit (measured on 3.14: 100,000
+    # levels parse and then will not re-encode) made THIS line raise `RecursionError`, one line
+    # above the re-encode that is guarded — so `charter init` died with no sentence and no exit
+    # code. Deciding on the parsed entry removes the encode rather than wrapping it, which is the
+    # only version of this that cannot come back.
+    if doctor._guard_runs_in(pre):
         return "present", None
     settings.setdefault("hooks", {}).setdefault("PreToolUse", []).append(_GUARD_HOOK)
     indent, separators = _json_style(raw)
-    rewritten = json.dumps(settings, indent=indent, separators=separators)
+    try:
+        rewritten = json.dumps(settings, indent=indent, separators=separators)
+    except RecursionError:
+        # Parsed, and too deep to write back out: 3.12's encoder recurses where its decoder did
+        # not (6,000 levels, measured). Left completely untouched, like a file it cannot read.
+        return "malformed", p
     if raw.endswith("\n"):
         rewritten += "\n"
     p.write_text(rewritten)
     return "created", None
+
+
+def _settings_left_untouched(path) -> str:
+    """The one sentence `init` and `reinit` say about a settings file `_ensure_guard_hook` would
+    not rewrite, its path contained: a path is text somebody else's commit created, and a newline
+    in it would write a second line in charter's voice."""
+    return contain.path_sentence(
+        "{path} is not a settings file charter can read and write back as JSON — left it "
+        "completely untouched. Wire the plane-root guard yourself:", path=path)
 
 
 def _json_style(text: str) -> tuple[str | None, tuple[str, str]]:
@@ -1611,13 +1640,25 @@ def _load_settings(root: Path) -> tuple[dict | None, Path]:
     settings yet is ordinary. A *malformed* one reads as ``None`` so callers refuse rather
     than repair: the operator's content is in there, and `_ensure_guard_hook` already keeps
     that restraint for the same file.
+
+    **Read as Claude Code reads it, because this reader feeds writers** (round 5 of the
+    review). Python's `json` accepts ``NaN``, ``Infinity`` and ``-Infinity`` and `JSON.parse`
+    refuses them, so a settings file holding one is a file Claude Code loads nothing from.
+    Read with plain `json.loads`, this handed such a file to `ensure_env_var` and
+    `add_permission_rule`, which rewrote it — `init` added `env.CHARTER_HARNESS` and a
+    `permissions.ask` entry to a file the host ignores, and then printed that it had left it
+    completely untouched. `_ensure_guard_hook` read the same file through the strict parser
+    and refused it, which is how one command came to do both. The rule is the one that
+    settles it: charter never writes back a file it did not read the way the host reads it.
     """
     p = _settings_path(root)
     if not p.exists():
         return {}, p
     try:
-        doc = json.loads(p.read_text())
-    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        doc = doctor._json_as_claude_code_parses(p.read_text())
+    except (OSError, ValueError, RecursionError):
+        # `UnicodeDecodeError` is a `ValueError`; `RecursionError` — a file nested too deeply
+        # to parse — is not.
         return None, p
     return (doc if isinstance(doc, dict) else None), p
 
@@ -1628,12 +1669,16 @@ def _load_json_settings(path: Path):
     `_load_settings` answers this for the plane's committed file specifically. This is the
     same restraint for any path: a missing file is an empty document, an unparseable one is
     somebody's to fix and charter reports it rather than overwriting it.
+
+    Parsed as Claude Code parses it, for `_load_settings`' reason and with the same force:
+    this is the loader `--local` rules are written through, and the two files differ only in
+    blast radius, so they must not differ in what charter is willing to write back.
     """
     if not path.exists():
         return {}, path
     try:
-        doc = json.loads(path.read_text())
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        doc = doctor._json_as_claude_code_parses(path.read_text())
+    except (OSError, ValueError, RecursionError):
         return None, path
     return (doc, path) if isinstance(doc, dict) else (None, path)
 
@@ -1685,8 +1730,6 @@ def add_permission_rule(root: Path, rule: str, bucket: str, local: bool = False,
         return "malformed", f"{path} (`permissions.{bucket}` is not a list)"
     if rule in entries:
         return "present", str(path)
-    if dry_run:
-        return "added", str(path)
     entries.append(rule)
     # Through `_json_style`, like the file's other writers. `init` reaches this function now
     # (the handoff's consent rule), and a plane whose settings are one compact line or
@@ -1694,8 +1737,26 @@ def add_permission_rule(root: Path, rule: str, bucket: str, local: bool = False,
     # `TestSettingsFormattingPreserved` is the pin.
     raw = path.read_text() if path.exists() else ""
     indent, separators = _json_style(raw) if raw else ("  ", (",", ": "))
+    try:
+        rewritten = json.dumps(settings, indent=indent, separators=separators) + "\n"
+    except RecursionError:
+        # Parsed, and too deep to write back out: 3.12's encoder recurses where its decoder did
+        # not (6,000 levels, measured; 3.14 does neither). `_ensure_guard_hook` and
+        # `ensure_env_var` caught this in round 4 and THIS writer did not, so `charter init`
+        # still died here — it reaches this function through `ensure_handoff_gate`, and
+        # `charter guard` reaches it through `_guard_apply` for every registered harness.
+        # Refused like any other file charter cannot write back, and before the `mkdir` below,
+        # so a refusal leaves not even a directory behind.
+        return "malformed", f"{path} (nested too deeply to write back)"
+    # AFTER the encode, because the encode is where this file is refused. `dry_run` is the write
+    # path minus the write (this method's contract), and a check that returned `added` here while
+    # the commit returned `malformed` is precisely the disagreement that contract exists to
+    # prevent: `_guard_apply` would decide the transaction was safe, commit it, and discover the
+    # refusal with the earlier harnesses already written.
+    if dry_run:
+        return "added", str(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(settings, indent=indent, separators=separators) + "\n")
+    path.write_text(rewritten)
     return "added", str(path)
 
 
@@ -2219,7 +2280,12 @@ def ensure_env_var(root: Path, key: str, value: str) -> tuple[str, Path | None]:
     settings["env"] = env
     raw = p.read_text() if p.exists() else ""
     indent, separators = _json_style(raw)
-    rewritten = json.dumps(settings, indent=indent, separators=separators)
+    try:
+        rewritten = json.dumps(settings, indent=indent, separators=separators)
+    except RecursionError:
+        # Parsed, and too deep to write back out: 3.12's encoder recurses where its decoder did
+        # not (6,000 levels, measured). Left completely untouched, like a file it cannot read.
+        return "malformed", p
     if raw.endswith("\n"):
         rewritten += "\n"
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -2704,6 +2770,12 @@ def cmd_init(args) -> int:
         # shim with every guard cut out of it got listed as "already present" (#433).
         if status == "unvouched":
             unvouched.append(label)
+        elif status == "malformed":
+            # Neither written nor found: the harness refused the file. Listing it under
+            # "already present" says charter found its key in there, which is the #433 shape
+            # again — and it would print beside the sentence below saying the same file was
+            # left completely untouched. The refusal is reported where the file is named.
+            pass
         else:
             (created if status == "created" else present).append(label)
 
@@ -2767,8 +2839,7 @@ def cmd_init(args) -> int:
     elif gh_status == "present":
         present.append(".claude/settings.json (plane-root guard already wired)")
     elif gh_status == "malformed":
-        util.warn(f"{gh_detail} is not valid JSON — left it completely untouched. Wire the "
-                  f"plane-root guard yourself:\n{_hooks_snippet()}")
+        util.warn(f"{_settings_left_untouched(gh_detail)}\n{_hooks_snippet()}")
     elif gh_status == "blocked":
         blocked.append((".claude", gh_detail))
 
@@ -2905,8 +2976,7 @@ def cmd_reinit(args) -> int:
     elif gh_status == "present":
         present.append(".claude/settings.json (plane-root guard already wired)")
     elif gh_status == "malformed":
-        util.warn(f"{gh_detail} is not valid JSON — left it completely untouched. Wire the "
-                  f"plane-root guard yourself:\n{_hooks_snippet()}")
+        util.warn(f"{_settings_left_untouched(gh_detail)}\n{_hooks_snippet()}")
 
     if blocked:
         for d, p in blocked:

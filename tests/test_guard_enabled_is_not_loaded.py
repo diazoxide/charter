@@ -19,6 +19,7 @@ with an age, never a verdict (ADR 0013).
 """
 from __future__ import annotations
 
+import json
 import os
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -40,6 +41,12 @@ class GuardCase(PersonaIso):
         # early without one. Asserted here rather than worked around, so the fixture says
         # out loud that these rows are about a real plane.
         self.enterContext(mock.patch.object(config, "HAS_CONTROL_PLANE", True))
+        # A home of its own, and the default config folder under it, so these rows read this
+        # test's manifest and user settings and never the developer's (#969). With project-scope
+        # installs for other planes in the real `~/.claude`, `plane-root guard` read them as
+        # this plane's plugin installed somewhere else.
+        self.enterContext(mock.patch.dict(os.environ, {"HOME": str(self.tmp / "home")}))
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)
         # Rooted at the plane, so `config.ROOT/.claude/settings.json` is the file the host
         # would actually read for this "session" (#851). Without it these tests write one
         # settings file and `check_guard_wired` reads another — the developer's own — which
@@ -50,7 +57,17 @@ class GuardCase(PersonaIso):
                         "these tests are about a session rooted at the plane")
 
     def plugin_enabled(self):
-        """The plugin is enabled in settings — declared, and loaded only at session start."""
+        """The plugin is enabled in settings — declared, and loaded only at session start — and
+        installed for this plane. The record is written because `plane-root guard` asks which
+        directory the install belongs to, and a declaration with no record behind it is a manifest
+        charter cannot read."""
+        man = self.tmp / "home" / ".claude" / "plugins" / "installed_plugins.json"
+        man.parent.mkdir(parents=True, exist_ok=True)
+        # With its files: a record reaches a session only while its `installPath` is a directory.
+        files = self.tmp / "plugin-cache"
+        files.mkdir(exist_ok=True)
+        man.write_text(json.dumps({"version": 2, "plugins": {"charter@charter": [
+            {"scope": "project", "projectPath": str(config.ROOT), "installPath": str(files)}]}}))
         return mock.patch.object(doctor, "_plugin_declaring_guard", return_value="charter@charter")
 
     def running_under_plugin(self):
@@ -115,7 +132,8 @@ class TestEnabledIsNotLoaded(GuardCase):
         """It is read by the session that is running now, so it was never in doubt."""
         (config.ROOT / ".claude").mkdir(parents=True, exist_ok=True)
         (config.ROOT / ".claude" / "settings.json").write_text(
-            '{"hooks": {"PreToolUse": [{"hooks": [{"command": "charter hook pretooluse"}]}]}}')
+            '{"hooks": {"PreToolUse": [{"hooks": [{"type": "command", '
+            '"command": "charter hook pretooluse"}]}]}}')
         with self.not_running_under_plugin():
             r = doctor.check_guard_wired()
         self.assertEqual(r.status, doctor.OK)
@@ -125,7 +143,31 @@ class TestASightingDoesNotOutliveItsDeclaration(GuardCase):
     def _settings_declare(self) -> None:
         (config.ROOT / ".claude").mkdir(parents=True, exist_ok=True)
         (config.ROOT / ".claude" / "settings.json").write_text(
-            '{"hooks": {"PreToolUse": [{"hooks": [{"command": "charter hook pretooluse"}]}]}}')
+            '{"hooks": {"PreToolUse": [{"hooks": [{"type": "command", '
+            '"command": "charter hook pretooluse"}]}]}}')
+
+    def test_a_settings_file_charter_cannot_read_is_not_called_a_deletion(self):
+        """The row may not assert a deletion it did not see.
+
+        With `settings.json` unparseable and a plugin dispatching the guard, charter never read
+        the file that would say whether the declaration is still there — and the sentence said it
+        was "no longer there", sending the operator after an edit nobody made. It is the same
+        false claim as the mirror sentence two lines above it ("its declaration is still in
+        <file>"), which round 7 fixed; `None` being falsy is what hid it here.
+
+        The row still cannot go green — nothing vouches for the declaration — so it warns and
+        says which of the two it could not tell.
+        """
+        (config.ROOT / ".claude").mkdir(parents=True, exist_ok=True)
+        (config.ROOT / ".claude" / "settings.json").write_text('{"hooks": NaN}')
+        self.seen(guardseen.SETTINGS)
+        with self.plugin_enabled(), self.not_running_under_plugin():
+            r = doctor.check_guard_seen()
+        said = (r.detail + " " + (r.hint or "")).lower()
+        self.assertEqual(r.status, doctor.WARN, said)
+        self.assertNotIn("no longer", said)
+        self.assertIn("could not tell", said)
+        self.assertIn("settings.json", said)
 
     def test_a_sighting_from_a_removed_settings_block_is_not_credited(self):
         """The subtle half of the report. The block that fired minutes ago is gone; saying
@@ -134,6 +176,19 @@ class TestASightingDoesNotOutliveItsDeclaration(GuardCase):
         with self.plugin_enabled(), self.not_running_under_plugin():
             r = doctor.check_guard_seen()
         self.assertIn("no longer", (r.detail + " " + (r.hint or "")).lower())
+
+    def test_a_declaration_still_present_beside_an_enabled_plugin_reads_normally(self):
+        """One settings file declaring the hook is enough to keep the sighting's declaration
+        present, whatever the plane's other settings files hold. Here the plugin is enabled too,
+        and with it the one case where "no longer there" could be said — the deletion sweep's
+        survivor on 7385d3a read `any` of those files the same as `all` of them."""
+        self._settings_declare()
+        self.seen(guardseen.SETTINGS)
+        with self.plugin_enabled(), self.not_running_under_plugin():
+            r = doctor.check_guard_seen()
+        self.assertEqual(r.status, doctor.OK, f"{r.detail} {r.hint}")
+        self.assertIn("last ran", r.detail)
+        self.assertNotIn("no longer", r.detail)
 
     def test_a_sighting_from_a_declaration_still_present_reads_normally(self):
         self._settings_declare()
@@ -155,6 +210,21 @@ class TestASightingDoesNotOutliveItsDeclaration(GuardCase):
             r = doctor.check_guard_seen()
         self.assertEqual(r.status, doctor.OK)
         self.assertIn("last ran", r.detail)
+
+    def test_a_sighting_with_no_recorded_source_is_not_read_as_one_from_settings(self):
+        """The same unknown provenance, where a guess would change the answer: an enabled
+        plugin declares the guard and no settings file does, which is exactly the state the
+        removed-settings-block warning is for. A sighting that never said where it came from
+        is not a sighting from settings, so it must not be told it came from a declaration
+        that is no longer there. The test above never enables a plugin, so that branch never
+        ran and reading `None` as `settings` survived review of #970 (M8)."""
+        guardseen.path().parent.mkdir(parents=True, exist_ok=True)
+        guardseen.path().write_text('{"ts": "2026-08-18T00:00:00+00:00", "harness": "opencode"}')
+        with self.plugin_enabled(), self.not_running_under_plugin():
+            r = doctor.check_guard_seen()
+        self.assertEqual(r.status, doctor.OK)
+        self.assertIn("last ran", r.detail)
+        self.assertNotIn("no longer", (r.detail + " " + (r.hint or "")).lower())
 
 
 if __name__ == "__main__":

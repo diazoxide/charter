@@ -11,6 +11,7 @@ import concurrent.futures as cf
 import json
 import os
 import platform
+import re
 import shutil
 import sys
 from dataclasses import dataclass
@@ -1017,8 +1018,8 @@ def session_root() -> Path:
 def _canonical(p: Path) -> Path:
     """*p* with symlinks resolved, or *p* itself when it cannot be.
 
-    **One call site, deliberately.** The first draft resolved both sides of the comparison
-    in :func:`session_is_the_plane`, and the deletion sweep charged both — each was
+    **One side of a comparison, deliberately.** The first draft resolved both sides of the
+    comparison in :func:`session_is_the_plane`, and the deletion sweep charged both — each was
     individually deletable with the suite still green, because they masked each other and
     because a Linux runner's ``/tmp`` needs no normalising either way. Only one of them was
     ever load-bearing: `os.getcwd` hands back the physical path already, so the SESSION
@@ -1029,6 +1030,10 @@ def _canonical(p: Path) -> Path:
     So the plane is the side that needs it, and this is where it happens. Resolving a path
     can raise `OSError` (an unreadable ancestor) or `RuntimeError` (a symlink loop), and a
     preflight row must render something rather than traceback.
+
+    :func:`_settings_files` asks the same question about files rather than about the plane —
+    which local root it is standing in, and whether two of its entries are one file — and
+    asks it here so that "the same file" means the same thing in both places.
     """
     try:
         return p.resolve()
@@ -1049,7 +1054,19 @@ def session_is_the_plane() -> bool:
 
 
 def _settings_files(root: Path | None = None, folder: Path | None = None) -> list[Path]:
-    """The settings the HOST actually resolves, in the order it reads them.
+    """The settings the HOST actually resolves for this session, each of them once.
+
+    **Charter's order, not the host's.** 2.1.273 reads `userSettings` first, where this list
+    ends with it. Nothing here needs the host's order — hooks are additive across the
+    sources, so no file wins — and a list that claimed it would be claiming something
+    charter has not measured.
+
+    **Each file once, by resolved path** (`_canonical`), keeping the first spelling so the
+    order above is unchanged. One file arrives twice in two reachable setups:
+    `$CLAUDE_CONFIG_DIR` naming the folder the session's own settings live in (a session
+    rooted at home, or a folder pointed at `<plane>/.claude`), and macOS spelling one
+    directory both `/var` and `/private/var`. Both would otherwise be counted twice by the
+    guard row and named twice in the sentence that says what charter could not read.
 
     One list, used both for a directly-declared hook and for `enabledPlugins`, so the two
     halves of "is it wired" can never disagree about which files are in force.
@@ -1083,7 +1100,10 @@ def _settings_files(root: Path | None = None, folder: Path | None = None) -> lis
     if top is not None and top != _canonical(here):
         files.append(top / ".claude" / "settings.local.json")
     files.append(_claude_folder(folder) / "settings.json")
-    return files
+    seen: dict[Path, Path] = {}
+    for p in files:
+        seen.setdefault(_canonical(p), p)
+    return list(seen.values())
 
 
 def _local_settings_root(here: Path) -> Path | None:
@@ -1128,6 +1148,91 @@ def _claude_folder(folder: Path | None) -> Path:
     return Path(folder) if folder is not None else _claude_code.config_home()
 
 
+def _refuse_json_constant(name: str):
+    raise ValueError(f"{name} is not JSON")
+
+
+def _json_as_claude_code_parses(text: str):
+    """*text* parsed as `JSON.parse` parses it — how Claude Code reads its install list.
+
+    Python's `json` also accepts ``NaN``, ``Infinity`` and ``-Infinity``, which `JSON.parse`
+    refuses. So a file holding one read as valid here and as nothing to Claude Code: a ``NaN`` in
+    a field the schema drops made `init` answer "present" and write no hook (round 4 of the
+    review). Refused here like any other text that is not JSON, with a `ValueError`. A document
+    nested too deeply still raises `RecursionError`, which is not one; every caller catches both.
+
+    **The one parser** for Claude Code's install list, and for the settings file whose hook block
+    and `enabledPlugins` the guard row and `commands._ensure_guard_hook` count.
+    """
+    return json.loads(text, parse_constant=_refuse_json_constant)
+
+
+def _declares_guard_hook(path: Path) -> bool | None:
+    """Does the settings file at *path* declare a hook Claude Code would RUN for the guard?
+
+    ``True`` it does, ``False`` it does not, and ``None`` charter could not read the file to tell.
+
+    **Decided by the reader the WRITER uses** (round 7), and that is the whole of this function's
+    history. It matched the text `charter hook pretooluse` anywhere in the file; round 6 moved
+    `commands._ensure_guard_hook` to deciding structurally; and the two then disagreed about one
+    file on exactly three shapes — the guard's name in a `matcher`, in an entry whose `type` is
+    not `command`, and in `charter hook pretooluse-read`, which guards Read and Grep. On each of
+    them `doctor` printed a green "wired (settings.json)" and the writer, reading the same file,
+    went on to create the hook. A tick over a plane where nothing runs the guard is the failure
+    #168 is about, and two readers of one file is how it came back.
+
+    A file that is absent, or that holds no hook Claude Code would run, declares nothing. One
+    `JSON.parse` refuses — or that is not UTF-8 — is ``None``: Claude Code loads nothing from it,
+    and neither "wired" nor "not wired" is a thing charter can say about a file it could not read
+    (round 4's `Infinity` beside a hook block, one round on).
+    """
+    try:
+        text = path.read_text()
+    except OSError:
+        return False
+    except UnicodeDecodeError:
+        return None
+    try:
+        doc = _json_as_claude_code_parses(text)
+    except (ValueError, RecursionError):
+        return None
+    events = doc.get("hooks") if isinstance(doc, dict) else None
+    return _guard_runs_in(events.get(_GUARD_EVENT) if isinstance(events, dict) else None)
+
+
+def _settings_declaring_guard(root: Path | None = None,
+                              folder: Path | None = None) -> tuple[list[Path], str | None]:
+    """``(the settings files that declare the guard, why charter could not tell)``.
+
+    One pass for both halves, because the row needs them together and a checker that asks twice
+    is a checker that can answer itself differently — which is the defect one function up.
+
+    Unreadable files are named in the order :func:`_settings_files` yields them — charter's
+    own order, not the host's: 2.1.273 lists `userSettings` first, where this list ends with
+    it. Naming them in the host's order would say something this function cannot back, and
+    nothing here needs it: hooks are additive across the sources, so no file "wins" and every
+    declaring file's hook runs.
+
+    This sorted them into a set first. The sort is gone — alphabetical order is an arbitrary
+    one to impose, and no caller or sentence depends on it. The dedupe is not gone; it moved
+    to `_settings_files`, where it is by RESOLVED path, because the two ways one file is
+    reached twice both spell it differently or not at all: `$CLAUDE_CONFIG_DIR` naming the
+    session's own `.claude`, and macOS spelling one directory `/var` and `/private/var`.
+    Deduping here would have left the guard row counting that file's declaration twice.
+    """
+    declared: list[Path] = []
+    unreadable: list[str] = []
+    for p in _settings_files(root, folder):
+        state = _declares_guard_hook(p)
+        if state:
+            declared.append(p)
+        elif state is None:
+            unreadable.append(_line(util.short_path(p)))
+    doubt = (f"{_named(unreadable[:2])} is not JSON charter can parse"
+             if unreadable else None)
+    return declared, doubt
+
+
 def _settings_docs(root: Path | None = None, folder: Path | None = None) -> list[dict]:
     """Every settings document the host resolves from *root*, parsed, unreadable ones dropped.
 
@@ -1144,8 +1249,8 @@ def _settings_docs(root: Path | None = None, folder: Path | None = None) -> list
     out: list[dict] = []
     for p in _settings_files(root, folder):
         try:
-            doc = json.loads(p.read_text())
-        except (OSError, ValueError, UnicodeDecodeError):
+            doc = _json_as_claude_code_parses(p.read_text())
+        except (OSError, ValueError, UnicodeDecodeError, RecursionError):
             continue
         if isinstance(doc, dict):
             out.append(doc)
@@ -1156,7 +1261,12 @@ def _enabled_plugin_ids(root: Path | None = None, folder: Path | None = None) ->
     """Plugin ids the host has ENABLED. Installed is not enabled (#177)."""
     out: set[str] = set()
     for doc in _settings_docs(root, folder):
-        for pid, on in (doc.get("enabledPlugins") or {}).items():
+        enabled = doc.get("enabledPlugins")
+        # Not an object — a list, a string, a number — enables no plugin from that file. A list
+        # raised `AttributeError` out of the guard row and `init` (round 4 of the review).
+        if not isinstance(enabled, dict):
+            continue
+        for pid, on in enabled.items():
             if on:
                 out.add(pid)
     return out
@@ -1208,25 +1318,356 @@ def _plugin_declaring_guard(root: Path | None = None,
     # list`, which follows `$CLAUDE_CONFIG_DIR` — so one report said the plugin was not
     # installed for this plane and, rows earlier, that the guard it carries was wired. Under
     # that folder no charter hook ran at all: installed somewhere else read as installed here.
-    manifest = _claude_folder(folder) / "plugins" / "installed_plugins.json"
-    try:
-        doc = json.loads(manifest.read_text())
-    except (OSError, ValueError):
-        return None
-    for pid, entries in (doc.get("plugins") or {}).items():
-        if pid not in enabled:
-            continue
-        for entry in entries or []:
-            path = (entry or {}).get("installPath")
-            if not path:
-                continue
-            hooks_json = Path(path) / "hooks" / "hooks.json"
-            try:
-                if "charter hook pretooluse" in hooks_json.read_text():
-                    return pid
-            except (OSError, UnicodeDecodeError):
-                continue
+    #
+    # Through `_installed_plugins`, which never raises. This loop used to read the file itself and
+    # assumed the shape Claude Code writes, so a chat that wrote another one crashed `charter
+    # doctor`, the session preflight and `charter init`. A list charter cannot read declares
+    # nothing here — and `commands._ensure_guard_hook`, which asks this, then writes the guard
+    # hook: a guard declared twice runs twice and is reported, a guard declared nowhere is not.
+    installs, _doubt = _installed_plugins(folder)
+    for pid, records in installs.items():
+        # :func:`_dispatches_guard` has a third answer now, and both of the others are falsy
+        # here on purpose: a file charter could not read is not a plugin that dispatches the
+        # guard, so this function's `None` goes on meaning "none that charter can see" for every
+        # caller that only asks whether to write the hook. `_guard_dispatch_doubt` is what tells
+        # the two apart, for the row that has to say which it met. (Spelled as truthiness rather
+        # than `is True`: `None` and `False` are the same answer to THIS question, and a
+        # comparison that changes nothing observable is a line the deletion sweep is right to
+        # report.)
+        if pid in enabled and any(_dispatches_guard(r["installPath"]) for r in records):
+            return pid
     return None
+
+
+#: The event charter's guard is wired to, and the handler it dispatches — the two things that
+#: make a `hooks.json` entry THIS guard rather than one of charter's other hooks. Spelled here
+#: because `commands._GUARD_HOOK` is the block that writes them and this is the reader that
+#: counts them; `wiring.CODEX_GUARD_HANDLER` is the same handler named for Codex's trust ledger.
+_GUARD_EVENT = "PreToolUse"
+_GUARD_HANDLER = "pretooluse"
+
+
+def _dispatches_guard(install_path: str) -> bool | None:
+    """Does the plugin installed at *install_path* dispatch `charter hook pretooluse`?
+
+    ``True`` it does, ``False`` it does not, and ``None`` charter could not read the file to tell
+    — three answers rather than two, because the third is a fact about charter and the second is
+    a fact about the plugin, and a row that prints them the same way claims something it does not
+    know (round 5 of the review). :func:`_guard_dispatch_doubt` is what turns the third into a
+    sentence naming the file.
+
+    *install_path* is text out of a file a chat can write, so a missing directory, an unreadable
+    `hooks.json` and a NUL byte (``ValueError``) each answer no rather than raise. Those are
+    ``False`` and not ``None`` on purpose: an install whose files are gone is a state this row
+    already reports in its own words, and charter read the file it was given perfectly well.
+
+    The structural half is :func:`_guard_runs_in`, shared with the settings file's own writer.
+
+    **Decided from the entry Claude Code would RUN, not from the file's text** (round 5 of the
+    review). This asked whether the string `charter hook pretooluse` appeared anywhere in the
+    file, which counts it in four places that dispatch nothing: in a `matcher`, in a
+    `statusMessage` or any other key beside the command, under another event entirely, and in an
+    entry whose `type` says it is not a command. It also counted `charter hook pretooluse-read`,
+    which is a different handler guarding Read and Grep — so a plugin wiring only that one read
+    as wiring the Bash guard, and `init` then wrote no hook for a plane nothing guards.
+
+    The walk is `wiring._guard_positions`' — the same file, read the same way for Codex's trust
+    ledger — with every level checked for its type, because each is a line a chat can write. The
+    handler comes from `hooks._HOOK_CMD_RE` rather than a substring, which is what keeps one
+    handler's name from matching another's prefix.
+
+    A file charter cannot parse as Claude Code parses it dispatches nothing HERE, and that is the
+    safe direction rather than a claim: `init` then writes the guard hook, so a guard declared
+    twice is the worst case — harmless, and reported as *declared twice* — where reading a
+    dispatch that is not there leaves the plane root unguarded.
+    """
+    from . import hooks
+
+    try:
+        text = _hooks_json(install_path).read_text()
+    except (OSError, ValueError):
+        return False
+    try:
+        doc = _json_as_claude_code_parses(text)
+    except (ValueError, RecursionError):
+        return None
+    events = doc.get("hooks") if isinstance(doc, dict) else None
+    return _guard_runs_in(events.get(_GUARD_EVENT) if isinstance(events, dict) else None)
+
+
+def _guard_runs_in(groups) -> bool:
+    """Does any hook group in *groups* run `charter hook pretooluse`?
+
+    *groups* is one event's list of hook groups, as it comes out of a plugin's `hooks.json` or
+    out of a settings file's ``hooks.PreToolUse`` — the same shape in both, which is why this is
+    one function. `commands._ensure_guard_hook` decides whether the guard is already wired by
+    asking here, so the writer and the readers cannot come to different ideas of what "the guard
+    is wired" means; that writer used to decide by substring over `json.dumps(entry)`, which was
+    wrong twice over (round 6). It counted the guard's text in a `matcher`, in an entry Claude
+    Code would not run, and in a different handler — and it re-encoded parsed data purely to
+    search it, so a settings file nested past the C encoder's limit killed `charter init` with an
+    uncaught `RecursionError` on 3.14 (measured: 100,000 levels parse and then will not
+    re-encode, while 3.12's decoder gives up first and never reaches it).
+
+    Every level is checked for its type, because every level is a line a chat can write.
+
+    **A known limit, stated rather than guessed at:** Claude Code's hook schema also has an exec
+    form carrying the handler in ``args`` rather than in the ``command`` string. Charter reads
+    only the command string, so a plugin wiring the guard that way reads here as no dispatch —
+    and `init` then writes its own hook, which is the safe direction: declared twice is harmless
+    and `doctor` reports it, declared nowhere is a hole.
+    """
+    from . import hooks
+
+    for group in groups if isinstance(groups, list) else ():
+        entries = group.get("hooks") if isinstance(group, dict) else None
+        for entry in entries if isinstance(entries, list) else ():
+            if not isinstance(entry, dict) or entry.get("type") != "command":
+                continue
+            command = entry.get("command")
+            if isinstance(command, str) and _GUARD_HANDLER in hooks._HOOK_CMD_RE.findall(command):
+                return True
+    return False
+
+
+def _hooks_json(install_path: str) -> Path:
+    """Where a plugin installed at *install_path* declares its hooks. One spelling, because the
+    reader that decides and the reader that doubts must name the same file."""
+    return Path(install_path) / "hooks" / "hooks.json"
+
+
+def _guard_dispatch_doubt(root: Path | None = None,
+                          folder: Path | None = None) -> str | None:
+    """The enabled plugins whose own `hooks.json` charter could not read, as one clause naming
+    the files — or ``None`` when it could read all of them.
+
+    ``None`` includes the ordinary case where nothing dispatches the guard: that is an answer,
+    not a doubt, and reporting it as one would put a caveat on every unwired plane and teach the
+    reader to skip the ones that are real.
+
+    Separate from :func:`_plugin_declaring_guard` rather than folded into it, because that
+    function's ``None`` is read by `commands._ensure_guard_hook` as "write the hook" and must go
+    on meaning exactly that — the write is the safe direction whether charter could read the file
+    or not. What could not be read changes only what the ROW says. Both walk the same installs
+    through :func:`_dispatches_guard`, so the answer and the doubt cannot come from different
+    evidence, which is the drift `_plugin_dispatches_guard` already records for this file.
+    """
+    # No early return for "nothing enabled": the `pid in enabled` filter below already yields
+    # nothing, so one would change no answer, and a line that changes no answer is one the
+    # deletion sweep reports as a survivor — rightly.
+    enabled = _enabled_plugin_ids(root, folder)
+    installs, _doubt = _installed_plugins(folder)
+    unreadable = sorted({_line(util.short_path(_hooks_json(r["installPath"])))
+                         for pid, records in installs.items() if pid in enabled
+                         for r in records if _dispatches_guard(r["installPath"]) is None})
+    if not unreadable:
+        return None
+    return f"{_named(unreadable[:2])} is not JSON charter can parse"
+
+
+def _line(value) -> str:
+    """*value* — a path or an id taken from a file a chat can write, or from the environment — as
+    one line of printable text, so it can neither end a row nor drive the operator's terminal."""
+    return contain.readable(value, contain.PATH_DISPLAY_LIMIT)
+
+
+def _install_list(folder: Path | None = None) -> Path:
+    return _claude_folder(folder) / "plugins" / "installed_plugins.json"
+
+
+#: The scopes Claude Code 2.1.272 accepts in its install list, as its schema spells them.
+_INSTALL_SCOPES = ("managed", "user", "project", "local")
+
+#: A plugin id as that schema requires it: ``plugin@marketplace``, each side
+#: ``[A-Za-z0-9][-A-Za-z0-9._]*``. Matched with ``fullmatch``, because JavaScript's ``$`` allows
+#: no trailing newline and Python's does.
+_PLUGIN_ID = re.compile(r"[A-Za-z0-9][-A-Za-z0-9._]*@[A-Za-z0-9][-A-Za-z0-9._]*")
+
+#: The fields that schema types on a version-2 install, besides the ``scope`` and ``installPath``
+#: every install must have, and refuses the whole list over when one holds the wrong type. All of
+#: them are optional: a record with only ``scope``, ``projectPath`` and ``installPath`` loads
+#: (measured). The fields it drops instead of refusing (``.catch(void 0)``: ``claudeaiPluginId``,
+#: ``archiveSha256``, ``sourceCommand``, ``sourceProducerPath``, ``previousProducerPaths``) and the
+#: keys it does not name load whatever they hold — measured — so nothing here asks about them.
+_OPTIONAL_STRINGS = ("projectPath", "version", "installedAt", "lastUpdated", "gitCommitSha",
+                     "resolvedVersion")
+_OPTIONAL_BOOLEANS = ("auto",)
+
+
+def _installed_plugins(folder: Path | None = None) -> tuple[dict[str, list[dict]], str | None]:
+    """Claude Code's install records by plugin id, when the list matches Claude Code 2.1.272's
+    version-2 schema exactly.
+
+    ``(records, None)``; no list at all is ``({}, None)``, because nothing is installed there.
+    ``({}, why)`` when charter could not tell what Claude Code has installed, *why* being a clause
+    that names the file.
+
+    **Read from Claude Code 2.1.272's schema** — the version-2 install list's zod objects in that
+    binary — and measured against the same binary in throwaway folders (2026-09-15). Claude Code
+    checks the whole list before it loads anything, and a list that does not match loads no plugin
+    at all. :func:`_as_claude_code_reads` asks exactly what that schema refuses on.
+
+    **Any other list is "could not tell", a version-1 list included.** 2.1.272 migrates one, but
+    loads it from a path it computes from the plugin id and version rather than from the
+    ``installPath`` in the file, and charter keeps no reading of that. A newer Claude Code that
+    changes the schema gets the same answer until charter follows the change: `doctor` warns, and
+    `commands._ensure_guard_hook` writes the settings hook — a guard declared twice is harmless
+    and reported, a guard declared nowhere is a hole.
+
+    **Never raises, and every reader of the list reads it here.** 0.62.0's readers assumed the
+    shape Claude Code writes; a list in another shape crashed `charter doctor` with no rows, the
+    SessionStart preflight at every session start, and `charter init` and `reinit`. A list nested
+    too deeply to parse raises `RecursionError`, which is not a `ValueError`.
+
+    ``$CLAUDE_CODE_PLUGIN_CACHE_DIR`` moves the list out of the config folder — measured: set, `claude
+    plugin list --json` lists none of the folder's installs; set empty, Claude Code ignores it.
+    Charter does not follow it, so with it set the file here is not the list Claude Code reads.
+    """
+    shown = _line(util.short_path(_install_list(folder)))
+    if os.environ.get("CLAUDE_CODE_PLUGIN_CACHE_DIR"):
+        return {}, (f"$CLAUDE_CODE_PLUGIN_CACHE_DIR is set, so Claude Code reads its install list "
+                    f"there and not {shown}")
+    try:
+        doc = _json_as_claude_code_parses(_install_list(folder).read_text())
+    except FileNotFoundError:
+        return {}, None
+    except OSError as e:
+        return {}, f"{shown} could not be read ({type(e).__name__})"
+    except (ValueError, RecursionError):
+        return {}, f"{shown} is not JSON charter can parse"
+    installs = _as_claude_code_reads(doc)
+    if installs is None:
+        return {}, f"{shown} is not in the shape Claude Code 2.1.272 reads"
+    return installs, None
+
+
+def _as_claude_code_reads(doc) -> dict[str, list[dict]] | None:
+    """*doc*'s install records when it matches 2.1.272's version-2 schema, or ``None``."""
+    if not isinstance(doc, dict) or doc.get("version") != 2:
+        return None
+    plugins = doc.get("plugins")
+    if not isinstance(plugins, dict):
+        return None
+    for pid, records in plugins.items():
+        if not (_PLUGIN_ID.fullmatch(pid) and isinstance(records, list)
+                and all(_claude_code_reads_install(r) for r in records)):
+            return None
+    return plugins
+
+
+def _claude_code_reads_install(record) -> bool:
+    """Does one install record match 2.1.272's schema for it?"""
+    return (isinstance(record, dict) and record.get("scope") in _INSTALL_SCOPES
+            and isinstance(record.get("installPath"), str)
+            and all(isinstance(record[k], str) for k in _OPTIONAL_STRINGS if k in record)
+            and all(isinstance(record[k], bool) for k in _OPTIONAL_BOOLEANS if k in record))
+
+
+#: How `check_guard_wired` names the plugin when THIS process was launched by it
+#: (`$CLAUDE_PLUGIN_ROOT`), as distinct from a plugin id read from settings. One spelling for the
+#: row's words and for the decision they carry: a session the plugin launched has the plugin
+#: loaded, so no install record is looked up for it and none can overrule it.
+_LAUNCHED_BY_THE_PLUGIN = "Claude Code plugin"
+
+
+def _plugin_standing(pid: str | None) -> tuple[str | None, list[str], list[str], str | None]:
+    """Is *pid* — the enabled plugin `_plugin_declaring_guard` found — installed, with its files,
+    for a session here? ``(placed, elsewhere, gone, doubt)``, each shown as one line of text:
+
+    * *placed* — the plugin id the answer is about: *pid*, or charter's own when none was found,
+      so a sentence names the plugin it placed and never an id nothing found;
+    * *elsewhere* — the directories its installs are recorded for, when none reaches this session;
+    * *gone* — the install paths of installs that reach it but whose files are not there;
+    * *doubt* — why charter could not tell, naming the file.
+
+    All but *placed* empty when it is, or when there is nothing to ask.
+
+    **Enabled here is not installed here.** A plane that has MOVED keeps the record for its old
+    path while its own settings go on enabling the plugin, and a session at the new path loads
+    nothing — measured 2026-09-15 on 2.1.272, at ``project`` scope and at ``local`` (see
+    `tests/test_doctor_tells_one_story_about_a_moved_plane.py`). :func:`_install_reaches` is the
+    rule. **And installed is not loaded:** an install that reaches the session but whose
+    ``installPath`` is not a directory loads nothing, measured too, unless another one that
+    reaches it still has its files.
+
+    With no *pid*, two things are still worth saying: that the list could not be read — which is
+    why no plugin was found — and that charter's own plugin is enabled and installed here with
+    every file gone, which leaves no `hooks.json` to show it dispatches the guard.
+    """
+    from . import config as _config, plugincache
+
+    nothing: tuple[str | None, list[str], list[str], str | None] = (pid, [], [], None)
+    if pid == _LAUNCHED_BY_THE_PLUGIN:
+        return nothing
+    enabled = _enabled_plugin_ids()
+    if not (pid or enabled):
+        return nothing
+    installs, doubt = _installed_plugins()
+    if doubt:
+        return pid, [], [], doubt
+    if not pid and plugincache.PLUGIN_ID not in enabled:
+        return nothing
+    placed = pid or plugincache.PLUGIN_ID
+    records = installs.get(placed)
+    if pid and not records:
+        return pid, [], [], f"{_line(util.short_path(_install_list()))} lists no install of {_line(pid)}"
+    here = session_root()
+    plane = _canonical(Path(_config.ROOT))
+    elsewhere: list[str] = []
+    gone: list[str] = []
+    for record in records or []:
+        if not _install_reaches(record, here, plane):
+            elsewhere.append(_recorded_dir(record))
+        elif _files_there(record["installPath"]):
+            return nothing
+        else:
+            gone.append(_line(util.short_path(record["installPath"])))
+    return placed, elsewhere, gone, None
+
+
+def _install_reaches(record: dict, here: Path, plane: Path) -> bool:
+    """Does Claude Code count this install for a session at *here*?
+
+    2.1.272's own rule (``e1``): ``user`` and ``managed`` reach every directory; otherwise the
+    ``projectPath`` must be the session's directory or share its repository root, and a record
+    with no ``projectPath`` reaches none (``if(!e.projectPath)return!1``). Measured for a missing,
+    an empty and a NUL-bearing path: Claude Code loads the list and places that install nowhere.
+
+    The repository half is approximated as *inside the plane*, the one repository charter installs
+    for (`commands._run_doctor_fix` and `init` both install for `config.ROOT`), which is also what
+    makes a workspace chat reached by the plane's install.
+    """
+    if record["scope"] in ("user", "managed"):
+        return True
+    recorded = record.get("projectPath")
+    if not recorded:
+        return False
+    try:
+        at = _canonical(Path(recorded))
+    except ValueError:
+        return False
+    return at == here or at == plane or plane in at.parents
+
+
+def _recorded_dir(record: dict) -> str:
+    """The directory an install is recorded for, as one line — "no directory" for none."""
+    recorded = record.get("projectPath")
+    return _line(util.short_path(recorded)) if recorded else "no directory"
+
+
+def _files_there(install_path: str) -> bool:
+    """Is *install_path* a directory, as far as asking can confirm?
+
+    Claude Code accepts any string here, and `Path.is_dir` raises `OSError` 63 (name too long) for
+    a component over 255 bytes on Python 3.11–3.13 — measured on 3.12; 3.14 answers False — and
+    `_checks()` has no per-check guard, so that took `charter doctor` and the preflight down (round
+    4 of the review). Files that cannot be confirmed are files gone: the row warns, and `init`
+    writes the hook.
+    """
+    try:
+        return Path(install_path).is_dir()
+    except OSError:
+        return False
 
 
 def _named(items: list[str]) -> str:
@@ -1573,35 +2014,115 @@ def check_guard_wired() -> Result:
     # `commands._ensure_guard_hook` asks the SAME question through the same function.
     # Reading different evidence is how a writer and a checker disagreed about "wired"
     # and left the guard declared twice — and enabled is not dispatched (#177).
-    plugin = ("Claude Code plugin" if os.environ.get("CLAUDE_PLUGIN_ROOT")
+    plugin = (_LAUNCHED_BY_THE_PLUGIN if os.environ.get("CLAUDE_PLUGIN_ROOT")
               else _plugin_declaring_guard())
+    # A plugin whose own `hooks.json` charter cannot parse is not a plugin that does not dispatch
+    # the guard, and `_plugin_declaring_guard` answers `None` to both. Turning that into
+    # "pretooluse is not wired" is the one claim this row cannot support about a file it could not
+    # read — the defect this whole review is about, arrived at from the plugin's side (round 5).
+    # Asked only when nothing was found: a plugin that DOES dispatch it settles the row, whatever
+    # some other plugin's unreadable file holds.
+    dispatch_doubt = None if plugin else _guard_dispatch_doubt()
+    # A plugin id is a key in files a chat can write, so every sentence prints it contained.
+    named = _line(plugin)
 
-    declared = []
-    for p in _settings_files():
-        try:
-            if "charter hook pretooluse" in p.read_text():
-                declared.append(p)
-        except (OSError, UnicodeDecodeError):
-            continue
+    # Both halves from one pass, and both from the reader `commands._ensure_guard_hook` uses:
+    # whatever this row calls wired is what that writer calls present (round 7).
+    declared, settings_doubt = _settings_declaring_guard()
+
+    # ENABLED is not INSTALLED HERE, and INSTALLED is not LOADED. A project-scope install belongs
+    # to the directory it was installed from, and a plane that has moved keeps the old record
+    # while its settings, which enable the plugin, move with it. Measured on Claude Code 2.1.272
+    # (2026-09-15, throwaway folders): at the new path `claude plugin list --json` still lists the
+    # install, enabled, and a session there loads no plugin and runs none of charter's hooks; an
+    # install whose files are gone loads nothing either; and a list in a shape Claude Code does
+    # not read loads no plugin at all. This row said "wired for the NEXT session", whose remedy —
+    # restart — changes nothing, and with a sighting from before the move, green.
+    #
+    # A block in this session's own settings is asked about FIRST (the review of 30ab6ae): it runs
+    # whatever the list says, so nothing read from the list may tell the reader no hook runs here.
+    # Then, before the doubled branch — whose advice is to delete the one declaration a session
+    # here may be loading — could not tell, files gone, installed elsewhere.
+    placed, elsewhere, gone, doubt = _plugin_standing(plugin)
+    if declared and (doubt or dispatch_doubt):
+        # Green, because the block runs; and honest about the one thing it cannot tell — whether a
+        # plugin dispatches the guard as well, which is the second declaration `init` writes the
+        # hook knowing it may make (round 3 of the review). A plugin's own `hooks.json` that
+        # charter could not parse is the same sentence for the same reason (round 5).
+        return Result(name, OK,
+                      detail=f"wired ({_line(declared[0])}) — the declaration a session here "
+                             f"loads; charter could not tell whether an enabled plugin also "
+                             f"dispatches it here: {doubt or dispatch_doubt}")
+    if declared and (gone or elsewhere):
+        return Result(name, OK,
+                      detail=f"wired ({_line(declared[0])}) — the declaration a session here "
+                             f"loads; the install list does not show a plugin loading it here too")
+    from . import plugincache
+    if doubt:
+        return Result(
+            name, WARN,
+            detail=f"charter could not tell whether the plugin enabled here is installed for "
+                   f"this directory: {doubt}",
+            hint=f"Claude Code loads a project- or local-scope install only in the directory it "
+                 f"was installed from or another directory of the same repository, and no plugin "
+                 f"at all from a list in a shape it does not read. Run `claude plugin list --json` "
+                 f"here and read each `projectPath`: if none is this plane or inside its "
+                 f"repository, and none has `user` or `managed` scope, no charter hook runs here — "
+                 f"run: {PLUGIN_FIX_CMD}  (installs `{plugincache.PLUGIN_ID}` for this plane; it "
+                 f"reads that list, not the file).")
+    if dispatch_doubt:
+        # Not "pretooluse is not wired": charter could not read the file that would say. The
+        # remedy names both ways out, because only one of them is the operator's to take if the
+        # plugin's file is somebody else's to fix.
+        return Result(
+            name, WARN,
+            detail=f"charter could not tell whether the plugin enabled here dispatches the "
+                   f"guard: {dispatch_doubt}",
+            hint=f"Charter reads a plugin's own hooks/hooks.json to see whether it runs `charter "
+                 f"hook pretooluse`, and that file is not JSON it can parse — so whether a guard "
+                 f"runs in a session here is not something charter can answer either way. Fix "
+                 f"that file, or declare `charter hook pretooluse` under hooks.PreToolUse in "
+                 f"this directory's .claude/settings.json, which runs whatever the plugin does "
+                 f"— `charter reinit` writes that block.")
+    if gone:
+        return Result(
+            name, WARN,
+            detail=f"enabled plugin {_line(placed)} is installed for a session here, but its files are "
+                   f"gone ({', '.join(gone[:2])}), so Claude Code loads nothing from it — branch "
+                   f"moves in the plane root are NOT refused",
+            hint=f"Claude Code puts an install's missing files back when it lists its plugins "
+                 f"(measured on 2.1.272), and a new session alone does not. Run: {PLUGIN_FIX_CMD}  "
+                 f"(it lists them) or `claude plugin list --json`, then start a new session.")
+    if elsewhere:
+        return Result(
+            name, WARN,
+            detail=f"enabled plugin {_line(placed)} is installed for {', '.join(elsewhere[:2])} and not "
+                   f"for this directory, so no charter hook runs in a session here — branch "
+                   f"moves in the plane root are NOT refused",
+            hint=f"A project- or local-scope install belongs to the directory it was installed "
+                 f"from and the rest of that directory's repository, and a plane that has moved "
+                 f"keeps the old record, so restarting changes nothing. Run: {PLUGIN_FIX_CMD}  "
+                 f"(installs `{plugincache.PLUGIN_ID}` for this plane, as the `plugin install` "
+                 f"row says). The plugin loads at the NEXT session, so restart afterwards.")
 
     if plugin and declared:
         # Not broken — doubled, which is why nobody finds it: two denials for one command
         # read as one stubborn denial. 0.43.1 stopped `init` writing this; planes wired
         # before it still carry the copy, and charter will not delete from a file that is
         # the operator's and git-tracked.
-        where = ", ".join(str(p) for p in declared[:2])
+        where = ", ".join(_line(p) for p in declared[:2])
         return Result(name, WARN,
-                      detail=f"declared twice — the {plugin} dispatches it, and so does "
+                      detail=f"declared twice — the {named} dispatches it, and so does "
                              f"{where}",
                       hint=f"charter runs `hook pretooluse` once per declaration, so every "
                            f"Bash call is guarded twice. Remove the charter `hooks` block "
                            f"from {where} and keep the plugin — or disable the plugin and "
                            f"keep the block. charter does not edit that file for you.")
     if plugin:
-        if plugin == "Claude Code plugin":
+        if plugin == _LAUNCHED_BY_THE_PLUGIN:
             # `$CLAUDE_PLUGIN_ROOT` means this very process was launched by the plugin, so
             # its hooks are demonstrably live. Nothing to qualify.
-            return Result(name, OK, detail="wired (Claude Code plugin)")
+            return Result(name, OK, detail=f"wired ({_LAUNCHED_BY_THE_PLUGIN})")
         # ENABLED is not LOADED (#261). A plugin's hooks are loaded by the harness at
         # session start, so a plugin installed mid-session — or one whose duplicate
         # settings block was just removed on this check's own advice — is declared for the
@@ -1619,27 +2140,38 @@ def check_guard_wired() -> Result:
             # the top of this row, is the one place that decides it, for `guard seen` too.
             if standing.doubt is None:
                 return Result(name, OK,
-                              detail=f"wired (enabled plugin {plugin}) — and it has fired here")
+                              detail=f"wired (enabled plugin {named}) — and it has fired here")
             # Something DID fire from the plugin, so "nothing has fired here yet" would be
             # false beside `guard seen`; and it cannot vouch for this folder, so a tick would
             # be false too. Neither a pass nor a claim that nothing fired (ADR 0009): the row
             # says which of the two it cannot tell, in `guardseen`'s words.
             return Result(
                 name, WARN,
-                detail=f"enabled plugin {plugin} declares it and a guard has fired from it, "
+                detail=f"enabled plugin {named} declares it and a guard has fired from it, "
                        f"but {standing.doubt}. Until a guard fires under the folder in use, "
                        f"nothing shows the plugin is loaded there",
                 hint=standing.hint)
         return Result(
             name, WARN,
-            detail=f"enabled plugin {plugin} declares it, but nothing has fired here yet — "
+            detail=f"enabled plugin {named} declares it, but nothing has fired here yet — "
                    f"a plugin's hooks load at session start, so this is wired for the NEXT "
                    f"session and THIS one may be unguarded",
             hint="Restart the session (or run a Bash command through it and re-check). If "
                  "you just removed a duplicate `hooks` block on this check's advice, that "
                  "was right — but it was the declaration this session actually had.")
     if declared:
-        return Result(name, OK, detail=f"wired ({declared[0]})")
+        return Result(name, OK, detail=f"wired ({_line(declared[0])})")
+    if settings_doubt:
+        # Last of the three could-not-tells, because a declaration or a plugin charter CAN read
+        # settles the row without it. Never "not wired": charter did not read the file that would
+        # say, and `init` writes the hook, so the plane ends up guarded either way.
+        return Result(
+            name, WARN,
+            detail=f"charter could not tell whether the guard is declared here: {settings_doubt}",
+            hint="Claude Code loads nothing from a settings file it cannot parse, so charter "
+                 "cannot say whether a guard runs in a session here. Fix that file — charter "
+                 "never repairs it — and re-check. `charter init` and `reinit` refuse it too, "
+                 "naming it, rather than writing into a file they could not read.")
     # The remedy has to name a file THIS session reads. `charter reinit` writes the PLANE's
     # `.claude/settings.json`, and for a chat rooted at `workspaces/<ws>/` the host never
     # reads that file — so the old hint would have been followed, believed, and left the
@@ -1836,16 +2368,6 @@ def commands_frame_no_renderer(missing: list[str]) -> str:
     return no_renderer_message(missing)
 
 
-def _read_text(p) -> str:
-    """A settings file's text, or ``""`` when it cannot be read. A file charter is not
-    allowed to open is not evidence of anything, and a preflight row must render whatever
-    it finds rather than raise on it."""
-    try:
-        return p.read_text()
-    except (OSError, UnicodeDecodeError):
-        return ""
-
-
 def check_guard_seen() -> Result:
     """Has a guard ever actually RUN here, and under which harness?
 
@@ -1893,9 +2415,12 @@ def check_guard_seen() -> Result:
             # It is in a file this folder's sessions never open, and saying it is gone — the
             # branch below — would send the reader looking for an edit nobody made. Said only
             # where it is true: the sighting came from settings, and that file declares it.
+            # Structurally, like every other reader of a settings file (round 7): this sentence
+            # claims a declaration is STILL THERE, and the guard's name in a `matcher` or in an
+            # entry Claude Code would not run is not one. A file charter cannot read answers
+            # `None`, which is falsy, so the sentence is simply not added.
             if (_seen.last_source() == _seen.SETTINGS and standing.elsewhere
-                    and "charter hook pretooluse" in _read_text(
-                        Path(standing.elsewhere) / "settings.json")):
+                    and _declares_guard_hook(Path(standing.elsewhere) / "settings.json")):
                 detail += (f"; its declaration is still in "
                            f"{util.short_path(Path(standing.elsewhere) / 'settings.json')}, a "
                            f"file sessions on the folder in use never read")
@@ -1906,14 +2431,31 @@ def check_guard_seen() -> Result:
         # reader to conclude the surviving declaration is working (#261). An unrecorded
         # source predates the field and stays unqualified: unknown is not suspect.
         src = _seen.last_source()
-        settings_declare = any("charter hook pretooluse" in _read_text(p)
-                               for p in _settings_files())
+        # Three answers here too, for the reason the row above has them (round 8). This was
+        # `any(...)`, which collapses `None` into "no settings file declares it" — so with an
+        # unparseable `settings.json` beside a dispatching plugin, the sentence below asserted a
+        # DELETION charter never saw, and sent the operator after an edit nobody had made. It is
+        # the same false claim as the mirror sentence a few lines up, which says a declaration is
+        # still there; charter read the file that would settle either one in neither case.
+        declared, settings_doubt = _settings_declaring_guard()
         # Narrow deliberately: `settings` is also what a Codex or opencode dispatch records,
         # and those declarations live in files this check never reads (`~/.codex/config.toml`),
         # so "no settings file declares it" alone would warn at planes that are wired fine.
         # The reported case is specific — the settings block was removed in favour of a
         # plugin — so the plugin has to be the thing that survived it.
-        if src == _seen.SETTINGS and not settings_declare and _plugin_declaring_guard():
+        if src == _seen.SETTINGS and not declared and _plugin_declaring_guard():
+            if settings_doubt:
+                # Not green — nothing vouches for the declaration the sighting came from — and
+                # not a deletion either, because charter could not read the file. It says which
+                # of the two it cannot tell, and names the file, which is the whole of this
+                # review's rule applied to the last sentence that broke it.
+                return Result(
+                    name, WARN,
+                    detail=f"last ran {at} ago under {where}, and charter could not tell whether "
+                           f"that settings declaration is still there: {settings_doubt}",
+                    hint="Fix that file — charter never repairs one it cannot read — and "
+                         "re-check. Until then the sighting is evidence for a declaration "
+                         "charter cannot see, so it vouches for nothing.")
             return Result(
                 name, WARN,
                 detail=f"last ran {at} ago under {where}, but from a settings declaration "

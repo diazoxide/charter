@@ -185,14 +185,60 @@ start Claude Code from, so it sees the same variable.
   sightings. Claude Code resolves it against its own working directory, which charter cannot
   see, so nothing can be compared with it. Set it to an absolute path; running a command
   changes nothing there.
-- **Three narrower Claude Code settings are not followed**, so with any of them set these rows
-  read the wrong file:
+- **`plane-root guard` reads Claude Code's install list only as Claude Code 2.1.272 defines it.**
+  The rules are read from Claude Code 2.1.272's schema and measured against that version:
+  - `version` is 2, and each plugin id has the form `plugin@marketplace`.
+  - Each install has a `scope` and an `installPath`.
+  - Every other field the schema types (`projectPath`, `version`, `installedAt`, `lastUpdated`,
+    `gitCommitSha`, `resolvedVersion` and `auto`) has the type the schema requires.
+
+  For any other list, a version-1 list included, the row says it could not tell which directory
+  the plugin is installed for, and `charter init` and `reinit` write the guard hook as though no
+  plugin dispatched it. A newer Claude Code that changes the schema gets the same answer until
+  charter follows the change. If this session's own settings declare `charter hook pretooluse`,
+  the row stays green instead, and says it could not tell whether a plugin also dispatches the
+  guard.
+- **A plugin dispatches the guard when an entry Claude Code would RUN says so.** charter reads
+  the plugin's own `hooks/hooks.json` and looks for a `PreToolUse` entry of type `command` whose
+  command invokes the `pretooluse` handler. The guard's name anywhere else in that file — in a
+  `matcher`, beside the command rather than in it, under another event, or in a different handler
+  such as `charter hook pretooluse-read`, which guards Read and Grep — dispatches nothing and is
+  not counted. A `hooks.json` charter cannot parse as Claude Code parses it is a file charter
+  could not read rather than a plugin that dispatches nothing, and the row says exactly that and
+  names the file. `charter init` and `reinit` write the guard hook in that case anyway: the safe
+  direction, since a guard declared twice is harmless and reported, and one declared nowhere is a
+  hole. If this session's own settings declare the guard, the row stays green and says it could
+  not tell whether a plugin dispatches it too.
+
+  `plane-root guard` reads your own `.claude/settings.json` the same way, and so do `charter
+  init` and `reinit` before they write the hook into it — so "already wired" means one thing
+  everywhere. Where the row says the guard is wired, `init` finds it already present; where the
+  row does not, `init` writes it. The guard's name in a `matcher`, in an entry Claude Code would
+  not run, or in a different handler is not a declaration in either of them.
+
+  **A known limit:** Claude Code's hook schema also has an exec form that carries the handler in
+  `args` rather than inside the `command` string. Charter reads only the command string, so a
+  plugin wiring the guard that way reads as no dispatch, and `init` writes its own hook — the
+  safe direction, and `doctor` reports the result as declared twice.
+- **A settings file charter cannot read is never written back.** `.claude/settings.json` and its
+  machine-local sibling are read exactly as Claude Code reads them, so a file holding `NaN`,
+  `Infinity` or `-Infinity` — which `JSON.parse` refuses, and Claude Code loads nothing from — is
+  one charter refuses too, as is one nested too deeply for Python to re-encode. `charter init`
+  names the file, writes nothing into it, and exits 1. `charter guard` writes no harness at all,
+  because it writes every harness or none. `plane-root guard` says the same of it rather than
+  calling the plane unguarded: it could not tell whether the guard is declared here, and names
+  the file.
+- **Three narrower Claude Code settings are not followed:**
   - `$CLAUDE_CODE_PLUGIN_CACHE_DIR` moves the installed-plugin list out of the config folder.
-    `plane-root guard` and `guard seen` still read `<config folder>/plugins/installed_plugins.json`.
+    With it set to anything but empty, `plane-root guard` says it could not tell which directory
+    the plugin is installed for. If this session's settings declare the guard, the row stays
+    green and says that instead. `charter init` and `reinit` write the guard hook as though no
+    plugin dispatched it.
   - `$CLAUDE_CODE_USE_COWORK_PLUGINS` renames `plugins/` to `cowork_plugins/` and
-    `settings.json` to `cowork_settings.json`. The guard rows still read the ordinary names.
+    `settings.json` to `cowork_settings.json`. The guard rows still read the ordinary names, so
+    with it set they read the wrong files.
   - `$CLAUDE_CODE_CUSTOM_OAUTH_URL` renames `.claude.json` to `.claude-custom-oauth.json`.
-    `mcp` still reads `.claude.json`.
+    `mcp` still reads `.claude.json`, so with it set that row reads the wrong file.
 
 By hand, if you would rather, or if `charter doctor --fix` could not (an old `claude`, no
 network):
