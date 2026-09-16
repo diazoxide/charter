@@ -373,6 +373,20 @@ class TheEndedStateIsClaimedOnce(PersonaIso, unittest.TestCase):
 
         self.assertTrue(state.is_ended("beta.1"))
 
+    def test_a_claim_that_cannot_be_created_is_answered_not_raised(self):
+        """Two processes answer one death and this is what tells them apart, so it runs in
+        the `pane-died` hook's own child AND in `_launch`'s late check — and a hook never
+        breaks a turn.
+
+        Narrowed to a type the filesystem does not raise, an `OSError` — a full disk, a plane
+        mounted read-only, a directory whose permissions changed under a running frame —
+        escapes into both. The documented degrade is to answer ``False``: nobody claims, so
+        nobody presents, and the tab stays exactly as tmux left it.
+        """
+        with mock.patch.object(state.config, "create_for",
+                               side_effect=OSError(28, "No space left on device")):
+            self.assertFalse(state.claim_ended("beta.1"))   # must not raise
+
     def test_a_chat_with_no_directory_answers_rather_than_raising(self):
         """The `pane-died` hook runs this, and a hook never breaks a turn — so an id that
         can name no directory is an answer, not an exception."""
@@ -1380,6 +1394,63 @@ class NothingActsOnARecordAlone(PersonaIso, unittest.TestCase):
                          "a value charter cannot name a chat from was looked up anyway")
         self.assertEqual(fake.calls, [], "an unspellable chat reached tmux")
 
+    def test_choose_asks_no_server_it_cannot_name(self):
+        """**A guard on what a respawn is aimed at**, and nothing below refuses the same
+        input.
+
+        Without it `proof` is called with `socket=""`, and `tmuxctl.server_argv("")` builds
+        `tmux -u -L '' list-panes …` — a command against a server charter cannot name, issued
+        on the one path whose next step respawns a pane. The profile half is the same shape:
+        a chat with none recorded is the escape hatch, which this drawer never acts for.
+        """
+        for what, setup in (("no server", lambda: state.record_server("beta.1", "")),
+                            ("no profile", lambda: state.record_profile("beta.1", ""))):
+            with self.subTest(chat=what):
+                _plant("beta.1")
+                setup()
+                fake = _Tmux([_row("%1", "1", "beta.1", self.plane)])
+
+                with mock.patch.object(ended.tmuxctl, "run", fake):
+                    ended.choose(overlay.Row(id=ended.RESUME_ID, title="resume"), "beta.1")
+
+                self.assertEqual(fake.calls, [],
+                                 f"a chat with {what} still reached tmux")
+
+    def test_an_unspellable_chat_never_reaches_a_server_lookup(self):
+        """`cmd_frame_ended`'s own guard, pinned the way `present`'s was — by REACH rather
+        than by the answer.
+
+        `test_the_command_always_returns_zero` asserts rc 0 and no tmux calls, and BOTH hold
+        with this guard deleted: `state.frame_server` refuses an id that names no directory
+        and answers nothing, so the command returns 0 regardless. What the guard decides is
+        that the lookup never happens at all — the value is expanded by tmux out of
+        `#{@charter_chat}` into a shell-quoted `run-shell` string, and a value charter cannot
+        name a chat from is one it must not look a server up for.
+        """
+        asked: list = []
+
+        with mock.patch.object(ended.state, "frame_server",
+                               side_effect=lambda f: asked.append(f)):
+            self.assertEqual(ended.cmd_frame_ended(SimpleNamespace(chat="../nope")), 0)
+
+        self.assertEqual(asked, [],
+                         "a server was looked up for a chat charter cannot name")
+
+    def test_the_proof_format_asks_for_the_drawer_marker_whole(self):
+        """**The one listing every write in this module is aimed by**, asserted as a shape
+        because no behavioural case here can see it.
+
+        Dropping the closing brace leaves `#{@charter_drawer` unterminated: tmux never
+        answers that field, so `proof` reports no drawers for any chat, `drop_drawer` kills
+        nothing, and a crash drawer is left standing on the operator's screen for good. The
+        `_Tmux` fake fabricates listing rows rather than parsing this format — which is
+        exactly why the sweep could take the brace with every case in this module green.
+        """
+        self.assertEqual(ended.PROOF_FORMAT.count("\t"), 4,
+                         "the listing no longer asks for five tab-separated fields")
+        self.assertIn("#{" + ended.DRAWER_OPTION + "}", ended.PROOF_FORMAT)
+        self.assertTrue(ended.PROOF_FORMAT.endswith("}"), ended.PROOF_FORMAT)
+
     def test_a_respawn_tmux_refused_offers_nothing(self):
         """The plan's Behaviour §6, and the answer has to be ``""``.
 
@@ -1687,6 +1758,30 @@ class ClosingAnEndedTabDoesNotAsk(PersonaIso, unittest.TestCase):
         self.assertEqual(len(spawned), 1, spawned)
         self.assertIn("frame-close", spawned[0])
         self.assertIn("beta.1", spawned[0])
+
+    def test_a_drawer_that_will_not_die_never_costs_the_close(self):
+        """**A courtesy may never cost the close behind it**, which is that function's own
+        rule and the reason the catch is broad.
+
+        `_forget_the_ended_tab` drops the two things an ended tab is holding — the `ended`
+        claim and the drawer pane offering the choice — and `cmd_close` calls it BEFORE the
+        window goes, while that pane is still there to be proven. Killing it reaches a real
+        tmux, so it can fail for reasons that have nothing to do with this close: a server
+        that will not answer, a pane already gone, a timeout.
+
+        Narrowed to a type nothing raises, such a failure propagates and takes the close with
+        it: the chat is left open, unmarked and unkilled, with its window still on screen.
+        That is #933's report arrived at from the other side — the operator asked for the
+        chat to be forgotten and it was not.
+        """
+        state.claim_ended("beta.1")
+
+        with mock.patch.object(ended, "drop_drawer",
+                               side_effect=RuntimeError("the server would not answer")):
+            commands_frame._forget_the_ended_tab("beta.1")   # must not raise
+
+        self.assertFalse(state.is_ended("beta.1"),
+                         "the ended claim was not dropped before the drawer was tried")
 
     def test_neither_close_now_id_can_be_shipped_as_an_action(self):
         """**The invariant, not the spelling.** Both ids are minted and read inside their
