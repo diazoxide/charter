@@ -142,9 +142,11 @@ def _paints(text: str) -> list[str]:
 def _types_on_first_paint(stream_cls, master: int):
     """*stream_cls*, plus one Ctrl-C typed into *master* the first time it is written to.
 
-    Ctrl-C rather than a named key: `overlay.decode` reads `\\x03` as Escape ("nothing else
-    is going to turn this into a signal"), it is ONE byte so there is no sequence to split
-    across reads, and it CANCELS — so nothing this class drives ever starts an action.
+    Ctrl-C rather than a named key: it is ONE byte, so there is no sequence to split across
+    reads, and it CANCELS — so nothing this class drives ever starts an action. `decode`
+    names it `overlay.CTRL_C` rather than Escape since the exit gate, and the cancel is kept
+    by `Surface.cancel_keys` carrying that name by default ("nothing else is going to turn
+    this into a signal"). A palette is one of the surfaces that keeps it.
 
     A factory rather than two written-out subclasses because the arrangement has to be
     identical on both stand-ins; see `_ran_the_palette` for why both carry it.

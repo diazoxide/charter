@@ -1225,12 +1225,24 @@ def window_argv(*, socket: str, session: str, window: str, cwd: str) -> list[str
 
 
 def respawn_argv(*, socket: str, harness_pane: str, env: dict[str, str],
-                 cwd: str, harness_argv: list[str]) -> list[str]:
-    """`respawn-pane -k`: the harness replaces the placeholder, in the SAME pane.
+                 cwd: str, harness_argv: list[str], kill: bool = True) -> list[str]:
+    """`respawn-pane`: a program replaces what was in the pane, in the SAME pane.
 
     Verified against tmux 3.7c that the pane keeps its `%N` id across the respawn, which
     is what lets `window_argv`'s reported id go on scoping the splits and the
     exit-status query afterwards.
+
+    **`kill` is what stands between a stale record and a running agent, which is why it is
+    a parameter and not the constant it used to be.** `-k` kills whatever is in the pane
+    before starting the new program. That is exactly right for the placeholder this call
+    was written for — :func:`window_argv` creates the pane running `cat` on purpose, and
+    replacing it is the whole point. It is exactly wrong for the ended step, which respawns
+    a pane whose harness has EXITED: there the pane id comes off a record, and a record can
+    be stale, so `-k` would quietly replace a harness that is still mid-turn instead of
+    refusing. Measured on tmux 3.7c and at the 3.2 floor: without `-k`, tmux refuses a live
+    pane outright (`respawn pane failed: pane … still active`, rc 1) and leaves the process
+    untouched. Dropping the flag is therefore not a weakening — it puts tmux's own check in
+    the way, which is the #933/#1103 rule that no respawn acts on a record alone.
 
     *env* rides on `-e`, one `NAME=VALUE` argv element each, sorted so the command is
     the same on every launch. This is the only way charter's own variables
@@ -1293,7 +1305,7 @@ def respawn_argv(*, socket: str, harness_pane: str, env: dict[str, str],
     # own command separator: a harness argument loses the `;`, and a directory or a value
     # ends the command at the next flag (#957). The directory's is `tmuxctl.start_directory`,
     # which also doubles each `#` tmux would read as a format (#961).
-    return _tmux(socket, "respawn-pane", "-k", "-t", harness_pane,
+    return _tmux(socket, "respawn-pane", *(("-k",) if kill else ()), "-t", harness_pane,
                  "-c", tmuxctl.start_directory(cwd),
                  *_env_argv(env), "--", *map(tmuxctl.verbatim, harness_argv))
 
