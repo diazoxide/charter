@@ -462,6 +462,10 @@ class TwoPlanesMixedInOneSessionBeforeTheUpgrade(_OnTheSharedServer, unittest.Te
         self._in(self.a_root)
         self.a_pane = self._old_chat(CHAT, first=True, mark=True, profile="claude-a")
         state.record_harness_session(CHAT, "conv-plane-a")
+        # The transcript its harness named, on disk: a restore asks for the conversation back
+        # only where that file exists (#1101, `leave.conversation_exists`).
+        (self.a_root / "conv-plane-a.jsonl").write_text("{}\n")
+        state.record_conversation(CHAT, str(self.a_root / "conv-plane-a.jsonl"))
         self._in(self.b_root)
         self.b_pane = self._old_chat(CHAT, first=False, profile="claude-b")
         state.record_harness_session(CHAT, "conv-plane-b")

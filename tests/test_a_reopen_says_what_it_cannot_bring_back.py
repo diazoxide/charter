@@ -24,6 +24,7 @@ asserted. The launcher's own behaviour is covered by its own tests and, on a rea
 
 from __future__ import annotations
 
+import os
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -59,6 +60,15 @@ def tearDownModule():
         _WIRED.stop()
 
 
+#: A conversation file that exists, standing in for the transcript Claude Code named. Since
+#: #1101's link a chat is promised its conversation only when that file is there
+#: (`leave.conversation_exists`, a `stat`); the cases here are about the other clauses, so
+#: an id means an id whose conversation exists unless a case says otherwise.
+#: `tests/test_a_tab_is_linked_to_one_harness_session.py` is where the file being absent is
+#: the subject.
+_CONVERSATION = os.path.abspath(__file__)
+
+
 def _doomed(**kw):
     """One `leave.Doomed` with every field defaulted, so a case states only what it is about.
 
@@ -68,7 +78,7 @@ def _doomed(**kw):
     base = dict(chat="alpha.1", workspace="alpha", persona="", harness="claude-code",
                 cwd="/tmp", resume="", server=SERVER, live=True, active=False,
                 exit_code=None, closed=False, homeless=False, cwd_gone=False,
-                cwd_outside=False)
+                cwd_outside=False, conversation=_CONVERSATION)
     base.update(kw)
     return leave.Doomed(**base)
 
@@ -86,17 +96,26 @@ class TheWarningNamesWhatEachChatLoses(PersonaIso, unittest.TestCase):
         self.assertEqual(leave.note(_doomed(harness="claude-code")),
                          leave.NO_RESUME_YET)
 
-    def test_another_harness_is_named_rather_than_left_as_reopens_empty(self):
-        note = leave.note(_doomed(harness="opencode"))
+    def test_a_harness_with_no_resume_is_named_rather_than_left_as_reopens_empty(self):
+        """No shipped harness is this one any more (#1101: Codex and opencode resume by
+        id), so the harness is a stand-in the registry answers `resume_argv` with `None`
+        for — the sentence is still owed to the next harness charter meets."""
+        from charter.harness import base, registry
 
-        self.assertIn("opencode", note)
-        self.assertEqual(note, leave.NO_RESUME_HARNESS.format(harness="opencode"))
+        class _NoResume(base.Harness):
+            name = "nosuch"
 
-    def test_only_claude_code_is_resumable_and_it_is_asked_of_the_registry(self):
-        from charter.harness import claude_code
+        with mock.patch.dict(registry.KINDS, {"nosuch": _NoResume}):
+            note = leave.note(_doomed(harness="nosuch"))
+
+        self.assertIn("nosuch", note)
+        self.assertEqual(note, leave.NO_RESUME_HARNESS.format(harness="nosuch"))
+
+    def test_every_shipped_harness_is_resumable_and_it_is_asked_of_the_registry(self):
+        from charter.harness import claude_code, codex, opencode
         self.assertTrue(leave.resumable_harness(claude_code.NAME))
-        self.assertFalse(leave.resumable_harness("opencode"))
-        self.assertFalse(leave.resumable_harness("codex"))
+        self.assertTrue(leave.resumable_harness(opencode.NAME))
+        self.assertTrue(leave.resumable_harness(codex.NAME))
         self.assertFalse(leave.resumable_harness(""))
 
     def test_a_missing_workspace_is_reported_and_never_re_homed(self):
@@ -196,7 +215,7 @@ class TheConfirmationIsAWarningNotAMenu(PersonaIso, unittest.TestCase):
             verb=leave.QUIT)
 
         self.assertEqual(rows[1].note, leave.RESUMES)
-        self.assertIn("opencode", rows[2].note)
+        self.assertEqual(rows[2].note, leave.NO_RESUME_YET)
 
     def test_the_chat_you_are_looking_at_is_marked(self):
         rows = leave.confirm_rows(self._plan(_doomed(active=True)), verb=leave.QUIT)
@@ -280,8 +299,10 @@ class WhatAReopenPutsBack(PersonaIso, unittest.TestCase):
         """
         self.calls.append(SimpleNamespace(harness=args.harness, rest=list(args.rest),
                                           workspace=args.workspace, cwd=__import__(
-                                              "os").getcwd()))
-        fid = state.new_chat_id(args.workspace or "default")
+                                              "os").getcwd(), resume=args.resume))
+        # A reopen keeps the chat's own id (#1101): the launcher claims exactly it.
+        fid, why = commands_frame._claim_kept_id(args.reopening.chat)
+        assert fid is not None, why
         state.record_workspace(fid, args.workspace or "default")
         state.record_cwd(fid, __import__("os").getcwd())
         state.record_harness_pane(fid, "%7")
@@ -327,20 +348,24 @@ class WhatAReopenPutsBack(PersonaIso, unittest.TestCase):
             launch.assert_not_called()
         self.assertIsNotNone(reopen.read(), "and the record is left to try again")
 
-    def test_resume_is_appended_to_the_harness_argv_for_claude_with_an_id(self):
-        self._record(self._chat(resume="conv-1"))
-
-        self.assertEqual(self._reopen(), 0)
-
-        self.assertEqual(self.calls[0].rest, ["--resume", "conv-1"])
-        self.assertEqual(self.calls[0].harness, "claude")
-
-    def test_a_harness_that_records_no_id_is_never_handed_the_flag(self):
-        self._record(self._chat(harness="opencode", resume="conv-1"))
+    def test_resume_is_asked_of_the_launcher_for_claude_with_a_conversation(self):
+        """Asked as `resume`, not spelled into `rest` (#1101): the launcher reads the link in
+        the pane and says it the way each harness takes it."""
+        self._record(self._chat(resume="conv-1", conversation=_CONVERSATION))
 
         self.assertEqual(self._reopen(), 0)
 
         self.assertEqual(self.calls[0].rest, [])
+        self.assertIs(self.calls[0].resume, True)
+        self.assertEqual(self.calls[0].harness, "claude")
+
+    def test_a_chat_whose_conversation_is_gone_is_never_asked_to_resume(self):
+        self._record(self._chat(resume="conv-1", conversation="/nowhere/conv-1.jsonl"))
+
+        self.assertEqual(self._reopen(), 0)
+
+        self.assertEqual(self.calls[0].rest, [])
+        self.assertIs(self.calls[0].resume, False)
 
     def test_a_chat_with_no_id_still_comes_back_empty(self):
         self._record(self._chat(resume=""))
@@ -419,27 +444,28 @@ class WhatAReopenPutsBack(PersonaIso, unittest.TestCase):
 
         self.assertEqual(os.getcwd(), here)
 
-    def test_the_persona_pointer_follows_the_chat_onto_its_new_id(self):
-        # The recorded chat was `alpha.9`, so the pointer under `alpha.9` is about to name
-        # nothing — the reopened chat gets a fresh ordinal (`alpha.1` here) and the pointer
-        # has to be written under THAT id or the persona is silently lost.
+    def test_the_persona_pointer_is_written_back_under_the_chats_own_id(self):
+        # The reap that took `alpha.9`'s directory took its session pointer with it
+        # (`state._forget_session`), and an unpinned chat's persona lives nowhere else — so
+        # the reopen writes it back, under the id the chat keeps (#1101).
         self._record(self._chat(chat="alpha.9", persona="steward"))
-        self.assertIsNone(persona.for_session("alpha.1"))
+        self.assertIsNone(persona.for_session("alpha.9"))
 
         self.assertEqual(self._reopen(), 0)
 
-        self.assertEqual(persona.for_session("alpha.1"), "steward")
+        self.assertEqual(persona.for_session("alpha.9"), "steward")
 
-    def test_the_captured_transcript_follows_the_chat_onto_its_new_id(self):
+    def test_the_captured_transcript_stays_offered_under_the_chats_own_id(self):
         # The old chat's directory is gone (reaped), so the transcript is the only thing
-        # left of it — and the row that offers it looks the file up by the NEW chat's id.
+        # left of it — and the row that offers it looks the file up by the chat's id, which a
+        # reopen keeps (#1101), so nothing has to move.
         config.write_for(reopen.transcript_path("alpha.9"), "what was on screen\n")
         self._record(self._chat(chat="alpha.9", transcript="alpha.9.transcript"))
 
         self.assertEqual(self._reopen(), 0)
 
-        self.assertFalse(reopen.transcript_path("alpha.9").exists())
-        self.assertEqual(reopen.transcript_path("alpha.1").read_text(),
+        self.assertEqual(self.calls and state.frame_dir("alpha.9").is_dir(), True)
+        self.assertEqual(reopen.transcript_path("alpha.9").read_text(),
                          "what was on screen\n")
 
     def test_a_reopened_chat_draws_no_gauge_until_its_own_first_turn(self):
@@ -467,16 +493,16 @@ class WhatAReopenPutsBack(PersonaIso, unittest.TestCase):
         self.assertIsNone(state.harness_session(newest))
         self.assertIsNone(state.kept_harness_session(newest))
 
-    def test_the_manifest_outranks_a_stale_pointer_left_on_a_recycled_ordinal(self):
+    def test_the_manifest_outranks_a_stale_pointer_left_under_the_kept_id(self):
         """The dependency this design was written around, closed by #791 and pinned here.
 
-        **A reopen mints a FRESH chat id — and very often the SAME one.** `new_chat_id`
-        walks upward from 1 and `reap` frees the ordinals a quit's chats held, so
-        `alpha.1` quit and reopened is `alpha.1` again. That made the per-session pointer a
-        live hazard rather than a theoretical one: while `.charter/sessions/<fid>.workspace`
-        was a rung of `state.own_workspace`, a `charter workspace use gamma` typed inside
-        the OLD `alpha.1` would have decided the NEW `alpha.1`'s membership, over the
-        workspace the manifest recorded and the launcher wrote.
+        **A reopen keeps the chat's id** (#1101) — and before that it very often got the same
+        id back by accident, on a recycled ordinal. Either way `alpha.1` quit and reopened is
+        `alpha.1` again, which made the per-session pointer a live hazard rather than a
+        theoretical one: while `.charter/sessions/<fid>.workspace` was a rung of
+        `state.own_workspace`, a `charter workspace use gamma` typed inside `alpha.1` before
+        the quit would have decided the reopened chat's membership, over the workspace the
+        manifest recorded and the launcher wrote.
 
         #791 took that rung out (`own_workspace` is now the launch pin, then the record), so
         the manifest is authoritative. This plants exactly that stale pointer and asserts the

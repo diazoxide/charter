@@ -597,7 +597,15 @@ class TheFramesOwnStateIsChartersToChooseToo(PersonaIso):
         state.bump(self.FID)
         state.record_exit(self.FID, 0)
         state.record_harness_pane(self.FID, "%0")
-        state.record_harness_session(self.FID, "$1")
+        # An id `state.SESSION_ID_RE` accepts: a `$1` is refused before anything is written
+        # (#1101), and a recorder that writes nothing is not a recorder this case measures.
+        state.record_harness_session(self.FID, "sid-1")
+        # And the rest of the tab's session link (#1101), each a file of its own.
+        state.record_conversation(self.FID, "/abs/t.jsonl")
+        state.record_harness_pid(self.FID, 4242)
+        state.record_start(self.FID, resumed=True)
+        state.adopt_report(self.FID)
+        state.new_chat_id("alpha")
         state.record_server(self.FID, "charter")
         state.record_workspace(self.FID, "alpha")
         state.record_density(self.FID, "full")

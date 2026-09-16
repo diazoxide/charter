@@ -375,13 +375,13 @@ class TheOtherDoorMovesNoChatEither(PersonaIso, unittest.TestCase):
         """#731's first half, and the reason a reopened chat (§4e/§4f) can trust its own
         launch record.
 
-        `state.new_chat_id` allocates the lowest free ordinal from `.charter/frame/`, so
-        an id is free the moment its directory is reaped — while `state.reap` leaves
-        `sessions/<fid>.workspace` behind. The next `charter claude --workspace alpha`
-        that lands on `alpha.1` therefore inherits the previous frame's pointer, and while
-        that pointer was a membership rung it OUTRANKED the launcher that had just been
-        told `alpha` explicitly: measured, the relaunched chat drew `gamma`, joined
-        `gamma`'s roster and left `alpha`'s.
+        A directory is reaped while `state.reap` leaves `sessions/<fid>.workspace` behind.
+        When `state.new_chat_id` handed out the lowest free ordinal, the next `charter
+        claude --workspace alpha` landed on `alpha.1` and inherited that pointer; since
+        #1101 an id is never handed out again, and the launch that claims `alpha.1` back
+        is a reopen keeping its own id. While that pointer was a membership rung it
+        OUTRANKED the launcher that had just been told `alpha` explicitly: measured, the
+        relaunched chat drew `gamma`, joined `gamma`'s roster and left `alpha`'s.
 
         Nothing here reaps the pointer — #731's remaining half — and nothing needs to for
         identity: a stale pointer is no longer a rung of `own_workspace`, so a chat's
@@ -392,7 +392,7 @@ class TheOtherDoorMovesNoChatEither(PersonaIso, unittest.TestCase):
         shutil.rmtree(state.frame_dir("alpha.1"))
         self.assertEqual(workspace.for_session("alpha.1"), "gamma",
                          "the stale pointer this case is about was reaped after all")
-        _plant("alpha.1", ws="alpha", pane="%9")    # the relaunch, same ordinal
+        _plant("alpha.1", ws="alpha", pane="%9")    # the reopen, keeping its id
         self.assertEqual(state.own_workspace("alpha.1"), "alpha")
         self.assertEqual(state.workspace_for("alpha.1"), "alpha")
         self.assertEqual(chats.of_workspace("alpha"), ["alpha.1", "alpha.2"])

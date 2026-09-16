@@ -1198,6 +1198,9 @@ def _add_frame_parsers(sub) -> None:
     fl.add_argument("--select", action="store_true")
     fl.add_argument("--start", dest="start", default="")
     fl.add_argument("--attended", action="store_true")
+    # Ask for the chat's linked conversation back (#1101). A flag and nothing else: the
+    # link itself is read from the chat's record in the pane and never crosses tmux.
+    fl.add_argument("--resume", action="store_true")
     fl.add_argument("rest", nargs=argparse.REMAINDER)
     fl.set_defaults(func=_frame_launch)
 

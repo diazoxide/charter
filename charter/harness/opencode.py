@@ -834,6 +834,20 @@ class OpenCodeHarness(Harness):
         """
         return ["--prompt", text]
 
+    #: The session link (ADR 0024), **read from source at `v1.18.23` and not run**: opencode
+    #: has no session-start event, so the id arrives at the chat's first tool hook, as the
+    #: `sessionID` the shim puts in the payload's `session_id` (O1). `opencode -s <id>`
+    #: validates that id against the WORKING DIRECTORY (O2), so a chat resumes only where it
+    #: ran. opencode names no transcript file.
+    resume_needs_cwd = True
+    reports_session_at = "tool"
+    session_flags = ("-s", "--session", "-c", "--continue")
+
+    def resume_argv(self, sid: str, name: str) -> list[str] | None:
+        """`opencode -s <id>` — no name: opencode's `--title` exists only on `opencode
+        run`."""
+        return ["-s", sid]
+
     def stale_wiring(self) -> str:
         """What the installed plugin REALM is, when charter cannot vouch for all of it.
 

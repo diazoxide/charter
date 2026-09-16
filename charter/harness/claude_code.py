@@ -282,6 +282,31 @@ class ClaudeCodeHarness(Harness):
         """
         return [text]
 
+    #: The session link (ADR 0024), measured live on Claude Code 2.1.272, 2026-09-15:
+    #: `--session-id <uuid>` is reported at SessionStart as given (C1); `--resume <id>
+    #: --name <name>` keeps the id and renames the session (C3); a nested `claude` and
+    #: `/clear` each report a new id, told apart by `$CLAUDE_PID` (C5, C6); and every hook's
+    #: `$CLAUDE_CODE_SESSION_ID` equals its payload's `session_id` (C7).
+    chooses_session_id = True
+    names_its_transcript = True
+    reports_harness_pid = True
+    reports_session_at = "sessionstart"
+    #: Every flag by which the operator names a session themselves. `--session-id` with
+    #: `--resume` is refused by the binary (C4: `--session-id can only be used with
+    #: --continue or --resume if --fork-session is also specified`), so charter never adds
+    #: one beside any of these.
+    session_flags = ("--session-id", "--resume", "-r", "--continue", "-c", "--fork-session")
+
+    def new_session_argv(self, sid: str, name: str) -> list[str]:
+        """`--session-id <uuid> --name <name>`: charter's id, so the link exists before
+        the harness starts. No transcript exists until the first prompt (C1, C2)."""
+        return ["--session-id", sid, "--name", name]
+
+    def resume_argv(self, sid: str, name: str) -> list[str] | None:
+        """`--resume <id> --name <name>`: the same id comes back, and the name is written
+        again with no prompt (C3)."""
+        return ["--resume", sid, "--name", name]
+
     def detect(self) -> bool:
         """``$CLAUDE_PLUGIN_ROOT`` is set for the plugin's own processes.
 

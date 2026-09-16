@@ -82,9 +82,11 @@ _Avoid_: changelog, release notes, announcement
 
 **Chat**:
 A frame tab: one harness conversation, in one workspace, for life. Its id
-(`<workspace>.<n>`) is allocated and never parsed for meaning, and its workspace is written
-by the launch that made it — so a chat cannot be moved to another workspace, only opened in
-one.
+(`<workspace>.<n>`) is allocated, handed out once for the life of the plane, and never parsed
+for meaning; a reopened chat keeps it. Its workspace is written by the launch that made it —
+so a chat cannot be moved to another workspace, only opened in one. It is linked to exactly
+one harness session: the id charter handed Claude Code, or the first id Codex or opencode
+reported in that start — never a guess.
 _Avoid_: session, spawn, sub-session
 
 **Handoff**:

@@ -337,7 +337,12 @@ def _by_workspace() -> dict[str | None, list[str]]:
 
 
 #: How many digits an ordinal `state.new_chat_id` can mint has, derived from its own
-#: ceiling rather than written down twice.
+#: ceiling rather than written down twice (`state.ORDINAL_CEILING`).
+#:
+#: **And the bound the allocator's trace scan puts on what it counts** (#1101). Ordinals only
+#: grow now, so the allocator refuses at the ceiling rather than mint an id this could not
+#: sort — and a scan could not count, which would let the next allocation hand out a name
+#: that still has leftovers.
 #:
 #: **It is a bound on `int()`, not on taste.** CPython refuses to convert a string of more
 #: than 4,300 digits to an integer — `int("9" * 5000)` raises `ValueError`, not
@@ -352,7 +357,7 @@ def _by_workspace() -> dict[str | None, list[str]]:
 #: perfectly parseable, merely above the allocator's ceiling — stop being a chat and
 #: start being reaped by the wrong rule. A name this cannot read the ordinal of is still
 #: a chat; it just sorts with the others it cannot read.
-_MAX_ORDINAL_DIGITS = len(str(state._CHAT_ORDINAL_MAX))
+_MAX_ORDINAL_DIGITS = len(str(state.ORDINAL_CEILING))
 
 
 def _order(fid: str) -> tuple[int, int, str]:

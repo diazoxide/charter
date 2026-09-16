@@ -414,6 +414,9 @@ class TheLaunchTakesTheDecision(PersonaIso, unittest.TestCase):
         self._launch(fake)
         after = sorted(p.name for p in (config.STATE_DIR / "frame").iterdir())
         self.assertEqual(before, after)
+        # Nor an id record: the mark is raised only by an allocation (#1101), and a focus
+        # that raised it would spend an ordinal on a chat that was never opened.
+        self.assertNotIn("chat-ids.json", after)
 
     def test_a_focused_launch_starts_no_window_and_selects_nothing(self):
         """`new-window` plus `select-window` IS the drag (§2.3). A focus must issue

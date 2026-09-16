@@ -510,6 +510,10 @@ class TheWarningIsSaidOnStderrAndOnTheScreenTheOperatorHas(PersonaIso, unittest.
     def setUp(self):
         super().setUp()
         _plant("alpha.1", ws="alpha", sid="conv-1")
+        # The transcript Claude Code named, there on disk: a chat is promised its
+        # conversation only when that file exists (#1101, `leave.conversation_exists`).
+        (self.tmp / "conv-1.jsonl").write_text("{}\n")
+        state.record_conversation("alpha.1", str(self.tmp / "conv-1.jsonl"))
         self.plan = leave.plan(live={"alpha.1"}, focus="alpha")
 
     def _warn(self, on):
@@ -1333,10 +1337,14 @@ class WhatIsOnDiskIsAFormatAndNotAnImplementationDetail(PersonaIso, unittest.Tes
         # holding it is reaped when its launcher pid dies, so this file is the only copy
         # that outlives a restart. Missing reads as `""`, which is every chat no handoff
         # opened.
+        #
+        # `conversation` joined them for the tab's session link (#1101): the file the
+        # harness named, which a reopen stats before it offers resume. Missing reads as `""`,
+        # which is a record from 0.62 — offered no resume for a harness that names its file.
         self.assertEqual(
             sorted(raw["frames"][0]["chats"][0]),
-            ["active", "brief", "chat", "cwd", "harness", "persona", "profile", "resume",
-             "transcript", "workspace"])
+            ["active", "brief", "chat", "conversation", "cwd", "harness", "persona",
+             "profile", "resume", "transcript", "workspace"])
 
     def test_the_writer_is_spelled_quit_or_recorder(self):
         """Two words on disk, and a quit's is the default: `_record_the_plane` is the one

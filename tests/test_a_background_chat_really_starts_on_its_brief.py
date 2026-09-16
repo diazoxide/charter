@@ -278,7 +278,10 @@ class ABackgroundChatReallyStartsOnItsBrief(_TwoChatsOnARealServer, unittest.Tes
         opened = self._open(self.BRIEF)
         self.assertTrue(opened.ok, opened.message)
         pane = state.harness_pane(opened.chat)
-        self.assertEqual(self._received(pane), [self.BRIEF])
+        got = self._received(pane)
+        # The session charter chose for the chat comes first (#1101), then the brief, whole.
+        self.assertEqual(got[0], "--session-id")
+        self.assertEqual(got[2:], ["--name", opened.chat, self.BRIEF])
         after = self._tmux("display-message", "-p", "-t", session, "#{window_id}")
         self.assertEqual(after.stdout.strip(), before.stdout.strip(),
                          "opening a chat in the background moved the session's window")
@@ -294,7 +297,10 @@ class ABackgroundChatReallyStartsOnItsBrief(_TwoChatsOnARealServer, unittest.Tes
         text = "x" * (commands_frame.FIRST_MESSAGE_MAX_BYTES - 2) + " y"
         opened = self._open(text)
         self.assertTrue(opened.ok, opened.message)
-        self.assertEqual(self._received(state.harness_pane(opened.chat)), [text])
+        got = self._received(state.harness_pane(opened.chat))
+        # The session words ride beside it (#1101) and the message still arrives whole.
+        self.assertEqual(got[0], "--session-id")
+        self.assertEqual(got[2:], ["--name", opened.chat, text])
 
 
 @unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")

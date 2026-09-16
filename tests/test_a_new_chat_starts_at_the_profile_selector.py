@@ -1180,7 +1180,12 @@ class ANewProfileIsAskedInThePane(_ASelectorPane, unittest.TestCase):
         self.assertNotIn("not shown", shown)
         self.assertEqual(typed.reads, 1)
         self.assertTrue(self._approved())
-        self.assertEqual(self.execs[0][1], ["claude", self.LONG])
+        # The profile's own command, then the session charter chose for this chat (#1101):
+        # a pick is a start, and every start of a Claude Code chat is handed its id.
+        argv = self.execs[0][1]
+        self.assertEqual(argv[:3], ["claude", self.LONG, "--session-id"])
+        self.assertEqual(argv[4:], ["--name", "beta.1"])
+        self.assertEqual(state.kept_harness_session("beta.1"), argv[3])
         self.assertFalse(state.is_waiting("beta.1"))
 
     def test_no_goes_back_to_the_list_with_nothing_refused_and_the_cursor_on_that_row(self):
@@ -1422,9 +1427,10 @@ class WhereItAppears(_APlaneWithProfiles, unittest.TestCase):
     """
 
     #: The id a launch allocates here. `state.reap` takes the cold `beta.1` this fixture
-    #: leaves behind before `new_chat_id` walks upward from 1, so the new chat gets that
-    #: ordinal back — spelled out rather than inferred, because a case reading the wrong
-    #: chat's state is a case that passes for the wrong reason.
+    #: leaves behind before `new_chat_id` runs, and nothing that fixture writes is a trace
+    #: the allocator counts — no id record, no transcript, no quit record, no session marker
+    #: (#1101) — so the new chat is `beta.1` — spelled out rather than inferred, because a
+    #: case reading the wrong chat's state is a case that passes for the wrong reason.
     NEW = "beta.1"
 
     def setUp(self) -> None:
@@ -1582,21 +1588,29 @@ class WhereItAppears(_APlaneWithProfiles, unittest.TestCase):
         `#{pane_dead_status}` eagerly, kills the window and then reports. So the fixture
         answers that question and lets `_launch` run to its end.
 
-        *recorded* puts the new chat in the plane's record first, which is the premise of
+        *recorded* puts the new chat in the plane's record as its window opens, which is the premise of
         the recorded-plane sentence at all: without it that sentence says nothing whatever
         else is true, and a case about it would pass for the wrong reason. *picked* clears
         the waiting marker as the window opens — a selector whose pane picked a profile and
         whose harness then died before the frame was drawn.
         """
-        if recorded:
-            reopen_state.write([reopen_state.Frame(workspace="beta", chats=(
-                reopen_state.Chat(chat=self.NEW, workspace="beta", persona="",
-                                  harness="claude-code", cwd="", resume="conv-1",
-                                  transcript="", active=True),))], focus="beta")
         said: list[str] = []
         fake = _AServerWithOneWorkspaceRunning(sessions=[], chats=[], dead=f"1:{code}")
-        if picked:
-            fake.at_new_window = lambda: state.clear_waiting(self.NEW)
+
+        def window_opened():
+            # The record is written once the window exists, naming the id this launch was
+            # given — a quit landing while the chat runs. A chat id is never handed out
+            # again (#1101), so a record written BEFORE the launch could only name a chat
+            # that is not this one.
+            if recorded:
+                reopen_state.write([reopen_state.Frame(workspace="beta", chats=(
+                    reopen_state.Chat(chat=self.NEW, workspace="beta", persona="",
+                                      harness="claude-code", cwd="", resume="conv-1",
+                                      transcript="", active=True),))], focus="beta")
+            if picked:
+                state.clear_waiting(self.NEW)
+
+        fake.at_new_window = window_opened
         with mock.patch.object(commands_frame.util, "err", side_effect=said.append), \
                 mock.patch.object(commands_frame.util, "info", side_effect=said.append):
             # `fresh`: a plane with a record and nothing running RESTORES that record on
@@ -1777,7 +1791,7 @@ class WhereItAppears(_APlaneWithProfiles, unittest.TestCase):
         """An open nobody is at names its profile: there is no one there to pick."""
         args = commands_frame._reopen_args(
             SimpleNamespace(workspace="beta", persona="", cwd="", resume="", brief=""),
-            harness_name="claude", profile="claude-work", rest=[], reopening=None)
+            harness_name="claude", profile="claude-work", reopening=None, resume=False)
         self.assertFalse(getattr(args, "select", False))
         self.assertEqual(args.profile, "claude-work")
 

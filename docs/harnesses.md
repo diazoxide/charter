@@ -131,6 +131,28 @@ harness you are in, each ceiling carrying its own answer. Where it is empty it s
 charter cannot conjure opencode a per-turn prompt hook, and a workaround that does not
 exist costs more to chase than an honest gap.
 
+### Resume: the session each tab is linked to
+
+Every tab is linked to exactly one harness session, and `charter reopen` offers that
+conversation back only when it exists. How each harness is linked, and what it costs, was read
+on these versions (ADR 0024):
+
+| Harness | Link | Offered when | Resumes with | Limits |
+| --- | --- | --- | --- | --- |
+| Claude Code 2.1.272 | the id charter hands it (`--session-id <uuid> --name <chat id>`); follows `/clear`; ignores a nested `claude` | after the first prompt (the transcript exists) | `--resume <id> --name <chat id>` | the in-session `/resume` hides the current session; the name shows in a fresh `claude --resume` picker, and in `/resume` from every other session |
+| Codex 0.147.0 | the first id it reports in each start | after its first turn (it reports nothing before) | `codex resume <id>` | after `/new`, resume offers the start's first conversation; read from source, not run |
+| opencode 1.18.23 | the first id its tool hooks report in each start | after its first tool call | `opencode -s <id>`, in the chat's recorded directory | a new session inside opencode is not followed; a chat moved to another directory reopens empty; read from source, not run |
+
+**Which harness sent a report is decided by the report, never by the environment it
+inherited.** A harness nested in a chat's shell inherits `CHARTER_HARNESS`, `CLAUDE_PID` and
+`TMUX_PANE`, so none of those can say. A Claude Code report proves itself by
+`CLAUDE_CODE_SESSION_ID` equal to its payload's `session_id`, and then counts only from the
+`CLAUDE_PID` that adopted the chat's id. **Charter recognises a Codex report by the exact key
+set of Codex's SessionStart input**, read from source at codex-cli 0.147.0 and not yet seen on
+the wire. A Codex that adds a field is recognised as no report. The failure is closed: no link
+is recorded, so resume is simply not offered for that chat until charter is updated — a
+missing resume row is the only sign.
+
 ## Wiring, and when it happens
 
 `charter init` writes each harness's wiring into the plane, and installs the one artifact

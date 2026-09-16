@@ -177,16 +177,17 @@ class ZeroBehaviourChange(PersonaIso, unittest.TestCase):
 class ItDoesNotOUTLIVETheChatItself(PersonaIso, unittest.TestCase):
     """The other end of "durable", and #731 is why it is asserted rather than assumed.
 
-    #731 is a recycled chat id inheriting the PREVIOUS frame's workspace pointer and lock:
-    `state.new_chat_id` frees an ordinal the moment its frame DIRECTORY is reaped, while
-    `.charter/sessions/<fid>.workspace` and `.lock` live somewhere else entirely and are
-    left behind — so `charter claude --workspace alpha` can come up labelled `gamma`.
+    #731 is a chat id inheriting the PREVIOUS frame's workspace pointer and lock: the frame
+    DIRECTORY is reaped, while `.charter/sessions/<fid>.workspace` and `.lock` live
+    somewhere else entirely and are left behind. When `state.new_chat_id` recycled ordinals
+    that reached any new chat; since #1101 an id is never handed out again, and the one
+    launch that claims it back is a reopen keeping its own id (`state.claim_chat_id`).
 
     **This file cannot do that, and the reason is structural rather than careful.** It
-    lives INSIDE `.charter/frame/<fid>/`, which is the very directory whose absence frees
-    the ordinal — `reap` removes it whole. So "the id is free" and "the durable session id
-    is gone" are one event, not two, and there is no window in which a new chat can be
-    handed an old one's harness session.
+    lives INSIDE `.charter/frame/<fid>/`, which `reap` removes whole. So "the directory is
+    gone" and "the durable session id is gone" are one event, not two: a claim of that id
+    starts with nothing, and the reopen writes the link back from the quit's record, never
+    from a leftover.
 
     That is the invariant a resume has to rest on, so it is pinned here rather than left as
     a property the design happens to have. It is also the exact contrast with #731: the
@@ -195,15 +196,17 @@ class ItDoesNotOUTLIVETheChatItself(PersonaIso, unittest.TestCase):
     way.
     """
 
-    def test_a_recycled_ordinal_cannot_inherit_the_previous_chats_durable_id(self):
+    def test_a_kept_id_claimed_after_the_reap_starts_without_the_durable_id(self):
         state.record_harness_session(FID, SID)
         self.assertEqual(state.kept_harness_session(FID), SID)
-        # The whole of what frees the ordinal, and the whole of what removes the file.
+        # The whole of what frees the directory, and the whole of what removes the file.
         self.assertEqual(state.reap(set(), server=state.frame_server(FID) or ""), [FID])
-        self.assertEqual(state.new_chat_id("demo"), FID,
-                         "the ordinal is only free because the directory went")
+        self.assertTrue(state.claim_chat_id(FID),
+                        "the id can only be claimed back because the directory went")
         self.assertIsNone(state.kept_harness_session(FID),
-                          "a new chat must not be handed the previous chat's session id")
+                          "a claim must not find the previous start's session id on disk")
+        self.assertNotEqual(state.new_chat_id("demo"), FID,
+                            "and no new chat is ever handed that id at all")
 
     def setUp(self) -> None:
         super().setUp()
@@ -262,20 +265,23 @@ class AHookIsTheWriterNow(PersonaIso, unittest.TestCase):
     """
 
     def _run(self, *, harness="claude-code", chat=FID, sid=SID, in_plane=True):
+        """One SessionStart report from Claude Code, in the chat's pane.
+
+        *harness* is the kind the CHAT records (`state.identity`), because that is what a
+        report is held to since #1101 — never an inherited `$CHARTER_HARNESS`, which a
+        harness nested inside the chat carries too. The report proves it is Claude Code's by
+        `$CLAUDE_CODE_SESSION_ID` equal to its payload's id (C7), from a `$CLAUDE_PID`, and
+        the whole environment is stated."""
         import os
 
         from charter import hooks
-        env = {}
+        state.record_identity(FID, {"CHARTER_HARNESS": harness or ""})
+        env = {"CHARTER_HARNESS": "claude-code", "CLAUDE_PID": "4242",
+               "CLAUDE_CODE_SESSION_ID": str(sid)}
         if chat is not None:
             env["CHARTER_SESSION_ID"] = chat
-        if harness is not None:
-            env["CHARTER_HARNESS"] = harness
-        with mock.patch.dict(os.environ, env, clear=False), \
+        with mock.patch.dict(os.environ, env, clear=True), \
                 mock.patch.object(hooks, "_in_a_plane", return_value=in_plane):
-            if chat is None:
-                os.environ.pop("CHARTER_SESSION_ID", None)
-            if harness is None:
-                os.environ.pop("CHARTER_HARNESS", None)
             hooks._record_harness_session({"session_id": sid} if sid else {})
 
     def test_a_claude_code_hook_records_the_id_reopen_asks_with(self):
@@ -300,10 +306,10 @@ class AHookIsTheWriterNow(PersonaIso, unittest.TestCase):
         self.assertEqual(state.version(FID), after_first)
 
     def test_another_harness_records_nothing(self):
-        """The gate `_turn_begin` already keeps, for `state.harness_session`'s reason:
-        nothing but Claude Code is handed a usage payload, and `leave.resumable_harness`
-        offers a resume for nothing else — so an id written here would be a record with no
-        reader."""
+        """A Claude Code report in a chat recorded as another harness is not that chat's
+        own harness reporting — a `claude -p` run from an opencode chat's shell — so it
+        changes nothing (#1101). Codex and opencode record their own reports now:
+        `tests/test_a_tab_is_linked_to_one_harness_session.py`."""
         self._run(harness="opencode")
         self.assertIsNone(state.harness_session(FID))
 
@@ -327,14 +333,13 @@ class AHookIsTheWriterNow(PersonaIso, unittest.TestCase):
         self._run(in_plane=False)
         self.assertIsNone(state.harness_session(FID))
 
-    def test_an_id_that_is_not_a_string_is_recorded_as_text(self):
-        """`str(sid)`, and it is load-bearing rather than defensive. The payload is JSON
-        the harness composed, `record_harness_session` calls `.strip()` on what it is
-        given, and a number would raise there — swallowed by this function's own except,
-        which means the chat quietly stops being resumable. Nothing else in charter reads
-        this field back as anything but text."""
+    def test_an_id_that_is_not_a_string_records_nothing(self):
+        """The id goes on to be a harness argv word, so it is held to
+        `state.SESSION_ID_RE` as the text it arrived as (#1101). A number is not the id
+        Claude Code's own environment names — `$CLAUDE_CODE_SESSION_ID` is text — so it is
+        no Claude Code report at all."""
         self._run(sid=1234)
-        self.assertEqual(state.harness_session(FID), "1234")
+        self.assertIsNone(state.harness_session(FID))
 
     def test_a_write_that_fails_does_not_break_the_session(self):
         """`sessionstart` runs before the operator has typed anything. A hook that raised

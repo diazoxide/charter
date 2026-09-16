@@ -114,6 +114,10 @@ class Doomed(NamedTuple):
     #: it back on its own account rather than on another one, and what the row shows in
     #: place of the harness (:func:`title`).
     profile: str = ""
+    #: The conversation file the harness named for this chat (`state.conversation`), or
+    #: ``""``. Only ever `stat`ed, by :func:`conversation_exists` — the evidence that
+    #: :attr:`resume` names a conversation there is something of (#1101).
+    conversation: str = ""
 
 
 class Plan(NamedTuple):
@@ -201,6 +205,7 @@ def plan(*, live, focus: str, only: str = "") -> Plan:
             # not one of the five names a frame's identity carries onto a tmux argv, and a
             # reopen has to have it to bring the chat back on its own account.
             profile=state.profile(fid) or "",
+            conversation=state.conversation(fid) or "",
         ))
     return Plan(chats=tuple(out), focus=focus)
 
@@ -247,11 +252,10 @@ def _group(fid: str) -> tuple[int, str]:
     the answer and then returned it would read both twice for every chat on the plane.
 
     It was three until #791 took the per-session pointer out of that ladder, which is the
-    same change that makes this module's whole design work: a reopened chat gets a FRESH
-    ordinal, `new_chat_id` walks upward from 1, and `reap` frees the ordinals a quit's chats
-    held — so a reopen very often gets the same NAME back, and while the pointer was a rung
-    the previous chat's `charter workspace use` would have decided the reopened chat's
-    membership over the manifest. It cannot now.
+    same change that makes this module's whole design work. A reopened chat keeps the id it
+    had (#1101), so a pointer left under that id from before the quit is still the chat's
+    own — and while the pointer was a rung, a `charter workspace use` made before the quit
+    would have decided the reopened chat's membership over the manifest. It cannot now.
     """
     ws = state.own_workspace(fid)
     return (0, ws) if ws else (1, "")
@@ -289,7 +293,7 @@ def summary(p: Plan, *, verb: str = QUIT) -> str:
     if verb == CLOSE:
         return _close_summary(doomed)
     wss = p.workspaces()
-    back = len([c for c in doomed if c.resume])
+    back = len([c for c in doomed if conversation_exists(c.harness, c.resume, c.conversation)])
     return (f"quit — stop {_count(len(doomed), 'chat')} in "
             f"{_count(len(wss), 'workspace')}; "
             f"{back} of {len(doomed)} can resume the conversation")
@@ -308,18 +312,18 @@ def _count(n: int, noun: str) -> str:
 RESUMES = "conversation resumes"
 
 #: What a chat charter cannot resume is told, and it names the reason rather than the
-#: symptom. §2.8: only Claude Code puts its own session id anywhere charter can read it, so
-#: no other harness has an id to ask with. (That used to be *"the `statusLine` hook is the
-#: one writer"*; #895 unwired the status line and moved the write to
-#: `hooks._record_harness_session`, which is gated on the same harness for the same reason.
-#: The gauge did not move with it — see that function.) An operator reading "reopens empty"
-#: alone would reasonably file a bug.
+#: symptom: a harness whose resume charter has not measured (`Harness.resume_argv` answers
+#: ``None``), so there is nothing to ask for the conversation back with. No shipped harness
+#: is one since #1101 — Claude Code, Codex and opencode all resume by id — and the sentence
+#: stays for the next harness charter meets. An operator reading "reopens empty" alone would
+#: reasonably file a bug.
 NO_RESUME_HARNESS = "reopens empty — {harness} records no session id to resume from"
 
-#: The same outcome for the harness that CAN resume, when this particular chat has no id
-#: yet — a chat whose harness had not taken a turn, or one already running when the charter
-#: that keeps the id was installed (`state.kept_harness_session`'s own migration case).
-NO_RESUME_YET = "reopens empty — no session id recorded for this chat yet"
+#: The same outcome for a harness that CAN resume, when this chat has no conversation to
+#: resume yet: a link with no transcript file (Claude Code before its first prompt), no link
+#: at all (Codex before its first turn, opencode before its first tool call), or a chat
+#: already running when the charter that keeps the link was installed.
+NO_RESUME_YET = "reopens empty — no conversation recorded for this chat yet"
 
 #: Said when charter does not know which harness a chat was, which is the migration case
 #: and an ordinary one.
@@ -397,7 +401,7 @@ def _resume_clause(c: Doomed) -> str:
     different thing to tell an operator than "this one has not taken a turn yet", and the
     second would be a guess dressed as a fact.
     """
-    if c.resume:
+    if conversation_exists(c.harness, c.resume, c.conversation):
         return RESUMES
     if not c.harness:
         return NO_RESUME_UNKNOWN
@@ -409,21 +413,42 @@ def _resume_clause(c: Doomed) -> str:
 def resumable_harness(name: str) -> bool:
     """Whether *name* is a harness charter can ask for a conversation back.
 
-    **Claude Code alone, and asked of the registry rather than spelled here** (§2.8 and
-    §4e): `record_harness_session` has exactly one caller — `hooks._record_harness_session`
-    since #895, Claude Code's `statusLine` hook before it — and it is gated on Claude Code,
-    so that is the only harness that has ever written an id. A literal ``"claude-code"`` in
-    this module would be a second place that knows which harness resumes, and the day a
-    second one starts writing an id the two would disagree.
-
-    Deliberately NOT a member on `Harness`. Phase 5's Task 9 Step 4 refuses one on
-    `harness/base.py`'s own bar — *"a fifth member needs the same kind of argument, not just
-    a use"* — and the bar is not met: `launch_argv` is `[self.binary, *extra]` with no
-    subclass override anywhere in the registry, so the pass-through **is** the seam, and
-    what decides whether to use it is whether charter has an id, which is this question.
+    **Asked of the registry's `resume_argv`, never spelled here.** This used to answer
+    Claude Code alone and argued against a resume member on `Harness`: *"`launch_argv` is
+    `[self.binary, *extra]` with no subclass override anywhere in the registry, so the
+    pass-through IS the seam"*. #1101 meets that bar for `first_message_argv`'s own reason —
+    three harnesses resume with three spellings (`--resume <id> --name`, `resume <id>`,
+    `-s <id>`), so no single pass-through is right for all of them — and the answer is now
+    whichever harness says how it resumes.
     """
-    from ..harness import claude_code
-    return name == claude_code.NAME
+    from ..harness import registry
+    h = registry.get(name)
+    return h is not None and h.resume_argv("id", "") is not None
+
+
+def conversation_exists(harness: str, link: str, conversation: str) -> bool:
+    """Whether chat's *link* names a conversation there is something of — the one answer
+    every surface that offers resume asks, at the moment it offers it (#1101).
+
+    A link, a harness that resumes by id, and then the harness's own evidence:
+
+    * **a named transcript that is a FILE**, for a harness that names one. Claude Code
+      reports its chosen id at SessionStart and writes no transcript until the first prompt
+      (C1), so a chat nobody has typed in has a link and no conversation. A transcript
+      deleted since is no longer offered.
+    * **the reported link itself**, for opencode, which names no transcript: a tool hook
+      reported the session, and that is the whole of what charter can know.
+
+    A `stat` of a path the harness named, and nothing else — charter reads nothing inside
+    it. A Codex chat that has taken no turn has no link at all (X1).
+    """
+    from ..harness import registry
+    h = registry.get(harness)
+    if not link or h is None or h.resume_argv(link, "") is None:
+        return False
+    if h.names_its_transcript:
+        return os.path.isfile(conversation)
+    return True
 
 
 def title(c: Doomed) -> str:

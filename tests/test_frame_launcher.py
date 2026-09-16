@@ -4276,7 +4276,9 @@ class Launch(PersonaIso, unittest.TestCase):
 
         `state.new_chat_id` claims its ordinal with a `mkdir` that FAILS when the name is
         taken, so a launch cannot land on an occupied directory at all — the collision is
-        prevented rather than cleaned up after. Pinned as literals: workspace `demo`,
+        prevented rather than cleaned up after. Since #1101 it also starts ABOVE every id a
+        directory or the mark (`chat-ids.json`) carries, and raises the mark before the
+        `mkdir`, so `demo.1` is never even tried. Pinned as literals: workspace `demo`,
         `demo.1` already on disk, so the launch must take `demo.2`.
         """
         state.record_exit("demo.1", 99)
@@ -6420,8 +6422,12 @@ class ALaunchFillsTheCacheItJustEmptied(PersonaIso, unittest.TestCase):
 
         Asserted on the CALL rather than on the file, for `record_server`'s own reason in
         this module: the last `reap` of a finished launch legitimately removes this
-        frame's whole directory, marker and all."""
-        for name, launch in (("private", _launch), ("operator", _launch_inside)):
+        frame's whole directory, marker and all.
+
+        Both paths run in one plane, so the second launch is `demo.2`: a chat id is never
+        handed out again (#1101), even once the first chat's directory is reaped."""
+        for n, (name, launch) in enumerate((("private", _launch),
+                                            ("operator", _launch_inside)), start=1):
             with self.subTest(path=name):
                 marked: list[tuple[str, str]] = []
                 real = state.record_workspace
@@ -6430,7 +6436,7 @@ class ALaunchFillsTheCacheItJustEmptied(PersonaIso, unittest.TestCase):
                                                              real(fid, ws))[1]):
                     launch(_FakeTmux(exit_code=0) if name == "private"
                            else _FakeOperatorTmux(exit_code=0))
-                self.assertEqual(marked, [(_frame_id(), "demo")])
+                self.assertEqual(marked, [(f"demo.{n}", "demo")])
 
 
 class SpawningTheGather(PersonaIso, unittest.TestCase):

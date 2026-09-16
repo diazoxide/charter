@@ -66,6 +66,7 @@ line. One hostile manifest covers all of them.
 
 from __future__ import annotations
 
+import os
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -107,10 +108,12 @@ def tearDownModule():
 
 
 def _doomed(**kw):
+    # A conversation file that exists: a chat is promised its conversation only when the
+    # transcript its harness named is there (#1101), and these cases are about the words.
     base = dict(chat="alpha.1", workspace="alpha", persona="", harness="claude-code",
                 cwd="/tmp", resume="", server=SERVER, live=True, active=False,
                 exit_code=None, closed=False, homeless=False, cwd_gone=False,
-                cwd_outside=False)
+                cwd_outside=False, conversation=os.path.abspath(__file__))
     base.update(kw)
     return leave.Doomed(**base)
 
@@ -130,9 +133,9 @@ class TheFourResumeSentencesAreTheseWords(PersonaIso):
     def test_a_chat_with_an_id_is_promised_its_conversation(self):
         self.assertEqual(leave.note(_doomed(resume="conv-1")), "conversation resumes")
 
-    def test_a_chat_with_no_id_yet_says_so_and_names_no_harness(self):
+    def test_a_chat_with_no_conversation_yet_says_so_and_names_no_harness(self):
         self.assertEqual(leave.note(_doomed(harness="claude-code", resume="")),
-                         "reopens empty — no session id recorded for this chat yet")
+                         "reopens empty — no conversation recorded for this chat yet")
 
     def test_a_chat_whose_harness_charter_forgot_says_that_instead(self):
         self.assertEqual(leave.note(_doomed(harness="", resume="")),

@@ -12,9 +12,11 @@ import subprocess
 import sys
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from tests._isolation import PersonaIso
+from charter import config
 from charter.frame import state, tmuxctl
 from tests._tmuxsocket import OPERATOR_SOCKET
 
@@ -175,12 +177,15 @@ class ChatIdIsAllocated(PersonaIso, unittest.TestCase):
         self.assertIsNone(state.new_chat_id("x" * 5000))
 
     def test_giving_up_is_bounded_rather_than_a_spin(self):
-        """The loop has a ceiling, and it answers `None` at it. Asserted by shrinking the
-        ceiling rather than by making ten thousand directories."""
-        with mock.patch.object(state, "_CHAT_ORDINAL_MAX", 2):
-            self.assertEqual(state.new_chat_id("api"), "api.1")
-            self.assertEqual(state.new_chat_id("api"), "api.2")
+        """The loop has a ceiling on its ATTEMPTS, and it answers `None` at it. Asserted by
+        shrinking the ceiling and refusing every name, rather than by making ten thousand
+        directories: since #1101 the counter starts above every trace, so taken names no
+        longer exhaust it on their own."""
+        with mock.patch.object(state, "_CHAT_ORDINAL_MAX", 2), \
+                mock.patch.object(state.config, "claim_private_dir",
+                                  side_effect=FileExistsError("taken")) as claim:
             self.assertIsNone(state.new_chat_id("api"))
+        self.assertEqual(claim.call_count, 2)
 
     def test_the_ceiling_is_the_number_it_was_argued_at(self):
         """The test above shrinks it, so it cannot also say what it is. Ten thousand is
@@ -648,9 +653,20 @@ class WriteFailureIsNotFatal(PersonaIso, unittest.TestCase):
         """#685's marker is written on the launch path, so it takes the same posture as
         every other writer here: a filesystem that will not take the file costs the claim
         its keep-rule, never the launch. The ordinal still comes back and the directory is
-        still this launcher's."""
-        with mock.patch("charter.frame.state.config.write_for",
-                        side_effect=OSError("disk full")):
+        still this launcher's.
+
+        Only the MARKER's write fails here. The id record beside it is a different write
+        with the opposite posture (#1101): a mark that cannot be written hands out nothing,
+        because an id handed out unrecorded is one the next allocation could hand out again
+        (`test_a_chat_id_is_never_handed_out_again`)."""
+        real = config.write_for
+
+        def write(p, data):
+            if Path(p).name == state._CLAIM_FILE:
+                raise OSError("disk full")
+            return real(p, data)
+
+        with mock.patch("charter.frame.state.config.write_for", side_effect=write):
             chat = state.new_chat_id("api")   # must not raise
         self.assertEqual(chat, "api.1")
         self.assertTrue(state.frame_dir(chat).is_dir())

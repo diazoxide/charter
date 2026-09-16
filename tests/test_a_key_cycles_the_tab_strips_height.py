@@ -16,7 +16,7 @@ is that half.
 
 **The chosen height does not survive a restart.** It is a file in the frame's own state
 directory, which `state.reap` deletes whole when the frame ends and `state.clear_shape`
-deletes when a new frame claims a recycled id — the same place `density` and `hidden`
+deletes when a launch claims the id again, as a reopen keeps it — the same place `density` and `hidden`
 live, so there is no new kind of state and nothing for `doctor` to explain. A plane that
 always wants three rows says so once in `[[frame.component]] size` (#687), which
 `layout._grown` still honours.
@@ -169,11 +169,11 @@ class TheHeightIsRememberedForThisFrameAndNoLonger(PersonaIso, unittest.TestCase
             state.record_bar_rows(self.FID, n)
             self.assertEqual(state.bar_rows(self.FID), n)
 
-    def test_a_new_frame_claiming_a_recycled_id_does_not_inherit_it(self):
-        """`state.clear_shape`'s list. A brand-new frame inheriting three rows would come
-        up with a three-row-shorter harness taken from somebody else's session, with
-        nothing on screen to say why — and it would break the sentence #880 is written to
-        keep."""
+    def test_a_launch_claiming_the_id_again_does_not_inherit_it(self):
+        """`state.clear_shape`'s list. A reopen keeps the chat's id (#1101) and launches
+        into its directory; inheriting three rows would bring it up with a three-row-shorter
+        harness from a session that is over, with nothing on screen to say why — and it
+        would break the sentence #880 is written to keep."""
         state.record_bar_rows(self.FID, 3)
         state.clear_shape(self.FID)
         self.assertIsNone(state.bar_rows(self.FID))

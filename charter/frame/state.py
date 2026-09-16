@@ -43,6 +43,8 @@ aspirational.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 import os
 import re
@@ -129,16 +131,53 @@ def frame_id(workspace: str, pid: int) -> str:
 #: it cannot is a chat and takes liveness from tmux's own window list.
 _CHAT_SEP = "."
 
-#: How far :func:`new_chat_id` will count before it gives up on a workspace.
+#: How many ordinals :func:`new_chat_id` will TRY before it gives up on a workspace.
 #:
 #: Not a policy about how many chats an operator may have — `[frame] max_chats` is that,
-#: and it is a different question asked somewhere else. This bounds the LOOP: allocation
-#: walks upwards from 1 claiming directories, and without a ceiling a plane whose frame
-#: root somehow refuses every name would spin instead of answering. Ten thousand is far
-#: past any real plane (the scan costs one `mkdir` per taken ordinal, and a plane holds
-#: tens of frame directories, not thousands) and small enough that giving up is a
-#: refusal a caller can report rather than a hang nobody can see.
+#: and it is a different question asked somewhere else. This bounds the LOOP: without a
+#: ceiling a plane whose frame root somehow refuses every name would spin instead of
+#: answering. Ten thousand is far past any real plane (one `mkdir` per taken ordinal, and a
+#: plane holds tens of frame directories, not thousands) and small enough that giving up is
+#: a refusal a caller can report rather than a hang nobody can see.
+#:
+#: **A bound on attempts counted from where allocation starts, not on the ordinal** (#1101).
+#: It used to cap how high allocation could count, from 1. Ordinals only grow now, so a cap
+#: on the number itself would be a lifetime limit per workspace; :data:`ORDINAL_CEILING` is
+#: the bound on the number, and it is a different argument.
 _CHAT_ORDINAL_MAX = 10_000
+
+#: The highest ordinal :func:`new_chat_id` hands out for one prefix, in the life of a plane.
+#:
+#: **What a strip can sort, and what a trace scan can count.** `chats._MAX_ORDINAL_DIGITS` is
+#: derived from this, and it is the bound `chats._order` puts on `int()` and the one
+#: :func:`highest_ordinal` puts on every trace it reads. An id with more digits than that
+#: would be an id no scan could count — the next allocation would start below it and hand
+#: out a name that still has leftovers, which is #1101 again. So the allocator refuses at
+#: the ceiling instead of minting past it.
+ORDINAL_CEILING = 99_999
+
+#: The high-water mark: ``{prefix: highest ordinal ever handed out}``, a FILE in the frame
+#: root (#1101).
+#:
+#: **A file and never a directory**, because every scan of the frame root reads a directory
+#: as a chat — `leave.plane_chats`, `chats._by_workspace`, :func:`reap` — so a directory here
+#: would be listed as a tab and removed by a reap. Like `reopen.json` and `<id>.transcript`,
+#: a file is skipped by each of those already.
+#:
+#: **Scratch that survives being lost**, under :data:`NO_FORMAT_PROMISE`: every allocation
+#: scans the traces as well as reading this, so a lost mark falls back to the highest
+#: ordinal a leftover still carries — and an id that left no leftover has nothing to hand
+#: down.
+CHAT_IDS = "chat-ids.json"
+
+#: The lock the read-max-write of :data:`CHAT_IDS` runs under. A mark that went DOWN would
+#: hand an id out again, and two allocators reading one mark and each writing their own `n`
+#: is how it would go down.
+CHAT_IDS_LOCK = "chat-ids.lock"
+
+#: The ordinal after the last dot. A regex rather than `str.isdigit`, because `isdigit`
+#: admits `²`, which `int()` then refuses — and the scan below must never raise.
+_ORDINAL_RE = re.compile(r"[0-9]+")
 
 #: The file :func:`new_chat_id` writes its own pid into as it claims a directory, and the
 #: third keep-rule :func:`reap` reads it back through (#685).
@@ -225,12 +264,29 @@ def new_chat_id(workspace: str) -> str | None:
     directory — the collision this whole design exists to make impossible, reintroduced
     by the cheaper-looking spelling.
 
+    **And it starts above every id this plane has ever handed out** (#1101). It used to walk
+    upward from 1 and take the lowest free ordinal, and a reap frees an ordinal with its
+    directory — but two things keyed by the id live OUTSIDE that directory, the captured
+    `<id>.transcript` and the quit record's entry. So a new `default.1` was offered an
+    unrelated chat's scrollback, and closing it deleted the earlier chat's record. Deleting
+    every leftover at the reap was the alternative, and it fails the day a leftover charter
+    does not know about is written; never reusing the name needs no list.
+
+    So, under :data:`CHAT_IDS_LOCK`, allocation starts at :func:`highest_ordinal` ``+ 1`` —
+    the mark and every trace — and for each candidate **raises the mark before it claims
+    the directory**. A mark that cannot be written ends the allocation with nothing made, so
+    no id ever leaves unrecorded; a claim that then fails costs an ordinal the mark already
+    covers, which is harmless. The scan only chooses where to START: the `mkdir` below is
+    still the only thing that decides who owns a name, so a racer that holds no lock — an
+    older charter across the upgrade — still cannot share one.
+
     ``None`` for every way this can fail to allocate: a frame root that cannot be made, a
-    name :func:`contain.child` refuses, an id so long ``mkdir`` answers ``ENAMETOOLONG``,
-    a filesystem that will not take the directory, or a workspace already holding
-    :data:`_CHAT_ORDINAL_MAX` chats. One answer for all of them, because the caller does
-    the same thing with each: report that it could not open a chat, rather than launch
-    one whose state has nowhere to live.
+    lock that cannot be opened or taken, a mark that cannot be written, an id so long
+    ``mkdir`` answers ``ENAMETOOLONG``, a filesystem that will not take the directory,
+    :data:`_CHAT_ORDINAL_MAX` attempts all taken, or a prefix already at
+    :data:`ORDINAL_CEILING`. One answer for all of them, because the caller does the same
+    thing with each: report that it could not open a chat, rather than launch one whose
+    state has nowhere to live.
 
     The id is a NAME and is never parsed for meaning. Renaming a workspace leaves its
     live chats spelling the old one and changes nothing — `frame_workspace` reads the
@@ -244,39 +300,231 @@ def new_chat_id(workspace: str) -> str | None:
     root = _root()
     try:
         config.private_mkdir(root)
+        with _locked(root):
+            start = highest_ordinal(prefix) + 1
+            for n in range(start, min(start + _CHAT_ORDINAL_MAX, ORDINAL_CEILING + 1)):
+                # The mark first, and a mark that did not land hands out nothing — it raises
+                # into the `except` below: an id handed out unrecorded is one the next
+                # allocation could hand out again.
+                _raise_mark(prefix, n)
+                # A plain join, and the containment is asserted rather than branched on —
+                # the deletion sweep is why. `contain.child` here could only ever refuse a
+                # name `workspace_prefix` cannot produce: the alphabet holds no separator
+                # and no NUL, the head is non-empty (`or "frame"`), the strip rules out `.`
+                # and `..`, and the tail is a decimal integer. What still refuses a bad
+                # name is `frame_dir`, which every later reader of this id goes through.
+                d = root / f"{prefix}{_CHAT_SEP}{n}"
+                try:
+                    config.claim_private_dir(d)
+                except FileExistsError:
+                    continue      # taken — by a racer holding no lock, or by debris
+                # And the claim is SAID, immediately, in the directory the `mkdir` just
+                # made (#685). Winning the `mkdir` is only half of "cannot both win": the
+                # other half is that the winner's directory survives long enough to become
+                # a chat, and between this line and the `new-window` hundreds of
+                # milliseconds later the claim passed all three of `reap`'s keep-rules. A
+                # sibling launcher's reap deleted it, and both launchers then held `api.1`.
+                # Reproduced.
+                _record_claim(d)
+                return d.name
     except OSError:
+        # A frame root that cannot be made, a lock that cannot be opened or taken, and
+        # ENAMETOOLONG, a full filesystem or a permission the plane does not have at the
+        # claim. None of those gets better at `n+1`.
         return None
-    for n in range(1, _CHAT_ORDINAL_MAX + 1):
-        # A plain join, and the containment is asserted rather than branched on — the
-        # deletion sweep is why. `contain.child` here could only ever refuse a name
-        # `workspace_prefix` cannot produce: the alphabet holds no separator and no NUL,
-        # the head is non-empty (`or "frame"`), the strip rules out `.` and `..`, and the
-        # tail is a decimal integer. So `if d is None: return None` was a branch no test
-        # could reach and no mutation could redden — the shape `record_identity`'s own
-        # unreachable `isinstance` filter was deleted for. What still refuses a bad name
-        # is `frame_dir`, which every later reader of this id goes through, and which
-        # resolves through `contain.child` on the way back.
-        d = root / f"{prefix}{_CHAT_SEP}{n}"
-        try:
-            config.claim_private_dir(d)
-        except FileExistsError:
-            continue          # taken — by a sibling chat, by a racer, or by debris
-        except OSError:
-            # ENAMETOOLONG for an id no `mkdir` will take, a full filesystem, a
-            # permission the plane does not have. None of those gets better at `n+1`.
-            return None
-        # And the claim is SAID, immediately, in the directory the `mkdir` just made
-        # (#685). Winning the `mkdir` is only half of "cannot both win": the other half
-        # is that the winner's directory survives long enough to become a chat, and
-        # between this line and the `new-window` hundreds of milliseconds later the
-        # claim passed all three of `reap`'s keep-rules — no window yet, no `server`
-        # marker yet, and a chat id carries no launcher pid for the third to abstain in
-        # favour of. A sibling launcher's reap (every launch runs one) deleted it, and
-        # both launchers then held `api.1`: one `exit` file, one `panes` map, one pane
-        # record, and a switch aimed at whichever wrote last. Reproduced.
-        _record_claim(d)
-        return d.name
     return None
+
+
+@contextlib.contextmanager
+def _locked(root: Path):
+    """Hold :data:`CHAT_IDS_LOCK` for the read-max-write of the mark.
+
+    Opened through `config.open_for` in append mode, so the lock file is charter's own
+    private state and opening it never truncates anything. `fcntl.flock` rather than a
+    lock-file-exists protocol, because the kernel drops a flock with the descriptor: a
+    launcher killed while holding it strands nothing, which is the class of problem #685
+    spent a PR on. The lock is released when the file closes on the way out. An `OSError`
+    opening or taking it goes to the caller, which hands out nothing.
+    """
+    with config.open_for(root / CHAT_IDS_LOCK, "a") as f:
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        yield
+
+
+def _as_ordinal(value) -> int:
+    """A mark's value as an ordinal: a positive `int`, else 0 — a hand-edited or
+    half-understood mark reads as "nothing handed out", and the traces still count."""
+    return max(value, 0) if isinstance(value, int) else 0
+
+
+def _read_mark(root: Path) -> dict:
+    """The mark as a dict, or ``{}`` when it is missing, unreadable, or not an object."""
+    try:
+        data = json.loads((root / CHAT_IDS).read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _raise_mark(prefix: str, n: int) -> None:
+    """Raise *prefix*'s mark to *n* — never lower it. A write that does not land RAISES.
+
+    Called only under :func:`_locked`, by the two claims, each of which already answers an
+    `OSError` with "nothing handed out" — so the failure travels to that answer rather than
+    being caught here and turned back into it (a catch of its own was one the deletion sweep
+    could not tell from its absence). Written whole with `config.replace_for` whether or not
+    the value moves, because the caller's rule is "the mark covers this ordinal before the
+    directory exists", and one write is the simplest way to be sure it does. Every other
+    prefix's entry is carried through.
+    """
+    root = _root()
+    marks = _read_mark(root)
+    marks[prefix] = max(_as_ordinal(marks.get(prefix)), n)
+    config.replace_for(root / CHAT_IDS, json.dumps(marks, sort_keys=True) + "\n")
+
+
+def _digits(tail: str) -> int | None:
+    """*tail* as an ordinal when it is decimal digits a strip can sort, else ``None``.
+
+    The digit bound is `chats._MAX_ORDINAL_DIGITS` and nothing else, so what the strip sorts
+    and what the trace scan counts cannot drift apart. An ordinal past it is IGNORED, never
+    raised on: `int()` refuses more than 4,300 digits, and a scan that raised would hand out
+    nothing at all.
+    """
+    from . import chats
+    if _ORDINAL_RE.fullmatch(tail) and len(tail) <= chats._MAX_ORDINAL_DIGITS:
+        return int(tail)
+    return None
+
+
+def _traces(prefix: str) -> list[int]:
+    """Every ordinal a leftover on disk still carries for *prefix*. Never raises.
+
+    Four places, and each is a leftover a new chat of that id would inherit:
+
+    * ``<prefix>.<n>`` in the frame root — a chat's directory;
+    * ``<prefix>.<n>.transcript`` beside it (`reopen.TRANSCRIPT_SUFFIX`);
+    * every ``frames[*].chats[*].chat`` in `reopen.json`, read RAW, because `reopen.read`
+      answers ``None`` for a version it does not speak and that file still names ids a
+      transcript carries;
+    * ``SESSIONS_DIR/<prefix>.<n>.*`` — removed only when a reap removes the directory
+      (:func:`_forget_session`), so a marker with no directory beside it is an id that still
+      has something to hand down.
+
+    `chat-turns/<chat>` is keyed by the id too and is not here: it stands for a turn at most
+    `inflight.TURN_STALE_SECONDS` and marks a spinner, never a record a new chat is offered.
+
+    *prefix* holds no dot, so the head before the ordinal is compared whole, and an old
+    ``{workspace}-{pid}`` id never counts.
+    """
+    from . import reopen
+    # Two patterns rather than string splitting, and the reason is the deletion sweep: with a
+    # dot-free prefix, splitting at the first dot or the last one reads every name the same,
+    # so either spelling was a line no test could tell from the other. A pattern says the
+    # shape once: the whole id, or the id followed by a marker family.
+    whole = re.compile(re.escape(prefix) + r"\.([0-9]+)")
+    marker = re.compile(re.escape(prefix) + r"\.([0-9]+)\.")
+    found: list[int | None] = []
+    root = _root()
+    try:
+        names = [e.name for e in os.scandir(root)]
+    except OSError:
+        names = []
+    for name in names:
+        m = whole.fullmatch(name.removesuffix(reopen.TRANSCRIPT_SUFFIX))
+        found.append(_digits(m.group(1)) if m else None)
+    try:
+        raw = json.loads((root / reopen.MANIFEST).read_text())
+    except (OSError, ValueError):
+        raw = None
+    frames = raw.get("frames") if isinstance(raw, dict) else None
+    for frame in frames if isinstance(frames, list) else ():
+        listed = frame.get("chats") if isinstance(frame, dict) else None
+        for chat in listed if isinstance(listed, list) else ():
+            name = chat.get("chat") if isinstance(chat, dict) else None
+            if isinstance(name, str):
+                m = whole.fullmatch(name)
+                found.append(_digits(m.group(1)) if m else None)
+    try:
+        markers = [e.name for e in os.scandir(config.SESSIONS_DIR)]
+    except OSError:
+        markers = []
+    for name in markers:
+        m = marker.match(name)
+        found.append(_digits(m.group(1)) if m else None)
+    return [n for n in found if n is not None]
+
+
+def highest_ordinal(prefix: str) -> int:
+    """The highest ordinal *prefix* has handed out or left a trace of — the mark and every
+    trace (:func:`_traces`), whichever is higher. ``0`` for a prefix with neither. Never
+    raises, and asked on every allocation rather than only the first, which is what makes a
+    lost mark cost nothing."""
+    return max([_as_ordinal(_read_mark(_root()).get(prefix)), *_traces(prefix)])
+
+
+def ordinal_of(chat: str) -> int | None:
+    """The ordinal after *chat*'s last dot, when it is one :func:`new_chat_id` could hand
+    out — ``1`` to :data:`ORDINAL_CEILING` — else ``None``."""
+    _head, sep, tail = chat.rpartition(_CHAT_SEP)
+    n = _digits(tail) if sep else None
+    return n or None
+
+
+def _mintable(chat: str) -> tuple[str, int] | None:
+    """``(prefix, ordinal)`` when the whole id *chat* is one :func:`new_chat_id` could have
+    minted, else ``None``.
+
+    The prefix must be one `workspace_prefix` hands back unchanged — which rules out a dot
+    in it (`a.b.7`), an empty one (`.7`), a stripped end (`-beta.7`) and every character
+    outside the id alphabet in one comparison — and the ordinal must be in range. That also
+    makes the id a `chats.is_chat` chat by construction: the alphabet is `chats.ID_RE`'s and
+    a `.`-separated tail is never read as a launcher pid. The prefix is handed back so no
+    caller parses the id a second time.
+    """
+    n = ordinal_of(chat)
+    head = chat.rpartition(_CHAT_SEP)[0]
+    return (head, n) if n is not None and workspace_prefix(head) == head else None
+
+
+def claim_chat_id(chat: str) -> bool:
+    """Claim exactly *chat* — a restored chat keeping the id it had. ``True`` when this
+    process now owns its directory.
+
+    :func:`new_chat_id`'s claim for one named ordinal: under the same lock, the mark raised
+    first, then the `mkdir`, then the claim marker. ``False`` for a name that is not an id
+    charter mints, a lock or mark that cannot be written, and a directory that already
+    exists — which `commands_frame._claim_kept_id` then asks tmux about before it gives up.
+    """
+    found = _mintable(chat)
+    if found is None:
+        return False
+    prefix, n = found
+    root = _root()
+    try:
+        config.private_mkdir(root)
+        with _locked(root):
+            _raise_mark(prefix, n)   # a mark that did not land raises: nothing is claimed
+            d = root / chat
+            config.claim_private_dir(d)
+            _record_claim(d)
+    except OSError:
+        return False
+    return True
+
+
+def reap_chat(chat: str) -> None:
+    """Remove one chat's directory and its session markers — :func:`reap`'s removal, for a
+    single chat a caller has already proven dead (`commands_frame._claim_kept_id`).
+
+    **Only for an id charter mints.** This is `rmtree`, and *chat* can come off a quit record
+    a hand could have edited; a name like ``beta`` or ``frame`` is a directory in the frame
+    root that is not a chat's, and nothing here may reach it. Never raises.
+    """
+    if _mintable(chat) is None:
+        return
+    shutil.rmtree(_root() / chat, ignore_errors=True)
+    _forget_session(chat)
 
 
 def _record_claim(d: Path) -> None:
@@ -589,10 +837,10 @@ def clear_exit(fid: str) -> None:
     recorded under the id was recorded before this frame existed.
 
     **A CHAT's id cannot be adopted that way at all**, because :func:`new_chat_id` claims
-    its ordinal with a ``mkdir`` that fails when the name is taken, so a launch never
-    lands on an occupied directory. On the launch path this is now belt and braces; the
-    case it is still for is reopening a COLD chat, which relaunches into that chat's own
-    existing directory. Only ``exit`` is
+    its ordinal with a ``mkdir`` that fails when the name is taken, and never hands an
+    ordinal out twice (#1101), so a launch never lands on an occupied directory. On the
+    launch path this is now belt and braces; the case it is still for is a reopen, which
+    keeps the chat's own id (:func:`claim_chat_id`). Only ``exit`` is
     removed: ``version`` is a counter panels poll, and moving it is :func:`bump`'s job.
     Never raises, and never creates, for the same reasons as everything else here.
     """
@@ -689,6 +937,33 @@ def harness_pane(fid: str) -> str | None:
         return None
 
 
+def chat_in_pane(pane: str, server: str) -> str | None:
+    """The one chat of this plane whose harness pane charter recorded as *pane* on *server*,
+    or ``None``.
+
+    **For the hook that cannot name its chat** (ruled, open question 1 (A)): opencode's
+    plugin overwrites ``$CHARTER_SESSION_ID`` with opencode's own session id in every hook
+    subprocess, so the hook has only ``$TMUX_PANE`` and the server ``$TMUX`` names. A pane id
+    is unique on one server while it runs, and the record is a launcher's own
+    (:func:`record_harness_pane`).
+
+    **More than one chat recorded on that pane is none**: pane ids start again at ``%0`` when
+    a server restarts, so a closed chat's directory can still name a pane a new chat now
+    holds, and guessing between them is what this whole link refuses. The server is compared
+    as the socket each spelling names (`tmuxctl.same_server`), because ``$TMUX`` carries a
+    path and a record carries a name. An old ``{workspace}-{pid}`` frame is not a chat.
+    """
+    from . import chats
+    try:
+        names = [e.name for e in os.scandir(_root())]
+    except OSError:
+        return None
+    found = [n for n in names
+             if chats.is_chat(n) and harness_pane(n) == pane
+             and tmuxctl.same_server(frame_server(n) or tmuxctl.LEGACY_SOCKET, server)]
+    return found[0] if len(found) == 1 else None
+
+
 def record_harness_session(fid: str, sid: str) -> bool:
     """Write down the HARNESS's own session id for this frame. ``True`` when the recorded
     value actually changed.
@@ -733,7 +1008,10 @@ def record_harness_session(fid: str, sid: str) -> bool:
     different id.
     """
     sid = (sid or "").strip()
-    if not sid or harness_session(fid) == sid:
+    # **Held to a shape before it is kept** (#1101's link): the id goes on to be a harness
+    # argv word (`--resume <id>`), and it arrives in a hook payload a chat's own shell can
+    # write — so one starting with `-` would be read as a flag. An empty id fails the shape.
+    if not SESSION_ID_RE.fullmatch(sid) or harness_session(fid) == sid:
         return False
     d = frame_dir(fid, create=True)
     if d is None:
@@ -749,10 +1027,10 @@ def record_harness_session(fid: str, sid: str) -> bool:
 def harness_session(fid: str) -> str | None:
     """The harness's own session id for *fid*, or ``None`` when charter does not know.
 
-    ``None`` for a frame whose harness is not Claude Code (nothing else is handed a
-    per-turn usage payload, so nothing else writes here), for a frame launched by a
-    charter that predates :func:`record_harness_session`, for a directory that is not a
-    frame's, and for a file that cannot be read.
+    ``None`` for a chat whose harness has not reported or been handed a session yet (a Codex
+    chat before its first turn, an opencode chat before its first tool call — #1101), for a
+    frame launched by a charter that predates :func:`record_harness_session`, for a
+    directory that is not a frame's, and for a file that cannot be read.
 
     Four reasons, deliberately one answer, because every caller does the same thing with
     it: **draw no gauge.** `frame/slots.py`'s own rule — a gauge that silently reads zero
@@ -841,6 +1119,175 @@ def kept_harness_session(fid: str) -> str | None:
         return (d / _KEPT_SESSION_FILE).read_text().strip() or None
     except (OSError, ValueError):
         return None
+
+
+#: What a harness session id may look like before charter keeps it or hands it to a harness.
+#: A letter or digit first, so no id can be read as a flag; then the alphabet every shipped
+#: harness's ids fit — Claude Code's and Codex's UUIDs, opencode's ``ses_…`` — and a length
+#: bound far past any of them.
+SESSION_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+
+#: The conversation file the harness itself named for this chat (a hook payload's
+#: ``transcript_path``). Only ever `stat`ed — charter opens, shows and passes it to nothing.
+_CONVERSATION_FILE = "conversation"
+
+#: The ``$CLAUDE_PID`` of the report that adopted this start's link (Claude Code only).
+_HARNESS_PID_FILE = "harness.pid"
+
+#: The claim, created with ``O_EXCL``, that this start has adopted its report.
+_ADOPTED_FILE = "session.adopted"
+
+#: Whether the current start resumed its link or started fresh — a Codex report reads it.
+_START_FILE = "session.start"
+
+
+def clear_harness_session(fid: str) -> None:
+    """Forget *fid*'s link — both halves of :func:`record_harness_session` — because a start
+    is about to be linked to a different conversation. Never raises."""
+    d = frame_dir(fid)
+    if d is None:
+        return
+    for name in ("session", _KEPT_SESSION_FILE):
+        try:
+            (d / name).unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+def record_conversation(fid: str, path) -> bool:
+    """Keep the conversation file a harness named for *fid*. ``True`` when it was kept.
+
+    **A path a hook payload carried is held to a shape and never opened**: absolute, no NUL,
+    and no longer than `contain.PATH_DISPLAY_LIMIT`. Anything else records nothing — the
+    payload is text a chat's own shell can write. What charter later does with it is one
+    `os.path.isfile`, when a surface is about to offer resume.
+
+    Never creates the chat's directory: a report about a chat that has none is a report about
+    no chat of this plane.
+    """
+    if (not isinstance(path, str) or not os.path.isabs(path) or "\x00" in path
+            or len(path) > contain.PATH_DISPLAY_LIMIT):
+        return False
+    d = frame_dir(fid)
+    if d is None:
+        return False
+    try:
+        config.replace_for(d / _CONVERSATION_FILE, f"{path}\n")
+    except OSError:
+        return False
+    return True
+
+
+def conversation(fid: str) -> str | None:
+    """The conversation file recorded for *fid*, or ``None``."""
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        # No `or None`: an empty file is never written (`record_conversation` refuses an
+        # empty path), and every caller reads `""` and `None` alike.
+        return (d / _CONVERSATION_FILE).read_text().strip()
+    except (OSError, ValueError):
+        return None
+
+
+def clear_conversation(fid: str) -> None:
+    """Forget *fid*'s conversation file, because the link it belonged to has moved on."""
+    d = frame_dir(fid)
+    if d is None:
+        return
+    try:
+        (d / _CONVERSATION_FILE).unlink(missing_ok=True)
+    except OSError:
+        return
+
+
+def record_harness_pid(fid: str, pid: int) -> None:
+    """Keep the ``$CLAUDE_PID`` of the report that adopted *fid*'s link.
+
+    **Learned from that report, never from `#{pane_pid}`**: a profile's command may be a
+    wrapper that forks `claude`, and then the pane's pid is the wrapper's. Only a positive
+    pid is a process.
+    """
+    d = frame_dir(fid)
+    if d is None or pid <= 0:
+        return
+    try:
+        config.replace_for(d / _HARNESS_PID_FILE, f"{int(pid)}\n")
+    except OSError:
+        return
+
+
+def harness_pid(fid: str) -> int | None:
+    """The adopted harness pid for *fid*, or ``None`` when this start has adopted none."""
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        val = (d / _HARNESS_PID_FILE).read_text().strip()
+    except (OSError, ValueError):
+        return None
+    return int(val) if _ORDINAL_RE.fullmatch(val) and int(val) > 0 else None
+
+
+def adopt_report(fid: str) -> bool:
+    """Claim that this start has adopted its report. ``True`` only for the first caller.
+
+    `config.create_for`, which is ``O_EXCL``: two hook processes racing one start cannot both
+    be the first. Every start clears it (:func:`clear_adoption`), and nothing else does.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return False
+    try:
+        return config.create_for(d / _ADOPTED_FILE, "")
+    except OSError:
+        return False
+
+
+def adopted(fid: str) -> bool:
+    """Whether this start of *fid* has adopted a report."""
+    d = frame_dir(fid)
+    return d is not None and (d / _ADOPTED_FILE).is_file()
+
+
+def clear_adoption(fid: str) -> None:
+    """Forget this start's adoption and its harness pid, because a new start begins."""
+    d = frame_dir(fid)
+    if d is None:
+        return
+    for name in (_ADOPTED_FILE, _HARNESS_PID_FILE):
+        try:
+            (d / name).unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+def record_start(fid: str, *, resumed: bool) -> None:
+    """Write down whether *fid*'s current start resumed its link or started fresh.
+
+    A resumed Codex start keeps the link it resumed (X3, read from source at
+    `rust-v0.147.0`): a report naming another id is never adopted, and this is how the hook
+    that reads the report knows which start it is in.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return
+    try:
+        config.replace_for(d / _START_FILE, "resumed\n" if resumed else "fresh\n")
+    except OSError:
+        return
+
+
+def resumed_start(fid: str) -> bool:
+    """Whether *fid*'s current start resumed its link."""
+    d = frame_dir(fid)
+    if d is None:
+        return False
+    try:
+        return (d / _START_FILE).read_text().strip() == "resumed"
+    except (OSError, ValueError):
+        return False
 
 
 def record_server(fid: str, server: str) -> None:
@@ -1834,8 +2281,8 @@ def clear_shape(fid: str) -> None:
       frame would come up with three rows of tab strip and a three-row-shorter harness,
       taken from somebody else's session, with nothing on screen to say why. That the
       height does not survive a restart is the feature's own stated promise (#880), so a
-      file inherited across a recycled id would break exactly the sentence the feature is
-      written to keep.
+      file inherited by a launch into the chat's own directory would break exactly the
+      sentence the feature is written to keep.
 
     * ``selection`` is the same keypress or the same click said about a ROW
       (:func:`record_selection`), and it inherits with the mildest of these consequences
@@ -2622,13 +3069,14 @@ def is_live(fid: str, *, pane: str | None = None) -> bool:
 def _forget_session(fid: str) -> None:
     """Remove every per-session marker keyed on *fid* from ``SESSIONS_DIR`` (#731).
 
-    **A frame's directory is not all of a frame's state, and an ordinal is recycled.**
-    :func:`new_chat_id` hands out the lowest FREE ordinal and an ordinal is free the
-    moment :func:`reap` removes its directory, so a "fresh" chat id is very often a
-    recycled NAME. Inside a frame the frame **is** the charter session (ADR 0019), so
-    every file charter keys on a session id — one directory over, in
-    ``.charter/sessions/<sid>.*`` — is keyed on that name too, and the next tenant of the
-    ordinal inherits all of it. Measured on the reported case: a relaunched `alpha.1`
+    **A frame's directory is not all of a frame's state.** Inside a frame the frame **is**
+    the charter session (ADR 0019), so every file charter keys on a session id — one
+    directory over, in ``.charter/sessions/<sid>.*`` — is keyed on the chat's id too, and
+    anything that next claims that id inherits all of it. When this was written
+    :func:`new_chat_id` handed out the lowest free ordinal, so the next tenant was any new
+    chat; since #1101 an id is never handed out again, and the one claimant left is a
+    reopen keeping its own id (:func:`claim_chat_id`) — which is also why a marker with no
+    directory beside it counts as a trace there. Measured on the reported case: a relaunched `alpha.1`
     whose predecessor had chosen `gamma` answers `workspace.resolve` → `gamma`,
     `is_locked` → `gamma`, and refuses `charter workspace use alpha` as **locked** — to
     the operator who had just launched with `--workspace alpha`. Minting a new id is not
@@ -2818,8 +3266,8 @@ def reap(live: set[str], *, server: str) -> list[str]:
             #
             # It costs an ordinal rather than bytes, and that is the honest price: a
             # directory left empty by an `rmtree` that half-failed is now kept, and
-            # `new_chat_id` skips its name for good. One name out of
-            # `_CHAT_ORDINAL_MAX`, against a collision that hands two live chats one
+            # `new_chat_id` counts above its name for good. One name out of
+            # `ORDINAL_CEILING`, against a collision that hands two live chats one
             # `exit` file.
             continue
         pid = _claiming_pid(d)
@@ -2837,7 +3285,7 @@ def reap(live: set[str], *, server: str) -> list[str]:
             continue
         shutil.rmtree(d, ignore_errors=True)
         # The frame's directory is half its state; the other half is keyed on the same
-        # name one directory over, and the ordinal is about to be handed out again (#731).
+        # name one directory over, and a reopen keeping this id would inherit it (#731).
         _forget_session(d.name)
         removed.append(d.name)
     # **A reap that took every directory there was is this plane going COLD, and that is

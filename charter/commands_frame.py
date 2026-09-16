@@ -142,6 +142,7 @@ from __future__ import annotations
 
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -5312,7 +5313,7 @@ def _focus_workspace(session_id: str, chat: str, *, ws: str, picked: bool) -> in
 
 
 class Reopening:
-    """One recorded chat on its way back, and the id it came back as.
+    """One recorded chat on its way back, and the id the launch claimed for it — its own.
 
     **The whole of the seam between `charter reopen` and the launcher**, carried on the
     `args` namespace `cmd_reopen` builds and read with `getattr` — which is `--probe`'s own
@@ -5321,12 +5322,12 @@ class Reopening:
     one, so it has no business in `charter claude --help`, and every existing caller of
     `cmd_launch` (production and test) constructs an `args` without this field.
 
-    **Mutable, and that is what it is for.** `cmd_launch` allocates the new chat id, and
-    the driver needs it back: to put the operator on the right tab at the end, and to
-    report which recorded chat became which live one. The alternative — reading the frame
-    root before and after and taking the difference — would be inferring an id from a
-    directory listing that a sibling launcher on the same plane is free to change, for a
-    fact the launcher itself has in hand.
+    **Mutable, and that is what it is for.** `cmd_launch` claims the recorded chat's own id
+    (`_claim_kept_id`, #1101) or refuses, and the driver needs to know which: to put the
+    operator on the right tab at the end, and to report which recorded chats came back.
+    The alternative — reading the frame root before and after and taking the difference —
+    would be inferring a claim from a directory listing that a sibling launcher on the same
+    plane is free to change, for a fact the launcher itself has in hand.
 
     :attr:`fid` stays ``""`` for a launch that never got as far as claiming one, which is
     exactly what makes "this chat did not come back" reportable rather than silent.
@@ -5736,7 +5737,8 @@ def _launch(args) -> int:
         # Only the profile's NAME crosses tmux. Its command and its environment are read
         # again in the pane by the launcher and applied at the `exec`, so nothing of either
         # reaches `layout.CARRIABLE`, a tmux `-e`, or tmux's own argument parser.
-        argv = launcher.argv(p.name, rest, attended=attended)
+        argv = launcher.argv(p.name, rest, attended=attended,
+                             resume=getattr(args, "resume", False))
         display = launcher.display_command(p, rest)
     if not argv:
         util.err("charter frame: nothing to run — `charter frame -- <command>`")
@@ -5990,18 +5992,18 @@ def _launch(args) -> int:
     # **Put the recorded plane back** (#845), and the gate that matters is `not
     # live_before` rather than anything about this workspace. With recording on, the record
     # is CURRENT instead of a relic of the last quit — so a second terminal typing `charter`
-    # while the plane runs would reopen every chat it can already see, and a reopened chat
-    # gets a fresh ordinal, so nothing on screen would tell the duplicates from the
-    # originals. Nothing live anywhere on this plane is the only reading under which a
-    # restore cannot double something.
+    # while the plane runs would reopen every chat it can already see, under the ids those
+    # chats are still running under (#1101). Nothing live anywhere on this plane is the only
+    # reading under which a restore cannot double something.
     #
     # `not live_before` excludes the wedged server that listed sessions and refused windows.
     # One that would not even list sessions, and is still there, reaches the restore
     # unreaped, and `_reopen_plane` holds back the chats recorded on it (#1088).
     #
-    # **After the reap** for the reason the reap itself is here: `cmd_reopen` allocates a
-    # fresh ordinal per chat, and the directories the record describes are dead ones a reap
-    # is entitled to take. The manifest is a FILE and survives it (`frame/reopen.py`).
+    # **After the reap** for the reason the reap itself is here: the directories the record
+    # describes are dead ones a reap is entitled to take, and a reopen claims each chat's own
+    # id back once its directory is gone (`_claim_kept_id`, #1101). The manifest is a FILE and
+    # survives it (`frame/reopen.py`).
     #
     # **Before open-or-focus**, which is unreachable on this branch anyway — nothing is live
     # for a client to be looking at — but stated in this order because it is the order the
@@ -6096,12 +6098,21 @@ def _launch(args) -> int:
     # **Allocated, not computed.** `state.frame_id`'s `{workspace}-{pid}` could collide
     # with a previous launcher's on a recycled pid, which is what `clear_exit` /
     # `clear_shape` / `clear_respawn` below exist to survive; a claimed ordinal cannot,
-    # because `mkdir` is the exclusion. Those calls stay because Stage 5c reopens a COLD
-    # chat into its own existing directory, which is the case they are actually for.
-    fid = state.new_chat_id(ws)
+    # because `mkdir` is the exclusion, and it is never handed out again (#1101).
+    #
+    # **A reopen keeps the chat's id** (#1101): it claims exactly the recorded directory, and
+    # a directory still standing there is proven dead by one listing on its own server before
+    # it is reaped (`_claim_kept_id`). An ordinary launch allocates above every id this plane
+    # has handed out, so a recorded chat's id is never one it can be given.
+    restoring = _reopening(args)
+    if restoring is not None:
+        fid, why = _claim_kept_id(restoring.chat)
+    else:
+        fid = state.new_chat_id(ws)
+        why = (f"charter frame: could not open a chat in workspace {ws!r} — its state "
+               f"directory or its id record could not be written")
     if fid is None:
-        util.err(f"charter frame: could not open a chat in workspace {ws!r} — its state "
-                 f"directory could not be created")
+        util.err(why)
         return 1
     _pin_workspace(ws, fid, picked)
     # The tmux SESSION is the workspace, and the chat is one window in it. `new_chat_id`
@@ -6168,14 +6179,12 @@ def _launch(args) -> int:
     # and used twice: recorded, and handed to `chat_window_argv` below.
     launch_cwd = os.getcwd()
     state.record_cwd(fid, launch_cwd)
-    # **And the two restore items that are not this launch's own to write** — the persona
-    # the recorded chat had chosen, and the transcript captured off its pane before it was
-    # killed. Both are keyed on a chat ID, and the id has just changed: `new_chat_id`
-    # allocates a fresh ordinal, so the pointer and the file that named the old chat name
-    # nothing a moment from now. Done HERE, before the harness is started, because the
-    # persona is resolved inside the pane at run time and a pointer written afterwards
-    # would be read one turn late. See :func:`_restore_recorded_chat`.
-    restoring = _reopening(args)
+    # **And the restore items that are not this launch's own to write** — the persona the
+    # recorded chat had chosen, its brief, and its session link and conversation. The chat
+    # keeps its id (#1101), but the reap that took its directory took those with it. Done
+    # HERE, before the harness is started: the persona is resolved inside the pane at run
+    # time, and the launcher reads the link there (`launcher.session_argv`). See
+    # :func:`_restore_recorded_chat`.
     if restoring is not None:
         restoring.fid = fid
         _restore_recorded_chat(restoring.chat, fid)
@@ -6715,10 +6724,9 @@ def _launch(args) -> int:
     # harness that had already recorded a code reaches the first.
     #
     # **Only for a launch that WAS the operator's terminal**, and this gate is a defect fix
-    # rather than a tidiness. `new_chat_id` walks upward from 1 and `reap` frees the ordinals
-    # a quit's chats held, so a reopen very often gets the SAME ids back — and every one of
-    # its own launches would then find itself named in the manifest it is in the middle of
-    # acting on, and name `charter reopen` while `charter reopen` was putting it back.
+    # rather than a tidiness. A reopen keeps each chat's id (#1101), so every one of its own
+    # launches finds itself named in the manifest it is in the middle of acting on, and would
+    # name `charter reopen` while `charter reopen` was putting it back.
     #
     # **And only for a chat that is actually over** (#845). The record now names every chat
     # that is RUNNING as well, so without the second half an operator who detached from a
@@ -10595,7 +10603,7 @@ def _record_the_plane(doomed, *, focus: str, active, windows,
         entries[c.workspace].append(reopen_state.Chat(
             chat=c.chat, workspace=c.workspace, persona=c.persona, harness=c.harness,
             cwd=c.cwd, resume=c.resume, transcript=transcript,
-            active=c.chat in active, profile=c.profile,
+            active=c.chat in active, profile=c.profile, conversation=c.conversation,
             # Read here rather than carried on `Doomed`: it is not something the quit's
             # warning says anything about, and `leave.plan` reads one plane for the row an
             # operator is shown. `or ""` because `state.brief` answers `None` for the chats
@@ -11046,53 +11054,51 @@ def _forget_transcript(fid: str) -> None:
 def _resumes(c) -> bool:
     """Whether *c*'s conversation comes back — the ONE answer, asked in two places.
 
-    A reopen now asks this twice: `_reopen_one` to decide whether to hand the harness
-    `--resume`, and :func:`_restore_recorded_chat` to decide whether the chat is owed its
+    A reopen now asks this twice: `_reopen_one` to decide whether to ask the launcher to
+    resume, and :func:`_restore_recorded_chat` to decide whether the chat is owed its
     brief. A second spelling is how those two would come to disagree — one passing the flag
     while the other decided the chat came back empty, and the chat then reading its brief on
     top of the transcript that already holds it.
 
-    Two conditions and both are load-bearing: a recorded id (only a chat that took a turn
-    has one) and a harness that takes the flag (`leave.resumable_harness` — Claude Code
-    alone, asked of the registry).
+    `leave.conversation_exists` is that answer (#1101): a recorded link, a harness that
+    resumes by id, and — for a harness that names its transcript — that file still there. A
+    Claude Code chat nobody typed in has a link and no conversation, and is not resumed.
     """
-    return bool(c.resume) and leave.resumable_harness(c.harness)
+    return leave.conversation_exists(c.harness, c.resume, c.conversation)
 
 
 def _restore_recorded_chat(rec, fid: str) -> None:
-    """Move the id-keyed things a recorded chat owns onto its new id *fid*.
+    """Write back the id-keyed things a recorded chat owns, into the directory *fid* it came
+    back in — which is the recorded id, because a reopen keeps it (#1101, `_claim_kept_id`).
+    The reap that took the chat's directory took each of these with it.
 
     **The persona pointer.** `state.identity`'s `CHARTER_PERSONA` is the launch PIN, which
     is empty for every chat that was not launched with one — so a chat's actual persona
-    lives in `persona.for_session(<chat id>)`, a file keyed on an id that is about to stop
-    existing. `persona.set_active(..., terminal_id="")` is `switch.to_persona`'s own call:
-    the session's pointer and nothing else, so a reopen does not repoint the terminal the
-    operator happens to be typing `charter reopen` in.
+    lives in `persona.for_session(<chat id>)`, a session marker the reap removed
+    (`state._forget_session`). `persona.set_active(..., terminal_id="")` is
+    `switch.to_persona`'s own call: the session's pointer and nothing else, so a reopen does
+    not repoint the terminal the operator happens to be typing `charter reopen` in.
 
-    **The transcript.** `chat: previous transcript` looks the file up by the chat id it is
-    offered on, so a capture named for the old chat would be invisible to the new one. It is
-    RENAMED rather than pointed at, for `frame/reopen.TRANSCRIPT_SUFFIX`'s reason: one
-    naming rule and no second file to keep in step. `os.replace` and not a copy, so the
-    move is atomic and there is never a moment with two copies of one capture.
+    **The brief.** A handoff's brief is the whole context the chat has, and it lived in the
+    reaped directory. What is decided here as well is whether the chat has ever SEEN it: a
+    chat whose conversation does not come back (:func:`_resumes`) reopens empty and is owed
+    the brief at its next SessionStart (`hooks._brief_block`); one that resumes already has
+    it as the first message of its own transcript.
 
-    A recycled ordinal is the case worth naming rather than discovering: `new_chat_id` walks
-    upward from 1 and `reap` frees the ordinal a quit's chats held, so a reopen very often
-    gets the SAME id back. Then the source and destination are one path and there is nothing
-    to move — which is what the equality test says, and why it is an equality test rather
-    than an `exists` check.
+    **The session link and its conversation** (#1101), before tmux: the launcher reads the
+    link in the pane (`launcher.session_argv`), and the next quit records both again. A value
+    that is not an id or an absolute path records nothing (`state.record_harness_session`,
+    `state.record_conversation`), so an empty one is not a special case here.
 
-    **The brief.** A handoff's brief is the whole context the chat has, and it lives under
-    the id that is about to stop existing — so it moves here like the other two. What is
-    decided here as well is whether the chat has ever SEEN it: a chat whose conversation
-    does not come back (:func:`_resumes`) reopens empty and is owed the brief at its next
-    SessionStart (`hooks._brief_block`); one that resumes already has it as the first
-    message of its own transcript.
+    **The transcript is not moved.** `chat: previous transcript` looks the file up by the
+    chat's id, and the id is kept, so the capture is already where it is asked for. The
+    rename that stood here carried it onto the fresh ordinal a reopen used to be given.
 
     Never raises. A persona that could not be pointed at leaves the chat on the plane's
-    default, which is visible on its own panel; a transcript that could not be moved leaves
-    the row with nothing to offer; a brief that could not be written leaves an empty chat as
-    empty as it was before any of this existed. None is worth failing a relaunch over, which
-    is the promise every writer in `frame/state.py` makes for the same reason.
+    default, which is visible on its own panel; a brief or a link that could not be written
+    leaves an empty chat as empty as it was before any of this existed. None is worth
+    failing a relaunch over, which is the promise every writer in `frame/state.py` makes for
+    the same reason.
     """
     from . import persona as persona_mod
     # `valid_name` alone, and the `rec.persona and` that used to stand in front of it is
@@ -11108,7 +11114,7 @@ def _restore_recorded_chat(rec, fid: str) -> None:
         except (OSError, ValueError):
             pass
     if rec.brief:
-        # The brief moves onto the new id whichever way the conversation went: a chat that
+        # The brief is written back under the chat's id whichever way the conversation went: a chat that
         # resumes still has to be recorded with its brief by the NEXT quit, and the old
         # chat's directory is already gone.
         state.record_brief(fid, rec.brief)
@@ -11117,31 +11123,96 @@ def _restore_recorded_chat(rec, fid: str) -> None:
             # reading the brief in its own transcript, where it arrived as the first
             # message the operator approved.
             state.owe_brief(fid)
-    old = reopen_state.transcript_path(rec.chat)
-    new = reopen_state.transcript_path(fid)
-    if old is None or new is None or old == new:
-        return
-    try:
-        os.replace(old, new)
-    except OSError:
-        return
+    state.record_harness_session(fid, rec.resume)
+    state.record_conversation(fid, rec.conversation)
+
+
+#: What a reopen says when the directory of the id it keeps is still in use, and by what.
+#: Every value in it is contained or tmux's own: *dir* is a path under the plane's state, and
+#: *fix* is a command naming a window id tmux minted.
+KEPT_ID_TAKEN = ("charter reopen: {chat} is not reopened — {dir} belongs to a chat that is "
+                 "still {what}, so opening it would give two chats one id. It stays recorded; "
+                 "{fix}, then run charter reopen again.")
+
+#: What a reopen says when it cannot claim the id at all — not an id charter hands out, or a
+#: directory it could not reap and claim — with nothing live in the way.
+KEPT_ID_UNCLAIMED = ("charter reopen: {chat} is not reopened — charter could not claim {dir} "
+                     "for it. It stays recorded; check that the plane's state directory can "
+                     "be written, then run charter reopen again.")
+
+
+def _claim_kept_id(rec) -> tuple[str | None, str]:
+    """Claim recorded chat *rec*'s own id for its reopen. ``(the id, "")``, or ``(None, the
+    sentence saying why not)`` (#1101).
+
+    **A restored chat keeps its id**, so the claim is exactly `state.claim_chat_id(rec.chat)`.
+    When a directory of that name is still there, the directory proves nothing on its own — a
+    record only names what to look for (#933, #1103). So before anything is reaped:
+
+    * **a live launcher still holds the claim** (`state._claiming_pid`) → refused: it is being
+      started, and tmux is not asked.
+    * **ONE listing on the chat's recorded server** (`_chat_pane_rows`) decides the rest. A
+      row for this chat counts only when it carries this plane's marker: another plane's pane
+      with that id, or a pane an older charter left unmarked, is not this chat's life.
+      Live → refused, naming the directory and the `kill-window` that clears it.
+    * **A server that did not answer proves nothing** (#1100). Only one that
+      `tmuxctl.nothing_listening` confirms gone holds no panes; a timeout or any other failure
+      may still be running the chat — #1100 measured a SIGSTOP'd server timing out while its
+      chats were live — so it is refused and nothing is reaped.
+    * Otherwise the directory is dead: `state.reap_chat` takes it and its session markers, and
+      the claim is made again. That answer is about this chat alone.
+
+    A name that is not an ordinal id asks tmux nothing: there is no directory charter could
+    keep for it.
+    """
+    chat = rec.chat
+    if state.claim_chat_id(chat):
+        return chat, ""
+    d = state.frame_dir(chat) if state.ordinal_of(chat) is not None else None
+    if d is None:
+        # *chat* is a quit record's, held to `chats.ID_RE` on the way in (`reopen._usable`),
+        # so it is already in an alphabet a terminal shows as it is — no containment here.
+        return None, KEPT_ID_UNCLAIMED.format(chat=chat, dir=chat)
+    shown = contain.readable(str(d), contain.PATH_DISPLAY_LIMIT)
+    pid = state._claiming_pid(d)
+    if pid is not None and state._launcher_is_alive(pid):
+        return None, KEPT_ID_TAKEN.format(chat=chat, dir=shown, what="being started",
+                                          fix="wait for that launch to finish")
+    server = state.frame_server(chat) or tmuxctl.LEGACY_SOCKET
+    rows = _chat_pane_rows(server)
+    if rows is None:
+        if not tmuxctl.nothing_listening(server):
+            return None, KEPT_ID_TAKEN.format(
+                chat=chat, dir=shown, what="on a tmux server that did not answer",
+                fix=f"wait for that server to answer, or remove {shown} if you know it is gone")
+        rows = []
+    plane = _this_plane()
+    live = [r for r in rows if r[0] == chat and r[3] == plane]
+    if live:
+        close = contain.readable(shlex.join(tmuxctl.server_argv(server, "kill-window", "-t",
+                                                               live[0][1])))
+        return None, KEPT_ID_TAKEN.format(chat=chat, dir=shown, what="running",
+                                          fix=f"close it with `{close}`")
+    state.reap_chat(chat)
+    if state.claim_chat_id(chat):
+        return chat, ""
+    return None, KEPT_ID_UNCLAIMED.format(chat=chat, dir=shown)
 
 
 #: What `charter reopen` says when this plane is already running, and #845 is what made it
 #: reachable. The record used to exist only after a quit, so there was never a live plane
 #: for it to describe; it is written as the plane CHANGES now, so a `charter reopen` typed
 #: out of habit — after closing a terminal, say, which only detaches — would put a second
-#: copy of every running chat on the plane. A reopened chat gets a fresh ordinal, so nothing
-#: on screen would tell the copies from the originals, and for Claude Code both copies would
-#: `--resume` the same conversation.
+#: copy of every running chat on the plane. A reopened chat keeps its id (#1101), so each copy
+#: would be a second chat under a running chat's id, and both would resume one conversation.
 #:
 #: It names the two things that ARE what the operator wanted, because "already running" on
 #: its own reads as a refusal to do the thing rather than as an answer.
 REOPEN_ON_A_LIVE_PLANE = (
     "charter reopen: this plane is already running — reopening it would open a second copy "
-    "of every chat, and a reopened chat gets a new id, so nothing on screen would tell the "
-    "copies apart. Attach to what is there ({attach}), or quit it first (`charter frame-quit` "
-    "in this project). Nothing was reopened, and the record is left in place.")
+    "of every chat, under the id the first copy is still running under. Attach to what is "
+    "there ({attach}), or quit it first (`charter frame-quit` in this project). Nothing was "
+    "reopened, and the record is left in place.")
 
 
 #: What `charter reopen` says about the chats it holds back, one line per server that would not
@@ -11269,8 +11340,8 @@ def _reopen_plane(args) -> int:
     """`charter reopen` — put back the plane the last quit recorded.
 
     **What comes back, per chat: the workspace, the persona, the harness and the
-    directory** — §4e's own four — plus, for Claude Code alone, the conversation, by
-    appending ``--resume <id>`` to the harness's own argv. **What does not: the selection,
+    directory** — §4e's own four — plus the conversation, for a chat whose harness resumes
+    by id and whose conversation exists (#1101). **What does not: the selection,
     the pane map, and the live scrollback.** §2.5's reasons for destroying the first two are
     still right, `panes` names tmux ids that died with the server, and §4f is explicit that a
     captured transcript is *offered and never replayed* — the reopened pane starts clean and
@@ -11564,6 +11635,12 @@ REOPEN_GONE = ("charter reopen: {chat} ran on profile '{name}', which this plane
                "where its conversation does not exist. Declare '{name}' again in "
                "charter.local.toml and run charter reopen to bring it back.")
 
+#: What a reopen says for a chat whose harness finds a conversation by the directory it ran
+#: in (opencode, O2: `opencode -s` validates the id against the working directory), when the
+#: chat comes back in another one — #867 moves a chat standing outside its workspace into it.
+REOPEN_ELSEWHERE = ("charter reopen: {chat} reopens empty — {harness} finds a conversation by "
+                    "the directory it ran in, and this chat comes back in a different one.")
+
 
 def _reopen_one(c, *, quiet: bool = False) -> "Reopening | None":
     """Put one recorded chat back. The launch's own record, or ``None`` when it did not run.
@@ -11575,11 +11652,12 @@ def _reopen_one(c, *, quiet: bool = False) -> "Reopening | None":
     for their plane back and is getting one chat of it under a different runtime, which is a
     thing to be told.
 
-    **`--resume` is appended to the harness's own argv and nowhere else.** `Harness.launch_argv`
-    is ``[self.binary, *extra]`` with no override in the registry, so the pass-through IS
-    the seam — there is no resume member on `Harness` and Phase 5's Task 9 Step 4 refuses one
-    on `harness/base.py`'s own bar. It is gated on `leave.resumable_harness`, so a recorded
-    id belonging to a harness that does not take the flag is not handed to it.
+    **The conversation is asked for with `resume`, never spelled into `rest`** (#1101). Three
+    harnesses resume with three spellings, so the launcher says it in the pane
+    (`launcher.session_argv`), from the link :func:`_restore_recorded_chat` writes back. It
+    is asked only where `leave.conversation_exists` says there is a conversation
+    (:func:`_resumes`), and — for a harness that looks the id up in the working directory —
+    only where the chat comes back in the directory it ran in (:data:`REOPEN_ELSEWHERE`).
 
     **The directory is `os.chdir`'d into rather than passed**, because that is where
     `cmd_launch` reads it from — one `os.getcwd()` on each of its two paths — and adding a
@@ -11625,9 +11703,6 @@ def _reopen_one(c, *, quiet: bool = False) -> "Reopening | None":
                 profiletrust.REOPEN_UNAPPROVED.format(
                     chat=c.chat, name=contain.readable(p.name), state=unapproved))
         return None
-    rest: list[str] = []
-    if _resumes(c):
-        rest = ["--resume", c.resume]
     # **Asked BEFORE `_restore_root`, which MAKES the workspace directory when it is gone**
     # (#867). The note below is about the plane the operator left, not about the one this
     # function has just repaired — asked after the `ensure` it would answer "present" for
@@ -11660,9 +11735,15 @@ def _reopen_one(c, *, quiet: bool = False) -> "Reopening | None":
         _report(quiet, util.warn,
                 f"charter reopen: {c.chat} comes back in {landing} — "
                 f"{_was_standing_in(c)}")
+    resume = _resumes(c)
+    if resume and harness.get(c.harness).resume_needs_cwd and not _same_directory(where, c.cwd):
+        resume = False
+        # `c.harness` is a registered harness's name here — `_resumes` said yes, which it
+        # says only for one — so it is charter's own constant, not text to contain.
+        _report(quiet, util.warn, REOPEN_ELSEWHERE.format(chat=c.chat, harness=c.harness))
     r = Reopening(c)
-    argv_args = _reopen_args(c, harness_name=p.kind, profile=p.name, rest=rest,
-                             reopening=r)
+    argv_args = _reopen_args(c, harness_name=p.kind, profile=p.name, reopening=r,
+                             resume=resume)
     here = os.getcwd()
     try:
         os.chdir(where)
@@ -11683,12 +11764,12 @@ def _reopen_one(c, *, quiet: bool = False) -> "Reopening | None":
                 f"charter reopen: {c.chat} did not come back (launcher returned {rc})")
         return None
     _report(quiet, util.info,
-            f"  {c.chat} → {r.fid} · {leave.RESUMES if rest else 'empty'}"
+            f"  {r.fid} · {leave.RESUMES if resume else 'empty'}"
             + (" · workspace was missing — remade empty" if homeless else ""))
     return r
 
 
-def _reopen_args(c, *, harness_name: str, profile: str, rest, reopening):
+def _reopen_args(c, *, harness_name: str, profile: str, reopening, resume: bool):
     """The namespace `cmd_launch` is driven with, built once so its fields are visible.
 
     Every field `cmd_launch` and `_choose_workspace` read is named here rather than left to
@@ -11696,12 +11777,13 @@ def _reopen_args(c, *, harness_name: str, profile: str, rest, reopening):
     ``workspace`` is the recorded one — set explicitly, so `_picker_wanted` never asks a
     question on a path with no operator waiting — ``pick`` is false for the same reason,
     ``no_frame`` is false because a reopen without a frame is a bare harness, and
-    ``reopening`` is the seam.
+    ``reopening`` is the seam. ``rest`` is empty and ``resume`` asks for the conversation
+    back (#1101): the launcher spells that per harness in the pane.
     """
     from types import SimpleNamespace
-    return SimpleNamespace(harness=harness_name, profile=profile, rest=list(rest),
+    return SimpleNamespace(harness=harness_name, profile=profile, rest=[],
                            no_frame=False, workspace=c.workspace or None, pick=False,
-                           reopening=reopening)
+                           reopening=reopening, resume=resume)
 
 
 def _attach_after_reopen(m, back) -> int:
