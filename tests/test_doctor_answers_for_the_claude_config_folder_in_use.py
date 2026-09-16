@@ -180,6 +180,27 @@ class TestSettingsComeFromTheFolderInUse(ConfigFolderCase):
         self.use_folder(self.other)
         self.assertEqual(doctor._settings_files()[2], self.other / "settings.json")
 
+    def test_the_folder_in_use_being_the_sessions_own_lists_that_file_once(self):
+        """`$CLAUDE_CONFIG_DIR` can name the very folder the session's own settings live in —
+        a session rooted at home, or a folder pointed at `<plane>/.claude`. This list is what
+        every "is it wired" row reads, and the list's own docstring says a file listed twice
+        would read as declared twice."""
+        self.use_folder(config.ROOT / ".claude")
+        listed = [p.resolve() for p in doctor._settings_files()]
+        user = (config.ROOT / ".claude" / "settings.json").resolve()
+        self.assertEqual(listed.count(user), 1, listed)
+
+    def test_a_file_charter_cannot_parse_is_named_once_however_many_ways_it_is_reached(self):
+        """The row says what it could not read. Reaching one file twice is charter's own
+        bookkeeping, and saying its name twice in one sentence tells the operator to go and
+        fix two files that are one."""
+        self.use_folder(config.ROOT / ".claude")
+        self.write(config.ROOT / ".claude" / "settings.json", "{oops")
+        _declared, doubt = doctor._settings_declaring_guard()
+        self.assertIsNotNone(doubt)
+        self.assertEqual(doubt.count("settings.json"), 1, doubt)
+        self.assertNotIn(" and ", doubt)
+
     def test_a_hook_only_in_the_default_folders_settings_does_not_wire_a_named_one(self):
         self.write(self.home / ".claude" / "settings.json", _PRETOOLUSE)
         self.assertEqual(doctor.check_guard_wired().status, OK, "the control")

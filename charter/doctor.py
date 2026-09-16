@@ -1017,8 +1017,8 @@ def session_root() -> Path:
 def _canonical(p: Path) -> Path:
     """*p* with symlinks resolved, or *p* itself when it cannot be.
 
-    **One call site, deliberately.** The first draft resolved both sides of the comparison
-    in :func:`session_is_the_plane`, and the deletion sweep charged both — each was
+    **One side of a comparison, deliberately.** The first draft resolved both sides of the
+    comparison in :func:`session_is_the_plane`, and the deletion sweep charged both — each was
     individually deletable with the suite still green, because they masked each other and
     because a Linux runner's ``/tmp`` needs no normalising either way. Only one of them was
     ever load-bearing: `os.getcwd` hands back the physical path already, so the SESSION
@@ -1029,6 +1029,10 @@ def _canonical(p: Path) -> Path:
     So the plane is the side that needs it, and this is where it happens. Resolving a path
     can raise `OSError` (an unreadable ancestor) or `RuntimeError` (a symlink loop), and a
     preflight row must render something rather than traceback.
+
+    :func:`_settings_files` asks the same question about files rather than about the plane —
+    which local root it is standing in, and whether two of its entries are one file — and
+    asks it here so that "the same file" means the same thing in both places.
     """
     try:
         return p.resolve()
@@ -1049,7 +1053,19 @@ def session_is_the_plane() -> bool:
 
 
 def _settings_files(root: Path | None = None, folder: Path | None = None) -> list[Path]:
-    """The settings the HOST actually resolves, in the order it reads them.
+    """The settings the HOST actually resolves for this session, each of them once.
+
+    **Charter's order, not the host's.** 2.1.273 reads `userSettings` first, where this list
+    ends with it. Nothing here needs the host's order — hooks are additive across the
+    sources, so no file wins — and a list that claimed it would be claiming something
+    charter has not measured.
+
+    **Each file once, by resolved path** (`_canonical`), keeping the first spelling so the
+    order above is unchanged. One file arrives twice in two reachable setups:
+    `$CLAUDE_CONFIG_DIR` naming the folder the session's own settings live in (a session
+    rooted at home, or a folder pointed at `<plane>/.claude`), and macOS spelling one
+    directory both `/var` and `/private/var`. Both would otherwise be counted twice by the
+    guard row and named twice in the sentence that says what charter could not read.
 
     One list, used both for a directly-declared hook and for `enabledPlugins`, so the two
     halves of "is it wired" can never disagree about which files are in force.
@@ -1083,7 +1099,10 @@ def _settings_files(root: Path | None = None, folder: Path | None = None) -> lis
     if top is not None and top != _canonical(here):
         files.append(top / ".claude" / "settings.local.json")
     files.append(_claude_folder(folder) / "settings.json")
-    return files
+    seen: dict[Path, Path] = {}
+    for p in files:
+        seen.setdefault(_canonical(p), p)
+    return list(seen.values())
 
 
 def _local_settings_root(here: Path) -> Path | None:
@@ -1187,13 +1206,18 @@ def _settings_declaring_guard(root: Path | None = None,
     One pass for both halves, because the row needs them together and a checker that asks twice
     is a checker that can answer itself differently — which is the defect one function up.
 
-    Unreadable files are named in the order :func:`_settings_files` yields them, which is the
-    order the host reads them in — so the first one named is the first one a session would have
-    loaded. This sorted them into a set first; the deletion sweep asked whether that ordering was
-    pinned and it was not, because there was nothing to pin: `_settings_files` never lists one
-    file twice (it says so, for the guard row that would otherwise count a declaration twice), so
-    the dedupe was dead, and alphabetical order is an arbitrary one to impose on a list that
-    already arrives in the order that means something.
+    Unreadable files are named in the order :func:`_settings_files` yields them — charter's
+    own order, not the host's: 2.1.273 lists `userSettings` first, where this list ends with
+    it. Naming them in the host's order would say something this function cannot back, and
+    nothing here needs it: hooks are additive across the sources, so no file "wins" and every
+    declaring file's hook runs.
+
+    This sorted them into a set first. The sort is gone — alphabetical order is an arbitrary
+    one to impose, and no caller or sentence depends on it. The dedupe is not gone; it moved
+    to `_settings_files`, where it is by RESOLVED path, because the two ways one file is
+    reached twice both spell it differently or not at all: `$CLAUDE_CONFIG_DIR` naming the
+    session's own `.claude`, and macOS spelling one directory `/var` and `/private/var`.
+    Deduping here would have left the guard row counting that file's declaration twice.
     """
     declared: list[Path] = []
     unreadable: list[str] = []
