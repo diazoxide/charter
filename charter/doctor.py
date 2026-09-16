@@ -1186,6 +1186,14 @@ def _settings_declaring_guard(root: Path | None = None,
 
     One pass for both halves, because the row needs them together and a checker that asks twice
     is a checker that can answer itself differently — which is the defect one function up.
+
+    Unreadable files are named in the order :func:`_settings_files` yields them, which is the
+    order the host reads them in — so the first one named is the first one a session would have
+    loaded. This sorted them into a set first; the deletion sweep asked whether that ordering was
+    pinned and it was not, because there was nothing to pin: `_settings_files` never lists one
+    file twice (it says so, for the guard row that would otherwise count a declaration twice), so
+    the dedupe was dead, and alphabetical order is an arbitrary one to impose on a list that
+    already arrives in the order that means something.
     """
     declared: list[Path] = []
     unreadable: list[str] = []
@@ -1195,7 +1203,7 @@ def _settings_declaring_guard(root: Path | None = None,
             declared.append(p)
         elif state is None:
             unreadable.append(_line(util.short_path(p)))
-    doubt = (f"{_named(sorted(set(unreadable))[:2])} is not JSON charter can parse"
+    doubt = (f"{_named(unreadable[:2])} is not JSON charter can parse"
              if unreadable else None)
     return declared, doubt
 

@@ -494,6 +494,40 @@ class TestTheRowAndTheWriterAgreeAboutOneFile(ListShapeCase):
                 self.assertNotIn("wired (", r.detail)
                 self.assertEqual(commands._ensure_guard_hook(self.plane)[0], "created")
 
+    def test_a_settings_file_that_is_not_an_object_declares_nothing_and_does_not_crash(self):
+        """`JSON.parse` reads `[]`, `"x"`, `7` and `null` perfectly well, and Claude Code loads no
+        hooks from any of them. So charter READ this file — it is not a doubt — and it declares
+        nothing. Without the type check the reader reaches `doc.get` on a list or a string and
+        raises `AttributeError` straight out of the row and out of `init`, which is the shape
+        this whole review keeps returning to: a crash where an answer belongs.
+        """
+        for shape in ("[]", '"x"', "7", "null", "[1, 2]"):
+            with self.subTest(shape=shape):
+                self.write(self.settings, shape)
+                r = doctor.check_guard_wired()
+                self.assertEqual(r.status, WARN, f"{r.detail} {r.hint}")
+                self.assertIn(_UNWIRED, r.detail)
+                self.assertNotIn("could not tell", r.detail)
+                self.assertEqual(commands._ensure_guard_hook(self.plane)[0], "malformed")
+
+    def test_a_plugin_that_is_not_enabled_is_not_a_file_charter_could_not_read(self):
+        """Installed is not enabled (#177). A disabled plugin's `hooks.json` decides nothing here,
+        so charter being unable to read it is not something to report — the row would otherwise
+        say it could not tell, on the strength of a file no session in this plane loads."""
+        other = self.tmp / "plugin-cache" / "other"
+        self.write(other / "hooks" / "hooks.json", {"hooks": {"PreToolUse": [
+            {"matcher": "Bash", "hooks": [
+                {"type": "command", "command": "charter hook posttooluse"}]}]}})
+        self.write(self.plugin / "hooks" / "hooks.json", "not json")
+        self.write(self.settings, {"enabledPlugins": {"other@y": True}})
+        self.write(self.manifest, {"version": 2, "plugins": {
+            PID: [self.valid()],
+            "other@y": [{"scope": "user", "installPath": str(other)}]}})
+        r = doctor.check_guard_wired()
+        self.assertEqual(r.status, WARN, f"{r.detail} {r.hint}")
+        self.assertIn(_UNWIRED, r.detail)
+        self.assertNotIn("could not tell", r.detail)
+
     def test_a_real_entry_is_wired_and_the_writer_leaves_it_alone(self):
         self.write(self.settings, _PRETOOLUSE)
         r = doctor.check_guard_wired()
