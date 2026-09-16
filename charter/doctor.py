@@ -1147,17 +1147,57 @@ def _json_as_claude_code_parses(text: str):
     return json.loads(text, parse_constant=_refuse_json_constant)
 
 
-def _declares_guard_hook(path: Path) -> bool:
-    """Does the settings file at *path* declare `charter hook pretooluse`, in a file Claude Code
-    can read? The text is matched as it always was, but a file `JSON.parse` refuses, or one that is
-    not an object, declares nothing, because Claude Code loads nothing from it (round 4 of the
-    review: `Infinity` beside a hook block read as wired)."""
+def _declares_guard_hook(path: Path) -> bool | None:
+    """Does the settings file at *path* declare a hook Claude Code would RUN for the guard?
+
+    ``True`` it does, ``False`` it does not, and ``None`` charter could not read the file to tell.
+
+    **Decided by the reader the WRITER uses** (round 7), and that is the whole of this function's
+    history. It matched the text `charter hook pretooluse` anywhere in the file; round 6 moved
+    `commands._ensure_guard_hook` to deciding structurally; and the two then disagreed about one
+    file on exactly three shapes — the guard's name in a `matcher`, in an entry whose `type` is
+    not `command`, and in `charter hook pretooluse-read`, which guards Read and Grep. On each of
+    them `doctor` printed a green "wired (settings.json)" and the writer, reading the same file,
+    went on to create the hook. A tick over a plane where nothing runs the guard is the failure
+    #168 is about, and two readers of one file is how it came back.
+
+    A file that is absent, or that holds no hook Claude Code would run, declares nothing. One
+    `JSON.parse` refuses — or that is not UTF-8 — is ``None``: Claude Code loads nothing from it,
+    and neither "wired" nor "not wired" is a thing charter can say about a file it could not read
+    (round 4's `Infinity` beside a hook block, one round on).
+    """
     try:
         text = path.read_text()
-        return ("charter hook pretooluse" in text
-                and isinstance(_json_as_claude_code_parses(text), dict))
-    except (OSError, ValueError, RecursionError):
+    except OSError:
         return False
+    except UnicodeDecodeError:
+        return None
+    try:
+        doc = _json_as_claude_code_parses(text)
+    except (ValueError, RecursionError):
+        return None
+    events = doc.get("hooks") if isinstance(doc, dict) else None
+    return _guard_runs_in(events.get(_GUARD_EVENT) if isinstance(events, dict) else None)
+
+
+def _settings_declaring_guard(root: Path | None = None,
+                              folder: Path | None = None) -> tuple[list[Path], str | None]:
+    """``(the settings files that declare the guard, why charter could not tell)``.
+
+    One pass for both halves, because the row needs them together and a checker that asks twice
+    is a checker that can answer itself differently — which is the defect one function up.
+    """
+    declared: list[Path] = []
+    unreadable: list[str] = []
+    for p in _settings_files(root, folder):
+        state = _declares_guard_hook(p)
+        if state:
+            declared.append(p)
+        elif state is None:
+            unreadable.append(_line(util.short_path(p)))
+    doubt = (f"{_named(sorted(set(unreadable))[:2])} is not JSON charter can parse"
+             if unreadable else None)
+    return declared, doubt
 
 
 def _settings_docs(root: Path | None = None, folder: Path | None = None) -> list[dict]:
@@ -1953,7 +1993,9 @@ def check_guard_wired() -> Result:
     # A plugin id is a key in files a chat can write, so every sentence prints it contained.
     named = _line(plugin)
 
-    declared = [p for p in _settings_files() if _declares_guard_hook(p)]
+    # Both halves from one pass, and both from the reader `commands._ensure_guard_hook` uses:
+    # whatever this row calls wired is what that writer calls present (round 7).
+    declared, settings_doubt = _settings_declaring_guard()
 
     # ENABLED is not INSTALLED HERE, and INSTALLED is not LOADED. A project-scope install belongs
     # to the directory it was installed from, and a plane that has moved keeps the old record
@@ -2086,6 +2128,17 @@ def check_guard_wired() -> Result:
                  "was right — but it was the declaration this session actually had.")
     if declared:
         return Result(name, OK, detail=f"wired ({_line(declared[0])})")
+    if settings_doubt:
+        # Last of the three could-not-tells, because a declaration or a plugin charter CAN read
+        # settles the row without it. Never "not wired": charter did not read the file that would
+        # say, and `init` writes the hook, so the plane ends up guarded either way.
+        return Result(
+            name, WARN,
+            detail=f"charter could not tell whether the guard is declared here: {settings_doubt}",
+            hint="Claude Code loads nothing from a settings file it cannot parse, so charter "
+                 "cannot say whether a guard runs in a session here. Fix that file — charter "
+                 "never repairs it — and re-check. `charter init` and `reinit` refuse it too, "
+                 "naming it, rather than writing into a file they could not read.")
     # The remedy has to name a file THIS session reads. `charter reinit` writes the PLANE's
     # `.claude/settings.json`, and for a chat rooted at `workspaces/<ws>/` the host never
     # reads that file — so the old hint would have been followed, believed, and left the
@@ -2282,16 +2335,6 @@ def commands_frame_no_renderer(missing: list[str]) -> str:
     return no_renderer_message(missing)
 
 
-def _read_text(p) -> str:
-    """A settings file's text, or ``""`` when it cannot be read. A file charter is not
-    allowed to open is not evidence of anything, and a preflight row must render whatever
-    it finds rather than raise on it."""
-    try:
-        return p.read_text()
-    except (OSError, UnicodeDecodeError):
-        return ""
-
-
 def check_guard_seen() -> Result:
     """Has a guard ever actually RUN here, and under which harness?
 
@@ -2339,9 +2382,12 @@ def check_guard_seen() -> Result:
             # It is in a file this folder's sessions never open, and saying it is gone — the
             # branch below — would send the reader looking for an edit nobody made. Said only
             # where it is true: the sighting came from settings, and that file declares it.
+            # Structurally, like every other reader of a settings file (round 7): this sentence
+            # claims a declaration is STILL THERE, and the guard's name in a `matcher` or in an
+            # entry Claude Code would not run is not one. A file charter cannot read answers
+            # `None`, which is falsy, so the sentence is simply not added.
             if (_seen.last_source() == _seen.SETTINGS and standing.elsewhere
-                    and "charter hook pretooluse" in _read_text(
-                        Path(standing.elsewhere) / "settings.json")):
+                    and _declares_guard_hook(Path(standing.elsewhere) / "settings.json")):
                 detail += (f"; its declaration is still in "
                            f"{util.short_path(Path(standing.elsewhere) / 'settings.json')}, a "
                            f"file sessions on the folder in use never read")
@@ -2352,6 +2398,10 @@ def check_guard_seen() -> Result:
         # reader to conclude the surviving declaration is working (#261). An unrecorded
         # source predates the field and stays unqualified: unknown is not suspect.
         src = _seen.last_source()
+        # The structural answer, like the row above. A file charter could not read answers `None`
+        # here, which is falsy and so reads as "no settings file declares it" — the conservative
+        # half of this branch, since the sentence it guards also needs a plugin to have survived
+        # the deleted block before it says anything at all.
         settings_declare = any(_declares_guard_hook(p) for p in _settings_files())
         # Narrow deliberately: `settings` is also what a Codex or opencode dispatch records,
         # and those declarations live in files this check never reads (`~/.codex/config.toml`),

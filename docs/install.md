@@ -210,8 +210,11 @@ start Claude Code from, so it sees the same variable.
   hole. If this session's own settings declare the guard, the row stays green and says it could
   not tell whether a plugin dispatches it too.
 
-  `charter init` and `reinit` decide the same way about your own `.claude/settings.json` before
-  they write the hook into it, so "already wired" means the same thing in both files.
+  `plane-root guard` reads your own `.claude/settings.json` the same way, and so do `charter
+  init` and `reinit` before they write the hook into it — so "already wired" means one thing
+  everywhere. Where the row says the guard is wired, `init` finds it already present; where the
+  row does not, `init` writes it. The guard's name in a `matcher`, in an entry Claude Code would
+  not run, or in a different handler is not a declaration in either of them.
 
   **A known limit:** Claude Code's hook schema also has an exec form that carries the handler in
   `args` rather than inside the `command` string. Charter reads only the command string, so a
@@ -222,7 +225,9 @@ start Claude Code from, so it sees the same variable.
   `Infinity` or `-Infinity` — which `JSON.parse` refuses, and Claude Code loads nothing from — is
   one charter refuses too, as is one nested too deeply for Python to re-encode. `charter init`
   names the file, writes nothing into it, and exits 1. `charter guard` writes no harness at all,
-  because it writes every harness or none.
+  because it writes every harness or none. `plane-root guard` says the same of it rather than
+  calling the plane unguarded: it could not tell whether the guard is declared here, and names
+  the file.
 - **Three narrower Claude Code settings are not followed:**
   - `$CLAUDE_CODE_PLUGIN_CACHE_DIR` moves the installed-plugin list out of the config folder.
     With it set to anything but empty, `plane-root guard` says it could not tell which directory

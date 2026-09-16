@@ -132,7 +132,8 @@ class TestEnabledIsNotLoaded(GuardCase):
         """It is read by the session that is running now, so it was never in doubt."""
         (config.ROOT / ".claude").mkdir(parents=True, exist_ok=True)
         (config.ROOT / ".claude" / "settings.json").write_text(
-            '{"hooks": {"PreToolUse": [{"hooks": [{"command": "charter hook pretooluse"}]}]}}')
+            '{"hooks": {"PreToolUse": [{"hooks": [{"type": "command", '
+            '"command": "charter hook pretooluse"}]}]}}')
         with self.not_running_under_plugin():
             r = doctor.check_guard_wired()
         self.assertEqual(r.status, doctor.OK)
@@ -142,7 +143,8 @@ class TestASightingDoesNotOutliveItsDeclaration(GuardCase):
     def _settings_declare(self) -> None:
         (config.ROOT / ".claude").mkdir(parents=True, exist_ok=True)
         (config.ROOT / ".claude" / "settings.json").write_text(
-            '{"hooks": {"PreToolUse": [{"hooks": [{"command": "charter hook pretooluse"}]}]}}')
+            '{"hooks": {"PreToolUse": [{"hooks": [{"type": "command", '
+            '"command": "charter hook pretooluse"}]}]}}')
 
     def test_a_sighting_from_a_removed_settings_block_is_not_credited(self):
         """The subtle half of the report. The block that fired minutes ago is gone; saying

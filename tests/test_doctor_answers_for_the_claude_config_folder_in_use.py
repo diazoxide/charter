@@ -416,6 +416,25 @@ class TestGuardSeenComparesTheFolderToo(ConfigFolderCase):
         self.assertNotIn("no longer there", r.detail)
         self.assertIn("still in ~/.claude/settings.json", r.detail)
 
+    def test_a_declaration_claude_code_would_not_run_is_not_named_as_still_there(self):
+        """The sentence above claims a declaration is STILL THERE, so it has to be one.
+
+        The guard's name in a `matcher` is not: Claude Code runs nothing from it. Read by
+        substring — which is how this line decided until round 7 — that file said "still in
+        ~/.claude/settings.json", sending the reader to look at a declaration that would never
+        have fired.
+        """
+        self.write(self.home / ".claude" / "settings.json",
+                   {"hooks": {"PreToolUse": [
+                       {"matcher": "charter hook pretooluse", "hooks": []}]}})
+        self.a_sighting_under(None, source=guardseen.SETTINGS)
+        self.install_in(self.other)
+        self.enable_in_the_plane()
+        self.use_folder(self.other)
+        r = doctor.check_guard_seen()
+        self.assertEqual(r.status, WARN)
+        self.assertNotIn("still in", r.detail)
+
     def test_a_settings_sighting_elsewhere_names_no_file_that_does_not_declare_it(self):
         self.a_sighting_under(None, source=guardseen.SETTINGS)
         self.use_folder(self.other)

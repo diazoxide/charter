@@ -95,3 +95,14 @@ could not tell whether that plugin dispatches the guard, and names the file, rat
 the guard is not wired. `charter init` and `reinit` write the guard hook in that case anyway —
 the safe direction, since a guard declared twice is harmless and reported while one declared
 nowhere is a hole.
+
+**The row and `charter init` now read your settings file the same way.** `plane-root guard`
+decided whether the guard was declared by looking for the text `charter hook pretooluse`
+anywhere in `.claude/settings.json`, while `init` decided structurally. So on three shapes they
+disagreed about the same file: the guard's name in a `matcher`, in an entry whose `type` is not
+`command`, and in `charter hook pretooluse-read` — a different handler, which guards Read and
+Grep rather than Bash. The row printed a green `wired` over a plane where nothing runs the
+guard, and `init`, reading the same file, went on to write the hook. Both now ask one reader,
+so whatever the row calls wired is what `init` finds already present. And a settings file
+charter cannot parse is reported as that — "could not tell whether the guard is declared here",
+naming the file — rather than as a plane with no guard.

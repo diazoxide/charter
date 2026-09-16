@@ -235,19 +235,28 @@ class TestEverySettingsShapeEnablesOnlyWhatClaudeCodeReads(ListShapeCase):
         )
 
     def test_the_guard_row(self):
-        for label, doc, _status in self.settings_shapes():
+        for label, doc, status in self.settings_shapes():
             with self.subTest(label):
                 self.write(self.settings, doc)
                 r = doctor.check_guard_wired()
                 self.assertEqual(r.status, WARN, f"{r.detail} {r.hint}")
-                self.assertIn(_UNWIRED, r.detail)
+                self.assertIn(self.claim_for(status), r.detail)
 
     def test_the_session_preflight(self):
-        for label, doc, _status in self.settings_shapes():
+        for label, doc, status in self.settings_shapes():
             with self.subTest(label):
                 self.write(self.settings, doc)
                 out = preflight()
-                self.assertIn(_UNWIRED, guard_line(out), out)
+                self.assertIn(self.claim_for(status), guard_line(out), out)
+
+    def claim_for(self, init_status: str) -> str:
+        """What the row may claim about a settings file, given what `init` did to the same file.
+
+        `malformed` is `init` refusing a file it could not read, and the row may not then say the
+        guard is not wired: it did not read the file that would say. It says it could not tell
+        (round 7). Where `init` wrote the hook, the file WAS read and "not wired" is a fact.
+        """
+        return "could not tell" if init_status == "malformed" else _UNWIRED
 
     def test_inits_guard_check(self):
         for label, doc, status in self.settings_shapes():
@@ -379,7 +388,10 @@ class TestASettingsFileNestedTooDeepIsUnreadable(ListShapeCase):
         self.write(self.settings, "[" * 200000)
         r = doctor.check_guard_wired()
         self.assertEqual(r.status, WARN, f"{r.detail} {r.hint}")
-        self.assertIn(_UNWIRED, r.detail)
+        # Not "pretooluse is not wired": charter could not read this file either, so the row says
+        # so and names it, exactly as `init` refuses it below (round 7).
+        self.assertIn("could not tell", r.detail)
+        self.assertIn("settings.json", r.detail)
         self.assertEqual(commands._ensure_guard_hook(self.plane)[0], "malformed")
 
 
@@ -451,6 +463,69 @@ class TestASettingsFileTooDeepToRewriteIsLeftAlone(PersonaIso):
         self.assertNotIn("\x1b", said)
         self.assertIn("[2Jboom", said)
         self.assertIn("left it completely untouched", said)
+
+
+class TestTheRowAndTheWriterAgreeAboutOneFile(ListShapeCase):
+    """`doctor` and `charter init` may not disagree about whether the guard is wired here.
+
+    Round 6 made the WRITER decide structurally and left the row deciding by substring over the
+    same file's raw text, so on three shapes the row printed a green "wired (settings.json)" over
+    a plane where nothing runs the guard — and `init`, reading the same file, went on to write
+    the hook. A green tick over an unguarded plane is the exact failure this row exists to
+    prevent (#168), arrived at from the reader's side.
+    """
+
+    #: Shapes Claude Code runs nothing from, each holding the guard's name somewhere the old
+    #: substring found it. Hand-spelled, never imported from the module under test.
+    NOT_RUN = (
+        ("the guard's name in a matcher", {"matcher": "charter hook pretooluse", "hooks": []}),
+        ("an entry Claude Code would not run", {"matcher": "Bash", "hooks": [
+            {"type": "disabled", "command": "charter hook pretooluse"}]}),
+        ("a different handler", {"matcher": "Bash", "hooks": [
+            {"type": "command", "command": "charter hook pretooluse-read"}]}),
+    )
+
+    def test_a_declaration_claude_code_would_not_run_is_not_a_green_wired(self):
+        for label, group in self.NOT_RUN:
+            with self.subTest(label):
+                self.write(self.settings, {"hooks": {"PreToolUse": [group]}})
+                r = doctor.check_guard_wired()
+                self.assertEqual(r.status, WARN, f"{r.detail} {r.hint}")
+                self.assertNotIn("wired (", r.detail)
+                self.assertEqual(commands._ensure_guard_hook(self.plane)[0], "created")
+
+    def test_a_real_entry_is_wired_and_the_writer_leaves_it_alone(self):
+        self.write(self.settings, _PRETOOLUSE)
+        r = doctor.check_guard_wired()
+        self.assertEqual(r.status, OK, f"{r.detail} {r.hint}")
+        self.assertIn("wired", r.detail)
+        self.assertEqual(commands._ensure_guard_hook(self.plane)[0], "present")
+
+    def test_a_settings_file_charter_cannot_parse_is_could_not_tell_not_wired(self):
+        for shape in ('{"hooks": {"PreToolUse": NaN}}', "[" * 200000, "not json"):
+            with self.subTest(shape=shape[:24]):
+                self.write(self.settings, shape)
+                r = doctor.check_guard_wired()
+                self.assertEqual(r.status, WARN, f"{r.detail} {r.hint}")
+                self.assertIn("could not tell", r.detail)
+                self.assertIn("settings.json", r.detail)
+                self.assertNotIn("wired (", r.detail)
+                self.assertEqual(commands._ensure_guard_hook(self.plane)[0], "malformed")
+
+    def test_whatever_the_row_calls_wired_is_what_the_writer_calls_present(self):
+        """The property, asked of every shape at once, so this class cannot come back: one
+        reader answers "does the guard run here", and the row and the writer both use it."""
+        shapes = [(label, {"hooks": {"PreToolUse": [group]}}) for label, group in self.NOT_RUN]
+        shapes += [("a real entry", _PRETOOLUSE),
+                   ("no hooks at all", {"enabledPlugins": {}}),
+                   ("hooks that are not an object", {"hooks": "PreToolUse"}),
+                   ("a group that is not an object", {"hooks": {"PreToolUse": ["x"]}})]
+        for label, doc in shapes:
+            with self.subTest(label):
+                self.write(self.settings, doc)
+                says_wired = doctor.check_guard_wired().detail.startswith("wired")
+                self.assertEqual(says_wired,
+                                 commands._ensure_guard_hook(self.plane)[0] == "present")
 
 
 class TestAPluginHooksFileCharterCannotReadIsCouldNotTell(ListShapeCase):

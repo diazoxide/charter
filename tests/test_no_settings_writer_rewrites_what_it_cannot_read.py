@@ -76,10 +76,24 @@ def deep_text(levels: int) -> str:
             + '{"deep": ' * levels + "{}" + "}" * levels + "\n}\n")
 
 
-#: Levels at which 3.14 parses a settings file and its C encoder then refuses it. Measured:
-#: 50,000 still encodes, 100,000 does not, and 3.12's decoder gives up by 20,000 and never
-#: reaches the encoder at all. Dict nesting, because that is what a hook group is.
-BEYOND_THE_C_ENCODER = 100_000
+#: **Measured, and deliberately not run here.** On 3.14 a settings file whose hook group nests
+#: 70,000 levels parses and the C encoder then refuses it (60,000 still encodes); 3.12's decoder
+#: gives up by 20,000 and never reaches the encoder at all. Dict nesting, because that is what a
+#: hook group is.
+#:
+#: That case is documented rather than asserted, and the reason is worth the paragraph. Driven at
+#: 100,000 it cost the `test (3.14)` job on `a31177c` — killed 22 seconds into the one test. At
+#: 70,000 it was worse than slow: building that object graph *at import time*, for a `skipUnless`
+#: probe, made this module poison every other module sharing its process. Measured on 3.14, this
+#: module plus `test_every_reader_of_the_install_list_survives_its_shape` went from 17 seconds to
+#: 192, almost all of it system time, and stayed slow even with the deep TEST deselected — while
+#: the same pair on 3.12, where the probe fails cheaply at the parse, stayed at 13. A fixture
+#: that costs a CI job is a defect in the fixture; one that slows every test after it is worse,
+#: because nothing points at the module that did it.
+#:
+#: So the encoder's refusal is proved the portable way instead — `too_deep_to_rewrite` patches
+#: `json.dumps` on the document's DEPTH, which asks the same question of the same code at a depth
+#: every machine survives, and is red on every version rather than on 3.14 alone.
 
 
 def deep_group_text(levels: int) -> str:
@@ -459,16 +473,32 @@ class TestTheWiredCheckDecidesOnTheParsedEntry(SettingsCase):
         self.assertEqual(status, "malformed")
         self.assertEqual(self.settings.read_bytes(), before)
 
-    def test_init_survives_a_group_too_deep_for_the_c_encoder(self):
-        """Unpatched and real. On 3.14 the file parses and the C encoder then refuses the group,
-        which is where `init` died; on 3.11-3.13 the decoder gives up first. Either way `init`
-        says one contained sentence, exits 1, and leaves the file exactly as it was — never a
-        traceback."""
-        before = self.put(self.settings, deep_group_text(BEYOND_THE_C_ENCODER))
-        rc, err = self.init()
+    def test_init_refuses_a_group_it_cannot_re_encode(self):
+        """`init` end to end over a populated `pre`: one contained sentence, exit 1, and the file
+        exactly as it was — never a traceback.
+
+        Patched rather than genuinely deep, and that is a lesson this fixture paid for. Driven at
+        100,000 real levels it cost the `test (3.14)` job on `a31177c`, killed 22 seconds into
+        this one test; `cmd_init` attempts the encode in several writers, and a descent that deep
+        is a native stack problem on the runner rather than a slow one. The patch asks the same
+        question of the same code at a depth every machine survives, and the real encoder is
+        still measured — once, on one writer, below.
+        """
+        before = self.put(self.settings, deep_group_text(200))
+        with too_deep_to_rewrite():
+            rc, err = self.init()
         self.assertEqual(rc, 1, err)
         self.assertEqual(self.settings.read_bytes(), before)
         self.assertIn(_UNTOUCHED, err)
+
+    def test_a_group_charter_cannot_parse_is_refused_too(self):
+        """The other end of the same file, and genuinely deep rather than patched — 200,000
+        levels is beyond every supported decoder, so it fails at the parse in milliseconds
+        instead of building the object graph that made the encoder case unaffordable."""
+        before = self.put(self.settings, '{"hooks": {"PreToolUse": [' + "[" * 200000)
+        status, _detail = commands._ensure_guard_hook(self.root)
+        self.assertEqual(status, "malformed")
+        self.assertEqual(self.settings.read_bytes(), before)
 
 
 class TestCodexRefusesAConfigItCannotParse(SettingsCase):
