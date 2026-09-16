@@ -1376,6 +1376,17 @@ class WhatTheSweepAsked(_AWatchedSpawn, unittest.TestCase):
 
         self.assertEqual(seen, [True], "the flag reached the pane and was read as absent")
 
+    def test_a_name_charter_refuses_cannot_repaint_the_row_it_is_refused_on(self):
+        """The refusal quotes the name it refused, and that name came off an argv — so it is
+        contained (ruling 35). It is reachable exactly because the value FAILED `chats.ID_RE`:
+        everything charter itself spells passes, and only a hand-typed `charter frame-rename`
+        gets here with an escape sequence in it."""
+        commands_frame.cmd_rename(SimpleNamespace(chat_id="a\x1b[2Kb", chat="beta.1",
+                                                  title=["fix", "it"]))
+        self.assertIn("no chat", self.said[-1][1])
+        self.assertNotIn("\x1b", self.said[-1][1])
+        self.assertIsNone(state.title("beta.1"))
+
     def test_the_words_the_docs_promise_are_the_words_on_the_row(self):
         """**Spelled by hand, for `slots.ENDED_MARK`'s reason.** These two are
         operator-visible and `docs/frame.md` and this PR's news entry describe the gesture by

@@ -447,7 +447,11 @@ def title_of(fid: str) -> str:
     `title` file would otherwise reach `contain.DISPLAY_LIMIT` — 160 columns of somebody
     else's words across a tab strip.
     """
-    text = state.title(fid) or ""
+    # No `or ""` after `state.title`, and the sweep is what asked: it answers `str | None`,
+    # and `None` is falsey — so the conditional below already sends it to the same `""` the
+    # fallback would have made. A line nothing can tell from its absence is the survivor
+    # `tools/sweep.py` reports.
+    text = state.title(fid)
     return contain.readable(text, state.TITLE_MAX) if text else ""
 
 
