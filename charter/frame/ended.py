@@ -174,9 +174,21 @@ def present(fid: str, *, socket: str) -> str:
         commands_frame._repaint_the_other_strips(fid)
 
         ident = state.identity(fid)
-        env = (commands_frame._guest_harness_env(ident)
-               if tmuxctl.is_operator_socket(socket)
-               else commands_frame._frame_identity_env(ident))
+        # **One env for both servers, and the conditional that used to be here could not
+        # decide anything.** It chose `_guest_harness_env` on a server charter is a guest on
+        # and `_frame_identity_env` on charter's own, and those two differ in exactly one
+        # thing: a `PATH`, added only `if env.get("PATH")`. What is handed in here is
+        # `state.identity(fid)`, and an identity record can never hold one — both writers
+        # pass `_frame_identity_env(env)`, whose keys are exactly `_FRAME_IDENTITY`, and the
+        # two writers that merge (`record_picked_kind`, the workspace update) keep that key
+        # set. So both arms answered the same dict for every input this call site can build.
+        #
+        # It would not have carried one anyway: `layout.respawn_argv` records the
+        # measurement that tmux OVERWRITES a pane's `$PATH` after applying the `-e` set, so
+        # `-e PATH=…` on a respawn is not a value that survives. The guest/host split is
+        # real where a LAUNCH builds the whole environment (#446); it is not real here, and
+        # the deletion sweep reported it as the equivalent mutant it was.
+        env = commands_frame._frame_identity_env(ident)
         if state.exit_code(fid) == CLEAN:
             # The pane is charter's again: put the selector back in it, with this chat's own
             # resume row. `kill=False`, so tmux refuses if the listing was already stale.
@@ -212,7 +224,12 @@ def _open_drawer(fid: str, *, socket: str, harness: str) -> None:
                             *util.self_relaunch_argv("frame-palette", "--ended",
                                                      "--chat", fid)),
         report=False)
-    pane = (out.stdout or "").strip()
+    # `out.stdout` and not `out.stdout or ""`: every one of `tmuxctl.run`'s three exits
+    # returns a `str` — the two it invents pass `stdout=""` explicitly — so the fallback
+    # was a line nothing could reach. The identical one was deleted at
+    # `tmuxctl.live_pane_by_pid` for this exact finding; this is the same deletion, one
+    # module over.
+    pane = out.stdout.strip()
     if out.returncode != 0 or not tmuxctl.PANE_ID_RE.fullmatch(pane):
         return
     tmuxctl.run("marking the drawer as this chat's",
@@ -344,9 +361,9 @@ def choose(row, fid: str) -> None:
         return
     ident = state.identity(fid)
     from .. import commands_frame
-    env = (commands_frame._guest_harness_env(ident)
-           if tmuxctl.is_operator_socket(socket)
-           else commands_frame._frame_identity_env(ident))
+    # One env for both servers — see :func:`present`, which carries the measurement: the
+    # two builders differ only by a `PATH`, and `state.identity` can never hold one.
+    env = commands_frame._frame_identity_env(ident)
     tmuxctl.run(
         "starting what the operator chose in the pane their harness left",
         # The chat's own directory: for a harness that resumes by looking the id up in the
