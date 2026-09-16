@@ -3027,6 +3027,14 @@ the surface **in the same pane** with a picker, which is this same surface over 
 set of rows. Type to narrow it exactly as you would the
 palette, Enter to switch, Escape to leave having changed nothing:
 
+**On an ended tab `chat: close` is not one of them**, exactly as the tab menu's own close row
+is not — the warning is about stopping a running harness, and an ended tab has none left to
+stop. There the row is an action rather than a doorway, it says so in its title (`chat: close
+— its harness has ended; do not bring it back`), and `Enter` on it closes the tab through the
+same teardown every other route takes. It keeps its place at the end of the list either way:
+that placement is about how many keypresses stand between you and an irreversible answer,
+which an ended tab does not get to shorten for having one fewer.
+
 ```
 workspace · 4 to choose from
   * alpha
