@@ -49,7 +49,7 @@ from unittest import mock
 
 from charter import commands_frame
 from charter.frame import tmuxctl
-from charter.frame import chats, leave, slots, state
+from charter.frame import chats, leave, overlay, slots, state
 
 from tests._isolation import PersonaIso, make_plane
 from tests.test_a_real_click_on_a_real_tab_bar_switches import (
@@ -142,8 +142,32 @@ class _TwoLiveChatsWithTheSecondOnScreen(_ARealFrameWithBars):
             f"the pane never drew a menu about {target}: {self._shown(pane)!r}")
         return pane
 
+    def _cursor_row(self, pane: str) -> str:
+        """The one row of *pane* the cursor is on, read off the surface's own marker.
+
+        `overlay._MARK[0]` rather than a `>` this file spells: the marker is the surface's,
+        and a case that wrote its own would go on passing the day the surface drew another.
+        """
+        shown = self._shown(pane)
+        marked = [ln for ln in shown.split("\n") if ln.startswith(overlay._MARK[0])]
+        self.assertEqual(len(marked), 1,
+                         f"not exactly one cursor on the surface: {shown!r}")
+        return marked[0]
+
     def _confirmation_on(self, pane: str) -> str:
-        """Press Enter and hand back the confirmation it draws in the same pane."""
+        """Walk to the close row, press Enter, and hand back the confirmation it draws.
+
+        **The `down` is the tab menu's third row, not a fixture convenience** (decision 11).
+        `palette.aim` opens the cursor on the first row that can run; the transcript row is
+        refused on a chat that has never been quit, and `chat: rename` is never refused — so
+        the menu opens on rename and close is one arrow key below it. That is what an operator
+        does, and it is `leave.open_rows`' guard counting one keypress MORE between a pointer
+        gesture and a stopped harness than it counted before.
+        """
+        os.write(self.fd, b"\x1b[B")
+        self.assertTrue(
+            _await(lambda: "chat: close " in self._cursor_row(pane), timeout=20.0),
+            f"`down` did not reach the close row: {self._shown(pane)!r}")
         os.write(self.fd, b"\r")
         self.assertTrue(
             _await(lambda: self._shown(pane).split("\n")[0].startswith(leave.CLOSE),

@@ -38,6 +38,11 @@ charter could pass, so their tabs carry the title in charter's own surfaces only
 **A quit records the title and `charter reopen` puts it back**, before the harness starts, so
 a restored plane comes back under the names you gave it.
 
+**One gesture moved.** The tab menu's cursor opens on the first row that can run, and that
+is now `chat: rename` rather than `chat: close` — so `-` then `Enter` opens the rename input
+instead of the close warning, and close is one `down` below it. A press that used to be one
+keystroke from a confirmation is now two, which is the direction that guard points.
+
 **Limits.** A title is one line of printable text, at most 60 characters. A longer one is
 refused with its length rather than cut, and a control byte is refused rather than escaped —
 charter says the rule and renames nothing. A press on a tab still resolves to the chat and

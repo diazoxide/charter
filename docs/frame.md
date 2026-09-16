@@ -967,9 +967,14 @@ and an ended tab has none left to stop — so the row is an action rather than a
 says so in its title, and `Enter` on it closes the tab. The `-` still only opens the menu:
 a pointer opens the question whichever state the chat is in.
 
-`-` then `Enter` reaches that warning on a chat with no transcript, because the cursor opens
-on the row that can run. It did not until 0.60.0: the menu opened on the refused transcript
-row, `Enter` started nothing, and a `-` that did nothing twice reads as a `-` that does not
+**The cursor opens on the first row that can run, and since titles that row is
+`chat: rename`.** On a chat with no transcript the first row is refused, so `-` then `Enter`
+opens the rename input — harmless, and `Esc` leaves it having changed nothing. Close is one
+`down` below it. That is one keypress more between a pointer gesture and a stopped harness
+than there used to be, which is the direction that guard is meant to point.
+
+It was worse than either before 0.60.0: the menu opened on the refused transcript row,
+`Enter` started nothing at all, and a `-` that did nothing twice reads as a `-` that does not
 work.
 
 It is one glyph at the end of the row rather than a `×` on every tab, because a per-tab

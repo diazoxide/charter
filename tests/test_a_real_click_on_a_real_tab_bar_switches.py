@@ -1273,6 +1273,12 @@ class ARealPressOnThePlusReachesTheCommandBehindIt(_ARealFrameWithBars,
         that CAN run, which is the sentence six docstrings in this repository already
         claimed was the code.
 
+        **That row is `chat: rename` since titles arrived** (decision 11), not `chat: close`.
+        The property #931 asked for is the one asserted — the cursor is on a row Enter can
+        answer, and the refused row is still listed above it with its reason — and the row it
+        landed on is now harmless and reversible, with close one `down` further from a
+        pointer gesture than it was.
+
         The rows do not move — #512's refused row is still listed, still above, still
         carrying its reason, and asserted here because a cursor rule that fixed itself by
         dropping the row would pass the first assertion alone.
@@ -1280,7 +1286,8 @@ class ARealPressOnThePlusReachesTheCommandBehindIt(_ARealFrameWithBars,
         pane = self._menu_from_the_minus()
         shown = self._shown(pane)
 
-        self.assertIn(f"chat: close {self.here}", self._cursor_row(pane))
+        self.assertIn(f"chat: rename {self.here}", self._cursor_row(pane))
+        self.assertIn(f"chat: close {self.here}", shown)
         self.assertIn("chat: previous transcript", shown)
         self.assertIn("no previous transcript for this chat", shown)
 
@@ -1295,8 +1302,10 @@ class ARealPressOnThePlusReachesTheCommandBehindIt(_ARealFrameWithBars,
         the `finally` killed the pane, and a `-` that did nothing twice reads as a `-` that
         does not work.
 
-        **Enter is pressed once and only once.** The row now under the cursor is `leave`'s
-        own confirming row, and going through with it stops a harness.
+        **One `down`, then Enter once and only once.** The cursor opens on `chat: rename`
+        since titles arrived (the case above), so reaching close is the arrow key an operator
+        presses — and Enter is then pressed exactly once, because the row under it is
+        `leave`'s own confirming row and going through with it stops a harness.
 
         **What the warning SAYS is asserted in the unit file and not here**, because this
         fixture cannot honestly be asked. `leave.plan` counts what is live through
@@ -1310,6 +1319,10 @@ class ARealPressOnThePlusReachesTheCommandBehindIt(_ARealFrameWithBars,
         """
         pane = self._menu_from_the_minus()
 
+        os.write(self.fd, b"\x1b[B")
+        self.assertTrue(
+            _await(lambda: f"chat: close {self.here}" in self._cursor_row(pane)),
+            f"`down` did not reach the close row: {self._shown(pane)!r}")
         os.write(self.fd, b"\r")
 
         self.assertTrue(

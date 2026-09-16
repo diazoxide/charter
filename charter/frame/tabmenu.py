@@ -247,21 +247,27 @@ def catalogue(target: str) -> tuple[overlay.Row, ...]:
     not the order: `palette.aim` now opens it on the first row that CAN run, which is what
     the paragraph above always claimed happened.
 
-    **So on a chat with no capture the cursor opens on `chat: close`, and that is the
-    answer rather than a cost accepted quietly.** It is defensible on this surface and on
-    no other, for a reason this menu can state and `F2` cannot:
+    **So on a chat with no capture the cursor opens on the first row below the transcript
+    that can run — `chat: rename` since titles arrived (decision 11), and `chat: close`
+    before that.** Both are defensible, and the move is the guard tightening rather than
+    loosening:
 
-    * the row is a **doorway** — :func:`chose` refuses it by id and :func:`opens` replaces
-      the surface with `leave.confirm_rows` — so the Enter under the cursor draws the
-      warning that names the chat, and a second, deliberate Enter on a row that says *stop
-      it and do not bring it back* is what stops anything. `leave.open_rows`' guard is about
-      the number of keypresses between an operator and an irreversible answer, and there
-      are still two, with the whole warning drawn between them;
+    * **rename can always run and undoes itself**, so `-` then Enter now opens a one-line
+      input and Esc leaves it having changed nothing. Close is one `down` further on, which
+      is `leave.open_rows`' count — the keypresses between an operator and an irreversible
+      answer — going UP by one for the one gesture that reaches this surface with no warning
+      at all;
+    * **close was defensible under the cursor too, on this surface and no other**, because
+      the row is a **doorway** — :func:`chose` refuses it by id and :func:`opens` replaces
+      the surface with `leave.confirm_rows` — so the Enter under it drew the warning that
+      names the chat, and a second, deliberate Enter on a row that says *stop it and do not
+      bring it back* is what stops anything. That is why the third row did not have to be
+      added and is not an apology for one;
     * `F2` is opened without a target and carries every row charter has, so a destructive
       row under its cursor would be a trap for an operator who came for something else.
       This menu has no something else: it is opened AT one chat, by `slots.CLOSE_CHAT` — a
       `-` whose own docstring says *a pointer opens the question; the keyboard answers it*
-      — or by a right press on that chat's tab, and both of its rows are about that chat;
+      — or by a right press on that chat's tab, and every one of its rows is about that chat;
     * and the alternative is the defect. A cursor on the refused row spends the operator's
       Enter on nothing, and a cursor on no row at all cannot be told from a cancel
       (`palette.aim` lists what that costs at every call site).
@@ -270,9 +276,8 @@ def catalogue(target: str) -> tuple[overlay.Row, ...]:
     to <target>` would be a row that exists for the cursor rather than for the operator, and
     this module's scope argument above is what refuses it: switching is about the FRAME, and
     the menu's rows are the ones a TAB has. **`chat: rename` is not that row and did not
-    arrive for that reason** — it is about one chat by the same scope rule, it can always
-    run, and it happens to make the paragraph above less often reachable rather than being
-    the answer to it.
+    arrive for that reason** — it is about one chat by the same scope rule, and it would be
+    here on a plane where the cursor had never been a question at all.
 
     No plan is built here and nothing is scanned. `frame/leave.open_rows` makes the same
     promise for the same reason: the operator is not deciding while a menu is merely open,

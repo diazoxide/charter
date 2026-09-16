@@ -30,12 +30,15 @@ is put on. `TheOrderingGuardIsNotWhatMoved` is the half of this file that proves
 change did not buy itself out of the second.
 
 **Where that leaves the tab menu, said plainly because it is the one surface it bites.**
-On a chat with no capture the only row that can run is `chat: close`, so the cursor opens
-there. It is a DOORWAY — `tabmenu.chose` refuses it by id and `tabmenu.opens` replaces the
-surface with `leave.confirm_rows` — so there are still two keypresses and a warning naming
-the chat between the pointer and a stopped harness, which is what `leave.open_rows`' guard
-is actually counting. `F2` is the surface that guard was written for, and there every row
-above close can run.
+On a chat with no capture the transcript row is refused, so the cursor opens on the first row
+below it that can run. That was `chat: close` when the menu had two rows, and it is
+`chat: rename` now that it has three (decision 11) — a harmless, reversible input, with close
+one `down` further on. Either way close is a DOORWAY — `tabmenu.chose` refuses it by id and
+`tabmenu.opens` replaces the surface with `leave.confirm_rows` — so there are at least two
+keypresses and a warning naming the chat between the pointer and a stopped harness, which is
+what `leave.open_rows`' guard is actually counting, and the third row made that count go up
+rather than down. `F2` is the surface that guard was written for, and there every row above
+close can run.
 
 **What was rejected**, each asserted below where it would show:
 
@@ -192,21 +195,44 @@ class TheTabMenuAimsEnterAtSomethingItCanDo(PersonaIso, unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("what was on screen\n", encoding="utf-8")
 
-    def test_on_a_chat_never_quit_enter_is_aimed_at_the_close_doorway(self):
+    def test_on_a_chat_never_quit_enter_is_aimed_at_a_row_that_can_run(self):
         """The report, fixed. Said as *which row*, because "not the transcript row" would
-        pass on a menu that had lost the close row too."""
-        self.assertEqual(self._menu().selected.id, tabmenu.CLOSE_ID)
+        pass on a menu that had lost its other rows too.
 
-    def test_that_enter_really_opens_the_warning_that_names_the_chat(self):
+        **It is `chat: rename` since titles arrived, and the aim moving is the guard getting
+        STRONGER rather than the fix eroding.** `palette.aim` opens the cursor on the first
+        row that can run; the transcript row is refused on a chat that has never been quit,
+        and rename can always run — so Enter now opens a harmless, reversible input where it
+        used to open the close warning. `leave.open_rows`' rule is about how many keypresses
+        stand between an operator and an irreversible answer, and there are now two — `down`,
+        then Enter — where there was one. What #931 asked for is unchanged: the keypress
+        answers something rather than nothing.
+        """
+        self.assertEqual(self._menu().selected.id, tabmenu.RENAME_ID)
+
+    def test_that_enter_really_opens_the_input_that_names_the_chat(self):
         """**What the fix BUYS, which is the assertion #930 says this surface kept
         missing.** Not "Enter is not refused" — the surface the keypress reaches, built by
-        `tabmenu.opens` from the row the cursor is really on, carrying `leave`'s own
-        confirming row for this one chat."""
+        `tabmenu.opens` from the row the cursor is really on, and about this one tab."""
         chosen = self._menu().selected
 
         nxt = tabmenu.opens(chosen, self.TAB, live=("alpha.1", "alpha.2"))
 
         self.assertIsNotNone(nxt, "Enter on the aimed row opened no surface at all")
+        self.assertEqual(nxt.target, self.TAB)
+        self.assertIn(self.TAB, nxt.label)
+
+    def test_close_is_one_row_down_and_still_opens_the_warning_that_names_the_chat(self):
+        """The half the aim used to cover, asserted where it now lives: close is still a
+        DOORWAY, it still opens `leave`'s own confirming row for this one chat, and it is
+        still last. An operator reaches it with `down` and Enter."""
+        p = self._menu()
+        closing = p.rows[-1]
+        self.assertEqual(closing.id, tabmenu.CLOSE_ID)
+
+        nxt = tabmenu.opens(closing, self.TAB, live=("alpha.1", "alpha.2"))
+
+        self.assertIsNotNone(nxt, "Enter on the close row opened no surface at all")
         self.assertEqual(nxt.label, leave.CLOSE)
         self.assertEqual(nxt.catalogue[0].id, leave.GO_ID.format(leave.CLOSE))
         self.assertIn(self.TAB, nxt.catalogue[0].title)
@@ -218,7 +244,7 @@ class TheTabMenuAimsEnterAtSomethingItCanDo(PersonaIso, unittest.TestCase):
         p = self._menu()
 
         self.assertEqual([r.id for r in p.rows],
-                         [tabmenu.TRANSCRIPT_ID, tabmenu.CLOSE_ID])
+                         [tabmenu.TRANSCRIPT_ID, tabmenu.RENAME_ID, tabmenu.CLOSE_ID])
         self.assertTrue(p.rows[0].refused)
         self.assertEqual(
             p.rows[0].note,
@@ -237,7 +263,7 @@ class TheTabMenuAimsEnterAtSomethingItCanDo(PersonaIso, unittest.TestCase):
     def test_the_reason_survives_the_width_every_real_pane_truncates_it_to(self):
         """**#931's second question, and it is about word order rather than about the
         note.** `overlay._title_width` splits the pane between the title and the reason, so
-        on a two-row menu the reason is cut on every terminal anyone has: at 60 columns the
+        on a menu this short the reason is cut on every terminal anyone has: at 60 columns the
         operator gets `no previous transcript for…` and at 120 `…one is captured when…`.
 
         What has to survive the cut is the answer to *why can this not run*, and it does
