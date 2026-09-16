@@ -2570,9 +2570,20 @@ def _wait_out_the_ended_tab(socket: str, *, fid: str, harness_pane: str) -> int 
     on tmux 3.7c and at the 3.2 floor, a second `_wait_for_harness` after a respawn waits on
     the NEW process rather than returning the old one's status again.
 
+    Answers ``(code, gave up)``. **The second half is what keeps the sentence honest.**
+    :data:`ENDED_CHOICE_NEVER_TAKEN` promises the operator that *"the tab is still open and
+    still holding resume / start fresh / close"* — and the caller's tail reads a non-``None``
+    code as an ending like any other and runs `_close_window` and `_reap_this_server`, so
+    charter said the tab was there and killed it in the next breath. Decision 4 is what the
+    sentence says, so the behaviour is what moves: on this path the window is left standing
+    and the directory is not reaped, and the operator takes the choice or closes the window
+    themselves.
+
     It ends the moment there is nothing left to offer: a pane that is gone rather than dead
     (``code is None`` — the operator closed the window), a chat the operator closed, or a
     `present` that answered "nothing offered", which is every reason the ended step declines.
+    Each of those is an ordinary ending and answers ``gave up`` false, so the tail closes the
+    window exactly as it always did.
 
     **And it ends anyway, on a bound.** `present` declines the second time because
     `state.claim_ended` is an ``O_EXCL`` create — which makes that claim the ONLY thing
@@ -2593,11 +2604,11 @@ def _wait_out_the_ended_tab(socket: str, *, fid: str, harness_pane: str) -> int 
     while True:
         code = _wait_for_harness(socket, harness_pane)
         if code is None or state.was_closed(fid):
-            return code
+            return code, False
         state.record_exit(fid, code)
         state.record_drawn(fid)
         if not ended_mod.present(fid, socket=socket):
-            return code
+            return code, False
         presented += 1
         if presented >= _ENDED_ATTEMPTS:
             why = f"{_ENDED_ATTEMPTS} endings is the cap"
@@ -2606,7 +2617,7 @@ def _wait_out_the_ended_tab(socket: str, *, fid: str, harness_pane: str) -> int 
             why = f"{_ENDED_SECONDS / 3600:.0f} hours is the cap"
             break
     util.err(ENDED_CHOICE_NEVER_TAKEN.format(fid=fid, presented=presented, why=why))
-    return code
+    return code, True
 
 
 #: How long an open nobody is watching waits for its pane's launcher to say what it did.
@@ -4108,7 +4119,21 @@ def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
     if selected.returncode == 0:
         _drop_panels(socket, leaving)
 
-    if not profile:
+    # **`selecting` as well as the profile, and the two paths have to agree.** *profile* here
+    # is `_profile_name(p)`, which is `""` for every launch that opens the SELECTOR — bare
+    # `charter` inside a tmux, the strip's `+`, a workspace tab, the palette's `chat: new`
+    # and a `charter reopen` restoring an ended tab all open a pane that asks which profile
+    # to run and resolve one minutes later, in the pane. Keyed on the profile alone, every
+    # one of those took the escape hatch: the window closed at the first harness exit and the
+    # chat was reaped, which is the whole feature missing on its commonest path.
+    #
+    # `_pane_died_second_hook_argv` already asks this the right way for the hook path —
+    # `harness_chat=(p is not None or selecting)` — and its docstring calls getting it wrong
+    # "a live defect rather than a nicety". This is the same question on the path that has no
+    # hooks to install, so it gets the same answer: the escape hatch is a launch with no
+    # profile that is not asking for one.
+    gave_up = False
+    if not profile and not selecting:
         # The escape hatch. `charter frame -- <cmd>` is not a harness, so its window closes
         # when the command exits and the code goes back to whoever was waiting on it — the
         # operator's ruling on open question 5, kept by taking this path out of the loop.
@@ -4118,8 +4143,8 @@ def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
         # so this launcher IS what answers an exit — see :func:`_wait_out_the_ended_tab`,
         # which presents each ending in-process, goes back to waiting on the pane, and
         # carries the bound that keeps a claim nobody creates from spinning here forever.
-        # Then the tail below closes the window exactly as it always did.
-        code = _wait_out_the_ended_tab(socket, fid=fid, harness_pane=harness_pane)
+        code, gave_up = _wait_out_the_ended_tab(socket, fid=fid,
+                                                harness_pane=harness_pane)
     # **Whether this pane was still the selector, read now** — while this launch still holds
     # its claim, which is the only thing keeping another launch's reap off a directory whose
     # window is gone (#685). A cancelled selector's window IS gone: its launcher closed it
@@ -4171,12 +4196,21 @@ def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
         state.record_exit(fid, code)
     if refused:
         util.err(f"charter: {refused}")
-    if not gone:
+    # **A tab charter gave up waiting on is left exactly where the sentence says it is.**
+    # `ENDED_CHOICE_NEVER_TAKEN` tells the operator the tab is still open and still holding
+    # its three rows; closing the window here and reaping the directory would make that
+    # sentence false in the same breath it was printed. Decision 4 is the promise, so this is
+    # the line that keeps it: charter stops WAITING, not the tab.
+    if not gone and not gave_up:
         _close_window()
     # Given up before this path's own closing reap, for the reason `cmd_launch` gives at
     # its own (#685): the marker is held for the LAUNCH, and this launch is over.
     state.clear_claim(fid)
-    _reap_this_server(socket)
+    if not gave_up:
+        # The reap takes the chat's whole directory — its claim, its transcript, its link —
+        # so on the give-up path it would take the conversation the tab is still offering to
+        # bring back.
+        _reap_this_server(socket)
     return code
 
 

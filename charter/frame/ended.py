@@ -192,12 +192,27 @@ def present(fid: str, *, socket: str) -> str:
         if state.exit_code(fid) == CLEAN:
             # The pane is charter's again: put the selector back in it, with this chat's own
             # resume row. `kill=False`, so tmux refuses if the listing was already stale.
-            tmuxctl.run(
+            out = tmuxctl.run(
                 "putting the selector back in the pane a harness left",
                 layout.respawn_argv(socket=socket, harness_pane=pr.harness, kill=False,
                                     env=env, cwd=state.chat_cwd(fid) or str(config.ROOT),
                                     harness_argv=launcher.argv_select(profile, ended=True)),
                 report=False)
+            if out.returncode != 0:
+                # **A respawn tmux refused offered nothing, and this says so.** The argv
+                # carries no `-k`, so tmux itself refuses a pane whose harness is somehow
+                # still running (`layout.respawn_argv`) — and answering "selector" for a
+                # pane that still holds whatever was in it would report a surface the
+                # operator cannot see, on the one path that decides whether anything was
+                # offered at all.
+                #
+                # **Measured, because it differs from what the plan assumed.** This does not
+                # merely count toward `_wait_out_the_ended_tab`'s attempt bound: ``""`` is
+                # falsey, so that loop RETURNS rather than going round, which ends a
+                # permanently refusing respawn at once instead of spending eight attempts on
+                # it. The claim is already made either way, so a second pass would decline
+                # at `claim_ended` regardless.
+                return ""
             return "selector"
         _open_drawer(fid, socket=socket, harness=pr.harness)
         return "drawer"

@@ -887,7 +887,7 @@ class TheEndedLoopEndsOnItsOwn(PersonaIso, unittest.TestCase):
         with mock.patch.object(commands_frame, "_wait_for_harness", return_value=0), \
              mock.patch.object(ended, "present", present), \
              mock.patch.object(commands_frame.util, "err", said.append):
-            code = commands_frame._wait_out_the_ended_tab(
+            code, self.gave_up = commands_frame._wait_out_the_ended_tab(
                 SERVER, fid="beta.1", harness_pane="%1")
         return code, said, seen["n"]
 
@@ -902,6 +902,11 @@ class TheEndedLoopEndsOnItsOwn(PersonaIso, unittest.TestCase):
         self.assertIn("still holding", said[0],
                       "the operator is not told the choice is still takeable")
         self.assertEqual(code, 0)
+        # **And the caller is TOLD, which is what makes the sentence above true.** The tail
+        # of `_launch_in_operator_tmux` reads a non-`None` code as an ending like any other
+        # and closes the window and reaps the directory — so without this second answer
+        # charter promised the tab was still there and killed it in the next breath.
+        self.assertTrue(self.gave_up, "the give-up was not reported to the caller")
 
     def test_a_runaway_that_is_slow_stops_on_the_deadline(self):
         """A chat resumed all day must not be cut off by a count, so the clock bounds it too
@@ -924,6 +929,9 @@ class TheEndedLoopEndsOnItsOwn(PersonaIso, unittest.TestCase):
         self.assertEqual(presented, 2)
         self.assertEqual(said, [], "charter complained about a tab whose choice was taken")
         self.assertEqual(code, 0)
+        # The control for the flag as well as for the sentence: an ordinary ending must
+        # still close its window and reap, exactly as it always did.
+        self.assertFalse(self.gave_up, "an ordinary ending was reported as a give-up")
 
 
 class NothingActsOnARecordAlone(PersonaIso, unittest.TestCase):
@@ -1285,6 +1293,34 @@ class NothingActsOnARecordAlone(PersonaIso, unittest.TestCase):
         argv = fake.wrote("respawn-pane")[0]
         return {argv[i + 1].split("=", 1)[0] for i, a in enumerate(argv) if a == "-e"}
 
+    def test_a_respawn_tmux_refused_offers_nothing(self):
+        """The plan's Behaviour §6, and the answer has to be ``""``.
+
+        The respawn carries no `-k`, so tmux itself refuses a pane whose harness is somehow
+        still running (`layout.respawn_argv`) — and answering `"selector"` for a pane that
+        still holds whatever was in it would report a surface the operator cannot see, on
+        the one call whose whole job is to say whether anything was offered.
+
+        **Measured, and it differs from what the plan assumed:** this does not merely count
+        toward `_wait_out_the_ended_tab`'s attempt bound. ``""`` is falsey, so that loop
+        RETURNS rather than going round — a permanently refusing respawn ends at once
+        instead of spending eight attempts on it.
+        """
+        class _TheRespawnFails(_Tmux):
+            def __call__(self, action, argv, **kw):
+                out = super().__call__(action, argv, **kw)
+                if "respawn-pane" in argv:
+                    return subprocess.CompletedProcess(argv, 1, stdout="",
+                                                       stderr="pane still active")
+                return out
+
+        fake = _TheRespawnFails([_row("%1", "1", "beta.1", self.plane)])
+        with mock.patch.object(ended.tmuxctl, "run", fake):
+            answer = ended.present("beta.1", socket=SERVER)
+
+        self.assertEqual(answer, "")
+        self.assertEqual(len(fake.wrote("respawn-pane")), 1, "it never even tried")
+
     def test_the_command_always_returns_zero(self):
         """It runs as a `run-shell -b` child of the tmux server: a non-zero return is
         printed INTO the harness pane and drops it into copy-mode, which is charter drawing
@@ -1572,6 +1608,70 @@ class EveryRowThePaletteDrawsGoesSomewhere(PersonaIso, unittest.TestCase):
         state.claim_ended(self.FID)
 
         self.assertEqual(self._unhandled(), [])
+
+    def _does_something(self, row) -> bool:
+        """Whether choosing *row* in a real `_draw_palette` produces anything observable."""
+        opened: list = []
+        acted: list = []
+
+        def _own(surface, *, fd=None, out=None, then=None):
+            nxt = then(row) if then is not None else None
+            if nxt is not None:
+                opened.append(nxt)
+            return row
+
+        with mock.patch.object(palette, "own_the_tty", side_effect=_own), \
+                mock.patch.object(commands_frame, "_close_palette"), \
+                mock.patch.object(commands_frame, "_plane_live",
+                                  return_value=(frozenset({self.FID}),
+                                                {SERVER: {self.FID: "@0"}},
+                                                frozenset({self.FID}))), \
+                mock.patch.object(commands_frame, "_start_leaving",
+                                  side_effect=lambda *a, **kw: acted.append("leave")), \
+                mock.patch.object(commands_frame, "_say_on_screen",
+                                  side_effect=lambda *a, **kw: acted.append("said")), \
+                mock.patch.object(commands_frame, "_start_chat_switch",
+                                  side_effect=lambda *a, **kw: acted.append("switch")), \
+                mock.patch("charter.frame.builtin_actions._spawn",
+                           side_effect=lambda *a, **kw: acted.append("spawn")):
+            commands_frame._draw_palette(SimpleNamespace(chat=self.FID))
+        return bool(opened or acted)
+
+    def test_a_row_the_palette_recognises_but_never_acts_on_is_a_failure(self):
+        """**`is_row` is only half the question, and it is the half that hides the bug.**
+
+        The two cases above skip every row `leave.is_row` claims — rightly, because such a
+        row must not reach `invoke` — but *recognised* is not *dispatched*. `_draw_palette`'s
+        next branch describes rather than does: it says a doorway's note and returns 0. So a
+        row added to `is_row` with no dispatch behind it — which is exactly the defect this
+        class was written for, and exactly what `leave:close:now` was — keeps those two green
+        while doing nothing at all.
+
+        So this asks the behavioural question of every non-refused row that is NOT an action:
+        choosing it must produce something the operator can observe — a surface opened in the
+        pane, work spawned, a teardown started, or a sentence on the attention row. Silence
+        is the bug. Action rows are excluded because `invoke` is their dispatch and the cases
+        above already prove the registry holds them.
+        """
+        state.claim_ended(self.FID)
+        reg = builtin_actions.build(self.FID, current_density="normal",
+                                    current_chrome="off")
+        rows = commands_frame._palette_catalogue(self.FID, reg, snapshot={})
+
+        silent = []
+        for row in rows:
+            if row.refused:
+                continue
+            try:
+                reg.get(row.id)
+                continue            # an action: `invoke` is its dispatch
+            except actions.ActionError:
+                pass
+            if not self._does_something(row):
+                silent.append(row.id)
+
+        self.assertEqual(silent, [],
+                         "these rows are drawn, can run, and dispatch to nothing at all")
 
 
 class AnEndedTabIsMarked(PersonaIso, unittest.TestCase):
@@ -1907,6 +2007,54 @@ class QuitAndReopenKeepEndedTabs(PersonaIso, unittest.TestCase):
                               "conversation": ""})
 
         self.assertFalse(older.ended)
+
+
+class TheRecordIsWrittenDown(PersonaIso, unittest.TestCase):
+    """**Ruling 44: the decision is written down where the next reader will look.**
+
+    This branch honours it in the diff and nothing guards it, which is how a dated note
+    quietly stops being true — the words are edited, the code is not, and the two drift
+    without a single test going red.
+
+    The files are read off disk **from the repository root**, never through `config`:
+    `tests/_isolation.py` points that at a throwaway plane, so a case asserting against this
+    repository's own committed text has to reach for the checkout itself. That is
+    CONTRIBUTING's rule and `test_frame_config._COMMITTED`'s shape.
+
+    Substrings rather than whole paragraphs, because what is pinned is the CLAIM — that the
+    amendment exists, that its two bounds are stated, that the vocabulary has the word, and
+    that the spec section says when it was built — and not the prose around it, which should
+    stay free to be rewritten.
+    """
+
+    REPO = Path(__file__).resolve().parent.parent
+
+    def _read(self, rel: str) -> str:
+        p = self.REPO / rel
+        self.assertTrue(p.is_file(), f"{rel} is not in this checkout")
+        return p.read_text()
+
+    def test_adr_0018_carries_the_amendment_and_its_two_bounds(self):
+        """The ADR is the boundary this whole module keeps: a harness exit stops being
+        final, charter still starts nothing by itself, and it still touches no pane a
+        listing has not proved."""
+        text = self._read(
+            "docs/adr/0018-charter-may-run-the-harness-but-never-draws-it.md")
+
+        self.assertIn("a harness exit is no longer final", text)
+        self.assertIn("Charter restarts nothing by itself", text)
+        self.assertIn("Charter acts on a pane only as a listing proves it", text)
+
+    def test_the_vocabulary_names_an_ended_tab(self):
+        """`CONTEXT.md` holds the words charter uses. A feature whose central noun is not in
+        it is one the next reader has to infer from code."""
+        self.assertIn("**Ended tab**:", self._read("CONTEXT.md"))
+
+    def test_the_ide_spec_says_when_its_section_was_built(self):
+        """§4j's dated note. Undated, a spec section reads as a plan rather than as
+        something that shipped, and nobody can tell which."""
+        self.assertIn("Built 2026-09-15", self._read(
+            "docs/superpowers/specs/2026-08-30-charter-opens-like-an-ide.md"))
 
 
 if __name__ == "__main__":

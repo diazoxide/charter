@@ -1720,45 +1720,6 @@ class WhereItAppears(_APlaneWithProfiles, unittest.TestCase):
         self.assertTrue(state.is_waiting("beta.2"))
         self.assertEqual(state.identity("beta.2").get("CHARTER_HARNESS"), "")
 
-    def _which_wait(self, *, profile: str) -> list[str]:
-        """Which of the two waits `_launch_in_operator_tmux` ends on, for *profile*."""
-        seen: list[str] = []
-
-        def answer(cmd, **kw):
-            if not cmd or cmd[0] != "tmux":
-                return _completed(cmd, 0)
-            return _completed(cmd, 0, "@1 %7\n" if "new-window" in cmd else "%7\n")
-
-        with mock.patch("charter.commands_frame.subprocess.run", side_effect=answer), \
-                mock.patch.object(commands_frame, "_wait_out_the_ended_tab",
-                                  side_effect=lambda *a, **kw: seen.append("ended") or 0), \
-                mock.patch.object(commands_frame, "_wait_for_harness",
-                                  side_effect=lambda *a, **kw: seen.append("plain") or 0):
-            commands_frame._launch_in_operator_tmux(
-                "op", "$1", ws="beta",
-                argv=launcher.argv("claude", [], attended=True), display=["claude"],
-                profile=profile, h=None, v=(3, 7), picked=False)
-        return seen
-
-    def test_a_profile_chat_in_the_operators_tmux_gets_the_ended_loop(self):
-        """**Inside an operator's own tmux there are no hooks**, so this launcher IS what
-        answers an exit — it presents each ending in-process and goes back to waiting.
-
-        With the guard above it always taken, a profile chat waits in `_wait_for_harness`
-        instead and the ended step never runs there at all: the whole feature missing on the
-        guest path, and invisible to every case that launches on charter's own server.
-        """
-        self.assertIn("ended", self._which_wait(profile="claude"))
-        self.assertNotIn("plain", self._which_wait(profile="claude"))
-
-    def test_the_escape_hatch_in_the_operators_tmux_keeps_the_plain_wait(self):
-        """The control, and the ruling on open question 5: `charter frame -- <cmd>` is not a
-        harness, so its window closes when the command exits and the code goes back to
-        whoever was waiting on it. Taking it into the ended loop would hold that window open
-        and the code would never arrive."""
-        self.assertIn("plain", self._which_wait(profile=""))
-        self.assertNotIn("ended", self._which_wait(profile=""))
-
     def test_a_reopened_ended_tab_comes_back_ended_and_never_waiting(self):
         """**A restored ended tab is the one selector that is not a chat waiting to begin.**
 
@@ -1954,6 +1915,142 @@ _SERVERS = itertools.count()
 #: charter` keeps the child's cwd off `sys.path` (#390) and its cwd is a workspace
 #: directory, so without this the pane cannot import the charter under test.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+class InsideTheOperatorsTmux(_APlaneWithProfiles, unittest.TestCase):
+    """**On a server charter is a guest on there are no hooks**, so the launcher itself is
+    what answers a harness exit — and which launches got that was decided by the wrong
+    question.
+
+    `_launch_in_operator_tmux` gated the ended step on `if not profile:`, where *profile* is
+    `_profile_name(p)` — which is `""` for every launch that opens the SELECTOR. Bare
+    `charter` inside a tmux, the strip's `+`, a workspace tab, the palette's `chat: new` and
+    a `charter reopen` restoring an ended tab all open a pane that asks which profile to run
+    and resolve one minutes later, in the pane. Keyed on the profile alone, every one of them
+    took the escape hatch: the window closed at the first harness exit and the chat was
+    reaped. The whole feature, missing on its commonest path.
+
+    `commands_frame._pane_died_second_hook_argv` already asks it the right way for the hook
+    path — `harness_chat=(p is not None or selecting)` — and its own docstring calls getting
+    it wrong *"a live defect rather than a nicety"*. The two paths have to agree.
+
+    **These drive `_launch_in_operator_tmux` itself rather than `_wait_out_the_ended_tab`,
+    and that is why nothing caught this.** A case that calls the loop directly proves the
+    loop works and never asks who is allowed to reach it.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        (config.WORKSPACES_DIR / "beta").mkdir(parents=True, exist_ok=True)
+        self.enterContext(mock.patch.object(commands_frame, "_spawn_gather"))
+        self.enterContext(mock.patch.object(commands_frame, "_drawable_slots",
+                                            return_value=[]))
+        wired_as_today(self)
+
+    def _drive(self, *, profile: str, selecting: bool = False, gave_up: bool = False):
+        """`_launch_in_operator_tmux` to its end.
+
+        Answers ``(which wait ran, every tmux argv, the sockets reaped)``. `tmuxctl.run` is
+        what is stood in for rather than `subprocess.run`, because the window close this is
+        about goes through it: `_close_window` is a closure and cannot be patched by name.
+        """
+        waits: list[str] = []
+        reaped: list = []
+        argvs: list[list[str]] = []
+
+        def tmux(_action, argv, **_kw):
+            argvs.append(list(argv))
+            if "new-window" in argv:
+                out = "@1 %7\n"
+            elif "display-message" in argv:
+                out = "132:43"
+            else:
+                out = "%7\n"
+            return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+        with mock.patch.object(commands_frame.tmuxctl, "run", side_effect=tmux), \
+                mock.patch.object(commands_frame, "_wait_out_the_ended_tab",
+                                  side_effect=lambda *a, **kw: waits.append("ended")
+                                  or (0, gave_up)), \
+                mock.patch.object(commands_frame, "_wait_for_harness",
+                                  side_effect=lambda *a, **kw: waits.append("plain") or 0), \
+                mock.patch.object(commands_frame, "_what_the_pane_recorded",
+                                  return_value=(None, "")), \
+                mock.patch.object(commands_frame, "_reap_this_server",
+                                  side_effect=reaped.append):
+            commands_frame._launch_in_operator_tmux(
+                "op", "$1", ws="beta",
+                argv=launcher.argv("claude", [], attended=True), display=["claude"],
+                profile=profile, h=None, v=(3, 7), picked=False, selecting=selecting)
+        return waits, argvs, reaped
+
+    @staticmethod
+    def _issued(argvs, verb: str) -> bool:
+        """Whether *verb* was issued — matched anywhere in an argv, never by index, because
+        where `server_argv` puts the subcommand is not this case's business."""
+        return any(verb in argv for argv in argvs)
+
+    def test_a_chat_started_at_the_selector_gets_the_ended_step(self):
+        """**The defect, on the commonest path charter has.** A selector chat has no profile
+        when the launch decides this, and it is the state bare `charter`, `+`, a workspace
+        tab and the palette's `chat: new` all open in.
+
+        Red without the fix: the launch waits in `_wait_for_harness`, so the first harness
+        this operator starts from the selector has its window closed and its chat reaped the
+        moment it exits — with the conversation still resumable and nothing offering it.
+        """
+        waits, _argvs, _reaped = self._drive(profile="", selecting=True)
+
+        self.assertIn("ended", waits,
+                      "a selector-started chat never reached the ended step")
+        self.assertNotIn("plain", waits)
+
+    def test_a_chat_that_named_its_profile_gets_it_too(self):
+        """The half that already worked, kept as the control: `charter <profile>` inside the
+        operator's own tmux."""
+        waits, _argvs, _reaped = self._drive(profile="claude")
+
+        self.assertIn("ended", waits)
+        self.assertNotIn("plain", waits)
+
+    def test_the_escape_hatch_keeps_todays_ending(self):
+        """`charter frame -- <cmd>` — no profile, and not asking for one. The ruling on open
+        question 5: its window closes when the command exits and the code goes back to the
+        script waiting on it. Taking it into the loop would hold that window open and the
+        code would never arrive."""
+        waits, _argvs, _reaped = self._drive(profile="", selecting=False)
+
+        self.assertIn("plain", waits)
+        self.assertNotIn("ended", waits,
+                         "the escape hatch was taken into the ended loop")
+
+    def test_a_tab_charter_gave_up_waiting_on_is_left_standing(self):
+        """**The sentence and the behaviour disagreed, and the sentence was right.**
+
+        `ENDED_CHOICE_NEVER_TAKEN` tells the operator *"The tab is still open and still
+        holding resume / start fresh / close — take it there, or close the window."* The tail
+        read the loop's non-`None` code as an ending like any other and ran `_close_window`
+        and `_reap_this_server`, so charter printed that and killed the tab in the same
+        breath — taking the directory, the claim and the link the tab was offering to resume.
+
+        Decision 4 is what the sentence says, so the behaviour is what moved: charter stops
+        WAITING, not the tab.
+        """
+        _waits, argvs, reaped = self._drive(profile="claude", gave_up=True)
+
+        self.assertFalse(self._issued(argvs, "kill-window"),
+                         "charter closed the tab it had just promised was still open")
+        self.assertEqual(reaped, [],
+                         "the reap took the conversation the tab was still offering")
+
+    def test_an_ordinary_ending_still_closes_the_window_and_reaps(self):
+        """The control that keeps the case above from being a licence to leak windows: every
+        ending that is NOT a give-up closes and reaps exactly as it always did."""
+        _waits, argvs, reaped = self._drive(profile="claude", gave_up=False)
+
+        self.assertTrue(self._issued(argvs, "kill-window"),
+                        "an ordinary ending stopped closing its window")
+        self.assertEqual(len(reaped), 1, reaped)
 
 
 def _eventually(predicate, timeout: float = 20.0) -> bool:
