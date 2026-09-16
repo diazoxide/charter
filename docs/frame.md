@@ -957,6 +957,11 @@ chat and what stopping it costs, and the keypress on *that* is what stops it. A 
 opens the question; the keyboard answers it, which is why making a chat may happen on a
 press and unmaking one may not.
 
+**On an ended tab that row asks nothing.** The warning is about stopping a running harness,
+and an ended tab has none left to stop — so the row is an action rather than a doorway, it
+says so in its title, and `Enter` on it closes the tab. The `-` still only opens the menu:
+a pointer opens the question whichever state the chat is in.
+
 `-` then `Enter` reaches that warning on a chat with no transcript, because the cursor opens
 on the row that can run. It did not until 0.60.0: the menu opened on the refused transcript
 row, `Enter` started nothing, and a `-` that did nothing twice reads as a `-` that does not
@@ -1080,9 +1085,14 @@ not part of that reckoning and are never touched.
 **Run from inside an existing tmux session, the frame does not nest.** Charter reads
 `$TMUX`, and instead of starting a server of its own it opens **one window in your
 server**, in the session you were in, with the identical layout inside it. One tmux, one
-prefix key, your own window list. `charter claude` switches you to that window and waits;
-when the harness exits, charter closes the window, tmux puts you back where you were, and
-`charter claude` exits with the harness's own code.
+prefix key, your own window list. `charter claude` switches you to that window and waits.
+
+**When the harness ends there, the window stays and offers you a choice**, exactly as it does
+on charter's own server — resume, start fresh, or close the tab (*When a harness ends*,
+below). `charter claude` returns when you close that tab or detach, with the code the chat
+recorded at the exit. The one thing that still closes its window the moment its command exits
+is `charter frame -- <cmd>`: it is not a harness, and a script waiting on its exit code gets
+it back the way it always did.
 
 Charter is a guest there, and behaves like one — it writes **nothing** of yours. Not a
 server option, not a session option, not a key binding. What it does write is scoped to the
@@ -1159,6 +1169,43 @@ or a `tmux kill-server` under a running script — is not a tmux you are inside.
 checks before it builds anything, and falls back to its own private server.
 
 ## Leaving: detach, close, quit — and reopen
+
+### When a harness ends
+
+**A harness that ends keeps its tab.** `/exit`, Ctrl-D, a double Ctrl+C, a crash, a `kill -9`
+from another terminal — none of them closes a chat any more. What happens instead depends on
+one thing, the exit code, and on nothing charter read off your screen:
+
+- **A clean exit** puts the profile selector back in that same pane, with **resume
+  &lt;session&gt;** first and already selected when there is a conversation to come back to.
+  Enter brings it back; any other row starts fresh on a new conversation; `Esc` closes the
+  tab.
+- **A crash, or a kill from outside**, leaves the pane exactly as it is — your harness's last
+  lines and tmux's own `Pane is dead (status N)` stay on screen — and opens the same three
+  choices in a small drawer beneath it.
+- **A chat nobody has typed in yet** has no conversation to offer, so it gets *start fresh*
+  and *close tab*.
+
+Background and handed-off chats end the same way whether or not anybody is looking: the tab
+is marked `x` on the chat strip and the choice is waiting when you switch to it.
+
+**Charter restarts nothing by itself and types nothing into a harness.** Every start after an
+exit is you pressing Enter on a row — no timer, no retry, no automatic resume. A resume is an
+argument at the start (`--resume`, `resume`, `-s`), never a `/resume` typed into a prompt.
+
+**End of input is not `Esc`.** If the terminal drops, the tmux server is killed, or the
+machine goes down, the tab stays ended and open — nothing is marked closed, no transcript is
+forgotten, and the chat is still in the record a quit writes. Only a real `Esc` keystroke
+closes an ended tab, and `Ctrl+C` there does nothing at all.
+
+**Closing an ended tab does not ask.** The confirmation exists to warn you about stopping a
+running harness; there is none left to stop. A quit does not capture an ended tab's screen
+either — that pane is charter's selector or a drawer, not your harness — so the tab keeps the
+transcript its harness left.
+
+**A chat charter did not mark as its own is left alone.** A session an older charter created
+carries no plane marker, so its harness's exit leaves a dead pane with tmux's own `Pane is
+dead` on it until you close the tab.
 
 **Closing the window detaches, and that is the exit that costs nothing.** tmux sessions
 survive a client leaving, so the common way out loses nothing and needs no resume: the
@@ -1431,6 +1478,13 @@ the harness's real status and exits with that. `--no-frame` and the automatic by
 stdout is not a terminal both skip the frame entirely and `exec` straight into the harness,
 so a pipe (`charter claude -p … | jq`) carries the real exit code with no help needed.
 
+**The code arrives when the tab closes or you detach, not when the harness exits.** A harness
+that ends keeps its tab (*When a harness ends*, above), so `charter claude` goes on waiting
+while that tab is offering you a choice; the number it finally exits with is the one the chat
+recorded at the exit, unchanged. `charter frame -- <cmd>` is the exception and keeps today's
+ending exactly: its window closes when the command exits, and the caller gets its code
+straight away.
+
 ## What `charter frame -- <cmd>` accepts
 
 The escape hatch runs whatever **tmux** runs, and charter refuses nothing up front. That
@@ -1569,6 +1623,13 @@ pane id charter records, `remain-on-exit`, the exit code, the `pane-died` hooks 
 early-death report all answer exactly what they answered when the harness was started
 directly. Only one reading differs, and nothing in charter reads it: until the `exec`,
 `#{pane_current_command}` names charter's interpreter rather than the harness.
+
+**And when that harness exits, the pane becomes charter's again.** ADR 0018 used to end on a
+harness exit being final; it is amended (2026-09-15) so that the question is the present-tense
+one — *is a harness running in this pane right now?* — and charter puts its selector back into
+a pane no harness is in, or opens a drawer beside a crashed one. It still draws nothing in a
+pane a harness is running in, still types nothing into one, and still starts nothing without
+your keypress.
 
 **A refusal in the pane waits for you.** A launcher that refuses — a command that is no
 longer on `PATH`, a local file git would now commit — prints its sentence in the
@@ -3252,10 +3313,21 @@ starts in that pane once you choose a row. Opening charter used to start whateve
 ```
 
 **Where it appears:** bare `charter` on a workspace with no running chat; the `+` on the
-chat strip; the palette's `chat: new`; a workspace tab whose workspace has no running chat.
+chat strip; the palette's `chat: new`; a workspace tab whose workspace has no running chat;
+and **the pane of a chat whose harness has just ended cleanly**.
 **Where it does not:** `charter <profile>` names the profile, and so does every open nobody
-is at — `charter reopen`, a restored plane, and a chat handed off by another chat. A
-selector is a question, and those have nobody there to answer one.
+is at — `charter reopen` for a chat that was running, and a chat handed off by another chat.
+A selector is a question, and those have nobody there to answer one.
+
+**After a harness ends it comes back with one extra row, `resume`, at the top.** That row is
+there only when the conversation exists, it is what the cursor opens on, and it says which
+session it would bring back. Every other row starts a fresh conversation in the same tab. The
+footer's last hint changes with it — `esc close this tab`, because here `Esc` ends a chat that
+ran rather than one that never started — and `Ctrl+C` does nothing at all.
+
+An ended tab that `charter reopen` brings back opens on this selector too, which is the one
+selector an open nobody is at may reach: nothing starts until somebody switches to that tab
+and presses Enter.
 
 It is the `F2` palette's picker, so it behaves like one: type to narrow, up/down to move,
 Enter to start. **It always shows, even where one profile can run** — one profile costs one
