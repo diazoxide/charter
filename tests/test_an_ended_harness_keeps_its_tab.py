@@ -940,6 +940,36 @@ class QuitAndReopenKeepEndedTabs(PersonaIso, unittest.TestCase):
         self.assertIn("comes back ended", note)
         self.assertIn("nothing to resume", note)
 
+    def _record(self, *, ended: bool):
+        return reopen.Chat(chat="beta.7", workspace="beta", persona="",
+                           harness="claude-code", cwd="", resume="u", transcript="",
+                           active=False, profile="claude", brief="", conversation="",
+                           ended=ended)
+
+    def test_a_reopen_brings_an_ended_chat_back_at_the_ended_selector(self):
+        """It reopens at its OWN selector and starts no harness: nothing runs until somebody
+        switches to that tab and presses Enter. That is what keeps `argv_select`'s rule —
+        a selector is a question, so only an open somebody is in front of may reach one —
+        true of the one selector an open nobody is at may create."""
+        args = commands_frame._reopen_args(self._record(ended=True), harness_name="claude",
+                                           profile="claude", reopening=None, resume=False)
+
+        self.assertTrue(args.select)
+        self.assertTrue(args.ended)
+        self.assertEqual(args.start, "claude")
+        self.assertFalse(args.fresh, "a restored tab withheld its own resume row")
+
+    def test_a_reopen_brings_a_running_chat_back_on_its_profile(self):
+        """The control: a chat that was RUNNING when the quit recorded it reopens on its
+        profile exactly as it always has, with no selector in front of it."""
+        args = commands_frame._reopen_args(self._record(ended=False), harness_name="claude",
+                                           profile="claude", reopening=None, resume=True)
+
+        self.assertFalse(args.select)
+        self.assertFalse(args.ended)
+        self.assertEqual(args.profile, "claude")
+        self.assertTrue(args.resume)
+
     def test_a_record_from_before_this_field_reads_as_not_ended(self):
         """The migration case this reader is built for: a manifest one field older. Every
         chat in it was running, which is the reading that brings a conversation back."""
