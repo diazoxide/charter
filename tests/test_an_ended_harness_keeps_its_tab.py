@@ -32,8 +32,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, tui
-from charter.frame import (chats, ended, leave, overlay, palette, reopen, selector, slots,
-                           state, tabmenu)
+from charter.frame import (chats, ended, launcher, leave, overlay, palette, reopen,
+                           selector, slots, state, tabmenu)
 
 from tests._isolation import (PersonaIso, approve_every_profile, declare_profiles,
                               make_plane, wired_as_today)
@@ -785,6 +785,80 @@ class AnEndedTabIsMarked(PersonaIso, unittest.TestCase):
 
         self.assertIn(slots.ENDED_MARK, tui.strip_ansi(row))
         self.assertIn("beta.2", tui.strip_ansi(row))
+
+
+class TheEndedSelectorClosesOnlyOnEsc(PersonaIso, unittest.TestCase):
+    """**Esc and end of input are the same `None` to every other surface, and here they are
+    two different answers** — which is the whole reason `pick` grew two sentinels.
+
+    A real Esc forgets the chat for good, through `cmd_close`: the mark, the transcript, the
+    manifest entry and the window. End of input is a closed pty, a killed tmux server or a
+    machine that went down, and none of them is the operator asking for anything — so the
+    tab stays ended and open, and the pane's own death reaches `frame-ended`, which finds
+    `ended` already claimed and does nothing.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        _plant("beta.1")
+        state.claim_ended("beta.1")
+        self.enterContext(mock.patch.object(launcher, "framed_chat",
+                                            return_value="beta.1"))
+        self.enterContext(mock.patch.object(launcher.pane, "claim"))
+        self.enterContext(mock.patch.object(launcher.pane, "release"))
+
+    def _select(self, answer, *, fresh: bool = False):
+        """`_select_in_pane` on an ENDED tab, with the pick answered and both closers
+        recorded. Answers ``(rc, chats cmd_close forgot, chats the cancel path closed)``."""
+        closed: list = []
+        cancelled: list = []
+        with mock.patch.object(selector, "pick", return_value=answer), \
+                mock.patch.object(commands_frame, "cmd_close",
+                                  side_effect=lambda a: closed.append(a.chat_id)), \
+                mock.patch.object(launcher, "_close_the_cancelled_chat",
+                                  side_effect=lambda f: cancelled.append(f)):
+            rc = launcher._select_in_pane(
+                SimpleNamespace(start="claude", ended=True, fresh=fresh, profile="",
+                                rest=[], attended=True), "beta.1")
+        return rc, closed, cancelled
+
+    def test_a_real_escape_closes_the_tab_for_good(self):
+        rc, closed, cancelled = self._select(selector.KEY_CANCEL)
+
+        self.assertEqual(rc, selector.CANCELLED_EXIT)
+        self.assertEqual(closed, ["beta.1"], "Esc did not forget the chat")
+        self.assertEqual(cancelled, [],
+                         "an ended tab took the never-started pane's close, which writes "
+                         "no closed mark")
+
+    def test_end_of_input_leaves_the_tab_ended_and_open(self):
+        rc, closed, cancelled = self._select(selector.END_OF_INPUT)
+
+        self.assertEqual(rc, selector.CANCELLED_EXIT)
+        self.assertEqual((closed, cancelled), ([], []),
+                         "a terminal going away was read as a decision")
+        self.assertTrue(state.is_ended("beta.1"), "the tab stopped being ended")
+        self.assertFalse(state.was_closed("beta.1"), "end of input marked the chat closed")
+
+    def test_a_pane_that_never_started_still_closes_on_both(self):
+        """The pin for the other side of the branch, as #1103 left it: nothing ran in that
+        pane, so there is no chat to keep and both answers close its window."""
+        state.clear_ended("beta.1")
+        for answer in (selector.KEY_CANCEL, selector.END_OF_INPUT):
+            with self.subTest(answer=answer):
+                closed: list = []
+                cancelled: list = []
+                with mock.patch.object(selector, "pick", return_value=answer), \
+                        mock.patch.object(commands_frame, "cmd_close",
+                                          side_effect=lambda a: closed.append(a.chat_id)), \
+                        mock.patch.object(launcher, "_close_the_cancelled_chat",
+                                          side_effect=lambda f: cancelled.append(f)):
+                    rc = launcher._select_in_pane(
+                        SimpleNamespace(start="claude", ended=False, fresh=False,
+                                        profile="", rest=[], attended=True), "beta.1")
+                self.assertEqual(rc, selector.CANCELLED_EXIT)
+                self.assertEqual(cancelled, ["beta.1"])
+                self.assertEqual(closed, [], "a pane that never started wrote a closed mark")
 
 
 class QuitAndReopenKeepEndedTabs(PersonaIso, unittest.TestCase):
