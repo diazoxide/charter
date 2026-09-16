@@ -35,6 +35,29 @@ and what charter writes down cannot come from two readings. The containment on t
   (:data:`TOO_LONG`), because "too long" without a number is a refusal the operator cannot
   act on.
 
+**A leading `-` is NOT refused, and that is measured rather than assumed.** A title becomes
+the front of `--name`'s value (`launcher.session_name`), so a strict option parser could read
+`--name --test` as a flag with its argument missing and refuse to start — which would be a tab
+whose harness cannot launch. Measured on Claude Code **2.1.273**, in a throwaway `HOME` and
+`CLAUDE_CONFIG_DIR`, with no prompt typed and nothing spent:
+
+===========================================  ====  =======================================
+argv                                         rc    what happened
+===========================================  ====  =======================================
+``--name x --version``                       0     version printed (the control)
+``--name --test --version``                  0     version printed — the value was taken
+``--name -x --version``                      0     version printed
+``--name --version``                         1     `Not logged in` — ``--version`` ITSELF
+                                                   was taken as the value
+===========================================  ====  =======================================
+
+The last row is the one that settles it: `--name` takes the next argv element whatever it
+looks like, so a dash-leading title is a value and never a flag. Charter passes argv as a list
+through `os.execvpe` with no shell in between, so the parser was the only thing that could
+have read it as anything else. A refusal here would cost an operator a title charter had no
+reason to refuse.
+
+
 **Renaming touches no harness** (ADR 0018, and ruling 3 of this task). There is no
 `send-keys`, no `/rename` and no respawn anywhere in this module or in
 `commands_frame.cmd_rename`: the new name reaches Claude Code at its next start or resume,

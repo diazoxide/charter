@@ -553,6 +553,15 @@ def pick(*, cwd: Path, root: Path, start: str | None = None,
                                else opens_on(listed, start, resume=resume)))
         naming: list[rename.Rename] = []
 
+        def opened_input() -> "rename.Rename | None":
+            """The title input this selector has open, or ``None``.
+
+            **One reader, because two sites ask it and an invariant guarded on one branch and
+            not the other is the shape that bites the next reader.** The list is a cell rather
+            than a local: `_then` is a closure and cannot rebind one of `pick`'s.
+            """
+            return naming[-1] if naming else None
+
         def _then(row):
             if row.id == TITLE_ID:
                 box = title_input(titled)
@@ -560,7 +569,7 @@ def pick(*, cwd: Path, root: Path, start: str | None = None,
                 return box
             # A title charter refuses redraws the input with the reason in its footer and
             # keeps what was typed (ruling 6) — the same call `F2`'s rename makes.
-            return rename.again(row, naming[-1] if naming else None)
+            return rename.again(row, opened_input())
 
         chosen = palette.own_the_tty(surface, fd=fd, out=out, then=_then)
         if chosen is None:
@@ -574,26 +583,26 @@ def pick(*, cwd: Path, root: Path, start: str | None = None,
             # leaves the same way, and looping back to redraw a selector nobody can see is the
             # wedge `END_OF_INPUT` exists to avoid. Only a real keystroke comes back to the
             # list.
-            box = naming[-1] if naming else None
+            box = opened_input()
             if box is not None and box.left == overlay.LEFT_KEY:
                 continue
             # Which way the surface left is what the caller acts on: only a real keystroke
             # is the operator asking for this tab to be closed.
             return KEY_CANCEL if surface.left == overlay.LEFT_KEY else END_OF_INPUT
-        if chosen.id == rename.GO_ID:
+        named = opened_input()
+        if named is not None and chosen.id == rename.GO_ID:
             # The operator named the chat. Handed back rather than recorded, because this
             # module reads and writes no chat's record — see :class:`Titled`.
             #
-            # **No `naming and` in front of it, and its absence is measured rather than
-            # assumed.** `rename.GO_ID` is minted on a `rename.Rename` surface and nowhere
-            # else, the only `Rename` this pane can reach is the one `_then` opens for
-            # :data:`TITLE_ID`, and that branch is the only writer of *naming* — so the list
-            # is non-empty exactly when this id can arrive. A conjunct that only ever
-            # restates what the id already proved is the survivor `tools/sweep.py` reports,
-            # and it reported this one: dropping the ID half instead is a real defect (the
-            # next profile row would be read as a title and the named chat would never
-            # start), which is why that half is the one that stayed.
-            return Titled(naming[-1].typed())
+            # **Both halves, and the same question asked the same way as `_then` asks it.**
+            # The ID half is the one a defect hides behind: without it, the very next profile
+            # row would be read as a title and the chat just named would never start. The
+            # input half is the one a reader trips over: in charter's own flow `GO_ID` is
+            # minted on a surface only `_then` opens, so it cannot be absent — but an
+            # invariant guarded inside `_then` and not here is the shape that bites whoever
+            # adds the next surface, and it is reachable from a caller that answers a `GO_ID`
+            # row without going through the doorway. Asked, rather than reasoned about.
+            return Titled(named.typed())
         if chosen.id == RESUME_ID:
             # The chat's OWN profile, because a resume runs the command the chat was
             # already running. What differs is the words after it, and those come off the

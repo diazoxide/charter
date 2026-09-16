@@ -920,6 +920,24 @@ class ClaudeIsNamedAtStartAndResume(PersonaIso, unittest.TestCase):
         self.assertEqual(launcher.session_argv(p, "beta.1", resume=True, rest=[])[0][-1],
                          "second \u00b7 beta.1")
 
+    def test_a_title_that_starts_with_a_dash_still_names_the_session(self):
+        """**`normalized` does not refuse a leading `-`, and that is measured** (see
+        `rename`'s module docstring). A title is the front of `--name`'s value, so a strict
+        parser could have read `--name --fix` as a flag with its argument missing and refused
+        to start the harness. Claude Code 2.1.273 takes the next argv element whatever it
+        looks like — measured to the point of `--name --version` eating `--version` itself.
+
+        Pinned so the refusal is not added back on a hunch: charter passes argv as a list
+        through `os.execvpe` with no shell in between, and the parser was the only reader that
+        could have seen a flag.
+        """
+        from charter.frame import launcher
+        p = SimpleNamespace(harness="claude-code", name="claude-work")
+        self.assertTrue(state.record_title("beta.1", "--fix the widget"))
+        self.assertEqual(launcher.session_name("beta.1"), "--fix the widget \u00b7 beta.1")
+        words, _chosen = launcher.session_argv(p, "beta.1", resume=False, rest=[])
+        self.assertEqual(words[-2:], ["--name", "--fix the widget \u00b7 beta.1"])
+
     def test_codex_and_opencode_get_no_name(self):
         """Ruling 4. Neither takes a name at launch — openai/codex#14482 is open, and
         opencode's `--title` exists only on `opencode run` — so their tabs carry the title in
@@ -1210,6 +1228,27 @@ class WhatTheSweepAsked(_AWatchedSpawn, unittest.TestCase):
         wired_as_today(self)
         with mock.patch.object(palette_mod, "own_the_tty", side_effect=_own):
             return selector.pick(cwd=config.ROOT, root=config.ROOT, titling=True), seen
+
+    def test_a_go_row_with_no_input_behind_it_is_not_a_title(self):
+        """The unguarded half of `pick`'s pair, driven.
+
+        In charter's own flow a `rename.GO_ID` row can only come off a surface `_then` opened,
+        so the input is always there — but the guard is asked rather than reasoned about,
+        because an invariant tested inside `_then` and not at the return is the shape that
+        bites whoever adds the next surface. A caller that answers a `GO_ID` row without going
+        through the doorway gets the ordinary "no such profile" round trip, not a crash.
+        """
+        from charter.frame import selector
+
+        def _once(surface, then, visit):
+            if visit == 1:
+                return overlay.Row(id=rename.GO_ID, title="title: fix it")
+            surface.left = overlay.LEFT_KEY
+            return None
+
+        got, seen = self._selector(_once)
+        self.assertIs(got, selector.KEY_CANCEL)
+        self.assertEqual(len(seen), 2, "a row with no input behind it was read as a title")
 
     def test_a_title_the_selector_refuses_redraws_the_input_too(self):
         """And the third surface that opens one. `selector.pick` loops, so a refusal it did
