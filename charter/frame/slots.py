@@ -4627,8 +4627,20 @@ def _ended_chats(names: list) -> frozenset:
     existed, which is the safe degrade rather than a hole in the frame. The mark only ever
     ADDS information, so a failed read costs the strip nothing but the marks.
 
-    One `stat` per name (`state.is_ended`), off the roster the strip has already read — so
-    this scans nothing that was not scanned anyway, exactly as :func:`_off_server` does.
+    **One `stat` per name, and the roster has already asked the same question.** This is
+    where it differs from :func:`_off_server`, which this used to claim kinship with: that
+    one decides its answer off the names in hand (`chats.off_server_of`), where
+    `state.is_ended` stats a path per name — and `chats.roster` fills `Chat.ended` with the
+    identical call, so the question is asked twice on the way to one strip.
+
+    **What that costs is not settled, and the sentence that said it was free was wrong.**
+    `tests.test_frame_slots.ReposTable.test_a_taller_pane_costs_the_same_syscalls_as_a_one
+    _row_one` is #387/#488's budget on the repo table, and it goes red in some module
+    orderings on this branch; neutralising either call site clears it. But a non-perturbing
+    trace of that guard's own renders recorded no `is_ended` call inside them at all, so
+    what the budget is catching is something other than this function's cost in the draw it
+    brackets. The cause is open (see the PR), and a claim of no cost does not belong here
+    until it is.
     """
     from . import state as state_mod
     try:
