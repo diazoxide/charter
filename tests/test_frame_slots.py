@@ -1675,6 +1675,21 @@ class ReposTable(PersonaIso, unittest.TestCase):
             with contextlib.ExitStack() as stack:
                 for p in patches:
                     stack.enter_context(p)
+                # **Primed a second time INSIDE the patches, and that is what makes this
+                # budget mean anything.** The prime above warms the render; it does NOT
+                # warm the first render made while these eight patches are installed, and
+                # something on this path costs one `os.stat` the first time it is reached
+                # in a process. Measured: with only the outer prime, whichever size was
+                # counted FIRST carried an extra `os.stat` and the second did not — swap
+                # the two `_count` calls and the extra call swapped sides with them. So
+                # the differential was comparing a COLD measurement against a warm one
+                # rather than one row against fourteen, and which side paid depended on
+                # what had already run in the process: the same commit passed in one
+                # module ordering and failed in another, which is a budget that protects
+                # nothing. Rendering once here and discarding what it counted leaves both
+                # sides warm, so what is left to differ is the rows.
+                self._render(fid, cols=200, rows=1 + n)
+                seen.clear()
                 out = self._render(fid, cols=200, rows=1 + n)
             return len(out.split("\n")), seen
 

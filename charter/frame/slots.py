@@ -4618,37 +4618,6 @@ def working_chats() -> frozenset:
         return frozenset()
 
 
-def _ended_chats(names: list) -> frozenset:
-    """Which of *names* have ended and are holding the choice — :data:`ENDED_MARK`'s set.
-
-    A wrapper for :func:`working_chats`' reason, which is this module's rule for every read
-    on the repaint path: **never raises.** A panel that threw out of `render` loses its pane,
-    and a chat charter cannot stat is "not ended" — the strip drawn before this feature
-    existed, which is the safe degrade rather than a hole in the frame. The mark only ever
-    ADDS information, so a failed read costs the strip nothing but the marks.
-
-    **One `stat` per name, and the roster has already asked the same question.** This is
-    where it differs from :func:`_off_server`, which this used to claim kinship with: that
-    one decides its answer off the names in hand (`chats.off_server_of`), where
-    `state.is_ended` stats a path per name — and `chats.roster` fills `Chat.ended` with the
-    identical call, so the question is asked twice on the way to one strip.
-
-    **What that costs is not settled, and the sentence that said it was free was wrong.**
-    `tests.test_frame_slots.ReposTable.test_a_taller_pane_costs_the_same_syscalls_as_a_one
-    _row_one` is #387/#488's budget on the repo table, and it goes red in some module
-    orderings on this branch; neutralising either call site clears it. But a non-perturbing
-    trace of that guard's own renders recorded no `is_ended` call inside them at all, so
-    what the budget is catching is something other than this function's cost in the draw it
-    brackets. The cause is open (see the PR), and a claim of no cost does not belong here
-    until it is.
-    """
-    from . import state as state_mod
-    try:
-        return frozenset(n for n in names if state_mod.is_ended(n))
-    except Exception:  # noqa: BLE001 - a readout must never cost a pane
-        return frozenset()
-
-
 def _off_server(names: list, fid: str) -> frozenset:
     """Which of *names* are on ANOTHER tmux server — ones this frame cannot switch to after a
     charter upgrade split its chats across servers (ruling 46).
@@ -4696,8 +4665,32 @@ def _chats_strip(fid: str):
     two adjacent strips apart, and position, the `+` and the spinner do that without
     spending nine columns of a row whose names are competing for them.
     """
+    return _strip_of(_chats_rows(fid), fid)
+
+
+def _chats_rows(fid: str):
+    """The roster both :func:`_chats_strip` and :func:`chats_bar` are a view of, read ONCE.
+
+    **`chats.roster` already answers "has this chat ended" for every chat it returns** —
+    `Chat.ended`, filled with one :func:`state.is_ended` stat each — so a strip that then
+    asked the same question a second time paid that stat twice per name, on every repaint
+    of the one row this module puts on a clock (:data:`BAR_ANIMATED`). The mark is read off
+    the roster that was read anyway, which is the rule :func:`_off_server` already keeps
+    one field over: decide the answer off what is in hand rather than scanning again.
+    """
     from . import chats as chats_mod
-    return [c.id for c in chats_mod.roster(fid)], fid, ADD_CHAT, CLOSE_CHAT, None
+    return chats_mod.roster(fid)
+
+
+def _strip_of(rows, fid: str):
+    """*rows* as the five fields :func:`_bar` and :func:`bar_rows_wanted` both unpack.
+
+    Split out so that "which names is this a strip of" is decided in ONE place while
+    :func:`chats_bar` still gets at the roster records behind them — the sizer takes the
+    five fields and reads no marks (its own docstring's rule), and the renderer takes the
+    marks off the same read.
+    """
+    return [c.id for c in rows], fid, ADD_CHAT, CLOSE_CHAT, None
 
 
 def _workspace_counts() -> dict:
@@ -4901,10 +4894,11 @@ def chats_bar(fid: str, width: int, rows: int = 1) -> list[str]:
     dispatches and this chat's notice dwell, and neither is "a sibling chat's harness
     started working".
     """
-    names, here, note, close, counts = _chats_strip(fid)
+    roster_rows = _chats_rows(fid)
+    names, here, note, close, counts = _strip_of(roster_rows, fid)
     return _bar(names, here, width, note=note, close=close, rows=rows,
                 busy=working_chats(), counts=counts, off_server=_off_server(names, fid),
-                ended=_ended_chats(names))
+                ended=frozenset(c.id for c in roster_rows if c.ended))
 
 
 def workspaces_bar(fid: str, width: int, rows: int = 1) -> list[str]:
