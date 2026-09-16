@@ -6427,12 +6427,25 @@ def _launch(args) -> int:
         # ended before any pane exists, so the strip marks it and a close does not ask from
         # the very first repaint.
         #
-        # The profile and the kind are written here rather than left to the pick, because
+        # The profile is written here rather than left to the pick, because
         # `launcher.resume_row` has to answer on this tab before anybody has picked
         # anything — that row is the whole reason the tab came back.
+        #
+        # **The KIND is deliberately NOT written here, and that is the two-writer fix.** It
+        # used to be, through `state.record_picked_kind` — and `state.record_identity` below
+        # REPLACES the record rather than merging into it, so that write was thrown away a
+        # few dozen lines later. That was this branch's own defect: a reopened ended tab
+        # recorded no kind at all, and it only looked harmless because `launcher.resume_row`
+        # falls back to resolving the profile. The identity call is the single writer now and
+        # carries `h.name` for a restored tab, so a second one here would be exactly the
+        # second answer to "what kind is this chat" that caused the bug.
+        #
+        # Measured rather than reasoned: with that argument mutated BOTH ways — to `""` and
+        # to `h.name` — the suite stayed green, because nothing between the two calls reads
+        # the identity record. `test_a_reopened_ended_tab_records_the_kind_it_came_back_as`
+        # pins what the chat is left holding.
         state.claim_ended(fid)
         state.record_profile(fid, _selector_start(args) or "")
-        state.record_picked_kind(fid, h.name if h is not None else "")
     elif selecting:
         state.record_waiting(fid)
     # And WHERE — see the identical call on the operator's-tmux path, and

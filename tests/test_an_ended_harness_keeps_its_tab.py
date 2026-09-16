@@ -1451,6 +1451,50 @@ class NothingActsOnARecordAlone(PersonaIso, unittest.TestCase):
         self.assertIn("#{" + ended.DRAWER_OPTION + "}", ended.PROOF_FORMAT)
         self.assertTrue(ended.PROOF_FORMAT.endswith("}"), ended.PROOF_FORMAT)
 
+    def test_another_chats_drawer_is_never_taken_as_this_chats_harness(self):
+        """**The other half of the same conjunct**, and a second guard on what a respawn is
+        aimed at.
+
+        `test_only_the_recorded_pane_is_taken_as_the_harness` pins the `pane == recorded`
+        half. This pins `not drawer_of`: a pane the listing proves is a DRAWER — of any chat
+        — is never the harness, even when a stale record names that very id. The first branch
+        catches this chat's own drawer, so the case that reaches here is another chat's, which
+        is exactly the #933 shape: two planes' chats in one tmux, ids reused, and a record
+        pointing at a pane tmux has since handed to somebody else's surface.
+
+        Red without it: the drawer is taken as the harness and respawned, which replaces
+        another chat's crash drawer with this chat's selector.
+        """
+        answer, fake = self._present([_row("%1", "1", "beta.1", self.plane, "beta.2")])
+
+        self.assertEqual(answer, "")
+        self.assertEqual(fake.wrote("respawn-pane"), [],
+                         "a pane the listing proved was a drawer was respawned as a harness")
+
+    def test_the_drawer_closes_the_pane_its_own_pid_proves(self):
+        """`_close_this_pane` kills the pane `#{pane_pid}` proves is THIS process's, never the
+        one a record names — `launcher._close_the_cancelled_chat`'s proof, and the reason an
+        empty `kill-pane -t ''` can never be issued from here.
+
+        Collapsed to `""`, `pane` is empty, the `if pane:` below is false, and the drawer
+        never closes at all: it stays on screen over the chat it was asking about, with the
+        keyboard still in it and its record still naming a pane. The sibling case above
+        asserts the refusal for a pane that cannot be proven; this asserts the action for one
+        that can, because a `collapse-ifexp` takes the branch and its consequence together.
+        """
+        state.record_drawer("beta.1", "%7")
+        fake = _Tmux()
+
+        with mock.patch.object(ended.tmuxctl, "live_pane_by_pid",
+                               return_value=SimpleNamespace(pane="%3")), \
+                mock.patch.object(ended.tmuxctl, "run", fake):
+            ended._close_this_pane(SERVER, fid="beta.1", harness="%1", own_pane="%3")
+
+        killed = [c[c.index("-t") + 1] for c in fake.wrote("kill-pane")]
+        self.assertEqual(killed, ["%3"], "the drawer did not close its own pane")
+        self.assertIsNone(state.drawer("beta.1"),
+                          "the drawer record was not forgotten as its pane went")
+
     def test_a_respawn_tmux_refused_offers_nothing(self):
         """The plan's Behaviour §6, and the answer has to be ``""``.
 
