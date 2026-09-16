@@ -3377,6 +3377,15 @@ _ARRIVED_MARK = "✶"
 #: `*`: the chat you are on is always on your own server (:func:`chats.off_server` drops it).
 _OFF_SERVER_MARK = "~"
 
+#: What a tab whose harness has ENDED draws in the mark cell — decision 4's *marked ended
+#: in the strip*.
+#:
+#: A background or handed-off chat ends whether or not anybody is looking, and its tab then
+#: holds a choice nothing else on screen announces. `x` rather than a symbol, for
+#: :data:`_BAR_RULE`'s measured reason and not a preference: a click on this row is resolved
+#: by COLUMN, so a glyph a terminal may draw two cells wide would move every field after it.
+ENDED_MARK = "x"
+
 #: Columns a bar spends between two names. Two, so a name reads as one name — a single
 #: space runs `api.1 api.2` together at the widths where this matters most.
 #:
@@ -3939,7 +3948,7 @@ def _affordances(note: str, close: str) -> str:
 
 
 def _mark_cell(active: bool, arrived: bool, busy: bool, frame: str,
-               off_server: bool = False) -> str:
+               off_server: bool = False, ended: bool = False) -> str:
     """The one cell in front of a tab's name, for the things it can say.
 
     `*` for the tab you are ON first and unconditionally (:data:`_BAR_MARK`), because under
@@ -3963,6 +3972,14 @@ def _mark_cell(active: bool, arrived: bool, busy: bool, frame: str,
         return _BAR_MARK[0]
     if off_server:
         return _OFF_SERVER_MARK
+    # **Above the arrival and the spinner, and below off-server.** An ended chat cannot be
+    # working, so it can never collide with the spinner in fact — but it CAN carry an
+    # arrival (a handed-off chat whose harness ran and exited before anybody looked), and
+    # there the ending is the thing the operator has to act on: the tab is holding a choice,
+    # where an arrival only says it wants attention. Off-server still wins, because a chat
+    # this frame cannot switch to is one whose ending there is nothing to be done about here.
+    if ended:
+        return ENDED_MARK
     if arrived:
         return _ARRIVED_MARK
     if busy:
@@ -3972,7 +3989,8 @@ def _mark_cell(active: bool, arrived: bool, busy: bool, frame: str,
 
 def _bar(names: list[str], here: str, width: int, *,
          note: str = "", close: str = "", rows: int = 1, busy=(),
-         counts=None, arrived=frozenset(), off_server=frozenset()) -> list[str]:
+         counts=None, arrived=frozenset(), off_server=frozenset(),
+         ended=frozenset()) -> list[str]:
     """One bar: *names* with *here* marked, in *rows* x *width* cells.
 
     :func:`_compose` composes it and this is what PUBLISHES it — the one call that writes
@@ -3988,14 +4006,14 @@ def _bar(names: list[str], here: str, width: int, *,
     """
     lines, cols, more, add, close_cells = _compose(
         names, here, width, note=note, close=close, rows=rows, busy=busy, counts=counts,
-        arrived=arrived, off_server=off_server)
+        arrived=arrived, off_server=off_server, ended=ended)
     TABS.publish(cols, here, more, add, close_cells)
     return lines
 
 
 def _compose(names: list[str], here: str, width: int, *,
              note: str = "", close: str = "", rows: int = 1, busy=(), counts=None,
-             arrived=frozenset(), off_server=frozenset()):
+             arrived=frozenset(), off_server=frozenset(), ended=frozenset()):
     """The strip *names*/*here* composes to, and the cells its tabs landed in.
 
     Answers ``(lines, columns, more, add, close)`` — the rows to draw, the ``(row, col)``
@@ -4258,7 +4276,7 @@ def _compose(names: list[str], here: str, width: int, *,
     # in front of it would change no output at all, only one `time.monotonic()`, which is
     # the equivalent mutant this repository deletes rather than documents.
     frame = tab_spinner_frame()
-    marked = [f"{_mark_cell(i == at, names[i] in arrived, names[i] in busy, frame, names[i] in off_server)}{n}"
+    marked = [f"{_mark_cell(i == at, names[i] in arrived, names[i] in busy, frame, names[i] in off_server, names[i] in ended)}{n}"
               for i, n in enumerate(shown)]
     # **The same fields twice: one set to MEASURE and one set to DRAW.** `chrome.block`
     # adds no cell — `tui.width` counts no SGR — so the two are the same width by
@@ -4647,8 +4665,32 @@ def _chats_strip(fid: str):
     two adjacent strips apart, and position, the `+` and the spinner do that without
     spending nine columns of a row whose names are competing for them.
     """
+    return _strip_of(_chats_rows(fid), fid)
+
+
+def _chats_rows(fid: str):
+    """The roster both :func:`_chats_strip` and :func:`chats_bar` are a view of, read ONCE.
+
+    **`chats.roster` already answers "has this chat ended" for every chat it returns** —
+    `Chat.ended`, filled with one :func:`state.is_ended` stat each — so a strip that then
+    asked the same question a second time paid that stat twice per name, on every repaint
+    of the one row this module puts on a clock (:data:`BAR_ANIMATED`). The mark is read off
+    the roster that was read anyway, which is the rule :func:`_off_server` already keeps
+    one field over: decide the answer off what is in hand rather than scanning again.
+    """
     from . import chats as chats_mod
-    return [c.id for c in chats_mod.roster(fid)], fid, ADD_CHAT, CLOSE_CHAT, None
+    return chats_mod.roster(fid)
+
+
+def _strip_of(rows, fid: str):
+    """*rows* as the five fields :func:`_bar` and :func:`bar_rows_wanted` both unpack.
+
+    Split out so that "which names is this a strip of" is decided in ONE place while
+    :func:`chats_bar` still gets at the roster records behind them — the sizer takes the
+    five fields and reads no marks (its own docstring's rule), and the renderer takes the
+    marks off the same read.
+    """
+    return [c.id for c in rows], fid, ADD_CHAT, CLOSE_CHAT, None
 
 
 def _workspace_counts() -> dict:
@@ -4852,9 +4894,11 @@ def chats_bar(fid: str, width: int, rows: int = 1) -> list[str]:
     dispatches and this chat's notice dwell, and neither is "a sibling chat's harness
     started working".
     """
-    names, here, note, close, counts = _chats_strip(fid)
+    roster_rows = _chats_rows(fid)
+    names, here, note, close, counts = _strip_of(roster_rows, fid)
     return _bar(names, here, width, note=note, close=close, rows=rows,
-                busy=working_chats(), counts=counts, off_server=_off_server(names, fid))
+                busy=working_chats(), counts=counts, off_server=_off_server(names, fid),
+                ended=frozenset(c.id for c in roster_rows if c.ended))
 
 
 def workspaces_bar(fid: str, width: int, rows: int = 1) -> list[str]:

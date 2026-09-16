@@ -370,10 +370,43 @@ class ThePaneCharterStartsIsThePaneTheHarnessRunsIn(_ARealChatOnARealServer,
 @unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")
 class TheHarnessExitCodeTravelsAsItDid(_ARealChatOnARealServer, unittest.TestCase):
     """L2: the `pane-died` hooks are installed against the launcher's pane and fire for the
-    harness that replaced it, so the code the harness chose is the code charter records."""
+    harness that replaced it, so the code the harness chose is the code charter records.
+
+    **And the window STAYS, which is the exit gate's whole change** (#1112, task 2). This
+    case used to assert the opposite — that `pane-died[1]`'s `kill-window` took the chat's
+    window the moment its harness exited — and that is exactly what decision 4 overturns: no
+    harness exit destroys a chat. The exit code still travels; what changed is that the tab
+    is still there to hold it, and the operator is offered something.
+
+    7 is a crash, so this drives the crash presentation end to end on a real server: the
+    dead pane is left exactly as tmux keeps it, and the choice opens in a drawer marked as
+    this chat's.
+    """
 
     SLUG = "pane-exit-code"
     EXIT_WITH = 7
+
+    def _why_not_ended(self, fid: str) -> str:
+        """Every gate `ended.present` refuses at, read back off the real server.
+
+        A bare "it never claimed this exit" says nothing about WHICH of the six conditions
+        declined, and the answer is in six different places — three files under the chat's
+        directory, the chat's own record, and two pane options tmux holds. Assembling them
+        here is what makes a red run readable instead of the start of a hunt.
+        """
+        proof = self._tmux("list-panes", "-a", "-F",
+                           "#{pane_id}|#{pane_dead}|#{@charter_chat}|#{@charter_plane}"
+                           "|#{@charter_drawer}").stdout.strip()
+        hooks = self._tmux("show-hooks", "-p", "-t",
+                           state.harness_pane(fid) or "").stdout.strip()
+        return (f"\n  profile={state.profile(fid)!r}"
+                f"\n  drawn={state.was_drawn(fid)!r} closed={state.was_closed(fid)!r}"
+                f"\n  exit={state.exit_code(fid)!r} server={state.frame_server(fid)!r}"
+                f"\n  recorded pane={state.harness_pane(fid)!r}"
+                f"\n  this plane={commands_frame._this_plane()!r}"
+                f"\n  this plane, resolved={os.path.realpath(commands_frame._this_plane())!r}"
+                f"\n  list-panes:\n    " + proof.replace("\n", "\n    ") +
+                f"\n  hooks on the pane:\n    " + hooks.replace("\n", "\n    "))
 
     def test_a_harness_exit_code_travels_as_it_did(self):
         self.assertEqual(self._launch(), 0)
@@ -381,9 +414,39 @@ class TheHarnessExitCodeTravelsAsItDid(_ARealChatOnARealServer, unittest.TestCas
         self.assertTrue(_eventually(lambda: state.exit_code(fid) == 7),
                         f"the exit code did not reach the chat's state: "
                         f"{state.exit_code(fid)!r}")
-        self.assertTrue(_eventually(lambda: fid not in self._tmux(
-            "list-windows", "-a", "-F", "#{window_name}").stdout.split()),
-            "the teardown hook did not close the window of a chat that ended")
+        self.assertTrue(_eventually(lambda: state.is_ended(fid)),
+                        "the ended step never claimed this exit:"
+                        + self._why_not_ended(fid))
+        self.assertIn(fid, self._tmux("list-windows", "-a", "-F",
+                                      "#{window_name}").stdout.split(),
+                      "a harness exiting closed its chat's window")
+
+    def test_a_crash_leaves_the_pane_alone_and_opens_a_marked_drawer(self):
+        """The harness's last lines are what a crashed tab is FOR, so charter draws nothing
+        in that pane — tmux keeps it dead under `remain-on-exit` — and splits the choice
+        beneath it. One listing proves the drawer is this chat's, which is the same listing
+        every kill in `frame/ended.py` is aimed by."""
+        self.assertEqual(self._launch(), 0)
+        fid = "beta.1"
+        self.assertTrue(_eventually(lambda: state.is_ended(fid)),
+                        "the ended step never claimed this exit")
+
+        pane = state.harness_pane(fid)
+        self.assertEqual(
+            self._tmux("display-message", "-p", "-t", pane, "#{pane_dead}").stdout.strip(),
+            "1", "the crashed pane was respawned instead of being left alone")
+        # **`|` and not a TAB, because this call is a raw `tmux` without `-u`.** #984:
+        # a client whose environment names no UTF-8 locale gets a literal tab back in a
+        # `-F` format as `_`, so a tab-separated row read here splits into one field and
+        # the assertion can never match. `tmuxctl.server_argv` adds `-u` for exactly this;
+        # the fixture's own `_tmux` does not, and production's `ended.PROOF_FORMAT` goes
+        # through `server_argv`, so only the test has to choose another separator.
+        self.assertTrue(_eventually(lambda: any(
+            row.split("|")[-1] == fid
+            for row in self._tmux("list-panes", "-a", "-F",
+                                  "#{pane_id}|#{@charter_drawer}").stdout.splitlines())),
+            f"no drawer was opened for the crashed chat: "
+            f"{self._tmux('list-panes', '-a', '-F', '#{pane_id}|#{@charter_drawer}').stdout!r}")
 
 
 @unittest.skipUnless(_HAS_TMUX, "no tmux on this machine")

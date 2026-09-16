@@ -529,7 +529,16 @@ class _APickedSelector(_APlaneWithProfiles):
             selector.palette, "own_the_tty", side_effect=self._answer))
 
     def _answer(self, surface, **kw):
+        """`own_the_tty` answering the queue — and a real ESC KEYSTROKE once it is empty.
+
+        `Surface.run` records which way it left before answering ``None``
+        (`overlay.Surface.left`), and `selector.pick` reads that to tell a keystroke from a
+        pane whose input ended: the first closes a chat, the second must never be read as a
+        decision at all. Every cancel in this class is the operator pressing Esc, so the
+        stand-in says which one it is rather than leaving `pick` to guess.
+        """
         self.surfaces.append(surface)
+        surface.left = overlay.LEFT_KEY
         return self.answers.pop(0) if self.answers else None
 
     def _queue(self, *answers) -> None:
@@ -549,12 +558,12 @@ class ThePick(_APickedSelector, unittest.TestCase):
 
     def test_escape_starts_nothing(self):
         self._queue()
-        self.assertIsNone(self._pick())
+        self.assertIs(self._pick(), selector.KEY_CANCEL)
 
     def test_enter_on_a_refused_row_keeps_the_selector_open_and_shows_why(self):
         self.which.side_effect = lambda cmd, **kw: None if cmd == "claude" else "/usr/bin/x"
         self._queue(self._row_named(WORK), None)
-        self.assertIsNone(self._pick())
+        self.assertIs(self._pick(), selector.KEY_CANCEL)
         self.assertEqual(len(self.surfaces), 2)
         self.assertIn("not on PATH", self.surfaces[1].footer)
 
@@ -563,7 +572,7 @@ class ThePick(_APickedSelector, unittest.TestCase):
         only after an Enter: a list where nothing can run says so while it is being read."""
         self.which.side_effect = lambda cmd, **kw: None
         self._queue()
-        self.assertIsNone(self._pick())
+        self.assertIs(self._pick(), selector.KEY_CANCEL)
         self.assertIn("no profile can start here", self.surfaces[0].footer)
 
     def test_the_selector_shows_even_with_one_profile(self):
@@ -842,6 +851,25 @@ class TheSweepsOwnFindings(_APlaneWithProfiles, unittest.TestCase):
         self.assertEqual(launcher.argv_select(None)[-2:], ["--select", "--attended"])
         self.assertNotIn("--start", launcher.argv_select(None))
 
+    def test_the_ended_and_fresh_flags_ride_only_when_they_are_asked_for(self):
+        """The two conditionals beside `--start`, and each is a different keystroke's
+        meaning at the far end.
+
+        `--ended` says a harness EXIT put this selector here: it draws the resume row,
+        `esc close this tab`, and a Ctrl+C that does nothing. Collapsed to `()`, every ended
+        tab reopens as an ORDINARY selector — Ctrl+C closes it, and the footer promises the
+        wrong thing about the one key that works.
+
+        `--fresh` is the crash drawer's *start fresh*: the same selector with the resume row
+        withheld. Collapsed to `()`, *start fresh* silently resumes the conversation it was
+        pressed to leave behind.
+        """
+        self.assertIn("--ended", launcher.argv_select("claude-work", ended=True))
+        self.assertNotIn("--ended", launcher.argv_select("claude-work"))
+        self.assertIn("--fresh",
+                      launcher.argv_select("claude-work", ended=True, fresh=True))
+        self.assertNotIn("--fresh", launcher.argv_select("claude-work", ended=True))
+
     def test_the_surface_says_what_it_is_for(self):
         """`selector.LABEL` reaches the heading: the pane is a question, and a heading that
         did not say which question is a modal surface with no subject."""
@@ -945,9 +973,18 @@ class _ASelectorPane(_APlaneWithProfiles):
         return [kw.get("after") for kw in self.asked]
 
     def _pick(self, **kw):
+        """`selector.pick` stood in — and an empty queue is a real ESC KEYSTROKE.
+
+        `pick` answers two sentinels where it answered one ``None`` (`selector.KEY_CANCEL`
+        and `selector.END_OF_INPUT`), because an ended tab has to tell the operator closing
+        it from a terminal that went away. Every cancel in this class is the operator
+        pressing Esc on a pane that never started a harness, which closes its window either
+        way — so the stand-in says which one it is rather than handing the launcher a
+        ``None`` that no longer means anything.
+        """
         self.log.append("draw")
         self.asked.append(kw)
-        return self.picks.pop(0) if self.picks else None
+        return self.picks.pop(0) if self.picks else selector.KEY_CANCEL
 
     def _run(self, *picks, start: str = "") -> int:
         self.picks = list(picks)
@@ -1683,6 +1720,116 @@ class WhereItAppears(_APlaneWithProfiles, unittest.TestCase):
         self.assertTrue(state.is_waiting("beta.2"))
         self.assertEqual(state.identity("beta.2").get("CHARTER_HARNESS"), "")
 
+    def test_a_restored_ended_tab_opens_its_pane_on_the_ended_selector(self):
+        """**The flag has to ride the PANE's own argv, not merely the chat's state.**
+        `--ended` is what makes that pane draw the resume row, say `esc close this tab`, and
+        ignore Ctrl+C (`launcher.argv_select`). The literal here is the argparse dest;
+        retuned, it matches nothing, the flag silently never rides, and a restored tab comes
+        back as an ORDINARY selector — where Ctrl+C closes it and the footer promises the
+        wrong thing about the one key that works.
+        """
+        fake = _AServerWithOneWorkspaceRunning(sessions=(), chats=())
+
+        self._launch(fake, harness="claude", profile="claude", select=True, ended=True,
+                     start="claude")
+
+        flat = " ".join(" ".join(c) for c in fake.calls)
+        self.assertIn("--ended", flat,
+                      "the restored tab's pane was opened on an ordinary selector")
+
+    def test_the_escape_hatch_still_gets_todays_teardown_hook(self):
+        """`harness_chat=(p is not None or selecting)`, and the first half is what names the
+        escape hatch. Forced true, `charter frame -- <cmd>` is armed with the ended step
+        instead of `kill-window`: its window stays open when the command exits, `attach`
+        never returns, and the exit code never reaches the script waiting on it — the ruling
+        on open question 5, undone.
+        """
+        fake = _AServerWithOneWorkspaceRunning(sessions=(), chats=())
+
+        self._launch(fake, harness="", profile=None, select=False, rest=["--", "htop"])
+
+        hooks = [" ".join(c) for c in fake.calls
+                 if any("pane-died[1]" in word for word in c)]
+        self.assertTrue(hooks, "no second pane-died hook was installed at all")
+        self.assertIn("kill-window", hooks[0])
+        self.assertNotIn("frame-ended", hooks[0],
+                         "the escape hatch was armed with the ended step")
+
+    def test_a_selector_launch_with_no_start_never_records_the_word_None(self):
+        """**`state.record_profile` interpolates rather than refusing**, and that is the
+        whole reason the fallback is load-bearing.
+
+        `_selector_start` answers ``None`` for a launch with no press behind it and no
+        `[harness] default` — ruling 18, where a `default` naming a profile this machine
+        lacks resolves to nothing at all. `record_profile` then writes `f"{name}\\n"`: it
+        does not raise and it does not refuse, so without the `or ""` the chat records the
+        four characters `None`, and `state.profile` hands that straight back as a NAME.
+
+        Every reader takes it for one — `+` and a workspace tab open the next chat on it
+        (`_same_profile_as`), and a reopen tries to restore it — so the cost is not a tidy
+        empty string, it is a chat whose recorded profile is a word no plane declares.
+
+        `_selector_start` is stated here rather than arranged for, because whether this
+        fixture's plane happens to declare a default is not what the case is about.
+
+        **And the launch is a RESTORED ENDED tab, because that is the only path that reaches
+        this write.** The line sits inside `if restored_ended:` — an ordinary selector takes
+        the `elif selecting: record_waiting(fid)` arm instead — so a case that drove
+        `--select` without `--ended` never executed the line at all and would have called
+        any mutation of it survived without ever running it.
+        """
+        fake = _AServerWithOneWorkspaceRunning(sessions=(), chats=())
+
+        with mock.patch.object(commands_frame, "_selector_start", return_value=None):
+            self.assertEqual(
+                self._launch(fake, harness="claude", profile="claude", select=True,
+                             ended=True, start=""), 0)
+
+        self.assertNotEqual(state.profile(self.NEW), "None",
+                            "the word None was recorded as this chat's profile")
+        self.assertFalse(state.profile(self.NEW) or "",
+                         "a chat that picked nothing recorded a profile anyway")
+
+    def test_a_reopened_ended_tab_comes_back_ended_and_never_waiting(self):
+        """**A restored ended tab is the one selector that is not a chat waiting to begin.**
+
+        `getattr(args, "ended", False)` reads the argparse dest as a literal, so a retune is
+        silent: the branch never runs, the tab is marked WAITING instead of claimed, and
+        `leave.plan` then passes it over — so a quit does not record it and `charter reopen`
+        never brings it back. The chat is lost by quitting, which is the outcome this whole
+        design exists to prevent.
+        """
+        fake = _AServerWithOneWorkspaceRunning(sessions=(), chats=())
+
+        self._launch(fake, harness="claude", profile="claude", select=True, ended=True,
+                     start="claude")
+
+        self.assertTrue(state.is_ended(self.NEW), "the restored tab came back unclaimed")
+        self.assertFalse(state.is_waiting(self.NEW),
+                         "an ended tab was marked as a pane that never started")
+
+    def test_a_reopened_ended_tab_records_the_kind_it_came_back_as(self):
+        """`launcher.resume_row` has to answer on this tab before anybody has picked
+        anything — that row is the whole reason the chat came back — and it reads the KIND
+        off the identity record.
+
+        **This case found a defect rather than merely pinning a line.** `record_picked_kind`
+        wrote the kind, and `record_identity` a few dozen lines later REPLACED the record
+        with one whose `CHARTER_HARNESS` the selector branch had blanked — so a reopened
+        ended tab recorded no kind at all. Nothing caught it because `resume_row` falls back
+        to resolving the chat's profile, which answers for every chat whose profile is still
+        declared; the tab that loses its resume row is the one whose profile has left the
+        plane, which is the chat that most needs its conversation back.
+
+        Red without the fix: `None != 'claude-code'`.
+        """
+        fake = _AServerWithOneWorkspaceRunning(sessions=(), chats=())
+
+        self._launch(fake, harness="claude", profile="claude", select=True, ended=True,
+                     start="claude")
+
+        self.assertEqual(state.identity(self.NEW).get("CHARTER_HARNESS"), "claude-code")
+
     def _in_the_operators_tmux(self, *states, select: bool = True) -> tuple[int, str]:
         """`_launch_in_operator_tmux` to its end, with the pane answering *states* in turn.
 
@@ -1788,9 +1935,18 @@ class WhereItAppears(_APlaneWithProfiles, unittest.TestCase):
         self.assertNotIn("reopen", said)
 
     def test_a_reopen_never_opens_the_selector(self):
-        """An open nobody is at names its profile: there is no one there to pick."""
+        """An open nobody is at names its profile: there is no one there to pick.
+
+        **True of a chat that was RUNNING, which is what this stand-in is.** An ended tab is
+        the one exception decision 12 makes — it comes back holding its choice, at its own
+        selector, and starts nothing until somebody switches to it — and that case is pinned
+        in `tests/test_an_ended_harness_keeps_its_tab.py`. So the record says which kind it
+        is rather than leaving `_reopen_args` to a `getattr` default: that function names
+        every field it reads on purpose, "a readable contract instead of a puzzle".
+        """
         args = commands_frame._reopen_args(
-            SimpleNamespace(workspace="beta", persona="", cwd="", resume="", brief=""),
+            SimpleNamespace(workspace="beta", persona="", cwd="", resume="", brief="",
+                            ended=False),
             harness_name="claude", profile="claude-work", reopening=None, resume=False)
         self.assertFalse(getattr(args, "select", False))
         self.assertEqual(args.profile, "claude-work")
@@ -1829,6 +1985,142 @@ _SERVERS = itertools.count()
 #: charter` keeps the child's cwd off `sys.path` (#390) and its cwd is a workspace
 #: directory, so without this the pane cannot import the charter under test.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+class InsideTheOperatorsTmux(_APlaneWithProfiles, unittest.TestCase):
+    """**On a server charter is a guest on there are no hooks**, so the launcher itself is
+    what answers a harness exit — and which launches got that was decided by the wrong
+    question.
+
+    `_launch_in_operator_tmux` gated the ended step on `if not profile:`, where *profile* is
+    `_profile_name(p)` — which is `""` for every launch that opens the SELECTOR. Bare
+    `charter` inside a tmux, the strip's `+`, a workspace tab, the palette's `chat: new` and
+    a `charter reopen` restoring an ended tab all open a pane that asks which profile to run
+    and resolve one minutes later, in the pane. Keyed on the profile alone, every one of them
+    took the escape hatch: the window closed at the first harness exit and the chat was
+    reaped. The whole feature, missing on its commonest path.
+
+    `commands_frame._pane_died_second_hook_argv` already asks it the right way for the hook
+    path — `harness_chat=(p is not None or selecting)` — and its own docstring calls getting
+    it wrong *"a live defect rather than a nicety"*. The two paths have to agree.
+
+    **These drive `_launch_in_operator_tmux` itself rather than `_wait_out_the_ended_tab`,
+    and that is why nothing caught this.** A case that calls the loop directly proves the
+    loop works and never asks who is allowed to reach it.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        (config.WORKSPACES_DIR / "beta").mkdir(parents=True, exist_ok=True)
+        self.enterContext(mock.patch.object(commands_frame, "_spawn_gather"))
+        self.enterContext(mock.patch.object(commands_frame, "_drawable_slots",
+                                            return_value=[]))
+        wired_as_today(self)
+
+    def _drive(self, *, profile: str, selecting: bool = False, gave_up: bool = False):
+        """`_launch_in_operator_tmux` to its end.
+
+        Answers ``(which wait ran, every tmux argv, the sockets reaped)``. `tmuxctl.run` is
+        what is stood in for rather than `subprocess.run`, because the window close this is
+        about goes through it: `_close_window` is a closure and cannot be patched by name.
+        """
+        waits: list[str] = []
+        reaped: list = []
+        argvs: list[list[str]] = []
+
+        def tmux(_action, argv, **_kw):
+            argvs.append(list(argv))
+            if "new-window" in argv:
+                out = "@1 %7\n"
+            elif "display-message" in argv:
+                out = "132:43"
+            else:
+                out = "%7\n"
+            return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+        with mock.patch.object(commands_frame.tmuxctl, "run", side_effect=tmux), \
+                mock.patch.object(commands_frame, "_wait_out_the_ended_tab",
+                                  side_effect=lambda *a, **kw: waits.append("ended")
+                                  or (0, gave_up)), \
+                mock.patch.object(commands_frame, "_wait_for_harness",
+                                  side_effect=lambda *a, **kw: waits.append("plain") or 0), \
+                mock.patch.object(commands_frame, "_what_the_pane_recorded",
+                                  return_value=(None, "")), \
+                mock.patch.object(commands_frame, "_reap_this_server",
+                                  side_effect=reaped.append):
+            commands_frame._launch_in_operator_tmux(
+                "op", "$1", ws="beta",
+                argv=launcher.argv("claude", [], attended=True), display=["claude"],
+                profile=profile, h=None, v=(3, 7), picked=False, selecting=selecting)
+        return waits, argvs, reaped
+
+    @staticmethod
+    def _issued(argvs, verb: str) -> bool:
+        """Whether *verb* was issued — matched anywhere in an argv, never by index, because
+        where `server_argv` puts the subcommand is not this case's business."""
+        return any(verb in argv for argv in argvs)
+
+    def test_a_chat_started_at_the_selector_gets_the_ended_step(self):
+        """**The defect, on the commonest path charter has.** A selector chat has no profile
+        when the launch decides this, and it is the state bare `charter`, `+`, a workspace
+        tab and the palette's `chat: new` all open in.
+
+        Red without the fix: the launch waits in `_wait_for_harness`, so the first harness
+        this operator starts from the selector has its window closed and its chat reaped the
+        moment it exits — with the conversation still resumable and nothing offering it.
+        """
+        waits, _argvs, _reaped = self._drive(profile="", selecting=True)
+
+        self.assertIn("ended", waits,
+                      "a selector-started chat never reached the ended step")
+        self.assertNotIn("plain", waits)
+
+    def test_a_chat_that_named_its_profile_gets_it_too(self):
+        """The half that already worked, kept as the control: `charter <profile>` inside the
+        operator's own tmux."""
+        waits, _argvs, _reaped = self._drive(profile="claude")
+
+        self.assertIn("ended", waits)
+        self.assertNotIn("plain", waits)
+
+    def test_the_escape_hatch_keeps_todays_ending(self):
+        """`charter frame -- <cmd>` — no profile, and not asking for one. The ruling on open
+        question 5: its window closes when the command exits and the code goes back to the
+        script waiting on it. Taking it into the loop would hold that window open and the
+        code would never arrive."""
+        waits, _argvs, _reaped = self._drive(profile="", selecting=False)
+
+        self.assertIn("plain", waits)
+        self.assertNotIn("ended", waits,
+                         "the escape hatch was taken into the ended loop")
+
+    def test_a_tab_charter_gave_up_waiting_on_is_left_standing(self):
+        """**The sentence and the behaviour disagreed, and the sentence was right.**
+
+        `ENDED_CHOICE_NEVER_TAKEN` tells the operator *"The tab is still open and still
+        holding resume / start fresh / close — take it there, or close the window."* The tail
+        read the loop's non-`None` code as an ending like any other and ran `_close_window`
+        and `_reap_this_server`, so charter printed that and killed the tab in the same
+        breath — taking the directory, the claim and the link the tab was offering to resume.
+
+        Decision 4 is what the sentence says, so the behaviour is what moved: charter stops
+        WAITING, not the tab.
+        """
+        _waits, argvs, reaped = self._drive(profile="claude", gave_up=True)
+
+        self.assertFalse(self._issued(argvs, "kill-window"),
+                         "charter closed the tab it had just promised was still open")
+        self.assertEqual(reaped, [],
+                         "the reap took the conversation the tab was still offering")
+
+    def test_an_ordinary_ending_still_closes_the_window_and_reaps(self):
+        """The control that keeps the case above from being a licence to leak windows: every
+        ending that is NOT a give-up closes and reaps exactly as it always did."""
+        _waits, argvs, reaped = self._drive(profile="claude", gave_up=False)
+
+        self.assertTrue(self._issued(argvs, "kill-window"),
+                        "an ordinary ending stopped closing its window")
+        self.assertEqual(len(reaped), 1, reaped)
 
 
 def _eventually(predicate, timeout: float = 20.0) -> bool:

@@ -473,6 +473,13 @@ is kept** — the same state as a cold one (§4c), so it costs nothing new. Clos
 because one chat ended would be charter deciding the operator is finished when they closed one
 thing.
 
+> **Built 2026-09-15 by `docs/superpowers/specs/2026-09-15-one-exit-gate.md`.** This section
+> described the intent and the code did the opposite: `pane-died[1]` was `kill-window`, so
+> every harness exit took the chat's window and `state.reap` took its directory. The ended tab
+> exists now, and it is more than kept — it offers resume, a fresh start, or close. A dead tab
+> is no longer the same state as a cold one: it holds a choice, and closing it is what ends
+> the chat.
+
 ### 4k. `charter -w foo` opens or focuses
 
 With several workspaces open, an explicit `--workspace` is ambiguous for the first time: "as
@@ -520,6 +527,14 @@ plane is the kind of thing found six months later.
   and `kill-session` write no `exit`. Only a harness that ended by itself is distinguishable.
 * **Keep the last chat of a workspace alive as a dead tab.** §4j — that is what returns the
   exit code and unblocks `attach` (§2.14). Open question, not a deferred feature.
+
+  > **Answered 2026-09-15 by `docs/superpowers/specs/2026-09-15-one-exit-gate.md`.** The last
+  > chat of a workspace IS kept as an ended tab now, and the two things this bullet feared
+  > were measured rather than argued: a client attached to a session whose only window has
+  > ended and been respawned stays attached, and returns within a second of that window's
+  > `kill-window` (reading E4, tmux 3.7c and the 3.2 floor). So `attach` is not blocked — it
+  > returns when the tab is closed, which is when the exit code is handed back. The open set
+  > only ever growing now covers ended chats too.
 * **Say what tools were running when a chat was killed.** §4e — `inflight` records dispatches,
   not tool calls, and is plane-scoped with no chat on any record.
 * **Bound the open set by anything except the operator closing things.** §4d's cap plus

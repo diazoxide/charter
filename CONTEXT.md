@@ -89,6 +89,15 @@ one harness session: the id charter handed Claude Code, or the first id Codex or
 reported in that start — never a guess.
 _Avoid_: session, spawn, sub-session
 
+**Ended tab**:
+A chat whose harness has exited — cleanly, by crashing, or killed from outside — whose tab is
+still on the strip holding a choice: resume the conversation, start fresh, or close the tab.
+It is the one state a chat can be in with no harness running in it and no decision taken yet.
+Nothing restarts by itself: every start is an operator's keypress, and neither end of input
+nor Ctrl+C is read as an answer. Closing the tab is what ends the chat, and it ends it for
+good.
+_Avoid_: dead tab, closed chat, zombie
+
 **Handoff**:
 Opening a chat, here or in another workspace, whose first message is a brief the operator
 approved at the harness's own permission prompt (ADR 0021). A handed-off chat never reports

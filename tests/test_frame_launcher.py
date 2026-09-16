@@ -3517,6 +3517,40 @@ class Launch(PersonaIso, unittest.TestCase):
         # thing keeping this directory. `still_live=True` is what puts the chat in it.
         self.assertTrue(state.frame_dir(fake.fid).exists())
 
+    def test_a_failed_hook_install_says_which_hook_this_chat_lost(self):
+        """**Two chats lose two different things, and the refusal has to say which.**
+
+        A PROFILE's chat installs the ended step at `pane-died[1]`, so `attach` is not at
+        risk — the window is kept either way now. What it loses is the tab's whole purpose:
+        an exit nothing answers, on a chat that would sit dead offering nothing
+        (`ENDED_HOOK_NOT_INSTALLED`). The escape hatch still installs `kill-window` there,
+        so what IT loses is the thing that ends the session at all, and a crash later would
+        leave `attach` blocked forever.
+
+        `test_refuses_to_attach_when_the_teardown_hook_fails_to_install` below asserts only
+        that *"refusing to attach"* is printed — which both sentences say — so it holds
+        whichever chat gets whichever words. That is why the deletion sweep could delete the
+        branch choosing between them and have the whole suite stay green: the operator is
+        told to fix the wrong hook, about a risk their chat is not running.
+        """
+        def refusal(**kw) -> str:
+            fake = _FakeTmux(teardown_hook_rc=1, still_live=True)
+            buf: list = []
+            with mock.patch("charter.util.err", side_effect=buf.append), \
+                 mock.patch("charter.util.warn"):
+                _launch(fake, **kw)
+            return " ".join(buf)
+
+        profile_chat = refusal(harness="claude")
+        escape_hatch = refusal(harness="", rest=["--", "echo", "hi"])
+
+        self.assertIn("harness ending", profile_chat,
+                      "a profile's chat was not told the ended step is what failed")
+        self.assertIn("block `attach` forever", escape_hatch,
+                      "the escape hatch was not told what its own missing hook costs")
+        self.assertNotIn("harness ending", escape_hatch,
+                         "the escape hatch was told about an ended step it never installs")
+
     def test_refuses_to_attach_when_the_teardown_hook_fails_to_install(self):
         """Without the teardown hook, a crash ANY time later in the harness's life
         would leave `attach` blocked forever with nothing to end the session — the same

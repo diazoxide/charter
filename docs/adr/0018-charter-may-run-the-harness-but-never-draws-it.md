@@ -368,3 +368,52 @@ test run inside a live chat; `kill-window -t ''` kills the active window. That i
 stretched — the pane is charter's while no harness has run in it, and closing the window it
 is drawing in is the last thing it does with it. The hook is untouched and is still the
 answer for a harness that dies.
+
+## Amendment, 2026-09-15: a harness exit is no longer final — the pane that emptied offers a choice
+
+The 2026-09-12 selector amendment ended on *"A pane whose harness later EXITS closes as it
+always did and never comes back to the selector — going back would be charter drawing in a
+pane a harness has run in"* (:335-337). The operator ruled otherwise: **no harness exit
+destroys a chat.** Ctrl+C stays exactly as each harness defines it, because a chat is
+protected by what charter does after an exit and not by taking a key away — which is the
+consequence at :96-98, read as written.
+
+**The distinguishing question moves from the past tense to the present.** It was *has a
+harness ever run in this pane, and is charter's own process still the one in it?* It is now:
+**is a harness process in this pane right now?** No, and the pane is charter's again — before
+the first `exec`, and after any exit. Yes, and the rule is unqualified: charter draws nothing
+there and reads it only at the two moments of the 2026-09-01 amendment. That is checkable
+from outside rather than asserted: tmux lists the pane `#{pane_dead}` before charter touches
+it, and `ended` is claimed before any respawn.
+
+**What charter puts there after an exit, and nothing else.**
+
+* A **clean exit** respawns the pane into the profile selector — a `frame/overlay.py` surface
+  bounded exactly as the selector already is, with one extra row, resume.
+* A **crash** leaves the dead pane untouched. tmux keeps the harness's last lines on its own
+  screen (`remain-on-exit`), and the choice opens in a drawer pane split beside it. Charter
+  does not draw in the dead pane at all.
+* `charter frame -- <cmd>` is not a harness: its window closes at exit as it always did, and
+  its exit code goes back to the caller.
+
+**Bounded, and each bound is checkable.**
+
+* **Charter restarts nothing by itself.** Every harness start after an exit is an operator's
+  Enter on a row. No timer, no retry, no automatic resume; an ended tab nobody switches to
+  stays ended, and neither end of input nor Ctrl+C is ever read as a choice.
+* **Charter never types into a harness.** No `send-keys`, no `/rename`, no `/resume`. A
+  resume is an argument at the `exec` (`--resume`, `resume`, `-s`), and a title reaches
+  Claude Code as `--name` at the next `exec`.
+* **Charter reads nothing to decide.** Which presentation to draw is chosen from the exit
+  code the `pane-died[0]` hook wrote and from the link charter recorded, never from what the
+  harness printed. The last lines stay because charter leaves that pane alone, not because it
+  reads them.
+* **Charter acts on a pane only as a listing proves it.** Every respawn, split and kill
+  targets the pane id that ONE listing on the chat's own server reported under this chat and
+  this plane; a respawn never passes `-k`, so tmux itself refuses a pane whose harness is
+  still running.
+* **The launch's own early death is unchanged.** A harness dead before its chat was drawn is
+  reported and its window closed, as #384 requires — the ended step does nothing at all for a
+  chat that carries no `drawn` mark.
+
+*Recorded in the pull request whose code first relies on it (ruling 44).*

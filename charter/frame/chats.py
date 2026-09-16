@@ -88,6 +88,12 @@ class Chat(NamedTuple):
     harness: str
     #: Whether this is the chat asking.
     active: bool
+    #: Whether this chat's harness has ended and its tab is holding the choice.
+    #:
+    #: **A background or handed-off chat ends whether or not anybody is looking**, so the
+    #: strip is where an operator finds out (decision 4). Defaulted, because every caller
+    #: that builds a `Chat` by hand is asking about a chat that is running.
+    ended: bool = False
 
 
 def is_chat(fid: str) -> bool:
@@ -453,7 +459,8 @@ def roster(fid: str) -> list[Chat]:
     names = of_workspace(state.workspace_for(fid))
     if is_chat(fid) and fid not in names:
         names = sorted([*names, fid], key=_order)
-    return [Chat(id=n, harness=harness_of(n), active=n == fid) for n in names]
+    return [Chat(id=n, harness=harness_of(n), active=n == fid, ended=state.is_ended(n))
+            for n in names]
 
 
 def others(fid: str) -> list[str]:

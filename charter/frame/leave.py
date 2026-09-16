@@ -118,6 +118,11 @@ class Doomed(NamedTuple):
     #: ``""``. Only ever `stat`ed, by :func:`conversation_exists` — the evidence that
     #: :attr:`resume` names a conversation there is something of (#1101).
     conversation: str = ""
+    #: Whether this chat's harness has already ended and its tab is holding the choice
+    #: (decision 12). A quit records such a tab as ended, so a reopen brings it back ended
+    #: and resumable rather than starting a harness nobody asked to restart — and the
+    #: warning says so, because "comes back ended" is a different promise from "resumes".
+    ended: bool = False
 
 
 class Plan(NamedTuple):
@@ -206,6 +211,11 @@ def plan(*, live, focus: str, only: str = "") -> Plan:
             # reopen has to have it to bring the chat back on its own account.
             profile=state.profile(fid) or "",
             conversation=state.conversation(fid) or "",
+            # Read here rather than derived from `exit_code`: a code is recorded for every
+            # harness that ended on its own, while THIS says the tab is still holding the
+            # choice charter offered for it. A resumed chat has a code from its last exit
+            # and is running again, which is exactly the pair that must not be conflated.
+            ended=state.is_ended(fid),
         ))
     return Plan(chats=tuple(out), focus=focus)
 
@@ -389,6 +399,15 @@ def _ended(c: Doomed) -> list[str]:
     precisely *"this harness ended on its own"*, which is the one ending charter can
     distinguish and the one an operator most often wants to know about.
     """
+    if c.ended:
+        # **What a reopen actually gives back, not what stopping costs.** This tab is
+        # already holding the choice; a quit takes the window and `charter reopen` puts it
+        # back in the same state, so the only thing worth telling the operator is whether
+        # the conversation will still be on offer when it returns.
+        offer = ("resume offered"
+                 if conversation_exists(c.harness, c.resume, c.conversation)
+                 else "nothing to resume")
+        return [f"ended — comes back ended; {offer}"]
     return [] if c.exit_code is None else [f"already ended on its own ({c.exit_code})"]
 
 
@@ -484,6 +503,36 @@ CHAT_ID = "leave:{}:c{}"
 OPEN_QUIT = "charter: quit — stop every harness on this plane"
 OPEN_CLOSE = "chat: close — stop this chat and do not bring it back"
 
+#: The close row on a chat with no harness left to stop — an ACTION, not a doorway.
+#: `frame/tabmenu.py` mints the same row for the same reason under its own id; the ids are
+#: separate because the two surfaces dispatch on their own and neither reads the other's.
+CLOSE_NOW_ID = "leave:close:now"
+
+#: Its title, which says WHY it will not ask. An operator who has closed a chat before has
+#: been warned every time, so a row that suddenly acts on one keypress has to account for
+#: the difference — and the reason is the whole of it.
+OPEN_CLOSE_NOW = "chat: close — its harness has ended; do not bring it back"
+
+
+def needs_confirming(chat: str) -> bool:
+    """Whether closing *chat* draws the warning first.
+
+    **The warning describes what stopping a running harness costs**, so it is drawn exactly
+    when there is one. Two states have none and are told apart from each other nowhere else
+    in this module, because for this question they are the same answer:
+
+    * an **ended** tab, whose harness exited and whose conversation is already over;
+    * a pane still **waiting** at the selector, where nothing ever started.
+
+    In both, close does one thing — forget the chat — which is what the operator pressed
+    the row to do. Asking first would be charter warning about a cost nobody is paying.
+
+    ``True`` for a chat charter cannot name, which is the *ask first* direction: a close
+    charter is unsure about costs one keypress, where the other way round stops a live
+    harness with no warning at all.
+    """
+    return not state.is_ended(chat) and not state.is_waiting(chat)
+
 
 def open_rows(fid: str) -> tuple:
     """The two doorway rows the palette carries, and neither one costs a scan.
@@ -523,9 +572,14 @@ def open_rows(fid: str) -> tuple:
     behaves.
     """
     from . import overlay
-    return (overlay.Row(id=OPEN_ID.format(QUIT), title=OPEN_QUIT),
-            overlay.Row(id=OPEN_ID.format(CLOSE), title=OPEN_CLOSE,
-                        note="" if fid else NO_CHAT_HERE, refused=not fid))
+    # **The close row swaps its id and its words, and keeps its place.** The ordering above
+    # is a guard about how many keypresses stand between an operator and an irreversible
+    # answer, and an ended tab does not get to move the row for having one fewer.
+    closing = (overlay.Row(id=OPEN_ID.format(CLOSE), title=OPEN_CLOSE,
+                           note="" if fid else NO_CHAT_HERE, refused=not fid)
+               if not fid or needs_confirming(fid)
+               else overlay.Row(id=CLOSE_NOW_ID, title=OPEN_CLOSE_NOW))
+    return (overlay.Row(id=OPEN_ID.format(QUIT), title=OPEN_QUIT), closing)
 
 
 #: What the close row says on a frame whose own chat charter cannot resolve. Its own sentence
@@ -558,12 +612,26 @@ def is_row(row) -> bool:
     """Whether *row* belongs to a confirmation surface at all.
 
     What tells `commands_frame._draw_palette` that a chosen row is one of these and must
-    NOT be handed to `ActionRegistry.invoke` as an action id. Asked of the two ids that do
+    NOT be handed to `ActionRegistry.invoke` as an action id. Asked of the ids that do
     something and of the per-chat prefix, rather than of any id containing a colon: the
     palette also draws `frame/choose.py`'s rows, and one module claiming every colon would
     swallow the other's.
+
+    **:data:`CLOSE_NOW_ID` is one of them, and leaving it out made a drawn row that did
+    nothing.** An ended tab's close row is minted by :func:`open_rows` exactly as the two
+    doorways are, and it is this module's id in the same way — but nothing recognised it:
+    :func:`verb_of` answered ``None``, :func:`goes_through` ``False``, this function
+    ``False``, and `choose.noun_of` ``None`` too. So `_draw_palette` fell all the way
+    through to `ActionRegistry.invoke("leave:close:now")`, where no such action exists, and
+    an operator who pressed *chat: close — its harness has ended* was told an action had
+    failed instead of getting their tab closed. The row is this module's, so this module is
+    what answers for it.
     """
     if verb_of(row) is not None:
+        return True
+    # Never caught by the shapes below: `CLOSE_NOW_ID` is `leave:close:now`, where the
+    # per-chat prefix is `leave:close:c` and the confirming row is `leave:close:go`.
+    if row.id == CLOSE_NOW_ID:
         return True
     return any(row.id == GO_ID.format(v) or row.id.startswith(CHAT_ID.format(v, ""))
                for v in (QUIT, CLOSE))

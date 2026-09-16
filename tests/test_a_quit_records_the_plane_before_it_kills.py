@@ -1341,10 +1341,16 @@ class WhatIsOnDiskIsAFormatAndNotAnImplementationDetail(PersonaIso, unittest.Tes
         # `conversation` joined them for the tab's session link (#1101): the file the
         # harness named, which a reopen stats before it offers resume. Missing reads as `""`,
         # which is a record from 0.62 — offered no resume for a harness that names its file.
+        #
+        # `ended` joined them for decision 12 of the exit gate: a harness that ends keeps
+        # its tab, so a quit has tabs to record that are open and hold no harness. A reopen
+        # brings those back ENDED — at the selector, with resume offered — rather than
+        # starting a harness the operator had already let finish. Missing reads as `False`,
+        # which is a record from before the ended tab existed: every chat in it was running.
         self.assertEqual(
             sorted(raw["frames"][0]["chats"][0]),
-            ["active", "brief", "chat", "conversation", "cwd", "harness", "persona",
-             "profile", "resume", "transcript", "workspace"])
+            ["active", "brief", "chat", "conversation", "cwd", "ended", "harness",
+             "persona", "profile", "resume", "transcript", "workspace"])
 
     def test_the_writer_is_spelled_quit_or_recorder(self):
         """Two words on disk, and a quit's is the default: `_record_the_plane` is the one

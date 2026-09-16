@@ -348,14 +348,22 @@ class TheInputContract(unittest.TestCase):
         """The surface has the tty in RAW mode, so nothing downstream is going to turn
         `\\x03` into a signal — there is no "and then the interrupt fires" to fall back
         on. Dropped by the printable filter instead, it is a modal surface that does not
-        answer the first key an operator tries."""
+        answer the first key an operator tries.
+
+        **It decodes as its OWN name rather than as `escape`**, and the cancel it still
+        performs comes from `Surface.cancel_keys` carrying it. The two were one key until
+        the exit gate: an ended tab closes for good on a real Esc, so a stray third Ctrl+C
+        after a double-Ctrl+C `/exit` would otherwise have closed a chat nobody asked to
+        close (`tests/test_an_ended_harness_keeps_its_tab.py` is the other half).
+        """
         evs, _ = overlay.decode(b"\x03")
-        self.assertEqual([(e.kind, e.name) for e in evs], [(overlay.KEY, "escape")])
+        self.assertEqual([(e.kind, e.name) for e in evs], [(overlay.KEY, overlay.CTRL_C)])
         tty = _Tty([b"\x03"])
         surface = overlay.Surface(rows=_rows(3))
         self.assertIsNone(surface.run(read=tty.read, write=tty.write,
                                       size=lambda: tty.size))
         self.assertEqual(tty.reads, 1, "the overlay read on past a Ctrl-C")
+        self.assertEqual(surface.left, overlay.LEFT_KEY)
 
     def test_a_control_byte_this_surface_has_no_name_for_is_not_a_keypress(self):
         """Everything `decode` answers for, it names by hand; the filter is what keeps

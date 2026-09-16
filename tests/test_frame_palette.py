@@ -504,8 +504,8 @@ class TheTtyIsOwnedAndHandedBack(unittest.TestCase):
     def test_raw_mode_is_actually_entered(self):
         """Without it the line discipline holds every keystroke until Enter, echoes it
         where the palette is drawing, and turns Ctrl-C into a signal the surface never
-        sees — `decode` reads `\x03` as "leave", which is only true once nothing else
-        turns it into one first."""
+        sees — `decode` names `\x03` its own key and `Surface.cancel_keys` reads it as
+        "leave" here, which is only true once nothing else turns it into a signal first."""
         import termios
 
         seen = {}
