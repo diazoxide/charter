@@ -187,6 +187,30 @@ class TheGuardsThatHadNoTest(PersonaIso, unittest.TestCase):
         super().setUp()
         _plant("beta.1")
 
+    def test_an_exec_that_raises_claims_the_ended_state_back(self):
+        """**`reset` answers whether it CLEARED a claim, and the undo needs that answer.**
+
+        `launcher.attempt` hands the pane over at the `exec`; an `execvpe` that raises
+        leaves the pane running nothing at all, so a tab that was ended is ended still and
+        the claim has to go back. The undo learns that from `reset`'s return and from
+        nowhere else — there is no second record of what the state was before the start.
+
+        Red without it: `reset` answers `False`, the undo claims nothing, and a tab whose
+        harness never restarted is left unclaimed — so its strip mark is gone, a close
+        stops asking, and the next exit is presented as if it were the first.
+        """
+        state.claim_ended("beta.1")
+
+        self.assertTrue(ended.reset("beta.1"),
+                        "reset did not report that it cleared an ended claim")
+        self.assertFalse(state.is_ended("beta.1"))
+
+    def test_a_start_that_was_never_ended_reports_nothing_to_claim_back(self):
+        """The other half, and the one that keeps the undo honest: a chat that was NOT
+        ended must not come back claimed, or a pane nothing has ever run in would close
+        without asking."""
+        self.assertFalse(ended.reset("beta.1"))
+
     def test_a_drawer_that_is_not_a_pane_id_is_never_WRITTEN(self):
         """**The two `PANE_ID_RE` checks were masking each other.** `record_drawer` holds
         the value on the way IN and `drawer` holds it again on the way OUT, so a test that

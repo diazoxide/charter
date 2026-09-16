@@ -2870,13 +2870,13 @@ def is_ended(fid: str) -> bool:
     a close charter is unsure about confirms, which costs one keypress, where the other
     direction would stop a live harness with no warning at all.
 
-    **It never raises, and that is `chats.roster`'s requirement rather than this function's
-    taste.** The roster asks this of every chat on the strip, so this is now a filesystem
-    call on a per-name path where there was none — and a chat id is not length-bounded on
-    the way in (`$CHARTER_SESSION_ID` is an environment value, which is the one input to the
-    roster with no bound in front of it). A 5000-character ordinal makes the stat answer
-    `ENAMETOOLONG` rather than `False`, and a readout that raised would take the whole strip
-    down with it. Measured on CI: `test_frame_chat_switch` builds exactly that id.
+    **The `OSError` is caught because `chats.roster` asks this per chat**, which puts it on
+    the repaint path: it is a filesystem call on a per-name path where the roster had none.
+    A chat id reaches that walk from `$CHARTER_SESSION_ID`, an environment value the roster
+    length-bounds elsewhere but not here, so a 5000-character ordinal makes the stat answer
+    `ENAMETOOLONG` where a shorter one answers `False` — and a readout that raised would
+    cost the pane its strip. Measured on CI, where `test_frame_chat_switch` builds that id;
+    macOS answers `False` for the same path, which is why only the Linux runner saw it.
     """
     d = frame_dir(fid)
     if d is None:
