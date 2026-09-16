@@ -5821,7 +5821,8 @@ def _launch(args) -> int:
             cmd=contain.readable(" ".join(rest))))
         return 2
     if selecting:
-        argv = launcher.argv_select(_selector_start(args))
+        argv = launcher.argv_select(_selector_start(args),
+                                    ended=getattr(args, "ended", False))
         # What charter SHOWS if this window dies early: the selector, not
         # `python -P -m charter frame-launch --select`, which is an answer to a question
         # nobody asked (`launcher.display_command`'s own rule, one launch over).
@@ -6279,7 +6280,21 @@ def _launch(args) -> int:
     # question on a screen. Cleared in the pane at the pick (`launcher._picked`); until
     # then `leave.plan` passes over it, so `charter: quit` does not record it and
     # `charter reopen` never brings it back.
-    if selecting:
+    if selecting and getattr(args, "ended", False):
+        # **A RESTORED ended tab is the one selector that is not a chat waiting to begin.**
+        # A chat was here, it ran, and its conversation may still be resumable — so it must
+        # NOT be marked waiting, which is the marker that makes `leave.plan` pass a pane
+        # over and a quit forget it. It comes back holding its choice instead: claimed as
+        # ended before any pane exists, so the strip marks it and a close does not ask from
+        # the very first repaint.
+        #
+        # The profile and the kind are written here rather than left to the pick, because
+        # `launcher.resume_row` has to answer on this tab before anybody has picked
+        # anything — that row is the whole reason the tab came back.
+        state.claim_ended(fid)
+        state.record_profile(fid, _selector_start(args) or "")
+        state.record_picked_kind(fid, h.name if h is not None else "")
+    elif selecting:
         state.record_waiting(fid)
     # And WHERE — see the identical call on the operator's-tmux path, and
     # `state.record_cwd` for why this fact could not ride in `identity`. Read once here
@@ -11969,7 +11984,16 @@ def _reopen_args(c, *, harness_name: str, profile: str, reopening, resume: bool)
     from types import SimpleNamespace
     return SimpleNamespace(harness=harness_name, profile=profile, rest=[],
                            no_frame=False, workspace=c.workspace or None, pick=False,
-                           reopening=reopening, resume=resume)
+                           reopening=reopening, resume=resume,
+                           # **An ended tab comes back ENDED** (decision 12). It reopens at
+                           # its own selector — resume first where the conversation still
+                           # exists — and starts no harness: nothing runs until somebody
+                           # switches to that tab and presses Enter, which is what keeps
+                           # `argv_select`'s rule that a selector is a question somebody is
+                           # in front of. A chat that was RUNNING reopens on its profile as
+                           # it always has, so both fields are off for it.
+                           select=c.ended, start=profile if c.ended else "",
+                           ended=c.ended, fresh=False)
 
 
 def _attach_after_reopen(m, back) -> int:

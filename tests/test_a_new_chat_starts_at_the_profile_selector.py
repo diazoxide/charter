@@ -1806,9 +1806,18 @@ class WhereItAppears(_APlaneWithProfiles, unittest.TestCase):
         self.assertNotIn("reopen", said)
 
     def test_a_reopen_never_opens_the_selector(self):
-        """An open nobody is at names its profile: there is no one there to pick."""
+        """An open nobody is at names its profile: there is no one there to pick.
+
+        **True of a chat that was RUNNING, which is what this stand-in is.** An ended tab is
+        the one exception decision 12 makes — it comes back holding its choice, at its own
+        selector, and starts nothing until somebody switches to it — and that case is pinned
+        in `tests/test_an_ended_harness_keeps_its_tab.py`. So the record says which kind it
+        is rather than leaving `_reopen_args` to a `getattr` default: that function names
+        every field it reads on purpose, "a readable contract instead of a puzzle".
+        """
         args = commands_frame._reopen_args(
-            SimpleNamespace(workspace="beta", persona="", cwd="", resume="", brief=""),
+            SimpleNamespace(workspace="beta", persona="", cwd="", resume="", brief="",
+                            ended=False),
             harness_name="claude", profile="claude-work", reopening=None, resume=False)
         self.assertFalse(getattr(args, "select", False))
         self.assertEqual(args.profile, "claude-work")
