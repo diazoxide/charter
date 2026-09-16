@@ -430,6 +430,21 @@ class Selector(palette.Palette):
                 return
 
 
+def title_input(titled: str) -> "rename.Rename":
+    """The one-line input :data:`TITLE_ID` opens, seeded with what has been typed so far.
+
+    A function rather than three arguments inside :func:`pick`'s closure, so that what this
+    surface IS — its heading, its target, and that it starts from the last answer rather than
+    from nothing — is a thing a test can ask without a tty.
+
+    ``target=""``: there is no tab to rename yet. That is the whole point of this row, and it
+    is why nothing here spawns `charter frame-rename` the way the tab menu's row does —
+    `pick` hands the text back and the launcher, standing in the chat's own proven pane,
+    records it (:class:`Titled`).
+    """
+    return rename.Rename(target="", label=TITLE_LABEL, mouse=True, query=titled)
+
+
 def opens_on(listed: tuple[overlay.Row, ...], start: str | None, *,
              resume: Resume | None = None) -> str:
     """Which row a preselected *start* opens the cursor on — ``""`` for `palette.aim`.
@@ -535,11 +550,7 @@ def pick(*, cwd: Path, root: Path, start: str | None = None,
 
         def _then(row):
             if row.id == TITLE_ID:
-                # Seeded with what has been typed so far, so going back in to fix a title
-                # does not start from nothing. `target=""`: there is no tab yet — the whole
-                # point of this row is that the chat is still being made — and nothing here
-                # spawns `frame-rename`, so no target is needed.
-                box = rename.Rename(target="", label=TITLE_LABEL, mouse=True, query=titled)
+                box = title_input(titled)
                 naming.append(box)
                 return box
             # A title charter refuses redraws the input with the reason in its footer and

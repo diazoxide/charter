@@ -695,6 +695,19 @@ class ATitleAtThePlus(PersonaIso, unittest.TestCase):
                    overlay.Row(id=selector.TITLE_ID, title="title: (none)"))
         self.assertIn(selector.NOTHING_TO_PICK, selector._footer(refused, None))
 
+    def test_the_input_it_opens_names_the_chat_being_made_and_keeps_what_was_typed(self):
+        """It is not `chat: rename`'s input wearing the selector's clothes: there is no tab
+        to rename yet, so it carries no target and nothing about it spawns `frame-rename`.
+        Going back in to fix a title starts from the last answer rather than from nothing."""
+        from charter.frame import rename as rename_mod
+        from charter.frame import selector
+        box = selector.title_input("fix it")
+        self.assertIsInstance(box, rename_mod.Rename)
+        self.assertEqual(box.target, "")
+        self.assertEqual(box.typed(), "fix it")
+        self.assertEqual(box.label, selector.TITLE_LABEL)
+        self.assertIn("fix it", box.rows[0].title)
+
     def test_the_plus_and_a_workspace_tab_ask_for_it_and_an_ended_tab_does_not(self):
         """The call sites, which is where "where is a title offered" actually lives."""
         from charter.frame import launcher
