@@ -2659,6 +2659,96 @@ def brief_owed(fid: str | None) -> bool:
     return (d / _BRIEF_OWED_FILE).exists()
 
 
+#: How many characters a tab title may hold (decision 11).
+#:
+#: Sixty, because a title's whole job is to be read off a tab strip beside every other chat
+#: in the workspace — and because it becomes half of the name Claude Code is started under
+#: (`launcher.session_name`), which is drawn in that harness's own prompt box and in its
+#: `/resume` picker.
+#:
+#: **A bound rather than a clip**, and the difference is the decision: a rename says how long
+#: the title was and renames nothing (`rename.TOO_LONG`), because a title silently cut is a
+#: title the operator believes they set. The one value that IS cut is a handoff brief's first
+#: line (`rename.first_line_title`), which nobody typed as a label.
+#:
+#: It bounds the way OUT as well as the way in (`chats.title_of`): this file is one a chat
+#: can write (ruling 35), so the number a typed title is held to is the number a title read
+#: back off disk is drawn at.
+TITLE_MAX = 60
+
+#: The file one chat's title lives in, under `.charter/frame/<id>/`. Per chat and never in
+#: the workspace, for `_BRIEF_FILE`'s reason: it is private state this developer's plane
+#: keeps, and nothing about a tab label is committed.
+TITLE_FILE = "title"
+
+
+def record_title(fid: str, text: str) -> bool:
+    """Give chat *fid* the title *text*. ``True`` when the record moved.
+
+    **The one gate, and every route to a title goes through it** — the rename row, the `+`
+    selector's title row, a handoff's brief and a reopen's restore. The bound is
+    `rename.normalized`'s (one line, printable, at most :data:`TITLE_MAX`), asked here rather
+    than spelled a second time, so a title charter REFUSES and a title charter WRITES cannot
+    come from two readings of the same rule.
+
+    ``""`` removes the file, which is what :func:`title` already reads an empty one as — so
+    there is no second state for "named with nothing".
+
+    **``False`` for a title the record already holds**, which is not merely tidy:
+    `commands_frame.cmd_rename` bumps every strip on the plane off this answer, and a rename
+    to the name a tab already carries would otherwise wake every panel on the plane to redraw
+    the row it is already drawing.
+
+    The import is inside the call, for the reason every frame module's are: `frame/rename.py`
+    reads this module, and `charter hook …` builds the parser on every turn (ruling 43).
+
+    Never raises, like every writer here. What a failed write costs is a tab that goes on
+    drawing its id, which is exactly where it was before anybody renamed it.
+    """
+    from . import rename
+    shown, _why = rename.normalized(text)
+    if shown is None:
+        return False
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return False
+    if (title(fid) or "") == shown:
+        return False
+    try:
+        if shown:
+            config.write_for(d / TITLE_FILE, shown + "\n")
+        else:
+            (d / TITLE_FILE).unlink(missing_ok=True)
+    except OSError:
+        return False
+    return True
+
+
+def title(fid: str) -> str | None:
+    """The title recorded for *fid*, or ``None``.
+
+    ``None`` for a chat nobody has named, for a directory that is not a chat's, for a file
+    that cannot be read and for an EMPTY one. Four reasons, one answer, because every caller
+    does the same thing with all four: draw the id instead.
+
+    **Read back as it was written, and contained where it is DRAWN rather than here.** The
+    file is one a chat can write (ruling 35), so what bounds it on the way in is
+    :func:`record_title` and what escapes it on the way out is `chats.title_of`. A third
+    containment here would be the masked line `frame/chats.py`'s own docstring records — and
+    worse than idle: the manifest a quit writes holds what this answers
+    (`commands_frame._record_the_plane`), so an escaped copy would be re-escaped by every
+    quit and grow a backslash per restart.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        text = (d / TITLE_FILE).read_text().strip()
+    except (OSError, ValueError):
+        return None
+    return text or None
+
+
 #: What :func:`record_closed` writes, and the whole difference between a chat the operator
 #: CLOSED and a chat that merely stopped (§4i, and the accepted cost in the reopen design).
 #:
