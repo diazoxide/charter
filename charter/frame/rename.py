@@ -47,8 +47,10 @@ inside :func:`state.record_title`, and `commands_frame` reaches it at call time.
 
 from __future__ import annotations
 
-from .. import contain
-from . import state
+from dataclasses import dataclass
+
+from .. import contain, util
+from . import overlay, palette, state
 
 #: What a title longer than `state.TITLE_MAX` is refused with. It names the rule and the fix
 #: in one breath (CONTEXT.md's *A refusal is the rule working*) and it counts, because a
@@ -123,3 +125,243 @@ def first_line_title(brief: str) -> str:
         # naming a value and wrong for a tab, which would draw a pair of quotes as its name.
         return ""
     return contain.readable(line.strip(), state.TITLE_MAX - len("..."))
+
+
+# --------------------------------------------------------------------------- #
+# The surface: one line of input, in the pane the operator is already looking at.
+# --------------------------------------------------------------------------- #
+
+#: The row that OPENS the input from `F2`, and the row inside it that Enter acts on. Both
+#: carry a `:`, which is `frame/choose.py`'s trick and the whole of why they cannot collide
+#: with an action: `frame/action.py` holds every action id to `component.usable_id` — lower
+#: case letters, digits, underscores and at most one dot — so a provider cannot ship an action
+#: called `rename:go` and take this keypress. Neither id is ever drawn.
+OPEN_ID = "rename:open"
+GO_ID = "rename:go"
+
+#: The `F2` doorway's title. `chat:` because that is the noun it is about, exactly as
+#: `leave.OPEN_CLOSE` and `choose.open_rows` are read by an operator scanning left edges.
+OPEN_RENAME = "chat: rename — give this tab a title"
+
+#: What the doorway says on a frame whose own chat charter cannot resolve — `leave
+#: .NO_CHAT_HERE`'s case one verb over, and listed with its reason rather than dropped
+#: (#512: an option you cannot see is one you cannot ask about).
+NO_CHAT_HERE = ("charter cannot tell which chat this palette was opened in, so it has no tab "
+                "to rename — `charter frame-rename <chat> -- <title>` names one")
+
+#: What `charter frame-rename` says for a name that is not a chat of this plane. It names the
+#: rule and the fix in one breath, and the value in it is contained: it comes off an argv.
+NOT_A_CHAT = ("no chat '{chat}' on this plane, so nothing was renamed — `charter frame-rename "
+              "<chat> -- <title>` takes a chat id as charter spells it")
+
+#: The one row the input draws, and what it says before anything is typed. It names what an
+#: empty Enter does, because *take the title off* is the one outcome an operator cannot guess
+#: from a blank line.
+TYPED = "title: {text}"
+NOTHING_TYPED = "(none) — Enter takes this tab's title off"
+
+#: The input's bottom line. `enter rename` rather than `enter choose`: there is one row and it
+#: is not a list, so the only thing worth spelling is what the two keys do.
+FOOTER = "  type a title   enter rename   esc cancel"
+
+#: What the notice says after a rename landed. Two sentences, because a rename means two
+#: different things depending on the harness: Claude Code is started under the name charter
+#: composes, so the operator is told WHEN it will see it; Codex and opencode never do, so
+#: promising them anything would be charter claiming a parity it does not have (ruling 4).
+RENAMED = "renamed"
+RENAMED_AT_NEXT_START = ("renamed — {harness} sees the new name the next time it starts or "
+                         "resumes")
+
+
+def label(target: str) -> str:
+    """The input's heading. Named, for `tabmenu.label`'s reason: this surface may be about a
+    tab the frame is NOT on, and a bare `charter` over a one-line input would leave the
+    operator typing a name for a chat they cannot see."""
+    return f"rename {target}"
+
+
+def takes_a_name(harness: str) -> bool:
+    """Whether *harness* is started under the name charter composes.
+
+    **Asked of the registry's own argv builders, never by naming Claude Code here** (ruling
+    4, and `leave.resumable_harness`'s rule one question over). Codex names no flag at all
+    (openai/codex#14482 is open) and opencode's `--title` exists only on `opencode run`, so
+    both answer ``False`` — and a harness that grows a name flag tomorrow answers ``True``
+    here on the day its `new_session_argv` does, rather than on the day somebody remembers
+    this sentence.
+
+    ``False`` for a harness charter has no record of, which is the migration case: the notice
+    then promises nothing, which is the honest half of not knowing.
+    """
+    from ..harness import registry
+    h = registry.get(harness)
+    if h is None:
+        return False
+    return (h.new_session_argv("s", "n") != h.new_session_argv("s", "")
+            or h.resume_argv("s", "n") != h.resume_argv("s", ""))
+
+
+def renamed_note(harness: str) -> str:
+    """What the frame's attention row says after a rename landed."""
+    return (RENAMED_AT_NEXT_START.format(harness=contain.readable(harness))
+            if takes_a_name(harness) else RENAMED)
+
+
+def open_rows(fid: str) -> tuple[overlay.Row, ...]:
+    """The `F2` doorway row, and it costs no scan.
+
+    **A doorway and not an action**, for `leave.open_rows`' reason exactly: an `Action`'s
+    contract is *fire-and-report*, and opening an input starts nothing — it replaces the
+    surface in the pane the operator is already looking at.
+
+    **Before `leave.open_rows` and after everything else** (`commands_frame
+    ._palette_catalogue`). Renaming is harmless and the leaving rows are not, so the guard
+    that keeps a destructive row off the first row that can run is untouched: every row above
+    `charter: quit` can still run on an ordinary plane.
+
+    *fid* decides one thing: a palette that cannot resolve its own chat has no tab to rename,
+    so the row is listed with its reason rather than dropped.
+    """
+    return (overlay.Row(id=OPEN_ID, title=OPEN_RENAME,
+                        note="" if fid else NO_CHAT_HERE, refused=not fid),)
+
+
+def is_row(row) -> bool:
+    """Whether *row* belongs to this module at all.
+
+    What tells `commands_frame._draw_palette` that a chosen row must NOT be handed to
+    `ActionRegistry.invoke` as an action id — `leave.is_row`'s job, and the reason that
+    function exists is the defect this one avoids: an id nothing recognised fell through to
+    `invoke`, and the operator was told an action had failed instead of getting what they
+    pressed.
+    """
+    return row.id in (OPEN_ID, GO_ID)
+
+
+@dataclass
+class Rename(palette.Palette):
+    """A one-line input, drawn as the palette it is.
+
+    **`palette.Palette` with the filter turned off, and that is the whole design.** The
+    palette already reads one printable character at a time out of `overlay.decode`
+    (`Palette.handle`), already has backspace, already leaves on Escape, and already owns a
+    pane modally — so a title typed here cannot hold a newline or an escape sequence by the
+    route it is built, whatever :func:`normalized` then says about it. What this changes is
+    :meth:`_refilter`: the query is not a filter over rows, it IS the value, and the one row
+    shows it back.
+
+    **Nothing here reads or writes a chat's state.** Enter hands the typed text to `charter
+    frame-rename` through `builtin_actions._spawn` — a `Popen` argv, no tmux — for
+    `tabmenu.chose`'s measured reason: the surface's pane is killed the instant a row is
+    chosen, and `kill-pane` hands SIGHUP to that pane's process group.
+    """
+
+    #: The tab this input is about. Not always the chat the surface is drawn in: the tab menu
+    #: opens it over the tab the pointer landed on.
+    target: str = ""
+
+    #: A row here is not chosen from a list, so there is nothing for a cut to hide — but the
+    #: value being typed IS arbitrary text, and a pane too narrow to show all of it must say
+    #: so rather than let the operator believe they typed less (ruling 45).
+    says_what_it_hid: bool = True
+
+    footer: str | None = FOOTER
+
+    def typed(self) -> str:
+        """What has been typed, raw. `normalized` is what bounds it, and it is asked by the
+        one gate (`state.record_title`) rather than here — a surface that pre-normalised
+        would be a second reading of the same rule."""
+        return self.query
+
+    def refuse(self, why: str) -> None:
+        """Say *why* in the footer and leave everything else alone.
+
+        **The refusal stays in the footer and the surface stays up**, which is
+        `frame/selector.py`'s ruling 6 one surface over and for a sharper reason: what the
+        operator typed is in the query, and a surface that closed on a refusal would throw
+        away sixty characters to tell them one of them was wrong. The next keystroke clears
+        it (:meth:`_refilter`), because a reason that outlived its own occasion would be
+        attributed to whatever is typed next.
+        """
+        self.footer = why
+
+    def _refilter(self) -> None:
+        # **The one place this stops being a filter.** `Palette._refilter` narrows the
+        # catalogue by the query, which on a one-row surface would make the row vanish the
+        # moment the operator types anything that is not in its title — an input that erases
+        # itself. The row is composed from the query instead, so what is on screen is what
+        # will be recorded.
+        self.rows = (overlay.Row(id=GO_ID,
+                                 title=TYPED.format(text=self.query or NOTHING_TYPED)),)
+        self._sel = 0
+        self._top = 0
+        self.said = ""
+        self.footer = FOOTER
+        self._headline()
+
+
+def opens(row, target: str) -> "Rename | None":
+    """The surface *row* opens, or ``None`` when it opens none.
+
+    `commands_frame._picker`'s job for this row, and the same two-line shape: a doorway is
+    told apart by its id, and what comes back replaces the surface in the pane the operator is
+    already looking at (`palette.own_the_tty`'s *then*).
+
+    A REFUSED doorway opens nothing — the palette that could not name its own chat has no tab
+    to rename, and a surface over a target charter cannot name would be an offer it already
+    knows it cannot honour (`choose.open_rows`' rule).
+    """
+    if row.id != OPEN_ID or row.refused:
+        return None
+    return Rename(target=target, label=label(target), mouse=True)
+
+
+def again(row, opened: "Rename | None") -> "Rename | None":
+    """The input handed back with its refusal showing, or ``None`` when Enter may go through.
+
+    **The bound is asked HERE as well as at the gate, and the second ask is not a duplicate
+    rule — it is the same rule asked where there is somebody to tell.** `state.record_title`
+    refuses silently, because a handoff and a restore have no operator in front of them; this
+    is the surface that does, and ruling 6's whole point is that a refusal an operator can
+    read costs them nothing they typed.
+    """
+    if opened is None or row is None or row.id != GO_ID:
+        return None
+    shown, why = normalized(opened.typed())
+    if shown is not None:
+        return None
+    opened.refuse(why)
+    return opened
+
+
+def chose(row, target: str, *, fid: str, text: str) -> bool:
+    """Act on the row Enter landed on. Answers whether anything was started.
+
+    **`builtin_actions._spawn`, never a bare `Popen`**, for `tabmenu.chose`'s measured
+    reason: the surface closes the instant a row has been chosen, and `kill-pane` hands
+    SIGHUP to this process's group, so work started in-process dies with the pane it was
+    started from.
+
+    **The title travels on an ARGV and never through tmux** (the plan's global constraint:
+    `layout.CARRIABLE` is unchanged and nothing new crosses tmux but flags and closed-alphabet
+    ids). `_spawn` is a `Popen` with a list argv — no shell, no `split-window`, no
+    `set-environment` — so the one place a person's words go is the child's own `sys.argv`.
+
+    *target* is the tab and *fid* is the chat this surface was opened over: `charter
+    frame-rename <target>` says which tab to rename, and `--chat <fid>` says where the
+    keypress came from, which is what puts the notice on the screen the operator is actually
+    looking at. That is `tabmenu.chose`'s own split, made for the same reason.
+
+    **`--chat` goes BEFORE the tab, and that ordering is measured rather than stylistic.**
+    The title is `nargs=REMAINDER`, which swallows everything from the first token it reaches
+    — options included. Measured on this tree: `frame-rename <tab> --chat <fid> -- <text>`
+    parses `--chat`, `<fid>` and the separator INTO THE TITLE and leaves `args.chat` empty, so
+    the notice would be written to no frame at all. With the option in front, the positional
+    and the remainder each get what they are for.
+    """
+    if row is None or row.id != GO_ID:
+        return False
+    from .builtin_actions import _spawn
+    _spawn(util.self_relaunch_argv("frame-rename", "--chat", fid, target, "--", text),
+           fid=fid)
+    return True

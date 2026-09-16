@@ -869,7 +869,7 @@ def _add_frame_parsers(sub) -> None:
                                          "frame-toggle", "frame-chrome", "frame-chat",
                                          "frame-new-chat", "frame-quit", "frame-close",
                                          "frame-transcript", "frame-bar-rows",
-                                         "frame-launch", "frame-ended"}
+                                         "frame-launch", "frame-ended", "frame-rename"}
 
     # Which harness (by `.name`, never `.cli_name` — that's the dict key below) has
     # already claimed each word, so a SECOND harness wanting it is told who got there
@@ -1247,6 +1247,27 @@ def _add_frame_parsers(sub) -> None:
     cl.add_argument("chat_id", nargs="?", default="")
     cl.add_argument("--chat", dest="chat", default="")
     cl.set_defaults(func=commands_frame.cmd_close)
+
+    # Task 3's rename: a tab carries a name a person chose, and the id keeps doing the
+    # linking (decision 11). Started by the tab menu's row and by `F2`'s, and typeable by
+    # hand — which is why the title is held to `rename.normalized` here as well as on the
+    # surface that refuses it in its own footer.
+    #
+    # **Two chat ids, and they are two different questions**, exactly as `frame-close` has:
+    # the POSITIONAL is which tab to rename, optional so the bare command renames the one you
+    # are in; `--chat` is where the keypress came from, which is what puts the notice on the
+    # screen the operator is actually looking at.
+    #
+    # **The title is `nargs=REMAINDER` after `--`, and that is what makes a title that starts
+    # with a dash a title rather than an unknown option.** A person's words are not charter's
+    # vocabulary: `charter frame-rename beta.1 -- --fix the widget` names a tab. The
+    # separator arrives in the list and `cmd_rename` drops it, the way `frame-launch` already
+    # does with its own.
+    rn = sub.add_parser("frame-rename")
+    rn.add_argument("chat_id", nargs="?", default="")
+    rn.add_argument("--chat", dest="chat", default="")
+    rn.add_argument("title", nargs=argparse.REMAINDER)
+    rn.set_defaults(func=commands_frame.cmd_rename)
 
     # Task 2's ended step: the chat whose harness just exited keeps its tab, and this is
     # what offers the choice. Run by the chat's own `pane-died[1]` hook, never typed —

@@ -24,9 +24,12 @@ What this module pins, in the order the rulings state it:
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
-from charter import contain
-from charter.frame import chats, leave, rename, state
+from charter import cli, commands_frame, contain
+from charter.frame import (builtin_actions, chats, leave, overlay, rename, state, tabmenu,
+                           tmuxctl)
 
 from tests._isolation import PersonaIso
 
@@ -98,7 +101,7 @@ class TheTitleIsStoredAndContained(PersonaIso, unittest.TestCase):
         or of a menu. Every run of whitespace collapses — including U+2028 and U+0085, which
         are line separators `str.split` knows about and a naive `replace("\\n", " ")` does
         not."""
-        for typed in ("a\nb", "a b", "a\x85b", "a\tb", "a\xa0b"):
+        for typed in ("a\nb", "a\u2028b", "a\x85b", "a\tb", "a\xa0b"):
             with self.subTest(typed=typed):
                 # Taken off between rounds, because `record_title` answers "the record
                 # moved" and every one of these collapses to the same title.
@@ -129,7 +132,7 @@ class TheTitleIsStoredAndContained(PersonaIso, unittest.TestCase):
         codepoint is `Co`, which `one_line` does NOT escape at all: it would have gone into the
         record unchanged. Both are refused here by one rule.
         """
-        for typed in ("a‍b", "a​b", "ab", "a\udcffb".encode(
+        for typed in ("a\u200db", "a\u200bb", "a\ue000b", "a\udcffb".encode(
                 "utf-8", "surrogatepass").decode("utf-8", "surrogatepass")):
             with self.subTest(typed=typed):
                 self.assertFalse(state.record_title("beta.1", typed))
@@ -224,9 +227,9 @@ class TheTitleIsStoredAndContained(PersonaIso, unittest.TestCase):
         """Named rather than implied: a value that renders as nothing is a tab with no name on
         it, which `contain.one_line` cannot prevent — U+3164 HANGUL FILLER is `Lo`, is not
         whitespace, survives `strip`, and is `isprintable()`, so it passes the gate."""
-        self.assertTrue(state.record_title("beta.1", "ㅤㅤ"))
+        self.assertTrue(state.record_title("beta.1", "\u3164\u3164"))
         self.assertEqual(chats.title_of("beta.1"),
-                         contain.readable("ㅤㅤ", state.TITLE_MAX))
+                         contain.readable("\u3164\u3164", state.TITLE_MAX))
         self.assertNotEqual(chats.label_of("beta.1").strip(), "")
 
 
@@ -269,3 +272,276 @@ class TheRowsAChatIsNamedOn(PersonaIso, unittest.TestCase):
         self.assertEqual([c.chat for c in got.chats], ["beta.1"])
         self.assertNotIn("\x1b", got.chats[0].title)
         self.assertIn("beta.1", leave.title(got.chats[0]))
+
+
+class _AWatchedSpawn(PersonaIso):
+    """Every case below records what was started instead of starting it.
+
+    `builtin_actions._spawn` is the one door a rename goes out of — a `Popen` argv and no
+    tmux — so what is asserted is the argv that would have run. `tmuxctl.run` is watched
+    beside it, because *renaming touches no harness* (ruling 3) is a claim about what did NOT
+    happen and an unrecorded tmux call is exactly what would falsify it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.spawned: list[tuple[list[str], str]] = []
+        self.tmux: list[list[str]] = []
+        self.enterContext(mock.patch.object(
+            builtin_actions, "_spawn",
+            side_effect=lambda argv, *, fid: self.spawned.append((list(argv), fid))))
+        self.enterContext(mock.patch.object(
+            tmuxctl, "run",
+            side_effect=lambda why, argv, **kw: self.tmux.append(list(argv)) or _NOTHING))
+        self.said: list[tuple[str, str]] = []
+        self.enterContext(mock.patch.object(
+            commands_frame, "_say_on_screen",
+            side_effect=lambda fid, message, **kw: self.said.append((fid, message))))
+
+
+class _Nothing:
+    """What the watched `tmuxctl.run` answers: rc 0 and no output. `tmuxctl.run`'s own three
+    exits all return a `str` for `stdout`, so nothing downstream has to branch."""
+
+    returncode = 0
+    stdout = ""
+    stderr = ""
+
+
+_NOTHING = _Nothing()
+
+
+class RenameFromTheTabMenuAndF2(_AWatchedSpawn, unittest.TestCase):
+    """The two doorways, the one input behind them, and the command they spawn."""
+
+    def setUp(self):
+        super().setUp()
+        for chat in ("beta.1", "beta.2"):
+            _plant(chat)
+
+    def test_the_tab_menu_carries_rename_and_close_stays_last(self):
+        """The destructive row keeps the bottom of the list: `palette.aim` opens the cursor on
+        the first row that can run, and rename can always run — so it is the row Enter lands
+        on for a chat with no capture, which used to be close."""
+        self.assertEqual([r.id for r in tabmenu.catalogue("beta.1")],
+                         [tabmenu.TRANSCRIPT_ID, tabmenu.RENAME_ID, tabmenu.CLOSE_ID])
+        state.claim_ended("beta.1")
+        self.assertEqual([r.id for r in tabmenu.catalogue("beta.1")][-1],
+                         tabmenu.CLOSE_NOW_ID)
+
+    def test_the_palette_carries_rename_before_the_leaving_rows(self):
+        """`leave.open_rows` stays last, so `F2 Enter` reaches a destructive row no more
+        easily than it did."""
+        from charter.frame import builtin_actions as ba
+        reg = ba.build("beta.1", current_density="", current_chrome="")
+        ids = [r.id for r in commands_frame._palette_catalogue("beta.1", reg, snapshot={})]
+        self.assertIn(rename.OPEN_ID, ids)
+        self.assertLess(ids.index(rename.OPEN_ID), ids.index(leave.OPEN_ID.format("quit")))
+        self.assertEqual(ids[-1], leave.OPEN_ID.format("close"))
+
+    def test_the_rename_row_is_a_doorway(self):
+        """A doorway starts nothing — it replaces the surface in the pane the operator is
+        already looking at. `chose` is what STARTS work, and it does not recognise the row
+        that merely opens."""
+        row = rename.open_rows("beta.1")[0]
+        opened = rename.opens(row, "beta.1")
+        self.assertIsInstance(opened, rename.Rename)
+        self.assertEqual(opened.target, "beta.1")
+        self.assertFalse(rename.chose(row, "beta.1", fid="beta.1", text="fix it"))
+        self.assertEqual(self.spawned, [])
+
+    def test_a_palette_that_cannot_name_its_chat_lists_the_row_with_its_reason(self):
+        """#512: an option you cannot see is one you cannot ask about — and a surface over a
+        target charter cannot name is an offer it already knows it cannot honour."""
+        row = rename.open_rows("")[0]
+        self.assertTrue(row.refused)
+        self.assertEqual(row.note, rename.NO_CHAT_HERE)
+        self.assertIsNone(rename.opens(row, ""))
+
+    def test_the_input_shows_what_was_typed_and_does_not_filter_itself_away(self):
+        """`Palette._refilter` narrows the catalogue by the query, which on a one-row surface
+        would make the row vanish the moment anything is typed — an input that erases
+        itself."""
+        surface = rename.Rename(target="beta.1")
+        self.assertIn(rename.NOTHING_TYPED, surface.rows[0].title)
+        for ch in "fix it":
+            surface.handle(overlay.Event(kind=overlay.KEY, name=ch), 24)
+        self.assertEqual(len(surface.rows), 1)
+        self.assertEqual(surface.rows[0].id, rename.GO_ID)
+        self.assertEqual(surface.rows[0].title, rename.TYPED.format(text="fix it"))
+        self.assertEqual(surface.typed(), "fix it")
+
+    def test_a_refused_title_stays_in_the_footer_and_keeps_what_was_typed(self):
+        """Ruling 6, one surface over: a surface that closed on a refusal would throw away
+        sixty characters to tell the operator one of them was wrong."""
+        surface = rename.Rename(target="beta.1")
+        for ch in "y" * 61:
+            surface.handle(overlay.Event(kind=overlay.KEY, name=ch), 24)
+        back = rename.again(surface.rows[0], surface)
+        self.assertIs(back, surface)
+        self.assertIn("this one is 61", surface.footer)
+        self.assertEqual(surface.typed(), "y" * 61)
+        surface.handle(overlay.Event(kind=overlay.KEY, name="backspace"), 24)
+        self.assertEqual(surface.footer, rename.FOOTER,
+                         "the reason outlived the keystroke it was about")
+
+    def test_a_title_that_fits_lets_the_enter_through(self):
+        """The other half of the pair: `again` answers ``None`` so `own_the_tty`'s loop ends
+        and the caller spawns. Without it a title charter accepts would redraw forever."""
+        surface = rename.Rename(target="beta.1")
+        for ch in "fix it":
+            surface.handle(overlay.Event(kind=overlay.KEY, name=ch), 24)
+        self.assertIsNone(rename.again(surface.rows[0], surface))
+
+    def test_enter_spawns_frame_rename_with_the_text_on_argv_not_tmux(self):
+        """**The one place a person's words go is a child's own `sys.argv`.** No `-e`, no
+        `split-window`, no `set-environment`: `layout.CARRIABLE` is unchanged and nothing new
+        crosses tmux but flags and closed-alphabet ids."""
+        surface = rename.Rename(target="beta.2")
+        for ch in "fix it":
+            surface.handle(overlay.Event(kind=overlay.KEY, name=ch), 24)
+        self.assertTrue(rename.chose(surface.rows[0], surface.target, fid="beta.1",
+                                     text=surface.typed()))
+        self.assertEqual(len(self.spawned), 1)
+        argv, fid = self.spawned[0]
+        self.assertEqual(argv[-6:], ["frame-rename", "--chat", "beta.1", "beta.2", "--",
+                                     "fix it"])
+        self.assertEqual(fid, "beta.1")
+        self.assertEqual(self.tmux, [], "a rename reached tmux")
+
+    def test_the_tab_menu_opens_the_same_input_over_the_tab_that_was_clicked(self):
+        """The whole difference between the two doorways: `F2` renames the chat it was opened
+        IN, and the menu renames the tab the pointer landed on."""
+        row = [r for r in tabmenu.catalogue("beta.2") if r.id == tabmenu.RENAME_ID][0]
+        opened = tabmenu.opens(row, "beta.2", live=None)
+        self.assertIsInstance(opened, rename.Rename)
+        self.assertEqual(opened.target, "beta.2")
+        self.assertIn("beta.2", row.title)
+
+    def test_the_menu_acts_on_the_typed_text(self):
+        """`tabmenu.act` is where a chosen row becomes work, and the text rides in beside it
+        because what `own_the_tty` hands back is a ROW."""
+        tabmenu.act(overlay.Row(id=rename.GO_ID, title="title: fix it"), "beta.2",
+                    fid="beta.1", typed="fix it")
+        self.assertEqual(self.spawned[0][0][-6:],
+                         ["frame-rename", "--chat", "beta.1", "beta.2", "--", "fix it"])
+
+    def test_the_command_records_bumps_and_says_when_claude_sees_it(self):
+        """What `charter frame-rename` does, and the whole of it: one file, one bump, one
+        repaint, one sentence."""
+        was = state.version("beta.2")
+        commands_frame.cmd_rename(SimpleNamespace(chat_id="beta.1", chat="beta.1",
+                                                  title=["fix", "it"]))
+        self.assertEqual(state.title("beta.1"), "fix it")
+        self.assertNotEqual(state.version("beta.2"), was,
+                            "the other tabs were never told to repaint")
+        self.assertEqual(len(self.said), 1)
+        self.assertIn("next time it starts or resumes", self.said[0][1])
+        self.assertIn("claude-code", self.said[0][1])
+
+    def test_a_harness_that_takes_no_name_is_promised_nothing(self):
+        """Ruling 4. Codex and opencode take no name at launch, so a rename reaches them in
+        charter's own surfaces only — and the notice may not imply otherwise."""
+        _plant("beta.2", harness="codex")
+        commands_frame.cmd_rename(SimpleNamespace(chat_id="beta.2", chat="beta.1",
+                                                  title=["fix", "it"]))
+        self.assertEqual(self.said[-1][1], rename.RENAMED)
+        self.assertFalse(rename.takes_a_name("codex"))
+        self.assertFalse(rename.takes_a_name("opencode"))
+        self.assertTrue(rename.takes_a_name("claude-code"))
+
+    def test_the_same_title_again_repaints_nothing(self):
+        """`state.record_title` answers whether the record moved, and this is what reads it: a
+        rename to the name a tab already carries would otherwise wake every panel on the
+        plane to redraw the row it is already drawing."""
+        commands_frame.cmd_rename(SimpleNamespace(chat_id="beta.1", chat="beta.1",
+                                                  title=["fix", "it"]))
+        was, was_other = state.version("beta.1"), state.version("beta.2")
+        commands_frame.cmd_rename(SimpleNamespace(chat_id="beta.1", chat="beta.1",
+                                                  title=["fix", "it"]))
+        self.assertEqual(state.version("beta.1"), was)
+        self.assertEqual(state.version("beta.2"), was_other)
+
+    def test_a_rename_never_touches_the_harness(self):
+        """Ruling 3 and ADR 0018, asserted as the negative it is — and paired with its
+        positive, so a mutation that removed the whole rename would not pass both."""
+        commands_frame.cmd_rename(SimpleNamespace(chat_id="beta.1", chat="beta.1",
+                                                  title=["fix", "it"]))
+        self.assertEqual(state.title("beta.1"), "fix it")
+        self.assertEqual(self.spawned, [])
+        for argv in self.tmux:
+            self.assertNotIn("send-keys", argv)
+            self.assertNotIn("respawn-pane", argv)
+            self.assertNotIn("respawn-window", argv)
+            self.assertNotIn("kill-pane", argv)
+
+    def test_a_name_that_is_not_a_chat_is_refused(self):
+        """The id is held to `chats.ID_RE` and must name a chat of THIS plane — the last point
+        before a name off an argv becomes a state path."""
+        for bad in ("../x", "beta.9", "api.1"):
+            with self.subTest(bad=bad):
+                self.said.clear()
+                commands_frame.cmd_rename(SimpleNamespace(chat_id=bad, chat="beta.1",
+                                                          title=["fix", "it"]))
+                self.assertIn("no chat", self.said[-1][1])
+        self.assertIsNone(state.title("beta.1"))
+
+    def test_a_chat_still_at_the_selector_can_be_named(self):
+        """`leave.plane_chats` and not `leave.plan`, and this is the difference: a plan drops a
+        pane that is still WAITING at the selector, which is exactly the tab a title typed at
+        `+` is about."""
+        state.record_waiting("beta.2")
+        commands_frame.cmd_rename(SimpleNamespace(chat_id="beta.2", chat="beta.1",
+                                                  title=["fix", "it"]))
+        self.assertEqual(state.title("beta.2"), "fix it")
+
+    def test_a_refused_title_is_said_where_the_keypress_came_from(self):
+        """The hand-typed route has no footer to put a reason in, so the one rule is asked
+        again where there is somebody to tell."""
+        commands_frame.cmd_rename(SimpleNamespace(chat_id="beta.1", chat="beta.1",
+                                                  title=["y" * 61]))
+        self.assertIn("this one is 61", self.said[-1][1])
+        self.assertIsNone(state.title("beta.1"))
+
+    def test_a_title_that_starts_with_a_dash_is_a_title(self):
+        """`nargs=REMAINDER` after `--` is what makes a person's words their own vocabulary
+        rather than charter's."""
+        parser = cli.build_parser()
+        args = parser.parse_args(["frame-rename", "beta.1", "--", "--fix", "the", "widget"])
+        self.assertEqual(args.chat_id, "beta.1")
+        commands_frame.cmd_rename(args)
+        self.assertEqual(state.title("beta.1"), "--fix the widget")
+
+    def test_a_hand_typed_title_needs_no_separator(self):
+        """**`nargs=REMAINDER` and not `nargs="*"`**, which is where the two come apart: a
+        title typed without the `--` still reaches the command rather than being refused as an
+        unknown option. A person's words are not charter's vocabulary."""
+        args = cli.build_parser().parse_args(
+            ["frame-rename", "beta.1", "--fix", "the", "widget"])
+        commands_frame.cmd_rename(args)
+        self.assertEqual(state.title("beta.1"), "--fix the widget")
+
+    def test_what_the_surface_spawns_parses_back_to_what_was_typed(self):
+        """**The whole trip, end to end, through the real parser** — and the one case in this
+        module that is about a Python version rather than about charter.
+
+        `nargs=REMAINDER` swallows everything from the first token it reaches, and whether
+        argparse hands the `--` separator over with it depends on the shape of the parser:
+        measured here, `frame-launch`'s lone `rest` positional KEEPS it and this parser's
+        `chat_id` + `title` pair consumes it. `cmd_rename` therefore strips nothing, which is
+        right only while that holds — so the argv `rename.chose` really emits is parsed by the
+        real parser and run, on every Python CI builds against.
+        """
+        for typed in ("fix it", "--fix it", "--", "a  b"):
+            with self.subTest(typed=typed):
+                self.spawned.clear()
+                state.record_title("beta.1", "")
+                rename.chose(overlay.Row(id=rename.GO_ID, title=""), "beta.1",
+                             fid="beta.1", text=typed)
+                argv = self.spawned[0][0]
+                args = cli.build_parser().parse_args(argv[argv.index("frame-rename"):])
+                self.assertEqual(args.chat, "beta.1")
+                self.assertEqual(args.chat_id, "beta.1")
+                commands_frame.cmd_rename(args)
+                shown, _why = rename.normalized(typed)
+                self.assertEqual(state.title("beta.1"), shown or None)
