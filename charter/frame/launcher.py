@@ -967,9 +967,38 @@ def _select_in_pane(args, fid: str | None) -> int:
     try:
         start = getattr(args, "start", "") or None
         after: "selector.Refused | None" = None
+        # **This pane was put here by a harness EXIT, not by a chat that never started.**
+        # Three things change with it, and each is a different keystroke's meaning: the
+        # resume row exists, Esc closes a chat that RAN rather than one that never began,
+        # and end of input stops meaning anything at all.
+        ended = getattr(args, "ended", False)
+        # `--fresh` is the drawer's *start fresh*: the same selector with the resume row
+        # withheld. The conversation is not forgotten — the link stays recorded and the
+        # next exit offers it again — it is simply not on offer in this pass.
+        resume = (None if getattr(args, "fresh", False) else resume_row(fid)) if ended \
+            else None
         while True:
             choice = selector.pick(cwd=Path(os.getcwd()), root=Path(config.ROOT),
-                                   start=start, after=after)
+                                   start=start, after=after, resume=resume, ended=ended)
+            if ended and choice is selector.END_OF_INPUT:
+                # **End of input is not Esc, and this is the line that says so.** A closed
+                # pty, a killed tmux server or a machine that went down all end input here,
+                # and none of them is the operator asking to forget this chat. Nothing is
+                # written: no closed mark, no forgotten transcript, no dropped manifest
+                # entry — the tab stays ended and open, and the pane's own death then
+                # reaches `frame-ended`, which finds `ended` already claimed and does
+                # nothing.
+                return selector.CANCELLED_EXIT
+            if ended and choice is selector.KEY_CANCEL:
+                # A real Esc on an ended tab closes the chat FOR GOOD (decision 5), which
+                # is `cmd_close` — the mark, the transcript, the manifest entry and the
+                # window — and not `_close_the_cancelled_chat`, which closes a pane that
+                # never became a chat and deliberately writes no closed mark.
+                from types import SimpleNamespace
+
+                from .. import commands_frame
+                commands_frame.cmd_close(SimpleNamespace(chat_id=fid, chat=fid))
+                return selector.CANCELLED_EXIT
             if choice is selector.KEY_CANCEL or choice is selector.END_OF_INPUT:
                 # Esc, Ctrl+C, or a stdin that ended. **A pane that never started a harness
                 # closes on all three**, which is the rule #1103 left and this task does not
@@ -992,7 +1021,12 @@ def _select_in_pane(args, fid: str | None) -> int:
                 after = selector.Refused(choice.profile,
                                          why or unknown_profile(choice.profile))
                 continue
-            r = attempt(p, [], fid=fid, attended=True, on_exec=lambda: _picked(fid, p))
+            # **Resume asks for the chat's own conversation back; every other row starts a
+            # fresh one.** The link never crosses this surface — `session_argv` reads it off
+            # the chat's record in this pane at the `exec` — so all that travels from the
+            # row is the fact that resume was chosen.
+            r = attempt(p, [], fid=fid, attended=True, resume=choice.resume,
+                        on_exec=lambda: _picked(fid, p))
             if r is None:
                 return 0
             if r.kind == KIND_EXEC:
