@@ -93,11 +93,20 @@ class TheLinkIsRecordedBesideTheChat(PersonaIso, unittest.TestCase):
                 self.assertFalse(state.record_conversation(bad, "/abs/t"))
                 self.assertFalse(state.adopt_report(bad))
                 self.assertFalse(state.resumed_start(bad))
+                # The clears too: each is reached from a start and from a hook.
+                self.assertIsNone(state.clear_conversation(bad))
+                self.assertIsNone(state.clear_adoption(bad))
+                self.assertIsNone(state.clear_harness_session(bad))
+                self.assertIsNone(state.record_harness_pid(bad, 7))
+                self.assertIsNone(state.record_start(bad, resumed=True))
 
-    def test_a_pid_that_cannot_be_written_does_not_raise(self):
+    def test_a_record_that_cannot_be_written_does_not_raise(self):
+        """Both writers run from a start or a hook, where raising costs a turn."""
         with mock.patch.object(state.config, "replace_for", side_effect=OSError(28, "full")):
             self.assertIsNone(state.record_harness_pid(FID, 4242))
+            self.assertIsNone(state.record_start(FID, resumed=True))
         self.assertIsNone(state.harness_pid(FID))
+        self.assertFalse(state.resumed_start(FID))
 
     def test_a_clear_that_meets_a_directory_in_its_place_does_not_raise(self):
         """`unlink` refuses a directory (EISDIR on Linux, EPERM on macOS), and each clear goes
