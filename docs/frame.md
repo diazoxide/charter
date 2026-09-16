@@ -1625,9 +1625,9 @@ directly. Only one reading differs, and nothing in charter reads it: until the `
 `#{pane_current_command}` names charter's interpreter rather than the harness.
 
 **And when that harness exits, the pane becomes charter's again.** ADR 0018 used to end on a
-harness exit being final; it is amended (2026-09-15) so that the question is the present-tense
-one — *is a harness running in this pane right now?* — and charter puts its selector back into
-a pane no harness is in, or opens a drawer beside a crashed one. It still draws nothing in a
+harness exit being final; its latest amendment makes the question the present-tense one —
+*is a harness running in this pane right now?* — so charter puts its selector back into a
+pane no harness is in, or opens a drawer beside a crashed one. It still draws nothing in a
 pane a harness is running in, still types nothing into one, and still starts nothing without
 your keypress.
 

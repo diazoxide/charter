@@ -2869,11 +2869,22 @@ def is_ended(fid: str) -> bool:
     ``False`` for a marker charter cannot stat, and here that falls on the *ask first* side:
     a close charter is unsure about confirms, which costs one keypress, where the other
     direction would stop a live harness with no warning at all.
+
+    **It never raises, and that is `chats.roster`'s requirement rather than this function's
+    taste.** The roster asks this of every chat on the strip, so this is now a filesystem
+    call on a per-name path where there was none — and a chat id is not length-bounded on
+    the way in (`$CHARTER_SESSION_ID` is an environment value, which is the one input to the
+    roster with no bound in front of it). A 5000-character ordinal makes the stat answer
+    `ENAMETOOLONG` rather than `False`, and a readout that raised would take the whole strip
+    down with it. Measured on CI: `test_frame_chat_switch` builds exactly that id.
     """
     d = frame_dir(fid)
     if d is None:
         return False
-    return (d / _ENDED_FILE).exists()
+    try:
+        return (d / _ENDED_FILE).exists()
+    except OSError:
+        return False
 
 
 def clear_ended(fid: str) -> None:
