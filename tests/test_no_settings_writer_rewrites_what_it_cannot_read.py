@@ -470,7 +470,10 @@ class TestOnlyAnEntryClaudeCodeRunsIsADispatch(SettingsCase):
         reported, declared nowhere is a hole."""
         for shape in ('{"hooks": {"PreToolUse": NaN}}', "[" * 200000, "not json", "[]",
                       '{"hooks": {"PreToolUse": {"matcher": "Bash"}}}',
-                      '{"hooks": {"PreToolUse": ["charter hook pretooluse"]}}'):
+                      '{"hooks": {"PreToolUse": ["charter hook pretooluse"]}}',
+                      # `hooks` itself not an object — the outermost level, and the one a walk
+                      # that trusted the file would reach first.
+                      '{"hooks": "PreToolUse"}', '{"hooks": 7}', '{"hooks": null}'):
             with self.subTest(shape=shape[:40]):
                 self.assertFalse(doctor._dispatches_guard(self.hooks_json(shape)))
 
@@ -484,6 +487,22 @@ class TestOnlyAnEntryClaudeCodeRunsIsADispatch(SettingsCase):
                 at = self.hooks_json({"hooks": {"PreToolUse": [
                     {"matcher": "Bash", "hooks": entries}]}})
                 self.assertFalse(doctor._dispatches_guard(at))
+
+    def test_an_entry_whose_command_is_not_a_string_dispatches_nothing(self):
+        """The last level a chat can write: an entry that says `type: "command"` and then gives
+        something that is not one. The handler match runs a regex over it, which raises on a
+        number or a list rather than answering no."""
+        for command in (7, None, ["charter hook pretooluse"],
+                        {"run": "charter hook pretooluse"}, True):
+            with self.subTest(command=command):
+                at = self.hooks_json({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+                    {"type": "command", "command": command}]}]}})
+                self.assertFalse(doctor._dispatches_guard(at))
+
+    def test_an_entry_with_no_command_at_all_dispatches_nothing(self):
+        at = self.hooks_json({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+            {"type": "command"}]}]}})
+        self.assertFalse(doctor._dispatches_guard(at))
 
     def test_the_shipped_plugin_still_dispatches_it(self):
         """The reading has to keep answering yes for charter's own `hooks/hooks.json`, whose
