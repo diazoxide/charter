@@ -47,6 +47,27 @@ from tests.test_a_chat_pane_starts_as_charter_and_becomes_the_harness import (
 
 _HAS_TMUX = shutil.which("tmux") is not None
 
+#: How long a case here waits for a `pane-died` hook's own `run-shell` child to land.
+#:
+#: **Sized for a CONTENDED runner rather than for a quiet laptop**, and the number is a
+#: measurement rather than a guess. The whole of `AnExitOnARealServer` completes in 4.5 s on
+#: a developer machine; on CI `test (3.12)` still exceeded the old 10 s while 3.11, 3.13 and
+#: 3.14 passed on the same runner image. This matrix runs beside up to fourteen sweep shards
+#: against an account-wide ceiling of twenty concurrent jobs, so the tmux server's
+#: `run-shell` children are competing for a machine that is already full.
+#:
+#: **A failure that depends on the PYTHON version is contention, never a tmux capability**,
+#: and that is what rules out reading it as open question 4. `_pane_died_write_hook_argv`'s
+#: `${v:-N}` guarantees the file it writes is a parseable integer even for the signal death
+#: that question is about — `_UNKNOWN_DEATH_CODE`, never an empty line — so `exit=None` is a
+#: hook that has not run yet, not one that ran and wrote nothing. The failing run agreed:
+#: `ended` was False too, so neither `pane-died[0]` nor `[1]` had left any trace at all.
+#:
+#: Raising this weakens no assertion. The same predicate must still come true, and the same
+#: diagnostic is printed if it does not — what changes is only how long a starved runner is
+#: given to get there.
+_HOOK_SECONDS = 45.0
+
 _WIRED = None
 
 
@@ -134,7 +155,8 @@ class AnExitOnARealServer(_ARealChatOnARealServer, unittest.TestCase):
             # here — it is killed by the caller, after this returns — so waiting for its
             # code would be waiting for something nothing has caused yet.
             self.assertTrue(
-                _eventually(lambda: state.exit_code(fid) is not None, timeout=10.0),
+                _eventually(lambda: state.exit_code(fid) is not None,
+                            timeout=_HOOK_SECONDS),
                 f"no exit code was recorded for {fid}:"
                 f"{self._why(fid, state.harness_pane(fid) or '')}")
         return fid
@@ -181,7 +203,7 @@ class AnExitOnARealServer(_ARealChatOnARealServer, unittest.TestCase):
                     os.kill(self._harness()["pid"], signal.SIGKILL)
 
                 self.assertTrue(
-                    _eventually(lambda: state.is_ended(fid), timeout=5.0),
+                    _eventually(lambda: state.is_ended(fid), timeout=_HOOK_SECONDS),
                     f"the ended step never claimed this exit:{self._why(fid, pane)}")
                 self.assertIn(fid, self._tmux("list-windows", "-a", "-F",
                                               "#{window_name}").stdout.split(),
@@ -189,7 +211,8 @@ class AnExitOnARealServer(_ARealChatOnARealServer, unittest.TestCase):
 
                 if exits == 0:
                     self.assertTrue(
-                        _eventually(lambda: self._dead(pane) == "0", timeout=5.0),
+                        _eventually(lambda: self._dead(pane) == "0",
+                                    timeout=_HOOK_SECONDS),
                         f"a clean exit did not respawn the pane into the selector:"
                         f"{self._why(fid, pane)}")
                 else:
@@ -198,7 +221,8 @@ class AnExitOnARealServer(_ARealChatOnARealServer, unittest.TestCase):
                                      f"{self._why(fid, pane)}")
                     self.assertTrue(
                         _eventually(lambda: any(r.rsplit("|", 1)[-1] == fid
-                                                for r in self._drawers()), timeout=5.0),
+                                                for r in self._drawers()),
+                                    timeout=_HOOK_SECONDS),
                         f"no drawer opened for the killed chat:{self._why(fid, pane)}")
 
     def test_the_last_chat_ending_keeps_the_session(self):
@@ -208,7 +232,8 @@ class AnExitOnARealServer(_ARealChatOnARealServer, unittest.TestCase):
         closed rather than when the harness exits (reading E4)."""
         fid = self._start(exits=0)
 
-        self.assertTrue(_eventually(lambda: state.is_ended(fid), timeout=5.0))
+        self.assertTrue(_eventually(lambda: state.is_ended(fid),
+                                    timeout=_HOOK_SECONDS))
 
         self.assertIn("beta", self._tmux("list-sessions", "-F",
                                          "#{session_name}").stdout.split(),

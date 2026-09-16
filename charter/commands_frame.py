@@ -1458,6 +1458,23 @@ def _pane_died_write_hook_argv(*, socket: str, harness_pane: str) -> list[str]:
     this hook produces is always a parseable integer — `_UNKNOWN_DEATH_CODE` on a signal
     death, the real status otherwise. Verified against tmux 3.7c for both.
 
+    **This hook is deliberately NOT `-b`, and that is the only thing ordering it before the
+    ended step.** `pane-died[1]` is `run-shell -b` (`_pane_died_ended_hook_argv`) and starts
+    `charter frame-ended`, whose `frame/ended.present` chooses the whole presentation by
+    READING the file written here: `state.exit_code(fid) == CLEAN` puts the profile selector
+    back in the pane, and every other answer opens the crash drawer beside it. tmux
+    dispatches an array hook in index order, and a foreground `run-shell` finishes inside
+    tmux's own command queue — so `[0]` has written before `[1]` is started.
+
+    The asymmetry is load-bearing in BOTH directions, and neither half is a style choice.
+    This one may be foreground precisely because it is a shell `echo` that asks tmux for
+    nothing; that one MUST be backgrounded because it calls back into the server, and in the
+    foreground it would be tmux waiting on a client waiting on tmux. Backgrounding this hook
+    — or un-backgrounding that one so the pair "match" — races the write against the read,
+    and the failure is silent rather than loud: a clean `exit 0` whose file has not landed
+    yet reads back as `None`, which is not `CLEAN`, so the operator gets a crash drawer over
+    a harness that exited normally.
+
     **The path is the frame root plus this window's own chat**, `$CHARTER_FRAME_EXIT` from
     the session and `#{@charter_chat}` from the window, and both halves are load-bearing.
     A session holds several chats, so the session-scoped variable cannot name one chat's
@@ -1530,6 +1547,14 @@ def _pane_died_ended_hook_argv(*, socket: str, harness_pane: str) -> list[str]:
     teardown hook's docstring establishes still holds — the hook is pane-scoped, it must be
     installed AFTER `_pane_died_write_hook_argv` because an unindexed `set-hook` replaces
     the whole array, and the exit code is written by `[0]` before this ever runs.
+
+    **That last clause is a guarantee rather than a hope, and it rests on the pair's
+    backgrounding.** `[0]` is a foreground `run-shell`, so it completes inside tmux's own
+    command queue before this one is dispatched; `frame/ended.present` then reads the file
+    it wrote to choose between putting the selector back and opening the crash drawer. Make
+    the two hooks "match" in either direction and that read races that write, which shows up
+    as a crash drawer over a clean `exit 0` rather than as anything that looks like a bug.
+    See `_pane_died_write_hook_argv`, which carries the measurement.
 
     **The escape hatch keeps `kill-window`** (the ruling on open question 5). `charter frame
     -- <cmd>` records no profile, so `_launch` installs the teardown hook for it and its
