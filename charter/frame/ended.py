@@ -267,7 +267,13 @@ def drop_drawer(fid: str) -> None:
         return
     socket = state.frame_server(fid)
     if not socket:
-        state.record_drawer(fid, "")
+        # **"Charter could not ask" is not "there is no drawer", and the record stays.**
+        # A chat with no recorded server is one charter cannot LOOK on — not one whose
+        # drawer has gone. Forgetting it here would throw away the only pointer back to a
+        # pane that may still be on somebody's screen: the third answer collapsed into the
+        # second, which :func:`proof` refuses for a server that will not answer (#1100) and
+        # which the `pr is None` branch below refuses again. A later call that does know
+        # the server can still prove that pane and kill it.
         return
     pr = proof(fid, socket=socket)
     if pr is None:

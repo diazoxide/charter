@@ -647,6 +647,30 @@ class NothingActsOnARecordAlone(PersonaIso, unittest.TestCase):
 
         self.assertEqual(fake.wrote("kill-pane"), [])
 
+    def test_a_chat_with_no_recorded_server_keeps_its_drawer_record(self):
+        """**"Charter could not ask" is not "there is no drawer".**
+
+        A chat whose server record is missing is one charter cannot LOOK on, not one whose
+        drawer has gone — so forgetting the record would throw away the only pointer back
+        to a pane that may still be on somebody's screen. That is the third answer
+        collapsed into the second, which `proof` refuses for a server that will not answer
+        (#1100) and which the `pr is None` branch refuses again.
+
+        Red without the guard: the record is cleared, and nothing can prove that pane
+        afterwards — there is no second place the id is written down.
+        """
+        state.record_drawer("beta.1", "%7")
+        state.record_server("beta.1", "")
+
+        fake = _Tmux()
+        with mock.patch.object(ended.tmuxctl, "run", fake):
+            ended.drop_drawer("beta.1")
+
+        self.assertEqual(state.drawer("beta.1"), "%7",
+                         "the drawer record was forgotten because charter could not ask "
+                         "which server to look on")
+        self.assertEqual(fake.calls, [], "it asked a server it does not know")
+
     def test_choose_respawns_only_a_proven_dead_pane(self):
         """A drawer can sit on screen for hours; the pane may be live again by the Enter."""
         fake = _Tmux([_row("%1", "0", "beta.1", self.plane)])
