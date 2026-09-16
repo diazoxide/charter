@@ -175,6 +175,75 @@ class TheSurfaceTellsItsWaysOut(PersonaIso, unittest.TestCase):
         self.assertEqual(surface.left, overlay.LEFT_KEY)
 
 
+class TheGuardsThatHadNoTest(PersonaIso, unittest.TestCase):
+    """Three guards a hand deletion check found unpinned — each one red without its line.
+
+    The sweep deletes one guard at a time and reports what survives; these three survived
+    when this module was written, each for its own reason, and a guard no test can kill is
+    a line the next reader is entitled to delete.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        _plant("beta.1")
+
+    def test_a_drawer_that_is_not_a_pane_id_is_never_WRITTEN(self):
+        """**The two `PANE_ID_RE` checks were masking each other.** `record_drawer` holds
+        the value on the way IN and `drawer` holds it again on the way OUT, so a test that
+        only reads the value back stayed green with the inbound check deleted — the
+        outbound one caught it. What that costs is not nothing: the bad value is then
+        sitting in the chat's directory, and the next reader of that file is a `-t` target.
+
+        So this asserts the FILE, which is the only thing the inbound guard decides.
+        """
+        state.record_drawer("beta.1", "%1;kill-server")
+
+        on_disk = state.frame_dir("beta.1") / state._DRAWER_FILE
+        self.assertFalse(on_disk.exists(),
+                         f"a value that cannot name a pane was written to {on_disk}")
+
+    def test_a_chat_that_was_never_drawn_is_not_presented(self):
+        """**#384's early-death guard, which had no test of its own.**
+
+        A harness dead BEFORE its chat was drawn is the launch's own early death: it is
+        reported and its window closed. The ended step must do nothing for such a chat, and
+        `state.was_drawn` is the only thing that tells the two apart — an exit code cannot,
+        because a command that fails instantly and one that fails an hour later exit the
+        same way. Without the gate the hook would present a tab for a chat whose window
+        `_launch` is in the middle of killing.
+        """
+        state.record_exit("beta.1", 0)          # died, but the frame was never laid out
+        fake = _Tmux([_row("%1", "1", "beta.1", commands_frame._this_plane())])
+
+        with mock.patch.object(ended.tmuxctl, "run", fake):
+            answer = ended.present("beta.1", socket=SERVER)
+
+        self.assertEqual(answer, "")
+        self.assertEqual(fake.calls, [],
+                         "a chat that was never drawn reached tmux at all")
+        self.assertFalse(state.is_ended("beta.1"))
+
+    def test_reading_the_ended_mark_never_raises(self):
+        """**`chats.roster` asks this per chat, so it is on the repaint path.**
+
+        A chat id is not length-bounded on the way in (`$CHARTER_SESSION_ID` is an
+        environment value), and a stat on a too-long name answers `ENAMETOOLONG` — on
+        Linux. macOS returns False instead, which is why only CI caught it and why the
+        guard has to be pinned by making the failure happen rather than by finding a name
+        long enough: a test that depended on the platform's own limit would pass here and
+        measure nothing.
+        """
+        real = Path.exists
+
+        def too_long(self):
+            if self.name == state._ENDED_FILE:
+                raise OSError(63, "File name too long")
+            return real(self)
+
+        with mock.patch.object(Path, "exists", too_long):
+            self.assertFalse(state.is_ended("beta.1"))
+
+
 class TheEndedStateIsClaimedOnce(PersonaIso, unittest.TestCase):
     """`ended` is the claim that keeps ONE exit from being presented twice.
 
