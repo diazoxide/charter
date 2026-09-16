@@ -669,7 +669,8 @@ def ensure_instructions(base: Path) -> str:
     if p.exists():
         try:
             doc = json.loads(p.read_text())
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+            # `RecursionError` is a file nested too deeply to parse, and not a `ValueError`.
             return "malformed"
         if not isinstance(doc, dict):
             return "malformed"
@@ -680,8 +681,14 @@ def ensure_instructions(base: Path) -> str:
     if want in entries:
         return "present"
     entries.append(want)
+    try:
+        text = json.dumps(doc, indent=2) + "\n"
+    except RecursionError:
+        # Parsed, and too deep to write back out — `_apply_rule` records the measurement. `init`
+        # runs this writer through `_wire_harnesses`, so letting it out would end the command.
+        return "malformed"
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(doc, indent=2) + "\n")
+    p.write_text(text)
     return "created"
 
 
@@ -1227,7 +1234,8 @@ class OpenCodeHarness(Harness):
         if p.exists():
             try:
                 doc = json.loads(p.read_text())
-            except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError):
+                # `RecursionError` is a file nested too deeply to parse, and not a `ValueError`.
                 return "malformed", str(p)
             if not isinstance(doc, dict):
                 return "malformed", str(p)
@@ -1254,8 +1262,19 @@ class OpenCodeHarness(Harness):
             if block.get(glob) == decision:
                 return "present", str(p)
             block[glob] = decision
+        try:
+            text = json.dumps(doc, indent=2) + "\n"
+        except RecursionError:
+            # Parsed, and too deep to write back out: 3.12's encoder recurses where its decoder
+            # did not (6,000 levels, measured). `commands._guard_apply` commits through this
+            # method, so a harness that let the error out would take `charter guard` and `init`
+            # down with it — and after the OTHER harnesses had already been written.
+            return "malformed", f"{p} (nested too deeply to write back)"
+        # After the encode, for the reason `commands.add_permission_rule` records at its own:
+        # `dry_run` has to give the answer the write would give, and the encode is where this
+        # file is refused.
         if dry_run:
             return "added", str(p)
         p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(doc, indent=2) + "\n")
+        p.write_text(text)
         return "added", str(p)
