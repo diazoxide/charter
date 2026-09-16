@@ -1604,6 +1604,45 @@ ENDED_HOOK_NOT_INSTALLED = (
     "tmux -L {socket} attach -t {session}")
 
 
+#: What charter says when it stops waiting on an ended tab nobody answers.
+#:
+#: **A bound that gives up silently is a hang with better manners.** This path is awake for
+#: the life of the frame and it is the operator's own terminal, so the one thing that must
+#: not happen is `charter claude` returning with nothing said — the operator would be left
+#: with a tab holding a choice and a shell that simply came back. It names the chat because
+#: this process may have been watching any one of several, and it names what charter was
+#: waiting FOR rather than what it did, because the tab is still there and the choice in it
+#: is still takeable.
+ENDED_CHOICE_NEVER_TAKEN = (
+    "charter frame: chat {fid} ended {presented} times and the choice was never taken, so "
+    "charter has stopped waiting on it ({why}). The tab is still open and still holding "
+    "resume / start fresh / close — take it there, or close the window.")
+
+#: How many endings one chat may be offered on this path before charter stops waiting.
+#:
+#: **The `O_EXCL` claim is what ordinarily ends this loop; this is the backstop.** Inside an
+#: operator's own tmux there are no hooks, so this launcher is what answers an exit — and
+#: `_wait_for_harness` returns IMMEDIATELY for a pane that is already dead, which is exactly
+#: the state a crash leaves behind (the drawer deliberately does not touch it). So the loop
+#: spins at full speed for as long as `ended.present` keeps answering that it offered
+#: something, and only `state.claim_ended`'s atomic create makes it answer ``""`` the second
+#: time. A loop whose sole exit is a file another process must create is one bad day from
+#: opening drawers forever with an operator watching; measured on CI, where a mutation that
+#: deleted that claim ran a sweep shard for ten minutes until the runner killed it.
+#:
+#: Eight rather than three: unlike a panel respawn, every turn of this loop is a harness the
+#: operator actually started and ended, so the number has to be well past what an ordinary
+#: session does before it reads as charter interfering.
+_ENDED_ATTEMPTS = 8
+
+#: How long this loop may go on presenting before charter stops waiting, whatever the count.
+#:
+#: The attempt bound alone is not enough and the deadline alone is not either: a runaway
+#: `present` exhausts eight attempts in milliseconds, while a chat an operator genuinely
+#: resumes eight times over a working day must never be cut off by a count. Each answers the
+#: case the other misses, so both are checked and whichever trips first says so.
+_ENDED_SECONDS = 6 * 60 * 60.0
+
 #: How many times one slot's panel may be brought back before charter stops trying, per
 #: frame. The spec's own number ("a dead panel stays visible with its error, respawns
 #: with backoff, and gives up after 3 attempts"). The cap is the entire reason a count
@@ -2520,6 +2559,54 @@ def _wait_for_harness(socket: str, harness_pane: str) -> int | None:
         if status == _GONE:
             return None
         time.sleep(_POLL_SECONDS)
+
+
+def _wait_out_the_ended_tab(socket: str, *, fid: str, harness_pane: str) -> int | None:
+    """Answer *fid*'s endings for as long as its tab keeps taking the choice. Its last code.
+
+    **Inside the operator's own tmux there are no hooks**, so this launcher IS what answers
+    an exit: it waits on the pane, presents the choice in-process when the harness dies, and
+    goes back to waiting. Reading E5 is what makes that terminate rather than spin — measured
+    on tmux 3.7c and at the 3.2 floor, a second `_wait_for_harness` after a respawn waits on
+    the NEW process rather than returning the old one's status again.
+
+    It ends the moment there is nothing left to offer: a pane that is gone rather than dead
+    (``code is None`` — the operator closed the window), a chat the operator closed, or a
+    `present` that answered "nothing offered", which is every reason the ended step declines.
+
+    **And it ends anyway, on a bound.** `present` declines the second time because
+    `state.claim_ended` is an ``O_EXCL`` create — which makes that claim the ONLY thing
+    stopping this loop, and `_wait_for_harness` answers immediately for a pane that is
+    already dead, the state a crash leaves behind since the drawer deliberately does not
+    touch it. So a claim that never lands is a loop that never pauses, and it is charter
+    opening drawers forever with an operator watching rather than a test-only shape: measured
+    on CI, where deleting that claim ran a sweep shard for ten minutes until the runner
+    killed it and reaped an orphaned tmux server. :data:`_ENDED_ATTEMPTS` bounds the count
+    and :data:`_ENDED_SECONDS` the clock, each catching what the other misses, and whichever
+    trips first says so through :data:`ENDED_CHOICE_NEVER_TAKEN`.
+    """
+    from .frame import ended as ended_mod
+
+    started = time.monotonic()
+    presented = 0
+    code: int | None = None
+    while True:
+        code = _wait_for_harness(socket, harness_pane)
+        if code is None or state.was_closed(fid):
+            return code
+        state.record_exit(fid, code)
+        state.record_drawn(fid)
+        if not ended_mod.present(fid, socket=socket):
+            return code
+        presented += 1
+        if presented >= _ENDED_ATTEMPTS:
+            why = f"{_ENDED_ATTEMPTS} endings is the cap"
+            break
+        if time.monotonic() - started >= _ENDED_SECONDS:
+            why = f"{_ENDED_SECONDS / 3600:.0f} hours is the cap"
+            break
+    util.err(ENDED_CHOICE_NEVER_TAKEN.format(fid=fid, presented=presented, why=why))
+    return code
 
 
 #: How long an open nobody is watching waits for its pane's launcher to say what it did.
@@ -4028,25 +4115,11 @@ def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
         code = _wait_for_harness(socket, harness_pane)
     else:
         # **Inside the operator's own tmux there are no hooks** (this function's docstring),
-        # so this launcher IS what answers an exit: it is awake for the life of the frame,
-        # and when the harness dies it presents the choice in-process and goes back to
-        # waiting on the pane. Reading E5 is what makes the loop terminate rather than spin
-        # — measured on tmux 3.7c and at the 3.2 floor, a second `_wait_for_harness` after a
-        # respawn waits on the NEW process rather than returning the old one's status again.
-        #
-        # It ends the moment there is nothing left to offer: a pane that is gone rather than
-        # dead (`code is None` — the operator closed the window), a chat the operator closed,
-        # or a `present` that answered "nothing offered", which is every reason the ended
-        # step declines. Then the tail below closes the window exactly as it always did.
-        while True:
-            code = _wait_for_harness(socket, harness_pane)
-            if code is None or state.was_closed(fid):
-                break
-            state.record_exit(fid, code)
-            state.record_drawn(fid)
-            from .frame import ended as ended_mod
-            if not ended_mod.present(fid, socket=socket):
-                break
+        # so this launcher IS what answers an exit — see :func:`_wait_out_the_ended_tab`,
+        # which presents each ending in-process, goes back to waiting on the pane, and
+        # carries the bound that keeps a claim nobody creates from spinning here forever.
+        # Then the tail below closes the window exactly as it always did.
+        code = _wait_out_the_ended_tab(socket, fid=fid, harness_pane=harness_pane)
     # **Whether this pane was still the selector, read now** — while this launch still holds
     # its claim, which is the only thing keeping another launch's reap off a directory whose
     # window is gone (#685). A cancelled selector's window IS gone: its launcher closed it

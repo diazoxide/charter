@@ -551,6 +551,89 @@ def _row(pane: str, dead: str, chat: str, plane: str, drawer: str = "") -> str:
     return "\t".join((pane, dead, chat, plane, drawer))
 
 
+class TheEndedLoopEndsOnItsOwn(PersonaIso, unittest.TestCase):
+    """**The loop that answers endings inside an operator's tmux stops by itself.**
+
+    `_wait_out_the_ended_tab` is awake for the life of the frame, and until this it had no
+    bound of any kind: its only exit was `ended.present` answering ``""``, which happens
+    because `state.claim_ended` is an `O_EXCL` create. That made a file another process
+    creates the sole terminator of a loop whose wait returns INSTANTLY for an already-dead
+    pane — the state a crash leaves, since the drawer does not touch it. A claim that never
+    lands was therefore charter opening drawers forever with an operator watching.
+
+    Measured rather than argued: the deletion sweep could not score that claim at all,
+    because deleting it made the shard HANG for ten minutes until the runner killed it and
+    reaped an orphaned tmux server. A mutation that hangs is not a red test, which is why
+    the runaway fakes below raise far above either bound — so a missing bound fails fast
+    and visibly instead of running out somebody's clock.
+
+    The third case is the control: the claim is still what ordinarily ends this, and a tab
+    whose choice was taken must not be complained about.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        _plant("beta.1")
+
+    def _run(self, answer, *, cap: int = 400):
+        """Drive the loop with scripted `present` answers. ``(code, sentences, presented)``.
+
+        *cap* is the runaway guard and deliberately ~50x either bound: without a bound in
+        the code under test this raises, so the case is red in milliseconds rather than
+        hanging the suite the way the sweep shard hung.
+        """
+        said: list[str] = []
+        seen = {"n": 0}
+
+        def present(fid, *, socket):
+            seen["n"] += 1
+            if seen["n"] > cap:
+                raise AssertionError(
+                    f"presented {seen['n']} times for one chat — the loop has no bound")
+            return answer(seen["n"])
+
+        with mock.patch.object(commands_frame, "_wait_for_harness", return_value=0), \
+             mock.patch.object(ended, "present", present), \
+             mock.patch.object(commands_frame.util, "err", said.append):
+            code = commands_frame._wait_out_the_ended_tab(
+                SERVER, fid="beta.1", harness_pane="%1")
+        return code, said, seen["n"]
+
+    def test_a_claim_that_never_lands_stops_on_the_attempt_bound(self):
+        """Every ending presented, none ever taken: the count is what stops it."""
+        code, said, presented = self._run(lambda _n: "selector")
+
+        self.assertEqual(presented, commands_frame._ENDED_ATTEMPTS)
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("beta.1", said[0], "the sentence does not name the chat")
+        self.assertIn("stopped waiting", said[0])
+        self.assertIn("still holding", said[0],
+                      "the operator is not told the choice is still takeable")
+        self.assertEqual(code, 0)
+
+    def test_a_runaway_that_is_slow_stops_on_the_deadline(self):
+        """A chat resumed all day must not be cut off by a count, so the clock bounds it too
+        — and a jump past the deadline stops it before the count is anywhere near spent."""
+        clock = iter([0.0] + [commands_frame._ENDED_SECONDS + 1.0] * 4000)
+        with mock.patch.object(commands_frame.time, "monotonic", lambda: next(clock)):
+            code, said, presented = self._run(lambda _n: "selector")
+
+        self.assertEqual(presented, 1,
+                         "the deadline should have tripped before the attempt bound")
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("hours is the cap", said[0])
+        self.assertIn("beta.1", said[0])
+
+    def test_a_taken_choice_ends_it_on_the_claim_with_nothing_said(self):
+        """The control: the claim is still the ordinary terminator, and a tab that was
+        answered draws no sentence at all."""
+        code, said, presented = self._run(lambda n: "selector" if n == 1 else "")
+
+        self.assertEqual(presented, 2)
+        self.assertEqual(said, [], "charter complained about a tab whose choice was taken")
+        self.assertEqual(code, 0)
+
+
 class NothingActsOnARecordAlone(PersonaIso, unittest.TestCase):
     """**No kill, respawn or split acts on a record.** One listing proves the target.
 
