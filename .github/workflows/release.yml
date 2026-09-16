@@ -268,6 +268,11 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
+      # The same pin `test.yml` carries, and this job needs it for a sharper reason: it is
+      # the last gate before an irreversible PyPI upload. A tmux 3.4 flake here reads as
+      # "re-run it", and a release gate that teaches people to re-run is not a gate. See
+      # the action's header for the lost-SIGCHLD mechanism and #1116.
+      - uses: ./.github/actions/tmux
       - name: Run the suite
         run: python -m unittest discover -s tests -v
 

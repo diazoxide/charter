@@ -54,6 +54,12 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
+      # `ubuntu-latest` ships tmux 3.4, whose server can lose a SIGCHLD and destroy a pane
+      # without ever firing `pane-died`. That is the whole of `#1116`, and it is why
+      # `test_a_signal_death_ends_the_tab` failed on `main` and on two pull requests across
+      # three of the four interpreters here. The action's header carries the mechanism and
+      # the measured miss rates; it refuses the job if what lands is below tmux 3.5.
+      - uses: ./.github/actions/tmux
       - name: Run the suite
         run: python -m unittest discover -s tests -v
 
