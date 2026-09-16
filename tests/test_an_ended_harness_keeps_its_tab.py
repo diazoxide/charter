@@ -1349,6 +1349,37 @@ class NothingActsOnARecordAlone(PersonaIso, unittest.TestCase):
         argv = fake.wrote("respawn-pane")[0]
         return {argv[i + 1].split("=", 1)[0] for i, a in enumerate(argv) if a == "-e"}
 
+    def test_an_unspellable_chat_is_refused_before_anything_is_looked_up(self):
+        """**The guard is what refuses, and this is how that becomes observable.**
+
+        `present` is the `pane-died` hook's own child, and the value it is handed is expanded
+        by tmux out of `#{@charter_chat}` into a shell-quoted `run-shell` string. A value
+        charter cannot name a chat from is one it must not look a server up for, so the id is
+        held to `chats.ID_RE` before any state is read at all.
+
+        **Deleting that guard does not change the ANSWER**, which is why the deletion sweep
+        could take it with every test still green: `state.profile` would be called with the
+        hostile id, `state.frame_dir` would refuse it as not a safe child, and `present` would
+        return ``""`` a few lines further down. What changes is WHO refuses — an entry point
+        tmux invokes would be depending for its safety on a function three calls away going
+        on refusing the same inputs, which is the coupling that has bitten this project twice.
+
+        So the assertion is not about the answer but about the reach: nothing is looked up,
+        and no tmux command is issued.
+        """
+        looked_up: list = []
+        fake = _Tmux()
+
+        with mock.patch.object(ended.state, "profile",
+                               side_effect=lambda f: looked_up.append(f)), \
+                mock.patch.object(ended.tmuxctl, "run", fake):
+            answer = ended.present("../nope", socket=SERVER)
+
+        self.assertEqual(answer, "")
+        self.assertEqual(looked_up, [],
+                         "a value charter cannot name a chat from was looked up anyway")
+        self.assertEqual(fake.calls, [], "an unspellable chat reached tmux")
+
     def test_a_respawn_tmux_refused_offers_nothing(self):
         """The plan's Behaviour §6, and the answer has to be ``""``.
 
