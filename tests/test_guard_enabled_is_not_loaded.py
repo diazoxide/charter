@@ -146,6 +146,29 @@ class TestASightingDoesNotOutliveItsDeclaration(GuardCase):
             '{"hooks": {"PreToolUse": [{"hooks": [{"type": "command", '
             '"command": "charter hook pretooluse"}]}]}}')
 
+    def test_a_settings_file_charter_cannot_read_is_not_called_a_deletion(self):
+        """The row may not assert a deletion it did not see.
+
+        With `settings.json` unparseable and a plugin dispatching the guard, charter never read
+        the file that would say whether the declaration is still there — and the sentence said it
+        was "no longer there", sending the operator after an edit nobody made. It is the same
+        false claim as the mirror sentence two lines above it ("its declaration is still in
+        <file>"), which round 7 fixed; `None` being falsy is what hid it here.
+
+        The row still cannot go green — nothing vouches for the declaration — so it warns and
+        says which of the two it could not tell.
+        """
+        (config.ROOT / ".claude").mkdir(parents=True, exist_ok=True)
+        (config.ROOT / ".claude" / "settings.json").write_text('{"hooks": NaN}')
+        self.seen(guardseen.SETTINGS)
+        with self.plugin_enabled(), self.not_running_under_plugin():
+            r = doctor.check_guard_seen()
+        said = (r.detail + " " + (r.hint or "")).lower()
+        self.assertEqual(r.status, doctor.WARN, said)
+        self.assertNotIn("no longer", said)
+        self.assertIn("could not tell", said)
+        self.assertIn("settings.json", said)
+
     def test_a_sighting_from_a_removed_settings_block_is_not_credited(self):
         """The subtle half of the report. The block that fired minutes ago is gone; saying
         'last ran 0m ago' invites the reader to conclude the survivor is working."""

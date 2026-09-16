@@ -106,3 +106,10 @@ guard, and `init`, reading the same file, went on to write the hook. Both now as
 so whatever the row calls wired is what `init` finds already present. And a settings file
 charter cannot parse is reported as that — "could not tell whether the guard is declared here",
 naming the file — rather than as a plane with no guard.
+
+**And `guard seen` no longer asserts a deletion it did not see.** With that same file unreadable
+and a plugin dispatching the guard, the row said the sighting came "from a settings declaration
+that is no longer there" — sending you to look for an edit nobody had made, on the strength of a
+file charter never read. It now says it could not tell whether that declaration is still there,
+and names the file. The row still warns either way: nothing vouches for a declaration charter
+cannot see.

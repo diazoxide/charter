@@ -2398,17 +2398,31 @@ def check_guard_seen() -> Result:
         # reader to conclude the surviving declaration is working (#261). An unrecorded
         # source predates the field and stays unqualified: unknown is not suspect.
         src = _seen.last_source()
-        # The structural answer, like the row above. A file charter could not read answers `None`
-        # here, which is falsy and so reads as "no settings file declares it" — the conservative
-        # half of this branch, since the sentence it guards also needs a plugin to have survived
-        # the deleted block before it says anything at all.
-        settings_declare = any(_declares_guard_hook(p) for p in _settings_files())
+        # Three answers here too, for the reason the row above has them (round 8). This was
+        # `any(...)`, which collapses `None` into "no settings file declares it" — so with an
+        # unparseable `settings.json` beside a dispatching plugin, the sentence below asserted a
+        # DELETION charter never saw, and sent the operator after an edit nobody had made. It is
+        # the same false claim as the mirror sentence a few lines up, which says a declaration is
+        # still there; charter read the file that would settle either one in neither case.
+        declared, settings_doubt = _settings_declaring_guard()
         # Narrow deliberately: `settings` is also what a Codex or opencode dispatch records,
         # and those declarations live in files this check never reads (`~/.codex/config.toml`),
         # so "no settings file declares it" alone would warn at planes that are wired fine.
         # The reported case is specific — the settings block was removed in favour of a
         # plugin — so the plugin has to be the thing that survived it.
-        if src == _seen.SETTINGS and not settings_declare and _plugin_declaring_guard():
+        if src == _seen.SETTINGS and not declared and _plugin_declaring_guard():
+            if settings_doubt:
+                # Not green — nothing vouches for the declaration the sighting came from — and
+                # not a deletion either, because charter could not read the file. It says which
+                # of the two it cannot tell, and names the file, which is the whole of this
+                # review's rule applied to the last sentence that broke it.
+                return Result(
+                    name, WARN,
+                    detail=f"last ran {at} ago under {where}, and charter could not tell whether "
+                           f"that settings declaration is still there: {settings_doubt}",
+                    hint="Fix that file — charter never repairs one it cannot read — and "
+                         "re-check. Until then the sighting is evidence for a declaration "
+                         "charter cannot see, so it vouches for nothing.")
             return Result(
                 name, WARN,
                 detail=f"last ran {at} ago under {where}, but from a settings declaration "
