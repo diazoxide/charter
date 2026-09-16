@@ -1720,6 +1720,76 @@ class WhereItAppears(_APlaneWithProfiles, unittest.TestCase):
         self.assertTrue(state.is_waiting("beta.2"))
         self.assertEqual(state.identity("beta.2").get("CHARTER_HARNESS"), "")
 
+    def test_a_restored_ended_tab_opens_its_pane_on_the_ended_selector(self):
+        """**The flag has to ride the PANE's own argv, not merely the chat's state.**
+        `--ended` is what makes that pane draw the resume row, say `esc close this tab`, and
+        ignore Ctrl+C (`launcher.argv_select`). The literal here is the argparse dest;
+        retuned, it matches nothing, the flag silently never rides, and a restored tab comes
+        back as an ORDINARY selector — where Ctrl+C closes it and the footer promises the
+        wrong thing about the one key that works.
+        """
+        fake = _AServerWithOneWorkspaceRunning(sessions=(), chats=())
+
+        self._launch(fake, harness="claude", profile="claude", select=True, ended=True,
+                     start="claude")
+
+        flat = " ".join(" ".join(c) for c in fake.calls)
+        self.assertIn("--ended", flat,
+                      "the restored tab's pane was opened on an ordinary selector")
+
+    def test_the_escape_hatch_still_gets_todays_teardown_hook(self):
+        """`harness_chat=(p is not None or selecting)`, and the first half is what names the
+        escape hatch. Forced true, `charter frame -- <cmd>` is armed with the ended step
+        instead of `kill-window`: its window stays open when the command exits, `attach`
+        never returns, and the exit code never reaches the script waiting on it — the ruling
+        on open question 5, undone.
+        """
+        fake = _AServerWithOneWorkspaceRunning(sessions=(), chats=())
+
+        self._launch(fake, harness="", profile=None, select=False, rest=["--", "htop"])
+
+        hooks = [" ".join(c) for c in fake.calls
+                 if any("pane-died[1]" in word for word in c)]
+        self.assertTrue(hooks, "no second pane-died hook was installed at all")
+        self.assertIn("kill-window", hooks[0])
+        self.assertNotIn("frame-ended", hooks[0],
+                         "the escape hatch was armed with the ended step")
+
+    def test_a_selector_launch_with_no_start_never_records_the_word_None(self):
+        """**`state.record_profile` interpolates rather than refusing**, and that is the
+        whole reason the fallback is load-bearing.
+
+        `_selector_start` answers ``None`` for a launch with no press behind it and no
+        `[harness] default` — ruling 18, where a `default` naming a profile this machine
+        lacks resolves to nothing at all. `record_profile` then writes `f"{name}\\n"`: it
+        does not raise and it does not refuse, so without the `or ""` the chat records the
+        four characters `None`, and `state.profile` hands that straight back as a NAME.
+
+        Every reader takes it for one — `+` and a workspace tab open the next chat on it
+        (`_same_profile_as`), and a reopen tries to restore it — so the cost is not a tidy
+        empty string, it is a chat whose recorded profile is a word no plane declares.
+
+        `_selector_start` is stated here rather than arranged for, because whether this
+        fixture's plane happens to declare a default is not what the case is about.
+
+        **And the launch is a RESTORED ENDED tab, because that is the only path that reaches
+        this write.** The line sits inside `if restored_ended:` — an ordinary selector takes
+        the `elif selecting: record_waiting(fid)` arm instead — so a case that drove
+        `--select` without `--ended` never executed the line at all and would have called
+        any mutation of it survived without ever running it.
+        """
+        fake = _AServerWithOneWorkspaceRunning(sessions=(), chats=())
+
+        with mock.patch.object(commands_frame, "_selector_start", return_value=None):
+            self.assertEqual(
+                self._launch(fake, harness="claude", profile="claude", select=True,
+                             ended=True, start=""), 0)
+
+        self.assertNotEqual(state.profile(self.NEW), "None",
+                            "the word None was recorded as this chat's profile")
+        self.assertFalse(state.profile(self.NEW) or "",
+                         "a chat that picked nothing recorded a profile anyway")
+
     def test_a_reopened_ended_tab_comes_back_ended_and_never_waiting(self):
         """**A restored ended tab is the one selector that is not a chat waiting to begin.**
 

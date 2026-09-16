@@ -503,6 +503,22 @@ class TheDrawnMarkAndTheDrawer(PersonaIso, unittest.TestCase):
         self.assertEqual((rows[0].title, rows[0].note), (offered.title, offered.note),
                          "the drawer's resume row does not say which conversation")
 
+    def test_a_drawer_that_cannot_be_written_is_not_an_exception(self):
+        """The same safe degrade `record_drawn` makes one file over, and it is reached from
+        the same places: `_open_drawer` records the pane tmux just reported, and
+        `drop_drawer` records the empty answer after it kills one. Narrowed to a type the
+        filesystem does not raise, the `OSError` escapes into the `pane-died` hook's child —
+        which is `present`, whose whole contract is that a hook never breaks a turn.
+
+        What a failed write costs is stated rather than guarded against: no record means
+        `drop_drawer` will not look for that pane, which is the direction that kills nothing.
+        """
+        with mock.patch.object(state.config, "write_for",
+                               side_effect=OSError(28, "No space left on device")):
+            state.record_drawer("beta.1", "%7")     # must not raise
+
+        self.assertIsNone(state.drawer("beta.1"))
+
     def test_none_of_it_raises_for_a_chat_with_no_directory(self):
         state.record_drawn("../nope")
         state.record_drawer("../nope", "%7")
@@ -792,6 +808,28 @@ class TheSelectorAfterAnExit(PersonaIso, unittest.TestCase):
 
         self.assertIsNone(launcher.resume_row("beta.1"))
 
+    def test_a_chat_with_a_link_and_no_conversation_answers_none(self):
+        """`state.conversation` answers ``None`` for a chat that has a link but no transcript
+        recorded — a Claude Code chat whose SessionStart reported an id before the first
+        prompt (C1). Without the fallback that ``None`` reaches `os.path.isfile`, which
+        raises `TypeError` on the `pane-died` path, where an exception is an offer never
+        made."""
+        _plant("beta.5")
+        state.record_harness_session("beta.5", "conv5")
+
+        self.assertIsNone(launcher.resume_row("beta.5"))
+
+    def test_resume_is_only_preselected_when_its_row_is_actually_listed(self):
+        """`opens_on` may name `RESUME_ID` only when that row is in the list it was handed.
+        Dropping the second half of the conjunct returns the id of a row the surface does not
+        have, and `Selector._refilter` then finds nothing to put the cursor on — an opening
+        paint with no selection at all, on the one surface whose Enter must always do
+        something."""
+        listed = self._listed(resume=None)
+
+        self.assertEqual(selector.opens_on(listed, "claude-work", resume=self.resume),
+                         "claude-work")
+
     def test_ctrl_c_does_nothing_on_an_ended_selector(self):
         """The ruling, at the surface that has to keep it: a double Ctrl+C is how Claude
         Code exits, so the third press lands HERE — on the selector that replaced it — and
@@ -920,6 +958,24 @@ class TheEndedLoopEndsOnItsOwn(PersonaIso, unittest.TestCase):
         self.assertEqual(len(said), 1, said)
         self.assertIn("hours is the cap", said[0])
         self.assertIn("beta.1", said[0])
+
+    def test_the_deadline_trips_on_the_cap_itself(self):
+        """`>=`, and the boundary is the whole of what distinguishes it from `>`.
+
+        `test_a_runaway_that_is_slow_stops_on_the_deadline` jumps the clock a second PAST the
+        cap, so it holds for either comparison. A clock landing exactly ON the cap is the one
+        input that tells them apart, and with `>` that turn is allowed through — which is not
+        an abstraction here: every turn of this loop is another drawer opened in front of an
+        operator who has already stopped answering.
+        """
+        clock = iter([0.0] + [float(commands_frame._ENDED_SECONDS)] * 4000)
+
+        with mock.patch.object(commands_frame.time, "monotonic", lambda: next(clock)):
+            _code, said, presented = self._run(lambda _n: "selector")
+
+        self.assertEqual(presented, 1, "the deadline did not trip on the cap itself")
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("hours is the cap", said[0])
 
     def test_a_taken_choice_ends_it_on_the_claim_with_nothing_said(self):
         """The control: the claim is still the ordinary terminator, and a tab that was
@@ -1321,6 +1377,132 @@ class NothingActsOnARecordAlone(PersonaIso, unittest.TestCase):
         self.assertEqual(answer, "")
         self.assertEqual(len(fake.wrote("respawn-pane")), 1, "it never even tried")
 
+    def test_only_the_recorded_pane_is_taken_as_the_harness(self):
+        """**A guard on what a respawn is AIMED at**, and no guard below refuses the same
+        input: `present` respawns whatever `Proof.harness` names.
+
+        `proof` walks every row the listing returns. Without `pane == recorded`, any pane of
+        this chat on this plane that carries no drawer marker becomes the harness — so the
+        respawn lands in whichever such pane the listing happened to return last, which may
+        be one the operator is working in. `%9` here is exactly that: same chat, same plane,
+        no marker, listed after the recorded `%1`.
+        """
+        answer, fake = self._present([_row("%1", "1", "beta.1", self.plane),
+                                      _row("%9", "1", "beta.1", self.plane)])
+
+        self.assertEqual(answer, "selector")
+        respawns = fake.wrote("respawn-pane")
+        self.assertEqual(len(respawns), 1, fake.calls)
+        self.assertEqual(respawns[0][respawns[0].index("-t") + 1], "%1",
+                         "the respawn was aimed at a pane no record names")
+
+    def test_a_drawer_row_choose_does_not_recognise_does_nothing(self):
+        """The `else: return` beneath the two rows that act. Forced true, every row that is
+        neither resume nor close respawns the pane as *start fresh* — including an id this
+        function has never heard of, which is the shape a fourth drawer row would arrive in.
+        """
+        fake = _Tmux([_row("%1", "1", "beta.1", self.plane)])
+
+        with mock.patch.object(ended.tmuxctl, "run", fake):
+            ended.choose(overlay.Row(id="ended:something-new", title="?"), "beta.1")
+
+        self.assertEqual(fake.wrote("respawn-pane"), [],
+                         "a row `choose` does not recognise respawned the pane")
+
+    def test_the_drawer_hands_its_pane_back_even_when_it_raises(self):
+        """`draw` runs in a pane it must give back whatever happens — the same promise
+        `overlay.Surface.run` makes one layer down. Narrowed to a type nothing raises, an
+        error building the rows escapes and the drawer is left on screen holding a traceback,
+        with the keyboard still in it."""
+        closed: list = []
+
+        with mock.patch.object(ended, "drawer_rows", side_effect=RuntimeError("boom")), \
+                mock.patch.object(ended, "_close_this_pane",
+                                  side_effect=lambda *a, **kw: closed.append(True)):
+            rc = ended.draw(SimpleNamespace(chat="beta.1"))
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(closed), 1, "the drawer's pane was never handed back")
+
+    def test_the_keyboard_goes_back_to_a_real_harness_pane_and_only_to_one(self):
+        """**Both halves, because deleting an `if` takes the thing it guards with it.**
+
+        An earlier version of this case asserted only that an empty *harness* issues no
+        `select-pane` — which is just as true once the whole statement is gone, so it passed
+        with the guard and without it and pinned nothing at all. That is the shape this
+        branch has paid for twice; the fix is to assert the BEHAVIOUR as well as the refusal.
+
+        The body is what puts the operator's keyboard back on the chat's own pane as the
+        drawer closes. Without it the keyboard is left in a pane `kill-pane` is about to
+        take, which tmux then resolves wherever it likes.
+
+        The guard is what keeps that same command off an EMPTY target. Measured on tmux
+        3.7c, `select-pane -t ''` selects the ACTIVE pane — so a chat whose harness pane was
+        never recorded would drag the operator's keyboard onto whatever they were looking
+        at. Nothing below refuses it: `tmuxctl.run` issues the argv it is handed.
+        """
+        real = _Tmux()
+        with mock.patch.object(ended.tmuxctl, "live_pane_by_pid", return_value=None), \
+                mock.patch.object(ended.tmuxctl, "run", real):
+            ended._close_this_pane(SERVER, fid="beta.1", harness="%1", own_pane="%3")
+
+        aimed = [c[c.index("-t") + 1] for c in real.wrote("select-pane")]
+        self.assertEqual(aimed, ["%1"],
+                         "the keyboard was never put back on the chat's own pane")
+
+        empty = _Tmux()
+        with mock.patch.object(ended.tmuxctl, "live_pane_by_pid", return_value=None), \
+                mock.patch.object(ended.tmuxctl, "run", empty):
+            ended._close_this_pane(SERVER, fid="beta.1", harness="", own_pane="%3")
+
+        self.assertEqual(empty.wrote("select-pane"), [],
+                         "an empty target was aimed at the operator's own active pane")
+
+    def test_the_palette_command_draws_the_drawer_when_it_is_told_to(self):
+        """**`--ended` is the most specific of the four surfaces `frame-palette` can be**, so
+        `cmd_palette` asks it first — a drawer is not something a keypress produces, it is a
+        pane charter split beneath a harness that has just crashed.
+
+        The literal is the argparse dest. Retuned, the flag matches nothing and that pane
+        opens the ordinary `F2` palette instead: rows about the frame, in a rectangle charter
+        opened to ask about this one chat's ending.
+        """
+        drawn: list = []
+
+        with mock.patch.object(ended, "draw", side_effect=lambda a: drawn.append(a) or 0), \
+                mock.patch.object(commands_frame.pane, "claim", return_value=None), \
+                mock.patch.object(commands_frame.pane, "release"):
+            rc = commands_frame.cmd_palette(
+                SimpleNamespace(client="", pane=True, ended=True, chat="beta.1"))
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(drawn), 1,
+                         "the ended drawer was not the surface that opened")
+
+    def test_a_chat_argument_that_is_absent_is_answered_not_raised(self):
+        """`cmd_frame_ended` is a `run-shell -b` child and promises never to raise. Without
+        the fallback, an args namespace carrying `chat=None` makes `None.strip()` an
+        `AttributeError` out of a tmux hook, where nothing reads the traceback."""
+        fake = _Tmux()
+
+        with mock.patch.object(ended.tmuxctl, "run", fake):
+            self.assertEqual(ended.cmd_frame_ended(SimpleNamespace(chat=None)), 0)
+
+        self.assertEqual(fake.calls, [])
+
+    def test_a_chat_argument_is_stripped_at_both_ends(self):
+        """tmux expands `#{@charter_chat}` into a shell-quoted `run-shell` string, so the
+        value can arrive with whitespace around it. `lstrip` leaves the trailing space, and
+        `chats.ID_RE.fullmatch` then refuses the chat outright — the ended step silently
+        never runs for it."""
+        fake = _Tmux([_row("%1", "1", "beta.1", self.plane)])
+
+        with mock.patch.object(ended.tmuxctl, "run", fake):
+            ended.cmd_frame_ended(SimpleNamespace(chat="  beta.1  "))
+
+        self.assertEqual(len(fake.wrote("respawn-pane")), 1,
+                         "a chat id with whitespace around it was refused")
+
     def test_the_command_always_returns_zero(self):
         """It runs as a `run-shell -b` child of the tmux server: a non-zero return is
         printed INTO the harness pane and drops it into copy-mode, which is charter drawing
@@ -1495,6 +1677,22 @@ class ClosingAnEndedTabDoesNotAsk(PersonaIso, unittest.TestCase):
                 self.assertFalse(component.usable_id(row_id),
                                  f"a provider could ship an action as {row_id} and steal "
                                  "the keypress that closes an ended tab")
+
+    def test_the_palettes_close_row_says_why_it_will_not_ask(self):
+        """The title is the whole account of why this row acts on one keypress where the
+        doorway asks first — an operator who has closed a chat before has been warned every
+        time, so a row that suddenly acts has to say what changed.
+
+        The tab menu's twin has this assertion (`test_the_tab_menus_last_row_closes_now_on_an
+        _ended_tab` checks its title names the ending); the palette's row had its id and its
+        placement asserted and its words asserted nowhere.
+        """
+        state.claim_ended("beta.1")
+
+        row = leave.open_rows("beta.1")[-1]
+
+        self.assertIn("ended", row.title)
+        self.assertIn("close", row.title)
 
     def test_the_palettes_close_row_swaps_the_same_way_and_stays_last(self):
         """`leave.open_rows` puts the destructive row last so it is never one `F2 Enter`
@@ -1940,6 +2138,26 @@ class QuitAndReopenKeepEndedTabs(PersonaIso, unittest.TestCase):
         by_id = {c["chat"]: c for f in raw["frames"] for c in f["chats"]}
         self.assertEqual(by_id["beta.2"]["transcript"], dest.name)
 
+    def test_the_confirmation_says_when_the_conversation_is_still_on_offer(self):
+        """The other half of the ended tab's quit note. `test_the_confirmation_says_it_comes
+        _back_ended` below pins the *nothing to resume* answer; nothing pinned the one an
+        operator sees far more often — a tab whose conversation is still there.
+
+        Collapsed to either half, the sentence stops describing the chat it is about: an
+        operator reads *nothing to resume* over a conversation that is on offer, or is
+        promised a resume for a transcript that is gone.
+        """
+        kept = Path(config.ROOT) / "beta.2.jsonl"
+        kept.write_text("{}\n")
+        state.record_harness_session("beta.2", "conv2")
+        state.record_conversation("beta.2", str(kept))
+
+        doomed = {c.chat: c for c in self._plan().chats}
+        note = leave.note(doomed["beta.2"])
+
+        self.assertIn("comes back ended", note)
+        self.assertIn("resume offered", note)
+
     def test_the_confirmation_says_it_comes_back_ended(self):
         """`already ended on its own (N)` was about an exit code. What an operator needs
         before pressing quit is what they get BACK, which is a different sentence."""
@@ -1966,6 +2184,22 @@ class QuitAndReopenKeepEndedTabs(PersonaIso, unittest.TestCase):
 
         self.assertTrue(kept.ended)
         self.assertIn("ended", reopen.Chat._fields,
+                      "the writer's field and the reader's literal have come apart")
+
+    def test_the_manifests_active_field_survives_the_round_trip_too(self):
+        """`active` is the same hand-spelled wire key beside `ended`, and it decides where
+        the operator LANDS: `_attach_after_reopen` picks the chat whose record says it had
+        the client when the quit ran. Retuned, every restored chat reads as inactive and the
+        reopen falls through to the first chat of the focus workspace — somewhere the
+        operator was not.
+        """
+        raw = {"chat": "beta.1", "workspace": "beta", "persona": "",
+               "harness": "claude-code", "cwd": "", "resume": "", "transcript": "",
+               "profile": "claude", "brief": "", "conversation": ""}
+
+        self.assertTrue(reopen._chat({**raw, "active": True}).active)
+        self.assertFalse(reopen._chat(raw).active)
+        self.assertIn("active", reopen.Chat._fields,
                       "the writer's field and the reader's literal have come apart")
 
     def _record(self, *, ended: bool):
