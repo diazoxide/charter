@@ -453,6 +453,89 @@ class TestASettingsFileTooDeepToRewriteIsLeftAlone(PersonaIso):
         self.assertIn("left it completely untouched", said)
 
 
+class TestAPluginHooksFileCharterCannotReadIsCouldNotTell(ListShapeCase):
+    """A plugin's own `hooks.json` that charter cannot parse is not a plugin that does not
+    dispatch the guard — it is a file charter could not read, and the row must not say the first
+    when it means the second (round 5 of the review).
+
+    `init`'s behaviour is unchanged and deliberately so: no dispatch charter can see means it
+    writes the hook, which is the safe direction. What changes is only what the row CLAIMS.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.enable()
+        self.write(self.manifest, {"version": 2, "plugins": {PID: [self.valid()]}})
+
+    def test_the_row_names_the_file_it_could_not_read_and_init_still_writes_the_hook(self):
+        for shape in ('{"hooks": {"PreToolUse": NaN}}', "not json", "[" * 200000):
+            with self.subTest(shape=shape[:30]):
+                # Back to a plane that declares nothing: the `_ensure_guard_hook` below WROTE a
+                # hook block on the previous pass, and a plane that declares the guard itself is
+                # a different row (green, and pinned by the case under this one).
+                self.enable()
+                self.write(self.plugin / "hooks" / "hooks.json", shape)
+                r = doctor.check_guard_wired()
+                self.assertEqual(r.status, WARN, f"{r.detail} {r.hint}")
+                self.assertIn("could not tell", r.detail)
+                self.assertIn("hooks.json", r.detail)
+                self.assertEqual(commands._ensure_guard_hook(self.plane)[0], "created")
+
+    def test_a_settings_block_keeps_it_green_and_still_says_what_it_could_not_read(self):
+        """The block a session here loads runs whatever the plugin's file holds, so the row is
+        green — and still names the file, because "could not tell whether a plugin ALSO
+        dispatches it" is then the only thing left unsaid. The same sentence round 3 gave an
+        install list charter cannot read, for a file one level down."""
+        self.write(self.settings, {"enabledPlugins": {PID: True}, **_PRETOOLUSE})
+        self.write(self.plugin / "hooks" / "hooks.json", '{"hooks": {"PreToolUse": NaN}}')
+        r = doctor.check_guard_wired()
+        self.assertEqual(r.status, OK, f"{r.detail} {r.hint}")
+        self.assertIn("could not tell", r.detail)
+        self.assertIn("hooks.json", r.detail)
+
+    def test_a_plugin_that_does_dispatch_it_settles_the_row_whatever_else_cannot_be_read(self):
+        """The doubt is asked only when nothing was found. A plugin charter CAN read, dispatching
+        the guard, answers the row — and another plugin's unreadable file must not put a caveat
+        on an answer that does not depend on it."""
+        other = self.tmp / "plugin-cache" / "other"
+        self.write(other / "hooks" / "hooks.json", "not json")
+        self.write(self.settings, {"enabledPlugins": {PID: True, "other@x": True}})
+        self.write(self.manifest, {"version": 2, "plugins": {
+            PID: [self.valid()],
+            "other@x": [{"scope": "user", "installPath": str(other)}]}})
+        guardseen.mark(harness="claude-code", source=guardseen.PLUGIN)
+        r = doctor.check_guard_wired()
+        self.assertEqual(r.status, OK, f"{r.detail} {r.hint}")
+        self.assertNotIn("could not tell", r.detail)
+
+    def test_it_names_two_of_the_files_it_could_not_read_and_not_every_one(self):
+        """A row is one line, and the install list is a file a chat can write — so the count of
+        files it can put in this sentence is not the count of files it may print."""
+        ids, names = {}, ("plugA", "plugB", "plugC")
+        for name in names:
+            at = self.tmp / "plugin-cache" / name
+            self.write(at / "hooks" / "hooks.json", "not json")
+            ids[f"{name}@x"] = [{"scope": "user", "installPath": str(at)}]
+        self.write(self.settings, {"enabledPlugins": {pid: True for pid in ids}})
+        self.write(self.manifest, {"version": 2, "plugins": ids})
+        r = doctor.check_guard_wired()
+        self.assertEqual(r.status, WARN, f"{r.detail} {r.hint}")
+        self.assertIn("plugA", r.detail)
+        self.assertIn("plugB", r.detail)
+        self.assertNotIn("plugC", r.detail)
+
+    def test_a_hooks_file_that_simply_does_not_dispatch_is_not_doubt(self):
+        """The row may only say it could not read a file when it could not. A plugin wiring some
+        other handler is read perfectly well and dispatches nothing."""
+        self.write(self.plugin / "hooks" / "hooks.json", {"hooks": {"PreToolUse": [
+            {"matcher": "Bash", "hooks": [
+                {"type": "command", "command": "charter hook pretooluse-read"}]}]}})
+        r = doctor.check_guard_wired()
+        self.assertEqual(r.status, WARN, f"{r.detail} {r.hint}")
+        self.assertNotIn("could not tell", r.detail)
+        self.assertIn(_UNWIRED, r.detail)
+
+
 class TestAListClaudeCodeReadsFromElsewhereIsCouldNotTell(ListShapeCase):
     """`$CLAUDE_CODE_PLUGIN_CACHE_DIR` moves the install list out of the config folder. Measured:
     set to an empty directory, `claude plugin list --json` lists no install; set empty, it lists

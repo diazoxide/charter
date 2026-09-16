@@ -203,9 +203,20 @@ start Claude Code from, so it sees the same variable.
   command invokes the `pretooluse` handler. The guard's name anywhere else in that file — in a
   `matcher`, beside the command rather than in it, under another event, or in a different handler
   such as `charter hook pretooluse-read`, which guards Read and Grep — dispatches nothing and is
-  not counted. A `hooks.json` charter cannot parse as Claude Code parses it dispatches nothing
-  either, so `charter init` and `reinit` write the guard hook: the safe direction, since a guard
-  declared twice is harmless and reported, and one declared nowhere is a hole.
+  not counted. A `hooks.json` charter cannot parse as Claude Code parses it is a file charter
+  could not read rather than a plugin that dispatches nothing, and the row says exactly that and
+  names the file. `charter init` and `reinit` write the guard hook in that case anyway: the safe
+  direction, since a guard declared twice is harmless and reported, and one declared nowhere is a
+  hole. If this session's own settings declare the guard, the row stays green and says it could
+  not tell whether a plugin dispatches it too.
+
+  `charter init` and `reinit` decide the same way about your own `.claude/settings.json` before
+  they write the hook into it, so "already wired" means the same thing in both files.
+
+  **A known limit:** Claude Code's hook schema also has an exec form that carries the handler in
+  `args` rather than inside the `command` string. Charter reads only the command string, so a
+  plugin wiring the guard that way reads as no dispatch, and `init` writes its own hook — the
+  safe direction, and `doctor` reports the result as declared twice.
 - **A settings file charter cannot read is never written back.** `.claude/settings.json` and its
   machine-local sibling are read exactly as Claude Code reads them, so a file holding `NaN`,
   `Infinity` or `-Infinity` — which `JSON.parse` refuses, and Claude Code loads nothing from — is

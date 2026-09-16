@@ -1253,6 +1253,14 @@ def _plugin_declaring_guard(root: Path | None = None,
     # hook: a guard declared twice runs twice and is reported, a guard declared nowhere is not.
     installs, _doubt = _installed_plugins(folder)
     for pid, records in installs.items():
+        # :func:`_dispatches_guard` has a third answer now, and both of the others are falsy
+        # here on purpose: a file charter could not read is not a plugin that dispatches the
+        # guard, so this function's `None` goes on meaning "none that charter can see" for every
+        # caller that only asks whether to write the hook. `_guard_dispatch_doubt` is what tells
+        # the two apart, for the row that has to say which it met. (Spelled as truthiness rather
+        # than `is True`: `None` and `False` are the same answer to THIS question, and a
+        # comparison that changes nothing observable is a line the deletion sweep is right to
+        # report.)
         if pid in enabled and any(_dispatches_guard(r["installPath"]) for r in records):
             return pid
     return None
@@ -1266,11 +1274,21 @@ _GUARD_EVENT = "PreToolUse"
 _GUARD_HANDLER = "pretooluse"
 
 
-def _dispatches_guard(install_path: str) -> bool:
+def _dispatches_guard(install_path: str) -> bool | None:
     """Does the plugin installed at *install_path* dispatch `charter hook pretooluse`?
 
+    ``True`` it does, ``False`` it does not, and ``None`` charter could not read the file to tell
+    — three answers rather than two, because the third is a fact about charter and the second is
+    a fact about the plugin, and a row that prints them the same way claims something it does not
+    know (round 5 of the review). :func:`_guard_dispatch_doubt` is what turns the third into a
+    sentence naming the file.
+
     *install_path* is text out of a file a chat can write, so a missing directory, an unreadable
-    `hooks.json` and a NUL byte (``ValueError``) each answer no rather than raise.
+    `hooks.json` and a NUL byte (``ValueError``) each answer no rather than raise. Those are
+    ``False`` and not ``None`` on purpose: an install whose files are gone is a state this row
+    already reports in its own words, and charter read the file it was given perfectly well.
+
+    The structural half is :func:`_guard_runs_in`, shared with the settings file's own writer.
 
     **Decided from the entry Claude Code would RUN, not from the file's text** (round 5 of the
     review). This asked whether the string `charter hook pretooluse` appeared anywhere in the
@@ -1293,15 +1311,41 @@ def _dispatches_guard(install_path: str) -> bool:
     from . import hooks
 
     try:
-        text = (Path(install_path) / "hooks" / "hooks.json").read_text()
+        text = _hooks_json(install_path).read_text()
     except (OSError, ValueError):
         return False
     try:
         doc = _json_as_claude_code_parses(text)
     except (ValueError, RecursionError):
-        return False
+        return None
     events = doc.get("hooks") if isinstance(doc, dict) else None
-    groups = events.get(_GUARD_EVENT) if isinstance(events, dict) else None
+    return _guard_runs_in(events.get(_GUARD_EVENT) if isinstance(events, dict) else None)
+
+
+def _guard_runs_in(groups) -> bool:
+    """Does any hook group in *groups* run `charter hook pretooluse`?
+
+    *groups* is one event's list of hook groups, as it comes out of a plugin's `hooks.json` or
+    out of a settings file's ``hooks.PreToolUse`` — the same shape in both, which is why this is
+    one function. `commands._ensure_guard_hook` decides whether the guard is already wired by
+    asking here, so the writer and the readers cannot come to different ideas of what "the guard
+    is wired" means; that writer used to decide by substring over `json.dumps(entry)`, which was
+    wrong twice over (round 6). It counted the guard's text in a `matcher`, in an entry Claude
+    Code would not run, and in a different handler — and it re-encoded parsed data purely to
+    search it, so a settings file nested past the C encoder's limit killed `charter init` with an
+    uncaught `RecursionError` on 3.14 (measured: 100,000 levels parse and then will not
+    re-encode, while 3.12's decoder gives up first and never reaches it).
+
+    Every level is checked for its type, because every level is a line a chat can write.
+
+    **A known limit, stated rather than guessed at:** Claude Code's hook schema also has an exec
+    form carrying the handler in ``args`` rather than in the ``command`` string. Charter reads
+    only the command string, so a plugin wiring the guard that way reads here as no dispatch —
+    and `init` then writes its own hook, which is the safe direction: declared twice is harmless
+    and `doctor` reports it, declared nowhere is a hole.
+    """
+    from . import hooks
+
     for group in groups if isinstance(groups, list) else ():
         entries = group.get("hooks") if isinstance(group, dict) else None
         for entry in entries if isinstance(entries, list) else ():
@@ -1311,6 +1355,41 @@ def _dispatches_guard(install_path: str) -> bool:
             if isinstance(command, str) and _GUARD_HANDLER in hooks._HOOK_CMD_RE.findall(command):
                 return True
     return False
+
+
+def _hooks_json(install_path: str) -> Path:
+    """Where a plugin installed at *install_path* declares its hooks. One spelling, because the
+    reader that decides and the reader that doubts must name the same file."""
+    return Path(install_path) / "hooks" / "hooks.json"
+
+
+def _guard_dispatch_doubt(root: Path | None = None,
+                          folder: Path | None = None) -> str | None:
+    """The enabled plugins whose own `hooks.json` charter could not read, as one clause naming
+    the files — or ``None`` when it could read all of them.
+
+    ``None`` includes the ordinary case where nothing dispatches the guard: that is an answer,
+    not a doubt, and reporting it as one would put a caveat on every unwired plane and teach the
+    reader to skip the ones that are real.
+
+    Separate from :func:`_plugin_declaring_guard` rather than folded into it, because that
+    function's ``None`` is read by `commands._ensure_guard_hook` as "write the hook" and must go
+    on meaning exactly that — the write is the safe direction whether charter could read the file
+    or not. What could not be read changes only what the ROW says. Both walk the same installs
+    through :func:`_dispatches_guard`, so the answer and the doubt cannot come from different
+    evidence, which is the drift `_plugin_dispatches_guard` already records for this file.
+    """
+    # No early return for "nothing enabled": the `pid in enabled` filter below already yields
+    # nothing, so one would change no answer, and a line that changes no answer is one the
+    # deletion sweep reports as a survivor — rightly.
+    enabled = _enabled_plugin_ids(root, folder)
+    installs, _doubt = _installed_plugins(folder)
+    unreadable = sorted({_line(util.short_path(_hooks_json(r["installPath"])))
+                         for pid, records in installs.items() if pid in enabled
+                         for r in records if _dispatches_guard(r["installPath"]) is None})
+    if not unreadable:
+        return None
+    return f"{_named(unreadable[:2])} is not JSON charter can parse"
 
 
 def _line(value) -> str:
@@ -1864,6 +1943,13 @@ def check_guard_wired() -> Result:
     # and left the guard declared twice — and enabled is not dispatched (#177).
     plugin = (_LAUNCHED_BY_THE_PLUGIN if os.environ.get("CLAUDE_PLUGIN_ROOT")
               else _plugin_declaring_guard())
+    # A plugin whose own `hooks.json` charter cannot parse is not a plugin that does not dispatch
+    # the guard, and `_plugin_declaring_guard` answers `None` to both. Turning that into
+    # "pretooluse is not wired" is the one claim this row cannot support about a file it could not
+    # read — the defect this whole review is about, arrived at from the plugin's side (round 5).
+    # Asked only when nothing was found: a plugin that DOES dispatch it settles the row, whatever
+    # some other plugin's unreadable file holds.
+    dispatch_doubt = None if plugin else _guard_dispatch_doubt()
     # A plugin id is a key in files a chat can write, so every sentence prints it contained.
     named = _line(plugin)
 
@@ -1883,14 +1969,15 @@ def check_guard_wired() -> Result:
     # Then, before the doubled branch — whose advice is to delete the one declaration a session
     # here may be loading — could not tell, files gone, installed elsewhere.
     placed, elsewhere, gone, doubt = _plugin_standing(plugin)
-    if declared and doubt:
+    if declared and (doubt or dispatch_doubt):
         # Green, because the block runs; and honest about the one thing it cannot tell — whether a
         # plugin dispatches the guard as well, which is the second declaration `init` writes the
-        # hook knowing it may make (round 3 of the review).
+        # hook knowing it may make (round 3 of the review). A plugin's own `hooks.json` that
+        # charter could not parse is the same sentence for the same reason (round 5).
         return Result(name, OK,
                       detail=f"wired ({_line(declared[0])}) — the declaration a session here "
                              f"loads; charter could not tell whether an enabled plugin also "
-                             f"dispatches it here: {doubt}")
+                             f"dispatches it here: {doubt or dispatch_doubt}")
     if declared and (gone or elsewhere):
         return Result(name, OK,
                       detail=f"wired ({_line(declared[0])}) — the declaration a session here "
@@ -1908,6 +1995,20 @@ def check_guard_wired() -> Result:
                  f"repository, and none has `user` or `managed` scope, no charter hook runs here — "
                  f"run: {PLUGIN_FIX_CMD}  (installs `{plugincache.PLUGIN_ID}` for this plane; it "
                  f"reads that list, not the file).")
+    if dispatch_doubt:
+        # Not "pretooluse is not wired": charter could not read the file that would say. The
+        # remedy names both ways out, because only one of them is the operator's to take if the
+        # plugin's file is somebody else's to fix.
+        return Result(
+            name, WARN,
+            detail=f"charter could not tell whether the plugin enabled here dispatches the "
+                   f"guard: {dispatch_doubt}",
+            hint=f"Charter reads a plugin's own hooks/hooks.json to see whether it runs `charter "
+                 f"hook pretooluse`, and that file is not JSON it can parse — so whether a guard "
+                 f"runs in a session here is not something charter can answer either way. Fix "
+                 f"that file, or declare `charter hook pretooluse` under hooks.PreToolUse in "
+                 f"this directory's .claude/settings.json, which runs whatever the plugin does "
+                 f"— `charter reinit` writes that block.")
     if gone:
         return Result(
             name, WARN,

@@ -88,5 +88,10 @@ whether the text `charter hook pretooluse` appeared anywhere in that file. That 
 Code would not run as a command — and in `charter hook pretooluse-read`, which is a different
 handler guarding Read and Grep rather than Bash. So a plugin wiring only the read handler was
 read as wiring the Bash guard, and `init` then wrote no hook for a plane nothing guarded. The row
-now decides from the hook entry Claude Code would actually run. A `hooks.json` charter cannot
-parse dispatches nothing, and `init` writes the guard hook — the safe direction.
+now decides from the hook entry Claude Code would actually run.
+
+A plugin's `hooks.json` that charter cannot parse is reported as what it is: the row says it
+could not tell whether that plugin dispatches the guard, and names the file, rather than saying
+the guard is not wired. `charter init` and `reinit` write the guard hook in that case anyway —
+the safe direction, since a guard declared twice is harmless and reported while one declared
+nowhere is a hole.

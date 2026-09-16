@@ -1266,7 +1266,19 @@ def _ensure_guard_hook(root: Path) -> tuple[str, Path | None]:
     pre = (hooks_block or {}).get("PreToolUse") or []
     if not isinstance(pre, list):
         return "malformed", p
-    if any("charter hook pretooluse" in json.dumps(entry) for entry in pre):
+    # Structurally, through the reader `doctor` uses for a plugin's own `hooks.json` — the same
+    # question about the same shape, so one answer (round 6).
+    #
+    # This was `any("charter hook pretooluse" in json.dumps(entry) for entry in pre)`, and it was
+    # wrong in both directions. It counted the guard's text wherever it appeared — in a `matcher`,
+    # beside the command, in an entry Claude Code would not run — so `init` wrote no hook for a
+    # plane nothing guarded. And it re-encoded parsed data only in order to search it: a settings
+    # file whose `PreToolUse` entry nests past the C encoder's limit (measured on 3.14: 100,000
+    # levels parse and then will not re-encode) made THIS line raise `RecursionError`, one line
+    # above the re-encode that is guarded — so `charter init` died with no sentence and no exit
+    # code. Deciding on the parsed entry removes the encode rather than wrapping it, which is the
+    # only version of this that cannot come back.
+    if doctor._guard_runs_in(pre):
         return "present", None
     settings.setdefault("hooks", {}).setdefault("PreToolUse", []).append(_GUARD_HOOK)
     indent, separators = _json_style(raw)

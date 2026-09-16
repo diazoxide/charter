@@ -76,6 +76,25 @@ def deep_text(levels: int) -> str:
             + '{"deep": ' * levels + "{}" + "}" * levels + "\n}\n")
 
 
+#: Levels at which 3.14 parses a settings file and its C encoder then refuses it. Measured:
+#: 50,000 still encodes, 100,000 does not, and 3.12's decoder gives up by 20,000 and never
+#: reaches the encoder at all. Dict nesting, because that is what a hook group is.
+BEYOND_THE_C_ENCODER = 100_000
+
+
+def deep_group_text(levels: int) -> str:
+    """A settings file whose `hooks.PreToolUse` holds one group nested *levels* deep.
+
+    The nesting is INSIDE the group on purpose. `_ensure_guard_hook` used to re-encode each
+    group of `pre` one at a time to search it, so only a deep GROUP drives that line — round 5's
+    fixture nested under a top-level key, left `pre` empty, and never reached it.
+    """
+    nest = '{"deep": ' * levels + "{}" + "}" * levels
+    return ('{\n  "statusLine": {"type": "command", "command": "echo"},\n'
+            '  "hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [], "deep": '
+            + nest + "}]}\n}\n")
+
+
 def depth(obj) -> int:
     """How deeply *obj* nests, walked with an explicit stack.
 
@@ -392,6 +411,64 @@ class TestNothingIsWrittenBackThatClaudeCodeRefuses(SettingsCase):
                 status, _detail = commands.add_ask_rule(self.root, "Bash(x *)")
                 self.assertEqual(status, "malformed")
                 self.assertEqual(self.settings.read_bytes(), before)
+
+
+class TestTheWiredCheckDecidesOnTheParsedEntry(SettingsCase):
+    """`_ensure_guard_hook` asks whether the guard is ALREADY wired in this settings file, and it
+    answered by re-encoding each `hooks.PreToolUse` group and searching the text (round 6).
+
+    Two defects in one line. The search counted the guard's name anywhere in the group, including
+    places Claude Code runs nothing from — so `init` wrote no hook for a plane nothing guarded.
+    And the re-encode existed *only* to be searched, one line above the re-encode that round 4
+    guarded: a group nested past the C encoder's limit raised `RecursionError` there, so `charter
+    init` died with no sentence and no exit code. It is decided on the parsed entry now, through
+    the reader `doctor` uses for a plugin's own `hooks.json`.
+    """
+
+    def group(self, *entries, matcher: str = "Bash") -> bytes:
+        return self.put(self.settings, json.dumps(
+            {"hooks": {"PreToolUse": [{"matcher": matcher, "hooks": list(entries)}]}}, indent=2))
+
+    def test_the_guards_name_in_a_matcher_is_not_wired(self):
+        before = self.group(matcher="charter hook pretooluse")
+        status, _detail = commands._ensure_guard_hook(self.root)
+        self.assertEqual(status, "created")
+        self.assertNotEqual(self.settings.read_bytes(), before)
+
+    def test_the_guards_name_in_an_entry_claude_code_would_not_run_is_not_wired(self):
+        self.group({"type": "disabled", "command": "charter hook pretooluse"})
+        self.assertEqual(commands._ensure_guard_hook(self.root)[0], "created")
+
+    def test_another_handler_is_not_this_guard(self):
+        self.group({"type": "command", "command": "charter hook pretooluse-read"})
+        self.assertEqual(commands._ensure_guard_hook(self.root)[0], "created")
+
+    def test_a_real_entry_is_still_wired_and_nothing_is_written(self):
+        before = self.group({"type": "command", "command": "charter hook pretooluse",
+                             "timeout": 10})
+        status, _detail = commands._ensure_guard_hook(self.root)
+        self.assertEqual(status, "present")
+        self.assertEqual(self.settings.read_bytes(), before)
+
+    def test_a_group_too_deep_to_re_encode_never_raises(self):
+        """Patched, so it is red on every version: the depth that breaks a real encoder is not
+        portable, and the old line re-encoded each group whatever its depth."""
+        before = self.put(self.settings, deep_group_text(200))
+        with too_deep_to_rewrite():
+            status, _detail = commands._ensure_guard_hook(self.root)
+        self.assertEqual(status, "malformed")
+        self.assertEqual(self.settings.read_bytes(), before)
+
+    def test_init_survives_a_group_too_deep_for_the_c_encoder(self):
+        """Unpatched and real. On 3.14 the file parses and the C encoder then refuses the group,
+        which is where `init` died; on 3.11-3.13 the decoder gives up first. Either way `init`
+        says one contained sentence, exits 1, and leaves the file exactly as it was — never a
+        traceback."""
+        before = self.put(self.settings, deep_group_text(BEYOND_THE_C_ENCODER))
+        rc, err = self.init()
+        self.assertEqual(rc, 1, err)
+        self.assertEqual(self.settings.read_bytes(), before)
+        self.assertIn(_UNTOUCHED, err)
 
 
 class TestCodexRefusesAConfigItCannotParse(SettingsCase):
