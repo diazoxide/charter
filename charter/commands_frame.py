@@ -1561,20 +1561,28 @@ def _pane_died_ended_hook_argv(*, socket: str, harness_pane: str) -> list[str]:
 
 
 def _pane_died_second_hook_argv(*, socket: str, harness_pane: str,
-                                profile: str) -> list[str]:
+                                harness_chat: bool) -> list[str]:
     """Which `pane-died[1]` this chat gets — the ended step, or today's `kill-window`.
 
-    **One decision, made once, with a name.** A chat that runs a PROFILE keeps its tab and
-    is offered a choice (decision 4); `charter frame -- <cmd>` is not a harness and keeps
-    today's ending, which is the operator's ruling on open question 5 — its window closes
-    when the command exits and the exit code goes back to the script that was waiting on it.
+    **One decision, made once, with a name.** A chat that can ever run a harness keeps its
+    tab and is offered a choice (decision 4); `charter frame -- <cmd>` is not a harness and
+    keeps today's ending, which is the operator's ruling on open question 5 — its window
+    closes when the command exits and the exit code goes back to the script waiting on it.
 
-    *profile* is `_profile_name(p)`, which is `""` for exactly that escape hatch. Asked as a
-    function rather than as a condition inside the launch, because the next reader needs to
-    be able to find the rule rather than reconstruct it from where the call happens to sit —
-    and because it is the one line a test can drive without standing up a whole launch.
+    **The question is "is this the escape hatch", NOT "is a profile resolved right now",
+    and getting that wrong is a live defect rather than a nicety.** The hook is installed
+    once, at launch, and a SELECTOR chat has no profile at that moment — bare `charter`, the
+    `+`, a workspace tab and the palette's new chat all open a pane that asks which profile
+    to run and resolves one minutes later, in the pane. Keyed on the profile, every one of
+    those would have been armed with `kill-window`, so the first harness an operator started
+    from the selector would still have had its window killed the moment it exited: the whole
+    feature, missing on its commonest path, and invisible to any test that launches a named
+    profile.
+
+    So the escape hatch is named by what it IS — a launch with no profile that is not asking
+    for one — and everything else gets the ended step.
     """
-    if profile:
+    if harness_chat:
         return _pane_died_ended_hook_argv(socket=socket, harness_pane=harness_pane)
     return _pane_died_teardown_hook_argv(socket=socket, harness_pane=harness_pane)
 
@@ -6572,8 +6580,10 @@ def _launch(args) -> int:
     # at all, further down — so its position is kept rather than its result guessed at.
     teardown_at = _tell(
         "installing the chat-teardown hook",
+        # `p is not None or selecting`: a profile chat, or a pane that is ABOUT to become
+        # one. Only `charter frame -- <cmd>` is neither.
         _pane_died_second_hook_argv(socket=socket, harness_pane=harness_pane,
-                                    profile=_profile_name(p)),
+                                    harness_chat=(p is not None or selecting)),
         "")
 
     told = tmuxctl.write_all("telling the frame's window and session what they are",
