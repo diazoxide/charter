@@ -250,6 +250,35 @@ def argv_select(start: str | None, *, ended: bool = False,
                                    *(("--start", start) if start else ()))
 
 
+def session_name(fid: str) -> str:
+    """The name the harness is started under — ``"<title> · <id>"``, or the id alone.
+
+    **Composed at every `exec` and never stored** (decision 11): a rename writes one file and
+    nothing else (ADR 0018 — charter never types into a harness), so the name Claude Code sees
+    is whatever this answers the next time it starts or resumes. That is the whole mechanism,
+    and it is why a rename reaches a running harness not at all.
+
+    **The id is ALWAYS in it** (ruling 1). Claude Code's `--name` is a display name — the
+    prompt box, the `/resume` picker, the terminal title — and the operator picking a session
+    out of that list needs the same id every other charter surface calls it by. Measured live
+    on Claude Code 2.1.272 (readings C1 and C3): `--name "t1 · beta.1"` is accepted at a start
+    and at a resume, written with no prompt, and listed by a fresh `claude --resume` picker.
+
+    **Codex and opencode never see it.** Neither takes a name at launch — `resume_argv`
+    ignores the argument, and `new_session_argv` is the base class's empty list — so this is
+    composed for them and dropped, which costs one small file read on a path that is already
+    reading the chat's record. `rename.takes_a_name` is the question a caller asks when it has
+    to SAY which of the two a chat is (`docs/harnesses.md`).
+
+    Contained, because it is going onto an argv: `chats.title_of` is `contain.readable`
+    bounded to `state.TITLE_MAX`, so a `title` file a chat hand-wrote cannot put an escape
+    sequence or five thousand columns into a harness's argument (ruling 35).
+    """
+    from . import chats
+    shown = chats.title_of(fid)
+    return f"{shown} · {fid}" if shown else fid
+
+
 def resume_row(fid: str | None) -> "selector.Resume | None":
     """The resume row for *fid*'s tab, or ``None`` when there is nothing to bring back.
 
@@ -263,9 +292,12 @@ def resume_row(fid: str | None) -> "selector.Resume | None":
     identity yet, and a resume row that vanished on a restored tab would be the one place
     the feature is most needed — the chat came back precisely so its conversation could.
 
-    The title is the chat id here; task 3 composes `<title> · <id>` in its place. The note
-    names the harness and the first bytes of the link, so the row says WHICH conversation
-    rather than asking the operator to take charter's word for it.
+    **The title is the SESSION NAME** (:func:`session_name`), which is decision 4 read
+    exactly — *back to the profile selector, with resume &lt;session name&gt; preselected* —
+    and it is the same string the harness is about to be started under, so the row and the
+    `claude --resume` picker name one conversation the same way. The note names the harness
+    and the first bytes of the link, so the row says WHICH conversation rather than asking the
+    operator to take charter's word for it.
     """
     from . import selector as selector_mod
     from . import leave
@@ -285,7 +317,7 @@ def resume_row(fid: str | None) -> "selector.Resume | None":
     link = state.kept_harness_session(fid) or ""
     if not leave.conversation_exists(kind, link, state.conversation(fid) or ""):
         return None
-    return selector_mod.Resume(title=f"resume {fid}",
+    return selector_mod.Resume(title=f"resume {session_name(fid)}",
                                note=f"{kind} · session {link[:8]}")
 
 
@@ -551,9 +583,11 @@ def session_argv(p, fid: str | None, *, resume: bool, rest: list[str]) -> tuple[
       the `exec`, so every route that starts a harness gets one and the link exists before
       the harness does.
 
-    The name is the chat's id. It is read from the chat's record in this pane and never
-    crosses tmux, which is also why the id is minted here and not by the launch that made
-    the window.
+    The name is :func:`session_name` — the chat's title and its id, or the id alone. It is
+    read from the chat's record IN THIS PANE and never crosses tmux, which is also why the id
+    is minted here and not by the launch that made the window: a person's words are not a word
+    charter hands tmux's argument parser (`layout.CARRIABLE` is unchanged, and #957 and #961
+    are what that rule cost).
     """
     if fid is None:
         return [], ""
@@ -561,7 +595,7 @@ def session_argv(p, fid: str | None, *, resume: bool, rest: list[str]) -> tuple[
     h = registry.get(p.harness)
     if h is None or any(word.partition("=")[0] in h.session_flags for word in rest):
         return [], ""
-    name = fid
+    name = session_name(fid)
     link = state.kept_harness_session(fid) if resume else None
     words = h.resume_argv(link, name) if link else None
     if words is not None:

@@ -786,3 +786,194 @@ class ATitleAtThePlus(PersonaIso, unittest.TestCase):
                 SimpleNamespace(start="", ended=False, fresh=False), "beta.1")
         self.assertFalse(pick.call_args.kwargs["titling"])
         self.assertIsNone(state.title("beta.1"))
+
+
+class ClaudeIsNamedAtStartAndResume(PersonaIso, unittest.TestCase):
+    """The name the harness is started under, and the harnesses that never see one."""
+
+    def setUp(self):
+        super().setUp()
+        _plant("beta.1")
+
+    def test_the_session_name_is_the_title_and_the_id(self):
+        """Ruling 1 on the one surface where it would be easiest to lose: `--name` is a
+        DISPLAY name — Claude's prompt box, its `/resume` picker, the terminal title — and an
+        operator picking a session out of that list needs the same id every other charter
+        surface calls it by."""
+        from charter.frame import launcher
+        self.assertEqual(launcher.session_name("beta.1"), "beta.1")
+        state.record_title("beta.1", "fix it")
+        self.assertEqual(launcher.session_name("beta.1"), "fix it \u00b7 beta.1")
+
+    def test_the_name_is_contained_before_it_reaches_an_argv(self):
+        """Ruling 35: `title` is a file a chat can write, and this value is about to be a
+        harness's own argument."""
+        from charter.frame import launcher
+        (state._root() / "beta.1" / "title").write_text("ow\x1b[2Kned\n", encoding="utf-8")
+        name = launcher.session_name("beta.1")
+        self.assertNotIn("\x1b", name)
+        self.assertTrue(name.endswith("beta.1"))
+        (state._root() / "beta.1" / "title").write_text("z" * 5000, encoding="utf-8")
+        self.assertLess(len(launcher.session_name("beta.1")), 200)
+
+    def test_a_start_and_a_resume_both_carry_it(self):
+        """Measured live on Claude Code 2.1.272 (C1, C3): `--name "<title> · <id>"` is
+        accepted at a start and at a resume, written with no prompt, and listed by a fresh
+        `claude --resume` picker."""
+        from charter.frame import launcher
+        p = SimpleNamespace(harness="claude-code", name="claude-work")
+        state.record_title("beta.1", "fix it")
+        words, chosen = launcher.session_argv(p, "beta.1", resume=False, rest=[])
+        self.assertEqual(words[:2], ["--session-id", chosen])
+        self.assertEqual(words[2:], ["--name", "fix it \u00b7 beta.1"])
+
+        state.record_harness_session("beta.1", "u-linked")
+        words, chosen = launcher.session_argv(p, "beta.1", resume=True, rest=[])
+        self.assertEqual(words, ["--resume", "u-linked", "--name", "fix it \u00b7 beta.1"])
+        self.assertEqual(chosen, "")
+
+    def test_a_resume_after_a_rename_carries_the_new_name(self):
+        """The whole mechanism ruling 3 leaves: charter types nothing into a harness, so the
+        name moves at the next start or resume and at no other moment."""
+        from charter.frame import launcher
+        p = SimpleNamespace(harness="claude-code", name="claude-work")
+        state.record_harness_session("beta.1", "u-linked")
+        state.record_title("beta.1", "first")
+        self.assertEqual(launcher.session_argv(p, "beta.1", resume=True, rest=[])[0][-1],
+                         "first \u00b7 beta.1")
+        state.record_title("beta.1", "second")
+        self.assertEqual(launcher.session_argv(p, "beta.1", resume=True, rest=[])[0][-1],
+                         "second \u00b7 beta.1")
+
+    def test_codex_and_opencode_get_no_name(self):
+        """Ruling 4. Neither takes a name at launch — openai/codex#14482 is open, and
+        opencode's `--title` exists only on `opencode run` — so their tabs carry the title in
+        charter's own surfaces only."""
+        from charter.frame import launcher
+        state.record_title("beta.1", "fix it")
+        state.record_harness_session("beta.1", "u-linked")
+        for kind, expected in (("codex", ["resume", "u-linked"]),
+                               ("opencode", ["-s", "u-linked"])):
+            with self.subTest(kind=kind):
+                p = SimpleNamespace(harness=kind, name=kind)
+                words, _chosen = launcher.session_argv(p, "beta.1", resume=True, rest=[])
+                self.assertEqual(words, expected)
+                self.assertNotIn("--name", words)
+                self.assertNotIn("fix it", " ".join(words))
+
+    def test_the_resume_row_names_the_session(self):
+        """Decision 4 read exactly — *resume &lt;session name&gt;* — and it is the same string
+        the harness is about to be started under, so the row and the `claude --resume` picker
+        name one conversation the same way."""
+        from charter.frame import launcher
+        state.record_harness_session("beta.1", "u-linked-0123456789")
+        (config.ROOT / "conv.jsonl").write_text("{}\n")
+        state.record_conversation("beta.1", str(config.ROOT / "conv.jsonl"))
+        self.assertEqual(launcher.resume_row("beta.1").title, "resume beta.1")
+        state.record_title("beta.1", "fix it")
+        self.assertEqual(launcher.resume_row("beta.1").title,
+                         "resume fix it \u00b7 beta.1")
+
+    def test_the_crash_drawer_names_the_id_then_the_title(self):
+        """The drawer sits under a pane whose tab may be drawing nothing but the words the
+        operator chose, so its heading is what says which chat it is about."""
+        from charter.frame import ended
+        state.record_title("beta.1", "fix it")
+        seen: list[str] = []
+
+        def _own(surface, **kw):
+            seen.append(surface.label)
+            return None
+
+        # No pane record, so the handback resolves no harness pane and nothing is aimed at a
+        # server: this case is about the HEADING, and `tests/_planeguard.py` refuses a real
+        # `tmux` either way.
+        state.record_harness_pane("beta.1", "")
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "beta.1"}, clear=False), \
+                mock.patch.object(tmuxctl, "live_pane_by_pid", return_value=None), \
+                mock.patch("charter.frame.palette.own_the_tty", side_effect=_own):
+            ended.draw(SimpleNamespace(chat="beta.1"))
+        self.assertEqual(seen, ["chat beta.1 \u00b7 fix it ended"])
+
+
+class AHandoffTitlesItsChat(PersonaIso, unittest.TestCase):
+    """A chat opened in the background is titled from the first line of its brief."""
+
+    def test_the_first_non_blank_line_is_the_title(self):
+        self.assertEqual(rename.first_line_title("\n\nfix the widget\nand then more\n"),
+                         "fix the widget")
+
+    # **The `_launch` call site is pinned where the real launch runs**, not here:
+    # `tests/test_a_chat_opens_in_the_background_with_its_first_message
+    # .TheLaunchOpensWithoutMovingAnyone` drives the actual `cmd_launch` with tmux stood in,
+    # and `test_a_handed_off_chat_is_titled_from_the_first_line_of_its_brief` is the case that
+    # goes red without the write. A case here that called `record_title` with
+    # `first_line_title`'s answer itself would be a fixture agreeing with a fixture — #1117's
+    # finding, and it would have stayed green with the call site deleted.
+
+    def test_a_brief_cannot_repaint_the_strip_it_is_drawn_on(self):
+        """A brief is text a MODEL wrote: ADR 0021 approves the message, not a tab label."""
+        _plant("beta.1")
+        state.record_title("beta.1",
+                           rename.first_line_title("\x1b]0;x\x07 own the strip\n"))
+        for shown in (chats.label_of("beta.1"), chats.named("beta.1")):
+            self.assertNotIn("\x1b", shown)
+            self.assertNotIn("\x07", shown)
+
+
+class TheTitleTravelsThroughTheRecord(PersonaIso, unittest.TestCase):
+    """A quit records the title and a reopen puts it back, before tmux."""
+
+    def test_the_manifest_carries_the_literal_key(self):
+        from charter.frame import reopen as reopen_state
+        rec = reopen_state.Chat(chat="beta.1", workspace="beta", persona="",
+                                harness="claude-code", cwd="", resume="", transcript="",
+                                active=False, title="fix it")
+        self.assertEqual(rec._asdict()["title"], "fix it")
+        back = reopen_state._chat({**rec._asdict()})
+        self.assertEqual(back.title, "fix it")
+
+    def test_a_record_from_before_this_field_reads_as_untitled(self):
+        """The migration case this whole reader is built to survive, and `VERSION` stays 1
+        for it."""
+        from charter.frame import reopen as reopen_state
+        back = reopen_state._chat({"chat": "beta.1", "workspace": "beta"})
+        self.assertEqual(back.title, "")
+
+    def test_a_quit_records_what_was_WRITTEN_not_what_was_drawn(self):
+        """A record holding the escaped form would be re-escaped by every quit and grow a
+        backslash per reopen, so the manifest reads `state.title` the way it reads the
+        brief."""
+        _plant("beta.1")
+        state.record_title("beta.1", "C:\\work")
+        p = leave.plan(live={"beta.1"}, focus="beta")
+        self.assertEqual(p.chats[0].title, contain.readable("C:\\work", state.TITLE_MAX))
+        self.assertNotEqual(p.chats[0].title, "C:\\work")
+        with mock.patch.object(commands_frame.reopen_state, "write",
+                               side_effect=lambda frames, **kw: True) as wrote:
+            commands_frame._record_the_plane(p.chats, focus="beta", active=set(),
+                                             windows={}, capture=False)
+        recorded = wrote.call_args.args[0][0].chats[0]
+        self.assertEqual(recorded.title, "C:\\work")
+
+    def test_a_reopen_restores_it_before_tmux(self):
+        """The launcher composes the harness's name in the pane, so a title written after the
+        window exists would be a chat that comes back bare and is renamed a moment later."""
+        from charter.frame import reopen as reopen_state
+        _plant("beta.1")
+        rec = reopen_state.Chat(chat="beta.1", workspace="beta", persona="",
+                                harness="claude-code", cwd="", resume="", transcript="",
+                                active=False, title="fix it")
+        commands_frame._restore_recorded_chat(rec, "beta.1")
+        self.assertEqual(state.title("beta.1"), "fix it")
+
+    def test_a_manifest_title_charter_would_refuse_leaves_the_chat_untitled(self):
+        """`state.record_title` is the gate on every route in, the restore included: a
+        hand-edited manifest may not carry a value a rename could not."""
+        from charter.frame import reopen as reopen_state
+        _plant("beta.1")
+        rec = reopen_state.Chat(chat="beta.1", workspace="beta", persona="",
+                                harness="claude-code", cwd="", resume="", transcript="",
+                                active=False, title="own\x1b[2Ked")
+        commands_frame._restore_recorded_chat(rec, "beta.1")
+        self.assertIsNone(state.title("beta.1"))

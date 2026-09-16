@@ -631,6 +631,21 @@ class TheLaunchOpensWithoutMovingAnyone(PersonaIso, unittest.TestCase):
         self.assertIsNone(state.brief("beta.1"))
         self.assertFalse((config.STATE_DIR / "frame" / "beta.1" / "brief").exists())
 
+    def test_a_handed_off_chat_is_titled_from_the_first_line_of_its_brief(self):
+        """Decision 11. A handed-off chat is the one an operator is most likely to find on a
+        strip without having opened it, so its tab says what it was opened to do rather than
+        `beta.1`. Written beside the brief, at id allocation, for the same reason."""
+        self._launch(opening=commands_frame.Opening(
+            "fix it please", brief="\nship the release\n\nand the notes\n"))
+        self.assertEqual(state.title("beta.1"), "ship the release")
+
+    def test_an_opening_with_no_brief_titles_nothing(self):
+        """Every background open that is not a handoff carries no brief, and `state
+        .record_title` reads `""` as *no title* — so the tab is its id, exactly as before."""
+        self._launch(opening=commands_frame.Opening("fix it please"))
+        self.assertIsNone(state.title("beta.1"))
+        self.assertFalse((config.STATE_DIR / "frame" / "beta.1" / "title").exists())
+
     def test_an_ordinary_launch_still_selects_its_window(self):
         """The gate is an `and`, not a replacement: a launch with no opening, whose `attach`
         is left absent, is still the operator's terminal and still lands on its chat."""

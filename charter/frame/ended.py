@@ -413,8 +413,11 @@ def draw(args) -> int:
 
     fid, socket, harness, own_pane = tabmenu.handback(os.environ)
     try:
+        # The id then the title (`chats.named`, decision 11): this drawer sits under a pane
+        # whose tab may be drawing nothing but the words the operator chose, and the heading
+        # is what says which chat it is about.
         surface = palette.Palette(catalogue=drawer_rows(fid),
-                                  label=f"chat {fid} ended", mouse=True,
+                                  label=f"chat {chats.named(fid)} ended", mouse=True,
                                   cancel_keys=("escape",))
         choose(palette.own_the_tty(surface), fid)
     except Exception:  # noqa: BLE001 - the pane must still be handed back

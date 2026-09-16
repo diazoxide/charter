@@ -6482,6 +6482,14 @@ def _launch(args) -> int:
         # the launch returned, it existed only after the harness it is for was already
         # running — a race that reproduces on nobody's machine.
         state.record_brief(fid, opening.brief)
+        # **And the tab's name, from the brief's first line** (decision 11). Here for the
+        # same two reasons and one more: a handed-off chat is the one an operator is MOST
+        # likely to find on a strip without having opened it, so the tab has to say what it
+        # was opened to do rather than `beta.7`. `rename.first_line_title` cuts rather than
+        # refuses — a brief is the message a model wrote and the operator approved at the
+        # harness prompt (ADR 0021), not a label anybody typed — and answers `""` for every
+        # open that is not a handoff, which `state.record_title` reads as *no title*.
+        state.record_title(fid, rename.first_line_title(opening.brief))
         if opening.persona:
             from . import persona as persona_mod
             persona_mod.set_active(opening.persona, session_id=fid, terminal_id="")
@@ -11039,7 +11047,13 @@ def _record_the_plane(doomed, *, focus: str, active, windows,
             # warning says anything about, and `leave.plan` reads one plane for the row an
             # operator is shown. `or ""` because `state.brief` answers `None` for the chats
             # that were not opened by a handoff, which is nearly all of them.
-            brief=state.brief(c.chat) or ""))
+            brief=state.brief(c.chat) or "",
+            # **`state.title` and not `c.title`, which is the DRAWN form.** `leave.Doomed`
+            # carries the title `contain.readable` has already escaped, because its one
+            # reader is the confirmation row; a record holding that would be escaped again by
+            # the next quit and grow a backslash per reopen. The record holds what was
+            # written, exactly as `brief` above does.
+            title=state.title(c.chat) or ""))
     for ws in order:
         frames.append(reopen_state.Frame(workspace=ws, chats=tuple(entries[ws])))
     # Signed by who is writing (`reopen.QUIT`'s note): `capture` is true for exactly the
@@ -11648,6 +11662,12 @@ def _restore_recorded_chat(rec, fid: str) -> None:
             state.owe_brief(fid)
     state.record_harness_session(fid, rec.resume)
     state.record_conversation(fid, rec.conversation)
+    # **The title, before tmux** (decision 11), for the link's reason exactly: the launcher
+    # composes the harness's name in the pane (`launcher.session_name`), so a title written
+    # after the window exists would be a chat that comes back under its bare id and is renamed
+    # a moment later. `state.record_title` is the gate, so a manifest a hand edited into a
+    # value charter would refuse leaves the chat untitled rather than carrying it through.
+    state.record_title(fid, rec.title)
 
 
 #: What a reopen says when the directory of the id it keeps is still in use, and by what.
