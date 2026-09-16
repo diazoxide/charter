@@ -612,12 +612,26 @@ def is_row(row) -> bool:
     """Whether *row* belongs to a confirmation surface at all.
 
     What tells `commands_frame._draw_palette` that a chosen row is one of these and must
-    NOT be handed to `ActionRegistry.invoke` as an action id. Asked of the two ids that do
+    NOT be handed to `ActionRegistry.invoke` as an action id. Asked of the ids that do
     something and of the per-chat prefix, rather than of any id containing a colon: the
     palette also draws `frame/choose.py`'s rows, and one module claiming every colon would
     swallow the other's.
+
+    **:data:`CLOSE_NOW_ID` is one of them, and leaving it out made a drawn row that did
+    nothing.** An ended tab's close row is minted by :func:`open_rows` exactly as the two
+    doorways are, and it is this module's id in the same way — but nothing recognised it:
+    :func:`verb_of` answered ``None``, :func:`goes_through` ``False``, this function
+    ``False``, and `choose.noun_of` ``None`` too. So `_draw_palette` fell all the way
+    through to `ActionRegistry.invoke("leave:close:now")`, where no such action exists, and
+    an operator who pressed *chat: close — its harness has ended* was told an action had
+    failed instead of getting their tab closed. The row is this module's, so this module is
+    what answers for it.
     """
     if verb_of(row) is not None:
+        return True
+    # Never caught by the shapes below: `CLOSE_NOW_ID` is `leave:close:now`, where the
+    # per-chat prefix is `leave:close:c` and the confirming row is `leave:close:go`.
+    if row.id == CLOSE_NOW_ID:
         return True
     return any(row.id == GO_ID.format(v) or row.id.startswith(CHAT_ID.format(v, ""))
                for v in (QUIT, CLOSE))

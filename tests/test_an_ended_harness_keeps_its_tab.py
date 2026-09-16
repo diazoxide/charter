@@ -32,8 +32,9 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, tui
-from charter.frame import (chats, ended, launcher, leave, overlay, palette, reopen,
-                           selector, slots, state, tabmenu)
+from charter.frame import (actions, builtin_actions, chats, choose, ended, launcher,
+                           leave, overlay, palette, reopen, selector, slots, state,
+                           tabmenu)
 
 from tests._isolation import (PersonaIso, approve_every_profile, declare_profiles,
                               make_plane, wired_as_today)
@@ -475,8 +476,31 @@ class TheSelectorAfterAnExit(PersonaIso, unittest.TestCase):
 
     def test_choosing_resume_asks_for_the_conversation_back(self):
         """The row comes back as a `Choice` that says `resume`, never as a profile name the
-        caller would have to parse out of a title."""
+        caller would have to parse out of a title.
+
+        **The stub answers ONCE and refuses a second time, and that is a guard about CI
+        rather than tidiness.** `pick` loops on a row it could not start — the note goes in
+        the footer and the list comes back (ruling 6) — so a stub that answered the same row
+        forever turns any deletion of the `RESUME_ID` branch into a live spin inside `pick`
+        rather than a failed assertion: the resume row falls through to
+        `name = chosen.id.removeprefix(ROW_PREFIX)`, which is `resume:` and is in no
+        `have.profiles`, so `after` becomes a `Refused` and the loop goes round again on a
+        surface that answers identically.
+
+        Measured, not feared: that mutation ran a sweep shard for its full 240 s cap and was
+        killed, which is why the sweep filed the line *unresolved* rather than pinned — a
+        mutation that HANGS is not a red test, and it costs a whole shard's answer. It is
+        the second hang of this shape on this branch; `TheEndedLoopEndsOnItsOwn` writes up
+        the first and bounds it the same way, with a runaway guard far above the real bound.
+        """
+        asked = {"n": 0}
+
         def chose(surface, *_a, **_kw):
+            asked["n"] += 1
+            if asked["n"] > 1:
+                raise AssertionError(
+                    "pick drew the selector a second time instead of answering: the resume "
+                    "row was read as a profile name and refused, and the loop came round")
             return next(r for r in surface.rows if r.id == selector.RESUME_ID)
 
         with mock.patch.object(selector.palette, "own_the_tty", side_effect=chose):
@@ -968,6 +992,109 @@ class ClosingAnEndedTabDoesNotAsk(PersonaIso, unittest.TestCase):
 
         self.assertEqual(rows[0].id, leave.OPEN_ID.format(leave.QUIT))
         self.assertEqual(rows[-1].id, leave.CLOSE_NOW_ID)
+
+    def test_choosing_the_palettes_close_row_closes_the_ended_tab(self):
+        """**The row was drawn and dispatched nowhere, and this is the case that says so.**
+
+        `test_the_palettes_close_row_swaps_the_same_way_and_stays_last` above asserts the
+        row's id and its placement, which is why a retune of the id survived the sweep and
+        why nobody noticed the id reached no dispatch at all: `leave.verb_of`,
+        `leave.goes_through`, `leave.is_row` and `choose.noun_of` all answered *not mine*,
+        `_picker` opened nothing, and `_draw_palette` fell through to
+        `reg.invoke("leave:close:now")` — an id no action has. The operator pressed *chat:
+        close — its harness has ended* and was told an action had failed.
+
+        Driven through the real hops rather than asserted about them, which is
+        `TheKeypressReachesTheTeardown`'s shape one surface over: the real
+        `_palette_catalogue`, the real `_picker` as `own_the_tty`'s *then*, the real
+        `_draw_palette`, and `builtin_actions._spawn` as the one thing stood in for — so
+        what this proves is that the keypress reaches `frame-close` with this chat on its
+        argv. The tab menu's twin has had exactly this case since it was written
+        (`test_choosing_close_now_spawns_the_close`); this is the one the palette lacked.
+        """
+        (config.WORKSPACES_DIR / "beta").mkdir(parents=True, exist_ok=True)
+        state.claim_ended("beta.1")
+        spawned: list = []
+
+        def _own(surface, *, fd=None, out=None, then=None):
+            row = next(r for r in surface.rows if r.id == leave.CLOSE_NOW_ID)
+            # An ACTION, not a doorway: it opens no confirmation, exactly as the tab
+            # menu's twin does not (`tabmenu.opens` answers None for the same row).
+            self.assertIsNone(then(row) if then is not None else None,
+                              "the ended tab's close row opened a surface to confirm with")
+            return row
+
+        with mock.patch.dict("os.environ", {"CHARTER_SESSION_ID": "beta.1"}), \
+                mock.patch.object(palette, "own_the_tty", side_effect=_own), \
+                mock.patch.object(commands_frame, "_close_palette"), \
+                mock.patch.object(commands_frame, "_say_on_screen") as said, \
+                mock.patch("charter.frame.builtin_actions._spawn",
+                           side_effect=lambda argv, *, fid: spawned.append(argv)):
+            rc = commands_frame._draw_palette(SimpleNamespace(chat="beta.1"))
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(spawned), 1, spawned)
+        self.assertIn("frame-close", spawned[0])
+        self.assertIn("beta.1", spawned[0])
+        said.assert_not_called()
+
+
+class EveryRowThePaletteDrawsGoesSomewhere(PersonaIso, unittest.TestCase):
+    """**No row `F2` draws may dispatch to an action the registry does not have.**
+
+    The general form of the defect above, stated over the catalogue rather than over the one
+    row that had it, so this class of bug cannot come back under a different id. A palette
+    row ends in exactly one of two places: `_draw_palette` recognises it and acts on it
+    itself — a picker doorway (`choose.noun_of`), or one of `frame/leave.py`'s own rows
+    (`leave.is_row`) — or it is an action id and goes to `ActionRegistry.invoke`. There is
+    no third destination, and `invoke` answers an id it does not hold by refusing, which
+    reaches the operator as a failure notice for a keypress that was drawn as a working row.
+
+    **Asked through the same two seams `_draw_palette` asks**, never a list of ids this
+    file keeps: a test that re-spelled which rows are dispatched locally would go on passing
+    the day the code and the copy drift, which is the failure mode it exists to catch.
+    `reg.get` is the question `invoke` asks first, so this is `invoke`'s own refusal
+    measured without starting anything.
+
+    Both states of the plane, because the row that broke this only exists in one of them:
+    an ordinary chat draws `leave:close` (a doorway) and an ended one draws
+    `leave:close:now` (an action id belonging to no action).
+    """
+
+    FID = "beta.1"
+
+    def setUp(self) -> None:
+        super().setUp()
+        (config.WORKSPACES_DIR / "beta").mkdir(parents=True, exist_ok=True)
+        _plant(self.FID)
+        self.enterContext(mock.patch.dict("os.environ",
+                                          {"CHARTER_SESSION_ID": self.FID}))
+
+    def _unhandled(self) -> list[str]:
+        """Every catalogue row that would reach `invoke` with an id it does not hold."""
+        reg = builtin_actions.build(self.FID, current_density="normal",
+                                    current_chrome="off")
+        rows = commands_frame._palette_catalogue(self.FID, reg, snapshot={})
+        self.assertTrue(rows, "the catalogue is empty, so this asserts nothing")
+        out = []
+        for row in rows:
+            if choose.noun_of(row) is not None or leave.is_row(row):
+                continue        # `_draw_palette` acts on these itself, before `invoke`
+            try:
+                reg.get(row.id)
+            except actions.ActionError:
+                out.append(row.id)
+        return out
+
+    def test_no_row_the_palette_draws_dispatches_to_a_missing_action(self):
+        self.assertEqual(self._unhandled(), [])
+
+    def test_the_same_holds_on_an_ended_tab(self):
+        """The state the defect lived in: `leave.open_rows` swaps the close doorway for
+        `leave:close:now`, which is not an action and must not be sent to `invoke` as one."""
+        state.claim_ended(self.FID)
+
+        self.assertEqual(self._unhandled(), [])
 
 
 class AnEndedTabIsMarked(PersonaIso, unittest.TestCase):

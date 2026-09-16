@@ -9746,6 +9746,25 @@ def _draw_palette(args) -> int:
             if leave.goes_through(chosen, verb):
                 _start_leaving(fid, verb)
                 return 0
+        if chosen.id == leave.CLOSE_NOW_ID:
+            # **The ended tab's close row skips the WARNING and never the close.**
+            # `leave.open_rows` swaps the close DOORWAY for this action id on a chat whose
+            # harness has already exited, because the confirmation exists to say what
+            # stopping a RUNNING harness costs and there is none left to stop
+            # (`leave.needs_confirming`). So this row acts on one keypress — and it acts
+            # through the same `frame-close` every other route takes, which is
+            # `frame/tabmenu.chose`'s rule for its own twin of this row: the mark, the
+            # transcript, the manifest entry and the window are one teardown, so an ended
+            # tab and a running one are forgotten identically.
+            #
+            # **Without this branch the row was drawn and dispatched nowhere.** Nothing
+            # recognised the id — `leave.verb_of`, `leave.goes_through`, `leave.is_row` and
+            # `choose.noun_of` all missed it, and `_picker` opened nothing — so it fell
+            # through to `reg.invoke("leave:close:now")`, an id no action has, and the
+            # operator got a failure notice instead of their tab closing. The tab menu's
+            # twin had its dispatch from the start; this one did not.
+            _start_leaving(fid, leave.CLOSE)
+            return 0
         if leave.is_row(chosen):
             # A doorway `_picker` refused (its note says why) or one of the warning's own
             # per-chat rows, which are `refused=True` and describe rather than do. The note
