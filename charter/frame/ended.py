@@ -104,7 +104,20 @@ def proof(fid: str, *, socket: str) -> Proof | None:
                       report=False)
     if out.returncode != 0:
         return None
-    me = commands_frame._this_plane()
+    # **Planes are compared by RESOLVED path, because two spellings of one plane are not
+    # the same string.** That is #812's finding one option over, and it was measured here
+    # rather than argued: the marker is written by the LAUNCH and read back in the hook's
+    # own child process, and the two do not derive the plane the same way — `root.find_root`
+    # calls `resolve()` on `$CHARTER_ROOT`, while a plane pointed at directly keeps the
+    # spelling it was given. On macOS `/var` is a symlink to `/private/var`, so the same
+    # directory reached the two sides as `/var/…/.charter` and `/private/var/…/.charter`,
+    # every row failed the plane test, and the ended step declined for EVERY exit — silently,
+    # because it is best-effort, leaving the tab dead and offering nothing.
+    #
+    # `realpath` and not `resolve()`: this must never raise on a plane that has been removed
+    # under a running frame, and it normalises a path that no longer exists rather than
+    # refusing it.
+    me = os.path.realpath(commands_frame._this_plane())
     recorded = chats.pane_of(fid)
     harness, dead, drawers = "", False, []
     for line in out.stdout.splitlines():
@@ -112,7 +125,7 @@ def proof(fid: str, *, socket: str) -> Proof | None:
         if len(fields) != _PROOF_FIELDS:
             continue
         pane, is_dead, chat, plane, drawer_of = fields
-        if chat != fid or plane != me or not plane:
+        if chat != fid or not plane or os.path.realpath(plane) != me:
             # Not this chat's, or not this plane's, or a pane an older charter created and
             # never marked. A session charter did not mark is left alone (the spec's
             # *Limits*): no presentation, no drawer, no respawn.
@@ -241,6 +254,17 @@ def drop_drawer(fid: str) -> None:
     Best effort throughout: a server that will not answer leaves the drawer standing, which
     is a pane the operator can close, where a kill aimed at an unproven id is not recoverable.
     """
+    if not state.drawer(fid):
+        # **No record, so nothing to look for — and this is the guard that keeps the cost
+        # honest.** A clean exit opens no drawer at all, and close and every harness start
+        # both come through here, so without this the ordinary case pays a `list-panes` to
+        # be told there is nothing to kill. The record is charter's OWN write rather than a
+        # reading it has to trust, which is what makes it safe to ask first: it says only
+        # whether to look, and `proof` below still decides what may be touched.
+        #
+        # A drawer whose record never landed is not stranded by this: its own process closes
+        # its pane on the way out, proven by `#{pane_pid}` (:func:`draw`).
+        return
     socket = state.frame_server(fid)
     if not socket:
         state.record_drawer(fid, "")

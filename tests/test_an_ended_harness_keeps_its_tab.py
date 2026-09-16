@@ -24,14 +24,16 @@ tab's selector it does nothing; every other surface keeps its cancel behaviour.*
 
 from __future__ import annotations
 
+import json
 import subprocess
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands_frame, config
-from charter.frame import ended, leave, overlay, palette, selector, state, tabmenu
+from charter import commands_frame, config, tui
+from charter.frame import (chats, ended, leave, overlay, palette, reopen, selector, slots,
+                           state, tabmenu)
 
 from tests._isolation import (PersonaIso, approve_every_profile, declare_profiles,
                               make_plane, wired_as_today)
@@ -615,6 +617,249 @@ class NothingActsOnARecordAlone(PersonaIso, unittest.TestCase):
         with mock.patch.object(ended, "proof", side_effect=RuntimeError("boom")):
             self.assertEqual(ended.present("beta.1", socket=SERVER), "")
             self.assertEqual(ended.cmd_frame_ended(SimpleNamespace(chat="beta.1")), 0)
+
+
+class TheHookAndItsBranch(PersonaIso, unittest.TestCase):
+    """`pane-died[1]` stops being `kill-window` — for a PROFILE's chat, and nothing else.
+
+    The escape hatch keeps today's ending (the ruling on open question 5): `charter frame --
+    <cmd>` closes its window when the command exits and hands the caller its code, because
+    it is not a harness and there is no conversation to offer back.
+    """
+
+    def test_index_one_runs_the_ended_step(self):
+        argv = commands_frame._pane_died_ended_hook_argv(socket="s", harness_pane="%1")
+
+        self.assertEqual(argv[-2], "pane-died[1]")
+        self.assertEqual(argv[argv.index("-t") + 1], "%1")
+        action = argv[-1]
+        self.assertNotIn("kill-window", action, "the window is the whole thing kept now")
+        self.assertIn("frame-ended", action)
+        self.assertIn("#{@charter_chat}", action, "tmux expands the chat at the keypress")
+        self.assertTrue(action.startswith("run-shell -b "), action)
+
+    def test_the_action_is_a_constant(self):
+        """A hook action is TEXT tmux re-parses, so charter interpolates nothing into it —
+        the module docstring's own rule, and the bug it fixed. Two different sockets and
+        panes must produce byte-identical action text."""
+        one = commands_frame._pane_died_ended_hook_argv(socket="s", harness_pane="%1")[-1]
+        two = commands_frame._pane_died_ended_hook_argv(socket="/tmp/other/s",
+                                                        harness_pane="%94")[-1]
+
+        self.assertEqual(one, two)
+
+    def test_a_profile_chat_gets_the_ended_step(self):
+        """Which of the two hooks a chat gets is decided ONCE, by whether it runs a profile
+        at all — so the decision is a function with a name rather than a condition buried in
+        the middle of a launch, where the next reader would have to reconstruct it."""
+        argv = commands_frame._pane_died_second_hook_argv(socket="s", harness_pane="%1",
+                                                          profile="claude")
+
+        self.assertIn("frame-ended", argv[-1])
+        self.assertNotIn("kill-window", argv[-1])
+
+    def test_the_escape_hatch_keeps_kill_window(self):
+        """`charter frame -- <cmd>` is not a harness and records no profile (the ruling on
+        open question 5). Its window closes when the command exits and the caller gets the
+        exit code back, which is what a script waiting on it has always been promised.
+
+        Red without the branch: the ended step would keep that window open, `attach` would
+        never return, and the code would never arrive.
+        """
+        argv = commands_frame._pane_died_second_hook_argv(socket="s", harness_pane="%1",
+                                                          profile="")
+
+        self.assertEqual(argv[-1], "kill-window")
+        self.assertEqual(
+            argv, commands_frame._pane_died_teardown_hook_argv(socket="s",
+                                                               harness_pane="%1"),
+            "the escape hatch stopped getting the teardown hook unchanged")
+
+    def test_the_escape_hatch_is_never_presented(self):
+        """`_profile_name(None)` is `""` for `charter frame -- <cmd>`, and `present` reads
+        that as *this is not a harness* before it asks tmux anything."""
+        _plant("beta.9", profile="")
+        state.record_drawn("beta.9")
+        state.record_exit("beta.9", 0)
+        fake = _Tmux([_row("%1", "1", "beta.9", commands_frame._this_plane())])
+
+        with mock.patch.object(ended.tmuxctl, "run", fake):
+            self.assertEqual(ended.present("beta.9", socket=SERVER), "")
+
+        self.assertEqual(fake.calls, [], "a chat with no profile reached tmux")
+
+
+class ClosingAnEndedTabDoesNotAsk(PersonaIso, unittest.TestCase):
+    """Decision 5: closing a tab is the one way to end a chat, and it ends it for good.
+
+    The confirmation exists to warn about stopping a RUNNING harness. An ended tab has none
+    left to stop, so the row is an action rather than a doorway — and a tab still running
+    keeps its warning, which is the pin that makes the other half mean something.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        _plant("beta.1")
+
+    def test_a_running_chat_is_confirmed(self):
+        self.assertTrue(leave.needs_confirming("beta.1"))
+
+    def test_an_ended_chat_is_not(self):
+        state.claim_ended("beta.1")
+
+        self.assertFalse(leave.needs_confirming("beta.1"))
+
+    def test_a_chat_still_at_the_selector_is_not(self):
+        """It never started, so there is nothing to warn about there either."""
+        state.record_waiting("beta.1")
+
+        self.assertFalse(leave.needs_confirming("beta.1"))
+
+    def test_the_tab_menus_last_row_closes_now_on_an_ended_tab(self):
+        state.claim_ended("beta.1")
+
+        rows = tabmenu.catalogue("beta.1")
+
+        self.assertEqual(rows[-1].id, tabmenu.CLOSE_NOW_ID)
+        self.assertIn("ended", rows[-1].title)
+        self.assertIsNone(tabmenu.opens(rows[-1], "beta.1", live=None),
+                          "an ended tab's close row is an action, not a doorway")
+
+    def test_the_tab_menus_last_row_is_still_the_doorway_while_it_runs(self):
+        rows = tabmenu.catalogue("beta.1")
+
+        self.assertEqual(rows[-1].id, tabmenu.CLOSE_ID)
+        self.assertIsNotNone(tabmenu.opens(rows[-1], "beta.1", live=None))
+
+    def test_choosing_close_now_spawns_the_close(self):
+        state.claim_ended("beta.1")
+        spawned: list = []
+
+        with mock.patch("charter.frame.builtin_actions._spawn",
+                        side_effect=lambda argv, *, fid: spawned.append(argv)):
+            acted = tabmenu.chose(tabmenu.catalogue("beta.1")[-1], "beta.1", fid="beta.1")
+
+        self.assertTrue(acted)
+        self.assertEqual(len(spawned), 1, spawned)
+        self.assertIn("frame-close", spawned[0])
+        self.assertIn("beta.1", spawned[0])
+
+    def test_the_palettes_close_row_swaps_the_same_way_and_stays_last(self):
+        """`leave.open_rows` puts the destructive row last so it is never one `F2 Enter`
+        away. That placement does not move when the row stops being a doorway."""
+        state.claim_ended("beta.1")
+
+        rows = leave.open_rows("beta.1")
+
+        self.assertEqual(rows[0].id, leave.OPEN_ID.format(leave.QUIT))
+        self.assertEqual(rows[-1].id, leave.CLOSE_NOW_ID)
+
+
+class AnEndedTabIsMarked(PersonaIso, unittest.TestCase):
+    """A background or handed-off chat ends whether or not anybody is looking, so the strip
+    is where an operator finds out — decision 4's *marked ended in the strip*."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        _plant("beta.1")
+        _plant("beta.2")
+
+    def test_the_roster_says_which_chat_has_ended(self):
+        state.claim_ended("beta.2")
+
+        by_id = {c.id: c for c in chats.roster("beta.1")}
+
+        self.assertFalse(by_id["beta.1"].ended)
+        self.assertTrue(by_id["beta.2"].ended)
+
+    def test_the_mark_is_one_ascii_cell(self):
+        """`slots._BAR_RULE`'s rule rather than a preference: a click on this row is
+        resolved by COLUMN, so a glyph a terminal may draw two cells wide would move every
+        field after it."""
+        self.assertEqual(len(slots.ENDED_MARK), 1)
+        self.assertTrue(slots.ENDED_MARK.isascii(), slots.ENDED_MARK)
+
+    def test_the_strip_draws_the_mark_and_the_tab_still_answers(self):
+        row = slots._bar(["beta.1", "beta.2"], "beta.1", 80,
+                         ended=frozenset({"beta.2"}))[0]
+
+        self.assertIn(slots.ENDED_MARK, tui.strip_ansi(row))
+        self.assertIn("beta.2", tui.strip_ansi(row))
+
+
+class QuitAndReopenKeepEndedTabs(PersonaIso, unittest.TestCase):
+    """Decision 12: a quit records ended-but-open tabs, with their link, so `charter reopen`
+    brings them back ended and resumable.
+
+    A quit is the one record that cannot be redone — the chats it describes are dead and
+    their directories reaped — so an ended tab left out of it is a chat the operator loses
+    by quitting, which is the outcome this whole design exists to prevent.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        _plant("beta.1")
+        _plant("beta.2")
+        state.claim_ended("beta.2")
+
+    def _plan(self):
+        return leave.plan(live={"beta.1", "beta.2"}, focus="beta")
+
+    def _recorded(self, **kw) -> dict:
+        commands_frame._record_the_plane(self._plan().chats, focus="beta",
+                                         active=set(), **kw)
+        return json.loads(reopen.path().read_text())
+
+    def test_a_quit_records_an_ended_tab_as_ended(self):
+        raw = self._recorded(windows={})
+
+        by_id = {c["chat"]: c for f in raw["frames"] for c in f["chats"]}
+        self.assertFalse(by_id["beta.1"]["ended"])
+        self.assertTrue(by_id["beta.2"]["ended"])
+
+    def test_a_quit_captures_no_ended_tab(self):
+        """That pane is charter's selector or its drawer, never the harness's screen — so a
+        capture would replace the harness's last words with a picture of charter asking what
+        to do about them, on exactly the tab whose transcript is most wanted."""
+        windows = {SERVER: {"beta.1": "@1", "beta.2": "@2"}}
+
+        with mock.patch.object(commands_frame, "_capture_transcript",
+                               return_value=True) as captured:
+            self._recorded(windows=windows)
+
+        asked = [call.args[1] for call in captured.call_args_list]
+        self.assertEqual(asked, ["%1"], "the ended tab's pane was captured")
+
+    def test_an_ended_tab_still_names_the_transcript_it_already_had(self):
+        """Not capturing is not forgetting: the tab keeps the transcript its harness left,
+        which is the one an operator would open."""
+        dest = reopen.transcript_path("beta.2")
+        dest.write_text("what the harness last said\n")
+
+        raw = self._recorded(windows={})
+
+        by_id = {c["chat"]: c for f in raw["frames"] for c in f["chats"]}
+        self.assertEqual(by_id["beta.2"]["transcript"], dest.name)
+
+    def test_the_confirmation_says_it_comes_back_ended(self):
+        """`already ended on its own (N)` was about an exit code. What an operator needs
+        before pressing quit is what they get BACK, which is a different sentence."""
+        doomed = {c.chat: c for c in self._plan().chats}
+
+        note = leave.note(doomed["beta.2"])
+
+        self.assertIn("comes back ended", note)
+        self.assertIn("nothing to resume", note)
+
+    def test_a_record_from_before_this_field_reads_as_not_ended(self):
+        """The migration case this reader is built for: a manifest one field older. Every
+        chat in it was running, which is the reading that brings a conversation back."""
+        older = reopen._chat({"chat": "beta.1", "workspace": "beta", "persona": "",
+                              "harness": "claude-code", "cwd": "", "resume": "",
+                              "transcript": "", "profile": "claude", "brief": "",
+                              "conversation": ""})
+
+        self.assertFalse(older.ended)
 
 
 if __name__ == "__main__":

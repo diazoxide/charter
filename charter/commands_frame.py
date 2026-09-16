@@ -1522,6 +1522,80 @@ def _pane_died_teardown_hook_argv(*, socket: str, harness_pane: str) -> list[str
                                "pane-died[1]", "kill-window")
 
 
+def _pane_died_ended_hook_argv(*, socket: str, harness_pane: str) -> list[str]:
+    """`pane-died[1]` for a PROFILE's chat: the ended step, in place of `kill-window`.
+
+    **The same index, and that is the whole shape of the change.** A harness exit used to
+    end the chat's window here; decision 4 says it offers a choice instead. Everything the
+    teardown hook's docstring establishes still holds — the hook is pane-scoped, it must be
+    installed AFTER `_pane_died_write_hook_argv` because an unindexed `set-hook` replaces
+    the whole array, and the exit code is written by `[0]` before this ever runs.
+
+    **The escape hatch keeps `kill-window`** (the ruling on open question 5). `charter frame
+    -- <cmd>` records no profile, so `_launch` installs the teardown hook for it and its
+    window closes at exit with the code going back to the caller, exactly as today. Which
+    of the two a chat gets is decided once, by whether it has a profile at all.
+
+    **A CONSTANT action**, like every hook charter installs: no socket, no pane and no chat
+    is interpolated here. tmux expands `#{@charter_chat}` in the context of the pane the
+    hook fired for — the same mechanism the write hook uses to find that chat's `exit` file,
+    measured on 3.7c and 3.2 — and the id it expands is `_FRAME_ID_RE`'s closed alphabet, so
+    it holds no quote, `$`, backtick, space or `#` for either parser to trip over.
+
+    `\\"` and `\\$` are load-bearing for `_pane_died_write_hook_argv`'s measured reason: an
+    unescaped `$` is eaten by tmux's own parsing before the shell sees it, and a second one
+    makes `set-hook` itself fail. The escaped form is what reaches `/bin/sh -c` as literal
+    text for the SHELL to expand, where `$CHARTER_PY` is the interpreter charter put in the
+    session's environment (`_charter_py_env_argv`).
+
+    **`-b`, so the hook does not hold tmux's command queue.** The ended step asks the server
+    for a listing and then respawns or splits a pane; run in the foreground it would be
+    tmux waiting on a client that is waiting on tmux. Measured through E1 on both versions:
+    the step runs once per death, with the id expanded, and the window is still listed.
+    """
+    action = ('run-shell -b '
+              f'"\\"\\${_CHARTER_PY_ENV}\\" -m charter frame-ended '
+              f'--chat \\"#{{{_CHAT_OPTION}}}\\""')
+    return tmuxctl.server_argv(socket, "set-hook", "-p", "-t", harness_pane,
+                               "pane-died[1]", action)
+
+
+def _pane_died_second_hook_argv(*, socket: str, harness_pane: str,
+                                profile: str) -> list[str]:
+    """Which `pane-died[1]` this chat gets — the ended step, or today's `kill-window`.
+
+    **One decision, made once, with a name.** A chat that runs a PROFILE keeps its tab and
+    is offered a choice (decision 4); `charter frame -- <cmd>` is not a harness and keeps
+    today's ending, which is the operator's ruling on open question 5 — its window closes
+    when the command exits and the exit code goes back to the script that was waiting on it.
+
+    *profile* is `_profile_name(p)`, which is `""` for exactly that escape hatch. Asked as a
+    function rather than as a condition inside the launch, because the next reader needs to
+    be able to find the rule rather than reconstruct it from where the call happens to sit —
+    and because it is the one line a test can drive without standing up a whole launch.
+    """
+    if profile:
+        return _pane_died_ended_hook_argv(socket=socket, harness_pane=harness_pane)
+    return _pane_died_teardown_hook_argv(socket=socket, harness_pane=harness_pane)
+
+
+#: What a PROFILE's chat refuses to attach with when its `pane-died[1]` did not install.
+#:
+#: **The refusal stays and its reason changes**, because what is lost is no longer the same
+#: thing. Without the teardown hook, a crash left `attach` blocked forever on a session
+#: `remain-on-exit` was keeping alive — the hang the pair of hooks exists to close. Without
+#: the ENDED hook, `attach` is fine: what the operator loses is the tab's whole purpose, an
+#: exit nothing answers, on a chat that would sit dead offering nothing.
+#:
+#: The harness is already running and detached by this point either way, so the sentence
+#: names the manual way back in rather than pretending nothing started.
+ENDED_HOOK_NOT_INSTALLED = (
+    "charter frame: refusing to attach — the hook that answers this chat's harness ending "
+    "failed to install, so an exit later would leave a dead tab charter could offer nothing "
+    "on. The harness is still running, detached; reattach manually if you must: "
+    "tmux -L {socket} attach -t {session}")
+
+
 #: How many times one slot's panel may be brought back before charter stops trying, per
 #: frame. The spec's own number ("a dead panel stays visible with its error, respawns
 #: with backoff, and gives up after 3 attempts"). The cap is the entire reason a count
@@ -3939,7 +4013,32 @@ def _launch_in_operator_tmux(socket: str, session: str, *, ws: str,
     if selected.returncode == 0:
         _drop_panels(socket, leaving)
 
-    code = _wait_for_harness(socket, harness_pane)
+    if not profile:
+        # The escape hatch. `charter frame -- <cmd>` is not a harness, so its window closes
+        # when the command exits and the code goes back to whoever was waiting on it — the
+        # operator's ruling on open question 5, kept by taking this path out of the loop.
+        code = _wait_for_harness(socket, harness_pane)
+    else:
+        # **Inside the operator's own tmux there are no hooks** (this function's docstring),
+        # so this launcher IS what answers an exit: it is awake for the life of the frame,
+        # and when the harness dies it presents the choice in-process and goes back to
+        # waiting on the pane. Reading E5 is what makes the loop terminate rather than spin
+        # — measured on tmux 3.7c and at the 3.2 floor, a second `_wait_for_harness` after a
+        # respawn waits on the NEW process rather than returning the old one's status again.
+        #
+        # It ends the moment there is nothing left to offer: a pane that is gone rather than
+        # dead (`code is None` — the operator closed the window), a chat the operator closed,
+        # or a `present` that answered "nothing offered", which is every reason the ended
+        # step declines. Then the tail below closes the window exactly as it always did.
+        while True:
+            code = _wait_for_harness(socket, harness_pane)
+            if code is None or state.was_closed(fid):
+                break
+            state.record_exit(fid, code)
+            state.record_drawn(fid)
+            from .frame import ended as ended_mod
+            if not ended_mod.present(fid, socket=socket):
+                break
     # **Whether this pane was still the selector, read now** — while this launch still holds
     # its claim, which is the only thing keeping another launch's reap off a directory whose
     # window is gone (#685). A cancelled selector's window IS gone: its launcher closed it
@@ -6473,7 +6572,8 @@ def _launch(args) -> int:
     # at all, further down — so its position is kept rather than its result guessed at.
     teardown_at = _tell(
         "installing the chat-teardown hook",
-        _pane_died_teardown_hook_argv(socket=socket, harness_pane=harness_pane),
+        _pane_died_second_hook_argv(socket=socket, harness_pane=harness_pane,
+                                    profile=_profile_name(p)),
         "")
 
     told = tmuxctl.write_all("telling the frame's window and session what they are",
@@ -6588,11 +6688,19 @@ def _launch(args) -> int:
             # harness keeps running (it was already started, detached); the operator can
             # still attach manually and accept that risk themselves.
             refused_to_attach = True
-            util.err("charter frame: refusing to attach — the chat-teardown hook "
-                     "failed to install, so a crash later would block `attach` forever "
-                     "with nothing to end the session. The harness is still running, "
-                     f"detached; reattach manually if you must: "
-                     f"tmux -L {socket} attach -t {session}")
+            if p is not None:
+                # **A profile's chat installs the ENDED step at `[1]`, so what a failed
+                # install costs is different.** `attach` is not at risk — the window is kept
+                # either way now. What is lost is the tab's whole purpose: an exit nothing
+                # answers, on a chat that would sit dead offering nothing. The refusal
+                # stands for that reason instead.
+                util.err(ENDED_HOOK_NOT_INSTALLED.format(socket=socket, session=session))
+            else:
+                util.err("charter frame: refusing to attach — the chat-teardown hook "
+                         "failed to install, so a crash later would block `attach` forever "
+                         "with nothing to end the session. The harness is still running, "
+                         f"detached; reattach manually if you must: "
+                         f"tmux -L {socket} attach -t {session}")
         else:
             # `pane_env` on this path too, since #411: a panel splits off a server that
             # may have been started by ANOTHER launcher, so `$CHARTER_WORKSPACE` and
@@ -6605,6 +6713,25 @@ def _launch(args) -> int:
                 sizes=_launch_sizes(fid, slots, window_cols=cols,
                                     window_rows=rows))
             _arm_panel_respawn(socket, fid=fid, panes=panes, env=env)
+
+            if p is not None:
+                from .frame import ended as ended_mod
+
+                # **The frame is laid out, so from here a harness exit is an ORDINARY one.**
+                # #384's early death is everything BEFORE this line — reported, and its
+                # window closed — and the mark is the only thing that tells the two apart.
+                # An exit code cannot: a command that fails instantly and one that fails an
+                # hour later exit the same way.
+                state.record_drawn(fid)
+                # **Asked once more, because the harness may have died while the frame was
+                # being drawn.** The hook that fired for that death found no drawn mark and
+                # did nothing, so without this the tab would sit dead offering nothing —
+                # the one window where neither answer covers the exit. The `O_EXCL` claim
+                # inside `present` is what keeps this and the hook from both presenting it.
+                late = _query_pane_dead_status(socket, harness_pane)
+                if late is not None:
+                    state.record_exit(fid, late)
+                    ended_mod.present(fid, socket=socket)
 
             # The chat this launch just built is the one the operator asked for, so it
             # is the one their client lands on. `new-window` created it detached (`-d`),
@@ -10593,7 +10720,15 @@ def _record_the_plane(doomed, *, focus: str, active, windows,
         transcript = ""
         dest = reopen_state.transcript_path(c.chat)
         pane_id = state.harness_pane(c.chat) or ""
-        if not capture:
+        if not capture or c.ended:
+            # **An ENDED tab is named, never captured, and that is not the same reason as
+            # `capture=False`'s.** The recorder skips the capture because it runs a hundred
+            # times a quit's rate; this chat is skipped because its pane is no longer the
+            # harness's screen at all — it is charter's own selector, or the drawer offering
+            # the choice. Capturing it would replace the harness's last words with a picture
+            # of charter asking what to do about them, on exactly the tab whose transcript
+            # the operator is most likely to want.
+            #
             # The file rather than a capture, and `is_file()` rather than the manifest's own
             # previous entry: the name is derived from the chat id either way
             # (`reopen.TRANSCRIPT_SUFFIX`), so asking the directory is asking the same
@@ -10612,6 +10747,10 @@ def _record_the_plane(doomed, *, focus: str, active, windows,
             chat=c.chat, workspace=c.workspace, persona=c.persona, harness=c.harness,
             cwd=c.cwd, resume=c.resume, transcript=transcript,
             active=c.chat in active, profile=c.profile, conversation=c.conversation,
+            # Decision 12: a quit records ended-but-open tabs AS ended, so `charter reopen`
+            # brings them back holding the same choice rather than starting a harness the
+            # operator had already let finish.
+            ended=c.ended,
             # Read here rather than carried on `Doomed`: it is not something the quit's
             # warning says anything about, and `leave.plan` reads one plane for the row an
             # operator is shown. `or ""` because `state.brief` answers `None` for the chats
@@ -10874,6 +11013,7 @@ def cmd_close(args) -> int:
         # "was open" and bring back uninvited.
         state.record_closed(target)
         _forget_transcript(target)
+        _forget_the_ended_tab(target)
         _repaint_the_other_strips(target)
         util.ok(f"charter: chat {target} was already stopped — marked closed, so it will "
                 "not come back")
@@ -10892,6 +11032,7 @@ def cmd_close(args) -> int:
     # closed it.
     state.record_closed(target)
     _forget_transcript(target)
+    _forget_the_ended_tab(target)
     _repaint_the_other_strips(target)
     stopped = _stop_chats(doomed, windows=windows)
     if not stopped:
@@ -10900,6 +11041,33 @@ def cmd_close(args) -> int:
         return 1
     util.ok(f"charter: closed {target} — it will not be reopened")
     return 0
+
+
+def _forget_the_ended_tab(chat: str) -> None:
+    """Drop what an ENDED tab is holding, because close is the verb that forgets a chat.
+
+    Two things, and both are the ended step's: the `ended` claim, and the drawer pane that
+    was offering the choice. The drawer is killed only as one listing proves it carries this
+    chat's `@charter_drawer` on this plane (`ended.drop_drawer`) — the record says where to
+    look and is never itself the target, which is the #933 rule this whole feature keeps.
+
+    **Called before the window goes**, so the drawer is still there to be proven. Afterwards
+    that pane has gone with its window and the same call would prove nothing — harmless in
+    itself, but it would leave a record naming a pane id tmux is free to hand to somebody
+    else's window.
+
+    Never costs the close behind it: a server that will not answer leaves one pane the
+    operator can close, where raising here would leave the chat open, unmarked and unkilled
+    — which is the report `_hand_the_client_a_frame` below was written for, arrived at from
+    the other side.
+    """
+    from .frame import ended as ended_mod
+
+    state.clear_ended(chat)
+    try:
+        ended_mod.drop_drawer(chat)
+    except Exception:  # noqa: BLE001 - a courtesy may never cost the close behind it
+        return
 
 
 def _hand_the_client_a_frame(closed: str, *, fid: str) -> None:
