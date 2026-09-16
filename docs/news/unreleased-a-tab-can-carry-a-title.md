@@ -22,7 +22,8 @@ of linking charter does — the harness session, the transcript, the quit record
 - **A handoff names its own chat** from the first line of the brief it was opened on — the
   chat you did not open now reads as what it was opened to do.
 
-Enter on an empty input takes the title off again.
+Enter on an empty input takes the title off again, and `Esc` cancels the naming and nothing
+else — at `+` it comes back to the profile list rather than closing the chat you are making.
 
 **Where it shows.** The chat strip, in place of the id; and after the id in the tab menu's
 heading, the quit and `chat: close` confirmation rows, the choice an ended tab offers, and

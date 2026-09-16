@@ -327,8 +327,8 @@ def rows(have: profiles.ProfileSet, *, cwd: Path, start: str | None = None,
 
     *titled* is what has been typed so far, drawn back on that row. It is passed in rather
     than read, for :class:`Resume`'s reason and this module's rule: nothing here reads a
-    chat's record. It is contained before it is drawn — the operator typed it, and this row
-    goes through `tui.width` like every other.
+    chat's record — and it arrives contained, from `chats.title_of`, which is what lets this
+    draw it as it is (see the comment at the row).
     """
     order = list(profiles.builtins())
 
@@ -383,10 +383,15 @@ def rows(have: profiles.ProfileSet, *, cwd: Path, start: str | None = None,
         # resume: a refusal would be charter explaining itself about a chat nobody typed in.
         listed = (overlay.Row(id=RESUME_ID, title=resume.title, note=resume.note), *listed)
     if titling:
+        # **`titled` is drawn as it arrives, and the sweep is what asked.** A
+        # `contain.one_line` here could change no answer twice over: the caller hands over
+        # `chats.title_of`'s value, which `contain.readable` has already reduced to printable
+        # ASCII, and `overlay.Surface.render` runs `one_line` over every title before
+        # `tui.width` sees it. That is the masked containment `frame/chats.py`'s docstring
+        # records, and it was reported as a survivor here.
         listed = (*listed,
                   overlay.Row(id=TITLE_ID,
-                              title=TITLE_ROW.format(
-                                  text=contain.one_line(titled) or TITLE_NONE)))
+                              title=TITLE_ROW.format(text=titled or TITLE_NONE)))
     return listed
 
 
@@ -559,12 +564,35 @@ def pick(*, cwd: Path, root: Path, start: str | None = None,
 
         chosen = palette.own_the_tty(surface, fd=fd, out=out, then=_then)
         if chosen is None:
+            # **Esc on the TITLE INPUT cancels the naming, not the chat.** `own_the_tty`
+            # answers one `None` however deep the surface was, so without this the keystroke
+            # the input's own footer calls `esc cancel` would fall through to the selector's
+            # `esc close this chat` and take the new chat's window with it — charter promising
+            # one thing on screen and doing another.
+            #
+            # `overlay.LEFT_KEY` and not merely "the input left": a pane whose writer is gone
+            # leaves the same way, and looping back to redraw a selector nobody can see is the
+            # wedge `END_OF_INPUT` exists to avoid. Only a real keystroke comes back to the
+            # list.
+            box = naming[-1] if naming else None
+            if box is not None and box.left == overlay.LEFT_KEY:
+                continue
             # Which way the surface left is what the caller acts on: only a real keystroke
             # is the operator asking for this tab to be closed.
             return KEY_CANCEL if surface.left == overlay.LEFT_KEY else END_OF_INPUT
-        if naming and chosen.id == rename.GO_ID:
+        if chosen.id == rename.GO_ID:
             # The operator named the chat. Handed back rather than recorded, because this
             # module reads and writes no chat's record — see :class:`Titled`.
+            #
+            # **No `naming and` in front of it, and its absence is measured rather than
+            # assumed.** `rename.GO_ID` is minted on a `rename.Rename` surface and nowhere
+            # else, the only `Rename` this pane can reach is the one `_then` opens for
+            # :data:`TITLE_ID`, and that branch is the only writer of *naming* — so the list
+            # is non-empty exactly when this id can arrive. A conjunct that only ever
+            # restates what the id already proved is the survivor `tools/sweep.py` reports,
+            # and it reported this one: dropping the ID half instead is a real defect (the
+            # next profile row would be read as a title and the named chat would never
+            # start), which is why that half is the one that stayed.
             return Titled(naming[-1].typed())
         if chosen.id == RESUME_ID:
             # The chat's OWN profile, because a resume runs the command the chat was

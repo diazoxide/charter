@@ -202,8 +202,18 @@ def takes_a_name(harness: str) -> bool:
 
 
 def renamed_note(harness: str) -> str:
-    """What the frame's attention row says after a rename landed."""
-    return (RENAMED_AT_NEXT_START.format(harness=contain.readable(harness))
+    """What the frame's attention row says after a rename landed.
+
+    **The harness name is NOT contained here, and the sweep is what asked.** It is read off
+    `state.identity`, which is a file a chat can write — so ruling 35 would ordinarily apply.
+    It cannot be reached: the only branch that puts *harness* in a sentence is the one
+    :func:`takes_a_name` answers ``True`` for, and that function answers from
+    `harness.registry`, whose names are charter's own literals. A value off disk that is not
+    one of them answers ``False`` and reaches :data:`RENAMED`, which names nothing. A
+    containment no input can make observable is the survivor `tools/sweep.py` reports, and
+    this one was reported.
+    """
+    return (RENAMED_AT_NEXT_START.format(harness=harness)
             if takes_a_name(harness) else RENAMED)
 
 

@@ -662,6 +662,24 @@ class ATitleAtThePlus(PersonaIso, unittest.TestCase):
         wired_as_today(self)
         _plant("beta.1")
 
+    def _answers(self, once):
+        """A stand-in for `palette.own_the_tty` that answers ONCE and then raises.
+
+        **A stub that answers the same thing on every call turns a deleted guard into a
+        hang**, not a failure: `selector.pick` loops until a row it can act on comes back, so
+        a guard removed here would spin forever against a stub that kept handing over the same
+        row. This makes the second visit a failure with a sentence on it.
+        """
+        calls = []
+
+        def _own(surface, *, fd=None, out=None, then=None):
+            calls.append(1)
+            self.assertEqual(len(calls), 1,
+                             "the selector came round again — a row it could not act on")
+            return once(then)
+
+        return _own
+
     def _rows(self, **kw):
         from charter.frame import selector
         have = selector.read(config.ROOT)
@@ -707,6 +725,50 @@ class ATitleAtThePlus(PersonaIso, unittest.TestCase):
         self.assertEqual(box.typed(), "fix it")
         self.assertEqual(box.label, selector.TITLE_LABEL)
         self.assertIn("fix it", box.rows[0].title)
+
+    def test_a_profile_picked_after_naming_the_chat_still_starts_it(self):
+        """**Naming a chat must not stop it starting**, which is the half of `pick`'s conjunct
+        the id test carries.
+
+        The surface is opened once and lives for the rest of the selector, so `naming` stays
+        non-empty after the operator comes back to the list. Without
+        ``chosen.id == rename.GO_ID`` beside it, the very next row — a profile, or resume —
+        would be read as a title, and the chat the operator just named would never start.
+        `naming` is not redundant either: it guards the index on the line below.
+
+        Found out of time by CI's sweep (shard 7 of 16 hit the job cap) and measured by hand:
+        the mutation that drops the id half is GREEN without this case.
+        """
+        from charter.frame import palette, selector
+
+        with mock.patch.object(palette, "own_the_tty", side_effect=self._answers(
+                lambda then: (then(overlay.Row(id=selector.TITLE_ID, title="title:")),
+                              overlay.Row(id=selector.ROW_PREFIX + "claude-work",
+                                          title="claude-work"))[1])):
+            got = selector.pick(cwd=config.ROOT, root=config.ROOT, titling=True)
+
+        self.assertIsInstance(got, selector.Choice)
+        self.assertEqual(got.profile, "claude-work")
+
+    def test_naming_the_chat_answers_titled_rather_than_a_profile(self):
+        """The other half of the same conjunct, driven through the REAL `pick`: Enter on the
+        input's row comes back as a :class:`selector.Titled` carrying what was typed.
+
+        The case above patches `selector.pick` itself, so it cannot redden anything inside it
+        — this one is what pins the branch."""
+        from charter.frame import palette, selector
+
+        def _chose(then):
+            box = then(overlay.Row(id=selector.TITLE_ID, title="title:"))
+            for ch in "fix it":
+                box.handle(overlay.Event(kind=overlay.KEY, name=ch), 24)
+            return box.rows[0]
+
+        with mock.patch.object(palette, "own_the_tty", side_effect=self._answers(_chose)):
+            got = selector.pick(cwd=config.ROOT, root=config.ROOT, titling=True)
+
+        self.assertIsInstance(got, selector.Titled)
+        self.assertEqual(got.text, "fix it")
 
     def test_the_plus_and_a_workspace_tab_ask_for_it_and_an_ended_tab_does_not(self):
         """The call sites, which is where "where is a title offered" actually lives."""
@@ -990,3 +1052,341 @@ class TheTitleTravelsThroughTheRecord(PersonaIso, unittest.TestCase):
                                 active=False, title="own\x1b[2Ked")
         commands_frame._restore_recorded_chat(rec, "beta.1")
         self.assertIsNone(state.title("beta.1"))
+
+
+class WhatTheSweepAsked(_AWatchedSpawn, unittest.TestCase):
+    """The survivors CI's deletion sweep reported on this PR's own lines.
+
+    Every case here exists because a mutation of a line this branch added went GREEN. They
+    are grouped rather than scattered because what they have in common is the reason they
+    were missing: each is a second answer on a path whose FIRST answer was already asserted,
+    which is exactly the shape a test written from the feature's description does not reach.
+
+    Two survivors were answered by DELETING the line instead, and are named where they were
+    (`rename.renamed_note`, `selector.rows`): a containment no input can make observable is
+    not a guard, it is a line.
+    """
+
+    def setUp(self):
+        super().setUp()
+        for chat in ("beta.1", "beta.2"):
+            _plant(chat)
+
+    # --- `charter frame-rename`'s own argument handling ------------------------------- #
+
+    def test_a_padded_chat_id_names_the_chat_it_is_padded_around(self):
+        """`.strip()` and not `.lstrip()`, and it is `cmd_close`'s own line for `cmd_close`'s
+        own reason: this value can arrive expanded by tmux out of `#{@charter_chat}` into a
+        shell-quoted `run-shell` string, where padding is a thing a format can produce."""
+        commands_frame.cmd_rename(SimpleNamespace(chat_id="  beta.2\t", chat="beta.1",
+                                                  title=["fix", "it"]))
+        self.assertEqual(state.title("beta.2"), "fix it")
+
+    def test_a_namespace_with_no_fields_at_all_is_refused_rather_than_raised(self):
+        """The two `or` fallbacks, which are what make this command total. `cmd_rename` is
+        started by a `run-shell` child, and a raise there is a traceback printed INTO THE
+        HARNESS PANE — the one rectangle ADR 0018 says charter never draws in."""
+        rc = commands_frame.cmd_rename(SimpleNamespace())
+        self.assertNotEqual(rc, 0, "a command with no frame reported success")
+        self.assertIsNone(state.title("beta.1"))
+        # And the title's own fallback, which the refusal above returns before reaching: a
+        # namespace that names a chat and no words takes the title OFF rather than raising.
+        state.record_title("beta.1", "fix it")
+        self.assertEqual(commands_frame.cmd_rename(
+            SimpleNamespace(chat_id="beta.1", chat="beta.1")), 0)
+        self.assertIsNone(state.title("beta.1"))
+
+    def test_no_chat_at_all_says_so_and_does_not_look_one_up(self):
+        """`outside_a_frame`'s sentence, which is the one every `frame-*` command an operator
+        can type says when it has no frame. Without it the command falls through to the
+        not-a-chat refusal and writes it to a frame that does not exist — silence."""
+        rc = commands_frame.cmd_rename(SimpleNamespace(chat_id="", chat="",
+                                                       title=["fix", "it"]))
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(self.said, [], "it wrote a notice to a frame it could not name")
+
+    # --- the `F2` route, end to end through `_draw_palette` ---------------------------- #
+
+    @staticmethod
+    def _typing(text: str):
+        """A script step that types *text* into the surface just opened and presses its row."""
+        def step(surface):
+            for ch in text:
+                surface.handle(overlay.Event(kind=overlay.KEY, name=ch), 24)
+            return surface.rows[0]
+        return step
+
+    def _drive(self, run, script):
+        """Run *run* with `palette.own_the_tty` stood in, walking *script*.
+
+        Each step is a function of the surface most recently opened (``None`` on the first)
+        answering the row Enter lands on; a step whose row opens a doorway is followed by the
+        next step against that doorway.
+
+        **Answer once, then raise.** `own_the_tty` and `pick` are both loops, so a stub that
+        kept handing the same row over would turn a deleted guard into a HANG rather than a
+        failure — and a hang on CI is the one outcome that reads as neither.
+        """
+        from charter.frame import palette as palette_mod
+        left = list(script)
+
+        def _own(surface, *, fd=None, out=None, then=None):
+            self.assertTrue(left, "the surface came round again with nothing left to choose")
+            opened = None
+            while True:
+                row = left.pop(0)(opened)
+                if row is None:
+                    # The operator pressed Esc. `own_the_tty` answers `None` for a cancel,
+                    # for the hatch, and for a pane whose writer is gone.
+                    return None
+                nxt = then(row) if then is not None else None
+                if nxt is None:
+                    return row
+                opened = nxt
+                self.assertTrue(left, "a doorway opened with nothing left to choose")
+
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "beta.1"}, clear=False), \
+                mock.patch.object(palette_mod, "own_the_tty", side_effect=_own), \
+                mock.patch.object(commands_frame, "_close_palette"), \
+                mock.patch.object(commands_frame, "_plane_live",
+                                  return_value=(frozenset({"beta.1"}), {}, frozenset())):
+            return run()
+
+    def test_f2_rename_opens_the_input_and_spawns_what_was_typed(self):
+        """**Three survivors in one line of behaviour**: `_picker` returning the input,
+        `_then` remembering it, and the tail acting on the row that comes back. Each was
+        asserted on its own and none of them together, so dropping any one left the `F2`
+        route drawing an input that renamed nothing."""
+        rc = self._drive(
+            lambda: commands_frame._draw_palette(SimpleNamespace(chat="beta.1")),
+            [lambda _s: rename.open_rows("beta.1")[0], self._typing("fix it")])
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(self.spawned), 1, self.spawned)
+        self.assertEqual(self.spawned[0][0][-6:],
+                         ["frame-rename", "--chat", "beta.1", "beta.1", "--", "fix it"])
+
+    def test_the_menu_opens_the_input_and_spawns_it_for_the_tab_that_was_clicked(self):
+        """The same three, one surface over — and the half `tabmenu.draw` adds: the text lives
+        on the SURFACE and `own_the_tty` hands back a ROW, so the menu has to remember which
+        input it opened to have anything to spawn."""
+        rc = self._drive(
+            lambda: tabmenu.draw(SimpleNamespace(tab="beta.2")),
+            [lambda _s: [r for r in tabmenu.catalogue("beta.2")
+                         if r.id == tabmenu.RENAME_ID][0],
+             self._typing("fix it")])
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(self.spawned), 1, self.spawned)
+        self.assertEqual(self.spawned[0][0][-6:],
+                         ["frame-rename", "--chat", "beta.1", "beta.2", "--", "fix it"])
+
+    def test_a_title_f2_refuses_redraws_the_input_and_spawns_nothing(self):
+        """The same branch on the `F2` route. Both surfaces hand `rename.again` the input they
+        opened, and a surface handed ``None`` instead loses the refusal — so the palette
+        closes on a title charter would not have taken."""
+        rc = self._drive(
+            lambda: commands_frame._draw_palette(SimpleNamespace(chat="beta.1")),
+            [lambda _s: rename.open_rows("beta.1")[0],
+             self._typing("y" * 61),
+             lambda _s: None])
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.spawned, [], "a title charter refused was spawned anyway")
+
+    def _selector(self, run_once):
+        """Drive `selector.pick` with `own_the_tty` stood in — *run_once* per visit."""
+        from charter.frame import palette as palette_mod
+        from charter.frame import selector
+        seen: list = []
+
+        def _own(surface, *, fd=None, out=None, then=None):
+            seen.append(surface)
+            self.assertLessEqual(len(seen), 2, "the selector kept coming round")
+            return run_once(surface, then, len(seen))
+
+        declare_profiles(self)
+        approve_every_profile(self)
+        wired_as_today(self)
+        with mock.patch.object(palette_mod, "own_the_tty", side_effect=_own):
+            return selector.pick(cwd=config.ROOT, root=config.ROOT, titling=True), seen
+
+    def test_a_title_the_selector_refuses_redraws_the_input_too(self):
+        """And the third surface that opens one. `selector.pick` loops, so a refusal it did
+        not redraw would come straight back as a row it cannot act on."""
+        from charter.frame import selector
+
+        def _once(surface, then, visit):
+            box = then(overlay.Row(id=selector.TITLE_ID, title="title:"))
+            for ch in "y" * 61:
+                box.handle(overlay.Event(kind=overlay.KEY, name=ch), 24)
+            back = then(box.rows[0])
+            self.assertIs(back, box, "the refusal did not come back as the input")
+            self.assertIn("this one is 61", box.footer)
+            box.left = overlay.LEFT_EOF
+            return None
+
+        got, seen = self._selector(_once)
+        self.assertIs(got, selector.END_OF_INPUT)
+        self.assertEqual(len(seen), 1)
+
+    def test_escape_in_the_title_input_cancels_the_NAMING_and_not_the_chat(self):
+        """**The input's footer says `esc cancel` and the selector's says `esc close this
+        chat`, and one keystroke reaches both.** `own_the_tty` answers a single ``None``
+        however deep the surface was, so without asking WHICH surface left, Esc on the title
+        input would take the new chat's window with it — charter promising one thing on screen
+        and doing another.
+
+        A dropped terminal leaves the same way and must NOT come back to the list, which is
+        why the test is `overlay.LEFT_KEY` and not "the input left"; the case above is that
+        half.
+        """
+        from charter.frame import selector
+
+        def _once(surface, then, visit):
+            if visit == 1:
+                box = then(overlay.Row(id=selector.TITLE_ID, title="title:"))
+                box.left = overlay.LEFT_KEY          # Esc, on the input
+                return None
+            surface.left = overlay.LEFT_KEY          # Esc, on the list this time
+            return None
+
+        got, seen = self._selector(_once)
+        self.assertIs(got, selector.KEY_CANCEL)
+        self.assertEqual(len(seen), 2,
+                         "Esc on the title input answered for the whole selector")
+
+    def test_a_title_the_menu_refuses_redraws_the_input_and_spawns_nothing(self):
+        """`_then`'s `back` branch, on the surface that has one. Without it a refused title
+        closes the menu, and sixty characters go with it — ruling 6 lost at the one surface
+        that opens under a pointer. The operator then presses Esc, which is what makes this a
+        finite script rather than an input redrawing itself forever."""
+        rc = self._drive(
+            lambda: tabmenu.draw(SimpleNamespace(tab="beta.2")),
+            [lambda _s: [r for r in tabmenu.catalogue("beta.2")
+                         if r.id == tabmenu.RENAME_ID][0],
+             self._typing("y" * 61),
+             lambda _s: None])
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.spawned, [], "a title charter refused was spawned anyway")
+
+    def test_the_f2_doorway_opens_the_input_over_this_palettes_own_chat(self):
+        """`_picker`'s own answer, asked of `_picker`: `F2` has no pointer and no target but
+        the chat it was opened in."""
+        opened: list = []
+        got = commands_frame._picker(rename.open_rows("beta.1")[0], "beta.1", opened)
+        self.assertIsInstance(got, rename.Rename)
+        self.assertEqual(got.target, "beta.1")
+
+    # --- the tab menu's own loop ------------------------------------------------------- #
+
+    def test_the_menus_rename_row_opens_the_input_and_not_the_close_warning(self):
+        """`_then`'s id test. Without it the row falls through to the close doorway's branch,
+        which pays a `list-panes` per server and opens a confirmation about a chat the
+        operator asked to NAME."""
+        self.assertIsInstance(
+            tabmenu.opens(overlay.Row(id=tabmenu.RENAME_ID, title="chat: rename beta.1"),
+                          "beta.1", live=None),
+            rename.Rename)
+        self.assertIsNone(
+            tabmenu.opens(overlay.Row(id=tabmenu.TRANSCRIPT_ID, title="t"), "beta.1",
+                          live=None))
+
+    def test_a_refused_title_redraws_the_input_wherever_it_was_opened(self):
+        """`rename.again`, asked through both surfaces that call it. Handing it ``None``
+        instead of the surface — which is what dropping the `if naming` expression does —
+        closes the input on a refusal and throws away sixty characters."""
+        surface = rename.Rename(target="beta.1")
+        for ch in "y" * 61:
+            surface.handle(overlay.Event(kind=overlay.KEY, name=ch), 24)
+        self.assertIs(rename.again(surface.rows[0], surface), surface)
+        self.assertIsNone(rename.again(surface.rows[0], None),
+                          "a refusal with no surface to redraw must not invent one")
+
+    # --- the rest ---------------------------------------------------------------------- #
+
+    def test_the_rename_row_carries_no_note_when_it_has_a_chat(self):
+        """The other arm of `open_rows`' conditional. Collapsed to the refusal it would put
+        `NO_CHAT_HERE` on every palette on every plane, which reads as charter refusing a row
+        it is about to open."""
+        row = rename.open_rows("beta.1")[0]
+        self.assertEqual(row.note, "")
+        self.assertFalse(row.refused)
+
+    def test_a_harness_charter_has_no_record_of_is_promised_nothing(self):
+        """`takes_a_name`'s ``None`` guard. Without it the notice raises on a chat whose
+        identity record names a harness this charter does not have — the migration case."""
+        self.assertFalse(rename.takes_a_name("not-a-harness"))
+        self.assertEqual(rename.renamed_note("not-a-harness"), rename.RENAMED)
+
+    def test_an_empty_title_file_reads_as_no_title(self):
+        """`state.title`'s `or None`. An empty file is what a half-finished write leaves, and
+        `""` would make `label_of` draw a tab with no name on it rather than its id."""
+        (state._root() / "beta.1" / "title").write_text("", encoding="utf-8")
+        self.assertIsNone(state.title("beta.1"))
+        self.assertEqual(chats.label_of("beta.1"), "beta.1")
+
+    def test_a_directory_charter_cannot_write_leaves_the_tab_as_it_was(self):
+        """`record_title`'s `except OSError`. Every writer in `frame/state.py` promises never
+        to raise, and what a failed write costs is a tab that goes on drawing its id — which
+        is exactly where it was before anybody renamed it."""
+        d = state.frame_dir("beta.1", create=True)
+        mode = d.stat().st_mode
+        d.chmod(0o500)
+        self.addCleanup(d.chmod, mode)
+        self.assertFalse(state.record_title("beta.1", "fix it"))
+        self.assertIsNone(state.title("beta.1"))
+
+    def test_the_title_row_flag_survives_the_trip_through_the_parser(self):
+        """**`--title-row`'s argparse dest and the pane's `getattr` are two spellings of one
+        wire**, and nothing was asking whether they agreed: a retune of either leaves the flag
+        parsed, carried across tmux and then read as absent, so `+` opens a selector with no
+        title row and no error anywhere.
+
+        Parsed from the argv `argv_select` really emits, and driven into the real
+        `_select_in_pane`, so the two spellings are compared rather than restated.
+        """
+        from charter.frame import launcher, selector
+        argv = launcher.argv_select("claude-work", titling=True)
+        args = cli.build_parser().parse_args(argv[argv.index("frame-launch"):])
+        self.assertTrue(args.title_row)
+
+        no_terminal()
+        declare_profiles(self)
+        approve_every_profile(self)
+        wired_as_today(self)
+        seen: list = []
+
+        def _pick(**kw):
+            # **Answer once, then raise.** `_select_in_pane` loops until a pick it can start,
+            # and a stub that kept handing the same one back would hang rather than fail if
+            # the launch chain refused it.
+            self.assertFalse(seen, "the selector came round again — the pick was refused")
+            seen.append(kw["titling"])
+            return selector.Choice("claude-work")
+
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": "beta.1"}, clear=False), \
+                mock.patch.object(launcher, "framed_chat", return_value="beta.1"), \
+                mock.patch.object(selector, "pick", side_effect=_pick), \
+                mock.patch.object(launcher.pane, "claim", return_value=None), \
+                mock.patch.object(launcher.pane, "release"), \
+                mock.patch("os.execvpe", side_effect=OSError(2, "no")):
+            launcher._select_in_pane(args, "beta.1")
+
+        self.assertEqual(seen, [True], "the flag reached the pane and was read as absent")
+
+    def test_the_words_the_docs_promise_are_the_words_on_the_row(self):
+        """**Spelled by hand, for `slots.ENDED_MARK`'s reason.** These two are
+        operator-visible and `docs/frame.md` and this PR's news entry describe the gesture by
+        them — every other constant this feature adds is an id or a sentence whose spelling
+        nothing outside charter depends on, and those are named in the PR rather than pinned
+        here."""
+        self.assertIn("chat: rename", rename.OPEN_RENAME)
+        self.assertIn("chat: rename", tabmenu.rename_title("beta.1"))
+
+    def test_a_brief_line_is_cut_after_its_trailing_space_is_taken_off(self):
+        """`line.strip()` and not `lstrip()` where the cut is measured: trailing whitespace
+        counted into the budget moves the marker onto text that fits."""
+        line = "x" * (state.TITLE_MAX - 3) + "   " * 10
+        self.assertEqual(rename.first_line_title(line + "\n"), "x" * (state.TITLE_MAX - 3))

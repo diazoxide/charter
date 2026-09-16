@@ -1012,7 +1012,9 @@ that title on the strip in place of its id; a chat without one is its id, exactl
 - **A handoff names its own chat** from the first line of the brief it was opened on — see
   *A chat opened for you in the background*.
 
-Enter on an empty input takes the title off again and the tab goes back to its id.
+Enter on an empty input takes the title off again and the tab goes back to its id, and `Esc`
+in the input cancels the naming and nothing else — at `+` it comes back to the profile list
+rather than closing the chat you are making.
 
 **Where a title shows:** the chat strip, in place of the id; and after the id in the tab
 menu's heading, the quit and `chat: close` confirmation rows, the choice an ended tab offers,
