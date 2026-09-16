@@ -648,18 +648,33 @@ class TheHookAndItsBranch(PersonaIso, unittest.TestCase):
 
         self.assertEqual(one, two)
 
-    def test_a_profile_chat_gets_the_ended_step(self):
-        """Which of the two hooks a chat gets is decided ONCE, by whether it runs a profile
-        at all — so the decision is a function with a name rather than a condition buried in
-        the middle of a launch, where the next reader would have to reconstruct it."""
+    def test_a_harness_chat_gets_the_ended_step(self):
+        """Which of the two hooks a chat gets is decided ONCE, by a function with a name
+        rather than a condition buried in the middle of a launch."""
         argv = commands_frame._pane_died_second_hook_argv(socket="s", harness_pane="%1",
-                                                          profile="claude")
+                                                          harness_chat=True)
 
         self.assertIn("frame-ended", argv[-1])
         self.assertNotIn("kill-window", argv[-1])
 
+    def test_a_chat_still_choosing_its_profile_gets_it_too(self):
+        """**The defect this case exists for.** The hook is installed ONCE, at launch, and a
+        selector chat has no profile at that moment — bare `charter`, the `+`, a workspace
+        tab and the palette's new chat all open a pane that asks first and resolves a profile
+        minutes later, in the pane.
+
+        Keyed on "is a profile resolved right now", every one of those would have been armed
+        with `kill-window`, so the first harness started from the selector would still have
+        had its window killed on exit: the whole feature missing on its commonest path, and
+        invisible to any test that launches a named profile.
+        """
+        argv = commands_frame._pane_died_second_hook_argv(socket="s", harness_pane="%1",
+                                                          harness_chat=True)
+
+        self.assertIn("frame-ended", argv[-1])
+
     def test_the_escape_hatch_keeps_kill_window(self):
-        """`charter frame -- <cmd>` is not a harness and records no profile (the ruling on
+        """`charter frame -- <cmd>` is not a harness and never becomes one (the ruling on
         open question 5). Its window closes when the command exits and the caller gets the
         exit code back, which is what a script waiting on it has always been promised.
 
@@ -667,7 +682,7 @@ class TheHookAndItsBranch(PersonaIso, unittest.TestCase):
         never return, and the code would never arrive.
         """
         argv = commands_frame._pane_died_second_hook_argv(socket="s", harness_pane="%1",
-                                                          profile="")
+                                                          harness_chat=False)
 
         self.assertEqual(argv[-1], "kill-window")
         self.assertEqual(
