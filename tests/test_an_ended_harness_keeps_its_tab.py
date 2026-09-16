@@ -24,12 +24,14 @@ tab's selector it does nothing; every other surface keeps its cancel behaviour.*
 
 from __future__ import annotations
 
+import subprocess
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
-from charter import config
-from charter.frame import leave, overlay, palette, selector, state, tabmenu
+from charter import commands_frame, config
+from charter.frame import ended, leave, overlay, palette, selector, state, tabmenu
 
 from tests._isolation import (PersonaIso, approve_every_profile, declare_profiles,
                               make_plane, wired_as_today)
@@ -415,6 +417,204 @@ class TheSelectorAfterAnExit(PersonaIso, unittest.TestCase):
         self.assertIsNone(chosen)
         self.assertEqual(surface.left, overlay.LEFT_EOF,
                          "Ctrl+C cancelled the selector an ended tab draws")
+
+
+class _Tmux:
+    """`tmuxctl.run` stood in: answers one `list-panes`, records every other command.
+
+    The listing is what a real server would hand back — the pane's two option VALUES and
+    its `#{pane_dead}` — so a case states what the SERVER says rather than what charter
+    concluded from it, which is the only way these guards can be tested at all.
+    """
+
+    def __init__(self, rows=(), *, rc: int = 0, split: str = "%7") -> None:
+        self.rows = list(rows)
+        self.rc = rc
+        self.split = split
+        self.calls: list[list[str]] = []
+
+    def __call__(self, _action, argv, **_kw):
+        self.calls.append(list(argv))
+        if "list-panes" in argv:
+            return subprocess.CompletedProcess(
+                argv, self.rc, stdout="".join(r + "\n" for r in self.rows), stderr="")
+        if "split-window" in argv:
+            return subprocess.CompletedProcess(argv, 0, stdout=self.split + "\n",
+                                               stderr="")
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+    def verbs(self) -> list[str]:
+        """The tmux SUBCOMMAND of each call — never a substring of the whole line, because
+        an option's value can hold the text of another command."""
+        return [c[3] for c in self.calls if len(c) > 3]
+
+    def wrote(self, verb: str) -> list[list[str]]:
+        return [c for c in self.calls if verb in c]
+
+
+def _row(pane: str, dead: str, chat: str, plane: str, drawer: str = "") -> str:
+    return "\t".join((pane, dead, chat, plane, drawer))
+
+
+class NothingActsOnARecordAlone(PersonaIso, unittest.TestCase):
+    """**No kill, respawn or split acts on a record.** One listing proves the target.
+
+    This is the #933 and #1103 rule, and the reason it has a class of its own is that every
+    case below is a real state a plane reaches: two planes in one tmux with the same chat
+    ids, a session an older charter created and never marked, a record left naming a pane
+    tmux has since handed to somebody else, and a server that will not answer. Each one,
+    acted on, is a respawn or a kill aimed at a window that is not this chat's.
+    """
+
+    def setUp(self) -> None:
+        super().setUp()
+        _plant("beta.1")
+        state.record_drawn("beta.1")
+        state.record_exit("beta.1", 0)
+        self.plane = commands_frame._this_plane()
+        self.enterContext(mock.patch.object(ended.tmuxctl, "is_operator_socket",
+                                            return_value=False))
+
+    def _present(self, rows, *, rc: int = 0) -> tuple[str, _Tmux]:
+        fake = _Tmux(rows, rc=rc)
+        with mock.patch.object(ended.tmuxctl, "run", fake):
+            return ended.present("beta.1", socket=SERVER), fake
+
+    def test_a_proven_dead_pane_is_respawned_without_k(self):
+        """The one case that acts, so the refusals below mean something."""
+        answer, fake = self._present([_row("%1", "1", "beta.1", self.plane)])
+
+        self.assertEqual(answer, "selector")
+        respawns = fake.wrote("respawn-pane")
+        self.assertEqual(len(respawns), 1, fake.calls)
+        self.assertNotIn("-k", respawns[0], "a stale record would have killed a live agent")
+        self.assertEqual(respawns[0][respawns[0].index("-t") + 1], "%1")
+
+    def test_another_planes_pane_is_not_touched(self):
+        """Two planes open inside one tmux have chats of the same id — #933's own shape."""
+        answer, fake = self._present([_row("%1", "1", "beta.1", "/some/other/plane")])
+
+        self.assertEqual(answer, "")
+        self.assertEqual(fake.wrote("respawn-pane"), [])
+        self.assertFalse(state.is_ended("beta.1"))
+
+    def test_an_unmarked_pane_is_not_touched(self):
+        """A session an older charter created carries no plane marker, and is left alone."""
+        answer, fake = self._present([_row("%1", "1", "beta.1", "")])
+
+        self.assertEqual(answer, "")
+        self.assertEqual(fake.wrote("respawn-pane"), [])
+
+    def test_a_recorded_pane_listed_under_another_chat_is_not_touched(self):
+        """The record is stale: tmux has handed `%1` to a different chat since."""
+        answer, fake = self._present([_row("%1", "1", "beta.2", self.plane)])
+
+        self.assertEqual(answer, "")
+        self.assertEqual(fake.wrote("respawn-pane"), [])
+
+    def test_a_live_pane_is_not_touched(self):
+        """Charter refuses before tmux would: the harness is still running in there."""
+        answer, fake = self._present([_row("%1", "0", "beta.1", self.plane)])
+
+        self.assertEqual(answer, "")
+        self.assertEqual(fake.wrote("respawn-pane"), [])
+
+    def test_a_server_that_does_not_answer_touches_nothing(self):
+        """#1100: a server that would not answer is not a server with nothing on it."""
+        answer, fake = self._present([], rc=1)
+
+        self.assertEqual(answer, "")
+        self.assertEqual(fake.wrote("respawn-pane"), [])
+        self.assertFalse(state.is_ended("beta.1"))
+
+    def test_the_hook_and_the_late_check_present_once(self):
+        """The `pane-died` hook and `_launch`'s late check both answer one death."""
+        rows = [_row("%1", "1", "beta.1", self.plane)]
+        first, fake = self._present(rows)
+        second, again = self._present(rows)
+
+        self.assertEqual((first, second), ("selector", ""))
+        self.assertEqual(len(fake.wrote("respawn-pane")), 1)
+        self.assertEqual(again.wrote("respawn-pane"), [],
+                         "one exit was presented twice")
+
+    def test_a_crash_opens_a_drawer_and_marks_it(self):
+        state.record_exit("beta.1", 3)
+
+        answer, fake = self._present([_row("%1", "1", "beta.1", self.plane)])
+
+        self.assertEqual(answer, "drawer")
+        self.assertEqual(fake.wrote("respawn-pane"), [],
+                         "a crash must leave the harness's last lines on screen")
+        split = fake.wrote("split-window")
+        self.assertEqual(len(split), 1, fake.calls)
+        self.assertEqual(split[0][split[0].index("-t") + 1], "%1")
+        marked = fake.wrote(ended.DRAWER_OPTION)
+        self.assertEqual(len(marked), 1, "the drawer was never marked as this chat's")
+        self.assertEqual(marked[0][-1], "beta.1")
+        self.assertEqual(state.drawer("beta.1"), "%7")
+
+    def test_drop_drawer_kills_only_a_proven_drawer(self):
+        state.record_drawer("beta.1", "%7")
+        fake = _Tmux([_row("%7", "0", "beta.1", self.plane, "beta.1"),
+                      _row("%8", "0", "beta.1", self.plane)])
+
+        with mock.patch.object(ended.tmuxctl, "run", fake):
+            ended.drop_drawer("beta.1")
+
+        killed = fake.wrote("kill-pane")
+        self.assertEqual([c[c.index("-t") + 1] for c in killed], ["%7"])
+        self.assertIsNone(state.drawer("beta.1"))
+
+    def test_drop_drawer_never_kills_the_recorded_pane_when_unproven(self):
+        """The record names `%7`; the listing says `%7` belongs to another chat now."""
+        state.record_drawer("beta.1", "%7")
+        fake = _Tmux([_row("%7", "0", "beta.2", self.plane, "beta.2")])
+
+        with mock.patch.object(ended.tmuxctl, "run", fake):
+            ended.drop_drawer("beta.1")
+
+        self.assertEqual(fake.wrote("kill-pane"), [])
+
+    def test_choose_respawns_only_a_proven_dead_pane(self):
+        """A drawer can sit on screen for hours; the pane may be live again by the Enter."""
+        fake = _Tmux([_row("%1", "0", "beta.1", self.plane)])
+
+        with mock.patch.object(ended.tmuxctl, "run", fake):
+            ended.choose(overlay.Row(id=ended.RESUME_ID, title="resume"), "beta.1")
+
+        self.assertEqual(fake.wrote("respawn-pane"), [])
+
+    def test_it_reads_nothing_from_the_pane_and_sends_no_keys(self):
+        """ADR 0018's two bounds, asserted over every command this module issues: the
+        presentation is chosen from the exit code and the record, never from what the
+        harness printed, and charter never types into a harness."""
+        seen: list[list[str]] = []
+        for code, rows in ((0, [_row("%1", "1", "beta.1", self.plane)]),
+                           (3, [_row("%1", "1", "beta.1", self.plane)]),
+                           (0, [_row("%1", "0", "beta.1", self.plane)])):
+            state.clear_ended("beta.1")
+            state.record_exit("beta.1", code)
+            _answer, fake = self._present(rows)
+            seen.extend(fake.calls)
+
+        flat = [" ".join(c) for c in seen]
+        self.assertTrue(seen, "nothing was recorded, so this asserts nothing")
+        self.assertFalse([c for c in flat if "capture-pane" in c], flat)
+        self.assertFalse([c for c in flat if "send-keys" in c], flat)
+
+    def test_the_command_always_returns_zero(self):
+        """It runs as a `run-shell -b` child of the tmux server: a non-zero return is
+        printed INTO the harness pane and drops it into copy-mode, which is charter drawing
+        in the one rectangle ADR 0018 says it never draws."""
+        fake = _Tmux()
+        with mock.patch.object(ended.tmuxctl, "run", fake):
+            self.assertEqual(ended.cmd_frame_ended(SimpleNamespace(chat="../x")), 0)
+        self.assertEqual(fake.calls, [], "an unspellable chat reached tmux")
+
+        with mock.patch.object(ended, "proof", side_effect=RuntimeError("boom")):
+            self.assertEqual(ended.present("beta.1", socket=SERVER), "")
+            self.assertEqual(ended.cmd_frame_ended(SimpleNamespace(chat="beta.1")), 0)
 
 
 if __name__ == "__main__":

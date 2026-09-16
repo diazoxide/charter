@@ -9250,6 +9250,14 @@ def cmd_palette(args) -> int:
             # menu is about one CHAT that is very often not the one the frame is on. An
             # unspellable `--tab` answers `""` and the ordinary palette opens, which is
             # `frame/tabmenu.wanted`'s whole degradation promise: never a refusal.
+            # **`--ended` is the fourth surface this pane can be, and it is asked first**
+            # because it is the most specific of them. A drawer is not something a keypress
+            # produces: charter splits it itself, beneath a pane whose harness has just
+            # crashed, and the rows in it are about that one chat's ending rather than
+            # about the frame or about a tab somebody pointed at.
+            if getattr(args, "ended", False):
+                from .frame import ended as ended_mod
+                return ended_mod.draw(args)
             if tabmenu.wanted(args):
                 return tabmenu.draw(args)
             return _draw_palette(args)
