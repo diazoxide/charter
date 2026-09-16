@@ -523,7 +523,7 @@ class ALaunchAndASwitchSpendWhatTheyMeasured(PersonaIso, unittest.TestCase):
     A count that has to be edited is a count somebody has to look at.
     """
 
-    def test_a_four_panel_launch_sends_sixteen_invocations_up_to_the_attach(self):
+    def test_a_four_panel_launch_sends_seventeen_invocations_up_to_the_attach(self):
         """The whole private-server launch, up to and including `attach`. It was 44.
 
         Against THIS MODULE'S fake, which is what makes the number assertable at all; a
@@ -536,9 +536,22 @@ class ALaunchAndASwitchSpendWhatTheyMeasured(PersonaIso, unittest.TestCase):
 
         Unbatched, and named here so a reader can see what is left rather than guess: two
         reaping reads, `new-session`, the eager death check, `list-panes`, the resize
-        hook, the window-seat read, `list-keys`, `select-window`, `select-pane`, `attach`.
+        hook, the window-seat read, `list-keys`, the LATE death check, `select-window`,
+        `select-pane`, `attach`.
 
-        **`list-keys` is the sixteenth and it is a READ whose answer a later WRITE is
+        **The late death check is the seventeenth, and it is a round trip the exit gate
+        bought deliberately** (#1112, task 2). A chat that keeps its tab when its harness
+        ends needs one thing the launch cannot get from the `pane-died` hook: the hook only
+        answers deaths that happen AFTER it exists and after the frame is marked drawn, so
+        a harness that dies while the panels are being drawn is seen by nobody. `_launch`
+        therefore asks `#{pane_dead}` once more, right after it writes the drawn mark, and
+        presents the exit itself if the pane went in between. Without it that tab sits dead
+        offering nothing — the one window neither answer covers.
+
+        It cannot be folded into a batch for the same reason `list-keys` cannot: it is a
+        READ whose answer decides whether a WRITE happens at all.
+
+        **`list-keys` is the other such READ, whose answer a later WRITE is
         built out of** (#848: charter wraps tmux's own `MouseDown3Pane` rather than
         replacing it). That is the one shape #780's batching cannot fold away — the bind
         does not exist until the read has answered — so it is a round trip that was
@@ -551,7 +564,7 @@ class ALaunchAndASwitchSpendWhatTheyMeasured(PersonaIso, unittest.TestCase):
         with mock.patch.dict(config.FRAME, {"slots": list(_FOUR)}):
             self.assertEqual(_launch(fake, cols=200, rows=50), 0)
         attach = next(i for i, c in enumerate(fake.invocations) if "attach" in c)
-        self.assertEqual(attach + 1, 16,
+        self.assertEqual(attach + 1, 17,
                          [" ".join(c[3:])[:70] for c in fake.invocations[:attach + 1]])
         self.assertEqual(
             len([c for c in fake.invocations[:attach + 1] if "list-keys" in c]), 1,

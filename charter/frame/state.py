@@ -2778,6 +2778,175 @@ def clear_waiting(fid: str) -> None:
         return
 
 
+#: Whether the launch that opened this chat got as far as laying its frame out.
+#:
+#: **#384's guard, kept by one bit.** A harness dead BEFORE its chat was drawn is the
+#: launch's own early death: it is reported and its window is closed, and that is unchanged.
+#: A harness that dies AFTER is the ordinary exit an ended tab exists for. Nothing else
+#: tells the two apart — an exit code cannot, because a command that fails instantly and one
+#: that fails an hour later exit the same way — so the ended step does nothing at all for a
+#: chat this does not mark, and `_launch` writes it at the moment the frame exists.
+#:
+#: In the chat's own directory, for :data:`_CLOSED_FILE`'s reason: it only has to outlive
+#: the pane, and `reap` takes the directory once the window is gone.
+_DRAWN_FILE = "drawn"
+
+#: The claim that says THIS exit is being presented, created with ``O_EXCL``.
+#:
+#: **Two processes answer one death and only one may act.** The `pane-died` hook fires for
+#: the pane, and `_launch` asks `_query_pane_dead_status` again right after it writes the
+#: drawn mark — so a harness that dies in that window is seen twice. Without an atomic claim
+#: both would respawn the pane: two selectors for one exit, or a selector racing a drawer.
+#: `config.create_for` is the ``O_EXCL`` write (#1037), so the loser is TOLD it lost rather
+#: than finding out by overwriting.
+#:
+#: Cleared by every harness start (`ended.reset`), which is what makes a resumed chat's next
+#: exit presented exactly as its first was.
+_ENDED_FILE = "ended"
+
+#: Which pane holds the choice offered after a crash — a `%N`, or absent.
+#:
+#: A RECORD and never a target. `ended.drop_drawer` kills only a pane that ONE listing
+#: proves carries this chat's `@charter_drawer` on this plane; this file says where to look.
+_DRAWER_FILE = "drawer"
+
+
+def record_drawn(fid: str) -> None:
+    """Mark that *fid*'s frame was laid out, so its harness's exit is an ORDINARY one.
+
+    Never raises, like everything else here. What a failed write costs is stated rather than
+    guarded against: the ended step reads this as "not drawn" and offers nothing, so the
+    chat's window closes at its exit exactly as it did before this feature. That is the safe
+    direction and the one #384 already describes.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    try:
+        config.write_for(d / _DRAWN_FILE, "1\n")
+    except OSError:
+        return
+
+
+def was_drawn(fid: str) -> bool:
+    """Whether *fid*'s launch finished laying its frame out — one ``stat``.
+
+    ``False`` for a marker charter cannot stat as well as for one that is not there, and
+    both fall on the *do nothing* side: an unreadable marker leaves the exit to the launch's
+    own early-death path rather than respawning a pane on a reading charter is unsure of.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return False
+    return (d / _DRAWN_FILE).exists()
+
+
+def claim_ended(fid: str) -> bool:
+    """Claim *fid*'s exit for THIS process. ``True`` only for the first caller.
+
+    The whole race in one ``O_EXCL`` create (:data:`_ENDED_FILE`). ``False`` means another
+    process has already presented this exit, or is presenting it right now, and the caller
+    must do nothing at all — not respawn, not split, not repaint.
+
+    ``False`` for a chat that can name no directory, which is the same instruction: a hook
+    that cannot claim does nothing, and a hook never breaks a turn.
+    """
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return False
+    try:
+        return config.create_for(d / _ENDED_FILE, "1\n")
+    except OSError:
+        return False
+
+
+def is_ended(fid: str) -> bool:
+    """Whether *fid*'s harness has ended and its tab is holding the choice — one ``stat``.
+
+    Read by `leave.needs_confirming` (an ended tab closes without asking), by the chat
+    strip's mark, and by the quit that records an ended tab as ended.
+
+    ``False`` for a marker charter cannot stat, and here that falls on the *ask first* side:
+    a close charter is unsure about confirms, which costs one keypress, where the other
+    direction would stop a live harness with no warning at all.
+
+    **It never raises, and that is `chats.roster`'s requirement rather than this function's
+    taste.** The roster asks this of every chat on the strip, so this is now a filesystem
+    call on a per-name path where there was none — and a chat id is not length-bounded on
+    the way in (`$CHARTER_SESSION_ID` is an environment value, which is the one input to the
+    roster with no bound in front of it). A 5000-character ordinal makes the stat answer
+    `ENAMETOOLONG` rather than `False`, and a readout that raised would take the whole strip
+    down with it. Measured on CI: `test_frame_chat_switch` builds exactly that id.
+    """
+    d = frame_dir(fid)
+    if d is None:
+        return False
+    try:
+        return (d / _ENDED_FILE).exists()
+    except OSError:
+        return False
+
+
+def clear_ended(fid: str) -> None:
+    """Forget that *fid* ended — a harness is starting in it again."""
+    d = frame_dir(fid)
+    if d is None:
+        return
+    try:
+        (d / _ENDED_FILE).unlink(missing_ok=True)
+    except OSError:
+        return
+
+
+def record_drawer(fid: str, pane: str) -> None:
+    """Record which pane holds *fid*'s crash drawer, or forget it when *pane* is ``""``.
+
+    **Held to `tmuxctl.PANE_ID_RE` on the way in**, at #475's boundary and for its reason:
+    this value goes to disk and comes back as a `kill-pane -t` target. `%1;kill-server` in
+    that file is the shape that already cost this project a `kill-server` armed on every
+    window resize, and an EMPTY target is worse than a wrong one — measured on tmux 3.7c,
+    `kill-pane -t ''` kills the ACTIVE pane and exits 0. Anything that is not a pane id is
+    refused rather than rewritten: a value charter cannot name a pane from is one it must
+    not aim anything at.
+
+    A refusal leaves whatever was recorded before, which is the honest reading: the caller
+    is telling charter about a pane it could not name, not telling it the old one is gone.
+    """
+    from . import tmuxctl
+
+    d = frame_dir(fid, create=True)
+    if d is None:
+        return
+    try:
+        if not pane:
+            (d / _DRAWER_FILE).unlink(missing_ok=True)
+            return
+        if tmuxctl.PANE_ID_RE.fullmatch(pane):
+            config.write_for(d / _DRAWER_FILE, pane + "\n")
+    except OSError:
+        return
+
+
+def drawer(fid: str) -> str | None:
+    """The pane *fid*'s crash drawer was opened in, or ``None``.
+
+    Checked again on the way OUT, for the reason every reader in this module checks what it
+    read: the file sits on disk between the two, and this is where to LOOK rather than what
+    to kill — `ended.drop_drawer` still needs one listing to prove the pane carries this
+    chat's `@charter_drawer` before it aims anything at it.
+    """
+    from . import tmuxctl
+
+    d = frame_dir(fid)
+    if d is None:
+        return None
+    try:
+        pane = (d / _DRAWER_FILE).read_text().strip()
+    except OSError:
+        return None
+    return pane if tmuxctl.PANE_ID_RE.fullmatch(pane) else None
+
+
 def record_picked_kind(fid: str, harness_name: str) -> None:
     """Write the KIND the operator picked into *fid*'s identity record.
 

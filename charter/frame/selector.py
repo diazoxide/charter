@@ -71,6 +71,49 @@ ESC_HINT = "esc close this chat"
 #: go back to, and Esc here closes the chat rather than an overlay over one.
 FOOTER = f"  up/down move   enter start   {ESC_HINT}"
 
+#: What Esc does on the selector a harness EXIT put here, in place of :data:`ESC_HINT`.
+#:
+#: The two are one key and two different things. On a pane that never started a harness Esc
+#: closes a chat that never began; here it closes a chat that ran, and closing is the one
+#: way to end a chat for good (decision 5). Saying *this chat* on both would leave an
+#: operator pressing the same key for two outcomes with one sentence to go on.
+ESC_HINT_ENDED = "esc close this tab"
+
+#: The bottom line of the selector an ended tab draws.
+FOOTER_ENDED = f"  up/down move   enter start   {ESC_HINT_ENDED}"
+
+#: The id of the row that brings the chat's own conversation back. A full row id rather
+#: than a profile name, because resume is not a profile: the harness, the link and the
+#: directory all come off the chat's own record, and the row carries none of them.
+RESUME_ID = "resume:"
+
+
+class Resume(NamedTuple):
+    """What the resume row says, composed by whoever knows the chat (`launcher.resume_row`).
+
+    Held apart from the row so this module never reads a chat's record: the selector draws
+    what it is given, and *whether* there is a conversation to offer is
+    `leave.conversation_exists`' answer at the moment of offering (#1101).
+    """
+
+    #: The session name — task 3 composes `<title> · <id>`; until then it is the id.
+    title: str
+    #: `<kind> · session <first 8 of the link>`, so the row says which conversation.
+    note: str
+
+
+#: What :func:`pick` answers for a real Esc keystroke, and for a pane whose input ended.
+#:
+#: **Two sentinels where there was one ``None``, and the whole exit gate rests on the
+#: difference.** Esc is the operator saying *close this tab for good*; end of input is a
+#: closed pty, a killed tmux server or a machine that went down, and reading that as a
+#: decision would forget a chat nobody asked to forget. `overlay.Surface.left` is what
+#: tells them apart, and this is where that reading becomes an answer.
+#:
+#: Objects rather than strings, so no profile name and no row id can ever equal one.
+KEY_CANCEL = object()
+END_OF_INPUT = object()
+
 NOTHING_TO_PICK = ("charter: no profile can start here — every row above says why. Nothing "
                    "was started; fix one of them and open a chat again.")
 
@@ -91,9 +134,15 @@ NOT_WIRED_YET = "not wired yet — Enter installs {what}"
 
 class Choice(NamedTuple):
     """The profile the operator picked. A type of its own rather than a bare string,
-    because ``None`` from :func:`pick` means *Esc* and an empty name would not."""
+    because a cancel from :func:`pick` is a sentinel and an empty name would not be one."""
 
     profile: str
+    #: Whether the operator picked RESUME rather than a profile row — *bring this chat's
+    #: own conversation back*, which the launcher spells per harness at the `exec`
+    #: (`--resume <id>`, `resume <id>`, `-s <id>`). A flag on the choice rather than a
+    #: second return type, because every other thing the caller does with it is the same:
+    #: resolve the profile, run the chain, `exec`. Only the words after the command differ.
+    resume: bool = False
 
 
 class Refused(NamedTuple):
@@ -198,7 +247,8 @@ def read(root: Path) -> profiles.ProfileSet:
 
 
 def rows(have: profiles.ProfileSet, *, cwd: Path, start: str | None = None,
-         after: Refused | None = None) -> tuple[overlay.Row, ...]:
+         after: Refused | None = None,
+         resume: Resume | None = None) -> tuple[overlay.Row, ...]:
     """One row per profile, in `charter harness list`'s order, with its state on it.
 
     **Declared profiles always; a built-in only when its program is installed.** A built-in
@@ -282,7 +332,14 @@ def rows(have: profiles.ProfileSet, *, cwd: Path, start: str | None = None,
         out.append((place(r.name),
                     overlay.Row(id=ROW_PREFIX + r.name, title=r.name, note=r.reason,
                                 refused=True)))
-    return tuple(row for _place, row in sorted(out, key=lambda pair: pair[0]))
+    listed = tuple(row for _place, row in sorted(out, key=lambda pair: pair[0]))
+    if resume is None:
+        return listed
+    # **First, and never refused.** It is what the operator almost always wants after an
+    # exit, and it is offered only when the conversation exists — so a row that is here at
+    # all is a row that can run. Absent rather than refused when there is nothing to
+    # resume: a refusal would be charter explaining itself about a chat nobody typed in.
+    return (overlay.Row(id=RESUME_ID, title=resume.title, note=resume.note), *listed)
 
 
 @dataclass
@@ -314,14 +371,19 @@ class Selector(palette.Palette):
         # that only restates what the next line says is the shape this repository deletes
         # (the sweep reported exactly that one as a survivor).
         super()._refilter()
-        wanted, self.on = (ROW_PREFIX + self.on if self.on else ""), ""
+        # **A profile NAME or a whole row id**, because the row the cursor opens on is not
+        # always a profile's: :data:`RESUME_ID` names a row that has no profile behind it.
+        # Matching both spellings keeps every existing caller — which passes a bare name —
+        # working, where making `on` an id outright would have moved all of them.
+        wanted, self.on = self.on, ""
         for i, row in enumerate(self.rows):
-            if row.id == wanted:
+            if wanted and row.id in (wanted, ROW_PREFIX + wanted):
                 self._sel = i
                 return
 
 
-def opens_on(listed: tuple[overlay.Row, ...], start: str | None) -> str:
+def opens_on(listed: tuple[overlay.Row, ...], start: str | None, *,
+             resume: Resume | None = None) -> str:
     """Which row a preselected *start* opens the cursor on — ``""`` for `palette.aim`.
 
     **Ruling 18, and it is one sentence in two halves.** A `default` naming a profile this
@@ -331,12 +393,18 @@ def opens_on(listed: tuple[overlay.Row, ...], start: str | None) -> str:
     can only say why, and *Enter must always do something* is the rule the cursor exists to
     keep. Both fall through to the palette's own answer, the first row that can run.
     """
+    # **Resume outranks a preselected profile**, which is decision 4 read exactly: *back to
+    # the profile selector, with resume <session name> preselected*. It is only ever offered
+    # when the conversation exists, so unlike a `default` this row can always run.
+    if resume is not None and any(row.id == RESUME_ID for row in listed):
+        return RESUME_ID
     name = start or ""
     wanted = ROW_PREFIX + name
     return name if any(row.id == wanted and not row.refused for row in listed) else ""
 
 
-def _footer(listed: tuple[overlay.Row, ...], after: Refused | None) -> str:
+def _footer(listed: tuple[overlay.Row, ...], after: Refused | None, *,
+            ended: bool = False) -> str:
     """The bottom line: what the last Enter refused, else that nothing can start, else the
     keys — and :data:`ESC_HINT` in every one of them.
 
@@ -353,14 +421,29 @@ def _footer(listed: tuple[overlay.Row, ...], after: Refused | None) -> str:
     it took). Esc is the only thing that works in the state this footer describes, so it is
     the half that must survive.
     """
+    hint = ESC_HINT_ENDED if ended else ESC_HINT
     said = (after.why if after is not None
             else (NOTHING_TO_PICK if not any(not r.refused for r in listed) else ""))
-    return f"  {ESC_HINT}   ·   {said}" if said else FOOTER
+    if said:
+        return f"  {hint}   ·   {said}"
+    return FOOTER_ENDED if ended else FOOTER
 
 
 def pick(*, cwd: Path, root: Path, start: str | None = None,
-         after: Refused | None = None, fd: int | None = None, out=None) -> Choice | None:
-    """Own the pane until a profile is picked. The :class:`Choice`, or ``None`` for Esc.
+         after: Refused | None = None, resume: Resume | None = None,
+         ended: bool = False, fd: int | None = None, out=None):
+    """Own the pane until a profile is picked.
+
+    A :class:`Choice`, or one of two sentinels: :data:`KEY_CANCEL` for a real Esc keystroke
+    and :data:`END_OF_INPUT` for a pane whose input ended. It answered one ``None`` for both
+    until the exit gate, and the difference is the whole of what an ended tab rests on — Esc
+    closes that tab for good, while a dropped terminal must leave it ended and open.
+
+    *resume* is the row that brings this chat's conversation back, or ``None`` when there is
+    nothing to resume; the caller is what knows (`launcher.resume_row`). *ended* says this
+    selector was put here by a harness EXIT rather than by a chat that never started, which
+    decides two things an operator can see: the footer's Esc hint, and that Ctrl+C does
+    nothing at all here.
 
     Loops on a refused row with the reason in the footer (ruling 6), so what comes back is
     a name the operator meant to start. Whether it CAN start is asked again by the launch,
@@ -374,13 +457,28 @@ def pick(*, cwd: Path, root: Path, start: str | None = None,
     """
     while True:
         have = read(root)
-        listed = rows(have, cwd=cwd, start=start, after=after)
-        surface = Selector(catalogue=listed, footer=_footer(listed, after),
+        listed = rows(have, cwd=cwd, start=start, after=after, resume=resume)
+        surface = Selector(catalogue=listed,
+                           footer=_footer(listed, after, ended=ended),
+                           # **Ctrl+C does nothing on an ended tab's selector.** A double
+                           # Ctrl+C is how Claude Code exits, so the third press lands
+                           # HERE — on the surface that replaced the harness — and it must
+                           # not close the tab the second press created. Every other
+                           # selector keeps the cancel it has always had.
+                           cancel_keys=("escape",) if ended else ("escape", overlay.CTRL_C),
                            on=(after.profile if after is not None
-                               else opens_on(listed, start)))
+                               else opens_on(listed, start, resume=resume)))
         chosen = palette.own_the_tty(surface, fd=fd, out=out)
         if chosen is None:
-            return None
+            # Which way the surface left is what the caller acts on: only a real keystroke
+            # is the operator asking for this tab to be closed.
+            return KEY_CANCEL if surface.left == overlay.LEFT_KEY else END_OF_INPUT
+        if chosen.id == RESUME_ID:
+            # The chat's OWN profile, because a resume runs the command the chat was
+            # already running. What differs is the words after it, and those come off the
+            # chat's record at the `exec` rather than off this row — no link, no transcript
+            # path and no session id is ever drawn here or carried back.
+            return Choice(start or "", resume=True)
         name = chosen.id.removeprefix(ROW_PREFIX)
         if chosen.refused or name not in have.profiles:
             # A name not in `have.profiles` is a row for a name `read` refused, and it is

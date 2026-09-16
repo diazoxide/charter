@@ -161,6 +161,14 @@ class Chat(NamedTuple):
     #: `leave.conversation_exists` stats before a reopen offers resume (#1101). Defaulted
     #: like :attr:`profile`, so a record written by 0.62 still reads.
     conversation: str = ""
+    #: Whether this chat's harness had already ended when the quit recorded it (decision
+    #: 12). A reopen brings such a tab back ENDED — its pane at the selector, its resume row
+    #: offered — rather than starting a harness nobody asked to restart.
+    #:
+    #: Defaulted like :attr:`profile`, and a record written before this field reads as
+    #: ``False``: a chat charter cannot tell about is one that was running, which is the
+    #: direction that brings a conversation back rather than withholding it.
+    ended: bool = False
 
 
 class Frame(NamedTuple):
@@ -363,7 +371,7 @@ def _chat(raw) -> Chat | None:
     text = {k: (raw.get(k) if isinstance(raw.get(k), str) else "")
             for k in ("chat", "workspace", "persona", "harness", "cwd", "resume",
                       "transcript", "profile", "brief", "conversation")}
-    return Chat(active=raw.get("active") is True, **text)
+    return Chat(active=raw.get("active") is True, ended=raw.get("ended") is True, **text)
 
 
 def forget() -> None:

@@ -794,6 +794,37 @@ class WindowInTheOperatorsServer(unittest.TestCase):
         self.assertEqual(cmd[cmd.index("-t") + 1], "%7")
         self.assertEqual(cmd[cmd.index("--") + 1:], ["claude", "--resume", "a;b"])
 
+    def test_a_respawn_that_must_not_kill_says_so_and_changes_nothing_else(self):
+        """**`-k` is what the ended step must not pass, and tmux's refusal is the guard.**
+
+        A harness that exits leaves a dead pane charter puts its selector back into. `-k`
+        kills whatever is in the pane first, so the same command would answer 0 for a pane
+        whose harness is still RUNNING — which is exactly the state a stale record describes.
+        Measured on tmux 3.7c and at the 3.2 floor: without `-k` tmux refuses a live pane
+        outright (`respawn pane failed: pane … still active`, rc 1) and leaves the process
+        untouched, so dropping the flag puts tmux's own check between a record and an agent
+        mid-turn.
+
+        The placeholder respawn keeps it: there the pane is running `cat` on purpose and
+        replacing it is the whole point (`layout.window_argv`).
+
+        Everything else is the same command — same target, same `-c`, same `-e` overlay,
+        same argv after `--`. The flag is the only difference, asserted as such rather than
+        by respelling the expected argv, which would pass just as well if the two commands
+        had quietly diverged somewhere else.
+        """
+        kw = dict(socket="/s", harness_pane="%7", env={"CHARTER_SESSION_ID": "beta.1"},
+                  cwd="/work/repo",
+                  harness_argv=["python", "-P", "-m", "charter", "frame-launch"])
+
+        killing = layout.respawn_argv(**kw)
+        keeping = layout.respawn_argv(**kw, kill=False)
+
+        self.assertIn("-k", killing, "the placeholder respawn stopped replacing the pane")
+        self.assertNotIn("-k", keeping)
+        self.assertEqual([a for a in killing if a != "-k"], keeping,
+                         "dropping -k changed something other than -k")
+
     def test_the_harness_argv_is_never_joined(self):
         """The same rule the rest of this module pins: `a;b` reaching tmux as one
         element is inert, and as part of a joined string is a command separator."""

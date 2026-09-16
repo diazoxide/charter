@@ -869,7 +869,7 @@ def _add_frame_parsers(sub) -> None:
                                          "frame-toggle", "frame-chrome", "frame-chat",
                                          "frame-new-chat", "frame-quit", "frame-close",
                                          "frame-transcript", "frame-bar-rows",
-                                         "frame-launch"}
+                                         "frame-launch", "frame-ended"}
 
     # Which harness (by `.name`, never `.cli_name` — that's the dict key below) has
     # already claimed each word, so a SECOND harness wanting it is told who got there
@@ -990,6 +990,11 @@ def _add_frame_parsers(sub) -> None:
     # that is not a tab menu carries none, and `frame/tabmenu.wanted` reads an absent or
     # unspellable value as "this is the ordinary palette" rather than as an error.
     pal.add_argument("--tab", dest="tab", default="")
+    # Which SURFACE this pane is, and a third question again: `--chat` says where the
+    # keypress came from and `--tab` says which chat the rows act on, while this says the
+    # pane is a chat's crash drawer rather than a palette. Charter splits that pane itself
+    # when a harness ends badly (`frame/ended.py`); no keypress produces it.
+    pal.add_argument("--ended", action="store_true")
     pal.set_defaults(func=commands_frame.cmd_palette)
 
     # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the
@@ -1196,6 +1201,15 @@ def _add_frame_parsers(sub) -> None:
     fl = sub.add_parser("frame-launch")
     fl.add_argument("--profile", dest="profile", default="")
     fl.add_argument("--select", action="store_true")
+    # This selector was put here by a harness EXIT rather than by a chat that never
+    # started: it carries a resume row, its Esc closes the tab for good, and Ctrl+C on it
+    # does nothing. A flag and nothing else — the link it would resume is read from the
+    # chat's own record in the pane and never crosses tmux (`launcher.argv_select`).
+    fl.add_argument("--ended", action="store_true")
+    # The same selector with the resume row withheld, which is what the crash drawer's
+    # *start fresh* respawns into. The conversation is not forgotten, only not offered:
+    # the link stays recorded and the next exit offers it again.
+    fl.add_argument("--fresh", action="store_true")
     fl.add_argument("--start", dest="start", default="")
     fl.add_argument("--attended", action="store_true")
     # Ask for the chat's linked conversation back (#1101). A flag and nothing else: the
@@ -1233,6 +1247,19 @@ def _add_frame_parsers(sub) -> None:
     cl.add_argument("chat_id", nargs="?", default="")
     cl.add_argument("--chat", dest="chat", default="")
     cl.set_defaults(func=commands_frame.cmd_close)
+
+    # Task 2's ended step: the chat whose harness just exited keeps its tab, and this is
+    # what offers the choice. Run by the chat's own `pane-died[1]` hook, never typed —
+    # but a top-level subcommand all the same, because the hook's action is a CONSTANT
+    # string that tmux expands `#{@charter_chat}` into, and a constant cannot reach a
+    # subcommand hidden behind another word.
+    #
+    # **One option, and it is where the keypress came from in the same sense the others
+    # mean it**: which chat ENDED. It arrives expanded by tmux out of the dying pane's own
+    # window option, so it is held to `chats.ID_RE` before anything is asked of tmux.
+    fe = sub.add_parser("frame-ended")
+    fe.add_argument("--chat", dest="chat", default="")
+    fe.set_defaults(func=_frame_ended)
 
     # §4f's other half: the captured scrollback, offered rather than replayed. Opens a
     # pager in a window of its own; nothing is ever written into the harness's pane. See
@@ -2123,6 +2150,22 @@ def _frame_launch(args) -> int:
     from .frame import launcher
 
     return launcher.cmd_frame_launch(args)
+
+
+def _frame_ended(args) -> int:
+    """`charter frame-ended` — what a chat's `pane-died[1]` hook runs when its harness ends.
+
+    A thunk for :func:`_frame_launch`'s reason (ruling 43), and the argument is stronger
+    here: this is a `run-shell -b` child the tmux server starts for EVERY harness exit on
+    the plane, so anything it imports is paid on a path nothing is waiting on.
+
+    Always 0, and `frame/ended.py` is where that is kept: a non-zero return from a
+    `run-shell` child is printed into the harness's own pane and drops it into copy-mode,
+    which is charter drawing in the one rectangle ADR 0018 says it never draws.
+    """
+    from .frame import ended
+
+    return ended.cmd_frame_ended(args)
 
 
 #: The commands that still run on a plane charter has refused (`config.PLANE_REFUSAL`).

@@ -487,6 +487,26 @@ def _title_width(shown: list[tuple[str, str]], width: int) -> int:
     return min(longest, max(_MIN_TITLE, room // 2))
 
 
+#: How :meth:`Surface.run` left, recorded on the surface before it answers ``None``.
+#:
+#: **Three ways out are one answer to every caller today**, and an ended tab is the first
+#: surface that has to tell two of them apart: a real Esc keystroke closes that tab for
+#: good, while a pane whose input ended — a closed pty, a killed tmux server, a machine
+#: that went down — leaves it ended and open, with no closed mark, no forgotten transcript
+#: and no dropped manifest entry. Recorded on the surface rather than returned, so every
+#: existing caller's ``None`` is unchanged and only the one caller that cares asks.
+LEFT_KEY, LEFT_EOF = "key", "eof"
+
+#: What :func:`decode` names ``\x03``.
+#:
+#: **It was `escape`, and that made two different keystrokes one.** A double Ctrl+C is how
+#: Claude Code exits, so a third press landing on the selector that replaces the harness
+#: would have closed the chat for good — a tab forgotten by a key nobody aimed at it. The
+#: cancel every surface already had is kept by :attr:`Surface.cancel_keys` carrying this
+#: name by default; the surfaces an ended tab draws leave it out.
+CTRL_C = "ctrl-c"
+
+
 class Row(NamedTuple):
     """One line the overlay offers.
 
@@ -693,9 +713,12 @@ def decode(buf: bytes, *, final: bool = False) -> tuple[list[Event], bytes]:
         elif ch in (b"\x7f", b"\x08"):
             evs.append(Event(KEY, "backspace"))
         elif ch == b"\x03":
-            # Ctrl-C reads as "leave", not as a signal: the surface has the tty in raw
-            # mode, so nothing else is going to turn this into one.
-            evs.append(Event(KEY, "escape"))
+            # **Its own key, never `escape`** (:data:`CTRL_C`). The surface has the tty in
+            # raw mode, so nothing else is going to turn this into a signal — but naming it
+            # `escape` made it the SAME keystroke as the one that closes an ended tab for
+            # good. Which surfaces still leave on it is `Surface.cancel_keys`' to say, and
+            # by default every one of them does, exactly as before.
+            evs.append(Event(KEY, CTRL_C))
         else:
             try:
                 text = ch.decode()
@@ -754,6 +777,25 @@ class Surface:
     #: One attribute and not a `render` override, for :attr:`footer`'s reason: how a row
     #: is cut is this module's arithmetic.
     says_what_it_hid: bool = False
+
+    #: The key names that leave this surface with nothing chosen.
+    #:
+    #: :data:`CTRL_C` is in the default because every surface cancelled on it while
+    #: :func:`decode` called it `escape`, and giving the key its own name must not quietly
+    #: take that away from the `F2` palette, its pickers, its confirmation drawers, the tab
+    #: menu, or the never-started selector as #1103 left it.
+    #:
+    #: **The surfaces an ended tab draws pass `("escape",)`.** There Ctrl+C must do nothing
+    #: at all: the tab it would close holds a chat that has already ended once, and the
+    #: operator pressing the key their harness exits with has not asked to forget it. A
+    #: tuple here rather than a `handle` override in each, for :attr:`footer`'s reason —
+    #: which keys leave is this module's arithmetic, not a subclass's.
+    cancel_keys: tuple[str, ...] = ("escape", CTRL_C)
+
+    #: Which way :meth:`run` left — :data:`LEFT_KEY` or :data:`LEFT_EOF` — or ``""`` while
+    #: it has not left yet. **Not an init field**: it is an answer, and a caller able to set
+    #: it could describe a way out that never happened.
+    left: str = field(default="", init=False)
 
     _sel: int = field(default=0, init=False)
     _top: int = field(default=0, init=False)
@@ -846,7 +888,7 @@ class Surface:
         if ev.kind == KEY:
             if ev.name == "enter":
                 return CHOOSE if self.rows else None
-            if ev.name == "escape":
+            if ev.name in self.cancel_keys:
                 return CANCEL
             page = max(1, height - _CHROME_ROWS)
             self.move({"up": -1, "down": 1, "pgup": -page, "pgdn": page,
@@ -873,6 +915,11 @@ class Surface:
         stdin means, and it is the one answer that can never become a wedge (`picker.ask`
         makes the same call for the same reason).
 
+        **Which way it left is recorded in :attr:`left` before either ``None``.** The two
+        are the same answer to every caller here and are not the same event: a key is the
+        operator saying so, and end of input is the pane's writer going away. An ended tab
+        closes for good on the first and stays ended and open on the second.
+
         *size* is asked every iteration rather than once, because `window-resized` does
         not bump the frame's version and nothing else would redraw for it —
         `frame/panel.py`'s SIGWINCH section is the same fact one pane over.
@@ -888,6 +935,7 @@ class Surface:
             while True:
                 chunk = read()
                 if chunk is None:
+                    self.left = LEFT_EOF
                     return None
                 evs, tail = decode(tail + chunk, final=(chunk == b""))
                 nw, nh = size()
@@ -898,6 +946,7 @@ class Surface:
                     if verdict == CHOOSE:
                         return self.selected
                     if verdict == CANCEL:
+                        self.left = LEFT_KEY
                         return None
                     repaint = True
                 if repaint:

@@ -529,7 +529,16 @@ class _APickedSelector(_APlaneWithProfiles):
             selector.palette, "own_the_tty", side_effect=self._answer))
 
     def _answer(self, surface, **kw):
+        """`own_the_tty` answering the queue — and a real ESC KEYSTROKE once it is empty.
+
+        `Surface.run` records which way it left before answering ``None``
+        (`overlay.Surface.left`), and `selector.pick` reads that to tell a keystroke from a
+        pane whose input ended: the first closes a chat, the second must never be read as a
+        decision at all. Every cancel in this class is the operator pressing Esc, so the
+        stand-in says which one it is rather than leaving `pick` to guess.
+        """
         self.surfaces.append(surface)
+        surface.left = overlay.LEFT_KEY
         return self.answers.pop(0) if self.answers else None
 
     def _queue(self, *answers) -> None:
@@ -549,12 +558,12 @@ class ThePick(_APickedSelector, unittest.TestCase):
 
     def test_escape_starts_nothing(self):
         self._queue()
-        self.assertIsNone(self._pick())
+        self.assertIs(self._pick(), selector.KEY_CANCEL)
 
     def test_enter_on_a_refused_row_keeps_the_selector_open_and_shows_why(self):
         self.which.side_effect = lambda cmd, **kw: None if cmd == "claude" else "/usr/bin/x"
         self._queue(self._row_named(WORK), None)
-        self.assertIsNone(self._pick())
+        self.assertIs(self._pick(), selector.KEY_CANCEL)
         self.assertEqual(len(self.surfaces), 2)
         self.assertIn("not on PATH", self.surfaces[1].footer)
 
@@ -563,7 +572,7 @@ class ThePick(_APickedSelector, unittest.TestCase):
         only after an Enter: a list where nothing can run says so while it is being read."""
         self.which.side_effect = lambda cmd, **kw: None
         self._queue()
-        self.assertIsNone(self._pick())
+        self.assertIs(self._pick(), selector.KEY_CANCEL)
         self.assertIn("no profile can start here", self.surfaces[0].footer)
 
     def test_the_selector_shows_even_with_one_profile(self):
@@ -945,9 +954,18 @@ class _ASelectorPane(_APlaneWithProfiles):
         return [kw.get("after") for kw in self.asked]
 
     def _pick(self, **kw):
+        """`selector.pick` stood in — and an empty queue is a real ESC KEYSTROKE.
+
+        `pick` answers two sentinels where it answered one ``None`` (`selector.KEY_CANCEL`
+        and `selector.END_OF_INPUT`), because an ended tab has to tell the operator closing
+        it from a terminal that went away. Every cancel in this class is the operator
+        pressing Esc on a pane that never started a harness, which closes its window either
+        way — so the stand-in says which one it is rather than handing the launcher a
+        ``None`` that no longer means anything.
+        """
         self.log.append("draw")
         self.asked.append(kw)
-        return self.picks.pop(0) if self.picks else None
+        return self.picks.pop(0) if self.picks else selector.KEY_CANCEL
 
     def _run(self, *picks, start: str = "") -> int:
         self.picks = list(picks)
@@ -1788,9 +1806,18 @@ class WhereItAppears(_APlaneWithProfiles, unittest.TestCase):
         self.assertNotIn("reopen", said)
 
     def test_a_reopen_never_opens_the_selector(self):
-        """An open nobody is at names its profile: there is no one there to pick."""
+        """An open nobody is at names its profile: there is no one there to pick.
+
+        **True of a chat that was RUNNING, which is what this stand-in is.** An ended tab is
+        the one exception decision 12 makes — it comes back holding its choice, at its own
+        selector, and starts nothing until somebody switches to it — and that case is pinned
+        in `tests/test_an_ended_harness_keeps_its_tab.py`. So the record says which kind it
+        is rather than leaving `_reopen_args` to a `getattr` default: that function names
+        every field it reads on purpose, "a readable contract instead of a puzzle".
+        """
         args = commands_frame._reopen_args(
-            SimpleNamespace(workspace="beta", persona="", cwd="", resume="", brief=""),
+            SimpleNamespace(workspace="beta", persona="", cwd="", resume="", brief="",
+                            ended=False),
             harness_name="claude", profile="claude-work", reopening=None, resume=False)
         self.assertFalse(getattr(args, "select", False))
         self.assertEqual(args.profile, "claude-work")
