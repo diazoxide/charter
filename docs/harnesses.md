@@ -139,9 +139,27 @@ on these versions (ADR 0024):
 
 | Harness | Link | Offered when | Resumes with | Limits |
 | --- | --- | --- | --- | --- |
-| Claude Code 2.1.272 | the id charter hands it (`--session-id <uuid> --name <chat id>`); follows `/clear`; ignores a nested `claude` | after the first prompt (the transcript exists) | `--resume <id> --name <chat id>` | the in-session `/resume` hides the current session; the name shows in a fresh `claude --resume` picker, and in `/resume` from every other session |
+| Claude Code 2.1.272 | the id charter hands it (`--session-id <uuid> --name <session name>`); follows `/clear`; ignores a nested `claude` | after the first prompt (the transcript exists) | `--resume <id> --name <session name>` | the in-session `/resume` hides the current session; the name shows in a fresh `claude --resume` picker, and in `/resume` from every other session |
 | Codex 0.147.0 | the first id it reports in each start | after its first turn (it reports nothing before) | `codex resume <id>` | after `/new`, resume offers the start's first conversation; read from source, not run |
 | opencode 1.18.23 | the first id its tool hooks report in each start | after its first tool call | `opencode -s <id>`, in the chat's recorded directory | a new session inside opencode is not followed; a chat moved to another directory reopens empty; read from source, not run |
+
+### The name a session is started under
+
+**Claude Code is the only harness charter names, and the name is `<title> · <chat id>`** —
+the tab's title and its id, or the id alone for a tab nobody named (*A tab can carry a name
+you chose*, `docs/frame.md`). It is composed at every start and at every resume and stored
+nowhere: charter passes it with `--name` and never types `/rename` into a running harness
+(ADR 0018). So **a rename you make now reaches Claude Code at that chat's next start or
+resume, and not before.** Measured on 2.1.272: a name with spaces and ` · ` is accepted at a
+start and at a resume, written with no prompt, and listed by a fresh `claude --resume` picker;
+the in-session `/resume` hides the session it is run in.
+
+**Codex and opencode take no name at launch, so their tabs carry the title in charter's own
+surfaces only** — the strip, the tab menu, the quit and close rows, the ended tab's choice and
+`F2 → chat`. Codex names no flag for it at all (openai/codex#14482 is open) and opencode's
+`--title` exists only on `opencode run`, not on the TUI charter starts. Each keeps whatever
+session name it chose for itself, and `/rename` inside them is yours to type, not charter's.
+The notice after a rename says which of the two you just did.
 
 **Which harness sent a report is decided by the report, never by the environment it
 inherited.** A harness nested in a chat's shell inherits `CHARTER_HARNESS`, `CLAUDE_PID` and

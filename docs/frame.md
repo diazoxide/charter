@@ -767,6 +767,11 @@ message you approved. The opening underneath it is built so nothing you are look
   and `$CHARTER_PERSONA` are emptied for the length of the launch, so a pinned chat cannot
   file the new one under its own workspace or persona. The new chat gets the persona a new
   chat in that workspace gets when nothing is pinned, unless one is named for it.
+- **Its tab is titled from the brief's first line**, written before the harness starts, so a
+  chat you did not open reads as what it was opened to do rather than as `beta.7`. A long
+  first line is cut to fit rather than refused — a brief is the whole message a model wrote
+  and you approved at the harness prompt, not a label anybody typed — and a brief that is
+  blank titles nothing. `chat: rename` changes it like any other title.
 
 Before starting anything, it refuses a first message that is empty, starts with `-`, is a
 single word (which a harness may read as a subcommand), carries a NUL byte, or is past the
@@ -984,6 +989,45 @@ workspace still does); charter cannot prove the workspace's tmux session is this
 rather than another project's; or charter cannot enter the workspace's directory. It no
 longer stops over the profile: a chat that records none, a plane that declares no default
 and a profile that cannot start are all things the selector says on a row.
+
+### A tab can carry a name you chose
+
+A chat's id — `api.3` — is what charter links, records, kills and reaps by, and it always
+will be. **What a tab is CALLED is separate, and you can set it.** A chat with a title draws
+that title on the strip in place of its id; a chat without one is its id, exactly as before.
+
+**Four ways to set one.**
+
+- **`chat: rename` in the tab menu.** Press `-`, or right-click any tab, and the middle row
+  opens a one-line input in the pane you are already looking at. Type, Enter, done.
+- **`chat: rename` in `F2`**, which renames the chat the palette was opened in.
+- **A title row at `+` and on a workspace tab.** The profile selector a new chat opens at
+  carries `title: (none) — Enter to name this chat` as its last row. Naming it there writes
+  the title before any harness starts, so the tab is named the moment it appears.
+- **A handoff names its own chat** from the first line of the brief it was opened on — see
+  *A chat opened for you in the background*.
+
+Enter on an empty input takes the title off again and the tab goes back to its id.
+
+**Where a title shows:** the chat strip, in place of the id; and after the id in the tab
+menu's heading, the quit and `chat: close` confirmation rows, the choice an ended tab offers,
+and `F2 → chat`'s list. Nowhere else — a workspace tab has no title, because a workspace is
+not a chat, and a workspace tab's selector names profiles rather than chats.
+
+**A click still resolves to the chat and never to its words.** The strip's cell map is keyed
+by the id, so pressing a tab drawn as `fix the widget` switches to `api.3`. Typing in
+`F2 → chat` finds either, because that list draws `api.3 · fix the widget`.
+
+**A title is one line of printable text, at most 60 characters.** A longer one is refused
+with its length rather than cut — a title silently shortened is one you believe you set — and
+a control byte is refused rather than escaped. The 60 is there because the title is also half
+of the name your harness is started under (`docs/harnesses.md`), and because a strip is a row
+where every column is contested.
+
+**Renaming touches no harness.** charter sends no keys and types no `/rename`: it writes one
+file and repaints the strips. Claude Code sees the new name the next time that chat starts or
+resumes, through `--name` again; Codex and opencode never see it at all, because neither
+takes a name at launch. The notice on the attention row says which of the two you just did.
 
 **The workspace bar has neither, deliberately.** A new chat is nothing but a press. A new
 workspace is a directory and a *name*, which is `charter workspace create` — and a picker
@@ -1245,9 +1289,9 @@ nothing.
 **`charter reopen` puts the recorded plane back.** Every workspace, every chat, each one's
 persona and the directory it belongs in — and the conversation, by resuming it, wherever the
 chat's harness has one to resume. It attaches you to the workspace you pressed quit in, on the
-chat that was in front of you. **A reopened chat comes back under its own id**, and a closed
-chat's id is never handed out again, so nothing a new chat opens under — a transcript, a quit
-record — can be an earlier chat's. A chat whose id is still held by a running pane of this
+chat that was in front of you. **A reopened chat comes back under its own id and under the
+name you gave it**, and a closed chat's id is never handed out again, so nothing a new chat
+opens under — a transcript, a quit record — can be an earlier chat's. A chat whose id is still held by a running pane of this
 plane, or recorded on a tmux server that did not answer, is not reopened: it stays recorded,
 and the line says what clears it. The record describes one quit and is consumed chat by chat, so running it
 twice does not double your tabs — and if some chat could not be started, exactly that chat
@@ -1385,8 +1429,9 @@ it.
 
 **Every tab is linked to one harness session, and the warning says per chat whether it
 resumes.** Claude Code is handed the id charter chose when it starts (`--session-id <uuid>
---name <chat id>`), and comes back with `--resume <id> --name <chat id>` — once its first
-prompt has written a transcript, and following `/clear`. Codex is linked to the first id it
+--name <session name>`), and comes back with `--resume <id> --name <session name>` — once its
+first prompt has written a transcript, and following `/clear`. The session name is the chat's
+title and its id, `fix the widget · api.3`, or the id alone for a tab nobody named. Codex is linked to the first id it
 reports in a start, which it does at its first turn, and comes back with `codex resume <id>`.
 opencode is linked to the first id its tool hooks report, and comes back with `opencode -s
 <id>` — but only in the directory it ran in, because opencode looks the id up there; a chat
@@ -3336,6 +3381,13 @@ ran rather than one that never started — and `Ctrl+C` does nothing at all.
 An ended tab that `charter reopen` brings back opens on this selector too, which is the one
 selector an open nobody is at may reach: nothing starts until somebody switches to that tab
 and presses Enter.
+
+**A selector opened by `+` or by a workspace tab has one more row, last: `title:`.** Enter on
+it opens a one-line input and names the chat before anything starts, so the tab is named the
+moment it appears (*A tab can carry a name you chose*). It is last because the cursor opens on
+the first row that can run, and a row that starts no harness must not be the one your Enter
+lands on. An ended tab's selector does not offer it — that chat already has whatever name it
+was given — and neither does a reopen, which names its profile and never reaches a selector.
 
 It is the `F2` palette's picker, so it behaves like one: type to narrow, up/down to move,
 Enter to start. **It always shows, even where one profile can run** — one profile costs one
