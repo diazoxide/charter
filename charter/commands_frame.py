@@ -6353,7 +6353,14 @@ def _launch(args) -> int:
     # question on a screen. Cleared in the pane at the pick (`launcher._picked`); until
     # then `leave.plan` passes over it, so `charter: quit` does not record it and
     # `charter reopen` never brings it back.
-    if selecting and getattr(args, "ended", False):
+    # **Which selector this is, read once and used twice.** A RESTORED ended tab is not a
+    # chat waiting to begin, and two things turn on the difference: the markers written just
+    # below, and the kind that goes onto the window further down. The literal is the argparse
+    # dest — retuned, the branch silently never runs and every restored tab comes back marked
+    # WAITING, which `leave.plan` passes over, so a quit does not record it and `charter
+    # reopen` never brings it back a second time.
+    restored_ended = selecting and getattr(args, "ended", False)
+    if restored_ended:
         # **A RESTORED ended tab is the one selector that is not a chat waiting to begin.**
         # A chat was here, it ran, and its conversation may still be resumable — so it must
         # NOT be marked waiting, which is the marker that makes `leave.plan` pass a pane
@@ -6438,7 +6445,24 @@ def _launch(args) -> int:
     # from there into `chats.harness_of`, the chat strip and `_same_profile_as`. A chat that
     # has picked nothing records nothing, and `launcher._picked` writes the kind at the pick.
     if selecting:
-        env["CHARTER_HARNESS"] = ""
+        # **A restored ended tab is the exception, and without it this line undid the record
+        # above.** `state.record_picked_kind` writes the kind this chat came back AS a few
+        # dozen lines up (decision 12), and `record_identity` below REPLACES the record
+        # rather than merging into it — so blanking the name here wiped that write, and a
+        # reopened ended tab recorded no kind at all.
+        #
+        # It went unnoticed because `launcher.resume_row` falls back to resolving the chat's
+        # profile when the identity holds no kind, so the row still appeared. The defect only
+        # shows on a tab whose profile has since left the plane — which is exactly the chat
+        # that most needs its conversation offered back, and the one case the fallback cannot
+        # answer. Found by the deletion sweep: the `h.name` expression above could not be
+        # pinned, because nothing downstream could observe it.
+        #
+        # Review 12's rule is unchanged for every other selector: a chat that has picked
+        # nothing records nothing, so the launching chat's kind cannot ride onto the new
+        # window's `-e` and from there into `chats.harness_of`, the strip and
+        # `_same_profile_as`.
+        env["CHARTER_HARNESS"] = h.name if (restored_ended and h is not None) else ""
     # Same as the operator's-tmux path above, and needed harder here: charter's private
     # server is SHARED, so a `run-shell` child on it reads whichever launcher's
     # environment started the server. See `state.record_identity`.

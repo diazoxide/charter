@@ -851,6 +851,25 @@ class TheSweepsOwnFindings(_APlaneWithProfiles, unittest.TestCase):
         self.assertEqual(launcher.argv_select(None)[-2:], ["--select", "--attended"])
         self.assertNotIn("--start", launcher.argv_select(None))
 
+    def test_the_ended_and_fresh_flags_ride_only_when_they_are_asked_for(self):
+        """The two conditionals beside `--start`, and each is a different keystroke's
+        meaning at the far end.
+
+        `--ended` says a harness EXIT put this selector here: it draws the resume row,
+        `esc close this tab`, and a Ctrl+C that does nothing. Collapsed to `()`, every ended
+        tab reopens as an ORDINARY selector — Ctrl+C closes it, and the footer promises the
+        wrong thing about the one key that works.
+
+        `--fresh` is the crash drawer's *start fresh*: the same selector with the resume row
+        withheld. Collapsed to `()`, *start fresh* silently resumes the conversation it was
+        pressed to leave behind.
+        """
+        self.assertIn("--ended", launcher.argv_select("claude-work", ended=True))
+        self.assertNotIn("--ended", launcher.argv_select("claude-work"))
+        self.assertIn("--fresh",
+                      launcher.argv_select("claude-work", ended=True, fresh=True))
+        self.assertNotIn("--fresh", launcher.argv_select("claude-work", ended=True))
+
     def test_the_surface_says_what_it_is_for(self):
         """`selector.LABEL` reaches the heading: the pane is a question, and a heading that
         did not say which question is a modal surface with no subject."""
@@ -1700,6 +1719,85 @@ class WhereItAppears(_APlaneWithProfiles, unittest.TestCase):
                 v=(3, 7), picked=False, selecting=True)
         self.assertTrue(state.is_waiting("beta.2"))
         self.assertEqual(state.identity("beta.2").get("CHARTER_HARNESS"), "")
+
+    def _which_wait(self, *, profile: str) -> list[str]:
+        """Which of the two waits `_launch_in_operator_tmux` ends on, for *profile*."""
+        seen: list[str] = []
+
+        def answer(cmd, **kw):
+            if not cmd or cmd[0] != "tmux":
+                return _completed(cmd, 0)
+            return _completed(cmd, 0, "@1 %7\n" if "new-window" in cmd else "%7\n")
+
+        with mock.patch("charter.commands_frame.subprocess.run", side_effect=answer), \
+                mock.patch.object(commands_frame, "_wait_out_the_ended_tab",
+                                  side_effect=lambda *a, **kw: seen.append("ended") or 0), \
+                mock.patch.object(commands_frame, "_wait_for_harness",
+                                  side_effect=lambda *a, **kw: seen.append("plain") or 0):
+            commands_frame._launch_in_operator_tmux(
+                "op", "$1", ws="beta",
+                argv=launcher.argv("claude", [], attended=True), display=["claude"],
+                profile=profile, h=None, v=(3, 7), picked=False)
+        return seen
+
+    def test_a_profile_chat_in_the_operators_tmux_gets_the_ended_loop(self):
+        """**Inside an operator's own tmux there are no hooks**, so this launcher IS what
+        answers an exit — it presents each ending in-process and goes back to waiting.
+
+        With the guard above it always taken, a profile chat waits in `_wait_for_harness`
+        instead and the ended step never runs there at all: the whole feature missing on the
+        guest path, and invisible to every case that launches on charter's own server.
+        """
+        self.assertIn("ended", self._which_wait(profile="claude"))
+        self.assertNotIn("plain", self._which_wait(profile="claude"))
+
+    def test_the_escape_hatch_in_the_operators_tmux_keeps_the_plain_wait(self):
+        """The control, and the ruling on open question 5: `charter frame -- <cmd>` is not a
+        harness, so its window closes when the command exits and the code goes back to
+        whoever was waiting on it. Taking it into the ended loop would hold that window open
+        and the code would never arrive."""
+        self.assertIn("plain", self._which_wait(profile=""))
+        self.assertNotIn("ended", self._which_wait(profile=""))
+
+    def test_a_reopened_ended_tab_comes_back_ended_and_never_waiting(self):
+        """**A restored ended tab is the one selector that is not a chat waiting to begin.**
+
+        `getattr(args, "ended", False)` reads the argparse dest as a literal, so a retune is
+        silent: the branch never runs, the tab is marked WAITING instead of claimed, and
+        `leave.plan` then passes it over — so a quit does not record it and `charter reopen`
+        never brings it back. The chat is lost by quitting, which is the outcome this whole
+        design exists to prevent.
+        """
+        fake = _AServerWithOneWorkspaceRunning(sessions=(), chats=())
+
+        self._launch(fake, harness="claude", profile="claude", select=True, ended=True,
+                     start="claude")
+
+        self.assertTrue(state.is_ended(self.NEW), "the restored tab came back unclaimed")
+        self.assertFalse(state.is_waiting(self.NEW),
+                         "an ended tab was marked as a pane that never started")
+
+    def test_a_reopened_ended_tab_records_the_kind_it_came_back_as(self):
+        """`launcher.resume_row` has to answer on this tab before anybody has picked
+        anything — that row is the whole reason the chat came back — and it reads the KIND
+        off the identity record.
+
+        **This case found a defect rather than merely pinning a line.** `record_picked_kind`
+        wrote the kind, and `record_identity` a few dozen lines later REPLACED the record
+        with one whose `CHARTER_HARNESS` the selector branch had blanked — so a reopened
+        ended tab recorded no kind at all. Nothing caught it because `resume_row` falls back
+        to resolving the chat's profile, which answers for every chat whose profile is still
+        declared; the tab that loses its resume row is the one whose profile has left the
+        plane, which is the chat that most needs its conversation back.
+
+        Red without the fix: `None != 'claude-code'`.
+        """
+        fake = _AServerWithOneWorkspaceRunning(sessions=(), chats=())
+
+        self._launch(fake, harness="claude", profile="claude", select=True, ended=True,
+                     start="claude")
+
+        self.assertEqual(state.identity(self.NEW).get("CHARTER_HARNESS"), "claude-code")
 
     def _in_the_operators_tmux(self, *states, select: bool = True) -> tuple[int, str]:
         """`_launch_in_operator_tmux` to its end, with the pane answering *states* in turn.

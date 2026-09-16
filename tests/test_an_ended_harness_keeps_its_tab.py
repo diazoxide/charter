@@ -212,6 +212,35 @@ class TheGuardsThatHadNoTest(PersonaIso, unittest.TestCase):
         without asking."""
         self.assertFalse(ended.reset("beta.1"))
 
+    def test_a_start_that_raised_puts_the_ended_claim_back(self):
+        """**`_start_linked`'s undo, which no existing case reaches.**
+
+        `test_an_exec_that_raises_claims_the_ended_state_back` above pins `ended.reset`'s
+        ANSWER; this pins the line that USES it. `attempt` hands the pane over at the
+        `exec`, and an `execvpe` that raises leaves the pane running nothing at all — so a
+        tab that was ended is ended still. Red without the line: the claim stays cleared,
+        and a tab whose harness never restarted loses its strip mark, stops asking before it
+        closes, and has its next exit presented as if it were the first.
+        """
+        state.claim_ended("beta.1")
+
+        undo = launcher._start_linked("beta.1", chosen="", resumed=False,
+                                      then=lambda: (lambda: None))
+        self.assertFalse(state.is_ended("beta.1"), "the start did not clear the claim")
+        undo()
+
+        self.assertTrue(state.is_ended("beta.1"))
+
+    def test_a_start_that_was_never_ended_is_not_claimed_by_its_undo(self):
+        """The control that keeps the undo honest, and the reason `reset` answers a bool at
+        all: a tab that was NOT ended must not come back claimed, or a pane nothing has ever
+        run in would close without asking."""
+        undo = launcher._start_linked("beta.1", chosen="", resumed=False,
+                                      then=lambda: (lambda: None))
+        undo()
+
+        self.assertFalse(state.is_ended("beta.1"))
+
     def test_a_drawer_that_is_not_a_pane_id_is_never_WRITTEN(self):
         """**The two `PANE_ID_RE` checks were masking each other.** `record_drawer` holds
         the value on the way IN and `drawer` holds it again on the way OUT, so a test that
@@ -627,6 +656,141 @@ class TheSelectorAfterAnExit(PersonaIso, unittest.TestCase):
 
         self.assertIsInstance(answer, selector.Choice)
         self.assertFalse(answer.resume)
+
+    def test_a_resume_with_no_start_row_answers_an_empty_profile(self):
+        """`Choice(start or "")`, and the fallback is not decoration.
+
+        `pick` is called with `start=None` wherever no row is preselected — ruling 18's
+        `default` naming a profile this machine lacks — and what comes back goes straight to
+        `resolve(choice.profile)` in `_select_in_pane`, which hands `contain.readable` a
+        value it cannot contain. The empty string is a name no profile has; ``None`` is a
+        type the next function does not take.
+        """
+        asked = {"n": 0}
+
+        def chose(surface, *_a, **_kw):
+            asked["n"] += 1
+            if asked["n"] > 1:
+                raise AssertionError("pick looped past the resume row")
+            return next(r for r in surface.rows if r.id == selector.RESUME_ID)
+
+        with mock.patch.object(selector.palette, "own_the_tty", side_effect=chose):
+            answer = selector.pick(cwd=Path(config.ROOT), root=Path(config.ROOT),
+                                   start=None, resume=self.resume, ended=True)
+
+        self.assertTrue(answer.resume)
+        self.assertEqual(answer.profile, "")
+
+    def test_the_footer_an_ended_selector_draws_is_the_ended_one(self):
+        """**Two conditionals, four halves, and the existing case pins none of them.**
+        `test_the_footer_says_escape_closes_this_tab` asserts what is IN `FOOTER_ENDED`; it
+        never asserts that an ended selector is given it.
+
+        Both halves of both, because collapsing either way is a real and different lie: a
+        footer promising *esc close this chat* on a tab that ran, or promising *esc close
+        this tab* on a pane where nothing ever started. And the refusal-carrying form is the
+        one an ended tab shows most, which is why it is asked separately.
+        """
+        listed = self._listed(resume=self.resume)
+        refused = selector.Refused("claude-work", "it would not start")
+
+        self.assertEqual(selector._footer(listed, None, ended=True), selector.FOOTER_ENDED)
+        self.assertEqual(selector._footer(listed, None), selector.FOOTER)
+        self.assertIn(selector.ESC_HINT_ENDED,
+                      selector._footer(listed, refused, ended=True))
+        self.assertIn(selector.ESC_HINT, selector._footer(listed, refused))
+        self.assertNotIn(selector.ESC_HINT_ENDED, selector._footer(listed, refused))
+
+    def test_the_resume_row_id_can_never_be_read_as_a_profile(self):
+        """**The invariant, not the spelling.** The id never leaves the process, so a
+        re-spelling really is free — what must hold is that it cannot land in the PROFILE
+        namespace. `pick` strips `ROW_PREFIX` off whatever it is handed and looks the rest
+        up in `have.profiles`, so an id inside that namespace would be read as a profile
+        name and a chat would start the wrong harness instead of resuming its own.
+        """
+        self.assertFalse(selector.RESUME_ID.startswith(selector.ROW_PREFIX))
+        self.assertNotIn(selector.RESUME_ID.removeprefix(selector.ROW_PREFIX),
+                         self.have.profiles)
+
+    def _cancel_keys(self, *, ended: bool):
+        """The `cancel_keys` `pick` builds its surface with."""
+        seen: dict = {}
+
+        def record(surface, *_a, **_kw):
+            seen["keys"] = surface.cancel_keys
+            surface.left = overlay.LEFT_KEY
+            return None
+
+        with mock.patch.object(selector.palette, "own_the_tty", side_effect=record):
+            selector.pick(cwd=Path(config.ROOT), root=Path(config.ROOT),
+                          start="claude-work", ended=ended)
+        return seen["keys"]
+
+    def test_ctrl_c_is_taken_away_only_on_an_ended_selector(self):
+        """**The ruling, asked of what `pick` PASSES rather than of a surface built by
+        hand.** `test_ctrl_c_does_nothing_on_an_ended_selector` below constructs the
+        `Selector` itself, so it pins the surface's behaviour given `("escape",)` and says
+        nothing about which selector gets it — the expression that decides is here.
+
+        Both halves. Collapsed to the ended answer, every ordinary selector silently loses
+        the Ctrl+C it has always had; collapsed to the other, a stray third Ctrl+C after a
+        double-Ctrl+C `/exit` closes the tab that second press created.
+        """
+        self.assertEqual(self._cancel_keys(ended=True), ("escape",))
+        self.assertEqual(self._cancel_keys(ended=False), ("escape", overlay.CTRL_C))
+
+    def _offer(self, fid: str = "beta.1"):
+        """A chat with an identity, a link and a transcript — what `resume_row` reads."""
+        _plant(fid)
+        path = Path(config.ROOT) / f"{fid}.jsonl"
+        path.write_text("{}\n")
+        state.record_harness_session(fid, "conv1")
+        state.record_conversation(fid, str(path))
+        return path
+
+    def test_the_resume_row_names_the_kind_off_the_identity_record(self):
+        """`CHARTER_HARNESS` is written by `launcher.environment` and read back here by a
+        SECOND hand-spelled literal, so a retune of either half breaks a round trip that
+        nothing else checks — and the row then names no harness at all."""
+        self._offer()
+
+        row = launcher.resume_row("beta.1")
+
+        self.assertIsNotNone(row)
+        self.assertTrue(row.note.startswith("claude-code"), row.note)
+
+    def test_a_chat_recorded_by_an_older_charter_still_gets_its_row(self):
+        """The `.get(…, "")` fallback. An identity from before that field is `{}`, and this
+        runs on the `pane-died` path, where an exception is an offer never made — on exactly
+        the tab a restored chat came back for."""
+        self._offer()
+        state.record_identity("beta.1", {})
+
+        self.assertIsNotNone(launcher.resume_row("beta.1"))
+
+    def test_a_chat_with_no_profile_answers_none_rather_than_raising(self):
+        """Same shape, other source: `state.profile` answers ``None`` for a chat with none
+        recorded, and `resolve` cannot contain that value."""
+        state.frame_dir("beta.9", create=True)
+        state.record_identity("beta.9", {})
+
+        self.assertIsNone(launcher.resume_row("beta.9"))
+
+    def test_resume_is_offered_only_while_the_conversation_is_really_there(self):
+        """Decision 4, asked at the moment of offering (#1101). `leave.conversation_exists`
+        is one `stat` of a path the harness itself named, so a transcript deleted since the
+        tab ended is simply not offered — where a row built from a remembered answer would
+        start a harness on a conversation that is gone.
+
+        `test_no_conversation_means_no_resume_row_at_all` pins the SELECTOR given
+        `resume=None`; nothing pinned `resume_row` doing the asking.
+        """
+        path = self._offer()
+        self.assertIsNotNone(launcher.resume_row("beta.1"))
+
+        path.unlink()
+
+        self.assertIsNone(launcher.resume_row("beta.1"))
 
     def test_ctrl_c_does_nothing_on_an_ended_selector(self):
         """The ruling, at the surface that has to keep it: a double Ctrl+C is how Claude
@@ -1499,6 +1663,107 @@ class TheEndedSelectorClosesOnlyOnEsc(PersonaIso, unittest.TestCase):
                          "a terminal going away was read as a decision")
         self.assertTrue(state.is_ended("beta.1"), "the tab stopped being ended")
         self.assertFalse(state.was_closed("beta.1"), "end of input marked the chat closed")
+
+    def _picked(self, choice):
+        """`_select_in_pane` on an ENDED tab answering *choice*, with the launch stubbed.
+
+        `attempt` answers ``None`` — what a stand-in for `os.execvpe` hands back — so the
+        loop ends rather than going round, and `pick` raises on a second call for
+        `test_choosing_resume_asks_for_the_conversation_back`'s measured reason: a stub that
+        answers the same thing forever turns a deleted guard into a HANG instead of a
+        failure, which is a mutation with no verdict and a shard with no answer.
+        """
+        closed: list = []
+        tried: list = []
+        asked = {"n": 0}
+
+        def once(**_kw):
+            asked["n"] += 1
+            if asked["n"] > 1:
+                raise AssertionError("the selector came round instead of starting")
+            return choice
+
+        def attempt(p, _rest, **kw):
+            tried.append((p.name, kw.get("resume")))
+            return None
+
+        with mock.patch.object(selector, "pick", side_effect=once), \
+                mock.patch.object(launcher, "resolve",
+                                  return_value=(SimpleNamespace(name="claude"), "")), \
+                mock.patch.object(launcher, "attempt", side_effect=attempt), \
+                mock.patch.object(launcher, "_picked"), \
+                mock.patch.object(commands_frame, "cmd_close",
+                                  side_effect=lambda a: closed.append(a.chat_id)), \
+                mock.patch.object(launcher, "_close_the_cancelled_chat",
+                                  side_effect=closed.append):
+            rc = launcher._select_in_pane(
+                SimpleNamespace(start="claude", ended=True, fresh=False, profile="",
+                                rest=[], attended=True), "beta.1")
+        return rc, closed, tried
+
+    def test_a_profile_pick_on_an_ended_tab_is_not_read_as_escape(self):
+        """**The conjunct asks two things, and dropping either half is a chat forgotten.**
+
+        `ended and choice is selector.KEY_CANCEL` is what tells *the operator pressed Esc*
+        from *this tab was put here by an exit*. With the `choice is …` half gone, EVERY
+        answer on an ended tab is read as Esc — a real profile pick included — so the chat
+        the operator was trying to start a harness in is handed to `cmd_close` and forgotten
+        for good: the mark, the transcript, the manifest entry and the window.
+
+        Red without it: `closed == ["beta.1"]`, and `attempt` is never reached at all.
+        """
+        rc, closed, tried = self._picked(selector.Choice("claude"))
+
+        self.assertEqual(rc, 0)
+        self.assertEqual(closed, [], "a profile pick on an ended tab closed the tab")
+        self.assertEqual(tried, [("claude", False)],
+                         "the launch was never reached for the profile that was picked")
+
+    def _a_conversation(self, fid: str):
+        """Give *fid* a link and a transcript, so `resume_row` has something to offer."""
+        path = Path(config.ROOT) / f"{fid}.jsonl"
+        path.write_text("{}\n")
+        state.record_harness_session(fid, "conv1")
+        state.record_conversation(fid, str(path))
+        return path
+
+    def _resume_passed(self, *, ended: bool, fresh: bool):
+        """The *resume* row `_select_in_pane` hands `selector.pick`."""
+        seen: dict = {}
+
+        def once(**kw):
+            if seen:
+                raise AssertionError("the selector came round instead of leaving")
+            seen.update(kw)
+            return selector.END_OF_INPUT
+
+        with mock.patch.object(selector, "pick", side_effect=once), \
+                mock.patch.object(commands_frame, "cmd_close"), \
+                mock.patch.object(launcher, "_close_the_cancelled_chat"):
+            launcher._select_in_pane(
+                SimpleNamespace(start="claude", ended=ended, fresh=fresh, profile="",
+                                rest=[], attended=True), "beta.1")
+        return seen["resume"]
+
+    def test_start_fresh_is_the_same_selector_with_the_resume_row_withheld(self):
+        """`--fresh` is what the crash drawer's *start fresh* respawns into. The row is
+        SUPPRESSED, not the conversation forgotten — the link stays recorded and the next
+        exit offers it again — so collapsing the conditional either way is wrong in a
+        different direction: always offer, and *start fresh* silently resumes.
+        """
+        self._a_conversation("beta.1")
+
+        self.assertIsNone(self._resume_passed(ended=True, fresh=True))
+        self.assertIsNotNone(self._resume_passed(ended=True, fresh=False))
+
+    def test_a_selector_no_harness_put_here_carries_no_resume_row(self):
+        """The other half of the same expression, and the one the ordinary path depends on:
+        resume is the ENDED tab's row. A pane that never started a harness has a chat id and
+        may well have a conversation recorded against it, so a selector that asked for one
+        regardless would offer *resume* on a tab where nothing has ever run."""
+        self._a_conversation("beta.1")
+
+        self.assertIsNone(self._resume_passed(ended=False, fresh=False))
 
     def test_a_pane_that_never_started_still_closes_on_both(self):
         """The pin for the other side of the branch, as #1103 left it: nothing ran in that

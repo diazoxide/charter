@@ -266,7 +266,13 @@ def resume_row(fid: str | None) -> "selector.Resume | None":
         return None
     kind = state.identity(fid).get("CHARTER_HARNESS", "")
     if not kind:
-        p, _why = resolve(state.profile(fid) or "")
+        # `state.profile(fid)` and not `… or ""`: the fallback could not change an answer,
+        # which the deletion sweep reported and this measures. `resolve` looks the name up in
+        # a dict — `None` is simply absent, like any other name nothing declares — and then
+        # hands it to `contain.readable`, whose unconditional `str(value)` is load-bearing
+        # and pinned by its own test. Both spellings answer `(None, "")`, so the chat falls
+        # through to the same "no kind" below.
+        p, _why = resolve(state.profile(fid))
         kind = p.harness if p is not None else ""
     link = state.kept_harness_session(fid) or ""
     if not leave.conversation_exists(kind, link, state.conversation(fid) or ""):
