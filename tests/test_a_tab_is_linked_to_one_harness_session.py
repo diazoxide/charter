@@ -871,12 +871,17 @@ class ALinkFollowsOnlyTheChatsOwnHarness(PlaneIso, unittest.TestCase):
                 self._opencode("ses_abc", pane=pane, tmux=tmux)
                 self.assertIsNone(state.kept_harness_session(fid))
 
-    def test_a_tool_hook_of_a_harness_that_reports_at_sessionstart_writes_nothing(self):
-        fid = self._an_opencode_chat()
-        for harness in ("claude-code", "codex", "", "nosuch"):
-            with self.subTest(harness=harness):
-                self._opencode("ses_abc", harness=harness)
-                self.assertIsNone(state.kept_harness_session(fid))
+    def test_only_a_chat_whose_harness_reports_at_a_tool_hook_is_recorded(self):
+        """The kind is the CHAT's own record (`state.identity`), not `$CHARTER_HARNESS`,
+        which a harness nested in the pane inherits. A chat of a kind that reports at
+        SessionStart is never linked from a tool hook."""
+        self._an_opencode_chat()
+        for kind in ("claude-code", "codex", "", "nosuch"):
+            with self.subTest(kind=kind):
+                state.record_identity("beta.2", {"CHARTER_HARNESS": kind})
+                self._opencode("ses_abc")
+                self.assertIsNone(state.kept_harness_session("beta.2"))
+                self.assertFalse(state.adopted("beta.2"))
 
     def test_a_claude_code_tool_hook_in_its_own_chat_writes_nothing(self):
         """Claude Code reports at SessionStart. Its tool hooks run in its own chat's pane,
@@ -901,13 +906,56 @@ class ALinkFollowsOnlyTheChatsOwnHarness(PlaneIso, unittest.TestCase):
         self._opencode("ses_ok")
         self.assertEqual(state.kept_harness_session(fid), "ses_ok")
 
-    def test_the_session_id_comes_from_the_payload_not_the_variable(self):
+    def test_the_recorded_id_is_the_payloads_and_the_variable_must_agree(self):
+        """The shim sets `$CHARTER_SESSION_ID` and the payload's `session_id` from ONE value,
+        so a genuine report has them equal — and that equality is the proof this report is
+        the pane's own harness (the controller's ruling). The id charter keeps is still the
+        payload's; a report whose variable names something else is ignored."""
         fid = self._an_opencode_chat()
         env = {"CHARTER_HARNESS": "opencode", "CHARTER_SESSION_ID": "ses_var",
                "TMUX_PANE": "%4", "TMUX": f"{tmuxctl.socket_path('srv')},1,0"}
         with mock.patch.dict(os.environ, env, clear=True):
             hooks._record_reported_session({"session_id": "ses_payload"})
+        self.assertIsNone(state.kept_harness_session(fid))
+        self.assertFalse(state.adopted(fid))
+        with mock.patch.dict(os.environ, {**env, "CHARTER_SESSION_ID": "ses_payload"},
+                             clear=True):
+            hooks._record_reported_session({"session_id": "ses_payload"})
         self.assertEqual(state.kept_harness_session(fid), "ses_payload")
+
+    def test_a_nested_claude_in_an_unwired_opencode_chat_records_nothing(self):
+        """The scenario `$CHARTER_HARNESS` could not refuse. opencode's plugin is not wired,
+        so its shim fails open and opencode has reported nothing; the operator runs `claude`
+        in that pane. The nested harness inherits `CHARTER_HARNESS=opencode`, `$TMUX_PANE` and
+        the chat's own `$CHARTER_SESSION_ID`, and reports a uuid of its own — which is not
+        that variable, so it proves nothing and the link stays empty. Recorded, a reopen would
+        run `opencode -s <claude uuid>`, which opencode refuses (O2): the chat would come back
+        dead rather than empty."""
+        fid = self._an_opencode_chat()
+        env = {"CHARTER_HARNESS": "opencode", "CHARTER_SESSION_ID": fid,
+               "CLAUDE_PID": "4242", "TMUX_PANE": "%4",
+               "TMUX": f"{tmuxctl.socket_path('srv')},1,0"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            hooks._record_reported_session(
+                {"session_id": "e8962ccc-d263-4996-9881-c774dc586d3f",
+                 "hook_event_name": "PreToolUse", "cwd": "/w", "tool_name": "Bash"})
+        self.assertIsNone(state.kept_harness_session(fid))
+        self.assertFalse(state.adopted(fid))
+
+    def test_a_pane_that_is_not_a_pane_id_is_never_looked_up(self):
+        """`$TMUX_PANE` is held to `tmuxctl.PANE_ID_RE` BEFORE it reaches `chat_in_pane` —
+        asserted on the lookup rather than on the outcome, because a malformed pane matches
+        no recorded one either way, so only the call says whether the shape was asked."""
+        fid = self._an_opencode_chat()
+        for pane in ("4", "%4;kill-server", "%", "%4 %5", ""):
+            with self.subTest(pane=pane):
+                with mock.patch.object(state, "chat_in_pane") as looked_up:
+                    self._opencode("ses_abc", pane=pane)
+                looked_up.assert_not_called()
+                self.assertIsNone(state.kept_harness_session(fid))
+        with mock.patch.object(state, "chat_in_pane", return_value=fid) as looked_up:
+            self._opencode("ses_abc")
+        looked_up.assert_called_once()
 
     def test_outside_a_plane_opencode_records_nothing(self):
         fid = self._an_opencode_chat()

@@ -6115,32 +6115,43 @@ def _record_reported_session(data: dict) -> None:
     `$TMUX_PANE` against the harness panes charter recorded on the server `$TMUX` names, and
     a pane two chats record resolves to none.
 
-    **Which harness is reporting comes from the shim's own call**, which sets
-    `CHARTER_HARNESS=opencode` in the command it runs, and it counts only against a chat
-    recorded as that kind: a Claude Code hook is not a tool-reporting harness, and an opencode
-    run from another harness's chat finds a chat of another kind in that pane. The first
-    report of each start is adopted; opencode's own new session inside one start is not
-    followed.
+    **The report proves itself, and `$CHARTER_HARNESS` decides nothing** (the controller's
+    ruling, and the reason it was ruled again here). The shim sets `$CHARTER_SESSION_ID` and
+    the payload's `session_id` from ONE value (`opencode.py`), so a genuine report always has
+    them equal — and a harness nested in that pane cannot, because it inherits the variable
+    and reports an id of its own. Trusting `$CHARTER_HARNESS` instead had a measured cost: in
+    an opencode chat whose plugin is not wired, where the shim fails open and opencode has
+    reported nothing, a `claude` run in that pane inherits `CHARTER_HARNESS=opencode` and
+    `$TMUX_PANE`, and its uuid would become the link — after which `charter reopen` runs
+    `opencode -s <claude uuid>`, which O2 says opencode refuses with exit 1. The chat would
+    come back dead rather than empty.
 
-    No shape guards on the pane or the server of their own: both are only compared with what
-    a launcher recorded, so a value of any other shape matches nothing, and a `None` harness
-    or chat raises into the `except` or reads as no kind.
+    **Which harness this is comes from the chat's own record**, `state.identity` — what the
+    launch wrote, never what this process inherited — and only a harness that reports at a
+    tool hook may be recorded this way: an opencode run inside another harness's chat finds a
+    chat of another kind in that pane and changes nothing. The first report of each start is
+    adopted; opencode's own new session inside one start is not followed.
+
+    `$TMUX_PANE` is held to `tmuxctl.PANE_ID_RE` before it reaches `chat_in_pane`. No default
+    for it or for `$TMUX`: a hook outside tmux has neither, and a missing one raises into the
+    `except` below — the same "no chat" an empty one would read as.
     """
     if not _in_a_plane():
         return
     try:
         from .frame import state as frame_state
+        from .frame import tmuxctl
         from .harness import registry
-        h = registry.get(os.environ.get("CHARTER_HARNESS"))
+        sid = data.get("session_id")
+        if os.environ.get("CHARTER_SESSION_ID") != sid:
+            return
+        pane = os.environ["TMUX_PANE"]
+        if not tmuxctl.PANE_ID_RE.fullmatch(pane):
+            return
+        chat = frame_state.chat_in_pane(pane, os.environ["TMUX"].partition(",")[0])
+        h = registry.get(frame_state.identity(chat).get("CHARTER_HARNESS"))
         if h.reports_session_at != "tool":
             return
-        # No defaults: a hook outside tmux has neither variable, and a missing one raises into
-        # the `except` below — the same "no chat" an empty one would read as.
-        chat = frame_state.chat_in_pane(os.environ["TMUX_PANE"],
-                                        os.environ["TMUX"].partition(",")[0])
-        if frame_state.identity(chat).get("CHARTER_HARNESS") != h.name:
-            return
-        sid = data.get("session_id")
         if not frame_state.SESSION_ID_RE.fullmatch(sid):
             return
         if frame_state.adopt_report(chat) and frame_state.record_harness_session(chat, sid):
