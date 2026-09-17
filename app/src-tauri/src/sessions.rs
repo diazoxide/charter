@@ -443,6 +443,29 @@ mod tests {
     }
 
     #[test]
+    fn fifty_sessions_run_at_once_and_each_view_gets_its_own_session_s_output() {
+        // The scale the app is for (the spec's limits table), at the level where it can be
+        // held still: fifty programs, fifty terminals in the core, fifty views being read.
+        let sessions = Sessions::new();
+        let watched: Vec<(u32, Arc<Mutex<String>>)> = (0..50)
+            .map(|n| {
+                let id = sessions
+                    .open(&opening(&format!(
+                        "printf 'session {n} is running'; sleep 600"
+                    )))
+                    .expect("the session opens");
+                let (_view, seen) = watching(&sessions, id);
+                (id, seen)
+            })
+            .collect();
+
+        assert_eq!(sessions.running().len(), 50);
+        for (n, (_, seen)) in watched.iter().enumerate() {
+            until_seen(seen, &format!("session {n} is running"));
+        }
+    }
+
+    #[test]
     fn a_closed_session_is_no_longer_running() {
         let sessions = Sessions::new();
         let id = sessions.open(&opening("sleep 600")).expect("it opens");
