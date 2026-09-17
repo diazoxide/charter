@@ -38,9 +38,7 @@ impl AlacrittyEngine {
 impl AlacrittyEngine {
     fn apply_expired_sync(&mut self) {
         let expired = self
-            .parser
-            .sync_timeout()
-            .sync_timeout()
+            .open_update()
             .is_some_and(|deadline| Instant::now() >= deadline);
         if expired {
             self.parser.stop_sync(&mut self.term);
@@ -52,6 +50,10 @@ impl Engine for AlacrittyEngine {
     fn advance(&mut self, bytes: &[u8]) {
         self.apply_expired_sync();
         self.parser.advance(&mut self.term, bytes);
+    }
+
+    fn open_update(&self) -> Option<Instant> {
+        self.parser.sync_timeout().sync_timeout()
     }
 
     fn resize(&mut self, size: Size) {
@@ -380,6 +382,37 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(300));
 
         assert_eq!(term.screen().lines[0], "after");
+    }
+
+    #[test]
+    fn an_open_synchronized_update_reports_the_deadline_it_is_given_up_on() {
+        let mut term = engine();
+
+        term.advance(b"\x1b[?2026h\x1b[H\x1b[2Jhalf a frame");
+
+        let deadline = term.open_update().expect("the update is open");
+        assert!(
+            deadline > Instant::now(),
+            "an update just opened is not already past its deadline"
+        );
+    }
+
+    #[test]
+    fn output_with_no_synchronized_update_in_it_reports_no_deadline() {
+        let mut term = engine();
+
+        term.advance(b"a plain line\r\n");
+
+        assert!(term.open_update().is_none());
+    }
+
+    #[test]
+    fn an_update_the_program_closed_reports_no_deadline() {
+        let mut term = engine();
+
+        term.advance(b"\x1b[?2026h\x1b[H\x1b[2Jwhole frame\x1b[?2026l");
+
+        assert!(term.open_update().is_none());
     }
 
     #[test]
