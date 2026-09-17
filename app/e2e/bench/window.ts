@@ -54,7 +54,18 @@ export function inFront(): void {
   ]);
 }
 
-/** Waits for the window's seam, then draws every pane from now on with this run's arm. */
+/** How many frames a second the page has to be getting before anything here is measured. */
+const FRAMES_EXPECTED = 50;
+
+/**
+ * Waits for the window's seam, checks the display is giving the page full frames, then draws
+ * every pane from now on with this run's arm.
+ *
+ * Nothing can draw more often than the display changes, so a throttled display silently caps
+ * every draw-rate and paint measurement in the run: a dimmed one gave 26 frames a second here
+ * and made the DOM renderer look as if it drew 22. `caffeinate -u` in `tools/bench.mjs` holds
+ * it at the rate it uses when someone is at the machine; this refuses to measure if it did not.
+ */
 export async function ready(): Promise<void> {
   inFront();
   await browser.waitUntil(async () => browser.execute(() => Boolean(window.charterBench)), {
@@ -62,6 +73,16 @@ export async function ready(): Promise<void> {
     timeoutMsg: "the window has no benchmark seam: was the frontend built with --mode e2e?",
   });
   await browser.execute((kind) => (window.charterBench as Bench).drawWith(kind), arm);
+
+  await watchFrames();
+  await sleep(1000);
+  const drawn = await frames();
+  if (drawn.framesPerSecond < FRAMES_EXPECTED) {
+    throw new Error(
+      `the page is getting ${drawn.framesPerSecond.toFixed(1)} frames a second, not the ` +
+        `${FRAMES_EXPECTED}+ a measurement needs: the display is asleep, dimmed or throttled`,
+    );
+  }
 }
 
 export type PaneState = Awaited<ReturnType<Bench["panes"]>>[number];

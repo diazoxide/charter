@@ -78,11 +78,17 @@ if (!options["skip-build"]) {
 }
 
 // A display that goes to sleep stops WebKit drawing altogether, and every measurement that
-// waits for a paint waits forever. `caffeinate` keeps it awake for as long as this runs, and
-// no longer: it is told to watch this process.
+// waits for a paint waits forever. An idle one is nearly as bad: this machine's display drops
+// its refresh rate, and nothing can draw more often than the display changes — a run measured
+// 22 draws a second where the page itself was only getting 26 frames. `caffeinate` keeps the
+// display awake (`-d`), the machine awake (`-i`) and the display at the rate it uses when
+// someone is there (`-u`), for as long as this runs and no longer: it watches this process.
 const awake =
   platform() === "darwin"
-    ? spawn("caffeinate", ["-d", "-i", "-w", `${process.pid}`], { stdio: "ignore", detached: true })
+    ? spawn("caffeinate", ["-d", "-i", "-u", "-w", `${process.pid}`], {
+        stdio: "ignore",
+        detached: true,
+      })
     : undefined;
 awake?.unref();
 
