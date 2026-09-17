@@ -141,7 +141,8 @@ Each milestone is something the operator actually uses, not a layer.
 
 - **M0: walking skeleton.** Tauri + Rust core + xterm.js, with 50 fake sessions and one
   scenario test green in CI on macOS and Linux. It is measured against the limits above and
-  locks the stack. GPUI is tried only if a limit is missed.
+  locks the stack. GPUI is tried only if a limit is missed. **Done** — the measurements and
+  the lock are ADR 0026, and the benchmark is `node tools/bench.mjs` in charter-app.
 - **M1: daily driver on macOS.** The app replaces the tmux frame for the operator:
   - workspace sidebar and the "needs you" queue
   - chats with the profile and persona picker
@@ -158,8 +159,23 @@ Each milestone is something the operator actually uses, not a layer.
 - **M4: public release.** Linux, then Windows (ConPTY, bundled package), signed installers,
   the final PyPI release pointing to the new install, and Python charter retired.
 
-## Open until M0 reports
+## What M0 reported
 
-- The scrollback cap that the idle-session limit is measured at.
+M0 measured the skeleton against the limits above on the operator's machine and locked the
+stack: **ADR 0026**. It answers the first of the questions this section left open.
+
+- **The scrollback cap is 5000 lines**, and a hidden session holding that much at 150 columns
+  costs 20.2 MB of the 50 MB the limit allows. Fifty of them add about 1 GB to the app.
+- **xterm.js draws with its own DOM renderer.** WebGL was measured beside it: both meet every
+  limit, and neither is faster at the same things, so the simpler one wins on priority 1. The
+  addon stays behind a switch, because many panes on screen is the one thing it is better at.
+- **The hook call is missed**: 107.6 ms through Python charter, against a 1.8 ms start for the
+  Rust binary. M3 is where it is met, and it is not the stack's to fix.
+- **A `?2026` animation falls to one frame a second** if a writer pauses inside an open update
+  (xterm.js#6071), against 52 draws a second when repaints are written whole. The core can
+  close it in M1 by never ending a chunk inside an open update, with a deadline of its own.
+
+Still open:
+
 - Whether the file or socket for hook events (decision 3) needs anything beyond Tauri's own
   single-instance and IPC plugins.
