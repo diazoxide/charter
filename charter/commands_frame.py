@@ -151,8 +151,8 @@ from typing import NamedTuple
 
 from . import config, contain, harness, inflight, instance, tui, util, workspace
 from .frame import (actions as frame_actions, builtin_actions, chats, choose, component,
-                    gather, layout, leave, overlay, pane, palette, picker, record, rename,
-                    state, switch, tabmenu, tmuxctl)
+                    gate, gather, layout, leave, overlay, pane, palette, picker, record,
+                    rename, state, switch, tabmenu, tmuxctl)
 # Aliased because `cmd_reopen` is a function in this module and `reopen` reads as one: the
 # module answers what a quit RECORDED and the command is what puts it back, and a bare
 # `reopen.read()` beside `cmd_reopen` invites a reader to think one is the other.
@@ -1069,11 +1069,32 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
         "set -g focus-events on",
         f"bind -n {hotkey} run-shell "
         f"'\"${_CHARTER_PY_ENV}\" -m charter frame-palette "
+        f"\"#{{client_name}}\" "
+        f"--chat \"#{{{_CHAT_OPTION}}}\"'",
+        # **The gate follows the palette's own bind**, and it is the same command with one
+        # more flag for `gate.OPTION`'s reason: the gate IS the palette's pane with a
+        # different row source. `#{client_name}` is what makes *Close charter (keep chats
+        # running)* mean one terminal — measured in Step 0's G1 on 3.7c and at the floor,
+        # two clients on two ptys: the key's action reported the PRESSING client's name and
+        # never the other's.
+        f"bind -n {gate.GATE_KEY} run-shell "
+        f"'\"${_CHARTER_PY_ENV}\" -m charter frame-palette "
+        f"\"#{{client_name}}\" {gate.OPTION} "
         f"--chat \"#{{{_CHAT_OPTION}}}\"'",
         f"bind -n {tmuxctl.WHEEL_KEY} if-shell -F -t = '#{{mouse_any_flag}}'"
         " 'send-keys -M' 'copy-mode -e; send-keys -M'",
+        # The panel branch RECORDS the clicking client before forwarding, which is the
+        # pointer half of the same question the two binds above answer with a format.
+        # `set-option -F` is what expands `#{client_name}` at the press: without it the
+        # option holds the eighteen literal characters, `gate.CLIENT_RE` refuses them, and
+        # every click would reach the gate as "charter cannot tell which terminal asked".
+        # Measured in Step 0's G3 — six alternating SGR presses by two attached clients,
+        # on 3.7c and at the floor — the option read back as the clicking client every
+        # time, in either order of last activity.
         f"bind -n {tmuxctl.CLICK_KEY} if-shell -F -t = '#{{{_PANEL_OPTION}}}'"
-        " 'send-keys -M' 'select-pane -t =; send-keys -M'",
+        f" 'set-option -F -p -t = {gate.PRESSER_OPTION} \"#{{client_name}}\""
+        " ; send-keys -M'"
+        " 'select-pane -t =; send-keys -M'",
         f"bind -n {layout.BAR_ROWS_KEY} run-shell "
         f"'\"${_CHARTER_PY_ENV}\" -m charter frame-bar-rows "
         f"--chat \"#{{{_CHAT_OPTION}}}\"'",
@@ -9629,6 +9650,13 @@ def cmd_palette(args) -> int:
             if getattr(args, "ended", False):
                 from .frame import ended as ended_mod
                 return ended_mod.draw(args)
+            # **`--gate` is the fifth surface, and it is asked before `--tab`** for the
+            # same reason `--ended` is asked before both: it is the more specific. A tab
+            # menu is about whichever chat a pointer landed on; the gate is about leaving
+            # charter, which is neither this frame's catalogue nor one chat's rows — and
+            # `frame/gate.py` is the whole of it, in `tabmenu`'s shape.
+            if gate.wanted(args):
+                return gate.draw(args)
             if tabmenu.wanted(args):
                 return tabmenu.draw(args)
             return _draw_palette(args)
@@ -9674,7 +9702,13 @@ def _open_palette(args) -> int:
         # NOTHING for `F2`, so the ordinary palette's argv is byte-identical to what it was
         # (#846). The pane is still carved off THIS frame's harness whichever it is: the
         # menu is about another tab, but the operator is looking at this one.
+        # `frame/gate.forward` splices the PRESSER in for every route that has one and
+        # `--gate` for the key and the button, and `tabmenu.forward` splices `--tab <chat>`
+        # for a right-click on a tab. Both answer the empty tuple where they have nothing,
+        # so the argv of an `F2` fired by a bind that predates the presser is byte-identical
+        # to what it was (#846's rule, one value later).
         command=util.self_relaunch_argv("frame-palette", "--pane",
+                                        *gate.forward(args),
                                         *tabmenu.forward(args)),
         env=_relayout_pane_env(fid, v))
     if argv is None:
@@ -9835,8 +9869,16 @@ def _draw_palette(args) -> int:
     # here would be a second answer to "which pane am I", on the one path where being wrong
     # means resizing or killing the operator's harness.
     here = os.environ.get("TMUX_PANE", "")
+    # **The presser comes off THIS pane's own argv, not out of the environment**, and that
+    # is the same split `here` above makes for a different value: the frame is ambient (one
+    # tmux server is shared by every frame on the machine) and the keypress is not. The
+    # hotkey's bind expanded `#{client_name}` in the `run-shell` child, `_open_palette`
+    # spliced it onto the `split-window --` argv, and this is the far end of that trip. It
+    # decides one row — *Close charter (keep chats running)* — and an absent one costs
+    # exactly that row, listed with its reason.
     reg = builtin_actions.build(fid, current_density=_current_density(fid),
-                                current_chrome=_current_chrome(fid))
+                                current_chrome=_current_chrome(fid),
+                                client=gate.presser_of(args))
     snapshot = gather.cached(fid) or {}
     opened: list[choose.Roster] = []
     #: The rename input, once one has been opened. **A list for `opened`'s reason exactly**:

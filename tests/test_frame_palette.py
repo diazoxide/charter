@@ -26,9 +26,9 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from charter import commands_frame, contain, tui
-from charter.frame import (action, actions, builtin_actions, component, overlay, palette,
-                           state, tmuxctl)
+from charter import commands_frame, config, contain, tui
+from charter.frame import (action, actions, builtin_actions, component, gate,
+                           overlay, palette, state, tmuxctl)
 
 from tests import _tmuxsocket
 from tests._isolation import PersonaIso
@@ -530,10 +530,43 @@ class TheActionsCharterOffersItself(PersonaIso, unittest.TestCase):
         state.record_harness_pane(self.FID, "%3")
         state.record_identity(self.FID, {"CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
 
-    def _offers(self):
+    #: A presser, because since #1115 the detach row needs one to be available at all —
+    #: see `tests/test_one_gate_closes_charter.py` for the cases that are ABOUT that.
+    #: Stated here so the socket cases below keep asking what they were asking.
+    PRESSER = "/dev/ttys7"
+
+    def _offers(self, *, client=PRESSER):
         reg = builtin_actions.build(self.FID, current_density="normal",
-                                    current_chrome="off")
+                                    current_chrome="off", client=client)
         return {o.id: o for o in reg.offers(fid=self.FID, snapshot={})}
+
+    def _detach_run(self, *, client=PRESSER):
+        """Drive the detach row against a tmux that proves the presser, and answer what it
+        asked tmux and what it spawned.
+
+        The proof is three round trips since #1115 (`builtin_actions._detach`): where the
+        chat's pane is, who is attached to that session, and which plane the session
+        belongs to. Stubbed here rather than skipped, because the cases below are about
+        WHICH SERVER those go to.
+        """
+        import subprocess
+        calls, started = [], []
+
+        def run(_what, argv, **_kw):
+            calls.append(list(argv))
+            if "list-clients" in argv:
+                return subprocess.CompletedProcess(argv, 0, f"{client}\t$4\n", "")
+            if argv[-1] == "#{@charter_plane}":
+                return subprocess.CompletedProcess(argv, 0, str(config.STATE_DIR), "")
+            return subprocess.CompletedProcess(argv, 0, "$4\t@9", "")
+
+        reg = builtin_actions.build(self.FID, current_density="normal",
+                                    current_chrome="off", client=client)
+        with mock.patch.object(tmuxctl, "run", side_effect=run), \
+                mock.patch.object(builtin_actions, "_spawn",
+                                  side_effect=lambda argv, *, fid: started.append(argv)):
+            reg.get("frame.detach").run(SimpleNamespace(fid=self.FID))
+        return calls, started
 
     def test_charters_own_rows_are_offered_before_any_providers(self):
         ids = list(self._offers())
@@ -611,14 +644,13 @@ class TheActionsCharterOffersItself(PersonaIso, unittest.TestCase):
         self.assertTrue(self._offers()["frame.detach"].available)
 
     def test_the_detach_row_starts_a_detached_client_command_on_the_frames_own_server(self):
-        started = []
-        reg = builtin_actions.build(self.FID, current_density="normal",
-                                    current_chrome="off")
-        with mock.patch.object(builtin_actions, "_spawn",
-                               side_effect=lambda argv, *, fid: started.append(argv)):
-            reg.get("frame.detach").run(SimpleNamespace(fid=self.FID))
-        self.assertEqual(started,
-                         [tmuxctl.server_argv("charter", "detach-client", "-s", self.FID)])
+        """**`-t <client>` and never `-s <fid>`** since #1115 closed #1097: a chat is a
+        window in a per-workspace session, tmux parses a dotted target as `session.pane`,
+        and the old argv either named nothing or named the workspace and took every
+        attached client with it."""
+        _calls, started = self._detach_run()
+        self.assertEqual(started, [tmuxctl.server_argv("charter", "detach-client",
+                                                       "-t", self.PRESSER)])
 
     def test_a_frame_with_no_recorded_server_still_detaches_on_charters_own_socket(self):
         """`_server`'s `or SOCKET` fallback, pinned where it has a consequence.
@@ -631,14 +663,15 @@ class TheActionsCharterOffersItself(PersonaIso, unittest.TestCase):
         not this frame's and may not be any running one.
         """
         state.record_server(self.FID, "")
-        started = []
-        reg = builtin_actions.build(self.FID, current_density="normal",
-                                    current_chrome="off")
-        with mock.patch.object(builtin_actions, "_spawn",
-                               side_effect=lambda argv, *, fid: started.append(argv)):
-            reg.get("frame.detach").run(SimpleNamespace(fid=self.FID))
-        self.assertEqual(started,
-                         [tmuxctl.server_argv("charter", "detach-client", "-s", self.FID)])
+        calls, started = self._detach_run()
+        self.assertEqual(started, [tmuxctl.server_argv("charter", "detach-client",
+                                                       "-t", self.PRESSER)])
+        # And every question the proof asked went to the same server, which is the half a
+        # spawn-only assertion would miss: a fallback that healed the detach but left the
+        # listing pointed at `tmux -L ""` would prove the presser against no server at all.
+        for argv in calls:
+            self.assertEqual(argv[:len(tmuxctl.server_argv("charter"))],
+                             tmuxctl.server_argv("charter"))
 
     def test_every_action_starts_its_work_in_a_session_of_its_own(self):
         """§4g plus the fact that the palette's pane is killed the instant it has invoked:
@@ -701,8 +734,13 @@ class ThePaletteCommand(PersonaIso, unittest.TestCase):
         self.closed.assert_called_once()
 
     def test_choosing_a_row_starts_its_action(self):
+        """`chat.new` rather than `frame.detach`, since the gate arrived (#1115): detach
+        now PROVES its target before it spawns — one `display-message`, one `list-clients`
+        and one more `display-message` on the chat's own server — so a case that meant to
+        ask *does a chosen row reach `invoke`* would be asking about three tmux round trips
+        it does not stub. `chat.new` spawns unconditionally, which is the question."""
         with mock.patch.object(builtin_actions, "_spawn") as spawn:
-            self.assertEqual(self._draw(overlay.Row(id="frame.detach", title="d")), 0)
+            self.assertEqual(self._draw(overlay.Row(id="chat.new", title="d")), 0)
         spawn.assert_called_once()
 
     def test_a_refusal_at_the_moment_of_the_keypress_is_said_on_the_operators_screen(self):
@@ -736,7 +774,7 @@ class ThePaletteCommand(PersonaIso, unittest.TestCase):
 
         self.closed.side_effect = lambda *a, **kw: order.append("closed")
         with mock.patch.object(builtin_actions, "_spawn", side_effect=_slow):
-            self._draw(overlay.Row(id="frame.detach", title="d"))
+            self._draw(overlay.Row(id="chat.new", title="d"))
         self.assertEqual(order, ["started", "closed"])
 
     def test_the_pane_is_handed_back_even_when_the_surface_raises(self):

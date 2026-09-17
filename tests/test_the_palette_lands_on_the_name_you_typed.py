@@ -82,7 +82,7 @@ _DOORWAYS = (
          refused=True),
 )
 _ACTIONS = (
-    _row("frame.detach", "detach — leave the harness running"),
+    _row("frame.detach", "Close charter (keep chats running)"),
     _row("repo.next", "repo: select the next row"),
     _row("density.full", "density: full", mark=True),
 )

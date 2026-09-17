@@ -383,9 +383,15 @@ class ThePaletteOpensThePickerAndActsOnWhatComesBack(_Frame, unittest.TestCase):
 
     def test_an_action_row_still_goes_through_invoke(self):
         """The other branch, so the dispatch above cannot pass by swallowing everything:
-        a row that is not a doorway and not a name is an action and is started."""
+        a row that is not a doorway and not a name is an action and is started.
+
+        `chat.new` rather than `frame.detach`, since the exit gate arrived (#1115): the
+        detach row proves its target before it spawns and needs a presser to be available,
+        so it would answer this question with three unstubbed tmux calls. What is under
+        test is the dispatch, and `chat.new` is the row that spawns unconditionally.
+        """
         with mock.patch.object(commands_frame.builtin_actions, "_spawn") as spawn:
-            self.assertEqual(self._draw(overlay.Row(id="frame.detach", title="d")), 0)
+            self.assertEqual(self._draw(overlay.Row(id="chat.new", title="d")), 0)
         spawn.assert_called_once()
 
 

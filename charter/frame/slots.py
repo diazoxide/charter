@@ -341,6 +341,13 @@ class _Doors:
     `_Tabs`' own docstring argues away one axis over. What the field was CALLED is the
     renderer's business and a test's; what reaches the handler is "is this cell a door".
 
+    **That stopped being true with the exit gate, and this is the second set** (#1115).
+    `F10 close` at the right end of `_top` is a door to a DIFFERENT surface — `frame/gate.py`
+    rather than the palette — so something now branches on which cell was pressed, which is
+    the exact condition the paragraph above named for when a second answer would earn its
+    keep. It is still two sets and not a mapping: there are two destinations, both of them
+    charter's own, and `opens_gate` is the whole of what a handler has to ask.
+
     **The bounds check is structural for :class:`_Tabs`' reason.** A column nothing
     published is absent whether it is ``-1``, ``4096``, one of the two cells of a ` · `
     separator, or the empty space past the last field — `in` has no wrong answer to give
@@ -359,10 +366,11 @@ class _Doors:
     exactly one answer here.
     """
 
-    __slots__ = ("_cols",)
+    __slots__ = ("_cols", "_gate")
 
     def __init__(self) -> None:
         self._cols: frozenset[int] = frozenset()
+        self._gate: frozenset[int] = frozenset()
 
     def forget(self) -> None:
         """Back to a strip nobody has drawn — for a test, and only a test.
@@ -372,7 +380,7 @@ class _Doors:
         """
         self.publish(())
 
-    def publish(self, columns) -> None:
+    def publish(self, columns, gate=()) -> None:
         """Record which columns of the row that was just painted are doors.
 
         Columns of the component's OWN canvas — the rectangle `ctx.width` describes, which
@@ -385,18 +393,49 @@ class _Doors:
         starved and keeps exactly one at `terse`, and a strip that kept a stale map
         through a resize would open the palette from a cell whose field the operator can
         see is gone.
+
+        *gate* is the exit gate's own columns, and a SECOND set rather than a mapping is
+        still the shape — see the class docstring for what changed. Defaulted to empty and
+        cleared on every publish, so `_bottom`, which draws no gate door, does not have to
+        know this parameter exists and cannot leave a stale one behind.
         """
         self._cols = frozenset(columns)
+        self._gate = frozenset(gate)
 
     def opens_palette(self, col: int) -> bool:
         """Whether a click at canvas column *col* should open this frame's palette."""
         return col in self._cols
+
+    def opens_gate(self, col: int) -> bool:
+        """Whether a click at canvas column *col* should open the exit gate instead.
+
+        Two questions and not one with an argument, because `builtins._strip_events`
+        branches on the answer: a gate door spawns `frame-palette <presser> --gate` and
+        every other door spawns `frame-palette <presser>`. Asked in that order there, so a
+        column that somehow reached both sets would open the gate — which is the harmless
+        direction, since the gate's own cursor opens on the row that detaches one terminal.
+        """
+        return col in self._gate
 
 
 #: The one strip this process draws into. See :class:`_Doors` for why there is exactly
 #: one; `frame/builtins._strip_events` is the other half and holds no state of its own,
 #: so the handler and the renderer cannot come to disagree about where the doors are.
 DOORS = _Doors()
+
+#: The exit gate's button, at the right-hand end of the identity row.
+#:
+#: **The key is in the label**, exactly as `_bottom`'s `F2 palette` hint is: on most
+#: planes `[frame] mouse` is off and this cell cannot be clicked at all, so what it
+#: has to do there is teach the key. Where the pointer is on, it is that key's button
+#: (`_Doors.opens_gate`) — which is #751's finding, that a key name beside a noun
+#: reads as a button everywhere else an operator has seen one.
+#:
+#: Spelled here rather than composed from `gate.GATE_KEY`, because `slots.py` is
+#: imported by every panel process and `frame/gate.py` is not on that path — and the
+#: two are pinned together by `tests/test_one_gate_closes_charter.py`, which asserts
+#: the drawn row against the key charter actually binds.
+GATE_BUTTON = "F10 close"
 
 
 def _door_columns(limit: int, *fields) -> set[int]:
@@ -548,7 +587,7 @@ def _top(fid: str) -> str:
     with the version and can never be left behind on its own.
     """
     from .. import __version__, statusline, workspace as ws_mod
-    from . import state
+    from . import state, tmuxctl
     # The FRAME's workspace, not this pane's own guess at one (#512) — see
     # :func:`_frame_workspace`. `$CHARTER_WORKSPACE` is the one rung a panel does share
     # with its launcher (`commands_frame._frame_identity_env` carries it, empty when the
@@ -600,17 +639,52 @@ def _top(fid: str) -> str:
     # would be two places for that to stop being true.
     w = content_width("top")
     head_at = tui.width(left) + 2 + (tui.width(gauge) + 2 if gauge else 0)
+    # **The way out, at the right-hand end** (#1115). `F10` opens the gate wherever the
+    # frame draws, and with `[frame] mouse` off — which is the default — this cell is a
+    # label that teaches the key; with it on, it is the key's own button. Either way the
+    # row that answers *where am I* now also answers *how do I leave*.
+    #
+    # **Not drawn inside the operator's own tmux** (decision 7), which is `_bottom`'s rule
+    # for the `F2 palette` hint and the same defect reached the same way: charter binds no
+    # key on a server it is a guest on, so a button naming one would be telling every
+    # operator about a key that does nothing, on every repaint.
+    button = ("" if tmuxctl.is_operator_socket(state.frame_server(fid))
+              else f" {GATE_BUTTON} ")
+    # `terse` drops the version — the one field here that reads the same on every frame on
+    # this machine all day — and keeps the button, because a density that buys back a line
+    # is not buying it back by removing the exit.
+    build = ("" if verbosity(fid) == "terse"
+             else f"charter {__version__}{statusline._dev_chip()} ")
+    # **The right-hand end sheds in one order: the version, then the button, never the
+    # identity.** `+ 1` is the one column that must separate the two halves; without it a
+    # full-width identity would butt straight up against whatever follows and read as one
+    # word. "Shown whole or dropped whole" is `_fit_fields`' discipline, kept here by
+    # choosing between composed strings rather than truncating one of them.
+    right = next(r for r in (build + button, button, "")
+                 if not r or tui.width(identity) + tui.width(r) + 1 <= w)
+    # The gate's columns are the LAST cells of the row when the button survived, because
+    # `right` is the right-aligned half and the button is its tail. Published from what was
+    # drawn rather than from what was composed, which is `_door_columns`' own rule and the
+    # reason every rung of this ladder publishes — including the rungs with no button on
+    # them, where a stale map would open the gate from a cell the operator can see is empty.
+    # No `button and` in front of the test: `_door_columns` contributes nothing for a field
+    # whose text is empty, so an operator's-tmux row — where *button* is `""` and
+    # `right.endswith("")` is true of anything — publishes the same empty set either way,
+    # and a second guard for it is a line no input could turn red.
     DOORS.publish(_door_columns(w, (0, left),
-                                (head_at, "" if line is None else line.head)))
-    if verbosity(fid) == "terse":
-        return tui.truncate(identity, w)
-    build = f"charter {__version__}{statusline._dev_chip()} "
-    # `+ 1` is the one column that must separate them; without it a full-width identity
-    # would butt straight up against the version and read as one word.
-    if tui.width(identity) + tui.width(build) + 1 > w:
-        return tui.truncate(identity, w)
-    return tui.Row(tui.Cell(identity, w - tui.width(build)),
-                   tui.Cell(build, tui.width(build)), gap="").render(w)[0]
+                                (head_at, "" if line is None else line.head)),
+                  gate=(_door_columns(w, (w - tui.width(button), button))
+                        if right.endswith(button) else ()))
+    # **No early return for the starved rung, and the sweep is why it went.** It used to
+    # read `if not right: return tui.truncate(identity, w)`, and that is the same string
+    # the general path already produces: with *right* empty the row below is
+    # `tui.Cell(identity, w)` beside a zero-width cell, which IS a truncate. Measured
+    # directly against `tui.truncate` at three widths — one with room to spare, one that
+    # cuts mid-word to a `…`, and one three columns wide — byte-identical every time. A
+    # line no input could tell from its absence is the survivor this repository deletes,
+    # and this one composes a string on a path that kills, detaches and claims nothing.
+    return tui.Row(tui.Cell(identity, w - tui.width(right)),
+                   tui.Cell(right, tui.width(right)), gap="").render(w)[0]
 
 
 class _RowKey:

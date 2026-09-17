@@ -39,7 +39,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, instance
-from charter.frame import layout, overlay, slots, state, tmuxctl
+from charter.frame import gate, layout, overlay, slots, state, tmuxctl
 
 from tests import _tmuxchain
 from tests._isolation import PersonaIso
@@ -452,15 +452,20 @@ class TheKeyIsCharactersOwnAndNotAComponentsToTake(unittest.TestCase):
         self.assertEqual([c["key"] for c in ok["components"]], ["F9"])
 
     def test_it_is_a_key_that_costs_the_harness_nothing_it_was_using(self):
-        """The stated cost of a root-table bind, kept honest: charter claims exactly three
-        keys and this is the third, beside the palette's and the escape hatch's. A test
-        that only counted would pass on any number; this names them, so a fourth has to be
-        argued for here."""
+        """The stated cost of a root-table bind, kept honest: charter names every key it
+        claims, so a new one has to be argued for here rather than appear.
+
+        **The fourth is the exit gate's** (#1115, `frame/gate.py`), and it is argued for in
+        the one place the count could have been raised quietly: leaving charter was four
+        gestures and no single answer, and `[frame] mouse` is off by default, so the key is
+        the primary way to the menu rather than a shortcut to it. A test that only COUNTED
+        would have passed on any number; this names them.
+        """
         text = commands_frame.conf_text(hotkey="F2", mouse=True, history_limit=5,
                                         session="s", toggles={})
         keys = {ln.split()[2] for ln in text.splitlines() if ln.startswith("bind -n ")}
         self.assertEqual(keys - set(tmuxctl.MOUSE_KEYS),
-                         {"F2", overlay.HATCH_KEY, layout.BAR_ROWS_KEY})
+                         {"F2", overlay.HATCH_KEY, layout.BAR_ROWS_KEY, gate.GATE_KEY})
 
 
 class TheStripStillMeasuresItsOwnNames(unittest.TestCase):

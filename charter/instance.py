@@ -1972,6 +1972,25 @@ def toggle_key(value):
     return value if isinstance(value, str) and _HOTKEY_RE.fullmatch(value) else None
 
 
+def _gate_key() -> str:
+    """`frame/gate.py`'s key, asked rather than spelled here.
+
+    **One constant, read from the module that binds it**, for
+    :func:`component_arrangement`'s reason about `overlay.HATCH_KEY`: the key this refuses
+    has to be the same object `commands_frame.conf_text` actually writes into the `bind`
+    line, or the refusal drifts off the collision it exists to prevent the first time
+    either moves.
+
+    Imported inside the function because :func:`frame_of` is on the path of every command,
+    `charter --version` included, and must stay as cheap as it was — the same discipline
+    that keeps `component_arrangement`'s four imports out of module scope, and the same one
+    that makes this cost nothing at all on a plane that writes no `[frame] hotkey`, which
+    is every plane charter ships with.
+    """
+    from .frame import gate as _gate
+    return _gate.GATE_KEY
+
+
 def frame_of(cfg: dict) -> dict:
     """The ``[frame]`` section merged over :data:`FRAME_DEFAULTS`.
 
@@ -2097,7 +2116,23 @@ def frame_of(cfg: dict) -> dict:
                 out[key] = value
             continue
         if key == "hotkey":
-            if isinstance(value, str) and _HOTKEY_RE.fullmatch(value):
+            # **The gate's key is refused here as well as in the arrangement's `bound`
+            # set, and the two are not the same guard.** That one stops a COMPONENT taking
+            # a key charter binds; this stops `[frame] hotkey` BEING one. `conf_text` emits
+            # the palette's bind and then the gate's, so a plane on `hotkey = "F10"` would
+            # have tmux's last-wins quietly delete the palette — `F10` would open the gate,
+            # `F2` would do nothing, and every row §4h moved out of the deleted menu would
+            # be unreachable, with `source-file` reporting rc 0.
+            #
+            # Refused by falling back to the shipped `F2`, which is exactly what an
+            # unusable key already costs (`_HOTKEY_RE`), so there is one degrade here and
+            # not two. `docs/frame.md` names the key — in `## Leaving`, in the reserved-key
+            # paragraph and beside `hotkey`'s own shape rule — because that is the page
+            # `[frame]` is documented on; `docs/control-plane.md` describes the plane's own
+            # sections and mentions no frame key at all. Nothing is printed at launch, for
+            # `frame_ready`'s measured reason.
+            if (isinstance(value, str) and _HOTKEY_RE.fullmatch(value)
+                    and value != _gate_key()):
                 out[key] = value
             continue
         # `bool` is a subclass of `int` in Python, so `isinstance(True, int)` is True even
@@ -2528,6 +2563,7 @@ def component_arrangement(section, *,
         # deletion sweep calls a survivor.
         return None, "`component = []` places no components at all"
     from .frame import builtins as _builtins
+    from .frame import gate as _gate
     from .frame import layout as _layout
     from .frame import overlay as _overlay
     from .frame import tmuxctl as _tmuxctl
@@ -2558,8 +2594,13 @@ def component_arrangement(section, *,
     # real keys and nothing else. The collision test below leans on that rather than
     # re-checking, so this filter is load-bearing; see the comment there for what a
     # ``None`` in here would cost.
+    #
+    # `frame/gate.py`'s key is here for the hatch's reason with the sign flipped again:
+    # `conf_text` writes the gate's bind BEFORE the toggles, so tmux's last-wins would
+    # leave the component's key alive and the one way OUT of charter silently gone — no
+    # `F10`, and the operator left with a menu row they have to know exists to find.
     bound: set[str] = {k for k in (hotkey, _overlay.HATCH_KEY, _layout.BAR_ROWS_KEY,
-                                   *_tmuxctl.MOUSE_KEYS) if k}
+                                   _gate.GATE_KEY, *_tmuxctl.MOUSE_KEYS) if k}
     for n, table in enumerate(tables, 1):
         if not isinstance(table, dict):
             return None, (f"the entry {_component_at(None, n)} is "
@@ -2668,10 +2709,10 @@ def component_arrangement(section, *,
         # One invariant, stated once, where it is established.
         if key in bound:
             return None, (f"`key = {_component_value(key)}` {_component_at(cid, n)} "
-                          f"is already bound — the frame's own palette, its escape hatch, "
-                          f"its two mouse keys and each other component's `key` have it "
-                          f"first, and tmux's later `bind` would silently replace the "
-                          f"earlier one rather than report a conflict")
+                          f"is already bound — the frame's own palette, its close menu, "
+                          f"its escape hatch, its two mouse keys and each other "
+                          f"component's `key` have it first, and tmux's later `bind` would "
+                          f"silently replace the earlier one rather than report a conflict")
         if key is not None:
             bound.add(key)
         # The pane's own surface. Refused by NAME rather than passed through, which is

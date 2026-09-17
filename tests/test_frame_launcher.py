@@ -360,19 +360,29 @@ class Conf(unittest.TestCase):
         text = commands_frame.conf_text(hotkey="F2", mouse=False, history_limit=1,
                                         session="x")
         self.assertIn('bind -n F2 run-shell \'"$CHARTER_PY" -m charter '
-                      'frame-palette --chat "#{@charter_chat}"\'',
+                      'frame-palette "#{client_name}" --chat "#{@charter_chat}"\'',
                       text)
         self.assertNotIn("frame palette", text)
 
-    def test_the_hotkey_bind_no_longer_carries_a_client_name(self):
-        """#729. `#{client_name}` was in this bind for exactly one consumer,
-        `display-message -c`, and an outcome is now drawn on the frame's own attention row
-        by a panel every attached client can see. A format still expanded into the bind
-        would be a value threaded through a tmux bind, a CLI positional and a subprocess
-        relaunch to be ignored at the end of it."""
+    def test_the_hotkey_bind_carries_a_client_name_again(self):
+        """#729 removed `#{client_name}` from this bind because its one consumer,
+        `display-message -c`, was gone, and a value threaded through a bind, a CLI
+        positional and a subprocess relaunch to be ignored at the end of it earns nothing.
+
+        **The exit gate is a new consumer, so it is back** (#1115). *Close charter (keep
+        chats running)* detaches the terminal that ASKED and leaves every other client
+        attached, and there is no other way to know which that is: `list-clients` answers
+        every client of the session, and tmux's most-recently-active client is a coin toss
+        on a two-client frame. #729's own reasoning is intact — nothing here is about
+        choosing a screen to print a refusal on, which is still the attention row's job.
+
+        This is the inverse of the case it replaces, and an `assertIn` on the whole bind
+        (`test_the_hotkey_opens_the_palette_via_frame_palette_not_frame_space_palette`) is
+        what pins the shape; this pins that the value reaches the bind at all.
+        """
         text = commands_frame.conf_text(hotkey="F2", mouse=False, history_limit=1,
                                         session="x")
-        self.assertNotIn("client_name", text)
+        self.assertIn('frame-palette "#{client_name}"', text)
 
     def test_the_menu_is_gone_rather_than_left_beside_the_palette(self):
         """§4h, and the plan's own exit criterion: two answers to "how do I do a thing" is
@@ -3283,8 +3293,12 @@ class Launch(PersonaIso, unittest.TestCase):
         recorded server, so it has to look at a still-running frame."""
         fake = _FakeTmux(still_live=True)
         _launch(fake)
+        # A presser, because since #1115 *Close charter (keep chats running)* detaches the
+        # terminal that ASKED and needs to know which one that is — a different refusal,
+        # with its own file (`tests/test_one_gate_closes_charter.py`). This case is about
+        # the launch having wired a palette with something real in it.
         reg = builtin_actions.build(fake.fid, current_density="normal",
-                                    current_chrome="off")
+                                    current_chrome="off", client="/dev/ttys7")
         offer = [o for o in reg.offers(fid=fake.fid, snapshot={})
                  if o.id == "frame.detach"]
         self.assertEqual(len(offer), 1)
@@ -5332,15 +5346,24 @@ class PaletteCommands(PersonaIso, unittest.TestCase):
         """
         return next(c for c in calls if "split-window" in c)
 
-    def test_the_pane_runs_charters_own_palette_and_carries_no_client(self):
-        """The client name stopped being threaded to the palette's pane with #729: its one
-        consumer was `display-message -c`, and the outcome moved to the frame's own row.
-        `/dev/ttys7` is what this opener was handed, so asserting its ABSENCE is what pins
-        that the value is dropped here rather than merely unused two hops later."""
+    def test_the_pane_runs_charters_own_palette_and_carries_the_presser(self):
+        """**The client name is threaded to the palette's pane again** (#1115).
+
+        #729 dropped it: its one consumer was `display-message -c`, and the outcome moved
+        to the frame's own attention row, so the value was threaded through a bind, a CLI
+        positional and a subprocess relaunch to be ignored at the end of it. The exit gate
+        is a new consumer — *Close charter (keep chats running)* detaches the terminal that
+        pressed the key and leaves every other client attached — and the pane is a SECOND
+        process, so the value has to make this trip or the surface that acts on it never
+        sees it.
+
+        `/dev/ttys7` is what this opener was handed, so asserting its PRESENCE is what pins
+        that it is carried here rather than resolved again two hops later off a tmux that
+        would answer with whichever client was last active."""
         self._frame()
         split = self._split(self._open())
         self.assertIn("--pane", split)
-        self.assertNotIn("/dev/ttys7", split)
+        self.assertIn("/dev/ttys7", split)
         self.assertIn("frame-palette", split)
         self.assertEqual(split[split.index("--") + 1], sys.executable,
                          "the pane must run charter through this interpreter, never a "

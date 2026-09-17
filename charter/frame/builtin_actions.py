@@ -46,7 +46,7 @@ import subprocess
 from typing import Callable, NamedTuple
 
 from .. import util
-from . import action, actions, chats, choose, state, switch, tmuxctl
+from . import action, actions, chats, choose, gate, state, switch, tmuxctl
 
 #: What marks the density a frame is currently on. **One constant, not two**: it is
 #: `frame/choose.py`'s, which marks the workspace and the persona a frame is on for the
@@ -113,37 +113,182 @@ def _server(fid: str) -> str:
     return state.frame_server(fid) or tmuxctl.LEGACY_SOCKET
 
 
-def _detach(fid: str):
-    """`detach-client -s <fid>`, the spec's own "Detach is allowed".
+#: What an operator is told when charter cannot say whose terminal asked.
+#:
+#: **It names the gesture that works**, which is CONTEXT.md's prose rule and the only
+#: useful half: a bind installed by a charter that predates the presser carries no client,
+#: and the fix is one keypress in the terminal they want to close. The alternative — detach
+#: every client of the session — is refused outright by decision 2, because on a frame two
+#: people are attached to it closes somebody else's terminal to answer a question they did
+#: not ask.
+NO_PRESSER_TO_DETACH = ("charter cannot tell which terminal asked, so it detached nothing "
+                        "— press F10 in the terminal you want to close, or close it")
 
-    `-s` and never `-t`: `detach-client`'s `-s` targets every client attached to a
-    SESSION, `-t` a single CLIENT. A frame normally has exactly one, and `-s` is still
-    the correct answer if it ever has more.
+#: What is said when the presser is a real client that this chat's session does not hold.
+#:
+#: Distinct from :data:`NO_PRESSER_TO_DETACH` because the two are different facts and the
+#: operator's next move differs: that one is *charter does not know*, and this is *charter
+#: looked and the answer was no*. It covers a client attached to another session of the same
+#: server, a session another plane marked, a session no charter marked at all, a chat whose
+#: recorded pane tmux will not place — and a server that did not answer, which proves
+#: nothing (#1100) and so lands here rather than in the branch that detaches.
+NOT_ATTACHED_HERE = ("that terminal is not attached to this chat's session on this plane, "
+                     "so charter detached nothing")
+
+#: What the detach row says inside an operator's own tmux. Their prefix key is the answer,
+#: and #512's rule is why the row stays to say so rather than disappearing.
+IN_YOUR_OWN_TMUX = ("this frame is a window in your own tmux, not a charter session — "
+                    "detach with your own prefix key")
+
+#: The one format this module reads a client listing through. Two fields, tab separated,
+#: which is the shape every other listing charter parses already uses — see
+#: `commands_frame._LIVE_CHATS_FORMAT` for why the values that ride in one are held to an
+#: alphabet with no tab and no newline in it.
+_CLIENTS_FORMAT = "#{client_name}\t#{session_id}"
+
+
+def _detach(fid: str, client: str) -> str:
+    """Detach the terminal that ASKED, and no other — #1097, and decision 2.
+
+    **It used to be `detach-client -s <fid>`, and that is the bug.** `-s` targets every
+    client of a SESSION, and the argument for it — *a frame normally has exactly one* —
+    stopped being true twice over. A chat is a WINDOW in a per-workspace session now, so
+    `-s <chat id>` does not even name the right thing; and tmux parses a target-session
+    holding a dot as `session.pane`, so what it names depends on how many panes the window
+    has. Measured on tmux 3.7c and at the 3.2 floor, throwaway servers, session `default`
+    with a window named `default.1`:
+
+        has-session -t solo.1    (one pane)   rc 1, "can't find pane: 1"
+        has-session -t solo.1    (two panes)  rc 0
+        has-session -t default                rc 0
+        detach-client -s default.1 (two panes, two clients attached)
+                                              rc 0, and NEITHER client left attached
+
+    So on a bare chat the row reported *detaching — the harness keeps running* and detached
+    nothing, and on the ordinary chat — one that has any strip at all, so pane index 1
+    exists — it detached every client of the workspace, including a second operator's.
+
+    **`-t <client>`, proven by one listing, is the whole fix.** The chat's recorded server
+    and pane say where to look; they are never themselves the target (the #933/#1103 rule).
+    What is proven before anything is spawned:
+
+    1. *client* is shaped like a tmux client name (`gate.CLIENT_RE`). It arrives from a
+       format expanded on a server shared with every frame on the machine and is about to
+       be an argv, so it is held at this boundary — #475's rule at #475's boundary.
+    2. `_pane_place` resolves the chat's own session id (`$N`) from the pane charter
+       recorded. A `None` here is a record charter has lost or a target tmux would not
+       resolve, and an unresolvable `display-message -p -t` answers rc 0 with empty stdout,
+       so the return code could never have been the guard.
+    3. One `list-clients` on that server must name *client* attached to that session, and
+       that session must answer THIS plane (`@charter_plane`). Two planes can each hold a
+       `beta.1`; a session an older charter created carries no marker and is left alone.
+
+    **A server that did not answer proves nothing** (#1100). An empty or unreadable listing
+    matches nothing, so it refuses through the same branch a hostile answer does — the safe
+    direction, because what follows is detaching somebody's terminal.
+
+    **No branch falls back to every client**, which is decision 2 stated as code rather than
+    as a comment: `-s` appears nowhere in this module, and neither does *fid* on any argv
+    it builds.
+
+    Answers the sentence to say, never `None`: every caller has a screen to put it on
+    (`commands_frame._say_on_screen`), and a refusal that returned nothing would be a
+    keypress that did nothing.
     """
-    _spawn(tmuxctl.server_argv(_server(fid), "detach-client", "-s", fid), fid=fid)
+    from .. import commands_frame
+    from . import gate
+    if not gate.CLIENT_RE.fullmatch(client):
+        return NO_PRESSER_TO_DETACH
+    server = _server(fid)
+    place = commands_frame._pane_place(server, state.harness_pane(fid))
+    if place is None:
+        return NOT_ATTACHED_HERE
+    session = place[0]
+    listing = tmuxctl.run("asking which terminals are attached",
+                          tmuxctl.server_argv(server, "list-clients", "-F",
+                                              _CLIENTS_FORMAT)).stdout
+    # **Equality on both fields, and the whole row.** A `client in listing` would match a
+    # client name that is a prefix of another's — `/dev/ttys3` inside `/dev/ttys30` — and
+    # would not check the session at all.
+    # No `if row` filter: `splitlines` yields no empty entries for a listing that ends in a
+    # newline (which tmux's does) and none at all for an empty one, so a guard for a blank
+    # row is a line no input could turn red.
+    here = any(row.split("\t") == [client, session] for row in listing.splitlines())
+    if not here:
+        return NOT_ATTACHED_HERE
+    # The marker is asked for by `commands_frame`'s own option name rather than a second
+    # spelling here, so the guard and the WRITE (`_plane_option_argv`) cannot come to
+    # disagree about which option marks a plane.
+    plane = tmuxctl.run("asking which plane this chat's session belongs to",
+                        tmuxctl.server_argv(
+                            server, "display-message", "-p", "-t", session,
+                            f"#{{{commands_frame._PLANE_OPTION}}}")).stdout.strip()
+    # **Both sides through `realpath`, which is `frame/ended.py`'s reading and was measured
+    # again here on real tmux.** The marker holds whatever spelling the process that WROTE
+    # it resolved, and this one is read in a different process — the palette's pane, whose
+    # `$CHARTER_ROOT` came off a `-e` payload. On macOS `/var` is a symlink to
+    # `/private/var`, and the two sides arrived as `/var/…/.charter` and
+    # `/private/var/…/.charter`: a string comparison refused every detach on this machine,
+    # silently, with the row reporting `NOT_ATTACHED_HERE` about the frame it was pressed
+    # in. `tests/test_the_gate_detaches_a_real_client.py` is what FOUND it, because a unit
+    # test has both sides coming off one `_this_plane()` in one interpreter and no reason
+    # to make them differ; `test_the_marker_is_compared_as_a_path_and_not_as_a_string` is
+    # what pins it, now that the reason is known and can be built with a symlink.
+    #
+    # `realpath` and not `Path.resolve()`, for that module's reason: this must never raise
+    # on a plane removed under a running frame, and it normalises a path that no longer
+    # exists rather than refusing it.
+    #
+    # `not plane` stays in front of it, and it is the guard rather than a tidy-up:
+    # `os.path.realpath("")` answers the process's CWD, so an UNMARKED session — one an
+    # older charter created, which the spec's *Limits* says is left alone — would otherwise
+    # be compared as though it were marked with wherever this process happens to stand.
+    if not plane or os.path.realpath(plane) != os.path.realpath(
+            commands_frame._this_plane()):
+        return NOT_ATTACHED_HERE
+    _spawn(tmuxctl.server_argv(server, "detach-client", "-t", client), fid=fid)
     return "detaching — the harness keeps running"
 
 
 def _detachable(fid: str) -> bool:
-    """Whether `detach-client -s <fid>` names anything.
+    """Whether detaching is charter's to do here at all.
 
-    Inside an operator's own tmux a frame is a WINDOW, not a session, so `-s <fid>`
-    targets a session that does not exist — the same fact `cmd_density` records for the
-    menu it declined to write there. The row stays, with the operator's own prefix key
-    named in its reason, because "there is no charter key here" is exactly what somebody
-    pressing `F2` needs to be told.
+    Inside an operator's own tmux it is not, and that is decision 7 rather than a
+    limitation: a frame there is a WINDOW in a session charter did not make, charter binds
+    no key and writes no option on it (`commands_frame._launch_in_operator_tmux`), and
+    their own prefix key already detaches — better than charter can, because it is the key
+    they already know. The row stays, with that named in its reason, because "there is no
+    charter key here" is exactly what somebody pressing `F2` needs to be told (#512).
+
+    **The question stopped being "does `-s <fid>` name anything" with #1097's fix**, and
+    the answer did not change. :func:`_detach` never names a session now, on any server; the
+    socket is still the line between a frame charter owns the session of and a window inside
+    somebody else's, which is the thing this actually decides.
     """
     return not tmuxctl.is_operator_socket(_server(fid))
 
 
-def _register_detach(reg: actions.ActionRegistry) -> None:
+def _register_detach(reg: actions.ActionRegistry, *, client: str) -> None:
+    """`F2`'s half of the exit gate, in the gate's own words and with the gate's presser.
+
+    **One row, two refusals, and the order between them is the operator's.** Inside their
+    own tmux the answer is their prefix key, which is a thing they can do; with no presser
+    the answer is `F10` in the terminal they want to close, which is a different thing they
+    can do. Reporting the second inside an operator's tmux would send somebody to a key
+    charter does not bind there (decision 7), so the socket is asked first.
+
+    *client* is closed over rather than read off `ctx`: `action.Context` describes the FRAME
+    a row is invoked against, and which terminal pressed the key is a property of the
+    keypress. `commands_frame._draw_palette` has it — the hotkey's bind carries it — and
+    threading it through the ctx would make every provider's action carry a value only this
+    one reads.
+    """
     reg.register(action.Action(
-        id="frame.detach", title="detach — leave the harness running",
-        run=lambda ctx: _detach(ctx.fid),
-        available=lambda ctx: _detachable(ctx.fid),
-        reason_unavailable=lambda ctx: (
-            "this frame is a window in your own tmux, not a charter session — detach "
-            "with your own prefix key")))
+        id="frame.detach", title=gate.DETACH_TITLE,
+        run=lambda ctx: _detach(ctx.fid, client),
+        available=lambda ctx: _detachable(ctx.fid) and bool(client),
+        reason_unavailable=lambda ctx: (IN_YOUR_OWN_TMUX if not _detachable(ctx.fid)
+                                        else NO_PRESSER_TO_DETACH)))
 
 
 #: What a plane with nothing to select is told instead of a row that does nothing.
@@ -796,7 +941,7 @@ NO_TRANSCRIPT = ("no previous transcript for this chat — one is captured when 
 
 
 def build(fid: str, *, current_density: str,
-          current_chrome: str) -> actions.ActionRegistry:
+          current_chrome: str, client: str = "") -> actions.ActionRegistry:
     """Charter's own actions, plus every action an installed provider supplies.
 
     A fresh registry per call, for `builtins.build`'s reason: this is a snapshot of a
@@ -830,9 +975,17 @@ def build(fid: str, *, current_density: str,
     both `offers` and `invoke` precisely because that answer must never be ambient: one
     tmux server is shared by every frame on the machine, and this process's own
     `$CHARTER_SESSION_ID` may be another frame's (`state.record_identity` measures it).
+
+    **`client` is the one thing here that is about the KEYPRESS rather than the frame**,
+    and it defaults to empty on purpose. It is the terminal that pressed the hotkey, which
+    `commands_frame.conf_text` carries in the bind as `#{client_name}` and every other
+    caller of this function has none of — a provider's registry built for a probe, a test,
+    a charter old enough that its installed bind sends no client. What an empty one costs is
+    exactly one row, listed with its reason (:func:`_register_detach`), which is the shape
+    #512 asks for and the only one that cannot detach the wrong terminal.
     """
     reg = actions.ActionRegistry()
-    _register_detach(reg)
+    _register_detach(reg, client=client)
     _register_selection(reg)
     # Beside the repo table's own next/previous rather than among the densities, because
     # they are the same gesture on a different list — an operator who has learned one has

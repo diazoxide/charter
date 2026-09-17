@@ -1094,6 +1094,13 @@ class NoCharterEscapesThroughTheExecFamily(unittest.TestCase):
             "DRAWS for it, and there is no screen to draw on without a real client on a "
             "real terminal — a detached server repaints nothing at all. `os._exit`s in "
             "its `finally`.",
+        "tests/test_the_gate_detaches_a_real_client.py:execvp":
+            "The same `tmux attach` inside a `pty.fork` child, and this file needs TWO of "
+            "them: the whole claim under test is that closing charter detaches the "
+            "terminal that asked and leaves the other one attached, which nothing but two "
+            "real clients on two real terminals can be wrong about — a `send-keys` never "
+            "reaches the root key table, and a detached server has no client to detach. "
+            "`os._exit`s in its `finally`.",
     }
 
     _WATCHED = ("execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp",

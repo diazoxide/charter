@@ -995,6 +995,13 @@ def _add_frame_parsers(sub) -> None:
     # pane is a chat's crash drawer rather than a palette. Charter splits that pane itself
     # when a harness ends badly (`frame/ended.py`); no keypress produces it.
     pal.add_argument("--ended", action="store_true")
+    # Which SURFACE again, and the fifth question this one command answers: the pane is the
+    # exit gate (`frame/gate.py`) rather than the palette, the tab menu or a crash drawer.
+    # A flag rather than a subcommand for `--tab`'s reason exactly — the gate is this pane,
+    # carved off the same harness by the same argv, swept by the same
+    # `_close_open_overlays` and armed with the same hatch — and `store_true`, so a bind
+    # installed by a charter that predates it simply opens the ordinary palette.
+    pal.add_argument("--gate", action="store_true")
     pal.set_defaults(func=commands_frame.cmd_palette)
 
     # Internal, and a top-level sibling for the same `_split_frame_argv` reason as the

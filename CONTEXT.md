@@ -110,6 +110,23 @@ no name at all.
 _Avoid_: name (which is what Claude Code calls the session name charter composes), label,
 rename as a noun
 
+**Exit gate**:
+The one surface that leaves charter: `F10`, the `F10 close` button at the right end of the
+identity row, and the same two rows in `F2`. *Close charter (keep chats running)* detaches
+the **presser** and nothing else; *Close charter and stop all chats…* leads to the quit
+confirmation and then records and stops every chat of this project. It is never drawn inside
+a tmux the operator already had — charter binds no key and draws no button there, and the
+rows live in the palette. Its cursor opens on the harmless row in every state.
+_Avoid_: exit menu, close dialog, quit menu
+
+**Presser**:
+The tmux client that made a gesture — expanded from `#{client_name}` at the keypress, or read
+off the panel pane the click bind recorded it on. It is what *Close charter (keep chats
+running)* detaches, proven attached to this chat's session on this plane by one listing before
+anything is detached. **A presser charter cannot name is not a fallback to every client**: the
+row is listed refused with the gesture that works.
+_Avoid_: the client, the terminal (unqualified), the current client
+
 **Handoff**:
 Opening a chat, here or in another workspace, whose first message is a brief the operator
 approved at the harness's own permission prompt (ADR 0021). A handed-off chat never reports
