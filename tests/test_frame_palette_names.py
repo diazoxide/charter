@@ -322,11 +322,19 @@ class TheRosterIsNeverReadUntilSomethingIsTyped(_Frame, unittest.TestCase):
         self.assertEqual(self._reads(), 0)
 
     def test_pressing_an_action_with_nothing_typed_reads_no_roster_either(self):
-        """**The whole of the case this protects**: the operator opened the palette to
-        detach, and never asked a question about names at all. The query stays empty
-        through the whole of `_draw_palette`."""
+        """**The whole of the case this protects**: the operator opened the palette to do
+        one thing, and never asked a question about names at all. The query stays empty
+        through the whole of `_draw_palette`.
+
+        `chat.new` rather than `frame.detach`, since the exit gate arrived (#1115): the
+        detach row proves its target before it spawns — three tmux round trips on the
+        chat's own server — and needs a presser to be available at all, so a case that
+        meant to ask *does an action reach `invoke` without a roster read* would be asking
+        about a stub it does not have. `chat.new` spawns unconditionally, which is the
+        question. Both are charter's own rows, registered in the same catalogue.
+        """
         with mock.patch.object(palette, "own_the_tty",
-                               _pick("", want="frame.detach")), \
+                               _pick("", want="chat.new")), \
              mock.patch.object(builtin_actions, "_spawn") as spawn:
             commands_frame.cmd_palette(SimpleNamespace(client="", pane=True))
         spawn.assert_called_once()

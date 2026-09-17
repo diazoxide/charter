@@ -204,15 +204,26 @@ class TopRendersTheChannelBesideTheVersion(PersonaIso, unittest.TestCase):
 
     def test_the_chip_moves_to_the_right_hand_end_with_the_version(self):
         """#516 right-aligned the version. The chip is a fact ABOUT the version, not a
-        fourth thing on the row, so it has to travel — pinned by asserting they are
-        still adjacent at the row's end rather than that both merely appear."""
+        fourth thing on the row, so it has to travel — pinned by asserting they are still
+        adjacent rather than that both merely appear.
+
+        **The version is no longer the LAST field, and the chip still travels with it**
+        (#1115): the exit gate's `F10 close` button is the row's right-hand end now, and
+        the version sits immediately before it. So the button is peeled off and the same
+        question is asked of what is left — which is a tighter assertion than the one it
+        replaces, because it says where the chip is relative to BOTH neighbours.
+        """
         from charter import __version__
         with mock.patch.object(config, "UPDATE", {"channel": "dev"}), \
              mock.patch("os.get_terminal_size",
                         return_value=os.terminal_size((110, 1))), \
              mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
             out = tui.strip_ansi(slots.render("top", self.fid))
-        self.assertTrue(out.rstrip().endswith(f"charter {__version__} dev"), out)
+        drawn = out.rstrip()
+        self.assertTrue(drawn.endswith(slots.GATE_BUTTON), drawn)
+        self.assertTrue(
+            drawn[:-len(slots.GATE_BUTTON)].rstrip().endswith(f"charter {__version__} dev"),
+            drawn)
         self.assertGreater(out.index("charter "), len(out) // 2,
                            "the version is still sitting beside the identity")
 

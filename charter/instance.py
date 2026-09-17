@@ -2126,8 +2126,11 @@ def frame_of(cfg: dict) -> dict:
             #
             # Refused by falling back to the shipped `F2`, which is exactly what an
             # unusable key already costs (`_HOTKEY_RE`), so there is one degrade here and
-            # not two. `docs/control-plane.md` names the key; nothing is printed at launch,
-            # for `frame_ready`'s measured reason.
+            # not two. `docs/frame.md` names the key — in `## Leaving`, in the reserved-key
+            # paragraph and beside `hotkey`'s own shape rule — because that is the page
+            # `[frame]` is documented on; `docs/control-plane.md` describes the plane's own
+            # sections and mentions no frame key at all. Nothing is printed at launch, for
+            # `frame_ready`'s measured reason.
             if (isinstance(value, str) and _HOTKEY_RE.fullmatch(value)
                     and value != _gate_key()):
                 out[key] = value
