@@ -84,17 +84,28 @@ class TheBindCharterWrites(unittest.TestCase):
         the same pieces the code assembles it from would agree with any of them."""
         self.assertIn(
             "bind -n MouseDown1Pane if-shell -F -t = '#{@charter_panel}' "
-            "'send-keys -M' 'select-pane -t =; send-keys -M'",
+            "'set-option -F -p -t = @charter_presser \"#{client_name}\" ; "
+            "send-keys -M' 'select-pane -t =; send-keys -M'",
             _text())
 
     def test_a_panel_is_forwarded_to_and_never_selected(self):
-        """The true branch is `send-keys -M` ALONE. A `select-pane` that crept back into
+        """The true branch FORWARDS and never selects. A `select-pane` that crept back into
         it would restore the exact defect, and every other assertion in this file would
         still pass — the line would still be present, still conditional, still last-wins
-        safe."""
+        safe.
+
+        **It stopped being `send-keys -M` alone with the exit gate** (#1115): the branch now
+        records which client is clicking before it forwards, because *Close charter (keep
+        chats running)* detaches the terminal that asked and a pointer route with no presser
+        has nothing to aim at. What did NOT change is the property this case is about — the
+        keyboard stays where it was — so the assertion is on the two halves of the branch
+        rather than on its whole text, which `test_the_click_bind_is_the_line_that_was
+        _measured` pins.
+        """
         line = _click_line(_text())
         true_branch = line.split("'")[3]
-        self.assertEqual(true_branch, "send-keys -M")
+        self.assertNotIn("select-pane", true_branch)
+        self.assertTrue(true_branch.endswith("send-keys -M"), true_branch)
 
     def test_every_other_pane_keeps_tmuxs_own_two_commands(self):
         """The false branch is tmux's default behaviour, restated. This is what keeps
@@ -152,7 +163,8 @@ class TheBindCharterWrites(unittest.TestCase):
                 self.assertEqual(
                     _click_line(text),
                     "bind -n MouseDown1Pane if-shell -F -t = '#{@charter_panel}' "
-                    "'send-keys -M' 'select-pane -t =; send-keys -M'")
+                    "'set-option -F -p -t = @charter_presser \"#{client_name}\" "
+                    "; send-keys -M' 'select-pane -t =; send-keys -M'")
 
     def test_the_wheel_bind_is_untouched(self):
         """The control. The wheel never moved the keyboard and this change must not give

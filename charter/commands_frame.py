@@ -151,8 +151,8 @@ from typing import NamedTuple
 
 from . import config, contain, harness, inflight, instance, tui, util, workspace
 from .frame import (actions as frame_actions, builtin_actions, chats, choose, component,
-                    gather, layout, leave, overlay, pane, palette, picker, record, rename,
-                    state, switch, tabmenu, tmuxctl)
+                    gate, gather, layout, leave, overlay, pane, palette, picker, record,
+                    rename, state, switch, tabmenu, tmuxctl)
 # Aliased because `cmd_reopen` is a function in this module and `reopen` reads as one: the
 # module answers what a quit RECORDED and the command is what puts it back, and a bare
 # `reopen.read()` beside `cmd_reopen` invites a reader to think one is the other.
@@ -1069,11 +1069,32 @@ def conf_text(*, hotkey: str, mouse: bool, history_limit: int, session: str,
         "set -g focus-events on",
         f"bind -n {hotkey} run-shell "
         f"'\"${_CHARTER_PY_ENV}\" -m charter frame-palette "
+        f"\"#{{client_name}}\" "
+        f"--chat \"#{{{_CHAT_OPTION}}}\"'",
+        # **The gate follows the palette's own bind**, and it is the same command with one
+        # more flag for `gate.OPTION`'s reason: the gate IS the palette's pane with a
+        # different row source. `#{client_name}` is what makes *Close charter (keep chats
+        # running)* mean one terminal — measured in Step 0's G1 on 3.7c and at the floor,
+        # two clients on two ptys: the key's action reported the PRESSING client's name and
+        # never the other's.
+        f"bind -n {gate.GATE_KEY} run-shell "
+        f"'\"${_CHARTER_PY_ENV}\" -m charter frame-palette "
+        f"\"#{{client_name}}\" {gate.OPTION} "
         f"--chat \"#{{{_CHAT_OPTION}}}\"'",
         f"bind -n {tmuxctl.WHEEL_KEY} if-shell -F -t = '#{{mouse_any_flag}}'"
         " 'send-keys -M' 'copy-mode -e; send-keys -M'",
+        # The panel branch RECORDS the clicking client before forwarding, which is the
+        # pointer half of the same question the two binds above answer with a format.
+        # `set-option -F` is what expands `#{client_name}` at the press: without it the
+        # option holds the eighteen literal characters, `gate.CLIENT_RE` refuses them, and
+        # every click would reach the gate as "charter cannot tell which terminal asked".
+        # Measured in Step 0's G3 — six alternating SGR presses by two attached clients,
+        # on 3.7c and at the floor — the option read back as the clicking client every
+        # time, in either order of last activity.
         f"bind -n {tmuxctl.CLICK_KEY} if-shell -F -t = '#{{{_PANEL_OPTION}}}'"
-        " 'send-keys -M' 'select-pane -t =; send-keys -M'",
+        f" 'set-option -F -p -t = {gate.PRESSER_OPTION} \"#{{client_name}}\""
+        " ; send-keys -M'"
+        " 'select-pane -t =; send-keys -M'",
         f"bind -n {layout.BAR_ROWS_KEY} run-shell "
         f"'\"${_CHARTER_PY_ENV}\" -m charter frame-bar-rows "
         f"--chat \"#{{{_CHAT_OPTION}}}\"'",
