@@ -4,6 +4,7 @@
 //! The UI asks for a [`Screen`] only when it shows the pane.
 
 mod alacritty;
+mod snapshot;
 
 pub use alacritty::AlacrittyEngine;
 
@@ -52,8 +53,19 @@ pub trait Engine: Send {
 
     /// The current screen. A synchronized update (`?2026`) the program opened and never closed
     /// is applied first once its timeout has passed, so a program that dies mid-repaint cannot
-    /// freeze its screen.
+    /// freeze its screen. That too can leave an answer owed, so [`Engine::take_replies`]
+    /// follows a read of the screen.
     fn screen(&mut self) -> Screen;
+
+    /// Bytes that, written to a blank terminal of the same size, draw what this terminal
+    /// shows: its scrollback and screen with their colours and attributes, the cursor with its
+    /// pen and shape, and the modes that change what keys and the mouse send. A view that
+    /// shows a session late plays this first, then the session's output from that moment on.
+    ///
+    /// Everything this engine has read is in it, so a synchronized update the program left
+    /// open is ended first: half a frame drawn beats a frame the view never sees. That can
+    /// leave the program owed an answer, so [`Engine::take_replies`] follows a snapshot.
+    fn snapshot(&mut self) -> Vec<u8>;
 
     /// Bytes the terminal owes the program, such as answers to a cursor-position query.
     /// They must be written back to the program's input, or programs that ask will hang.
