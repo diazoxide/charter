@@ -230,8 +230,10 @@ def _detach(fid: str, client: str) -> str:
     # `/private/var`, and the two sides arrived as `/var/…/.charter` and
     # `/private/var/…/.charter`: a string comparison refused every detach on this machine,
     # silently, with the row reporting `NOT_ATTACHED_HERE` about the frame it was pressed
-    # in. `tests/test_the_gate_detaches_a_real_client.py` is what found it; no unit test
-    # could, because both sides are `_this_plane()` inside one interpreter.
+    # in. `tests/test_the_gate_detaches_a_real_client.py` is what FOUND it, because a unit
+    # test has both sides coming off one `_this_plane()` in one interpreter and no reason
+    # to make them differ; `test_the_marker_is_compared_as_a_path_and_not_as_a_string` is
+    # what pins it, now that the reason is known and can be built with a symlink.
     #
     # `realpath` and not `Path.resolve()`, for that module's reason: this must never raise
     # on a plane removed under a running frame, and it normalises a path that no longer
