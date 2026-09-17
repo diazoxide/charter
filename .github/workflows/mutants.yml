@@ -25,7 +25,7 @@ jobs:
           tool: cargo-mutants
       - run: cargo mutants --package charter-core --shard ${{ matrix.shard }}/4 --no-shuffle
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mutants-${{ matrix.shard }}
           path: mutants.out
