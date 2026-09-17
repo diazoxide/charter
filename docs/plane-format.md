@@ -204,7 +204,8 @@ charter** — never hand-written — so they are true by construction. That repo
 `tests/fixtures/planes/generate.py` records the exact commands, and its README records what is
 pinned (clock, hostname, user, session id, `PATH`) to keep a regeneration byte-identical, and
 what a committed fixture cannot carry (every `.git` directory, the caches keyed by absolute
-path, and `fingerprint.key`).
+path, `fingerprint.key`, and the empty directories a fresh plane has — `inventory/` and
+`workspaces/` — which are recorded beside each plane instead).
 
 There are two: `minimal`, what `charter init` leaves behind, and `daily`, a plane in use — a
 LIVE workspace with a clone, memory, todos and a snapshot; a second workspace left local; a
@@ -2140,11 +2141,11 @@ line carries): `--env NAME=<key>`, `--file ENVVAR=<key>` (0600 temp file, prefix
 ### `.charter/fingerprint.key`
 
 - **Format:** raw binary, exactly 32 bytes (`KEY_BYTES`, `charter/secrets/fingerprint.py:63`).
-- **Status:** **stable** — it is key material whose loss silently changes every fingerprint
-  this plane prints, it is read by any charter process that masks a value, and the hooks
-  guard denies harness reads of it by name (`charter/hooks.py:554`). Deleting it is not
-  free: it is regenerated on next use and every previously printed `fp:` value stops
-  matching.
+- **Status:** **stable** — key material. Losing it silently changes the `fp:` values this
+  plane prints, and a charter process computing one reads it. `charter/hooks.py:554` names
+  the file among the paths a harness tool call is refused; that bounds what an agent does
+  through the harness, not what a process on the machine can open. Deleting it is not free:
+  it is regenerated on next use, and `fp:` values printed before it stop matching.
 - **Written by:** `charter/secrets/fingerprint.py:105`-`114` (`_key`), lazily on first use.
   Created only by a command that masks a value — `charter secret get` (without `--reveal`),
   `charter secret set` does **not** create it (measured: after `secret set` the file was
