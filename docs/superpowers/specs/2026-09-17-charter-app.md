@@ -141,7 +141,8 @@ Each milestone is something the operator actually uses, not a layer.
 
 - **M0: walking skeleton.** Tauri + Rust core + xterm.js, with 50 fake sessions and one
   scenario test green in CI on macOS and Linux. It is measured against the limits above and
-  locks the stack. GPUI is tried only if a limit is missed.
+  locks the stack. GPUI is tried only if a limit is missed. **Done** — the measurements and
+  the lock are ADR 0026, and the benchmark is `node tools/bench.mjs` in charter-app.
 - **M1: daily driver on macOS.** The app replaces the tmux frame for the operator:
   - workspace sidebar and the "needs you" queue
   - chats with the profile and persona picker
@@ -158,8 +159,20 @@ Each milestone is something the operator actually uses, not a layer.
 - **M4: public release.** Linux, then Windows (ConPTY, bundled package), signed installers,
   the final PyPI release pointing to the new install, and Python charter retired.
 
-## Open until M0 reports
+## What M0 reported
 
-- The scrollback cap that the idle-session limit is measured at.
+M0 measured the skeleton against the limits above on the operator's machine and locked the
+stack: **ADR 0026**. It answers the first of the questions this section left open.
+
+- **The scrollback cap is 5000 lines**, and a hidden session holding that much at 150 columns
+  costs 20.7 MB of the 50 MB the limit allows. Fifty of them cost 1.15 GB.
+- **xterm.js draws with its own DOM renderer.** WebGL was measured beside it and won nothing.
+- **Two limits are not met.** The hook call costs 101.5 ms through Python charter, which is
+  M3's to fix and not the stack's; and a `?2026` animation falls to one frame a second if a
+  harness pauses inside an open update, which the core can close in M1 by never ending a
+  chunk inside one.
+
+Still open:
+
 - Whether the file or socket for hook events (decision 3) needs anything beyond Tauri's own
   single-instance and IPC plugins.
