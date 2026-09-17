@@ -94,6 +94,8 @@ const results = {
     memoryGb: Math.round(totalmem() / 2 ** 30),
     os: platform() === "darwin" ? `macOS ${text("sw_vers", ["-productVersion"])}` : `${platform()} ${release()}`,
     tmux: text("tmux", ["-V"]),
+    node: process.version,
+    cargo: text("cargo", ["--version"]),
     charterApp: text("git", ["-C", ROOT, "rev-parse", "--short", "HEAD"]),
     dirty: Boolean(text("git", ["-C", ROOT, "status", "--porcelain"])),
   },
@@ -229,6 +231,9 @@ async function tmuxReference() {
     while (at === undefined) {
       if (tmux("capture-pane", "-p", "-t", "bench").stdout.includes(sentinel)) at = performance.now();
       if (performance.now() - from > 300_000) throw new Error(`tmux never showed ${sentinel}`);
+      // A tight loop would spend a core asking tmux what it is showing while tmux is trying
+      // to parse, which takes the measurement out of the load and puts it in the asking.
+      await sleep(2);
     }
     const ms = at - from;
     out[name] = { ms, bytes: CORPUS_BYTES * loops, megabytesPerSecond: (CORPUS_BYTES * loops) / 1e6 / (ms / 1000) };
@@ -254,11 +259,19 @@ function screenIsLocked() {
   return root.includes("CGSSessionScreenIsLocked");
 }
 
+/** The specs that measure a paint, and so need a screen that is drawn. */
+const NEEDS_A_PAINT = (spec) => spec !== "chunking.bench.ts";
+
 function windowArm(arm) {
   const found = {};
+  const locked = screenIsLocked();
   // One wdio run per spec file: a run keeps one app for all its spec files, and a spec must
   // not measure what the one before it left running.
   for (const spec of readdirSync(join(APP, "e2e", "bench")).filter((name) => name.endsWith(".bench.ts"))) {
+    if (locked && NEEDS_A_PAINT(spec)) {
+      found[`${spec} skipped`] = "the screen is locked, so nothing in the window draws";
+      continue;
+    }
     try {
       run("npx", ["wdio", "run", "e2e/wdio.bench.conf.ts", "--spec", `e2e/bench/${spec}`], {
         cwd: APP,
@@ -289,8 +302,9 @@ if (only.has("hook")) results.hookCall = hookCall();
 if (only.has("tmux")) results.tmux = await tmuxReference();
 if (only.has("window")) {
   if (screenIsLocked()) {
-    throw new Error(
-      "the screen is locked, so nothing in the window will draw: unlock it and run again",
+    console.log(
+      "\nThe screen is locked, so nothing in the window draws: only the measurements that\n" +
+        "need no paint will run. Unlock it and run again for the rest.\n",
     );
   }
   results.window = {};

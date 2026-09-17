@@ -41,7 +41,11 @@ export type Drawing = {
  * renderer rather than blank. WebKit takes the oldest context back when a page asks for one
  * too many (research §5.1), so this is what happens to a pane once enough others are open.
  */
-export async function draw(pane: Terminal, onTrouble?: (why: string) => void): Promise<Drawing> {
+export async function draw(
+  pane: Terminal,
+  onTrouble?: (why: string) => void,
+  stillThere: () => boolean = () => true,
+): Promise<Drawing> {
   const kind = chosen;
   if (kind === "dom") return { renderer: "dom", active: true };
   const drawing: Drawing = { renderer: "webgl", active: false };
@@ -52,6 +56,9 @@ export async function draw(pane: Terminal, onTrouble?: (why: string) => void): P
   };
   try {
     const { WebglAddon } = await import("@xterm/addon-webgl");
+    // Loading the renderer took a moment, and the pane can have gone in it: a disposed
+    // terminal is not one to load an addon into.
+    if (!stillThere()) return drawing;
     const webgl = new WebglAddon();
     webgl.onContextLoss(() => {
       webgl.dispose();

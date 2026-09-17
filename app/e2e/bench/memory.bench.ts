@@ -21,8 +21,12 @@ describe("idle hidden sessions with their history full", () => {
     await sleep(3000);
     const empty = appProcess();
 
-    nextLoad(["--synthetic", "4096", "--sentinel", "ONE-OPEN", "--interactive"]);
-    await openTab();
+    // Two light sessions first — one hidden, one in front — so what the fifty add is the
+    // only thing between this reading and the last one.
+    for (const sentinel of ["ONE-OPEN", "TWO-OPEN"]) {
+      nextLoad(["--synthetic", "4096", "--sentinel", sentinel, "--interactive"]);
+      await openTab();
+    }
     await sleep(3000);
     const one = appProcess();
 
@@ -38,21 +42,21 @@ describe("idle hidden sessions with their history full", () => {
       await sleep(200);
       await job({ kind: "painted", sentinel: "HISTORY-FULL", bytes: history.bytes, type: "\r" });
     }
-    // One more tab in front, so every session with a full history is hidden.
-    nextLoad(["--synthetic", "4096", "--sentinel", "IN-FRONT", "--interactive"]);
-    await openTab();
     await sleep(10_000);
     const full = appProcess();
 
-    results[`${SESSIONS} idle hidden sessions`] = {
+    results[`${SESSIONS} idle sessions with their history full`] = {
       sessionsRunning: harnesses().running,
       historyLinesWrittenEach: LINES,
       historyBytesEach: history.bytes,
       scrollbackCap: 5000,
       appRssMbWithNoSessions: empty.rssMb,
-      appRssMbWithOneSession: one.rssMb,
+      appRssMbWithTwoLightSessions: one.rssMb,
       appRssMbWithAllFull: full.rssMb,
-      perHiddenSessionMb: (full.rssMb - one.rssMb) / SESSIONS,
+      // The app's own process only: a hidden session has no pane, so what it costs is its
+      // terminal in the core. What a pane costs lives in the web view's process, which this
+      // does not measure.
+      perSessionWithFullHistoryMb: (full.rssMb - one.rssMb) / SESSIONS,
     };
   });
 });

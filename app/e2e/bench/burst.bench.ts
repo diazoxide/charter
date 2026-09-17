@@ -1,6 +1,7 @@
 import { nextLoad, scrollingLines, synchronizedFrame } from "../load.js";
 import {
   CORPUS_BYTES,
+  closeEverything,
   corpus,
   frame,
   frames,
@@ -24,6 +25,9 @@ describe("bursts and switches", () => {
   const results: Record<string, unknown> = {};
 
   before(ready);
+  // Every test opens the sessions it needs: none may outlive it, least of all the animations,
+  // which run for as long as anything lets them.
+  afterEach(closeEverything);
   after(() => record("burst", results));
 
   const bursts: [string, number][] = [
@@ -101,33 +105,43 @@ describe("bursts and switches", () => {
 
   // A `?2026` animation, offered at 60 frames a second. xterm.js skips a render that falls
   // while a synchronized update is open, so how the frames arrive decides what is drawn:
-  const animations: [string, () => string[]][] = [
+  // A `?2026` animation, offered at 60 frames a second. xterm.js skips a render that falls
+  // while a synchronized update is open, so how the repaints arrive decides what is drawn.
+  // Each case says how big one repaint is, because that is what the writes carry.
+  const animations: [string, () => { args: string[]; bytes: number }][] = [
     [
-      // each repaint in one write, small: 40 lines with one colour run each
-      "?2026 animation, a 3 KB repaint written whole",
+      // one repaint per write, as a harness drawing a frame writes it
+      "a repaint written whole",
       () => {
         const frame = synchronizedFrame("small");
-        return ["--corpus", frame.path, "--chunk", `${frame.bytes}`, "--loops", "100000"];
+        return {
+          args: ["--corpus", frame.path, "--chunk", `${frame.bytes}`, "--loops", "100000"],
+          bytes: frame.bytes,
+        };
       },
     ],
     [
-      // a full screen with colour through it, still one write: what a harness that repaints
-      // everything hands to the pseudo-terminal at once
-      "?2026 animation, a 30 KB repaint written whole",
+      // a full screen with colour through it, still one write
+      "a full-screen repaint written whole",
       () => {
         const frame = synchronizedFrame("full", { rows: 42, columns: 150, runs: 6 });
-        return ["--corpus", frame.path, "--chunk", `${frame.bytes}`, "--loops", "100000"];
+        return {
+          args: ["--corpus", frame.path, "--chunk", `${frame.bytes}`, "--loops", "100000"],
+          bytes: frame.bytes,
+        };
       },
     ],
     [
-      // repaints cut at 4 KB wherever they fall, so most renders land mid-update
-      "?2026 animation, repaints split across writes",
-      () => ["--synthetic", "400000", "--loops", "1000"],
+      // repaints cut at 4 KB wherever they fall, with a pause in between, so a render lands
+      // while an update is open
+      "repaints split across writes, 16 ms apart",
+      () => ({ args: ["--synthetic", "400000", "--loops", "1000"], bytes: 4096 }),
     ],
   ];
   for (const [name, output] of animations) {
     it(`${name}: how often the pane draws`, async () => {
-      nextLoad([...output(), "--interval-ms", "16", "--wait-for-input"]);
+      const load = output();
+      nextLoad([...load.args, "--interval-ms", "16", "--wait-for-input"]);
       const { session } = await openTab();
       await frame(session);
       await sleep(500);
@@ -139,6 +153,7 @@ describe("bursts and switches", () => {
       const drawn = await frames();
       const pane = await paneOf(session);
       results[name] = {
+        bytesPerWrite: load.bytes,
         ...rate,
         longestFrameGapMs: drawn.longestGapMs,
         // How much arrived per message: a repaint handed over in pieces is the case that

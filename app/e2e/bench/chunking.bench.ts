@@ -17,9 +17,9 @@ describe("a repaint written in one write", () => {
   after(() => record("chunking", results));
 
   const frames: [string, Parameters<typeof synchronizedFrame>[1]][] = [
-    ["a 3 KB repaint", { rows: 40, columns: 60, runs: 1 }],
-    ["a 30 KB repaint of a full screen", { rows: 42, columns: 150, runs: 6 }],
-    ["a 120 KB repaint", { rows: 42, columns: 600, runs: 12 }],
+    ["a small repaint", { rows: 40, columns: 60, runs: 1 }],
+    ["a full-screen repaint", { rows: 42, columns: 150, runs: 6 }],
+    ["a repaint of a very wide screen", { rows: 42, columns: 600, runs: 12 }],
   ];
   for (const [name, shape] of frames) {
     it(`${name}: how many messages the pane is sent`, async () => {

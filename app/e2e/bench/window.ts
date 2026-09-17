@@ -171,6 +171,24 @@ export function harnesses(): { running: number; cpuPercent: number } {
   };
 }
 
+/**
+ * Closes every tab and waits until the harnesses are gone.
+ *
+ * A session nothing shows still streams into the core, so a test that leaves one running
+ * hands the next test a load it does not know about and does not report.
+ */
+export async function closeEverything(): Promise<void> {
+  await browser.execute(() => {
+    for (const close of [...document.querySelectorAll('button[aria-label^="Close tab"]')]) {
+      (close as HTMLElement).click();
+    }
+  });
+  await browser.waitUntil(async () => harnesses().running === 0, {
+    timeout: 60_000,
+    timeoutMsg: "closing every tab left harnesses running",
+  });
+}
+
 export function sleep(ms: number): Promise<void> {
   return new Promise((done) => setTimeout(done, ms));
 }

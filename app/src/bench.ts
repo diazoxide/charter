@@ -30,8 +30,8 @@ type Pane = {
   chunks: number;
   characters: number;
   firstChunkAt?: number;
-  /** Set while a job is waiting for text to be painted. `seen` is whether the text has
-   *  arrived; the draw after that is the paint being timed. */
+  /** Set while a job is waiting for text to be painted. `seen` is whether the text has been
+   *  parsed into the grid; the draw after that is the paint being timed. */
   waiting?: { needle: string; seen: boolean; found: (at: number) => void };
 };
 
@@ -80,19 +80,30 @@ export function paneDrawing(session: number, drawing: Drawing): void {
   if (pane) pane.drawing = drawing;
 }
 
-/** Text a pane has been sent, before it writes it to its terminal. */
-export function paneSent(session: number, text: string): void {
-  if (!measuring) return;
+/**
+ * Text a pane has been sent, before it writes it to its terminal.
+ *
+ * The answer, where there is one, is for the pane to hand to `Terminal.write` as its
+ * callback: that is called once this text has been parsed into the grid, which is where the
+ * row a job waits for becomes real. Arrival over IPC is not that — xterm.js parses its write
+ * queue on its own schedule — so a job that timed from arrival would be timing delivery.
+ */
+export function paneSent(session: number, text: string): (() => void) | undefined {
+  if (!measuring) return undefined;
   const pane = panes.get(session);
-  if (!pane) return;
+  if (!pane) return undefined;
   pane.chunks += 1;
   pane.characters += text.length;
   pane.firstChunkAt ??= performance.now();
-  if (!pane.waiting || pane.waiting.seen) return;
+  const waiting = pane.waiting;
+  if (!waiting || waiting.seen) return undefined;
   pane.tail = (pane.tail + text).slice(-TAIL);
-  // The text has arrived. The draw that follows is the paint of it, and `onRender` above
-  // answers with the frame after that.
-  if (pane.tail.includes(pane.waiting.needle)) pane.waiting.seen = true;
+  if (!pane.tail.includes(waiting.needle)) return undefined;
+  // The draw after this text is in the grid is the paint of it, and `onRender` above answers
+  // with the frame after that.
+  return () => {
+    waiting.seen = true;
+  };
 }
 
 /** How long a rAF frame has been from the one before it, over a whole phase. One loop runs
@@ -136,6 +147,7 @@ function pane(session?: number): Pane {
 
 /** Resolves with the moment `needle` was painted in `session`'s pane. */
 function painted(session: number, needle: string): Promise<number> {
+  if (needle === "") throw new Error("waiting for the empty string would match anything");
   return new Promise((found) => {
     const one = pane(session);
     one.tail = "";
@@ -191,7 +203,8 @@ async function work(plan: Plan): Promise<unknown> {
         };
       });
       if (plan.press) button(plan.press).click();
-      const session = await opened;
+      const session = await Promise.race([opened, sleep(30_000).then(() => undefined)]);
+      if (session === undefined) throw new Error("no pane opened");
       return { session, tab: selectedTab() };
     }
 
