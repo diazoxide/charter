@@ -3293,8 +3293,12 @@ class Launch(PersonaIso, unittest.TestCase):
         recorded server, so it has to look at a still-running frame."""
         fake = _FakeTmux(still_live=True)
         _launch(fake)
+        # A presser, because since #1115 *Close charter (keep chats running)* detaches the
+        # terminal that ASKED and needs to know which one that is — a different refusal,
+        # with its own file (`tests/test_one_gate_closes_charter.py`). This case is about
+        # the launch having wired a palette with something real in it.
         reg = builtin_actions.build(fake.fid, current_density="normal",
-                                    current_chrome="off")
+                                    current_chrome="off", client="/dev/ttys7")
         offer = [o for o in reg.offers(fid=fake.fid, snapshot={})
                  if o.id == "frame.detach"]
         self.assertEqual(len(offer), 1)
@@ -5342,15 +5346,24 @@ class PaletteCommands(PersonaIso, unittest.TestCase):
         """
         return next(c for c in calls if "split-window" in c)
 
-    def test_the_pane_runs_charters_own_palette_and_carries_no_client(self):
-        """The client name stopped being threaded to the palette's pane with #729: its one
-        consumer was `display-message -c`, and the outcome moved to the frame's own row.
-        `/dev/ttys7` is what this opener was handed, so asserting its ABSENCE is what pins
-        that the value is dropped here rather than merely unused two hops later."""
+    def test_the_pane_runs_charters_own_palette_and_carries_the_presser(self):
+        """**The client name is threaded to the palette's pane again** (#1115).
+
+        #729 dropped it: its one consumer was `display-message -c`, and the outcome moved
+        to the frame's own attention row, so the value was threaded through a bind, a CLI
+        positional and a subprocess relaunch to be ignored at the end of it. The exit gate
+        is a new consumer — *Close charter (keep chats running)* detaches the terminal that
+        pressed the key and leaves every other client attached — and the pane is a SECOND
+        process, so the value has to make this trip or the surface that acts on it never
+        sees it.
+
+        `/dev/ttys7` is what this opener was handed, so asserting its PRESENCE is what pins
+        that it is carried here rather than resolved again two hops later off a tmux that
+        would answer with whichever client was last active."""
         self._frame()
         split = self._split(self._open())
         self.assertIn("--pane", split)
-        self.assertNotIn("/dev/ttys7", split)
+        self.assertIn("/dev/ttys7", split)
         self.assertIn("frame-palette", split)
         self.assertEqual(split[split.index("--") + 1], sys.executable,
                          "the pane must run charter through this interpreter, never a "

@@ -1316,9 +1316,12 @@ would close somebody else's.
 are the only way to them — no key is bound there and no button is drawn (*Inside a tmux you
 already have*, above).
 
-**`F10` is charter's, and a harness never sees it.** A `[[frame.component]]` key of `F10` is
-refused, and so is `[frame] hotkey = "F10"`, which falls back to the shipped `F2`. The button
-needs `[frame] mouse`; with the mouse off — the default — it is a label that teaches the key.
+**`F10` is charter's on charter's own server**, because the binding is a root key-table
+entry and tmux matches it before the pane the harness is running in — which is also why a
+`[[frame.component]]` key of `F10` is refused, and so is `[frame] hotkey = "F10"`, which falls
+back to the shipped `F2`. **Inside a tmux you already have, charter binds nothing at all**, so
+`F10` reaches your harness there like any other key. The button needs `[frame] mouse`; with
+the mouse off — the default — it is a label that teaches the key.
 
 **Ctrl+C is not disabled, and this gate does not replace it.** Ctrl+C is your harness's
 interrupt: one press cancels the turn and a second exits it. What changed is that a harness

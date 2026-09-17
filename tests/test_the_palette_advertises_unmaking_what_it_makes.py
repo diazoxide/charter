@@ -70,10 +70,17 @@ def _noun_and_verb(row) -> tuple[str, str] | None:
     """The `<noun>: <verb>` a catalogue row leads with, or ``None`` for a row that leads
     with neither.
 
-    `detach — leave the harness running` and `refresh — gather this workspace's repos…`
-    are the two rows that carry no noun at all, and they are answered ``None`` here rather
-    than being special-cased at the call site: neither makes nor unmakes anything, and a
-    row with no noun cannot be asked for a counterpart of a kind it never named.
+    `Close charter (keep chats running)`, `Close charter and stop all chats…` and `refresh
+    — gather this workspace's repos…` are the rows that carry no noun at all, and they are
+    answered ``None`` here rather than being special-cased at the call site: a row with no
+    noun cannot be asked for a counterpart of a kind it never named.
+
+    **The two leaving rows joined that list with the exit gate** (#1115), and it is the
+    right answer rather than a gap this rule fell into: they are two halves of ONE gesture
+    — leave the terminal, or leave and stop — drawn together on `F10` and read together on
+    `F2`, and neither makes a thing whose unmaking the other could be. Refresh has always
+    been here for the same reason, and `chat: close` still pairs with `chat: new`, which is
+    the pairing the rule exists for.
     """
     noun, sep, rest = row.title.partition(":")
     words = rest.split()

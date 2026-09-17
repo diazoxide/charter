@@ -32,8 +32,10 @@ this plane.
 
 **What it will not do.**
 
-- `F10` is charter's on charter's own server, so a harness never sees it; a
-  `[[frame.component]]` key of `F10` and a `[frame] hotkey = "F10"` are both refused.
+- On charter's own server the binding is a root key-table entry, so tmux matches `F10`
+  before the pane your harness runs in — and a `[[frame.component]]` key of `F10` and a
+  `[frame] hotkey = "F10"` are both refused for the same reason. Inside a tmux you already
+  have charter binds nothing, so `F10` reaches your harness there as it always did.
 - **Inside a tmux you already have, charter binds no key and draws no button.** The two rows
   are in the palette, where *Close charter* is listed refused because your own prefix key
   detaches that window.
