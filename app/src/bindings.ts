@@ -4,6 +4,13 @@ import { invoke as __TAURI_INVOKE, Channel } from "@tauri-apps/api/core";
 
 /** Commands */
 export const commands = {
+	/**
+	 *  The window says its first frame is on screen, which is where cold start ends.
+	 * 
+	 *  It is silent unless `CHARTER_BENCH_LOG` is set — only `tools/bench.mjs` sets it — so in
+	 *  an ordinary run this is one IPC call at startup that does nothing.
+	 */
+	firstFrame: () => __TAURI_INVOKE<void>("first_frame"),
 	/**  The plane the app was started in, or why there is none. */
 	planeRoot: () => typedError<string, string>(__TAURI_INVOKE("plane_root")),
 	/**  Starts a session. No program is the operator's shell. */

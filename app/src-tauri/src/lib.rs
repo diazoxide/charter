@@ -3,6 +3,9 @@
 
 mod sessions;
 
+use std::sync::LazyLock;
+use std::time::Instant;
+
 use charter_core::engine::Size;
 use tauri::Manager;
 use tauri::ipc::Channel;
@@ -19,6 +22,24 @@ struct Watching {
     columns: u16,
     rows: u16,
     scrollback: u32,
+}
+
+/// When this process started, as close to it as the app can see.
+static STARTED: LazyLock<Instant> = LazyLock::new(Instant::now);
+
+/// The window says its first frame is on screen, which is where cold start ends.
+///
+/// It is silent unless `CHARTER_BENCH_LOG` is set — only `tools/bench.mjs` sets it — so in
+/// an ordinary run this is one IPC call at startup that does nothing.
+#[tauri::command]
+#[specta::specta]
+fn first_frame() {
+    if std::env::var_os("CHARTER_BENCH_LOG").is_some() {
+        println!(
+            "charter-bench first-frame {}",
+            STARTED.elapsed().as_millis()
+        );
+    }
 }
 
 /// The plane the app was started in, or why there is none.
@@ -128,6 +149,7 @@ fn running_sessions(sessions: tauri::State<'_, Sessions>) -> Vec<u32> {
 /// TypeScript the UI imports.
 fn commands() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new().commands(collect_commands![
+        first_frame,
         plane_root,
         open_session,
         close_session,
@@ -149,6 +171,9 @@ fn typescript() -> specta_typescript::Typescript {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Read first, so that what it holds is when the process started and not when the window
+    // first asked.
+    LazyLock::force(&STARTED);
     let commands = commands();
 
     #[cfg(debug_assertions)]

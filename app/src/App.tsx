@@ -55,6 +55,12 @@ function App() {
       .catch(() => undefined);
   }, []);
 
+  // Cold start ends when a person can see the window, which is the frame after the one this
+  // paints in. Nothing happens on the other side unless the app was started to be measured.
+  useEffect(() => {
+    requestAnimationFrame(() => requestAnimationFrame(() => void commands.firstFrame()));
+  }, []);
+
   useEffect(() => {
     void commands
       .planeRoot()

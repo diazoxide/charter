@@ -129,6 +129,37 @@ fn interactive_mode_answers_each_typed_line_until_quit() {
 }
 
 #[test]
+fn waiting_for_input_holds_the_output_back_until_a_line_is_typed() {
+    // Plain output: synthetic output can end inside a synchronized update, which the terminal
+    // would hold back on its own and make this pass for the wrong reason.
+    let dir = tempfile::tempdir().unwrap();
+    let corpus = dir.path().join("corpus.bin");
+    std::fs::write(&corpus, b"plain output\r\n").unwrap();
+    let session = harness(&[
+        "--corpus",
+        corpus.to_str().unwrap(),
+        "--sentinel",
+        "AFTER-THE-LINE",
+        "--wait-for-input",
+    ]);
+    // Long enough for the output to have been written, had it not waited.
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        !session
+            .screen()
+            .lines
+            .iter()
+            .any(|line| line.contains("AFTER-THE-LINE")),
+        "the output was written before anything was typed"
+    );
+
+    session.write(b"\r").unwrap();
+
+    screen_until(&session, "AFTER-THE-LINE");
+    assert_eq!(session.wait(PATIENCE).unwrap(), Some(Exit::Code(0)));
+}
+
+#[test]
 fn a_corpus_that_does_not_exist_is_an_error_not_silence() {
     let session = harness(&[
         "--corpus",
