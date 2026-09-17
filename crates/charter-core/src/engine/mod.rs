@@ -50,8 +50,10 @@ pub trait Engine: Send {
     /// Changes the size, reflowing what is on screen. Sizes below [`Size::MIN`] are raised to it.
     fn resize(&mut self, size: Size);
 
-    /// The current screen.
-    fn screen(&self) -> Screen;
+    /// The current screen. A synchronized update (`?2026`) the program opened and never closed
+    /// is applied first once its timeout has passed, so a program that dies mid-repaint cannot
+    /// freeze its screen.
+    fn screen(&mut self) -> Screen;
 
     /// Bytes the terminal owes the program, such as answers to a cursor-position query.
     /// They must be written back to the program's input, or programs that ask will hang.

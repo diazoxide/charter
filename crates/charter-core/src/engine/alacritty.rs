@@ -1,6 +1,7 @@
 //! [`Engine`] on `alacritty_terminal`.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Instant;
 
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::grid::Dimensions;
@@ -34,8 +35,22 @@ impl AlacrittyEngine {
     }
 }
 
+impl AlacrittyEngine {
+    fn apply_expired_sync(&mut self) {
+        let expired = self
+            .parser
+            .sync_timeout()
+            .sync_timeout()
+            .is_some_and(|deadline| Instant::now() >= deadline);
+        if expired {
+            self.parser.stop_sync(&mut self.term);
+        }
+    }
+}
+
 impl Engine for AlacrittyEngine {
     fn advance(&mut self, bytes: &[u8]) {
+        self.apply_expired_sync();
         self.parser.advance(&mut self.term, bytes);
     }
 
@@ -45,7 +60,8 @@ impl Engine for AlacrittyEngine {
         self.replies.state().size = size;
     }
 
-    fn screen(&self) -> Screen {
+    fn screen(&mut self) -> Screen {
+        self.apply_expired_sync();
         let grid = self.term.grid();
         let lines = (0..grid.screen_lines())
             .map(|row| {
@@ -337,5 +353,31 @@ mod tests {
         term.advance(b"\x1b[14t");
 
         assert!(!term.take_replies().is_empty());
+    }
+
+    #[test]
+    fn a_synchronized_update_that_never_ends_is_shown_once_its_timeout_passes() {
+        // A program that dies mid-repaint never sends the end of the block. Its screen must
+        // not freeze on what came before.
+        let mut term = engine();
+        term.advance(b"before\x1b[?2026h\x1b[H\x1b[2Jafter");
+        assert_eq!(
+            term.screen().lines[0],
+            "before",
+            "held back while the update is open"
+        );
+
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        assert_eq!(term.screen().lines[0], "after");
+    }
+
+    #[test]
+    fn a_finished_synchronized_update_is_shown_at_once() {
+        let mut term = engine();
+
+        term.advance(b"before\x1b[?2026h\x1b[H\x1b[2Jafter\x1b[?2026l");
+
+        assert_eq!(term.screen().lines[0], "after");
     }
 }
