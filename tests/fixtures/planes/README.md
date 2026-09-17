@@ -43,6 +43,10 @@ on every machine. The generator pins:
 
 ## What the fixtures deliberately leave out
 
+- **Empty directories.** A fresh plane has `inventory/` and `workspaces/` with nothing in
+  them, and git cannot carry an empty directory. They are part of the format, so each plane
+  records its own in `<plane>.empty-dirs` beside it, and `--check` compares that listing. A
+  test that needs the directories themselves creates them from that file.
 - **Every `.git` directory**, the plane's own and each clone's. Git will not track a path
   inside a `.git` directory, so a fixture that kept one could not be committed. This also
   drops `<clone>/.git/info/exclude`, which charter writes and the format specifies: a test

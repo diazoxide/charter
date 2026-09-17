@@ -152,6 +152,31 @@ def _generate(name: str, out: Path) -> None:
             shutil.rmtree(dest)
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(root, dest)
+        _write_empty_dirs(dest)
+
+
+def _empty_dirs(plane: Path) -> list[str]:
+    """Directories of the plane that hold no file at any depth, relative and sorted.
+
+    A fresh plane has `inventory/` and `workspaces/` and nothing in them, and git cannot
+    carry an empty directory. They are part of the format all the same, so they are
+    recorded beside the plane instead of inside it.
+    """
+    empty = [
+        str(d.relative_to(plane))
+        for d in plane.rglob("*")
+        if d.is_dir() and not any(p.is_file() for p in d.rglob("*"))
+    ]
+    return sorted(empty)
+
+
+def _write_empty_dirs(plane: Path) -> None:
+    listing = plane.parent / f"{plane.name}.empty-dirs"
+    dirs = _empty_dirs(plane)
+    if dirs:
+        listing.write_text("\n".join(dirs) + "\n")
+    else:
+        listing.unlink(missing_ok=True)
 
 
 def _prune(root: Path) -> None:
@@ -296,8 +321,11 @@ def _same_tree(committed: Path, fresh: Path) -> bool:
     Content, not `filecmp`'s default stat signature: two files of the same size written a
     moment apart compare equal under that default, which is every file here.
     """
+    # Files only. A committed fixture cannot carry an empty directory, so a fresh plane
+    # always has directories the committed one does not; they are compared through the
+    # `.empty-dirs` listing below instead.
     def paths(root: Path) -> set[str]:
-        return {str(p.relative_to(root)) for p in root.rglob("*")}
+        return {str(p.relative_to(root)) for p in root.rglob("*") if p.is_file()}
 
     left, right = paths(committed), paths(fresh)
     same = True
@@ -309,9 +337,16 @@ def _same_tree(committed: Path, fresh: Path) -> bool:
         same = False
     for rel in sorted(left & right):
         a, b = committed / rel, fresh / rel
-        if a.is_file() and b.is_file() and not filecmp.cmp(a, b, shallow=False):
+        if not filecmp.cmp(a, b, shallow=False):
             print(f"    differs: {rel}")
             same = False
+
+    recorded = committed.parent / f"{committed.name}.empty-dirs"
+    was = recorded.read_text().split() if recorded.exists() else []
+    now = _empty_dirs(fresh)
+    if was != now:
+        print(f"    empty directories differ: recorded {was}, fresh {now}")
+        same = False
     return same
 
 
