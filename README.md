@@ -34,13 +34,17 @@ Everything CI checks, runnable locally:
 
 ```bash
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo deny check           # licences and advisories (brew install cargo-deny)
+cargo clippy --all-targets -- -D warnings    # core and cli
+cargo test
+cargo deny check                             # licences and advisories (brew install cargo-deny)
 
 cd app
 npm run typecheck && npm run lint && npm run format:check && npm test
+npx tauri build --debug --no-bundle          # the app crate, with its frontend built first
 ```
+
+CI also runs clippy on the app crate (`--workspace`), after creating an empty `app/dist` so it
+compiles without a frontend build.
 
 ## Licence
 

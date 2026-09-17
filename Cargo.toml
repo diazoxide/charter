@@ -1,6 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["crates/charter-core", "crates/charter-cli", "app/src-tauri"]
+# Plain `cargo test` and `cargo clippy` cover the crates that need no built frontend.
+# The app crate compiles `app/dist` into itself, so it is checked through `npm run tauri`.
+default-members = ["crates/charter-core", "crates/charter-cli"]
 
 [workspace.package]
 version = "0.1.0"
