@@ -89,6 +89,11 @@ impl Engine for AlacrittyEngine {
         }
     }
 
+    fn snapshot(&mut self) -> Vec<u8> {
+        self.apply_expired_sync();
+        super::snapshot::snapshot(&self.term)
+    }
+
     fn take_replies(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.replies.state().bytes)
     }
@@ -379,5 +384,314 @@ mod tests {
         term.advance(b"before\x1b[?2026h\x1b[H\x1b[2Jafter\x1b[?2026l");
 
         assert_eq!(term.screen().lines[0], "after");
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use alacritty_terminal::grid::Dimensions;
+    use alacritty_terminal::index::{Column, Line};
+    use alacritty_terminal::term::TermMode;
+    use proptest::prelude::*;
+
+    use super::*;
+
+    const SIZE: Size = Size {
+        columns: 12,
+        rows: 5,
+    };
+    const SCROLLBACK: usize = 50;
+
+    fn fed(bytes: &[u8]) -> AlacrittyEngine {
+        let mut term = AlacrittyEngine::new(SIZE, SCROLLBACK);
+        term.advance(bytes);
+        term
+    }
+
+    /// Every cell of the scrollback and the screen, as a person or a later escape sequence
+    /// would see a difference.
+    fn cells(term: &AlacrittyEngine) -> Vec<Vec<String>> {
+        let grid = term.term.grid();
+        (grid.topmost_line().0..=grid.bottommost_line().0)
+            .map(|line| {
+                let row = &grid[Line(line)];
+                (0..grid.columns())
+                    .map(|column| {
+                        let cell = &row[Column(column)];
+                        // The markers on the blanks a wide character leaves behind — at the
+                        // end of a row too narrow for it, or where the character itself was
+                        // overwritten — are not carried by a snapshot, and nothing draws them
+                        // (see `snapshot`).
+                        let orphan = column == 0
+                            || !row[Column(column - 1)].flags.contains(Flags::WIDE_CHAR);
+                        let mut flags = cell.flags & !Flags::LEADING_WIDE_CHAR_SPACER;
+                        if orphan {
+                            flags &= !Flags::WIDE_CHAR_SPACER;
+                        }
+                        // A wide character pushed into the last column, where there is no
+                        // room for its second half, is drawn as a blank (see `snapshot`).
+                        let mut c = cell.c;
+                        if column + 1 == grid.columns() && flags.contains(Flags::WIDE_CHAR) {
+                            flags &= !Flags::WIDE_CHAR;
+                            c = ' ';
+                        }
+                        // A line only ever wraps at its last column. The mark can end up
+                        // elsewhere when cells are deleted, where nothing reads it and a
+                        // snapshot cannot put it back. Nor can it on the bottom row, or on
+                        // the row waiting to wrap (see `snapshot`).
+                        let waiting_to_wrap =
+                            grid.cursor.input_needs_wrap && grid.cursor.point.line.0 == line;
+                        if column + 1 < grid.columns()
+                            || line == grid.bottommost_line().0
+                            || waiting_to_wrap
+                        {
+                            flags &= !Flags::WRAPLINE;
+                        }
+                        // A cell that once carried a combining character keeps an empty
+                        // place for one, which is not a difference anything can see.
+                        let zerowidth = cell.zerowidth().filter(|marks| !marks.is_empty());
+                        format!(
+                            "{:?}{:?} fg={:?} bg={:?} {:?} ul={:?} link={:?}",
+                            c,
+                            zerowidth,
+                            cell.fg,
+                            cell.bg,
+                            flags,
+                            cell.underline_color(),
+                            cell.hyperlink().map(|link| link.uri().to_owned()),
+                        )
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// What changes how later output lands, or what keys send.
+    fn state(term: &AlacrittyEngine) -> String {
+        let grid = term.term.grid();
+        let pen =
+            |cursor: &alacritty_terminal::grid::Cursor<alacritty_terminal::term::cell::Cell>| {
+                format!(
+                    "{:?} fg={:?} bg={:?} {:?}",
+                    cursor.point, cursor.template.fg, cursor.template.bg, cursor.template.flags
+                )
+            };
+        let modes = *term.term.mode() & !(TermMode::URGENCY_HINTS | TermMode::VI);
+        format!(
+            "cursor {} wrap-pending={} | saved {} | {modes:?}",
+            pen(&grid.cursor),
+            grid.cursor.input_needs_wrap,
+            pen(&grid.saved_cursor),
+        )
+    }
+
+    /// Escaped, so a failing case can be pasted straight into a test.
+    fn readable(bytes: &[u8]) -> String {
+        String::from_utf8_lossy(bytes)
+            .chars()
+            .map(|c| match c {
+                '\x1b' => "\\x1b".to_owned(),
+                '\r' => "\\r".to_owned(),
+                '\n' => "\\n".to_owned(),
+                c if c.is_control() => format!("\\x{:02x}", c as u32),
+                c => c.to_string(),
+            })
+            .collect()
+    }
+
+    /// Every row as its characters alone, for reading a failure.
+    fn text(term: &AlacrittyEngine) -> Vec<String> {
+        let grid = term.term.grid();
+        (grid.topmost_line().0..=grid.bottommost_line().0)
+            .map(|line| {
+                (0..grid.columns())
+                    .map(|column| grid[Line(line)][Column(column)].c)
+                    .collect()
+            })
+            .collect()
+    }
+
+    fn assert_rebuilt(bytes: &[u8]) {
+        let mut original = fed(bytes);
+        let snapshot = original.snapshot();
+        let copy = fed(&snapshot);
+        let (original_cells, copy_cells) = (cells(&original), cells(&copy));
+        let differing = original_cells
+            .iter()
+            .zip(&copy_cells)
+            .position(|(original, copy)| original != copy);
+        if let Some(row) = differing {
+            let columns: String = original_cells[row]
+                .iter()
+                .zip(&copy_cells[row])
+                .enumerate()
+                .filter(|(_, (original, copy))| original != copy)
+                .map(|(column, (original, copy))| {
+                    format!("\n  column {column}\n    original {original}\n        copy {copy}")
+                })
+                .collect();
+            panic!(
+                "row {row} of {} differs\n rows fed: {:#?}\nrows copy: {:#?}\n     fed: \"{}\"\nsnapshot: \"{}\"{columns}",
+                original_cells.len(),
+                text(&original),
+                text(&copy),
+                readable(bytes),
+                readable(&snapshot),
+            );
+        }
+        assert_eq!(
+            copy_cells.len(),
+            original_cells.len(),
+            "different number of rows for \"{}\"",
+            readable(bytes)
+        );
+        assert_eq!(
+            state(&copy),
+            state(&original),
+            "state differs\n     fed: \"{}\"\nsnapshot: \"{}\"",
+            readable(bytes),
+            readable(&snapshot)
+        );
+    }
+
+    #[test]
+    fn a_snapshot_redraws_text_with_its_colours_and_attributes() {
+        assert_rebuilt(
+            b"plain \x1b[1;3;4mbold\x1b[0m\r\n\x1b[31;42mred\x1b[38;5;200;48;2;1;2;3mx\x1b[0m\r\n\x1b[2;7;8;9mdim\x1b[4:3;58;5;99mcurl",
+        );
+    }
+
+    #[test]
+    fn a_snapshot_keeps_the_scrollback() {
+        assert_rebuilt(b"1\r\n2\r\n3\r\n4\r\n5\r\n6\r\n7\r\n8\r\n9");
+    }
+
+    #[test]
+    fn a_snapshot_keeps_a_soft_wrapped_line_wrapped() {
+        assert_rebuilt(b"abcdefghijklmnopqrstuvwxyz\r\nnext");
+    }
+
+    #[test]
+    fn a_snapshot_keeps_wide_and_combining_characters() {
+        assert_rebuilt("e\u{301} \u{4e2d}\u{6587}\r\n0123456789a\u{4e2d}".as_bytes());
+    }
+
+    #[test]
+    fn a_snapshot_keeps_erased_cells_that_carry_a_background() {
+        assert_rebuilt(b"\x1b[44m\x1b[2J\x1b[Htext\x1b[0m");
+    }
+
+    #[test]
+    fn a_snapshot_puts_the_cursor_back_with_its_pen() {
+        assert_rebuilt(b"line\r\n\x1b[3;7H\x1b[1;35m");
+    }
+
+    #[test]
+    fn a_snapshot_keeps_a_wrap_that_is_pending_at_the_last_column() {
+        assert_rebuilt(b"\x1b[32mabcdefghijkl");
+    }
+
+    #[test]
+    fn a_snapshot_keeps_the_saved_cursor() {
+        assert_rebuilt(b"\x1b[2;3H\x1b[33m\x1b7\x1b[0m\x1b[5;1H");
+    }
+
+    #[test]
+    fn a_snapshot_restores_the_modes_that_change_what_keys_and_the_mouse_send() {
+        assert_rebuilt(b"\x1b[?1h\x1b=\x1b[?2004h\x1b[?1002h\x1b[?1006h\x1b[?1004h\x1b[?25l\x1b[?7l\x1b[4h\x1b[?1007l");
+    }
+
+    #[test]
+    fn a_snapshot_of_the_alternate_screen_opens_it() {
+        assert_rebuilt(b"main\x1b[?1049h\x1b[Halt screen");
+    }
+
+    #[test]
+    fn a_snapshot_keeps_a_hyperlink() {
+        assert_rebuilt(b"\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\ after");
+    }
+
+    /// Pieces of output the snapshot must survive. Scroll regions, tab stops and character
+    /// sets are left out: `alacritty_terminal` does not expose them, so a snapshot cannot carry
+    /// them (see `snapshot`).
+    fn piece() -> impl Strategy<Value = Vec<u8>> {
+        prop_oneof![
+            "[a-z ]{1,15}".prop_map(String::into_bytes),
+            Just("\u{4e2d}".as_bytes().to_vec()),
+            Just("e\u{301}".as_bytes().to_vec()),
+            Just(b"\r\n".to_vec()),
+            Just(b"\r".to_vec()),
+            Just(b"\n".to_vec()),
+            Just(b"\x08".to_vec()),
+            (1u8..8, 1u8..14).prop_map(|(row, col)| format!("\x1b[{row};{col}H").into_bytes()),
+            prop::sample::select(vec![
+                "0",
+                "1",
+                "2",
+                "3",
+                "4",
+                "7",
+                "8",
+                "9",
+                "22",
+                "24",
+                "27",
+                "31",
+                "42",
+                "93",
+                "104",
+                "38;5;123",
+                "48;2;9;8;7",
+                "4:2",
+                "4:3",
+                "58;2;1;2;3",
+                "39",
+                "49",
+            ])
+            .prop_map(|sgr| format!("\x1b[{sgr}m").into_bytes()),
+            prop::sample::select(vec![
+                "\x1b[J",
+                "\x1b[1J",
+                "\x1b[2J",
+                "\x1b[K",
+                "\x1b[1K",
+                "\x1b[2K",
+                "\x1b[2@",
+                "\x1b[2P",
+                "\x1b[L",
+                "\x1b[M",
+                "\x1b[S",
+                "\x1b[T",
+                "\x1bM",
+                "\x1b7",
+                "\x1b8",
+                "\x1b[?1049h",
+                "\x1b[?1049l",
+                "\x1b[?1h",
+                "\x1b[?1l",
+                "\x1b[?2004h",
+                "\x1b[?25l",
+                "\x1b[?25h",
+                "\x1b[?7l",
+                "\x1b[?7h",
+                "\x1b[4h",
+                "\x1b[4l",
+                "\x1b[?1000h",
+                "\x1b[?1003h",
+                "\x1b[?1006h",
+                "\x1b=",
+                "\x1b>",
+                "\x1b]8;;https://example.com\x1b\\",
+                "\x1b]8;;\x1b\\",
+            ])
+            .prop_map(|seq| seq.as_bytes().to_vec()),
+        ]
+    }
+
+    proptest! {
+        #[test]
+        fn any_output_is_redrawn_by_its_snapshot(pieces in prop::collection::vec(piece(), 0..60)) {
+            assert_rebuilt(&pieces.concat());
+        }
     }
 }
