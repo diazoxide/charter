@@ -14,13 +14,31 @@ pub struct Size {
     pub rows: u16,
 }
 
+impl Size {
+    /// The smallest terminal an engine keeps. A UI asks for 0×0 for a collapsed pane, and the
+    /// grid cannot be that small.
+    pub const MIN: Size = Size {
+        columns: 2,
+        rows: 1,
+    };
+
+    /// This size, raised to at least [`Size::MIN`] on each side.
+    pub fn at_least_min(self) -> Size {
+        Size {
+            columns: self.columns.max(Self::MIN.columns),
+            rows: self.rows.max(Self::MIN.rows),
+        }
+    }
+}
+
 /// What is on a terminal's screen right now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Screen {
     pub size: Size,
     /// One entry per row, trailing blanks removed.
     pub lines: Vec<String>,
-    /// Row and column of the cursor, zero-based.
+    /// Row and cell column of the cursor, zero-based. A column counts cells, so after a wide
+    /// character it is not the character index into `lines[row]`.
     pub cursor: (u16, u16),
 }
 
@@ -29,7 +47,7 @@ pub trait Engine: Send {
     /// Feeds output the program wrote to its terminal.
     fn advance(&mut self, bytes: &[u8]);
 
-    /// Changes the size, reflowing what is on screen.
+    /// Changes the size, reflowing what is on screen. Sizes below [`Size::MIN`] are raised to it.
     fn resize(&mut self, size: Size);
 
     /// The current screen.
