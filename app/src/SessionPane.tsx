@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { Channel } from "@tauri-apps/api/core";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
@@ -22,40 +22,63 @@ export function SessionPane({
   onFocus: () => void;
 }) {
   const holder = useRef<HTMLDivElement>(null);
+  const terminal = useRef<Terminal | undefined>(undefined);
+
+  /** Clicking a pane puts the keyboard in it, which is the whole point of clicking it. */
+  const take = useCallback(() => {
+    terminal.current?.focus();
+    onFocus();
+  }, [onFocus]);
+
+  // A pane that becomes the focused one — by a split, or by its tab coming back — takes the
+  // keyboard without being clicked.
+  useEffect(() => {
+    if (focused) terminal.current?.focus();
+  }, [focused]);
 
   useEffect(() => {
     const where = holder.current;
     if (!where) return;
 
-    const terminal = new Terminal({
-      scrollback: 5_000,
+    const pane = new Terminal({
       fontSize: 12,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
       theme: { background: "#181818", foreground: "#d8d8d8" },
     });
     const fit = new FitAddon();
-    terminal.loadAddon(fit);
-    terminal.open(where);
+    pane.loadAddon(fit);
+    pane.open(where);
+    terminal.current = pane;
 
-    const typed = terminal.onData((text) => {
-      void commands.sendInput(session, text);
+    let gone = false;
+    const say = (trouble: string) => {
+      if (!gone) pane.write(`\r\n\x1b[31mcharter: ${trouble}\x1b[0m\r\n`);
+    };
+    const typed = pane.onData((text) => {
+      // Input refused is worth seeing: the program has stopped reading it, or has ended.
+      void commands.sendInput(session, text).then(
+        (sent) => {
+          if (sent.status === "error") say(sent.error);
+        },
+        (err: unknown) => say(String(err)),
+      );
     });
     // The terminal decides the size, and the program is told it.
-    const resized = terminal.onResize(({ cols, rows }) => {
+    const resized = pane.onResize(({ cols, rows }) => {
       void commands.resizeSession(session, cols, rows);
     });
     const watching = new ResizeObserver(() => fit.fit());
     watching.observe(where);
 
     let view: number | undefined;
-    let gone = false;
     // What the view is sent waits here until the terminal is the size that screen was drawn
     // for, so a line the session wrapped is not wrapped again somewhere else.
     const waiting: string[] = [];
     let ready = false;
     const output = new Channel<string>();
     output.onmessage = (text) => {
-      if (ready) terminal.write(text);
+      if (gone) return;
+      if (ready) pane.write(text);
       else waiting.push(text);
     };
     // The pane's own size first: a session nobody is showing keeps whatever size it had.
@@ -65,7 +88,7 @@ export function SessionPane({
         .watchSession(session, output)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
       if (opened.status === "error") {
-        terminal.write(`\r\n\x1b[31mcharter: ${opened.error}\x1b[0m\r\n`);
+        say(opened.error);
         return;
       }
       if (gone) {
@@ -73,9 +96,12 @@ export function SessionPane({
         return;
       }
       view = opened.data.view;
-      terminal.resize(opened.data.columns, opened.data.rows);
+      // The core keeps the history; the pane keeps the same, so scrolling back shows what the
+      // session has rather than what this terminal happens to have seen.
+      pane.options.scrollback = opened.data.scrollback;
+      pane.resize(opened.data.columns, opened.data.rows);
       ready = true;
-      for (const text of waiting.splice(0)) terminal.write(text);
+      for (const text of waiting.splice(0)) pane.write(text);
       // Now that the screen is drawn, the pane's own size applies again.
       fit.fit();
     })();
@@ -86,7 +112,8 @@ export function SessionPane({
       typed.dispose();
       resized.dispose();
       if (view !== undefined) void commands.unwatchSession(session, view);
-      terminal.dispose();
+      pane.dispose();
+      terminal.current = undefined;
     };
   }, [session]);
 
@@ -95,8 +122,7 @@ export function SessionPane({
       className={focused ? "pane focused" : "pane"}
       data-testid="pane"
       data-session={session}
-      onMouseDown={onFocus}
-      onFocus={onFocus}
+      onMouseDown={take}
       ref={holder}
     />
   );

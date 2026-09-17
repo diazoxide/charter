@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import "./App.css";
 import { commands } from "./bindings";
@@ -27,6 +27,29 @@ function App() {
   const [plane, setPlane] = useState<Plane>({ state: "loading" });
   const [tabs, setTabs] = useState<Tabs>(noTabs);
   const [trouble, setTrouble] = useState<string>();
+
+  // The arrangement as it is right now, so that what a button does is decided here and not
+  // inside a state update. React may run an update again, and a session must not be opened or
+  // ended twice because it did.
+  const now = useRef(tabs);
+  const change = useCallback((how: (tabs: Tabs) => Tabs): Tabs => {
+    const next = how(now.current);
+    now.current = next;
+    setTabs(next);
+    return next;
+  }, []);
+
+  // A reload — during development, or after a crash in the window — leaves the core holding
+  // sessions no pane can reach. They are ended here, before any tab is opened, and once:
+  // React runs an effect twice in development, and ending a session twice is an error.
+  const swept = useRef(false);
+  useEffect(() => {
+    if (swept.current) return;
+    swept.current = true;
+    void commands.runningSessions().then((left) => {
+      for (const session of left) void commands.closeSession(session);
+    });
+  }, []);
 
   useEffect(() => {
     void commands
@@ -57,32 +80,39 @@ function App() {
 
   const newTab = useCallback(async () => {
     const session = await startSession();
-    if (session !== undefined) setTabs((tabs) => openTab(tabs, session));
-  }, [startSession]);
+    if (session !== undefined) change((tabs) => openTab(tabs, session));
+  }, [change, startSession]);
 
   const split = useCallback(
     async (direction: Direction) => {
       const session = await startSession();
-      if (session !== undefined) setTabs((tabs) => splitFocusedPane(tabs, direction, session));
+      if (session === undefined) return;
+      const before = now.current;
+      // The tab that was to be split can have closed while the session was starting. Nothing
+      // would show that session, so it is ended rather than left running unseen.
+      if (change((tabs) => splitFocusedPane(tabs, direction, session)) === before) {
+        void commands.closeSession(session);
+      }
     },
-    [startSession],
+    [change, startSession],
   );
 
   const closePane = useCallback(() => {
-    setTabs((tabs) => {
-      const tab = tabs.inFront === undefined ? undefined : tabs.byId[tabs.inFront];
-      const going = tab && panesOf(tabs, tab.id).find((pane) => pane.pane === tab.focused);
-      if (going) void commands.closeSession(going.session);
-      return closeFocusedPane(tabs);
-    });
-  }, []);
+    const tab =
+      now.current.inFront === undefined ? undefined : now.current.byId[now.current.inFront];
+    const going = tab && panesOf(now.current, tab.id).find((pane) => pane.pane === tab.focused);
+    change(closeFocusedPane);
+    if (going) void commands.closeSession(going.session);
+  }, [change]);
 
-  const close = useCallback((id: number) => {
-    setTabs((tabs) => {
-      for (const pane of panesOf(tabs, id)) void commands.closeSession(pane.session);
-      return closeTab(tabs, id);
-    });
-  }, []);
+  const close = useCallback(
+    (id: number) => {
+      const ending = panesOf(now.current, id);
+      change((tabs) => closeTab(tabs, id));
+      for (const pane of ending) void commands.closeSession(pane.session);
+    },
+    [change],
+  );
 
   const inFront = tabs.inFront === undefined ? undefined : tabs.byId[tabs.inFront];
 
@@ -95,7 +125,7 @@ function App() {
               <button
                 role="tab"
                 aria-selected={id === tabs.inFront}
-                onClick={() => setTabs((tabs) => selectTab(tabs, id))}
+                onClick={() => change((tabs) => selectTab(tabs, id))}
               >
                 {id}
               </button>
@@ -134,7 +164,7 @@ function App() {
           <LayoutPanes
             layout={inFront.layout}
             focused={inFront.focused}
-            onFocus={(pane) => setTabs((tabs) => focusPane(tabs, pane))}
+            onFocus={(pane) => change((tabs) => focusPane(tabs, pane))}
           />
         ) : (
           <p className="empty">No sessions. Open one with New tab.</p>
@@ -165,15 +195,22 @@ function LayoutPanes({
   }
   return (
     <Group orientation={layout.direction === "row" ? "horizontal" : "vertical"}>
-      <Panel>
-        <LayoutPanes layout={layout.children[0]} focused={focused} onFocus={onFocus} />
-      </Panel>
-      <Separator />
-      <Panel>
-        <LayoutPanes layout={layout.children[1]} focused={focused} onFocus={onFocus} />
-      </Panel>
+      {layout.children.map((child, side) => (
+        <Fragment key={nameOf(child)}>
+          {side === 1 && <Separator />}
+          <Panel>
+            <LayoutPanes layout={child} focused={focused} onFocus={onFocus} />
+          </Panel>
+        </Fragment>
+      ))}
     </Group>
   );
+}
+
+/** What a part of the layout is called, so that it keeps its place — and its pane keeps its
+ *  terminal — when what is beside it changes. */
+function nameOf(layout: Layout): string {
+  return layout.kind === "pane" ? `pane-${layout.pane}` : `split-${nameOf(layout.children[0])}`;
 }
 
 export default App;

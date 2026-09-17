@@ -10,13 +10,15 @@ use tauri_specta::{Builder, collect_commands};
 
 use sessions::{Opening, Sessions};
 
-/// A view a pane has open, and the size the screen it opened on was drawn for. The pane sets
-/// its terminal to that size before it draws the screen, so what was wrapped stays wrapped.
+/// A view a pane has open, and what its terminal has to match to show the session as it is:
+/// the size the screen was drawn for, so what was wrapped stays wrapped, and how much history
+/// the core is keeping, so the pane keeps the same.
 #[derive(serde::Serialize, specta::Type)]
 struct Watching {
     view: u32,
     columns: u16,
     rows: u16,
+    scrollback: u32,
 }
 
 /// The plane the app was started in, or why there is none.
@@ -100,6 +102,7 @@ fn watch_session(
         view: watching.view,
         columns: watching.size.columns,
         rows: watching.size.rows,
+        scrollback: sessions::SCROLLBACK,
     })
 }
 
@@ -160,8 +163,16 @@ pub fn run() {
             app.manage(Sessions::new());
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        // Tauri ends the process itself, which runs no destructor and waits for no thread, so
+        // the sessions are ended here — otherwise their programs are left to the operating
+        // system, and one that ignores a hangup outlives the app that started it.
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                app.state::<Sessions>().end_all();
+            }
+        });
 }
 
 #[cfg(test)]

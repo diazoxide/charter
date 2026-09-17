@@ -27,13 +27,15 @@ export const commands = {
 
 /* Types */
 /**
- *  A view a pane has open, and the size the screen it opened on was drawn for. The pane sets
- *  its terminal to that size before it draws the screen, so what was wrapped stays wrapped.
+ *  A view a pane has open, and what its terminal has to match to show the session as it is:
+ *  the size the screen was drawn for, so what was wrapped stays wrapped, and how much history
+ *  the core is keeping, so the pane keeps the same.
  */
 export type Watching = {
 	view: number,
 	columns: number,
 	rows: number,
+	scrollback: number,
 };
 
 /* Tauri Specta runtime */
