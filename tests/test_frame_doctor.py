@@ -16,6 +16,7 @@ from unittest import mock
 from charter import config, doctor
 from charter.frame import slots
 from tests import _envguard
+from tests._isolation import PersonaIso
 
 
 class FrameRow(unittest.TestCase):
@@ -247,12 +248,32 @@ class EndedTabRow(unittest.TestCase):
                 renders.append(doctor.check_ended_tab().render())
         self.assertEqual(len(set(renders)), 3, "three answers, three renders")
 
-    def test_the_row_is_in_the_preflight_column(self):
-        """`_FIXED_CHECK_NAMES` sizes doctor's name column without running a check and is
-        pinned by equality against `run_all`; a row added to one and not the other is a
-        wrong width at best. Named here too so the row cannot be quietly dropped from the
-        run while its tests go on passing."""
-        self.assertIn("ended tab", doctor._FIXED_CHECK_NAMES)
+    def test_the_row_does_not_claim_anything_about_the_frame_row(self):
+        """It used to say "the `frame` row above says whether there is a tmux here at all",
+        which is a claim about a reading this row did not make: the two rows call
+        `tmuxctl.version()` separately, so a transient failure on one and not the other
+        would have this row vouching for an answer it never saw."""
+        with mock.patch("charter.frame.tmuxctl.version", return_value=None):
+            r = doctor.check_ended_tab()
+        self.assertNotIn("frame` row", r.render())
+
+
+class TheEndedTabRowIsOneDoctorWillPrint(PersonaIso):
+    """`check_names` is what sizes doctor's name column without running a check, and
+    `tests/test_a_table_column_is_measured_in_cells` pins it by equality against `run_all`
+    — that pair is what catches a row added to one list and not the other. This asserts the
+    narrower thing it can show on its own: the row is among the names, on a preflight as
+    well as on a full run, so dropping it from the column fails here rather than only in a
+    width assertion two modules away.
+
+    `PersonaIso` because `check_names` splices in a row per harness profile, read off
+    `charter.local.toml` — a file `tests/_planeguard` refuses to read for the real plane,
+    since what it holds is whoever-runs-the-suite's own machine.
+    """
+
+    def test_the_row_is_one_of_the_names_doctor_will_print(self):
+        self.assertIn("ended tab", doctor.check_names())
+        self.assertIn("ended tab", doctor.check_names(preflight=True))
 
 
 if __name__ == "__main__":

@@ -150,6 +150,41 @@ class Messages(unittest.TestCase):
         msg = tmuxctl.below_ended_tab_message((3, 4))
         self.assertIn("chat: close", msg)
 
+    def test_it_does_not_spell_the_key_the_palette_is_on(self):
+        """`commands_frame.driving_keys`' rule, and this message is read by exactly the
+        surfaces it was written for (`--probe`, `frame-probe`, `doctor`): **the keys are
+        resolved, not spelled.** `[frame] hotkey` moves the palette off `F2`, and a remedy
+        that says `F2` on a plane that moved it is worse than one that says nothing,
+        because it is a fact an operator will act on. This module cannot resolve the key —
+        it is the one module that must not import the plane's config — so it names the row
+        and leaves the key to the surfaces that can."""
+        msg = tmuxctl.below_ended_tab_message((3, 4))
+        self.assertNotIn("F2", msg)
+
+    def test_it_scopes_the_loss_to_the_chats_that_actually_lose_it(self):
+        """**A chat opened inside a tmux the operator is already in does NOT lose its
+        tab**, and a message that said otherwise would be wrong for every one of them.
+        `_launch_in_operator_tmux` installs no `pane-died` hook for the harness pane and
+        watches `#{pane_dead}` itself — and `#{pane_dead}` is `wp->fd == -1`, set by the
+        pty EOF whether or not the SIGCHLD arrives (`.github/actions/tmux/action.yml`
+        carries that reading). So the hook miss costs that path the exit CODE, not the
+        tab."""
+        msg = tmuxctl.below_ended_tab_message((3, 4))
+        self.assertIn("already in", msg)
+
+    def test_it_does_not_claim_everything_else_is_unaffected(self):
+        """It said "Everything else in the frame works unchanged", and that was false in
+        the direction that matters. `charter frame -- <cmd>` is the escape hatch, and its
+        `pane-died[1]` is `kill-window` rather than the ended step
+        (`commands_frame._pane_died_second_hook_argv`). The same lost SIGCHLD means that
+        never runs either — so nothing ends the session and `attach` blocks forever, which
+        is the exact hang the hook pair exists to close. A hang is worse than a tab that
+        is not kept, and an operator told "everything else works" will not connect the
+        two."""
+        msg = tmuxctl.below_ended_tab_message((3, 4))
+        self.assertNotIn("Everything else in the frame works unchanged", msg)
+        self.assertIn("charter frame --", msg)
+
 
 class RunArgv(unittest.TestCase):
     def test_run_rejects_a_string_with_typeerror(self):

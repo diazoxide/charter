@@ -438,9 +438,9 @@ stops a launch — below 3.2 the frame still starts. **Prefer tmux 3.5 or newer 
 choice**: below it tmux can fail to report a harness that ended, so a chat's tab is not
 always kept. That is a tmux bug fixed upstream in 3.5, not a charter limit, and Ubuntu LTS
 ships 3.4 — see *What it needs* in [frame.md](frame.md) for what it costs and what to do
-about it. `charter opencode` and `charter codex`
-need their own binaries the same way. `charter claude --probe` says whether a frame can run
-here without starting one; [frame.md](frame.md) is the rest. If you ran `charter init` from
+about it. `charter opencode` and `charter codex` need their own binaries the same way.
+`charter claude --probe` says whether a frame can run here without starting one;
+[frame.md](frame.md) is the rest. If you ran `charter init` from
 inside a Claude Code session, restart that session first — the plugin loads at the next one.
 
 Bare `charter` opens a chat at the profile selector and starts nothing until you pick a

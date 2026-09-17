@@ -1336,15 +1336,18 @@ class Probe(PersonaIso, unittest.TestCase):
         """The other direction, and what stops the test above from passing against a probe
         that always warns: at 3.3 (`RESIZE_HOOK_FLOOR` exactly) the hook exists.
 
-        **The assertion is about THIS ceiling, not about the count**, since
-        `ENDED_TAB_FLOOR` (3.5) put a real one on this machine — a 3.3 cannot report a
-        harness's exit reliably. `test_an_ordinary_machine_gets_no_ceilings_at_all` is
-        where "a probe that always warns" is caught; this one only has to show that the
-        resize sentence stops at the version that fixes it."""
+        **The count is still asserted, just not as zero**, since `ENDED_TAB_FLOOR` (3.5)
+        put a real ceiling on this machine — a 3.3 cannot report a harness's exit reliably.
+        Saying "exactly one, and it is that one" keeps the half this test would otherwise
+        have lost: a probe that started warning about the resize hook here still fails, and
+        so does one that quietly grew a third ceiling nobody asked for."""
         with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 3)), \
              mock.patch.dict(config.FRAME, {"slots": ["top", "bottom"]}):
             _code, _level, line = commands_frame.frame_ready()
         self.assertNotIn(tmuxctl.below_resize_hook_message((3, 3)), line)
+        self.assertEqual(len(_ceilings(line)), 1,
+                         "3.3 has exactly one ceiling left — the ended tab's")
+        self.assertIn(tmuxctl.below_ended_tab_message((3, 3)), line)
 
     def test_a_tmux_that_can_miss_an_exit_is_a_ceiling_the_probe_names(self):
         """`tmuxctl.ENDED_TAB_FLOOR` (3.5), the fifth standing ceiling and the second to

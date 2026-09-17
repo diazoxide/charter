@@ -20,6 +20,13 @@ one image 3.4 missed 5 of 40 and 3.5 missed 0 of 40.
 has to come from a backport, a build, or Homebrew. macOS gets 3.7c from Homebrew, so a Mac
 already has this.
 
+**Two cases differ.** A chat opened *inside a tmux you are already in* never uses that hook
+— charter watches the pane itself there — so it keeps its tab on any tmux and loses only the
+exit code, which can turn a clean `/exit` into a crash drawer. And `charter frame -- <cmd>`,
+the escape hatch, closes its window through the same hook rather than offering a choice, so
+below 3.5 a missed exit leaves it attached with nothing to end the session. That one is a
+hang rather than a missing tab.
+
 **Nothing is switched off below 3.5.** Charter launches the same way, arms the same hook, and
 keeps the tab every time the hook does fire. What changed is that charter stops promising it
 and says so, on the two surfaces you can ask on demand rather than at a launch:
@@ -31,9 +38,9 @@ and says so, on the two surfaces you can ask on demand rather than at a launch:
 - **`charter <harness> --probe` and `charter frame-probe`** name it as a standing limit
   alongside the 3.2 floor and the 3.3 resize hook.
 
-A tab that was missed is closed the ordinary way, `F2 → chat: close`, which asks for
+A tab that was missed is closed the ordinary way, the palette's `chat: close`, which asks for
 confirmation because charter still believes there is a harness in there to stop.
 
 The mechanism, the measurements and the remedy are in `docs/frame.md` under *What it needs*
-and *When a harness ends*. Charter's CI has run the real-tmux tests on 3.5a since #1120, for
-the same reason.
+and *When a harness ends*. It is the same finding as #1116, which is why charter's CI has
+run the real-tmux tests on tmux 3.5a since #1120.

@@ -548,8 +548,9 @@ def frame_ready() -> tuple[int, str, str]:
     launcher goes on to draw regardless — a probe that lies about `cmd_launch`'s own
     behaviour is worse than one that runs nothing at all.
 
-    **The five STANDING conditions are reported here and nowhere else.** The first three
-    used
+    **The five STANDING conditions are reported here and nowhere else.** They are numbered
+    below in the order they were ADDED, which is not the order this function emits them;
+    the first three used
     to be `util.warn` calls inside `cmd_launch` (or, for the resize hook, inside
     `_draw_panels`), and all three were measured to be unreadable there: `util.warn` for
     an unimplemented slot lands 86 bytes before tmux's own `\\x1b[?1049h`, so the
@@ -608,7 +609,9 @@ def frame_ready() -> tuple[int, str, str]:
         ceilings.append(tmuxctl.below_floor_message(v))
     if v < tmuxctl.RESIZE_HOOK_FLOOR:
         ceilings.append(tmuxctl.below_resize_hook_message(v))
-    # **The fifth, and the one this surface is the only launch-side reader of.** Below
+    # **The fifth by the docstring's numbering, emitted here rather than last** — it is a
+    # tmux version floor, so it belongs beside the other two and not after the two
+    # conditions that are about the plane's own file. Below
     # `tmuxctl.ENDED_TAB_FLOOR` a harness exit can go unreported — a lost SIGCHLD leaves
     # tmux's `pane-died` unfired for good — so the ended tab (#1113) is not promised there.
     # It belongs on this list for the reason the two above it do: it is a standing property

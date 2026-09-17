@@ -2299,13 +2299,12 @@ def check_frame() -> Result:
     <harness>` without that flag is affected, and both remedies are named here rather
     than left to be discovered in `docs/frame.md`.
 
-    This row and `charter frame-probe` are also where the frame's standing capability
-    ceilings are reported — with `check_ended_tab` beside it since `tmuxctl.ENDED_TAB_FLOOR`,
-    which is a row of its own because it has to answer on a healthy machine too, and not
-    only when it is breached (its docstring carries the argument). They used to be
-    `util.warn` calls inside
-    `cmd_launch`, printed microseconds before tmux switched the operator's terminal to
-    the alternate screen, where nobody could read them — see
+    This row and `charter frame-probe` are where the frame's standing capability ceilings
+    are reported, with one exception that has a row of its own: `check_ended_tab`, because
+    `tmuxctl.ENDED_TAB_FLOOR` has to answer on a healthy machine and not only when it is
+    breached (its docstring carries that argument). The ceilings collected here used to be
+    `util.warn` calls inside `cmd_launch`, printed microseconds before tmux switched the
+    operator's terminal to the alternate screen, where nobody could read them — see
     `commands_frame.frame_ready`'s own docstring for the measurement and the argument.
     Every fact is answerable without starting anything: `tmuxctl.version()` and
     `config.FRAME["slots"]`.
@@ -2391,6 +2390,15 @@ def check_ended_tab() -> Result:
     frame_ready` reads the same function for `--probe` and `charter frame-probe`, so the two
     surfaces cannot drift into two accounts of one tmux bug — the reason
     `below_resize_hook_message` was extracted, recorded in its own docstring.
+
+    **It takes its own reading of tmux, and does not borrow `check_frame`'s.** That costs a
+    second `tmux -V` per `doctor` run — a local exec beside this command's `git` and forge
+    children — and it is the honest shape: a row reports what it established, and one that
+    rendered a verdict off a value some other row happened to fetch would be asserting a
+    reading it never made, which is the one thing this row exists not to do. The two can in
+    principle disagree (a transient failure on one call and not the other); each would then
+    be saying exactly what it found, which is why neither row claims anything about the
+    other's answer.
     """
     from .frame import tmuxctl
 
@@ -2402,10 +2410,10 @@ def check_ended_tab() -> Result:
         # did not find out which. `check_frame` is where an absent tmux is chased down;
         # this row states the reading it could not make and stops there.
         return Result(name, WARN, detail="could not tell — no tmux version read here",
-                      hint=f"charter asks `tmux -V` and could not read a version from it, "
-                           f"so it cannot say whether a harness exit would be reported on "
-                           f"this machine. The `frame` row above says whether there is a "
-                           f"tmux here at all. What is being asked for is tmux {floor} or "
+                      hint=f"charter asked `tmux -V` and could not read a version out of "
+                           f"the answer, so it cannot say whether a harness exit would be "
+                           f"reported on this machine — it is not saying the tab is kept "
+                           f"and not saying it is lost. What is wanted is tmux {floor} or "
                            f"newer, below which an exit can go unreported and a chat's tab "
                            f"may not be kept.")
     running = f"tmux {v[0]}.{v[1]}"

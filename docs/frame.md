@@ -67,7 +67,8 @@ fail to install charter says so and declines to attach rather than risk a sessio
 can end. The resize-recovery hook needs a further 3.3; below that a resize still works, the
 panels just do not come back on their own — `charter frame-resize`, typed in the frame's
 own window, restores them. **Keeping a tab when a harness ends needs 3.5**; below that an
-exit can go unreported and that tab is not kept. Both of those sit *above* the 3.2 floor.
+exit can go unreported, and when it is the tab is not kept. Both of those sit *above* the
+3.2 floor.
 
 `charter <harness> --probe` (or the standalone `charter frame-probe`) answers "can a frame
 run here, and what will it not be able to do" without starting anything: exit 0 if a frame
@@ -80,10 +81,11 @@ because it is also the closest thing charter has to "tell me about the frame".
 rows, the file's in its `charter.toml` row, beside the other settings a plane declares and
 charter is not honouring.
 
-The 3.3 line is worth calling out because the two floors are easy to conflate: 3.3 sits
-*above* the 3.2 floor, so a tmux 3.2 passes the floor cleanly and still has no
+The 3.3 line is worth calling out because a floor above the floor is easy to conflate with
+it: 3.3 sits *above* the 3.2 floor, so a tmux 3.2 passes the floor cleanly and still has no
 `window-resized` hook. Charter used to say so only in the milliseconds before the frame
 came up, which is nowhere. Now both surfaces name it, and they name the remedy with it.
+The 3.5 line below is the same shape again.
 
 What it costs is this. Resize your terminal on a tmux below 3.3 and nothing re-measures the
 panels, so they keep the shape the drag left them in. Measured on 3.2, a frame launched at
@@ -136,6 +138,17 @@ tests on 3.5a for the same reason.
 **Ubuntu LTS ships 3.4**, so `apt` on that release will not move you off it; a newer tmux
 has to come from a backport, a build from source, or Homebrew. macOS gets 3.7c from
 Homebrew today, so a Mac has this by default.
+
+**Two cases are not affected the same way.** A chat you open *inside a tmux you are already
+in* does not use that hook at all — charter stays awake and watches the pane itself (see
+*Inside a tmux you already have* below), and the flag it watches is set by the pane closing
+rather than by the signal that goes missing. Those chats keep their tab on any tmux; what a
+missed signal costs them is the exit *code*, so a clean `/exit` can come back as a crash
+drawer instead of the selector. The escape hatch goes the other way: `charter frame --
+<cmd>` closes its window through that same hook rather than offering a choice, so a missed
+exit leaves you attached to a frame with nothing left to end it, and the window has to be
+closed with tmux's own prefix key. That is a hang rather than a missing tab, and it is the
+one below-3.5 outcome worth knowing on sight.
 
 Nothing is switched off below 3.5. Charter launches the same way, arms the same hook, and
 keeps the tab every time the hook does fire — what changes is that charter stops promising
@@ -1295,16 +1308,19 @@ transcript its harness left.
 carries no plane marker, so its harness's exit leaves a dead pane with tmux's own `Pane is
 dead` on it until you close the tab.
 
-**It needs tmux 3.5.** All of the above rests on tmux telling charter that the pane's program
-finished, and on tmux 3.4 and older that message can go missing: a lost `SIGCHLD` means the
-`pane-died` hook never fires, so charter is never told the harness ended and this tab is not
-kept — the pane just stops where the harness left it, offering nothing. It is a tmux bug
-fixed upstream in 3.5, not a charter limit, and it is intermittent rather than constant
-(measured on 3.4 under load: 8 of 60 exits unreported, against 0 of 40 on 3.5). **Ubuntu LTS
-ships 3.4.** Charter does not lock you out below 3.5 — it launches the same way and keeps
-the tab every time the hook does fire — it just stops promising it. The full account, and
-what to do with a tab that was missed, is under *What it needs* above; `charter doctor`'s
-`ended tab` row says where your own tmux stands.
+**On charter's own tmux server it needs tmux 3.5.** All of the above rests on tmux telling
+charter that the pane's program finished, and on tmux 3.4 and older that message can go
+missing: a lost `SIGCHLD` means the `pane-died` hook never fires, so charter is never told
+the harness ended and that tab is not kept — the pane just stops where the harness left it,
+offering nothing. It is a tmux bug fixed upstream in 3.5, not a charter limit, and it is
+intermittent rather than constant (measured on 3.4 under load: 8 of 60 exits unreported,
+against 0 of 40 on 3.5). **Ubuntu LTS ships 3.4.** A chat opened inside a tmux you are
+already in is the exception: charter watches that pane itself rather than through the hook,
+so its tab is kept on any tmux and only the exit code is lost. Charter does not lock you
+out below 3.5 — it launches the same way and keeps the tab every time the hook does fire —
+it just stops promising it. The full account, and what to do with a tab that was missed, is
+under *What it needs* above; `charter doctor`'s `ended tab` row says where your own tmux
+stands.
 
 **Closing the window detaches, and that is the exit that costs nothing.** tmux sessions
 survive a client leaving, so the common way out loses nothing and needs no resume: the
