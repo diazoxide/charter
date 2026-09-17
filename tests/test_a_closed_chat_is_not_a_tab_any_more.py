@@ -91,7 +91,7 @@ class AClosedChatLeavesTheStrip(PersonaIso, unittest.TestCase):
         """The surface the report is about, asked as the strip asks it."""
         state.record_closed("alpha.2")
 
-        names, here, _add, _close, _counts = slots._chats_strip("alpha.1")
+        names, here, _add, _close, _counts, _labels = slots._chats_strip("alpha.1")
 
         self.assertEqual(names, ["alpha.1", "alpha.3"])
         self.assertEqual(here, "alpha.1")

@@ -151,8 +151,8 @@ from typing import NamedTuple
 
 from . import config, contain, harness, inflight, instance, tui, util, workspace
 from .frame import (actions as frame_actions, builtin_actions, chats, choose, component,
-                    gather, layout, leave, overlay, pane, palette, picker, record, state,
-                    switch, tabmenu, tmuxctl)
+                    gather, layout, leave, overlay, pane, palette, picker, record, rename,
+                    state, switch, tabmenu, tmuxctl)
 # Aliased because `cmd_reopen` is a function in this module and `reopen` reads as one: the
 # module answers what a quit RECORDED and the command is what puts it back, and a bare
 # `reopen.read()` beside `cmd_reopen` invites a reader to think one is the other.
@@ -5954,7 +5954,14 @@ def _launch(args) -> int:
         return 2
     if selecting:
         argv = launcher.argv_select(_selector_start(args),
-                                    ended=getattr(args, "ended", False))
+                                    ended=getattr(args, "ended", False),
+                                    # The two opens that MAKE a chat somebody is standing in
+                                    # front of ask for the title row (`cmd_new_chat`,
+                                    # `_open_workspace`). A reopen names its profile and
+                                    # never reaches a selector at all; an ended tab's
+                                    # selector is about a chat that already has whatever name
+                                    # it was given.
+                                    titling=getattr(args, "titling", False))
         # What charter SHOWS if this window dies early: the selector, not
         # `python -P -m charter frame-launch --select`, which is an answer to a question
         # nobody asked (`launcher.display_command`'s own rule, one launch over).
@@ -6475,6 +6482,14 @@ def _launch(args) -> int:
         # the launch returned, it existed only after the harness it is for was already
         # running — a race that reproduces on nobody's machine.
         state.record_brief(fid, opening.brief)
+        # **And the tab's name, from the brief's first line** (decision 11). Here for the
+        # same two reasons and one more: a handed-off chat is the one an operator is MOST
+        # likely to find on a strip without having opened it, so the tab has to say what it
+        # was opened to do rather than `beta.7`. `rename.first_line_title` cuts rather than
+        # refuses — a brief is the message a model wrote and the operator approved at the
+        # harness prompt (ADR 0021), not a label anybody typed — and answers `""` for every
+        # open that is not a handoff, which `state.record_title` reads as *no title*.
+        state.record_title(fid, rename.first_line_title(opening.brief))
         if opening.persona:
             from . import persona as persona_mod
             persona_mod.set_active(opening.persona, session_id=fid, terminal_id="")
@@ -9188,7 +9203,10 @@ def _open_workspace(fid: str, ws: str, *, socket: str,
     args = SimpleNamespace(harness="frame", profile=None, select=True,
                            start=p.name if p is not None else "",
                            rest=[], no_frame=False, workspace=ws, pick=False,
-                           attach=False, size=_window_size(socket, window))
+                           # A tab opens a chat somebody is standing in front of, so its
+                           # selector offers the row that names it (decision 11).
+                           attach=False, titling=True,
+                           size=_window_size(socket, window))
     here_dir = os.getcwd()
     try:
         os.chdir(root)
@@ -9731,8 +9749,14 @@ def _palette_catalogue(fid: str, reg, *, snapshot) -> tuple:
     the gather it read once. A second `builtin_actions.build` inside this would be a second
     reading of a plane that moves, which is the staleness `_draw_palette` records.
     """
+    # **`rename.open_rows` between the actions and the leaving rows**, and the placement is
+    # the same guard read twice. Renaming is harmless, so it does not have to be kept away
+    # from the cursor — and `leave.open_rows` stays LAST, so every row above `charter: quit`
+    # can still run on an ordinary plane and `F2 Enter` reaches the destructive rows no more
+    # easily than it did.
     return (choose.open_rows(fid)
             + palette.rows(reg.offers(fid=fid, snapshot=snapshot))
+            + rename.open_rows(fid)
             + leave.open_rows(fid))
 
 
@@ -9790,20 +9814,31 @@ def _draw_palette(args) -> int:
                                 current_chrome=_current_chrome(fid))
     snapshot = gather.cached(fid) or {}
     opened: list[choose.Roster] = []
+    #: The rename input, once one has been opened. **A list for `opened`'s reason exactly**:
+    #: what comes back out of `own_the_tty` is a ROW, and the thing this surface produces —
+    #: the text somebody typed — lives on the SURFACE. So the caller has to be able to reach
+    #: it after the loop, and a doorway cannot return two things.
+    renaming: list[rename.Rename] = []
     try:
         surface = palette.Palette(
             catalogue=_palette_catalogue(fid, reg, snapshot=snapshot),
             query_only=lambda: _name_rows(fid, opened),
             mouse=True)
         def _then(row):
-            # Two ways a chosen row does NOT end the palette, asked in the order they
-            # cost: a doorway replaces the surface, and a repeatable action runs and
-            # leaves this one standing. Explicit rather than `_picker(...) or _again(...)`
+            # Three ways a chosen row does NOT end the palette, asked in the order they
+            # cost: a doorway replaces the surface, a rename charter refuses redraws the
+            # input with the reason in its footer, and a repeatable action runs and leaves
+            # this one standing. Explicit rather than `_picker(...) or _again(...)`
             # — both answer a `Surface`, and a surface's truthiness is not a thing this
             # file gets to assume on `own_the_tty`'s behalf.
             nxt = _picker(row, fid, opened, socket=socket, pane=here)
             if nxt is not None:
+                if rename.is_row(row):
+                    renaming.append(nxt)
                 return nxt
+            back = rename.again(row, renaming[-1] if renaming else None)
+            if back is not None:
+                return back
             return _again(row, surface, reg, fid=fid, snapshot=snapshot)
 
         chosen = palette.own_the_tty(surface, then=_then)
@@ -9838,6 +9873,16 @@ def _draw_palette(args) -> int:
         if choose.noun_of(chosen) is not None:
             # A picker row that never opened its picker: `_picker` refused it, which it
             # does for exactly one reason and always with that reason in the row's note.
+            _say_on_screen(fid, chosen.note)
+            return 0
+        if _renamed(chosen, renaming, fid=fid):
+            return 0
+        if rename.is_row(chosen):
+            # The rename doorway on a palette that could not name its own chat: `_picker`
+            # refused it and the note says why. **It is asked before `invoke`** for
+            # `leave.is_row`'s measured reason — an id no action has falls through to
+            # `ActionRegistry.invoke`, and the operator is told an action FAILED for a
+            # keypress that was never an action.
             _say_on_screen(fid, chosen.note)
             return 0
         # **The confirmation's own rows, and they are asked about before `invoke`** — none
@@ -9887,6 +9932,25 @@ def _draw_palette(args) -> int:
     finally:
         _close_palette(socket, harness=harness, overlay_pane=here)
     return 0
+
+
+def _renamed(chosen, renaming: list, *, fid: str) -> bool:
+    """Start the rename the operator typed, if a rename is what came back. ``True`` when it
+    started one.
+
+    **The text is on the SURFACE and the answer is a ROW**, which is the whole reason
+    *renaming* is a list the caller keeps rather than something `own_the_tty` hands back.
+    `rename.chose` takes both, so it stays a function of its arguments that a test can call
+    with no surface at all — and the target comes off the surface rather than off *fid*,
+    because the tab menu opens this same input over a tab the frame is not on.
+
+    An empty list is an operator who never opened the input, which is every `F2` that ended
+    any other way.
+    """
+    if not renaming:
+        return False
+    box = renaming[-1]
+    return rename.chose(chosen, box.target, fid=fid, text=box.typed())
 
 
 def _start_chat_switch(fid: str, chat: str) -> None:
@@ -10063,6 +10127,14 @@ def _picker(row, fid: str, opened: list, *, socket: str = "",
         return _as_a_drawer(palette.Palette(catalogue=leave.confirm_rows(p, verb=verb),
                                             label=verb, mouse=True),
                             socket=socket, pane=pane)
+    # **The rename doorway, and it opens over THIS palette's own chat.** The tab menu opens
+    # the same surface over the tab the pointer landed on (`tabmenu.opens`); `F2` has no
+    # pointer and no target but the chat it was opened in, which is `fid`. A refused doorway
+    # never reaches here — the `row.note` above is what answers it, with the reason the row
+    # is already carrying.
+    naming = rename.opens(row, fid)
+    if naming is not None:
+        return naming
     noun = choose.noun_of(row)
     if noun is None:
         return None
@@ -10975,7 +11047,13 @@ def _record_the_plane(doomed, *, focus: str, active, windows,
             # warning says anything about, and `leave.plan` reads one plane for the row an
             # operator is shown. `or ""` because `state.brief` answers `None` for the chats
             # that were not opened by a handoff, which is nearly all of them.
-            brief=state.brief(c.chat) or ""))
+            brief=state.brief(c.chat) or "",
+            # **`state.title` and not `c.title`, which is the DRAWN form.** `leave.Doomed`
+            # carries the title `contain.readable` has already escaped, because its one
+            # reader is the confirmation row; a record holding that would be escaped again by
+            # the next quit and grow a backslash per reopen. The record holds what was
+            # written, exactly as `brief` above does.
+            title=state.title(c.chat) or ""))
     for ws in order:
         frames.append(reopen_state.Frame(workspace=ws, chats=tuple(entries[ws])))
     # Signed by who is writing (`reopen.QUIT`'s note): `capture` is true for exactly the
@@ -11263,6 +11341,69 @@ def cmd_close(args) -> int:
     return 0
 
 
+def cmd_rename(args) -> int:
+    """`charter frame-rename <chat> -- <title>` — give a tab a name a person chose.
+
+    **It writes one file and repaints, and that is the whole of it** (ruling 3). There is no
+    `send-keys`, no `/rename` and no respawn: charter never types into a harness (ADR 0018),
+    so the new name reaches Claude Code at its next start or resume through `--name` again,
+    and reaches Codex and opencode never — neither takes a name at launch (`rename
+    .takes_a_name`, `docs/harnesses.md`).
+
+    **The id is not touched** (ruling 1). Nothing here moves a link, a record, a window or a
+    claim; `state.record_title` writes `title` inside the chat's own directory and every other
+    file in it is left exactly as it was.
+
+    **Two chat ids, and they are two different questions**, exactly as `frame-close` has: the
+    POSITIONAL is which tab to rename, optional so the bare command renames the one you are
+    in; `--chat` is where the keypress came from, which is what puts the sentence on the
+    screen the operator is actually looking at when the tab menu was opened over a tab the
+    frame is not on.
+
+    **The target must be a chat of THIS plane.** `chats.ID_RE` is the alphabet a chat id
+    travels to a state path under, and `leave.plane_chats` is the scan that says which
+    directories are chats — including a pane still waiting at the selector, which
+    `leave.plan` deliberately drops and which is exactly the tab a title given at `+` is
+    about.
+
+    **The strips are bumped only when the record moved.** A rename to the name a tab already
+    carries writes nothing (`state.record_title`), and waking every panel on the plane to
+    redraw the row it is already drawing is a cost with nothing to show for it.
+
+    **Always 0**, for `cmd_palette`'s reason: this is started by a palette row and by a tab
+    menu row, both of which are `run-shell` children whose non-zero return is printed INTO
+    THE HARNESS PANE — charter drawing in the one rectangle ADR 0018 says it never draws.
+    """
+    fid = _pressers_chat(args)
+    target = (getattr(args, "chat_id", None) or "").strip() or fid
+    if not target:
+        return outside_a_frame("charter frame-rename")
+    # **No separator to strip, unlike `launcher.cmd_frame_launch`, and the difference is
+    # measured rather than assumed.** There `rest` is the only positional and argparse hands
+    # the `--` over with it; here the `chat_id` positional is matched first and the separator
+    # is consumed — checked on this tree for every spelling `rename.chose` emits. So a title
+    # whose first word IS `--` keeps it, which a strip would silently eat.
+    #
+    # The words are joined with one space, which loses nothing: `rename.normalized` collapses
+    # every run of whitespace to one space before it measures or writes anything.
+    words = list(getattr(args, "title", None) or [])
+    if not chats.ID_RE.fullmatch(target) or target not in leave.plane_chats():
+        _say_on_screen(fid, rename.NOT_A_CHAT.format(chat=contain.readable(target)))
+        return 0
+    shown, why = rename.normalized(" ".join(words))
+    if shown is None:
+        # The surface refuses the same text in its own footer before it ever spawns this
+        # (`rename.again`), so this is the hand-typed route and the one that has no footer to
+        # put it in. One rule, asked twice, said wherever there is somebody to tell.
+        _say_on_screen(fid, why)
+        return 0
+    if state.record_title(target, shown):
+        state.bump(target)
+        _repaint_the_other_strips(target)
+    _say_on_screen(fid, rename.renamed_note(chats.harness_of(target)), ok=True)
+    return 0
+
+
 def _forget_the_ended_tab(chat: str) -> None:
     """Drop what an ENDED tab is holding, because close is the verb that forgets a chat.
 
@@ -11521,6 +11662,12 @@ def _restore_recorded_chat(rec, fid: str) -> None:
             state.owe_brief(fid)
     state.record_harness_session(fid, rec.resume)
     state.record_conversation(fid, rec.conversation)
+    # **The title, before tmux** (decision 11), for the link's reason exactly: the launcher
+    # composes the harness's name in the pane (`launcher.session_name`), so a title written
+    # after the window exists would be a chat that comes back under its bare id and is renamed
+    # a moment later. `state.record_title` is the gate, so a manifest a hand edited into a
+    # value charter would refuse leaves the chat untitled rather than carrying it through.
+    state.record_title(fid, rec.title)
 
 
 #: What a reopen says when the directory of the id it keeps is still in use, and by what.
@@ -12606,7 +12753,9 @@ def cmd_new_chat(args) -> int:
     launch = SimpleNamespace(harness="frame", profile=None, select=True,
                              start=p.name if p is not None else "",
                              rest=[], no_frame=False, workspace=ws, pick=False,
-                             attach=False,
+                             # The `+` opens a chat somebody is standing in front of, so its
+                             # selector offers the row that names it (decision 11).
+                             attach=False, titling=True,
                              size=_window_size(socket, pane) if pane else None)
     here_dir = os.getcwd()
     try:

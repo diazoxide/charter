@@ -260,8 +260,14 @@ class ARightClickOpensTheMenuAndNothingElse(_ABarThatWasDrawn, unittest.TestCase
         self.assertEqual(self.spawned, [])
 
 
-class TheMenuIsTheTwoRowsThatHaveATabToSitOn(_AWatchedSpawn, unittest.TestCase):
-    """`frame/tabmenu.py`'s catalogue: what a right-click draws, and in what order."""
+class TheMenuIsTheRowsThatHaveATabToSitOn(_AWatchedSpawn, unittest.TestCase):
+    """`frame/tabmenu.py`'s catalogue: what a right-click draws, and in what order.
+
+    **Three rows since titles arrived** (decision 11). `chat: rename` is about ONE chat, so it
+    belongs here by the same scope rule the other two do — and it goes between them, so the
+    destructive row keeps the bottom of the list. The class was named for two rows; what the
+    name was about is the SCOPE rule, and that is unchanged.
+    """
 
     FID = "api.1"
     TAB = "api.2"
@@ -271,9 +277,9 @@ class TheMenuIsTheTwoRowsThatHaveATabToSitOn(_AWatchedSpawn, unittest.TestCase):
         for chat in ("api.1", "api.2"):
             _plant(chat, workspace="api")
 
-    def test_it_holds_the_transcript_row_and_the_close_doorway_and_nothing_else(self):
+    def test_it_holds_the_transcript_row_the_rename_and_the_close_doorway(self):
         self.assertEqual([r.id for r in tabmenu.catalogue(self.TAB)],
-                         [tabmenu.TRANSCRIPT_ID, tabmenu.CLOSE_ID])
+                         [tabmenu.TRANSCRIPT_ID, tabmenu.RENAME_ID, tabmenu.CLOSE_ID])
 
     def test_close_is_last(self):
         """`frame/leave.open_rows` puts the destructive row last so it is never one

@@ -98,6 +98,18 @@ nor Ctrl+C is read as an answer. Closing the tab is what ends the chat, and it e
 good.
 _Avoid_: dead tab, closed chat, zombie
 
+**Title**:
+Optional words a person gave a chat, drawn wherever that chat is named to a person — in place
+of the id on the strip, and after it everywhere else. **It is never an identity**: every link,
+record, kill, reap and claim goes on using the id, and a chat with no title behaves exactly as
+one did before titles existed. It is one line of printable text, at most 60 characters, set by
+a rename row, by the selector's title row at `+`, or by a handoff brief's first line. Charter
+composes Claude Code's session name from it (`<title> · <id>`) and passes that at the next
+start or resume — it never types `/rename` into a harness, and Codex and opencode are handed
+no name at all.
+_Avoid_: name (which is what Claude Code calls the session name charter composes), label,
+rename as a noun
+
 **Handoff**:
 Opening a chat, here or in another workspace, whose first message is a brief the operator
 approved at the harness's own permission prompt (ADR 0021). A handed-off chat never reports

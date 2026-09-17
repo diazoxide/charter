@@ -183,6 +183,13 @@ class ThePressRunsTheLauncherForThisWorkspace(_APlusOnAFrameInAlpha):
         self.assertEqual(self.launched[0].start, "claude")
         self.assertEqual(self.launched[0].harness, "frame")
 
+    def test_the_launch_offers_the_row_that_names_the_new_chat(self):
+        """Decision 11: a `+` opens a chat somebody is standing in front of, so its selector
+        carries the row that gives the tab a title. The flag and nothing else — the title is
+        typed in the new chat's own pane and written there, so no person's words cross tmux."""
+        self._press()
+        self.assertIs(self.launched[0].titling, True)
+
     def test_a_chat_with_no_recorded_harness_opens_on_the_planes_default(self):
         """The migration case — a chat launched by a charter that predates
         `state.record_identity`, which is the one rung where nothing about the chat itself

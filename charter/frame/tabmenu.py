@@ -33,13 +33,20 @@ is that map read without `switch_to`'s one subtraction — the tab you are ON an
 here, because closing the chat you are in is the ordinary case of closing a chat, where
 switching to the chat you are in is 41 tmux calls to arrive where you already were.
 
-**Exactly two rows have a tab to sit on**, which is a catalogue of the whole palette by
-scope rather than a choice: `chat: previous transcript` and `chat: close` are about one
-chat; detach, both next/previous pairs, the densities, the chromes, the todo row and the
+**Three rows have a tab to sit on**, which is a catalogue of the whole palette by scope
+rather than a choice: `chat: previous transcript`, `chat: rename` and `chat: close` are about
+one chat; detach, both next/previous pairs, the densities, the chromes, the todo row and the
 regather are about the FRAME; the pickers and `charter: quit` are about the PLANE. There is
-no `stop` distinct from close and no rename anywhere in the frame. So this module removes
-nothing from `F2` — the palette keeps every row it had, and this is a second, faster route
-to two of them, which matters because **a right-click menu is invisible until you try it**.
+no `stop` distinct from close. So this module removes nothing from `F2` — the palette keeps
+every row it had, and this is a second, faster route to three of them, which matters because
+**a right-click menu is invisible until you try it**.
+
+**Rename is the third, and it arrived with titles** (decision 11). It was *"no rename
+anywhere in the frame"* until this task, which was a statement about what charter had rather
+than about what a tab menu is for: a name a person chose is about ONE chat, so it belongs
+here by the same scope rule the other two do. It is a doorway like close — `frame/rename.py`
+draws a one-line input in this pane — and it sits between the transcript row and close, so
+the destructive row stays last (:func:`catalogue`).
 
 **Close goes LAST and stays confirmed.** `frame/leave.open_rows` puts the destructive rows
 at the bottom of the palette so that a destructive row is never one `F2 Enter` away, and a
@@ -65,7 +72,7 @@ from __future__ import annotations
 import os
 
 from .. import util
-from . import chats, leave, overlay, palette
+from . import chats, leave, overlay, palette, rename
 
 #: The option that carries which tab a menu is about, from the panel that decoded the
 #: press, through the `frame-palette` process the panel spawns, to the process inside the
@@ -85,6 +92,11 @@ TAB_OPTION = "--tab"
 #: `tab:close` and take this keypress. `frame/choose.py` and `frame/leave.py` use the same
 #: trick for the same reason. Neither is ever drawn.
 TRANSCRIPT_ID = "tab:transcript"
+#: The rename doorway's id. **Its own rather than `rename.OPEN_ID`**, because the two rows
+#: are opened over different targets and each surface dispatches on its own ids: `F2`'s row
+#: is about the chat the palette was opened IN, and this one is about the tab the pointer
+#: landed on. `frame/leave.py` keeps the same separation for its own twin of the close row.
+RENAME_ID = "tab:rename"
 CLOSE_ID = "tab:close"
 
 #: The close row on a tab whose harness has already ended — an ACTION, not a doorway.
@@ -107,13 +119,25 @@ def label(target: str) -> str:
     may be about a tab the frame is NOT on — `palette.HEADING`'s bare `charter` would
     leave a `chat: close` row over an unnamed target, which is the palette's row wearing a
     menu's clothes.
+
+    **The title after the id** (`chats.named`, decision 11): the operator right-clicked a tab
+    that may be drawing nothing but the words they chose, so the heading has to say which
+    chat that is — and the id is what every row below it, every refusal and `charter
+    frame-close` name it by.
     """
-    return f"chat {target}"
+    return f"chat {chats.named(target)}"
 
 
 def transcript_title(target: str) -> str:
     """The transcript row's title. Named, for :func:`label`'s reason."""
     return f"chat: previous transcript — {target}"
+
+
+def rename_title(target: str) -> str:
+    """The rename doorway's title. Named, for :func:`label`'s reason, and it says what the
+    row is FOR rather than what it does to the id — `give this tab a title` is the whole of
+    it, because the id is not going anywhere (ruling 1)."""
+    return f"chat: rename {target} — give this tab a title"
 
 
 def close_title(target: str) -> str:
@@ -193,9 +217,9 @@ def forward(args) -> tuple[str, ...]:
 
 
 def catalogue(target: str) -> tuple[overlay.Row, ...]:
-    """The menu's rows: the transcript, then close.
+    """The menu's rows: the transcript, the rename, then close.
 
-    **Two rows, and the order is the guard.** `frame/leave.open_rows` puts the destructive
+    **Three rows, and the order is the guard.** `frame/leave.open_rows` puts the destructive
     row last because a palette's cursor starts on the first row that can run, so a
     destructive row at the top is one Enter from a surface that has only just appeared.
     This menu appears under the pointer rather than under a keypress, so it arrives with
@@ -223,29 +247,37 @@ def catalogue(target: str) -> tuple[overlay.Row, ...]:
     not the order: `palette.aim` now opens it on the first row that CAN run, which is what
     the paragraph above always claimed happened.
 
-    **So on a chat with no capture the cursor opens on `chat: close`, and that is the
-    answer rather than a cost accepted quietly.** It is defensible on this surface and on
-    no other, for a reason this menu can state and `F2` cannot:
+    **So on a chat with no capture the cursor opens on the first row below the transcript
+    that can run — `chat: rename` since titles arrived (decision 11), and `chat: close`
+    before that.** Both are defensible, and the move is the guard tightening rather than
+    loosening:
 
-    * the row is a **doorway** — :func:`chose` refuses it by id and :func:`opens` replaces
-      the surface with `leave.confirm_rows` — so the Enter under the cursor draws the
-      warning that names the chat, and a second, deliberate Enter on a row that says *stop
-      it and do not bring it back* is what stops anything. `leave.open_rows`' guard is about
-      the number of keypresses between an operator and an irreversible answer, and there
-      are still two, with the whole warning drawn between them;
+    * **rename can always run and undoes itself**, so `-` then Enter now opens a one-line
+      input and Esc leaves it having changed nothing. Close is one `down` further on, which
+      is `leave.open_rows`' count — the keypresses between an operator and an irreversible
+      answer — going UP by one for the one gesture that reaches this surface with no warning
+      at all;
+    * **close was defensible under the cursor too, on this surface and no other**, because
+      the row is a **doorway** — :func:`chose` refuses it by id and :func:`opens` replaces
+      the surface with `leave.confirm_rows` — so the Enter under it drew the warning that
+      names the chat, and a second, deliberate Enter on a row that says *stop it and do not
+      bring it back* is what stops anything. That is why the third row did not have to be
+      added and is not an apology for one;
     * `F2` is opened without a target and carries every row charter has, so a destructive
       row under its cursor would be a trap for an operator who came for something else.
       This menu has no something else: it is opened AT one chat, by `slots.CLOSE_CHAT` — a
       `-` whose own docstring says *a pointer opens the question; the keyboard answers it*
-      — or by a right press on that chat's tab, and both of its rows are about that chat;
+      — or by a right press on that chat's tab, and every one of its rows is about that chat;
     * and the alternative is the defect. A cursor on the refused row spends the operator's
       Enter on nothing, and a cursor on no row at all cannot be told from a cancel
       (`palette.aim` lists what that costs at every call site).
 
-    Nothing is added to make the cursor somewhere harmless to sit. A third row — `chat:
-    switch to <target>`, say — would be a row that exists for the cursor rather than for
-    the operator, and this module's scope argument above is what refuses it: switching is
-    about the FRAME, and the menu's two rows are the ones a TAB has.
+    Nothing is added to make the cursor somewhere harmless to sit. A row like `chat: switch
+    to <target>` would be a row that exists for the cursor rather than for the operator, and
+    this module's scope argument above is what refuses it: switching is about the FRAME, and
+    the menu's rows are the ones a TAB has. **`chat: rename` is not that row and did not
+    arrive for that reason** — it is about one chat by the same scope rule, and it would be
+    here on a plane where the cursor had never been a question at all.
 
     No plan is built here and nothing is scanned. `frame/leave.open_rows` makes the same
     promise for the same reason: the operator is not deciding while a menu is merely open,
@@ -262,6 +294,12 @@ def catalogue(target: str) -> tuple[overlay.Row, ...]:
     return (
         overlay.Row(id=TRANSCRIPT_ID, title=transcript_title(target),
                     note="" if has else builtin_actions.NO_TRANSCRIPT, refused=not has),
+        # **Never refused, which is why it sits between the other two.** A tab can always be
+        # given a name — there is nothing to read, nothing to prove and nothing that can be
+        # missing — so on the ordinary chat with no capture the cursor now opens HERE rather
+        # than on close (`palette.aim`), which is the paragraph above becoming less reachable
+        # rather than being answered by a row invented for it.
+        overlay.Row(id=RENAME_ID, title=rename_title(target)),
         closing,
     )
 
@@ -346,19 +384,27 @@ def opens(row, target: str, *, live) -> "palette.Palette | None":
     rather than as it was when the pointer landed, and a right-click that never reaches
     the doorway pays for no scan of the frame root at all — `catalogue` is one `is_file`.
 
-    One test of the id and no test of `refused`: neither row this menu draws can be a
-    refused doorway — the close row is never refused, because the tab is a name the panel
-    resolved off a strip it had just painted, where `leave.open_rows`' own doorway can be
-    (a palette that cannot tell which chat it was opened in has no chat to close). A guard
-    for a state that cannot arrive is the line the deletion sweep reports.
+    One test of the id and no test of `refused`: no doorway this menu draws can be a refused
+    one — the close row is never refused, because the tab is a name the panel resolved off a
+    strip it had just painted, where `leave.open_rows`' own doorway can be (a palette that
+    cannot tell which chat it was opened in has no chat to close), and the rename row is
+    never refused at all (:func:`catalogue`). A guard for a state that cannot arrive is the
+    line the deletion sweep reports.
+
+    **The rename doorway is `frame/rename.py`'s own surface, built here rather than through
+    `rename.opens`**, because that function dispatches on `rename.OPEN_ID` — `F2`'s row —
+    and this menu's row is :data:`RENAME_ID`, opened over a different target. One surface,
+    two ids, for the reason :data:`RENAME_ID` gives.
     """
+    if row.id == RENAME_ID:
+        return rename.Rename(target=target, label=rename.label(target), mouse=True)
     if row.id != CLOSE_ID:
         return None
     return palette.Palette(catalogue=confirm_rows(target, live=live), label=leave.CLOSE,
                            mouse=True)
 
 
-def act(row, target: str, *, fid: str) -> None:
+def act(row, target: str, *, fid: str, typed: str = "") -> None:
     """Act on the row Enter landed on, and say the reason when it could not run.
 
     **One function because the three halves are one decision**, and because the surface a
@@ -381,9 +427,16 @@ def act(row, target: str, *, fid: str) -> None:
     per-chat rows (which carry `leave.note`) and its *nothing left to stop* row, which
     carries none — so both branches are reachable and neither is a restatement of the
     other.
+
+    *typed* is what the rename input was holding when Enter landed on its row — carried in
+    because the answer `own_the_tty` gives is a ROW and the text lives on the SURFACE
+    (`commands_frame._renamed` makes the same trip for `F2`). No `typed is not None` guard in
+    front of `rename.chose`: that function dispatches on the row id, and the only row that
+    id belongs to exists on a surface that was opened, so a guard could not decide anything.
     """
     from .. import commands_frame
-    if row is None or chose(row, target, fid=fid):
+    if (row is None or chose(row, target, fid=fid)
+            or rename.chose(row, target, fid=fid, text=typed)):
         return
     if row.note:
         commands_frame._say_on_screen(fid, row.note)
@@ -458,6 +511,10 @@ def draw(args) -> int:
     from .. import commands_frame
     fid, socket, harness, overlay_pane = handback(os.environ)
     target = wanted(args)
+    # The rename input, once one has been opened — `commands_frame._draw_palette` keeps the
+    # same list for the same reason: what `own_the_tty` hands back is a ROW, and the text
+    # somebody typed lives on the SURFACE.
+    renaming: list[rename.Rename] = []
     try:
         surface = palette.Palette(catalogue=catalogue(target), label=label(target),
                                   mouse=True)
@@ -482,6 +539,21 @@ def draw(args) -> int:
             # said so itself would be a second place holding the rule that decides how big
             # a confirmation is. That rule reads the surface's own label one call down, so
             # this route inherits the answer instead of restating it.
+            #
+            # **The rename row reads nothing about the plane, so nothing is scanned for
+            # it.** `opens` answers its surface from the id alone; only the close doorway's
+            # confirmation describes the plane, and `_plane_live` is one `list-windows` per
+            # server. Asking it in front of every row would be `leave.open_rows`' measured
+            # mistake — a surface costing a scan for a keypress that does not use it.
+            if row.id == RENAME_ID:
+                naming = opens(row, target, live=None)
+                renaming.append(naming)
+                return naming
+            # A title charter refuses redraws the input with the reason in its footer and
+            # keeps what was typed (ruling 6, `rename.again`).
+            back = rename.again(row, renaming[-1] if renaming else None)
+            if back is not None:
+                return back
             return commands_frame._as_a_drawer(
                 opens(row, target,
                       live=commands_frame._plane_live(
@@ -491,7 +563,8 @@ def draw(args) -> int:
         # `act` takes the cancel too (`own_the_tty` answers `None` for Escape, for the
         # hatch, and for a pane whose writer is gone), so there is no branch here that a
         # test would need a tty to reach.
-        act(palette.own_the_tty(surface, then=_then), target, fid=fid)
+        act(palette.own_the_tty(surface, then=_then), target, fid=fid,
+            typed=renaming[-1].typed() if renaming else "")
     finally:
         commands_frame._close_palette(socket, harness=harness,
                                       overlay_pane=overlay_pane)

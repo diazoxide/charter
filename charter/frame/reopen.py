@@ -169,6 +169,18 @@ class Chat(NamedTuple):
     #: ``False``: a chat charter cannot tell about is one that was running, which is the
     #: direction that brings a conversation back rather than withholding it.
     ended: bool = False
+    #: The name a person gave this tab (`state.title`), or ``""`` (decision 11).
+    #:
+    #: **The value as it was WRITTEN, not as it was drawn**, and that is what keeps a title
+    #: stable across restarts: `chats.title_of` escapes a backslash for the screen, so a
+    #: record holding the drawn form would be re-escaped by the next quit and grow one
+    #: backslash per reopen. `commands_frame._record_the_plane` reads `state.title` for
+    #: exactly this reason, the way it already reads `state.brief`.
+    #:
+    #: **It rides here for :attr:`brief`'s reason**: `reap` takes the chat's directory, and
+    #: this file with it. Defaulted like :attr:`profile`, so a manifest written by 0.62 reads
+    #: as a chat nobody named — which is what it was.
+    title: str = ""
 
 
 class Frame(NamedTuple):
@@ -370,7 +382,7 @@ def _chat(raw) -> Chat | None:
         return None
     text = {k: (raw.get(k) if isinstance(raw.get(k), str) else "")
             for k in ("chat", "workspace", "persona", "harness", "cwd", "resume",
-                      "transcript", "profile", "brief", "conversation")}
+                      "transcript", "profile", "brief", "conversation", "title")}
     return Chat(active=raw.get("active") is True, ended=raw.get("ended") is True, **text)
 
 

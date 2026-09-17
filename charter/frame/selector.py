@@ -50,7 +50,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from .. import contain, profiles, profiletrust, wiring
-from . import overlay, palette
+from . import overlay, palette, rename
 
 #: What a pane that started nothing exits with — the shell's own number for "ended by the
 #: operator", and what `_launch` reads back to say nothing at all about the chat.
@@ -86,6 +86,39 @@ FOOTER_ENDED = f"  up/down move   enter start   {ESC_HINT_ENDED}"
 #: than a profile name, because resume is not a profile: the harness, the link and the
 #: directory all come off the chat's own record, and the row carries none of them.
 RESUME_ID = "resume:"
+
+#: The id of the row that names the chat this selector is about to start (decision 11). A
+#: full row id rather than a profile name, for :data:`RESUME_ID`'s reason: it is not a
+#: profile, it starts nothing, and no name is parsed out of it.
+TITLE_ID = "title:"
+
+#: What that row says, and what it says when nothing has been typed. It names the KEY,
+#: because a row on a list of profiles that is not a profile has to account for itself: every
+#: other row here starts a harness and this one opens an input.
+TITLE_ROW = "title: {text}"
+TITLE_NONE = "(none) — Enter to name this chat"
+
+#: The heading the input draws over this pane while a title is being typed. Not
+#: `rename.label`'s, which names the tab being renamed: there is no tab yet, and the whole
+#: point of this row is that the chat is still being made.
+TITLE_LABEL = "charter · name this chat"
+
+
+class Titled(NamedTuple):
+    """What :func:`pick` answers when the operator named the chat instead of starting one.
+
+    A type of its own rather than a `Choice` with an empty profile: naming a chat and picking
+    a profile are two different answers, and the caller does two different things with them —
+    it records this one and comes straight back to the list, where a `Choice` is the end of
+    the surface.
+
+    **The recording is the CALLER's**, which is this module's own rule kept rather than bent:
+    the selector draws what it is given and reads no chat's record (`Resume` says the same one
+    field up). `frame/launcher._select_in_pane` is the process standing in the chat's own
+    proven pane, so it is the one that may write under that chat's id.
+    """
+
+    text: str
 
 
 class Resume(NamedTuple):
@@ -247,8 +280,8 @@ def read(root: Path) -> profiles.ProfileSet:
 
 
 def rows(have: profiles.ProfileSet, *, cwd: Path, start: str | None = None,
-         after: Refused | None = None,
-         resume: Resume | None = None) -> tuple[overlay.Row, ...]:
+         after: Refused | None = None, resume: Resume | None = None,
+         titling: bool = False, titled: str = "") -> tuple[overlay.Row, ...]:
     """One row per profile, in `charter harness list`'s order, with its state on it.
 
     **Declared profiles always; a built-in only when its program is installed.** A built-in
@@ -286,6 +319,16 @@ def rows(have: profiles.ProfileSet, *, cwd: Path, start: str | None = None,
     *start* MARKS its row and nothing else. A `default` naming a profile this machine lacks
     marks nothing (ruling 18) — there is no row to mark — and the cursor is
     :class:`Selector`'s to place.
+
+    *titling* adds the row that NAMES this chat, and it goes **last**, which is the placement
+    every argument about this list already makes: `palette.aim` opens the cursor on the first
+    row that can run, so a row at the top that starts no harness would spend the Enter of an
+    operator who opened a chat to start one. Last, it is a row you go and find.
+
+    *titled* is what has been typed so far, drawn back on that row. It is passed in rather
+    than read, for :class:`Resume`'s reason and this module's rule: nothing here reads a
+    chat's record — and it arrives contained, from `chats.title_of`, which is what lets this
+    draw it as it is (see the comment at the row).
     """
     order = list(profiles.builtins())
 
@@ -333,13 +376,23 @@ def rows(have: profiles.ProfileSet, *, cwd: Path, start: str | None = None,
                     overlay.Row(id=ROW_PREFIX + r.name, title=r.name, note=r.reason,
                                 refused=True)))
     listed = tuple(row for _place, row in sorted(out, key=lambda pair: pair[0]))
-    if resume is None:
-        return listed
-    # **First, and never refused.** It is what the operator almost always wants after an
-    # exit, and it is offered only when the conversation exists — so a row that is here at
-    # all is a row that can run. Absent rather than refused when there is nothing to
-    # resume: a refusal would be charter explaining itself about a chat nobody typed in.
-    return (overlay.Row(id=RESUME_ID, title=resume.title, note=resume.note), *listed)
+    if resume is not None:
+        # **First, and never refused.** It is what the operator almost always wants after an
+        # exit, and it is offered only when the conversation exists — so a row that is here
+        # at all is a row that can run. Absent rather than refused when there is nothing to
+        # resume: a refusal would be charter explaining itself about a chat nobody typed in.
+        listed = (overlay.Row(id=RESUME_ID, title=resume.title, note=resume.note), *listed)
+    if titling:
+        # **`titled` is drawn as it arrives, and the sweep is what asked.** A
+        # `contain.one_line` here could change no answer twice over: the caller hands over
+        # `chats.title_of`'s value, which `contain.readable` has already reduced to printable
+        # ASCII, and `overlay.Surface.render` runs `one_line` over every title before
+        # `tui.width` sees it. That is the masked containment `frame/chats.py`'s docstring
+        # records, and it was reported as a survivor here.
+        listed = (*listed,
+                  overlay.Row(id=TITLE_ID,
+                              title=TITLE_ROW.format(text=titled or TITLE_NONE)))
+    return listed
 
 
 @dataclass
@@ -382,6 +435,21 @@ class Selector(palette.Palette):
                 return
 
 
+def title_input(titled: str) -> "rename.Rename":
+    """The one-line input :data:`TITLE_ID` opens, seeded with what has been typed so far.
+
+    A function rather than three arguments inside :func:`pick`'s closure, so that what this
+    surface IS — its heading, its target, and that it starts from the last answer rather than
+    from nothing — is a thing a test can ask without a tty.
+
+    ``target=""``: there is no tab to rename yet. That is the whole point of this row, and it
+    is why nothing here spawns `charter frame-rename` the way the tab menu's row does —
+    `pick` hands the text back and the launcher, standing in the chat's own proven pane,
+    records it (:class:`Titled`).
+    """
+    return rename.Rename(target="", label=TITLE_LABEL, mouse=True, query=titled)
+
+
 def opens_on(listed: tuple[overlay.Row, ...], start: str | None, *,
              resume: Resume | None = None) -> str:
     """Which row a preselected *start* opens the cursor on — ``""`` for `palette.aim`.
@@ -422,8 +490,14 @@ def _footer(listed: tuple[overlay.Row, ...], after: Refused | None, *,
     the half that must survive.
     """
     hint = ESC_HINT_ENDED if ended else ESC_HINT
+    # **The title row does not count as something that can start**, and leaving it out of
+    # this sum is what keeps :data:`NOTHING_TO_PICK` reachable: it is never refused, so a
+    # selector where every profile says why it cannot run would otherwise stop saying so the
+    # day a chat could be named. The resume row is deliberately NOT excluded — that one CAN
+    # start a harness, which is exactly what the sentence is about.
     said = (after.why if after is not None
-            else (NOTHING_TO_PICK if not any(not r.refused for r in listed) else ""))
+            else (NOTHING_TO_PICK
+                  if not any(not r.refused for r in listed if r.id != TITLE_ID) else ""))
     if said:
         return f"  {hint}   ·   {said}"
     return FOOTER_ENDED if ended else FOOTER
@@ -431,13 +505,21 @@ def _footer(listed: tuple[overlay.Row, ...], after: Refused | None, *,
 
 def pick(*, cwd: Path, root: Path, start: str | None = None,
          after: Refused | None = None, resume: Resume | None = None,
-         ended: bool = False, fd: int | None = None, out=None):
+         ended: bool = False, titling: bool = False, titled: str = "",
+         fd: int | None = None, out=None):
     """Own the pane until a profile is picked.
 
-    A :class:`Choice`, or one of two sentinels: :data:`KEY_CANCEL` for a real Esc keystroke
-    and :data:`END_OF_INPUT` for a pane whose input ended. It answered one ``None`` for both
-    until the exit gate, and the difference is the whole of what an ended tab rests on — Esc
-    closes that tab for good, while a dropped terminal must leave it ended and open.
+    A :class:`Choice`, a :class:`Titled`, or one of two sentinels: :data:`KEY_CANCEL` for a
+    real Esc keystroke and :data:`END_OF_INPUT` for a pane whose input ended. It answered one
+    ``None`` for both until the exit gate, and the difference is the whole of what an ended
+    tab rests on — Esc closes that tab for good, while a dropped terminal must leave it ended
+    and open.
+
+    *titling* offers the title row, and a :class:`Titled` is what comes back when the operator
+    used it. **The input is drawn in THIS pane, through `own_the_tty`'s *then*** — the same
+    mechanism a palette doorway uses — so the tty never leaves raw mode between the list and
+    the line being typed, and nothing is spawned: a selector pane has no harness to be killed
+    beside, and a second process would be a chat that started before anybody picked one.
 
     *resume* is the row that brings this chat's conversation back, or ``None`` when there is
     nothing to resume; the caller is what knows (`launcher.resume_row`). *ended* says this
@@ -457,7 +539,8 @@ def pick(*, cwd: Path, root: Path, start: str | None = None,
     """
     while True:
         have = read(root)
-        listed = rows(have, cwd=cwd, start=start, after=after, resume=resume)
+        listed = rows(have, cwd=cwd, start=start, after=after, resume=resume,
+                      titling=titling, titled=titled)
         surface = Selector(catalogue=listed,
                            footer=_footer(listed, after, ended=ended),
                            # **Ctrl+C does nothing on an ended tab's selector.** A double
@@ -468,11 +551,58 @@ def pick(*, cwd: Path, root: Path, start: str | None = None,
                            cancel_keys=("escape",) if ended else ("escape", overlay.CTRL_C),
                            on=(after.profile if after is not None
                                else opens_on(listed, start, resume=resume)))
-        chosen = palette.own_the_tty(surface, fd=fd, out=out)
+        naming: list[rename.Rename] = []
+
+        def opened_input() -> "rename.Rename | None":
+            """The title input this selector has open, or ``None``.
+
+            **One reader, because two sites ask it and an invariant guarded on one branch and
+            not the other is the shape that bites the next reader.** The list is a cell rather
+            than a local: `_then` is a closure and cannot rebind one of `pick`'s.
+            """
+            return naming[-1] if naming else None
+
+        def _then(row):
+            if row.id == TITLE_ID:
+                box = title_input(titled)
+                naming.append(box)
+                return box
+            # A title charter refuses redraws the input with the reason in its footer and
+            # keeps what was typed (ruling 6) — the same call `F2`'s rename makes.
+            return rename.again(row, opened_input())
+
+        chosen = palette.own_the_tty(surface, fd=fd, out=out, then=_then)
         if chosen is None:
+            # **Esc on the TITLE INPUT cancels the naming, not the chat.** `own_the_tty`
+            # answers one `None` however deep the surface was, so without this the keystroke
+            # the input's own footer calls `esc cancel` would fall through to the selector's
+            # `esc close this chat` and take the new chat's window with it — charter promising
+            # one thing on screen and doing another.
+            #
+            # `overlay.LEFT_KEY` and not merely "the input left": a pane whose writer is gone
+            # leaves the same way, and looping back to redraw a selector nobody can see is the
+            # wedge `END_OF_INPUT` exists to avoid. Only a real keystroke comes back to the
+            # list.
+            box = opened_input()
+            if box is not None and box.left == overlay.LEFT_KEY:
+                continue
             # Which way the surface left is what the caller acts on: only a real keystroke
             # is the operator asking for this tab to be closed.
             return KEY_CANCEL if surface.left == overlay.LEFT_KEY else END_OF_INPUT
+        named = opened_input()
+        if named is not None and chosen.id == rename.GO_ID:
+            # The operator named the chat. Handed back rather than recorded, because this
+            # module reads and writes no chat's record — see :class:`Titled`.
+            #
+            # **Both halves, and the same question asked the same way as `_then` asks it.**
+            # The ID half is the one a defect hides behind: without it, the very next profile
+            # row would be read as a title and the chat just named would never start. The
+            # input half is the one a reader trips over: in charter's own flow `GO_ID` is
+            # minted on a surface only `_then` opens, so it cannot be absent — but an
+            # invariant guarded inside `_then` and not here is the shape that bites whoever
+            # adds the next surface, and it is reachable from a caller that answers a `GO_ID`
+            # row without going through the doorway. Asked, rather than reasoned about.
+            return Titled(named.typed())
         if chosen.id == RESUME_ID:
             # The chat's OWN profile, because a resume runs the command the chat was
             # already running. What differs is the words after it, and those come off the

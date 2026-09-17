@@ -123,6 +123,14 @@ class Doomed(NamedTuple):
     #: and resumable rather than starting a harness nobody asked to restart — and the
     #: warning says so, because "comes back ended" is a different promise from "resumes".
     ended: bool = False
+    #: The name a person gave this tab, contained and ready to draw, or ``""`` (decision 11).
+    #:
+    #: **The DRAWN form, because that is all this record is for** — :func:`title` puts it in
+    #: the confirmation row an operator reads before stopping a chat. The manifest a quit
+    #: writes reads `state.title` itself (`commands_frame._record_the_plane`), for the reason
+    #: `reopen.Chat.title` records: a record holding the escaped form would be re-escaped by
+    #: every quit.
+    title: str = ""
 
 
 class Plan(NamedTuple):
@@ -216,6 +224,10 @@ def plan(*, live, focus: str, only: str = "") -> Plan:
             # choice charter offered for it. A resumed chat has a code from its last exit
             # and is running again, which is exactly the pair that must not be conflated.
             ended=state.is_ended(fid),
+            # `chats.title_of` and not `state.title`, because this value's one reader draws
+            # it: a title is an open alphabet off a file a chat can write (ruling 35), and
+            # this row is where an operator decides whether to stop a chat.
+            title=chats.title_of(fid),
         ))
     return Plan(chats=tuple(out), focus=focus)
 
@@ -471,20 +483,30 @@ def conversation_exists(harness: str, link: str, conversation: str) -> bool:
 
 
 def title(c: Doomed) -> str:
-    """The left-hand side of one chat's row: its id, and what it was running.
+    """The left-hand side of one chat's row: its id, what the operator called it, and what
+    it was running.
 
-    The id first because it is what the operator has been looking at on the `chats` bar all
-    day, and the harness after it because two chats of one workspace are told apart by
-    nothing else. Display text with an open alphabet on the harness half — it is a
-    harness's own display name — contained by `overlay.Surface.render` where every other
-    title is, and never here (`chats.py`'s rule, and the masked-containment finding behind
-    it).
+    The id FIRST because it is what the operator has been looking at on the `chats` bar all
+    day — and because the title never replaces it (decision 11, ruling 1): this row is the
+    last thing read before a harness is stopped, and the id is what every other surface, every
+    refusal and `charter frame-close` name that chat by. The harness half is last because two
+    chats of one workspace used to be told apart by nothing else.
+
+    Display text with an open alphabet on the harness half — it is a harness's own display
+    name — contained by `overlay.Surface.render` where every other title is, and never here
+    (`chats.py`'s rule, and the masked-containment finding behind it). :attr:`Doomed.title` is
+    the one exception and is already contained where it was read, for the reason
+    `chats.title_of` gives.
+
+    **Empty parts drop, separator and all**, so a chat nobody named and a chat from before
+    profiles each read exactly as they did before this field existed — one join rather than
+    four format strings, because four is where `beta.1 ·  · claude` comes from.
     """
     # The PROFILE where there is one: two chats of one kind may be two accounts, and the
     # profile is the name the operator gave the one this row is about. A chat from before
     # profiles still names its harness, which is all it ever recorded.
     shown = c.profile or c.harness
-    return f"{c.chat} · {shown}" if shown else c.chat
+    return JOIN.join(part for part in (c.chat, c.title, shown) if part)
 
 
 #: The row that OPENS the confirmation, the row that goes through with it, and one row per

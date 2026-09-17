@@ -38,14 +38,14 @@ out of this module would be a line no test could go red without — `frame/choos
 records the same finding about `builtin_actions._register_names`, whose masked
 `contain.one_line` stayed green over its own deletion.
 
-**There is no `label` file, and its absence is a decision rather than an omission.**
-Spec §3.5 asks for one per chat, an open-alphabet display name. Nothing in this stage
-writes one: renaming a chat is not a task here, and a reader whose writer does not exist
-is a line no test can turn red — the shape this repository deletes rather than
-documents (`state.new_chat_id`'s own unreachable `None` went the same way in Stage 5a).
-What a chat is CALLED today is its id and the harness recorded beside it, and both of
-those are real values off disk that the containment tests are measured against. The file
-arrives with the stage that writes one.
+**The display name §3.5 asked for has arrived, and it is a TITLE** (decision 11). The file
+is `state.TITLE_FILE`, written by `state.record_title` and read by :func:`title_of`, and it
+is an open alphabet — so it is the one value this module contains on the way out rather than
+leaving to whatever draws (see that function for the measured reason the rule above does not
+reach it). **It is never an identity.** :func:`label_of` puts it on the strip in place of the
+id and :func:`named` puts it after the id everywhere else, and no caller matches on either:
+every link, switch, kill, reap and claim goes on using the id, which is what :data:`ID_RE`
+bounds and what `slots._Tabs` keys its click map by.
 """
 
 from __future__ import annotations
@@ -94,6 +94,16 @@ class Chat(NamedTuple):
     #: strip is where an operator finds out (decision 4). Defaulted, because every caller
     #: that builds a `Chat` by hand is asking about a chat that is running.
     ended: bool = False
+    #: The name a person gave this tab, contained and ready to draw, or ``""`` (decision 11).
+    #:
+    #: **Carried on the record rather than read per surface**, which is this class's whole
+    #: reason one field over: the strip reads the roster it has already read, so a title costs
+    #: one small file per chat per repaint rather than one per chat per surface. It is never
+    #: an identity — :attr:`id` is — and no caller matches on it.
+    #:
+    #: Defaulted, because every caller that builds a `Chat` by hand is asking about a chat's
+    #: id and its harness, and an untitled chat is the ordinary one.
+    title: str = ""
 
 
 def is_chat(fid: str) -> bool:
@@ -414,6 +424,69 @@ def profile_of(fid: str) -> str:
     return state.profile(fid) or ""
 
 
+def title_of(fid: str) -> str:
+    """*fid*'s title, contained and ready to draw, or ``""`` for a chat nobody has named.
+
+    **Contained HERE, which is the one exception this module makes to its own rule.** The
+    docstring above says containment belongs to whatever draws, because a second call is a
+    line no test can go red without. That reasoning does not reach this value and the
+    difference is measurable: a title goes to a tab STRIP, which composes and measures its
+    own row (`slots._compose`) rather than going through `overlay.Surface.render`, and it goes
+    onto a harness ARGV (`launcher.session_name`). Neither of those is a caller that contains
+    for itself, and `state.title` is a file a chat can write (ruling 35).
+
+    **`contain.readable` and not `contain.one_line`.** A title is a label a person is meant to
+    read a value back off, and `one_line` decides on five Unicode categories: U+3164 HANGUL
+    FILLER is `Lo`, is not `isspace`, survives `strip`, and renders as nothing — a tab with no
+    name on it, which is #498's finding one surface over. `readable` says instead what may be
+    drawn and escapes the rest.
+
+    **Bounded to `state.TITLE_MAX` on the way out as well as on the way in**, and that is not
+    a restatement of the gate: `state.record_title` bounds what an operator can TYPE, and this
+    bounds what charter draws from a file a chat may have written by hand. A 5,000-character
+    `title` file would otherwise reach `contain.DISPLAY_LIMIT` — 160 columns of somebody
+    else's words across a tab strip.
+    """
+    # No `or ""` after `state.title`, and the sweep is what asked: it answers `str | None`,
+    # and `None` is falsey — so the conditional below already sends it to the same `""` the
+    # fallback would have made. A line nothing can tell from its absence is the survivor
+    # `tools/sweep.py` reports.
+    text = state.title(fid)
+    return contain.readable(text, state.TITLE_MAX) if text else ""
+
+
+def label_of(fid: str) -> str:
+    """What the chat STRIP draws for *fid*: its title when it has one, else its id.
+
+    **Instead of the id and not beside it**, which is decision 11 read exactly — *shown in:
+    the strip* — and is the one surface where the title replaces the id rather than following
+    it. A strip is the row where every column is contested: `alpha.3 · fix the widget` on
+    fifteen tabs is a strip that cuts to a count (`slots._compose`'s rung 3) and shows neither.
+
+    **The click map is keyed by the ID all the same** (`slots._Tabs.publish`), so a press on
+    the words resolves to the chat and never to what it is called. Every other surface that
+    names a chat uses :func:`named`, which keeps the id in front.
+    """
+    return title_of(fid) or fid
+
+
+def named(fid: str) -> str:
+    """*fid* with its title AFTER it — for a surface that names the chat as well as titling
+    it: the tab menu's label, the confirmation rows, the chat picker, the crash drawer.
+
+    **The id first, always** (ruling 1). It is what every refusal, every `charter frame-chat`
+    argv and every other surface calls this chat, and it is what `frame/palette.matches` lets
+    an operator type to find the row — a picker row that dropped it would be a row nobody can
+    reach by typing the name charter minted. The title follows, because it is what the person
+    called it.
+
+    Untitled is the bare id, with no separator left dangling: a chat nobody has named reads
+    exactly as it did before titles existed.
+    """
+    shown = title_of(fid)
+    return f"{fid} · {shown}" if shown else fid
+
+
 def pane_of(chat: str) -> str | None:
     """The tmux pane charter records for *chat*, held to tmux's own shape — or ``None``.
 
@@ -459,7 +532,8 @@ def roster(fid: str) -> list[Chat]:
     names = of_workspace(state.workspace_for(fid))
     if is_chat(fid) and fid not in names:
         names = sorted([*names, fid], key=_order)
-    return [Chat(id=n, harness=harness_of(n), active=n == fid, ended=state.is_ended(n))
+    return [Chat(id=n, harness=harness_of(n), active=n == fid, ended=state.is_ended(n),
+                 title=title_of(n))
             for n in names]
 
 

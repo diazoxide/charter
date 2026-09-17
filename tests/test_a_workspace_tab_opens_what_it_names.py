@@ -416,6 +416,15 @@ class TheOpenStartsOnTheProfileTheOperatorIsAlreadyIn(_OpensBeta):
         self.assertTrue(self.launched[0].select)
         self.assertEqual(self.launched[0].start, "codex")
 
+    def test_the_selector_offers_the_row_that_names_the_new_chat(self):
+        """Decision 11: a tab opens a chat somebody is standing in front of, so its selector
+        carries the row that gives the tab a title — the same flag the `+` passes, and for the
+        same reason. The title is typed in the new chat's own pane and written there, so
+        nothing of it crosses tmux."""
+        _a_chat(self.FID, ws="alpha", pane="%1", harness="codex")
+        self._run()
+        self.assertIs(self.launched[0].titling, True)
+
     def test_a_chat_with_no_recorded_harness_starts_on_the_planes_default(self):
         """A chat launched by a charter that predates `state.record_identity`. The plane's
         `[harness] default` is a thing somebody chose, so it is a better row to open on
