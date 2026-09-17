@@ -24,7 +24,9 @@ export function SessionPane({
   const holder = useRef<HTMLDivElement>(null);
   const terminal = useRef<Terminal | undefined>(undefined);
 
-  /** Clicking a pane puts the keyboard in it, which is the whole point of clicking it. */
+  /** Clicking a pane puts the keyboard in it, which is the whole point of clicking it. Both
+   *  events are handled: a person's press arrives as `mousedown`, and something driving the
+   *  window from outside — a scenario test — may only send `click`. */
   const take = useCallback(() => {
     terminal.current?.focus();
     onFocus();
@@ -123,6 +125,7 @@ export function SessionPane({
       data-testid="pane"
       data-session={session}
       onMouseDown={take}
+      onClick={take}
       ref={holder}
     />
   );
