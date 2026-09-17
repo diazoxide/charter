@@ -20,7 +20,10 @@ fn a_recorded_claude_code_session_renders_to_the_screen_it_ended_on() {
     let mut engine = AlacrittyEngine::new(SIZE, 10_000);
 
     // In chunks, because a PTY delivers it that way and escape sequences straddle the joins.
-    engine.advance(&corpus()[..1000]);
+    // In chunks, because a PTY delivers it that way and escape sequences straddle the joins.
+    for chunk in corpus().chunks(997) {
+        engine.advance(chunk);
+    }
 
     let screen = engine.screen();
     assert_eq!(screen.size, SIZE);
