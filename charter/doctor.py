@@ -2299,10 +2299,12 @@ def check_frame() -> Result:
     <harness>` without that flag is affected, and both remedies are named here rather
     than left to be discovered in `docs/frame.md`.
 
-    This row and `charter frame-probe` are also the ONLY places the frame's standing
-    capability ceilings are reported at all. They used to be `util.warn` calls inside
-    `cmd_launch`, printed microseconds before tmux switched the operator's terminal to
-    the alternate screen, where nobody could read them — see
+    This row and `charter frame-probe` are where the frame's standing capability ceilings
+    are reported, with one exception that has a row of its own: `check_ended_tab`, because
+    `tmuxctl.ENDED_TAB_FLOOR` has to answer on a healthy machine and not only when it is
+    breached (its docstring carries that argument). The ceilings collected here used to be
+    `util.warn` calls inside `cmd_launch`, printed microseconds before tmux switched the
+    operator's terminal to the alternate screen, where nobody could read them — see
     `commands_frame.frame_ready`'s own docstring for the measurement and the argument.
     Every fact is answerable without starting anything: `tmuxctl.version()` and
     `config.FRAME["slots"]`.
@@ -2354,6 +2356,80 @@ def check_frame() -> Result:
     if ceilings:
         return Result(name, WARN, detail=detail, hint=" ".join(ceilings))
     return Result(name, OK, detail=detail)
+
+
+def check_ended_tab() -> Result:
+    """Does a harness exit reach charter on this tmux? (`tmuxctl.ENDED_TAB_FLOOR`)
+
+    **Its own row rather than a fourth ceiling inside `check_frame`**, and the two are
+    answering different questions. `check_frame` asks *can a frame run here*: a
+    prerequisite, and above its floors correctly nothing more than a tick. This asks
+    whether an exit gets reported, and an operator needs that answer on a HEALTHY machine
+    as much as on a limited one — "yes, an ended chat keeps its tab" is the fact that tells
+    them a tab sitting dead is worth a look. A condition that only speaks when it is
+    breached can never say that, which is why this is not `ceilings.append(...)` one
+    function up.
+
+    **Three answers, and the discipline is #1098's: never assert what has not been read.**
+
+    * **At or above the floor** — green, naming the tmux it measured.
+    * **Below it** — WARN, with `tmuxctl.below_ended_tab_message`. WARN and never FAIL, for
+      `check_frame`'s reason exactly: nothing here stops `charter <harness>`, the ended step
+      is installed below the floor just as it is above it, and the tab is kept every time
+      the hook does fire. A FAIL would tell the reader their frame is broken when what they
+      have is a tmux that drops one exit in ten.
+    * **Could not tell** — WARN, saying so and nothing else. `tmuxctl.version()` answers
+      ``None`` both for a machine with no tmux and for a `tmux -V` charter could not parse,
+      and **neither is evidence about the hook**. Rendering it as a tick would assert the
+      tab is kept; rendering the ceiling would assert it is lost, in a sentence that opens
+      by naming a tmux version there is none of. It does not guess WHICH of the two reasons
+      it was either — `check_frame` says "tmux not found" for both, which is an assertion it
+      has not earned, and this row is not going to make the same one twice.
+
+    **The below-floor sentence is `tmuxctl`'s, not this function's.** `commands_frame.
+    frame_ready` reads the same function for `--probe` and `charter frame-probe`, so the two
+    surfaces cannot drift into two accounts of one tmux bug — the reason
+    `below_resize_hook_message` was extracted, recorded in its own docstring.
+
+    **It takes its own reading of tmux, and does not borrow `check_frame`'s.** That costs a
+    second `tmux -V` per `doctor` run — a local exec beside this command's `git` and forge
+    children — and it is the honest shape: a row reports what it established itself. One
+    that rendered its verdict from a reading some other row happened to take would be
+    vouching for an answer it did not ask for, which is the one thing this row exists not
+    to do. The two can in principle disagree (a transient failure on one call and not the
+    other); each would then be saying exactly what it found, which is why one row says
+    nothing about the other's answer.
+
+    Wiring one reading down from `_checks` was written and thrown away: with both rows
+    reading for themselves the output is identical, so deleting the wiring would change
+    nothing observable — a sweep survivor by construction, and `CONTRIBUTING.md` is plain
+    that such a line should not exist.
+    """
+    from .frame import tmuxctl
+
+    name = "ended tab"
+    floor = f"{tmuxctl.ENDED_TAB_FLOOR[0]}.{tmuxctl.ENDED_TAB_FLOOR[1]}"
+    v = tmuxctl.version()
+    if v is None:
+        # Not "tmux not found": that is one of the two things this can mean, and charter
+        # did not find out which. `check_frame` is where an absent tmux is chased down;
+        # this row states the reading it could not make and stops there.
+        return Result(name, WARN, detail="could not tell — no tmux version read here",
+                      hint=f"charter asked `tmux -V` and could not read a version out of "
+                           f"the answer, so it cannot say whether a harness exit would be "
+                           f"reported on this machine — it is not saying the tab is kept "
+                           f"and not saying it is lost. What is wanted is tmux {floor} or "
+                           f"newer, below which an exit can go unreported and a chat's tab "
+                           f"may not be kept.")
+    running = f"tmux {v[0]}.{v[1]}"
+    if v < tmuxctl.ENDED_TAB_FLOOR:
+        return Result(name, WARN, detail=f"{running} — below tmux {floor}",
+                      hint=tmuxctl.below_ended_tab_message(v))
+    # The detail, not a hint: `Result.render` drops a green row's hint unprinted (#856), and
+    # this is a fact a passing row still has to state — it is the whole answer on the
+    # machines where the answer is good news.
+    return Result(name, OK, detail=f"{running} — a harness exit is reported, so an ended "
+                                   f"chat keeps its tab")
 
 
 def commands_frame_no_renderer(missing: list[str]) -> str:
@@ -4747,7 +4823,8 @@ def _checks(*, preflight: bool = False):
                 check_control_plane_schema(),
                 check_plane_root(), check_index_lock(),
                 check_session_root(), check_session_layer(),
-                check_harness(), check_frame(), check_guard_wired(), check_guard_seen(), check_nested_plane(),
+                check_harness(), check_frame(), check_ended_tab(),
+                check_guard_wired(), check_guard_seen(), check_nested_plane(),
                 check_workspace_clones(), check_workspace_harness(), check_changes(),
                 check_inventory(), check_vaults(),
                 check_vault_registry_divergence(), check_version_lock(),
@@ -4789,7 +4866,7 @@ _FIXED_CHECK_NAMES = (
     # ← the forge cli/auth pair is spliced in here, see `check_names`
     "git auth", "charter.toml", "harness profiles", "schema", "plane root", "index lock",
     "session root", "session layer",
-    "harness", "frame",
+    "harness", "frame", "ended tab",
     "plane-root guard", "guard seen", "nested plane", "workspace clones",
     "workspace layer", "changes",
     "inventory", "vaults", "vault registry", "version lock", "memory indexes",

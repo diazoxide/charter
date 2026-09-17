@@ -71,11 +71,13 @@ from tests.test_workflows import GITHUB, REPO, load
 #: where the fix landed in tmux's history — a floor this suite can point at a measurement
 #: for is worth more than one it has to point at a changelog for.
 #:
-#: **Written here and nowhere else.** `.github/actions/tmux/action.yml` states the same
-#: two numbers in `FLOOR_MAJOR`/`FLOOR_MINOR` so that the job fails before the suite even
-#: starts, and `TheActionAndThisModuleAgreeAboutTheFloor` holds the two copies together.
-#: One measurement written in two files and drifting is this repository's #670 and it is
-#: not repeated here.
+#: **Written here, and every other copy is pinned to it.** `.github/actions/tmux/
+#: action.yml` states the same two numbers in `FLOOR_MAJOR`/`FLOOR_MINOR` so that the job
+#: fails before the suite even starts, and `TheActionAndThisModuleAgreeAboutTheFloor` holds
+#: those two together. `charter.frame.tmuxctl.ENDED_TAB_FLOOR` is the third — the same
+#: measurement read as *what the ended tab needs* rather than *what CI must run* — and
+#: `TheCIFloorIsTheEndedTabFloor` holds that one. One measurement written in several files
+#: and drifting is this repository's #670; none of the three is free to move alone.
 CI_TMUX_FLOOR = (3, 5)
 
 #: The local composite action that installs it, as a `uses:` reference.
@@ -350,6 +352,27 @@ class TheActionAndThisModuleAgreeAboutTheFloor(unittest.TestCase):
         self.assertRegex(self._env("TMUX_SHA256"), r"^[0-9a-f]{64}$")
         self.assertIn("sha256sum -c", self.text,
                       "the digest is recorded but never checked against the download")
+
+
+class TheCIFloorIsTheEndedTabFloor(unittest.TestCase):
+    """The THIRD copy of the same measurement, held to the other two.
+
+    `CI_TMUX_FLOOR` above says *"written here and nowhere else"*, and names
+    `.github/actions/tmux/action.yml` as the one second copy that exists because a job has
+    to refuse before the suite starts. `tmuxctl.ENDED_TAB_FLOOR` is now a third, and it is
+    the same 3.5 for the same reason: the rate at which `pane-died` is missed was measured
+    at zero there and non-zero below.
+
+    **Two directions, one fact.** This module's constant is the tmux CI must RUN — without
+    it the suite is red for a reason that is not the branch's. That one is the tmux the
+    ended tab NEEDS — without it an operator's harness exits and nothing is presented.
+    Nothing says those must move together forever, and that is exactly why the pin is here
+    rather than a comment: the day they diverge, somebody has to come and argue with this
+    test, which is where the argument belongs. #670 is what an unpinned second copy costs.
+    """
+
+    def test_the_floor_ci_runs_is_the_floor_the_ended_tab_needs(self):
+        self.assertEqual(CI_TMUX_FLOOR, tmuxctl.ENDED_TAB_FLOOR)
 
 
 @unittest.skipUnless(os.environ.get("GITHUB_ACTIONS") == "true",

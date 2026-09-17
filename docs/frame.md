@@ -66,22 +66,26 @@ exit-code hooks
 fail to install charter says so and declines to attach rather than risk a session nothing
 can end. The resize-recovery hook needs a further 3.3; below that a resize still works, the
 panels just do not come back on their own — `charter frame-resize`, typed in the frame's
-own window, restores them.
+own window, restores them. **Keeping a tab when a harness ends needs 3.5**; below that an
+exit can go unreported, and when it is the tab is not kept. Both of those sit *above* the
+3.2 floor.
 
 `charter <harness> --probe` (or the standalone `charter frame-probe`) answers "can a frame
 run here, and what will it not be able to do" without starting anything: exit 0 if a frame
 can run, non-zero if tmux is missing entirely, plus a line for each standing limit — a
-tmux below 3.2, a tmux below 3.3 (no resize-recovery hook), any `[frame] slots` entry
-charter sizes but has no renderer for, and a `[[frame.component]]` arrangement charter
-refused. It closes with the three keys below, because it is also the closest thing charter
-has to "tell me about the frame". `charter doctor` carries the same facts — the machine's
-in its `frame` row, the file's in its `charter.toml` row, beside the other settings a plane
-declares and charter is not honouring.
+tmux below 3.2, a tmux below 3.3 (no resize-recovery hook), a tmux below 3.5 (an exit that
+can go unreported), any `[frame] slots` entry charter sizes but has no renderer for, and a
+`[[frame.component]]` arrangement charter refused. It closes with the three keys below,
+because it is also the closest thing charter has to "tell me about the frame".
+`charter doctor` carries the same facts — the machine's in its `frame` and `ended tab`
+rows, the file's in its `charter.toml` row, beside the other settings a plane declares and
+charter is not honouring.
 
-The 3.3 line is worth calling out because the two floors are easy to conflate: 3.3 sits
-*above* the 3.2 floor, so a tmux 3.2 passes the floor cleanly and still has no
+The 3.3 line is worth calling out because a floor above the floor is easy to conflate with
+it: 3.3 sits *above* the 3.2 floor, so a tmux 3.2 passes the floor cleanly and still has no
 `window-resized` hook. Charter used to say so only in the milliseconds before the frame
 came up, which is nowhere. Now both surfaces name it, and they name the remedy with it.
+The 3.5 line below is the same shape again.
 
 What it costs is this. Resize your terminal on a tmux below 3.3 and nothing re-measures the
 panels, so they keep the shape the drag left them in. Measured on 3.2, a frame launched at
@@ -110,11 +114,57 @@ on this tmux that command is the one recovery worth knowing. There is no palette
 no key for it: the frame binds keys through the config it sources onto its own server, and
 this is a command you type.
 
+**The 3.5 line is the other one above the floor, and it is a tmux bug fixed upstream in 3.5
+rather than anything charter can work around.** Up to and including 3.4, tmux can lose the
+`SIGCHLD` that tells it a pane's program has finished. When it does, it never runs that
+pane's `pane-died` hook — not late, never — and the pane is left reading dead with no exit
+status and no signal on it. Charter learns that a harness ended through exactly that hook,
+so on a missed exit charter is never told anything happened.
+
+What you see when it happens: the pane stops where your harness left it, with **no resume
+row, no start-fresh row and nothing on screen saying the harness is over**. The chat goes
+on looking live everywhere else — on the chat strip, in the tab menu, to `chat: close` —
+because as far as charter knows it is. `F2 → chat: close` is how that tab is closed; it is
+the ordinary close, and it asks for confirmation, because charter still believes there is a
+harness in there to stop.
+
+**It is intermittent, which is the part worth knowing before it happens.** Measured with
+charter taken out of the picture: on tmux 3.4 under load, 8 of 60 exits went unreported; on
+one image, 3.4 gave 5 of 40 and 3.5 gave 0 of 40. So the tab works most of the time and
+then, once, does not — which is exactly the shape of thing that reads as "charter is
+flaky" if nobody has told you the version it depends on. Charter's CI runs the real-tmux
+tests on 3.5a for the same reason.
+
+**Ubuntu LTS ships 3.4**, so `apt` on that release will not move you off it; a newer tmux
+has to come from a backport, a build from source, or Homebrew. macOS gets 3.7c from
+Homebrew today, so a Mac has this by default.
+
+**Two cases are not affected the same way.** A chat you open *inside a tmux you are already
+in* does not use that hook at all — charter stays awake and watches the pane itself (see
+*Inside a tmux you already have* below), and the flag it watches is set by the pane closing
+rather than by the signal that goes missing. Those chats keep their tab on any tmux; what a
+missed signal costs them is the exit *code*, so a clean `/exit` can come back as a crash
+drawer instead of the selector. The escape hatch goes the other way: `charter frame --
+<cmd>` closes its window through that same hook rather than offering a choice, so a missed
+exit leaves you attached to a frame with nothing left to end it, and the window has to be
+closed with tmux's own prefix key. That is a hang rather than a missing tab, and it is the
+one below-3.5 outcome worth knowing on sight.
+
+Nothing is switched off below 3.5. Charter launches the same way, arms the same hook, and
+keeps the tab every time the hook does fire — what changes is that charter stops promising
+it, and says so. `charter doctor` has a row of its own for this, `ended tab`, and it
+answers three ways: the tmux it measured and that an exit is reported, the tmux it measured
+and that one can be missed, or that it could not read a tmux version here at all and so
+cannot say either way.
+
 Those limits are deliberately **not** printed when a frame launches. A warning written to
 your terminal microseconds before tmux switches to the alternate screen is not readable —
 measured at 86 bytes ahead of the switch — and it comes back into view only once the frame
 exits. All of them are standing properties of this machine and this plane rather than news
-about one launch, so they live on the two surfaces you can ask on demand.
+about one launch, so they live on the two surfaces you can ask on demand — `--probe` and
+`charter doctor`. The 3.5 line has a third reason on top of that one: a missed exit is
+never reported to charter at all, so there is no later moment at which charter could
+notice and tell you. Said ahead of time or not said.
 
 ### What opening one costs
 
@@ -1257,6 +1307,20 @@ transcript its harness left.
 **A chat charter did not mark as its own is left alone.** A session an older charter created
 carries no plane marker, so its harness's exit leaves a dead pane with tmux's own `Pane is
 dead` on it until you close the tab.
+
+**On charter's own tmux server it needs tmux 3.5.** All of the above rests on tmux telling
+charter that the pane's program finished, and on tmux 3.4 and older that message can go
+missing: a lost `SIGCHLD` means the `pane-died` hook never fires, so charter is never told
+the harness ended and that tab is not kept — the pane just stops where the harness left it,
+offering nothing. It is a tmux bug fixed upstream in 3.5, not a charter limit, and it is
+intermittent rather than constant (measured on 3.4 under load: 8 of 60 exits unreported,
+against 0 of 40 on 3.5). **Ubuntu LTS ships 3.4.** A chat opened inside a tmux you are
+already in is the exception: charter watches that pane itself rather than through the hook,
+so its tab is kept on any tmux and only the exit code is lost. Charter does not lock you
+out below 3.5 — it launches the same way and keeps the tab every time the hook does fire —
+it just stops promising it. The full account, and what to do with a tab that was missed, is
+under *What it needs* above; `charter doctor`'s `ended tab` row says where your own tmux
+stands.
 
 **Closing the window detaches, and that is the exit that costs nothing.** tmux sessions
 survive a client leaving, so the common way out loses nothing and needs no resume: the

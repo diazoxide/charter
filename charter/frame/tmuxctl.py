@@ -74,6 +74,74 @@ FLOOR = (3, 2)
 #: stay two constants.
 RESIZE_HOOK_FLOOR = (3, 3)
 
+#: The first tmux that reports a harness's death RELIABLY — which is what the ended tab
+#: (#1112, #1113) is built on top of, and nothing else in charter is.
+#:
+#: **The mechanism, as #1116 established it** — recorded here rather than left in an issue,
+#: because a floor whose reason is elsewhere is a floor somebody folds away. On 3.4 a lost
+#: SIGCHLD leaves `PANE_STATUSREADY` unset on the pane, so `server_destroy_pane` returns
+#: early — `server-fn.c:329` — **before** `notify_pane("pane-died")`, and the hook never
+#: fires at all. Not late: never. The pane still reads dead, and `#{pane_dead_status}` and
+#: `#{pane_dead_signal}` are both EMPTY, permanently. That is a different state from the
+#: empty status a SIGNAL death leaves behind, which `commands_frame._pane_state` already
+#: reads as `_UNKNOWN_DEATH_CODE` — there the hook fired and charter was told.
+#:
+#: **Measured with charter stripped out, so the numbers are tmux's and not charter's.**
+#: tmux 3.4 under load: 8 misses in 60 exits. On one image, the same harness: 3.4 gave 5
+#: of 40 and 3.5 gave 0 of 40. CI was pinned to 3.5a for exactly this in #1120; this
+#: constant is the operator-facing half of the same finding, and no tmux below 3.5 exists
+#: on the machine this was written on to re-run either half against.
+#:
+#: **The same number, deliberately, as `tests.test_ci_runs_a_tmux_that_reaps_its_children.
+#: CI_TMUX_FLOOR`** — one measurement, and `TheCIFloorIsTheEndedTabFloor` holds the two
+#: together so #670's "one measurement written in two files and drifting" cannot happen to
+#: it. That module's constant is what CI must RUN; this one is what the behaviour NEEDS.
+#: They are the same fact from two directions, and if they ever stop being, the pin is
+#: where that argument has to be had rather than in a silent divergence.
+#:
+#: **HIGHER than `FLOOR`, a separate constant, and `RESIZE_HOOK_FLOOR`'s reason applies
+#: word for word.** Ubuntu LTS ships 3.4. Folding this into `FLOOR` would put every one of
+#: those operators below the version charter warns at — over one tab that is kept, not
+#: over the escape hatch and the exit-code hooks `FLOOR` is actually about. Charter does
+#: not lock them out: below this line it launches exactly as it does above it, installs
+#: the same `pane-died[1]` ended step (`commands_frame._pane_died_ended_hook_argv`), and
+#: keeps the tab every time the hook does fire — which on 3.4 is most of the time. What
+#: changes is that charter stops PROMISING it, and says so on the two surfaces built to
+#: report standing ceilings: `commands_frame.frame_ready` and `doctor.check_ended_tab`.
+#:
+#: **What it costs when the hook is missed, stated exactly, because a floor with a vague
+#: cost gets lowered.** Nothing fires, so neither `pane-died[0]` (the exit-status write)
+#: nor `pane-died[1]` runs. For a PROFILE's chat `[1]` is the ended step, so the pane sits
+#: where the harness left it, under `remain-on-exit`, with no ended tab and no drawer on
+#: it, and the chat goes on looking live to every other surface — the strip, the tab menu,
+#: `chat: close`. Charter is never told the exit happened, so there is no later moment at
+#: which it could notice and say so. **That is the whole reason this is reported ahead of
+#: time**, on the ceiling surfaces, rather than at the moment it costs something: at that
+#: moment charter knows nothing.
+#:
+#: **For the ESCAPE HATCH the same miss is worse, and that is not a footnote.** `charter
+#: frame -- <cmd>` gets `kill-window` at `[1]` rather than the ended step
+#: (:func:`commands_frame._pane_died_second_hook_argv`), and its launcher blocks in
+#: `attach` with nothing else watching. A missed SIGCHLD means `kill-window` never runs, so
+#: nothing ends the session and `attach` does not return — the exact hang this module's
+#: docstring says the hook pair exists to close, moved from the install race to an hour
+#: later. **A version-gated fallback buys nothing here**, which is worth writing down
+#: because it is the obvious idea: the fallback IS that hook, so swapping the ended step
+#: for `kill-window` below the floor would trade one unfired action for another.
+#:
+#: **Two things this floor is NOT about.** It does not reach a chat launched inside the
+#: operator's own tmux: that path installs no `pane-died` hook for the harness pane at all
+#: and watches `#{pane_dead}` itself (`commands_frame._launch_in_operator_tmux`, and its
+#: docstring's *"The harness's exit code travels without hooks here"*). `#{pane_dead}` is
+#: `wp->fd == -1`, set by the pty EOF and not by the signal — `.github/actions/tmux/
+#: action.yml` carries that reading — so the poll still sees the death and still presents
+#: the tab; what it loses is the STATUS, read back as `_UNKNOWN_DEATH_CODE`, which turns a
+#: clean exit's selector into a crash drawer. And it is not the only thing riding that hook
+#: — `_arm_panel_respawn` brings a dead PANEL back through a `pane-died` of its own, so the
+#: same miss leaves a panel down — but the ended tab is what an operator notices, and one
+#: floor named for one behaviour is the shape the constants above already keep.
+ENDED_TAB_FLOOR = (3, 5)
+
 #: The first tmux release in which `new-session` accepts `-e` at all — the VERSION is
 #: read from tmux's own published CHANGES file (github.com/tmux/tmux, "CHANGES FROM 3.1c
 #: TO 3.2"): "Add -e flag for new-session to set environment variables, like the same
@@ -1023,6 +1091,75 @@ def below_resize_hook_message(v: tuple[int, int]) -> str:
             f"launch geometry at once — that is the same command the hook would have "
             f"called, and it is the recovery on this tmux. Everything else works "
             f"unchanged.")
+
+
+def below_ended_tab_message(v: tuple[int, int]) -> str:
+    """What an operator below :data:`ENDED_TAB_FLOOR` is actually in for.
+
+    **Named here beside the other two for `below_resize_hook_message`'s reason**, which
+    that function's docstring already paid for: two copies of one standing fact drift into
+    two different facts. Its readers are `commands_frame.frame_ready` (so `--probe` and
+    `charter frame-probe` carry it) and `doctor.check_ended_tab`.
+
+    Six things it says, and each is here because leaving it out was tried in a draft and
+    read wrongly:
+
+    * **Intermittent, not broken.** 8 in 60, not 60 in 60. An operator told "the ended tab
+      does not work on your tmux" who then watches it work four times running stops
+      believing the whole surface. The one exit in ten that is missed is the one this
+      sentence is for.
+    * **A tmux defect, fixed upstream in 3.5.** Told it is a charter limit, an operator
+      files a charter issue and waits for a release that cannot fix it. Told whose bug it
+      is and which version closed it, they upgrade tmux, which is the only thing that does.
+    * **Ubuntu LTS is where 3.4 comes from**, so `apt` on that release will not move them
+      off it and "just update tmux" is not advice until somebody says that.
+    * **WHICH chats lose it**, because not all of them do and a flat claim would be wrong
+      for a whole launch path. A chat charter opens on its own server is the one that
+      rides the hook. A chat opened inside a tmux the operator is ALREADY in never
+      installs that hook at all — `commands_frame._launch_in_operator_tmux` watches
+      `#{pane_dead}` itself, and that format survives a lost SIGCHLD — so there the miss
+      costs the exit code, not the tab.
+    * **The escape hatch, which fails WORSE rather than the same.** `charter frame --
+      <cmd>` gets `kill-window` at `pane-died[1]`, not the ended step
+      (:func:`commands_frame._pane_died_second_hook_argv`), and the same miss stops that
+      running too — so nothing ends the session and `attach` blocks with no return. An
+      earlier draft closed with *"Everything else in the frame works unchanged"*, which
+      was false in exactly the direction that costs the most: a hang, not a missing tab.
+    * **A remedy for the tab that WAS missed**, on the ceiling it answers
+      (`doctor.check_harness`'s deficit rule, and `below_resize_hook_message`'s). A missed
+      exit leaves a chat charter still believes is live, so the way out is the palette's
+      ordinary `chat: close` — not anything about ended tabs, which is exactly what an
+      operator would go looking for and not find.
+
+    **The palette's KEY is not spelled here**, only the row. `commands_frame.driving_keys`
+    settles that for these surfaces: `[frame] hotkey` moves the palette off `F2`, and a
+    remedy naming a key the plane has moved is a fact an operator will act on and be wrong
+    about. This module is the one that must not read the plane's config, so it names what
+    the operator is looking for and leaves the key to a surface that can resolve it.
+
+    It does NOT say the frame is refused or that anything is disabled, because nothing is:
+    charter installs the same ended step below this floor as above it and keeps the tab
+    every time the hook does fire. See :data:`ENDED_TAB_FLOOR`.
+    """
+    floor = f"{ENDED_TAB_FLOOR[0]}.{ENDED_TAB_FLOOR[1]}"
+    return (f"tmux {v[0]}.{v[1]} does not always tell charter that a harness has ended, so "
+            f"a chat's tab may not be kept. When the exit is missed the pane simply stops "
+            f"where the harness left it: no resume row, no start-fresh row, and nothing on "
+            f"screen saying the harness is over — charter was never told, so it has nothing "
+            f"to draw. It is not every exit — measured on 3.4 under load, 8 of 60 went "
+            f"unreported, against 0 of 40 on tmux {floor} — which is what makes it worth "
+            f"knowing about before it happens. This is a tmux defect fixed upstream in tmux "
+            f"{floor}, not something charter can work around: below it a lost SIGCHLD "
+            f"leaves tmux's own `pane-died` hook unfired for good. Ubuntu LTS ships 3.4, so "
+            f"its `apt` will not move you off it — a newer tmux has to come from a backport, "
+            f"a build, or Homebrew. A tab that was missed is closed the ordinary way, the "
+            f"palette's `chat: close`, because charter still believes that chat is running. "
+            f"Two things are NOT affected the same way: a chat opened inside a tmux you are "
+            f"already in is watched by charter rather than by the hook, so it keeps its tab "
+            f"and loses only the exit code; and `charter frame -- <cmd>`, the escape hatch, "
+            f"fails harder rather than softer — its window is closed by that same hook, so "
+            f"a missed exit leaves it attached with nothing to end the session, and the "
+            f"window has to be closed with tmux's own prefix key.")
 
 
 def report_failure(action: str, cmd: list[str], proc: subprocess.CompletedProcess) -> None:

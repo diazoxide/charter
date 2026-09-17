@@ -548,8 +548,9 @@ def frame_ready() -> tuple[int, str, str]:
     launcher goes on to draw regardless — a probe that lies about `cmd_launch`'s own
     behaviour is worse than one that runs nothing at all.
 
-    **The four STANDING conditions are reported here and nowhere else.** The first three
-    used
+    **The five STANDING conditions are reported here and nowhere else.** They are numbered
+    below in the order they were ADDED, which is not the order this function emits them;
+    the first three used
     to be `util.warn` calls inside `cmd_launch` (or, for the resize hook, inside
     `_draw_panels`), and all three were measured to be unreadable there: `util.warn` for
     an unimplemented slot lands 86 bytes before tmux's own `\\x1b[?1049h`, so the
@@ -581,6 +582,16 @@ def frame_ready() -> tuple[int, str, str]:
     named for being silently ignored; this is the surface an operator asks BEFORE they
     launch, and the one `docs/frame.md` sends them to.
 
+    **`tmuxctl.ENDED_TAB_FLOOR` is the fifth, and its case for being on a report rather
+    than at the moment it costs something is the strongest of the five.** It sits above
+    `FLOOR` too, so #387's shape repeats: an operator on the tmux Ubuntu LTS ships passes
+    the floor and the resize hook cleanly and still has a harness exit that can go
+    unreported, taking the ended tab with it. What is different is that there is no "at the
+    moment" to choose instead — a lost SIGCHLD means the `pane-died` hook never fires, so
+    charter is never told the exit happened and has nothing to notice. Said here or said
+    nowhere. It does not change the exit code either: `cmd_launch` installs the same ended
+    step below this floor as above it, and the tab is kept every time the hook does fire.
+
     Two callers share this, both read-only for the same reason `charter/news.py`
     requires of a `check:` (reads, never acts; and this module's own tmux calls all go
     through `tmuxctl.run`, which is time-boxed, so neither can hang): `--probe` on every
@@ -598,6 +609,20 @@ def frame_ready() -> tuple[int, str, str]:
         ceilings.append(tmuxctl.below_floor_message(v))
     if v < tmuxctl.RESIZE_HOOK_FLOOR:
         ceilings.append(tmuxctl.below_resize_hook_message(v))
+    # **The fifth by the docstring's numbering, emitted here rather than last** — it is a
+    # tmux version floor, so it belongs beside the other two and not after the two
+    # conditions that are about the plane's own file. Below
+    # `tmuxctl.ENDED_TAB_FLOOR` a harness exit can go unreported — a lost SIGCHLD leaves
+    # tmux's `pane-died` unfired for good — so the ended tab (#1113) is not promised there.
+    # It belongs on this list for the reason the two above it do: it is a standing property
+    # of the machine, true on every launch until the operator's tmux changes. And it has to
+    # be said AHEAD of the loss rather than at it, which is stronger than the others' case:
+    # charter is never told the exit happened, so there is no moment at which it could
+    # notice and report. `doctor.check_ended_tab` is the second reader, and both take the
+    # sentence from `tmuxctl` rather than writing it out — `below_resize_hook_message`'s own
+    # rule, and the reason it lives there.
+    if v < tmuxctl.ENDED_TAB_FLOOR:
+        ceilings.append(tmuxctl.below_ended_tab_message(v))
     missing = frame_slots.unimplemented(config.FRAME["slots"])
     if missing:
         ceilings.append(no_renderer_message(missing))

@@ -59,6 +59,35 @@ class Floor(unittest.TestCase):
         about) the whole frame over a gap that only costs cosmetic resize drift."""
         self.assertGreater(tmuxctl.RESIZE_HOOK_FLOOR, tmuxctl.FLOOR)
 
+    def test_the_ended_tab_floor_is_the_tmux_that_can_report_a_death(self):
+        """3.5, and the number is a MEASUREMENT rather than a reading of CHANGES.
+
+        On 3.4 a lost SIGCHLD leaves `PANE_STATUSREADY` unset, so `server_destroy_pane`
+        returns at `server-fn.c:329` before `notify_pane("pane-died")` — the hook never
+        fires, and the pane reads dead with `pane_dead_status` and `pane_dead_signal`
+        both empty, permanently. Measured with charter stripped out: 8 misses in 60 under
+        load on 3.4; on the same image, 3.4 gave 5 of 40 and 3.5 gave 0 of 40.
+
+        Pinned to the number so nobody lowers it on a hunch about which release "probably"
+        has it: the whole of the ended tab rests on that one hook firing.
+        """
+        self.assertEqual(tmuxctl.ENDED_TAB_FLOOR, (3, 5))
+
+    def test_the_ended_tab_floor_stays_above_the_frames_own(self):
+        """`RESIZE_HOOK_FLOOR`'s reason exactly, one behaviour over. Raising `FLOOR` to
+        3.5 would put every Ubuntu LTS operator below the version charter warns at, over
+        one tab that is kept rather than the escape hatch and the exit code `FLOOR`
+        protects — and charter is explicitly not locking them out."""
+        self.assertGreater(tmuxctl.ENDED_TAB_FLOOR, tmuxctl.FLOOR)
+
+    def test_the_three_behaviour_floors_are_three_distinct_facts(self):
+        """Three constants, never folded, and no two of them numerically shadowing each
+        other by accident: a reader who found two equal would be entitled to delete one.
+        `SESSION_ENV_FLOOR` is deliberately equal to `FLOOR` and carries its own note; the
+        behaviour floors above it do not."""
+        self.assertNotEqual(tmuxctl.ENDED_TAB_FLOOR, tmuxctl.RESIZE_HOOK_FLOOR)
+        self.assertNotEqual(tmuxctl.ENDED_TAB_FLOOR, tmuxctl.FLOOR)
+
 
 class Messages(unittest.TestCase):
     def test_the_absent_message_names_the_command_that_fixes_it(self):
@@ -80,6 +109,81 @@ class Messages(unittest.TestCase):
         self.assertNotIn("hotkey disabled", msg)
         self.assertIn("stays bound", msg)
         self.assertIn("exit code", msg)
+
+    def test_the_below_ended_tab_message_names_both_versions(self):
+        """`below_floor_message`'s rule: the operator's own tmux and the version that
+        would fix it, so the sentence is actionable without a second lookup."""
+        msg = tmuxctl.below_ended_tab_message((3, 4))
+        self.assertIn("3.4", msg)
+        self.assertIn("3.5", msg)
+
+    def test_it_names_the_tab_as_what_is_lost_and_does_not_refuse_the_frame(self):
+        """The loss is one tab that is not kept, not a frame charter declines to draw.
+        A message that read as a refusal would send an operator looking for a flag to
+        turn it back on — there is none, because nothing is switched off."""
+        msg = tmuxctl.below_ended_tab_message((3, 4))
+        self.assertIn("tab", msg)
+        self.assertNotIn("refus", msg)
+        self.assertNotIn("disabled", msg)
+
+    def test_it_says_the_defect_is_tmuxs_and_was_fixed_upstream(self):
+        """An operator told "charter cannot do this on your tmux" files a charter bug and
+        waits. Told it is a tmux defect fixed in 3.5, they upgrade tmux — which is the
+        only thing that actually closes it. Ubuntu LTS is named because that is where
+        3.4 comes from, and `apt` on that release will not move them off it."""
+        msg = tmuxctl.below_ended_tab_message((3, 4))
+        self.assertIn("tmux", msg)
+        self.assertIn("Ubuntu", msg)
+        self.assertNotIn("charter limitation", msg)
+
+    def test_it_says_the_miss_is_intermittent_rather_than_constant(self):
+        """8 in 60, not 60 in 60. An operator told their ended tab "does not work" who
+        then watches it work four times running stops believing the message; told it is
+        missed sometimes, the one time it is missed is the one they were warned about."""
+        msg = tmuxctl.below_ended_tab_message((3, 4))
+        self.assertIn("not every", msg)
+
+    def test_it_names_what_to_do_with_a_tab_that_was_missed(self):
+        """`below_resize_hook_message`'s rule — the remedy sits on the ceiling it answers.
+        A missed exit leaves a chat charter still believes is live, so the way out is the
+        palette's own close row rather than anything about ended tabs."""
+        msg = tmuxctl.below_ended_tab_message((3, 4))
+        self.assertIn("chat: close", msg)
+
+    def test_it_does_not_spell_the_key_the_palette_is_on(self):
+        """`commands_frame.driving_keys`' rule, and this message is read by exactly the
+        surfaces it was written for (`--probe`, `frame-probe`, `doctor`): **the keys are
+        resolved, not spelled.** `[frame] hotkey` moves the palette off `F2`, and a remedy
+        that says `F2` on a plane that moved it is worse than one that says nothing,
+        because it is a fact an operator will act on. This module cannot resolve the key —
+        it is the one module that must not import the plane's config — so it names the row
+        and leaves the key to the surfaces that can."""
+        msg = tmuxctl.below_ended_tab_message((3, 4))
+        self.assertNotIn("F2", msg)
+
+    def test_it_scopes_the_loss_to_the_chats_that_actually_lose_it(self):
+        """**A chat opened inside a tmux the operator is already in does NOT lose its
+        tab**, and a message that said otherwise would be wrong for every one of them.
+        `_launch_in_operator_tmux` installs no `pane-died` hook for the harness pane and
+        watches `#{pane_dead}` itself — and `#{pane_dead}` is `wp->fd == -1`, set by the
+        pty EOF whether or not the SIGCHLD arrives (`.github/actions/tmux/action.yml`
+        carries that reading). So the hook miss costs that path the exit CODE, not the
+        tab."""
+        msg = tmuxctl.below_ended_tab_message((3, 4))
+        self.assertIn("already in", msg)
+
+    def test_it_does_not_claim_everything_else_is_unaffected(self):
+        """It said "Everything else in the frame works unchanged", and that was false in
+        the direction that matters. `charter frame -- <cmd>` is the escape hatch, and its
+        `pane-died[1]` is `kill-window` rather than the ended step
+        (`commands_frame._pane_died_second_hook_argv`). The same lost SIGCHLD means that
+        never runs either — so nothing ends the session and `attach` blocks forever, which
+        is the exact hang the hook pair exists to close. A hang is worse than a tab that
+        is not kept, and an operator told "everything else works" will not connect the
+        two."""
+        msg = tmuxctl.below_ended_tab_message((3, 4))
+        self.assertNotIn("Everything else in the frame works unchanged", msg)
+        self.assertIn("charter frame --", msg)
 
 
 class RunArgv(unittest.TestCase):
