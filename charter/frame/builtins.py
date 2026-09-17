@@ -742,16 +742,73 @@ def _strip_events(fid: str):
     """
     def on_event(ev):
         from .. import util
-        from . import slots as _slots
+        from . import gate, slots as _slots
         from .builtin_actions import _spawn
         if not ev.pressed or ev.name != _ACT_BUTTON:
             return False
-        if not _slots.DOORS.opens_palette(ev.col):
+        to_gate = _slots.DOORS.opens_gate(ev.col)
+        # **Asked before the read**, so a press on dead space — which is most of this row,
+        # and every stray report a terminal sends — costs no tmux round trip at all.
+        if not to_gate and not _slots.DOORS.opens_palette(ev.col):
             return False
-        _spawn(util.self_relaunch_argv(*_PALETTE), fid=fid)
+        presser = _presser(fid)
+        _spawn(util.self_relaunch_argv(*_PALETTE, *presser,
+                                       *((gate.OPTION,) if to_gate else ())), fid=fid)
         return False
 
     return on_event
+
+
+def _presser(fid: str) -> tuple[str, ...]:
+    """Which client clicked, as the argv fragment it rides on — or nothing at all.
+
+    **The click bind wrote it down; this reads it back.** `commands_frame.conf_text`'s
+    `MouseDown1Pane` line records `#{client_name}` onto the PANEL pane with `set-option -F`
+    before it forwards the press, so by the time `frame/events.py` delivers the click to
+    this handler the answer is already sitting on this process's own pane. Measured in task
+    4's Step 0 (G3) on tmux 3.7c and at the 3.2 floor, six alternating presses by two
+    attached clients: the option read back as the clicking client every time, in either
+    order of last activity.
+
+    **It is this pane's own `$TMUX_PANE` and never a most-recently-active client.** tmux
+    will happily answer `#{client_name}` for *a* client, and on the two-client frame
+    `commands_frame._say_on_screen` already reasons about that is a coin toss over whose
+    terminal *Close charter* closes. A pane option is the one answer that was written by
+    the press itself.
+
+    **Empty is an ordinary answer**, and it is what every way of not knowing comes back as:
+    a pane charter never wrote the option on (a frame launched by a charter that predates
+    it), a tmux that would not answer, a value outside `gate.CLIENT_RE` — which includes
+    the literal `#{client_name}` the option would hold if that bind ever lost its `-F`. All
+    of them reach the surface as *no presser*, where the detach row is listed refused with
+    the sentence that names the gesture that works. None of them reaches an argv.
+
+    A TUPLE rather than a string, for `tabmenu.forward`'s reason: an argv holding an empty
+    positional is not the same thing as an argv with no positional, and the second is what
+    a palette with no presser has to be.
+
+    *fid* names the chat this panel draws, which is how the SERVER is resolved — a panel is
+    a `run-shell` child of a tmux shared by every frame on the machine, so `$TMUX` is not an
+    answer charter reads (`builtin_actions._server` states the same fallback for the same
+    reason).
+    """
+    import os
+
+    from . import gate, state, tmuxctl
+    pane = os.environ.get("TMUX_PANE", "")
+    # A pane id charter cannot spell is no pane: `display-message -p -t ""` does not fail
+    # — measured on 3.7c, an EMPTY target resolves to the CURRENT pane, which on a shared
+    # server is whichever one tmux last touched (`commands_frame._pane_place` records the
+    # same reading). Reading somebody else's `@charter_presser` is exactly the wrong
+    # terminal.
+    if not tmuxctl.PANE_ID_RE.fullmatch(pane):
+        return ()
+    said = tmuxctl.run(
+        "asking which terminal clicked",
+        tmuxctl.server_argv(state.frame_server(fid) or tmuxctl.LEGACY_SOCKET,
+                            "display-message", "-p", "-t", pane,
+                            f"#{{{gate.PRESSER_OPTION}}}")).stdout.strip()
+    return (said,) if gate.CLIENT_RE.fullmatch(said) else ()
 
 
 def _persona_events(fid: str):

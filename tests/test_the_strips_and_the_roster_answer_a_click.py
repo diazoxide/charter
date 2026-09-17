@@ -29,6 +29,7 @@ happened to cancel would be indistinguishable from a design that refuses.
 
 from __future__ import annotations
 
+import os
 import unittest
 from unittest import mock
 
@@ -615,12 +616,25 @@ class TheHandlersActOnThePressAndNothingElse(unittest.TestCase):
     def test_a_press_on_a_door_starts_the_palette_for_this_frame(self):
         slots.DOORS.publish(range(10, 20))
         on_event = builtins._strip_events(FID)
-        self.assertFalse(on_event(_click(col=12)), "nothing this pane draws has changed")
+        with self._no_presser():
+            self.assertFalse(on_event(_click(col=12)),
+                             "nothing this pane draws has changed")
         self.assertEqual(len(self.spawned), 1)
         argv, fid = self.spawned[0]
         self.assertEqual(argv[-1], "frame-palette")
         self.assertEqual(fid, FID, "the frame is closed over, never read back out of "
                                    "an environment one tmux server shares")
+
+    def _no_presser(self):
+        """A pane the click bind never wrote `@charter_presser` on — the ordinary state of
+        a frame launched by a charter that predates the exit gate (#1115), and the one that
+        leaves this handler's argv byte-identical to what it was.
+
+        Stated rather than inherited: `$TMUX_PANE` is an identity the operator's own session
+        exports, and `tests/_envguard.py` refuses a test that reads one without saying what
+        it holds.
+        """
+        return mock.patch.dict(os.environ, {"TMUX_PANE": ""}, clear=True)
 
     def test_a_release_over_a_door_opens_nothing(self):
         slots.DOORS.publish(range(10, 20))
@@ -642,13 +656,36 @@ class TheHandlersActOnThePressAndNothingElse(unittest.TestCase):
         self.assertEqual(self.spawned, [])
 
     def test_the_palette_argv_is_the_one_the_hotkey_bind_runs(self):
-        """`commands_frame.conf_text` binds `frame-palette "#{client_name}"`; this is the
-        same subcommand with the client left off, because a panel is not a `run-shell`
-        child of a keypress and has no presser to name."""
+        """`commands_frame.conf_text` binds `frame-palette "#{client_name}"`, and since
+        #1115 this is the same subcommand with the same value — read back off the panel's
+        own pane, where the click bind recorded it before forwarding the press, rather than
+        expanded by a keypress.
+
+        The no-presser shape is what a pane with no such option gives, and it is the argv
+        this handler has always sent.
+        """
         slots.DOORS.publish({3})
-        builtins._strip_events(FID)(_click(col=3))
+        with self._no_presser():
+            builtins._strip_events(FID)(_click(col=3))
         argv, _ = self.spawned[0]
         self.assertEqual(argv[-1:], ("frame-palette",))
+
+    def test_a_press_on_a_door_carries_the_client_the_bind_recorded(self):
+        """The other half, and the one #1115 added: a presser charter CAN read rides the
+        argv, so *Close charter (keep chats running)* on the palette this opens knows whose
+        terminal to detach."""
+        import subprocess
+
+        from charter.frame import tmuxctl
+        slots.DOORS.publish({3})
+        with mock.patch.dict(os.environ, {"TMUX_PANE": "%9"}, clear=True), \
+                mock.patch.object(
+                    tmuxctl, "run",
+                    side_effect=lambda _w, argv, **kw: subprocess.CompletedProcess(
+                        argv, 0, "/dev/ttys003\n", "")):
+            builtins._strip_events(FID)(_click(col=3))
+        argv, _ = self.spawned[0]
+        self.assertEqual(argv[-2:], ("frame-palette", "/dev/ttys003"))
 
     # -- the sidebar --------------------------------------------------------- #
 

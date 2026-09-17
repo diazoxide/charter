@@ -765,3 +765,193 @@ class ThePaletteActsForThePresserToo(PersonaIso, unittest.TestCase):
         the value: `build` is handed `""`, the detach row is listed refused with its reason,
         and every other row is what it was."""
         self.assertEqual(self._detach_row("")["client"], "")
+
+
+class TheButton(PersonaIso, unittest.TestCase):
+    """`F10 close` at the right end of the identity row — the pointer's way to the gate.
+
+    **With `[frame] mouse` off, which is the default, it is a label that teaches the key**,
+    and that is not a consolation: the complaint #751 answered is that a key name beside a
+    noun reads as a button everywhere else an operator has seen one, and the answer there
+    was to make it one. This row now says where the exit is whether or not it is clickable.
+    """
+
+    FID = "beta.1"
+
+    def setUp(self) -> None:
+        super().setUp()
+        from charter.frame import slots, state
+        state.frame_dir(self.FID, create=True)
+        state.record_server(self.FID, "charter-plane-x")
+        state.record_workspace(self.FID, "beta")
+        self.addCleanup(slots.DOORS.forget)
+
+    def _top(self, *, cols=120, rows=24) -> str:
+        return self._top_and_width(cols=cols, rows=rows)[0]
+
+    def _top_and_width(self, *, cols=120, rows=24):
+        """The row as drawn, and the canvas width it was drawn for.
+
+        Both, because a door is published at a CANVAS column and the rendered row is
+        right-trimmed — so a test that worked the button's column out of the string it can
+        see would be measuring the pad rather than the cell.
+        """
+        import sys
+        from charter import tui
+        from charter.frame import slots
+        with mock.patch("os.get_terminal_size",
+                        return_value=os.terminal_size((cols, rows))), \
+                mock.patch.object(sys.stdout, "fileno", return_value=1, create=True):
+            return (tui.strip_ansi(slots.render("top", self.FID)),
+                    slots.content_width("top"))
+
+    def test_the_button_is_the_right_hand_end_of_the_row(self):
+        """The last thing on the row, after the version. `rstrip` because the row is
+        right-trimmed on its way out — the cell keeps its trailing column, and the pad is
+        not something a test gets to assert about."""
+        from charter.frame import slots
+        row = self._top()
+        self.assertTrue(row.rstrip().endswith(slots.GATE_BUTTON), row)
+
+    def test_its_columns_open_the_gate_and_not_the_palette(self):
+        """Two column sets rather than one, which is the part of `_Doors`' own docstring
+        that stopped holding: it argued against a mapping *"whose values nothing branches
+        on"*, and something branches on the value now."""
+        from charter import tui
+        from charter.frame import slots
+        row, w = self._top_and_width()
+        for at in range(w - tui.width(f" {slots.GATE_BUTTON} ") + 1, w - 1):
+            self.assertTrue(slots.DOORS.opens_gate(at), f"{at} of {w}: {row!r}")
+            self.assertFalse(slots.DOORS.opens_palette(at), f"{at} of {w}: {row!r}")
+
+    def test_the_workspace_chip_is_still_the_palettes_and_not_the_gates(self):
+        """The reverse, so the two sets cannot pass by being one set under two names."""
+        from charter.frame import slots
+        self._top()
+        self.assertTrue(slots.DOORS.opens_palette(1))
+        self.assertFalse(slots.DOORS.opens_gate(1))
+
+    def test_a_starved_row_drops_the_version_before_the_button(self):
+        """The ladder's order, and it is the operator's: the version is a fact about the
+        install and the button is the way out. A row too narrow for both keeps the way out.
+        """
+        from charter import __version__
+        wide, narrow = self._top(cols=120), self._top(cols=30)
+        self.assertIn(__version__, wide)
+        self.assertNotIn(__version__, narrow)
+        self.assertIn("F10 close", narrow)
+
+    def test_the_button_stays_at_terse(self):
+        """`terse` buys back a line by dropping the version — the one field on this row
+        that reads the same on every frame on the machine all day. It does not buy it back
+        by removing the way out."""
+        from charter.frame import state
+        from charter import __version__
+        state.record_density(self.FID, "minimal")
+        row = self._top()
+        self.assertNotIn(__version__, row)
+        self.assertIn("F10 close", row)
+
+    def test_an_identity_too_wide_for_the_button_keeps_the_identity(self):
+        """The bottom rung, and the one that must not publish a door. What the row is FOR
+        is where you are and who you are being; a button drawn over that would be the frame
+        losing the answer to keep the exit sign."""
+        from charter.frame import slots
+        row = self._top(cols=12)
+        self.assertNotIn("F10 close", row)
+        self.assertFalse(any(slots.DOORS.opens_gate(c) for c in range(40)))
+
+    def test_no_button_inside_the_operators_tmux(self):
+        """Decision 7 on the pointer half: charter binds no `F10` there, so a button
+        advertising it would be telling every operator about a key that does nothing, on
+        every repaint — `_bottom`'s rule for the `F2 palette` hint, which is the same
+        defect reached through the same server."""
+        from charter.frame import slots, state
+        from tests import _tmuxsocket
+        state.record_server(self.FID, _tmuxsocket.OPERATOR_SOCKET)
+        row = self._top()
+        self.assertNotIn("F10 close", row)
+        self.assertFalse(any(slots.DOORS.opens_gate(c) for c in range(200)))
+
+
+class AClickReadsTheRecordedPresser(PersonaIso, unittest.TestCase):
+    """`builtins._strip_events` — the pointer route's far end.
+
+    The click bind wrote the clicking client onto the panel pane before forwarding the
+    press (Step 0's G3); this is the panel process reading its own pane back and handing it
+    to the surface it opens. It never asks tmux for a most-recently-active client: that
+    answers *a* client, which on a two-client frame is a coin toss over whose terminal to
+    close.
+    """
+
+    FID = "beta.1"
+    A = "/dev/ttys003"
+
+    def setUp(self) -> None:
+        super().setUp()
+        from charter.frame import slots, state
+        state.frame_dir(self.FID, create=True)
+        state.record_server(self.FID, "charter-plane-x")
+        self.addCleanup(slots.DOORS.forget)
+
+    def _clicked(self, *, answer, gate_door):
+        import subprocess
+        from charter.frame import builtin_actions, builtins, slots
+        slots.DOORS.publish((5,) if not gate_door else (), gate=(5,) if gate_door else ())
+        started: list[list[str]] = []
+        with mock.patch.dict(os.environ, {"TMUX_PANE": "%9"}, clear=True), \
+                mock.patch.object(
+                    tmuxctl, "run",
+                    side_effect=lambda _w, argv, **kw: subprocess.CompletedProcess(
+                        argv, 0, answer, "")), \
+                mock.patch.object(builtin_actions, "_spawn",
+                                  side_effect=lambda argv, *, fid: started.append(argv)):
+            builtins._strip_events(self.FID)(
+                SimpleNamespace(pressed=True, name="left", col=5))
+        return started[0] if started else []
+
+    def test_a_press_on_the_button_opens_the_gate_for_that_client(self):
+        argv = self._clicked(answer=f"{self.A}\n", gate_door=True)
+        self.assertEqual(argv[-3:], ["frame-palette", self.A, gate.OPTION])
+
+    def test_a_press_on_any_other_door_opens_the_palette_for_that_client(self):
+        """The same presser, the other surface — which is what makes `F2 → Close charter`
+        work after a click on the workspace chip as well as after the key."""
+        argv = self._clicked(answer=f"{self.A}\n", gate_door=False)
+        self.assertEqual(argv[-2:], ["frame-palette", self.A])
+
+    def test_a_presser_that_cannot_be_read_is_no_presser(self):
+        """An empty option — a pane charter never wrote one on, a tmux that would not
+        answer — and a value outside the shape both reach the surface as *no presser*,
+        where the detach row is listed refused with its reason. Never as a client charter
+        aims a detach at."""
+        for answer in ("", "\n", "x; kill-server\n", "#{client_name}\n"):
+            with self.subTest(answer=answer):
+                argv = self._clicked(answer=answer, gate_door=True)
+                self.assertEqual(argv[-2:], ["frame-palette", gate.OPTION])
+
+    def test_a_click_that_is_not_on_a_door_opens_nothing(self):
+        from charter.frame import builtin_actions, builtins, slots
+        slots.DOORS.publish((5,), gate=(6,))
+        with mock.patch.dict(os.environ, {"TMUX_PANE": "%9"}, clear=True), \
+                mock.patch.object(tmuxctl, "run") as asked, \
+                mock.patch.object(builtin_actions, "_spawn") as spawn:
+            builtins._strip_events(self.FID)(
+                SimpleNamespace(pressed=True, name="left", col=40))
+        spawn.assert_not_called()
+        # And nothing was asked of tmux either: a read per click on dead space would be a
+        # round trip for every stray press the terminal reports.
+        asked.assert_not_called()
+
+    def test_a_release_opens_nothing(self):
+        """Kept word for word from the handler this grew out of: a drag begun on a pane
+        border delivers exactly one release, and a drag that began elsewhere and happened
+        to end over this row never pointed here."""
+        from charter.frame import builtin_actions, builtins, slots
+        slots.DOORS.publish((), gate=(5,))
+        with mock.patch.dict(os.environ, {"TMUX_PANE": "%9"}, clear=True), \
+                mock.patch.object(tmuxctl, "run"), \
+                mock.patch.object(builtin_actions, "_spawn") as spawn:
+            builtins._strip_events(self.FID)(
+                SimpleNamespace(pressed=False, name="left", col=5))
+        spawn.assert_not_called()
