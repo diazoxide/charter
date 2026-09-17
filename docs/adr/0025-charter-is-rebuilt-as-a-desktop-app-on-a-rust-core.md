@@ -20,11 +20,22 @@ What settled the grill is below. The spec it produced, with the milestones and t
 app is held to, is `docs/superpowers/specs/2026-09-17-charter-app.md`. The evidence for the
 stack is `docs/research/2026-09-17-gui-terminal-embedding.md`.
 
+## The order of priorities
+
+The operator set it, and every choice below is made in this order:
+
+1. **Development experience.** A change is quick to make, quick to check and pleasant to work on.
+2. **Robustness, through standard practice.** Mature, released, widely used tools, the way they
+   are meant to be used. Where a standard tool exists, nothing custom is built.
+3. **Speed a person can notice.** The app never lags or freezes. Speedups nobody can feel are
+   not worth any cost to 1 or 2.
+
 ## The decision
 
 **Charter is rebuilt from scratch as one cross-platform desktop app plus one `charter` binary,
-both on a Rust core.** The concepts carry over word for word: the plane, workspaces, personas,
-todos, memory, vaults, guards, and every ADR that is not about tmux. The Python code does not.
+both on a Rust core, with the UI on Tauri 2, React and TypeScript.** The concepts carry over
+word for word: the plane, workspaces, personas, todos, memory, vaults, guards, and every ADR
+that is not about tmux. The Python code does not.
 
 - **The plane on disk does not change.** The new charter reads and writes the plane the Python
   one does. The format is written down as a spec with fixture planes before any module is
@@ -64,43 +75,45 @@ change is part of this decision, not a detail left to it:
 - **Unit tests stay small** and cover the core crate.
 - **Mutation testing is scoped and nightly**: the core crate on its own, `--in-diff`, sharded.
   It no longer blocks every PR.
+- **No home-grown test tooling where a standard tool exists.** `tools/sweep.py` was built with
+  care, and it is also what four and a half hours looks like.
 
 Rewriting only the frontend was weighed and rejected. A desktop GUI over the Python core
 through a child process would be cheaper, and it would keep the start cost on every hook, the
 test weight and the POSIX-only reach.
 
-## Why a Rust core that owns every terminal
+## Why a Rust core that holds every terminal
 
-The research ruled out the obvious web shape before any drawing layer was chosen. WebKit, the
-webview Tauri and Wails use on macOS and Linux, hard-caps a page at 16 WebGL contexts, and
-Chromium does the same by default. Past the cap, the oldest context is lost. A UI that keeps a
-live xterm.js per session cannot hold 50 sessions. xterm.js is also only at tmux's speed, not
-above it: its maintainers measured 28–33 MB/s with no rendering.
+The research ruled out one obvious web shape. WebKit, the webview Tauri uses on macOS and
+Linux, hard-caps a page at 16 WebGL contexts, and Chromium does the same by default. Past the
+cap, the oldest context is lost. A UI that keeps a live xterm.js per session cannot hold 50
+sessions.
 
-So, whatever draws the screen, **the Rust core owns every PTY and every terminal's state,
-headless**, behind one trait. `alacritty_terminal` (Apache-2.0) is the first engine, and
-libghostty-vt, which measures far higher but whose API "is definitely going to change", is
-the challenger it is benchmarked against. The UI draws only the panes on screen.
+So **the Rust core owns every PTY and every terminal's state, headless.** `alacritty_terminal`
+is the engine: a released Apache-2.0 crate whose changelog marks breaking changes. The UI draws
+only the panes on screen. When a pane becomes visible, the core sends a snapshot of its screen
+and then streams its output to an xterm.js instance. That is the shape VS Code uses to reconnect
+terminals (a headless terminal, serialized into the visible one), so charter adopts a proven
+pattern instead of writing a renderer. libghostty-vt measures far higher, but its API "is
+definitely going to change", and priority 2 outranks priority 3. The engine stays behind a
+trait so it could be swapped later, with no second implementation built now.
 
-One compiled binary also puts hook calls near zero and covers PTYs on all three OSes, ConPTY
-included.
+Rust for the core rather than Node follows from the same scale requirement. In Electron, every
+session's parsing shares one Node event loop, which the research measured at 28–33 MB/s in
+total, so 50 streaming sessions would all be waiting on one thread. One compiled binary also
+covers PTYs on all three OSes, ConPTY included, and a hook call starts without an interpreter.
 
-## What decides the drawing layer
+## Why Tauri, React and TypeScript for the UI
 
-Two candidates remain, and **a measurement decides between them, not an argument**. That is
-the same discipline ADR 0018 used:
+Most day-to-day change happens in the UI, and priority 1 puts it where the feedback loop is
+fastest and the ecosystem is largest: Tauri 2 (stable) with React and TypeScript.
 
-- **GPUI (native, GPU-drawn):** one process, no context cap, the smallest footprint, and
-  deterministic in-process tests. It is pre-1.0 and pinned to Zed's git. Zed's own terminal
-  crate is GPL-3.0, so charter writes its own terminal view.
-- **Tauri 2:** the webview draws the visible panes from grid updates the core sends, and the
-  rest of the UI is React and TypeScript. It is quicker to build a modern UI this way, but
-  there is the 16-context cap, WebKitGTK risk on Linux, and the terminal renderer is custom
-  anyway.
-
-Milestone M0 builds both on the same Rust core, which is kept whichever option wins. The
-fastest option that meets the spec's limits wins, and a tie goes to GPUI. Electron was
-rejected before the bake-off: its 120–160 MB runtime breaks the minimal-footprint requirement.
+- **Electron** is the most proven desktop shell, but its 120–160 MB runtime buys nothing this
+  split needs.
+- **GPUI** would be the fastest, but it is pre-1.0 and pinned to Zed's git, has thin
+  documentation, and Zed's terminal crate is GPL-3.0, so charter would write its own terminal
+  view. That fails priorities 1 and 2 for a speed priority 3 does not ask for. It stays the
+  fallback only if the M0 skeleton misses a limit a person would notice.
 
 ## What this replaces
 
