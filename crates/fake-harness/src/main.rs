@@ -5,6 +5,11 @@
 //! optional sentinel line a benchmark can wait for, then runs its hooks in order, the way a
 //! harness fires `Notification` and `Stop`. With `--interactive` it then answers each typed
 //! line until `/quit`.
+//!
+//! With `--wait-for-input` it holds the output back until a line is typed, so a benchmark can
+//! have the pane on screen and the right size before the first byte is written — otherwise
+//! output that arrived before the pane was watching reaches it as a snapshot of the screen,
+//! and a throughput number would be measuring the wrong thing.
 
 mod synthetic;
 
@@ -42,6 +47,10 @@ struct Args {
     /// Replay the output this many times.
     #[arg(long, default_value_t = 1)]
     loops: usize,
+
+    /// Write nothing until a line is typed.
+    #[arg(long)]
+    wait_for_input: bool,
 
     /// A line written once the output is done, for a benchmark to wait for.
     #[arg(long)]
@@ -82,6 +91,13 @@ fn run(args: &Args) -> Result<(), String> {
 
     let mut stdout = io::stdout().lock();
     let write_err = |err: io::Error| format!("cannot write output: {err}");
+    if args.wait_for_input {
+        let mut line = String::new();
+        io::stdin()
+            .lock()
+            .read_line(&mut line)
+            .map_err(|err| format!("cannot read input: {err}"))?;
+    }
     for _ in 0..args.loops {
         for chunk in output.chunks(args.chunk.max(1)) {
             stdout.write_all(chunk).map_err(write_err)?;

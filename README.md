@@ -54,6 +54,14 @@ cargo test -p charter-app -- --ignored
 CI also runs clippy on the app crate (`--workspace`), after creating an empty `app/dist` so it
 compiles without a frontend build.
 
+To measure the app against the spec's limits, with tmux beside it as a reference (macOS; it
+takes about twenty minutes, opens windows on screen and brings each to the front, and needs the
+screen unlocked — a locked or sleeping display is not drawn, so nothing would paint):
+
+```bash
+node tools/bench.mjs          # builds release, then prints and writes target/bench/<time>/results.json
+```
+
 ## Licence
 
 MIT

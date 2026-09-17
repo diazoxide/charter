@@ -55,6 +55,23 @@ function App() {
       .catch(() => undefined);
   }, []);
 
+  // Cold start ends when a person can see the window, which is the frame after the one this
+  // paints in. Nothing happens on the other side unless the app was started to be measured,
+  // and nothing about the window depends on the marker arriving: a window that cannot send it
+  // is still a window.
+  useEffect(() => {
+    let gone = false;
+    const frame = requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        if (!gone) void commands.firstFrame().catch(() => undefined);
+      }),
+    );
+    return () => {
+      gone = true;
+      cancelAnimationFrame(frame);
+    };
+  }, []);
+
   useEffect(() => {
     void commands
       .planeRoot()

@@ -58,6 +58,42 @@ describe("App", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("no charter.toml in /tmp");
   });
 
+  it("tells the core when its first frame is on screen", async () => {
+    // Where cold start ends. The core prints it only when the app was started to be measured.
+    const { asked } = core();
+
+    render(<App />);
+
+    await vi.waitFor(() => expect(asked.map((one) => one.cmd)).toContain("first_frame"));
+  });
+
+  it("does not send that marker once the window has gone", async () => {
+    // It is sent a frame after the window paints, which can be after the window is gone —
+    // and then it reaches whatever the next test, or the next window, has put there.
+    const { asked } = core();
+
+    const { unmount } = render(<App />);
+    unmount();
+    await new Promise((done) => setTimeout(done, 100));
+
+    expect(asked.map((one) => one.cmd)).not.toContain("first_frame");
+  });
+
+  it("stays usable when the core cannot take that marker", async () => {
+    // It is instrumentation: a window whose marker is refused is still a window, and an
+    // unhandled rejection is not how it says so.
+    mockIPC((cmd) => {
+      if (cmd === "first_frame") throw new Error("no");
+      if (cmd === "plane_root") return "/home/dev/plane";
+      return null;
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText("/home/dev/plane")).toBeInTheDocument();
+    expect(await screen.findByText(/No sessions/)).toBeInTheDocument();
+  });
+
   it("ends sessions the core is left holding when the window reloads", async () => {
     // A reload leaves the window with no tabs and the core with every session it had, which
     // no pane can ever reach again.
