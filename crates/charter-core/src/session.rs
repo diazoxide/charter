@@ -12,6 +12,8 @@
 use std::ffi::OsString;
 use std::io::{ErrorKind, Read, Write};
 use std::path::PathBuf;
+#[cfg(all(test, unix))]
+use std::sync::mpsc::TryRecvError;
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
@@ -96,11 +98,26 @@ pub struct View {
     /// size by what it is sent, so the pane is told here.
     pub size: Size,
     pub output: Receiver<Vec<u8>>,
+    open: Attachment,
+}
+
+impl View {
+    /// The view taken apart, for a pane that reads its queue somewhere other than where it
+    /// holds the view open. Dropping the [`Attachment`] closes the view at once, whoever still
+    /// holds the queue.
+    pub fn into_parts(self) -> (Attachment, Size, Receiver<Vec<u8>>) {
+        (self.open, self.size, self.output)
+    }
+}
+
+/// A view held open. Dropping it closes the view: the session stops sending to it, and
+/// whoever is reading its queue sees that queue end.
+pub struct Attachment {
     terminal: Weak<Mutex<Terminal>>,
     id: u64,
 }
 
-impl Drop for View {
+impl Drop for Attachment {
     fn drop(&mut self) {
         if let Some(terminal) = self.terminal.upgrade() {
             lock(&terminal).views.retain(|(id, _)| *id != self.id);
@@ -226,8 +243,10 @@ impl Session {
         let view = View {
             size,
             output,
-            terminal: Arc::downgrade(&self.terminal),
-            id,
+            open: Attachment {
+                terminal: Arc::downgrade(&self.terminal),
+                id,
+            },
         };
         self.answer(answers);
         view
@@ -256,6 +275,14 @@ impl Session {
             }
             thread::sleep(POLL);
         }
+    }
+
+    /// Ends the program and everything it started, and does not return until it is gone.
+    /// Dropping a session does the same on a thread of its own, which is what closing a tab
+    /// wants; quitting cannot wait on a thread, because the process is about to go.
+    pub fn end(self) {
+        let child = Arc::clone(&self.child);
+        end(&child);
     }
 
     /// The operating system's id for the program, while it runs.
@@ -329,10 +356,12 @@ fn pump(
     let mut buffer = vec![0; 64 * 1024];
     loop {
         let read = match reader.read(&mut buffer) {
-            Ok(0) => return,
+            // The program's output has ended, and so has the program. Every view is closed,
+            // so a pane showing it can say so instead of showing a screen that is now final.
+            Ok(0) => return lock(terminal).views.clear(),
             Ok(read) => read,
             Err(err) if err.kind() == ErrorKind::Interrupted => continue,
-            Err(_) => return,
+            Err(_) => return lock(terminal).views.clear(),
         };
         let answers = {
             let mut terminal = lock(terminal);
@@ -685,6 +714,61 @@ mod tests {
             session.screen().lines,
             "the view's screen is the session's screen"
         );
+    }
+
+    #[test]
+    fn a_view_is_closed_when_the_program_ends_so_a_pane_can_tell() {
+        // A pane showing a program that has ended must be able to say so, rather than showing
+        // a screen that will never change again.
+        let session = sh("printf 'the last thing it printed'");
+        let view = session.attach();
+        view_until(&view, "the last thing it printed");
+
+        assert_eq!(session.wait(PATIENCE).unwrap(), Some(Exit::Code(0)));
+
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            match view.output.try_recv() {
+                Err(TryRecvError::Disconnected) => return,
+                _ => assert!(
+                    Instant::now() < deadline,
+                    "the view was never closed after the program ended"
+                ),
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn closing_a_view_stops_the_session_sending_to_it_at_once() {
+        let session = sh("read _; printf 'after the view closed'; sleep 600");
+        let (closing, _size, output) = session.attach().into_parts();
+        let staying = session.attach();
+
+        drop(closing);
+        session.write(b"\r").unwrap();
+        view_until(&staying, "after the view closed");
+
+        // What the closed view was already sent is still there to read; nothing is added.
+        while let Ok(_already_sent) = output.try_recv() {}
+        assert!(
+            matches!(output.try_recv(), Err(TryRecvError::Disconnected)),
+            "the session was still holding the closed view's queue"
+        );
+    }
+
+    #[test]
+    fn ending_a_session_ends_its_program_before_it_returns() {
+        // Quitting the app cannot leave a thread to do this: the process is about to go. The
+        // program here survives the hangup, so only the kill that follows it can end it — and
+        // it says so once it does, because until then a hangup would end it after all.
+        let session = sh("trap '' HUP; echo guarded; while :; do sleep 600; done");
+        screen_until(&session, shows("guarded"));
+        let pid = session.process_id().expect("a running program has a pid");
+
+        session.end();
+
+        assert!(!alive(pid), "process {pid} outlived the session it was in");
     }
 
     #[test]
