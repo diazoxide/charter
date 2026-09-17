@@ -955,3 +955,70 @@ class AClickReadsTheRecordedPresser(PersonaIso, unittest.TestCase):
             builtins._strip_events(self.FID)(
                 SimpleNamespace(pressed=False, name="left", col=5))
         spawn.assert_not_called()
+
+
+class TheF2RowsAreTheGate(PersonaIso, unittest.TestCase):
+    """`F2` carries the same two rows, in the same words — and in the same places.
+
+    **The point is that there is one gate, not two surfaces that resemble each other.**
+    Inside the operator's own tmux the `F2` rows are the ONLY way to them (decision 7), so
+    they cannot be a lesser copy; and on charter's own server an operator who learned
+    *Close charter* from `F10` has to find the same sentence where they already look.
+    """
+
+    FID = "beta.1"
+
+    def setUp(self) -> None:
+        super().setUp()
+        from charter.frame import state
+        state.frame_dir(self.FID, create=True)
+        state.record_server(self.FID, "charter-plane-x")
+        state.record_harness_pane(self.FID, "%3")
+        state.record_identity(self.FID, {"CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
+
+    def test_the_stop_row_is_the_gates_words(self):
+        from charter.frame import leave
+        self.assertEqual(leave.open_rows(self.FID)[0].title,
+                         "Close charter and stop all chats…")
+        self.assertEqual(leave.OPEN_QUIT, gate.STOP_TITLE)
+
+    def test_close_is_still_the_last_row(self):
+        """`leave.open_rows`' ordering guard, unmoved: the destructive rows are at the
+        bottom of the palette so that one is never one `F2 Enter` away, and *chat: close* is
+        the last of them. Changing the stop row's WORDS must not change its place."""
+        from charter.frame import builtin_actions, choose, leave
+        rows = leave.open_rows(self.FID)
+        self.assertEqual(rows[-1].id,
+                         leave.OPEN_ID.format(leave.CLOSE))
+        reg = builtin_actions.build(self.FID, current_density="normal",
+                                    current_chrome="off", client="/dev/ttys7")
+        catalogue = commands_frame._palette_catalogue(self.FID, reg, snapshot={})
+        self.assertEqual(catalogue[-1].id, rows[-1].id)
+        self.assertEqual(catalogue[-2].id, rows[0].id)
+        self.assertEqual(catalogue[0].id, choose.open_rows(self.FID)[0].id)
+
+    def test_the_detach_row_is_still_the_first_action(self):
+        """Its id and its position are unchanged — what moved is the sentence on it. An
+        operator's muscle memory for `F2 Enter` reaches the same harmless rows it did."""
+        from charter.frame import builtin_actions
+        reg = builtin_actions.build(self.FID, current_density="normal",
+                                    current_chrome="off", client="/dev/ttys7")
+        ids = [o.id for o in reg.offers(fid=self.FID, snapshot={})]
+        self.assertEqual(ids[0], "frame.detach")
+
+    def test_the_palette_never_opens_on_the_stop_row_inside_the_operators_tmux(self):
+        """Where the detach row is refused, the cursor must still not land on the row that
+        stops the plane — which on `F2` is the ORDER doing the work rather than a pin, since
+        every picker row above it can run. Asserted on the operator's socket, which is the
+        one place charter itself refuses the detach row."""
+        from charter.frame import builtin_actions, leave, palette
+        from charter.frame import state
+        from tests import _tmuxsocket
+        state.record_server(self.FID, _tmuxsocket.OPERATOR_SOCKET)
+        reg = builtin_actions.build(self.FID, current_density="normal",
+                                    current_chrome="off", client="/dev/ttys7")
+        catalogue = commands_frame._palette_catalogue(self.FID, reg, snapshot={})
+        aimed = catalogue[palette.aim(catalogue)]
+        self.assertNotEqual(aimed.id, leave.OPEN_ID.format(leave.QUIT))
+        self.assertNotEqual(aimed.id, leave.OPEN_ID.format(leave.CLOSE))
+        self.assertFalse(aimed.refused)

@@ -159,10 +159,15 @@ class TheConfirmationsOwnWordsAreTheseWords(PersonaIso):
                          "no chats are open on this plane — nothing to quit")
 
     def test_the_two_doorway_rows_say_what_each_one_stops(self):
+        """**The quit row's words moved to `frame/gate.py` with #1115** and are spelled
+        here all the same, because this file is where a reword becomes visible. It used to
+        say `charter: quit — stop every harness on this plane`, which named the mechanism;
+        it now says what the operator is doing, in the same sentence `F10`'s second row
+        uses — one gate, two ways in."""
         quit_row, close_row = leave.open_rows("alpha.1")
 
         self.assertEqual(quit_row.title,
-                         "charter: quit — stop every harness on this plane")
+                         "Close charter and stop all chats…")
         self.assertEqual(close_row.title,
                          "chat: close — stop this chat and do not bring it back")
 

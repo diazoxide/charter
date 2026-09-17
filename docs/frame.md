@@ -415,8 +415,10 @@ be about — the same case the persona column's own overflow row carries.
 
 **The `F2 palette` hint is a button now, and so are the two nouns on the identity row.**
 Click `F2 palette` on the attention strip and the palette opens; click `⬢ <workspace>` or
-`◆ <persona>` on the identity strip and the same palette opens. All three go to the same
-place on purpose: `⬢ alpha` names the workspace you are *on* and `◆ steward` the persona
+`◆ <persona>` on the identity strip and the same palette opens. **`F10 close`, at the right
+end of the identity row, is the fourth — it opens the way out** (*Leaving*, below), and it
+is the one of the four that does not open the palette. All three of the others go to the
+same place on purpose: `⬢ alpha` names the workspace you are *on* and `◆ steward` the persona
 you *are*, so a click on either can only mean *let me pick another*, and picking needs a
 list to pick from. The palette is that list, and opening it finishes on the pointer alone —
 it makes itself the active pane, so your keyboard reaches the rows it just drew.
@@ -938,9 +940,9 @@ chose and the panels a toggle key hid. If your plane always wants three rows, sa
 `charter.toml` — `[[frame.component]] size = 3` on the bar — and every launch starts there;
 `F3` is the gesture for right now.
 
-`F3` is the third key charter binds, after `F2` for the palette and `F12` for the escape
-hatch. Like `F12` and unlike `F2` it is not configurable, and a component may not claim it
-for its own toggle — charter refuses that table rather than letting a committed key silently
+`F3` is the fourth key charter binds, after `F2` for the palette, `F10` for the way out and
+`F12` for the escape hatch. Like `F10` and `F12`, and unlike `F2`, it is not configurable,
+and a component may not claim it for its own toggle — charter refuses that table rather than letting a committed key silently
 take the one that cycles your strips.
 
 Below tmux 3.3 that last part does not happen on its own. `window-resized` is a hook tmux
@@ -1212,12 +1214,16 @@ the sentence above:
   sits in `show-options -s` and setting it for one session sets it for every session on
   that server. Charter turns it on for its own private server and will not touch yours.
   `set -s focus-events on` in your own config is how you get it here.
-- **No hotkey.** tmux key tables are server-wide with no per-window form, so any key
-  charter bound would be taken from every window you have open. The spec allowed a
-  prefix-scoped bind here; charter takes the stricter option, because what the palette
-  would offer there is "Detach", which your own prefix key already does better, and the
-  density rows, which `[frame] density` sets. The bottom panel drops its hotkey hint to
-  match rather than advertising a key that does nothing.
+- **No hotkey, and no `F10` either.** tmux key tables are server-wide with no per-window
+  form, so any key charter bound would be taken from every window you have open. The spec
+  allowed a prefix-scoped bind here; charter takes the stricter option, because what the
+  palette would offer there is *Close charter*, which your own prefix key already does
+  better, and the density rows, which `[frame] density` sets. The bottom panel drops its
+  hotkey hint to match rather than advertising a key that does nothing, **and the identity
+  row draws no `F10 close` button** for the same reason.
+- **The way out is the `F2` rows, and `F10`'s menu is not drawn here.** Both rows are in
+  the palette where they always are; *Close charter (keep chats running)* is listed refused,
+  because the frame is a window in *your* session and your own prefix key detaches it.
 - **No `F12` escape hatch either, and this is the one that is worth knowing.** In charter's
   own tmux, `F12` returns you to your agent session from anywhere in the frame, including
   from a pane that has stopped answering its keyboard. It is a root key-table entry, which
@@ -1270,6 +1276,53 @@ or a `tmux kill-server` under a running script — is not a tmux you are inside.
 checks before it builds anything, and falls back to its own private server.
 
 ## Leaving: detach, close, quit — and reopen
+
+### One gate out of charter
+
+**`F10` opens it, wherever the frame draws, and `F10 close` at the right end of the identity
+row opens the same menu.** Two rows, and the first one is already selected:
+
+```
+charter · close · 2 to choose from
+>   Close charter (keep chats running)
+    Close charter and stop all chats…
+
+  up/down move   enter choose   esc cancel   F12 back to the harness
+```
+
+- **Close charter (keep chats running)** detaches **the terminal you pressed it in**, and
+  nothing else. Every chat keeps running, every other terminal attached to this project stays
+  attached, and `charter` in the project puts you back. It is the same thing as closing the
+  window, without needing to know tmux's prefix key.
+- **Close charter and stop all chats…** opens the confirmation below — every chat listed with
+  what it gets back — and the row at the top of that goes through with it. `charter reopen`
+  brings the plane back.
+
+**The cursor never starts on the row that stops things**, even where the first row cannot run.
+Charter detaches the terminal that asked, so it has to know which one that is: the key binding
+and the button both carry it. Where charter cannot tell — a frame launched by a version of
+charter older than this one, whose key binding is still in the running tmux server — the first
+row is listed with its reason and pressing it does nothing:
+
+```
+>   Close charter (keep chats running)   charter cannot tell which terminal asked, so it…
+```
+
+Press `F10` in the terminal you want to close, or close the window. Charter will not detach
+every terminal to make up for not knowing which one; on a project two people have open, that
+would close somebody else's.
+
+**The same two rows are in `F2`**, in the same words, and inside a tmux you already have they
+are the only way to them — no key is bound there and no button is drawn (*Inside a tmux you
+already have*, above).
+
+**`F10` is charter's, and a harness never sees it.** A `[[frame.component]]` key of `F10` is
+refused, and so is `[frame] hotkey = "F10"`, which falls back to the shipped `F2`. The button
+needs `[frame] mouse`; with the mouse off — the default — it is a label that teaches the key.
+
+**Ctrl+C is not disabled, and this gate does not replace it.** Ctrl+C is your harness's
+interrupt: one press cancels the turn and a second exits it. What changed is that a harness
+exiting no longer destroys a chat (*When a harness ends*, below).
 
 ### When a harness ends
 
@@ -1328,10 +1381,19 @@ harnesses keep running and `charter` in that project puts you back — or the
 `tmux -L charter-plane-<hex> attach -t <workspace>` the detach printed. A frame started before
 the upgrade is the exception, on the old `charter` server; see *Two projects open at once do
 not share a tmux server* above. A terminal
-that dies, a lid that closes and an ssh connection that drops all do this. `F2 → detach` is
-the same thing without needing to know tmux's prefix key.
+that dies, a lid that closes and an ssh connection that drops all do this. `F10` and
+`F2 → Close charter (keep chats running)` are the same thing without needing to know tmux's
+prefix key, and each one detaches only the terminal it was pressed in.
 
-**`F2 → charter: quit` stops everything on this plane, and records it first.** It is the only
+**That row used to detach nothing, or everything.** It named the chat as a tmux session
+(`detach-client -s <chat id>`), and tmux reads a target with a dot in it as
+`session.pane` — so on a chat with no strips it resolved to nothing while reporting success,
+and on any chat with one it resolved to the whole workspace and detached every terminal
+attached to it. It now names the terminal, after proving on the chat's own server that the
+terminal is attached to that chat's session and that the session belongs to this plane.
+
+**`F10 → Close charter and stop all chats…`, which is also `F2`'s second leaving row, stops
+everything on this plane and records it first.** It is the only
 route — never a signal, never a closing terminal. Enter on that row opens a confirmation
 rather than doing anything: the row that goes through, and under it one row per chat saying
 what that chat will and will not get back.
@@ -2193,7 +2255,10 @@ inside a `run-shell` is what makes tmux print into your harness pane.
 `hotkey` is checked against the shape of a tmux key name — optional `C-`/`M-`/`S-`
 modifiers and then a key (`F2`, `Up`, `PPage`, `a`, `/`). Anything else falls back to
 `F2`, the same way every other key in `[frame]` falls back to its default when charter
-cannot make sense of it. That check is not cosmetic: this value is interpolated into tmux
+cannot make sense of it. **So does `F10`**, which is not a shape charter cannot read but a
+key it has already bound: it opens the way out of charter (*Leaving*), charter writes the
+palette's binding before it and tmux's last-`bind`-wins would quietly delete the palette
+with nothing saying so. That check is not cosmetic: this value is interpolated into tmux
 configuration that `source-file` *executes*, and `charter.toml` is a committed, shared
 file that arrives from someone else's machine.
 
@@ -2816,11 +2881,12 @@ then a key name or one punctuation character — `F7`, `M-r`, `C-M-t`, `\`. Anyt
 takes the whole arrangement out of play, like every other value charter cannot honour.
 
 **And you cannot take a key charter has already bound.** Two components asking for the
-same key, your frame's own `hotkey` (`F2` unless you moved it), and `F12` — the escape
-hatch, the key that always returns you to your session even from a wedged overlay — are
-all refused the same way. tmux has no notion of a key conflict: the last `bind` simply
-replaces the earlier one, so one of the two would silently stop working and nothing would
-say which.
+same key, your frame's own `hotkey` (`F2` unless you moved it), `F10` — the way out of
+charter — and `F12` — the escape hatch, the key that always returns you to your session
+even from a wedged overlay — are all refused the same way. So is a `[frame] hotkey` of
+`F10` itself, which falls back to the shipped `F2`. tmux has no notion of a key conflict:
+the last `bind` simply replaces the earlier one, so one of the two would silently stop
+working and nothing would say which.
 
 **Density is now a name for one of these arrangements.** The three levels have not
 changed and the `F2` palette still offers them — `minimal` still means the two one-row
@@ -3088,7 +3154,7 @@ chats was last in front of you.
 charter · 16 to choose from
     workspace: alpha — pick another    cannot switch: a chat belongs to its workspa…
 >   persona: steward — pick another
-    detach — leave the harness running
+    Close charter (keep chats running)
     repo: select the next row
     repo: select the previous row
     chat: the next tab
@@ -3105,7 +3171,7 @@ charter · 16 to choose from
     chat: new — another chat in this workspace
     chat: previous transcript          no previous transcript for this chat — one …
     refresh — gather this workspace's repos, todos and changes again
-    charter: quit — stop every harness on this plane
+    Close charter and stop all chats…
     chat: close — stop this chat and do not bring it back
 ```
 

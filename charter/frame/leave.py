@@ -31,7 +31,7 @@ from __future__ import annotations
 import os
 from typing import NamedTuple
 
-from . import chats, reopen, state
+from . import chats, gate, reopen, state
 
 #: What the operator is told when a quit would stop nothing.
 NOTHING_OPEN = "no chats are open on this plane — nothing to quit"
@@ -519,10 +519,19 @@ OPEN_ID = "leave:{}"
 GO_ID = "leave:{}:go"
 CHAT_ID = "leave:{}:c{}"
 
-#: The doorway rows' titles. `charter:` and `chat:` because that is the noun each one is
-#: about — quit stops the plane, close stops one tab — and the palette is read by an
-#: operator scanning left edges.
-OPEN_QUIT = "charter: quit — stop every harness on this plane"
+#: The doorway rows' titles. `chat:` because that is the noun the close row is about — it
+#: stops one tab — and the palette is read by an operator scanning left edges.
+#:
+#: **The quit row's words come from `frame/gate.py` now** (#1115), and it is the same row
+#: rather than a second one: `F10`'s menu and `F2` carry the two ways out of charter in the
+#: same sentences, so an operator who learned one has learned the other. What it DOES is
+#: unchanged — a doorway onto :func:`confirm_rows`, which `charter frame-quit` goes through
+#: — and so is where it sits, which :func:`open_rows` argues about at length.
+#:
+#: `charter: quit — stop every harness on this plane` is what it said. That sentence named
+#: the mechanism; this one names what the operator is doing, and the ellipsis says a
+#: confirmation follows.
+OPEN_QUIT = gate.STOP_TITLE
 OPEN_CLOSE = "chat: close — stop this chat and do not bring it back"
 
 #: The close row on a chat with no harness left to stop — an ACTION, not a doorway.
