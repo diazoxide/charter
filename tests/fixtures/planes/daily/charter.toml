@@ -1,0 +1,11 @@
+schema = 1
+
+[[forge]]
+kind = "github"
+owner = "acme"
+
+[memory]
+share = "local"
+
+[persona]
+default = "steward"

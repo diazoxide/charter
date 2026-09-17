@@ -87,3 +87,13 @@ jobs:
         working-directory: app
       - run: npx tauri build --debug --no-bundle
         working-directory: app
+
+  fixtures:
+    name: fixture planes (regenerate, diff)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v5
+      # The planes are what the Python charter writes, never hand-edited. This regenerates
+      # them from the charter commit pinned in generate.py and fails if anything moved.
+      - run: tests/fixtures/planes/generate.py --check

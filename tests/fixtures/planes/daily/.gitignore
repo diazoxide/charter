@@ -1,0 +1,36 @@
+# Per-task workspaces (workspaces/<name>/). LOCAL by default = fully private (clones,
+# memory, manifest all ignored). Made LIVE via `charter workspace live <name>` un-ignores
+# its workspace.json + memory/ in a managed block here (see charter/workspace.py).
+/workspaces/*/*
+!/workspaces/.gitkeep
+# >>> charter live workspaces (managed by `charter workspace live`) >>>
+!/workspaces/alpha/workspace.json
+!/workspaces/alpha/workspace.md
+!/workspaces/alpha/memory
+!/workspaces/alpha/memory/**
+!/workspaces/alpha/todos
+!/workspaces/alpha/todos/**
+!/workspaces/alpha/changes
+!/workspaces/alpha/changes/**
+/workspaces/alpha/changes/log/
+# <<< charter live workspaces <<<
+
+# Per-developer secret vaults + registry (plaintext secrets, tokens, file paths).
+# NEVER commit this — it holds credentials.
+/.charter/
+
+# This machine's own harness permissions (`charter guard ask|allow --local`). Its committed
+# sibling `.claude/settings.json` is deliberately NOT ignored — that one is the team's.
+/.claude/settings.local.json
+
+# This machine's harness profiles (commands, config folders). Never committed: a profile's
+# command runs on a click, and a merged edit would run it on every machine.
+/charter.local.toml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# OS / editor cruft
+.DS_Store

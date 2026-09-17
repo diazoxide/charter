@@ -1,0 +1,13 @@
+{
+  "name": "alpha",
+  "description": "",
+  "repos": [
+    {
+      "name": "svc",
+      "branch": "main"
+    }
+  ],
+  "updated_at": "2026-03-02T09:09:00+00:00",
+  "updated_by": "Fixture User",
+  "charter_generated": "707b842b5d33e9f90644d73c9207090c64b82cdbb4e7a790a99347a8625543ce"
+}

@@ -1,0 +1,1 @@
+{"gathered_at": 1772443140.0, "workspace": "alpha", "current_repo": null, "repos": [{"name": "svc", "branch": "main", "dirty": false, "tracked_dirty": false, "ahead": 0, "behind": 0, "ci": null, "change": null, "sigil": "", "current": false, "worktree_count": 0}], "worktrees": [], "todos": [{"title": "Review the rollout plan"}], "todo_count": 1, "changes": []}

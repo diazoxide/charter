@@ -1,0 +1,11 @@
+{
+  "env": {
+    "CHARTER_HARNESS": "claude-code"
+  },
+  "permissions": {
+    "ask": [
+      "Bash(charter handoff *)",
+      "Bash(terraform apply *)"
+    ]
+  }
+}

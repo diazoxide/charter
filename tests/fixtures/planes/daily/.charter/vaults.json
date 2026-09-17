@@ -1,0 +1,11 @@
+{
+  "vaults": {
+    "fixture": {
+      "provider": "plain-file",
+      "persona": "steward",
+      "config": {
+        "file": ".charter/vaults/fixture.json"
+      }
+    }
+  }
+}
