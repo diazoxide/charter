@@ -570,17 +570,7 @@ def frame_ready() -> tuple[int, str, str]:
     code, for the same reason the other two do not: `cmd_launch` draws the frame
     regardless, and a probe stricter than the launcher lies about the launcher.
 
-    **`ENDED_TAB_FLOOR` is the fourth, and its case for being on a report rather than at
-    the moment it costs something is the strongest of the five.** It sits above `FLOOR`
-    too, so #387's shape repeats: an operator on the tmux Ubuntu LTS ships passes the floor
-    and the resize hook cleanly and still has a harness exit that can go unreported. What
-    is different is that there is no "at the moment" to choose instead — a lost SIGCHLD
-    means the `pane-died` hook never fires, so charter is never told the exit happened and
-    has nothing to notice. Said here or said nowhere. It does not change the exit code
-    either: `cmd_launch` installs the same ended step below this floor as above it, and the
-    tab is kept every time the hook does fire.
-
-    **A refused `[[frame.component]]` arrangement is the fifth (#738), and it is the one
+    **A refused `[[frame.component]]` arrangement is the fourth (#738), and it is the one
     that is about the plane rather than the machine.** It joins the list rather than
     getting a surface of its own because it is the same KIND of fact as the unimplemented
     slot beside it — a standing property of the committed file, true on every launch until
@@ -590,6 +580,16 @@ def frame_ready() -> tuple[int, str, str]:
     is its second reader, where `[plane] worktrees` and `[harness] default` are already
     named for being silently ignored; this is the surface an operator asks BEFORE they
     launch, and the one `docs/frame.md` sends them to.
+
+    **`tmuxctl.ENDED_TAB_FLOOR` is the fifth, and its case for being on a report rather
+    than at the moment it costs something is the strongest of the five.** It sits above
+    `FLOOR` too, so #387's shape repeats: an operator on the tmux Ubuntu LTS ships passes
+    the floor and the resize hook cleanly and still has a harness exit that can go
+    unreported, taking the ended tab with it. What is different is that there is no "at the
+    moment" to choose instead — a lost SIGCHLD means the `pane-died` hook never fires, so
+    charter is never told the exit happened and has nothing to notice. Said here or said
+    nowhere. It does not change the exit code either: `cmd_launch` installs the same ended
+    step below this floor as above it, and the tab is kept every time the hook does fire.
 
     Two callers share this, both read-only for the same reason `charter/news.py`
     requires of a `check:` (reads, never acts; and this module's own tmux calls all go
@@ -623,7 +623,7 @@ def frame_ready() -> tuple[int, str, str]:
     missing = frame_slots.unimplemented(config.FRAME["slots"])
     if missing:
         ceilings.append(no_renderer_message(missing))
-    # The fifth, and the only one that is about this PLANE rather than this machine —
+    # The fourth, and the only one that is about this PLANE rather than this machine —
     # which is `no_renderer_message`'s position too, and the reason it belongs on the same
     # list rather than in a report of its own. A `[[frame.component]]` arrangement charter
     # will not draw is refused whole and falls back to `slots`, and the frame that comes
