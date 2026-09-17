@@ -135,7 +135,13 @@ impl Terminal {
                 return true;
             }
             let held = std::mem::take(&mut view.held);
-            send(view, held)
+            // These bytes are held because the engine read an update as open over them, and
+            // the engine reassembles a sequence split across reads, which the held bytes
+            // cannot show by themselves. So bytes that say nothing either way end one here.
+            match update_after(&held) {
+                UpdateAfter::Ended => view.sends.send(held).is_ok(),
+                UpdateAfter::Opened | UpdateAfter::Unchanged => send_ending_the_update(view, held),
+            }
         });
     }
 
@@ -319,16 +325,18 @@ impl Session {
             let size = terminal.engine.screen().size;
             let answers = terminal.engine.take_replies();
             let (sender, output) = mpsc::channel();
-            // The screen goes in first, ahead of any output the reading thread sends once
-            // this lock is released.
-            let _ = sender.send(snapshot);
             terminal.opened += 1;
             let id = terminal.opened;
-            terminal.views.push(Watcher {
+            let mut watcher = Watcher {
                 id,
                 sends: sender,
                 held: Vec::new(),
-            });
+            };
+            // The screen goes in first, ahead of any output the reading thread sends once
+            // this lock is released — and through the same rule as everything else, so that
+            // a snapshot which ever draws itself inside an update cannot leave a pane in one.
+            send(&mut watcher, snapshot);
+            terminal.views.push(watcher);
             (output, answers, size, id)
         };
         let view = View {
@@ -519,53 +527,112 @@ fn pump(
 /// pane still honours. Each of those leaves the engine reporting no open update over bytes
 /// that hold one open, and a pane sent those unended draws nothing until its own safety
 /// timeout. So the answer is read from the bytes, here, where they go out.
-fn send(view: &mut Watcher, mut bytes: Vec<u8>) -> bool {
-    if ends_inside_an_update(&bytes) {
-        bytes.extend_from_slice(END_UPDATE);
+fn send(view: &mut Watcher, bytes: Vec<u8>) -> bool {
+    match update_after(&bytes) {
+        // Nothing in these bytes leaves the pane inside an update, so nothing is added.
+        UpdateAfter::Ended | UpdateAfter::Unchanged => view.sends.send(bytes).is_ok(),
+        UpdateAfter::Opened => send_ending_the_update(view, bytes),
     }
+}
+
+/// Sends `bytes` and ends the update they leave open — before any half-written sequence they
+/// end with, because an escape of this module's own would abort that sequence, and the rest
+/// of it, arriving next, would be printed as text the program never wrote. Those trailing
+/// bytes are held instead, and go out behind the rest of themselves.
+fn send_ending_the_update(view: &mut Watcher, mut bytes: Vec<u8>) -> bool {
+    view.held = bytes.split_off(whole_sequences_end(&bytes));
+    bytes.extend_from_slice(END_UPDATE);
     view.sends.send(bytes).is_ok()
 }
 
-/// Whether `bytes`, written to a terminal that is not inside a synchronized update, leave it
-/// inside one. Everything this module sends a view ends outside one, so that is where every
-/// run of bytes starts.
+/// Where the whole escape sequences in `bytes` end: `bytes.len()`, or where a sequence the
+/// program has only half written begins. Nothing of this module's own may be written between
+/// those bytes and the rest of them, arriving next.
 ///
-/// A pane counts `2026` anywhere in the parameters of a private mode set or reset, which is
-/// what xterm.js does and what vte does outside an update; vte inside one counts only the
-/// eight bytes exactly. The looser rule belongs here, because the question is what the pane
-/// will make of these bytes, and over-ending an update costs a pane nothing.
-fn ends_inside_an_update(bytes: &[u8]) -> bool {
+/// Only the last escape can be the unfinished one, because an escape abandons whatever
+/// sequence came before it, in xterm.js's parser as in vte's. What follows it says how it
+/// ends: a control sequence at any byte from `@` to `~`, a string at a bell or a string
+/// terminator, an escape with an intermediate byte at the character after that, and a bare
+/// escape at the single character that follows.
+fn whole_sequences_end(bytes: &[u8]) -> usize {
+    let Some(escape) = memchr::memrchr(0x1b, bytes) else {
+        return bytes.len();
+    };
+    let rest = &bytes[(escape + 2).min(bytes.len())..];
+    let whole = match bytes.get(escape + 1) {
+        None => false,
+        Some(b'[') => rest.iter().any(|byte| (0x40..=0x7e).contains(byte)),
+        // A string, whose payload runs to a bell or a string terminator. The terminator's own
+        // escape is a later one than this, so it is not what is being asked about here.
+        Some(b']' | b'P' | b'X' | b'^' | b'_') => {
+            rest.contains(&0x07) || rest.windows(2).any(|pair| pair == b"\x1b\\")
+        }
+        // An intermediate byte, and then the character the sequence ends with.
+        Some(b' ' | b'#' | b'%' | b'(' | b')' | b'*' | b'+' | b'-' | b'.' | b'/') => {
+            !rest.is_empty()
+        }
+        Some(_) => true,
+    };
+    if whole { bytes.len() } else { escape }
+}
+
+/// What `bytes` leave a terminal's synchronized update in, as a pane reads them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdateAfter {
+    /// They open one and do not close it.
+    Opened,
+    /// They close one, whether or not they also opened it.
+    Ended,
+    /// They say nothing either way: what was open is still open, and what was not is not.
+    /// Bytes carrying half of the sequence are this, and the rest of it is in what follows.
+    Unchanged,
+}
+
+/// What `bytes` leave a synchronized update in, as a pane reads them.
+///
+/// A pane counts `2026` as a parameter of a private mode set or reset wherever it falls among
+/// them, with sub-parameters of its own and with leading zeros: xterm.js switches on each
+/// parameter in turn (`setModePrivate`), and vte's ordinary parser does the same. vte *inside*
+/// an update counts only the eight bytes exactly, which is where the two part company — and
+/// why this is read from the bytes rather than asked of the engine.
+fn update_after(bytes: &[u8]) -> UpdateAfter {
     let mut before = bytes.len();
     while let Some(at) = memchr::memmem::rfind(&bytes[..before], SYNC_MODE) {
         before = at;
         if let Some(opens) = private_mode_around(bytes, at) {
-            return opens;
+            return if opens {
+                UpdateAfter::Opened
+            } else {
+                UpdateAfter::Ended
+            };
         }
     }
-    false
+    UpdateAfter::Unchanged
 }
 
 /// Whether the private mode sequence holding `bytes[at..]`, which is [`SYNC_MODE`], sets the
 /// mode rather than resets it — or `None` when those bytes are not a whole parameter of one.
 fn private_mode_around(bytes: &[u8], at: usize) -> Option<bool> {
-    // `2026` is a parameter of its own, not the tail of `12026`.
-    let parameters = bytes[..at]
-        .iter()
-        .rposition(|byte| !byte.is_ascii_digit())?;
-    if !matches!(bytes[at - 1], b';' | b'?') {
+    // A parameter of its own, not the tail of `12026`; leading zeros are still it. What this
+    // cannot run past is the `?`, which is also what keeps the indexing below inside `bytes`.
+    let parameters = bytes[..at].iter().rposition(|byte| *byte != b'0')?;
+    if !matches!(bytes[parameters], b';' | b'?') {
         return None;
     }
-    // Back over the parameters before it to the `[?` that introduces them.
+    // Back over the parameters before it to the escape sequence that introduces them.
     let opener = bytes[..=parameters]
         .iter()
         .rposition(|byte| !matches!(byte, b';' | b'0'..=b'9'))?;
     if bytes[opener] != b'?' || !bytes[..opener].ends_with(b"\x1b[") {
         return None;
     }
-    // Forward over the parameters after it to whichever character ends the sequence.
+    // Forward over the parameters after it to whichever character ends the sequence. A `:`
+    // here introduces sub-parameters of this parameter, which is 2026 either way; a `:`
+    // before it would have made 2026 a sub-parameter of another mode, which a pane does not
+    // read as this mode at all, and the check above rejects.
     let end = bytes[at + SYNC_MODE.len()..]
         .iter()
-        .position(|byte| !matches!(byte, b';' | b'0'..=b'9'))?;
+        .position(|byte| !matches!(byte, b':' | b';' | b'0'..=b'9'))?;
     match bytes[at + SYNC_MODE.len() + end] {
         b'h' => Some(true),
         b'l' => Some(false),
@@ -1207,6 +1274,13 @@ mod tests {
             String::from_utf8_lossy(&self.all()).contains(text)
         }
 
+        /// The screen a pane ends up with after being written everything the view was sent.
+        fn replayed(&self, size: Size) -> Screen {
+            let mut engine = AlacrittyEngine::new(size, 1000);
+            engine.advance(&self.all());
+            engine.screen()
+        }
+
         /// The output that followed the screen the view opened on.
         fn followed(&self) -> Vec<u8> {
             self.0.iter().skip(1).flatten().copied().collect()
@@ -1243,44 +1317,102 @@ mod tests {
         pieces
     }
 
-    /// A real engine whose answer about an open update the test decides, so that what the
-    /// core does with it needs no sleeping to see. The answer is a function of the real one:
-    /// [`STOPPED_TRACKING`] is an engine that has left an update the way vte leaves one for
-    /// reasons of its own, and [`NEVER_EXPIRES`] is one whose deadline never arrives.
-    struct AnEngineAsked(AlacrittyEngine, fn(Option<Instant>) -> Option<Instant>);
+    /// A real engine, with the answers a test needs to decide: what it says about an open
+    /// update (a function of the real answer, so that what the core does with it needs no
+    /// sleeping to see), and what its snapshot draws.
+    struct AnEngineAsked {
+        real: AlacrittyEngine,
+        open_update: fn(Option<Instant>) -> Option<Instant>,
+        snapshot: fn(Vec<u8>) -> Vec<u8>,
+    }
 
+    /// An engine that has left an update the way vte leaves one for reasons of its own.
     const STOPPED_TRACKING: fn(Option<Instant>) -> Option<Instant> = |_| None;
+    /// An engine whose deadline for an open update never arrives.
     const NEVER_EXPIRES: fn(Option<Instant>) -> Option<Instant> =
         |open| open.map(|_| Instant::now() + Duration::from_secs(3600));
+    /// What the engine really says.
+    const AS_IT_IS: fn(Option<Instant>) -> Option<Instant> = |open| open;
+    /// A snapshot that draws itself inside a synchronized update, as one that wrapped a whole
+    /// screen in one would. Today's does not; nothing should have to notice when it does.
+    const DRAWN_INSIDE_AN_UPDATE: fn(Vec<u8>) -> Vec<u8> = |mut snapshot| {
+        let mut opened = BEGIN_UPDATE.to_vec();
+        opened.append(&mut snapshot);
+        opened
+    };
 
     impl Engine for AnEngineAsked {
         fn advance(&mut self, bytes: &[u8]) {
-            self.0.advance(bytes);
+            self.real.advance(bytes);
         }
         fn open_update(&self) -> Option<Instant> {
-            self.1(self.0.open_update())
+            (self.open_update)(self.real.open_update())
         }
         fn resize(&mut self, size: Size) {
-            self.0.resize(size);
+            self.real.resize(size);
         }
         fn screen(&mut self) -> Screen {
-            self.0.screen()
+            self.real.screen()
         }
         fn snapshot(&mut self) -> Vec<u8> {
-            self.0.snapshot()
+            (self.snapshot)(self.real.snapshot())
         }
         fn take_replies(&mut self) -> Vec<u8> {
-            self.0.take_replies()
+            self.real.take_replies()
         }
     }
 
-    /// A session whose engine answers about an open update as `asked` says.
-    fn sh_asked(script: &str, asked: fn(Option<Instant>) -> Option<Instant>) -> Session {
+    /// A session whose engine answers about an open update as `open_update` says.
+    fn sh_asked(script: &str, open_update: fn(Option<Instant>) -> Option<Instant>) -> Session {
+        sh_engine(
+            script,
+            AnEngineAsked {
+                real: AlacrittyEngine::new(SIZE, 1000),
+                open_update,
+                snapshot: |snapshot| snapshot,
+            },
+        )
+    }
+
+    fn sh_engine(script: &str, engine: AnEngineAsked) -> Session {
         Session::spawn(
             Spec::new("/bin/sh", SIZE).args(["-c", script]),
-            Box::new(AnEngineAsked(AlacrittyEngine::new(SIZE, 1000), asked)),
+            Box::new(engine),
         )
         .expect("the session starts")
+    }
+
+    #[test]
+    fn a_pane_opening_on_a_snapshot_drawn_inside_an_update_is_not_left_in_one() {
+        // The screen a view opens on is a run of bytes like any other, and a snapshot that
+        // wraps a whole screen in one update — which is what a snapshot would do if it were
+        // written for that — must not leave every pane waiting on its safety timeout.
+        let session = sh_engine(
+            "printf 'a line\\r\\n'; sleep 30",
+            AnEngineAsked {
+                real: AlacrittyEngine::new(SIZE, 1000),
+                open_update: AS_IT_IS,
+                snapshot: DRAWN_INSIDE_AN_UPDATE,
+            },
+        );
+
+        let view = session.attach();
+
+        let mut pieces = Pieces::default();
+        let deadline = Instant::now() + PATIENCE;
+        while pieces.take(&view).0.is_empty() {
+            assert!(
+                Instant::now() < deadline,
+                "the view was sent no screen at all"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            updates_left_open(&pieces.0[0]),
+            0,
+            "the screen the view opened on leaves it inside an update: {:?}",
+            String::from_utf8_lossy(&pieces.0[0])
+        );
     }
 
     #[test]
@@ -1306,6 +1438,51 @@ mod tests {
             String::from_utf8_lossy(&pieces.followed())
         );
         drop(second);
+    }
+
+    #[test]
+    fn a_pane_is_never_sent_bytes_the_program_did_not_write() {
+        // The program is half way through a sequence when its update is given up on. Ending
+        // the update in front of those bytes would abort the sequence, and the rest of it,
+        // arriving next, would be printed: `26l` as text, on screen, for good. What a pane
+        // is written has to draw the screen the engine has, and nothing else.
+        let session = sh(
+            "sleep 0.3; printf '\\033[?2026h\\033[H\\033[2JAAA\\033[?20'; sleep 0.5; \
+             printf '26l'; sleep 30",
+        );
+        let view = session.attach();
+        let mut pieces = pieces_until_followed(&view, "AAA", XTERM_SAFETY_TIMEOUT);
+        // Long enough for the rest of the sequence to have arrived as well.
+        std::thread::sleep(Duration::from_millis(600));
+        pieces.take(&view);
+
+        let pane = pieces.replayed(view.size);
+
+        assert_eq!(
+            pane.lines,
+            session.screen().lines,
+            "the pane and the engine disagree: the pane was sent {:?}",
+            String::from_utf8_lossy(&pieces.followed())
+        );
+    }
+
+    #[test]
+    fn an_update_opened_across_two_reads_is_still_ended_for_the_pane() {
+        // The sequence that opens it is split by a read boundary, so neither read holds it
+        // whole and nothing in the held bytes says an update was opened at all. The engine
+        // reads across the boundary and knows, which is why it is what decides to hold them.
+        let session = sh("sleep 0.3; printf '\\033[?20'; sleep 0.1; \
+             printf '26h\\033[H\\033[2Jhalf a frame'; sleep 30");
+        let view = session.attach();
+
+        let pieces = pieces_until_followed(&view, "half a frame", XTERM_SAFETY_TIMEOUT);
+
+        assert_eq!(
+            updates_left_open(&pieces.followed()),
+            0,
+            "the pane is left inside the update the two reads opened between them: {:?}",
+            String::from_utf8_lossy(&pieces.followed())
+        );
     }
 
     #[test]
@@ -1360,38 +1537,87 @@ mod tests {
     }
 
     #[test]
-    fn bytes_that_open_an_update_and_do_not_close_it_end_inside_one() {
-        assert!(ends_inside_an_update(
-            b"\x1b[?2026h\x1b[H\x1b[2Jhalf a frame"
-        ));
-        assert!(!ends_inside_an_update(b"\x1b[?2026hwhole frame\x1b[?2026l"));
-        assert!(!ends_inside_an_update(b"a plain line\r\n"));
-        assert!(!ends_inside_an_update(b""));
+    fn a_sequence_the_program_has_only_half_written_is_where_the_whole_ones_end() {
+        assert_eq!(whole_sequences_end(b"plain text"), 10);
+        assert_eq!(whole_sequences_end(b"\x1b[?2026h"), 8);
+        // Half a control sequence: no character between `@` and `~` has ended it yet.
+        assert_eq!(whole_sequences_end(b"AAA\x1b[?20"), 3);
+        // Half a string: its payload is all printable, and neither terminator has arrived.
+        assert_eq!(whole_sequences_end(b"AAA\x1b]0;a title"), 3);
+        assert_eq!(whole_sequences_end(b"\x1b]0;t\x07"), 6);
+        assert_eq!(whole_sequences_end(b"\x1b]0;t\x1b\\"), 7);
+        // An escape on its own, an escape and the character it takes, and an escape whose
+        // intermediate byte is still waiting for one.
+        assert_eq!(whole_sequences_end(b"\x1b"), 0);
+        assert_eq!(whole_sequences_end(b"\x1bM"), 2);
+        assert_eq!(whole_sequences_end(b"\x1b(B"), 3);
+        assert_eq!(whole_sequences_end(b"\x1b("), 0);
+    }
+
+    #[test]
+    fn bytes_that_open_an_update_and_do_not_close_it_leave_it_open() {
+        assert_eq!(
+            update_after(b"\x1b[?2026h\x1b[H\x1b[2Jhalf a frame"),
+            UpdateAfter::Opened
+        );
+        assert_eq!(
+            update_after(b"\x1b[?2026hwhole frame\x1b[?2026l"),
+            UpdateAfter::Ended
+        );
+        assert_eq!(update_after(b"a plain line\r\n"), UpdateAfter::Unchanged);
+        assert_eq!(update_after(b""), UpdateAfter::Unchanged);
     }
 
     #[test]
     fn the_mode_counts_wherever_it_falls_among_the_parameters() {
         // What a pane honours, and what vte honours outside an update but stops tracking
         // inside one: the engine can report no open update over bytes that hold one open.
-        assert!(ends_inside_an_update(b"\x1b[?1;2026hAAA"));
-        assert!(!ends_inside_an_update(b"\x1b[?2026hAAA\x1b[?2026;1lBBB"));
+        assert_eq!(update_after(b"\x1b[?1;2026hAAA"), UpdateAfter::Opened);
+        assert_eq!(
+            update_after(b"\x1b[?2026hAAA\x1b[?2026;1lBBB"),
+            UpdateAfter::Ended
+        );
+        // Sub-parameters of its own, and leading zeros: xterm.js reads the parameter as 2026
+        // either way, and either is how vte opens an update it then stops tracking.
+        assert_eq!(update_after(b"\x1b[?2026:5hAAA"), UpdateAfter::Opened);
+        assert_eq!(update_after(b"\x1b[?02026hAAA"), UpdateAfter::Opened);
+        // A sub-parameter of another mode is not this mode: the 2026 belongs to the 1.
+        assert_eq!(update_after(b"\x1b[?1:2026hAAA"), UpdateAfter::Unchanged);
     }
 
     #[test]
     fn bytes_that_only_look_like_the_mode_are_not_it() {
-        assert!(!ends_inside_an_update(b"\x1b[?12026h"));
-        assert!(!ends_inside_an_update(b"the year 2026 arrived"));
-        assert!(!ends_inside_an_update(b"\x1b[?2026"));
+        assert_eq!(update_after(b"\x1b[?12026h"), UpdateAfter::Unchanged);
+        assert_eq!(
+            update_after(b"the year 2026 arrived"),
+            UpdateAfter::Unchanged
+        );
+        // A neighbouring mode, not a prefix of this one: 2027 is grapheme clustering.
+        assert_eq!(update_after(b"\x1b[?2027h"), UpdateAfter::Unchanged);
         // Nothing before the parameter to introduce it, and nothing to index behind it.
-        assert!(!ends_inside_an_update(b"2026h"));
+        assert_eq!(update_after(b"2026h"), UpdateAfter::Unchanged);
+        // Text that spells it, with no escape to make a sequence of it.
+        assert_eq!(
+            update_after(b"see ?2026h in the docs"),
+            UpdateAfter::Unchanged
+        );
         // Asking whether the mode is set is not setting it.
-        assert!(!ends_inside_an_update(b"\x1b[?2026$p"));
+        assert_eq!(update_after(b"\x1b[?2026$p"), UpdateAfter::Unchanged);
     }
 
     #[test]
-    fn an_update_left_open_stays_open_behind_a_sequence_cut_in_half() {
-        // The next read carries the rest of it; what is already open is still open.
-        assert!(ends_inside_an_update(b"\x1b[?2026habc\x1b[?2026"));
+    fn a_sequence_cut_in_half_says_nothing_about_the_update_either_way() {
+        // Half of it is in these bytes and the rest is in the ones that follow: what was
+        // open is still open, and what was not is not.
+        assert_eq!(update_after(b"\x1b[?2026"), UpdateAfter::Unchanged);
+        assert_eq!(
+            update_after(b"\x1b[?2026habc\x1b[?2026"),
+            UpdateAfter::Opened
+        );
+        assert_eq!(
+            update_after(b"26h\x1b[H\x1b[2Jhalf a frame"),
+            UpdateAfter::Unchanged
+        );
     }
 
     #[test]
