@@ -9,6 +9,8 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+alacritty_terminal = "0.26"
+portable-pty = "0.9"
 thiserror.workspace = true
 
 [dev-dependencies]
