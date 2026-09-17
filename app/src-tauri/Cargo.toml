@@ -29,10 +29,17 @@ serde.workspace = true
 serde_json.workspace = true
 specta = { version = "=2.0.0-rc.25", features = ["derive", "function"] }
 specta-typescript = "0.0.12"
+tauri-plugin-wdio = { version = "1", optional = true }
+tauri-plugin-wdio-webdriver = { version = "1", optional = true }
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 
 [lints]
 workspace = true
+
+[features]
+# What a scenario test needs inside the app: WebdriverIO's embedded WebDriver server, and its
+# plugin for running code in the window. Never in a build anyone is given.
+e2e = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver"]
 
 [dev-dependencies]
 tempfile.workspace = true

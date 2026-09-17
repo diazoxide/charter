@@ -156,9 +156,16 @@ pub fn run() {
         .export(typescript(), BINDINGS)
         .expect("the TypeScript bindings are written");
 
-    tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
-        .invoke_handler(commands.invoke_handler())
+    let app = tauri::Builder::default().plugin(tauri_plugin_opener::init());
+
+    // What the scenario tests drive the window through. The feature is off in every build
+    // anyone is given, so nothing here can be reached in one.
+    #[cfg(feature = "e2e")]
+    let app = app
+        .plugin(tauri_plugin_wdio::init())
+        .plugin(tauri_plugin_wdio_webdriver::init());
+
+    app.invoke_handler(commands.invoke_handler())
         .setup(|app| {
             app.manage(Sessions::new());
             Ok(())
