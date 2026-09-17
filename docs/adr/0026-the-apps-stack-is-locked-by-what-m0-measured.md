@@ -6,19 +6,19 @@ GPUI "stays the fallback only if the M0 skeleton misses a limit a person would n
 skeleton exists. This is what it measures against the spec's limits, and the decision that
 follows.
 
-**The stack is locked as ADR 0025 chose it, with one addition: xterm.js draws with its own DOM
-renderer, not WebGL.** Two limits are not met, neither of them the drawing layer's fault, and
-both are recorded below rather than designed around.
+**The stack is locked as ADR 0025 chose it, and xterm.js draws with its own DOM renderer.**
+One limit is missed and one is met with a hazard beside it; neither belongs to the drawing
+layer, and both are recorded here rather than designed around.
 
 ## How it was measured
 
-`node tools/bench.mjs` in charter-app, on the operator's machine — Apple M4 Pro, 14 cores,
-48 GB, macOS 26.2, tmux 3.7c, Node 24.12.0, cargo 1.98.1 — on 2026-09-17. The numbers below
-are from the run at 22:27–22:47 local, of the tree this PR's charter-app commit records; the
-chunking numbers are from 23:05, of the same tree plus the spec that takes them.
+`node tools/bench.mjs` in charter-app at commit `2b85efc`, with nothing uncommitted — the run
+records both, so a number can be tied to the code that produced it. On the operator's machine:
+Apple M4 Pro, 14 cores, 48 GB, macOS 26.2, tmux 3.7c, Node v24.12.0, cargo 1.98.1, on
+2026-09-17 from 00:03 local. Raw results: `target/bench/2026-09-17T20-03-53/results.json`.
 
 The method is research §9.3, adapted: the limits are the perceptible ones the spec lists, and
-tmux is re-measured beside the app as a reference, not as a gate.
+tmux is re-measured beside the app as a reference, not a gate.
 
 - **Release builds only.** A debug build's numbers say nothing about what a person feels. The
   app is built twice: as it ships, for cold start, and again with the `e2e` feature, which is
@@ -28,114 +28,149 @@ tmux is re-measured beside the app as a reference, not as a gate.
 - **The load is `fake-harness`**, replaying `fixtures/corpora/claude-code-session.raw` — 132 KB
   of real Claude Code output — ×16 for 2 MB and ×99 for 13 MB, and its synthetic
   harness-shaped output where a `?2026` animation is needed, because that recording has none.
-- **A burst starts once the pane is watching** (`--wait-for-input`). Output written before the
-  view opens reaches the pane as a snapshot of the screen, and timing that would measure the
-  wrong thing.
-- **"Painted" means the row is in the grid and one more frame has been presented**, measured
-  inside the window through a seam the `e2e` build alone has. Measured from the test process
-  instead, every sample carries the driver's own round trip, which is the size of the budget.
-- **Percentiles are over the samples named in each row.** With 20–30 samples, p99 is the worst
-  one; both are given where they differ.
+- **A burst starts once the pane is watching** (`--wait-for-input`), since output written
+  before the view opens arrives as a snapshot of the screen instead of as a stream.
+- **"Painted" means the text has been parsed into the terminal's grid and one more frame has
+  then been presented.** The pane hands xterm.js's `write` a callback, so the clock stops on
+  the parse and not on the IPC message: arrival is not paint, because xterm.js drains its write
+  queue on its own schedule.
 
-Two conditions the benchmark needs, learnt by getting them wrong: **the window must be in
-front, and the screen must be unlocked.** A covered window, a sleeping display and a locked
-session are each not drawn at all — no animation frames, no terminal renders — so every
-measurement that waits for a paint waits forever and a frame count reads zero. The benchmark
-brings each window forward, holds the display awake, and refuses to start the window phase on a
-locked screen.
+What the numbers do **not** cover, stated once here rather than implied row by row:
+
+- **Every throughput row is one sample**, as are the tmux rows. Run to run they move by about
+  ±10%. The percentile rows say their sample count.
+- **Memory is the app's own process.** A pane's terminal lives in WebKit's content process,
+  which this does not measure, so "the app at 140 MB" is the native side alone. The
+  idle-hidden-session row is unaffected: a hidden session has no pane, and its cost is its
+  terminal in the core.
+- **The keystroke rows drive xterm.js's `input`**, which is what a key press turns into once
+  the browser has delivered it. The browser's own key-event leg — a few milliseconds, at most
+  one frame — is outside them.
+- **The benchmark polls the window while it measures**, about twenty script evaluations a
+  second, and brings the window forward. Both cost the app, not the limit, so they make these
+  numbers pessimistic rather than flattering.
+- **Nothing can draw more often than the display changes.** An earlier run read the DOM
+  renderer at 22 draws a second because the display had dropped to 26 frames a second with
+  nobody at the machine. Every run now holds the display at full rate and refuses to measure
+  below 50 frames a second; both arms below were at 60.
+
+A benchmark of a window also needs the window drawn at all: covered, asleep or on a locked
+screen, WebKit hands out no frames, and a measurement waiting for a paint waits forever. The
+runner brings each window forward, holds the display awake, and skips the paint measurements
+with a reason rather than reporting zeros.
 
 ## What it measured
 
 | Limit | Measured | |
 | --- | --- | --- |
-| **Live sessions: 50** | 50 running, 49 of them streaming; the app at 139–148 MB | met |
-| **2 MB burst: no freeze, input and other panes responsive** | painted 77 ms after the first byte (27.5 MB/s); longest frame 33 ms | met |
-| **13 MB burst: the same** | 350 ms (37.4 MB/s); longest frame 62 ms; the whole burst arrived while the pane beside it was typed into, keystroke p50 24 ms, worst 80 ms | met, with the worst keystroke above the 50 ms row |
-| **Keystroke to screen ≤ 50 ms while 49 others stream** | worst 33 ms with 49 streaming at ~1 MB/s each, worst 25 ms with 49 flat out (harnesses using 620% CPU between them) | met |
-| **Tab or pane switch ≤ 100 ms** | back to a light tab worst 37 ms; to a tab whose session has all 5000 lines of history worst 53 ms; back to the typed tab under the 49-session load worst 40 ms | met |
-| **Hook call ≤ 50 ms** | `charter hook pretooluse` through Python charter: **p50 101.5 ms**, worst 108 ms | **missed** |
-| **Cold start ≤ 2 s** | p50 341 ms to the first frame on screen; worst 1035 ms, which was the first launch after the build and the only one cold on disk | met |
-| **Idle hidden session ≤ 50 MB at the shipped scrollback cap** | **20.7 MB** each: 50 sessions with 5000 lines of history at 150 columns took the app from 115 MB to 1149 MB | met |
-| **`?2026` animation ≥ 30 fps** | **51.8 draws/s** where the harness writes each repaint promptly; **1.0 draws/s** where it pauses inside an open update | met, with a hazard recorded below |
-| tmux, as a reference | 25.8 MB/s at 2 MB, 27.0 MB/s at 13 MB, in a 150×42 window with a client attached through a pseudo-terminal | the app is above it |
+| **Live sessions: 50** | 50 running, 49 of them streaming; harnesses using 605% CPU between them; the app's own process at 144 MB | met |
+| **2 MB burst: no freeze, input and other panes responsive** | painted 82 ms after the first byte (25.8 MB/s); longest frame 42 ms | met |
+| **13 MB burst: the same** | 460 ms (28.4 MB/s); longest frame 52 ms; in the pane beside it, the one keystroke that landed while the burst was still arriving took **110 ms**, and the other nineteen took 23–34 ms | met — no freeze, one hitch |
+| **Keystroke to screen ≤ 50 ms while 49 others stream** | worst 26 ms with 49 streaming at ~1 MB/s each, worst 26 ms with 49 flat out (30 samples each) | met |
+| **Tab or pane switch ≤ 100 ms** | back to a light tab worst 39 ms; to a tab whose session holds all 5000 lines of history worst 48 ms; back to the typed tab under the 49-session load worst 41 ms (10 samples each) | met |
+| **Hook call ≤ 50 ms** | `charter hook pretooluse` through Python charter: **p50 107.6 ms**, worst 114 ms (30 samples) | **missed** |
+| **Cold start ≤ 2 s** | p50 370 ms to the first frame on screen; worst 510 ms, the first launch after the build and the only one cold on disk | met |
+| **Idle hidden session ≤ 50 MB at the shipped scrollback cap** | **20.2 MB** each: fifty sessions holding 5000 lines at 150 columns took the app's process from 118.9 MB to 1129.7 MB | met |
+| **`?2026` animation ≥ 30 fps** | **52.4 draws/s** for a 3 KB repaint written whole, **52.0** for a 10 KB full-screen repaint written whole, both against a 60 fps display; **1.0 draws/s** when the writer pauses inside an open update | met, with a hazard recorded below |
+| tmux, as a reference | 26.0 MB/s at 2 MB, 26.1 MB/s at 13 MB, in a 150×42 window with a client attached through a pseudo-terminal | the app is above it |
 
 Two more numbers that no limit asks for, because they are what a person does:
 
-- **Opening a pane by splitting**, until the new pane has painted: worst 68 ms with a handful of
-  panes; p50 105 ms and worst 530 ms when the twentieth pane is added, since every split
-  re-lays out every pane.
+- **Opening a pane by splitting**, until the new pane has painted: p50 55 ms, worst 117 ms with
+  a handful of panes. Splitting on up to twenty panes costs far more — p50 191 ms, and 1380 ms
+  for the seventeenth — because every split re-lays out every pane.
 - **Twenty panes on screen at once** all drew, each with its own live session.
 
 ## The renderer is xterm.js's own, not WebGL
 
 The research expected WebGL and warned that WebKit caps a page at 16 WebGL contexts (§5.1), so
-both were measured. **The DOM renderer is locked**, because WebGL won nothing and cost
-something:
+both were measured, in the same run, on the same machine.
 
 | | DOM | WebGL |
 | --- | --- | --- |
-| 132 KB corpus, first byte to painted | 40 ms | 84 ms |
-| 13 MB burst | 37.4 MB/s | 37.2 MB/s |
-| Keystroke beside a 13 MB burst, worst | 80 ms | 105 ms |
-| Switch to a tab with 5000 lines of history, p50 | 37 ms | 48 ms |
-| Keystroke with 49 streaming, worst | 33 ms | 25 ms |
-| App memory with 50 sessions | 139 MB | 159 MB |
-| `?2026`, repaints written promptly | 51.8 draws/s | 51.8 draws/s |
+| 13 MB burst | 28.4 MB/s | 28.0 MB/s |
+| 2 MB burst | 25.8 MB/s | 22.5 MB/s |
+| 132 KB corpus, first byte to painted | 50 ms | 40 ms |
+| Keystroke with 49 streaming, worst | 26 ms | 34 ms |
+| Switch to a light tab, p50 | 32 ms | 40 ms |
+| Switch to a tab with 5000 lines of history, p50 | 47 ms | 49 ms |
+| Splitting up to twenty panes, p50 / worst | 191 / 1380 ms | 108 / 538 ms |
+| The app's process with 50 sessions | 144 MB | 167 MB |
+| Per idle hidden session | 20.2 MB | 20.9 MB |
+| `?2026`, repaints written whole | 52.4 draws/s | 51.6 draws/s |
 
-The context cap did not bite: **twenty panes each kept a live WebGL context, none fell back.**
-That is worth knowing and it changes nothing, since the arm it would have justified is not
-faster. `@xterm/addon-webgl` stays in the tree behind `app/src/renderer.ts`, loaded only if the
-renderer is switched, so the arm can be re-measured rather than re-argued.
+**Both arms meet every limit**, and neither is faster at the same things. WebGL paints a first
+screen sooner and builds a many-pane layout in about half the time; the DOM renderer switches
+tabs sooner, answers a keystroke under load sooner, and costs 23 MB less. So this is not a
+speed decision, and priority 3 does not decide it — **priority 1 does: the DOM renderer is
+what xterm.js does by itself.** No addon, no GPU context per pane, nothing to fall back from.
+
+The context cap did not bite either way: **twenty panes each kept a live WebGL context, none
+fell back.** That is worth knowing and changes nothing today.
+
+`@xterm/addon-webgl` stays in the tree behind `app/src/renderer.ts` — 113 KB of the shipped
+bundle that the shipped build never loads, because the switch is only reachable from the
+benchmark. It is kept so the arm can be re-measured rather than re-argued: **if many panes on
+screen at once becomes an ordinary way to work, the twenty-pane row above is the lever to
+pull.**
 
 ## The hook call is missed, and not by this stack
 
-`charter hook pretooluse` costs 101.5 ms at the median. That is the Python start ADR 0025
-already counted as a reason for the rewrite, measured again here: the hook path today is Python
+`charter hook pretooluse` costs 107.6 ms at the median. That is the Python start ADR 0025
+already counted as a reason for the rewrite, measured again: the hook path today is Python
 charter's, and no drawing layer changes it. The Rust `charter` binary answers `charter root` in
-**1.8 ms** on the same machine, which is the floor the limit will be held to once M2 and M3 move
-hooks off Python. **The limit stays missed until then, and M3 is where it is met** — it is not a
-reason to reopen the stack.
+**1.8 ms** on the same machine, which is the floor the limit will be held to once M2 and M3
+move hooks off Python. **The limit stays missed until then, and M3 is where it is met.** It is
+not a reason to reopen the stack.
 
 ## The `?2026` hazard, and the decision it needs
 
-xterm.js skips any render that falls while a synchronized update is open (`RenderService`), and
-forces one only on a one-second safety timeout. Measured:
+xterm.js skips any render that falls while a synchronized update is open
+(`RenderService._renderRows`), and forces one only on a one-second safety timeout. Measured:
 
-- Repaints written promptly: **51.8 draws/s**, well past the 30 fps the limit asks.
+- A repaint written whole, 3 KB or 10 KB: **52 draws a second** against a 60 fps display, well
+  past the 30 the limit asks.
 - Repaints written 4 KB at a time with 16 ms between writes, so an update stays open across
-  frames: **1.0 draws/s** — the pane updates once a second. This is xterm.js#6071, which is why
-  the spec lists the limit at all.
+  frames: **1.0 draws a second** — the pane updates on the safety timeout and nothing else.
+  This is xterm.js#6071, and it is why the spec lists the limit at all.
 
-What decides it is not that a repaint arrives in pieces: **every repaint does.** A repaint
-written in one write reaches the pane as roughly one message per kilobyte — a 3 KB repaint in
-about four, a 10 KB one in about ten — because that is what the pseudo-terminal hands over.
-Those arrive back to back and are parsed before the next frame, which is why the prompt case
-draws at 52/s. A harness that opens an update and then pauses is the case that stalls.
+What decides it is not that a repaint reaches the pane in pieces: **every repaint does.** A
+repaint written in one write arrives as roughly one message per kilobyte — a 3 KB repaint in
+about five messages, a 10 KB one in about eleven, a 32 KB one in about thirty-three — because
+that is what the pseudo-terminal hands over, one message per read (`session.rs`, a 64 KB
+buffer). Those arrive back to back and are parsed before the next frame, which is why the
+prompt cases draw at 52/s. **A writer that opens an update and then pauses is the case that
+stalls**, and no harness is known to do it: the recorded Claude Code session uses no `?2026` at
+all.
 
-No harness is known to do it: the recorded Claude Code session uses no `?2026` at all. It is
-still a hazard the app can close for good, in the core rather than the UI: **the core already
-parses every session's output and knows when an update is open, so it need never hand a pane a
-chunk that ends inside one.** That is the recommendation; it is a change to the core's streaming,
-not to the stack, and it belongs to M1. GPUI would also make the hazard impossible, by not
-having xterm.js — which is the trade ADR 0025 weighed and priced, and one stalled animation
-shape does not change it.
+It is still a hazard the app can close for good, in the core rather than the UI: **the core
+already parses every session's output and knows when an update is open** — `alacritty_terminal`
+exposes vte's sync state, which `engine/alacritty.rs` already uses — **so it need never hand a
+pane a chunk that ends inside one.** That is the recommendation, and it belongs to M1. It needs
+a deadline of its own: a harness that opens an update and never closes it must not hold its
+pane's output for ever, which is the one thing xterm.js's one-second timeout does get right.
+
+GPUI would also make the hazard impossible, by not having xterm.js. That is the trade ADR 0025
+weighed and priced, and one animation shape that no harness writes does not change it.
 
 ## The scrollback cap
 
 The spec left open "the scrollback cap that the idle-session limit is measured at". It is
-**5000 lines**, `SCROLLBACK` in the app, and it is measured: a hidden session holding 5000 lines
-at 150 columns costs **20.7 MB**, against a 50 MB limit. Fifty of them cost 1.15 GB of the app's
-memory, which is the number to weigh before raising the cap — the limit is per session, and the
-product's scale is fifty.
+**5000 lines**, `SCROLLBACK` in the app, and it is measured: a hidden session holding 5000
+lines at 150 columns costs **20.2 MB**, against a 50 MB limit. Fifty of them add about 1.01 GB
+to the app's process, which is the number to weigh before raising the cap — the limit is per
+session, and the product's scale is fifty.
 
 ## What would reopen this
 
-- A limit a person notices that the drawing layer causes, and that the core cannot close. The
-  `?2026` stall is the only candidate so far and the core can close it.
+- A limit a person notices that the drawing layer causes and the core cannot close. The
+  `?2026` stall is the only candidate so far, and the core can close it.
+- Many panes on screen becoming an ordinary way to work: that is the one thing the DOM renderer
+  is measurably worse at, and it is a switch in `renderer.ts`, not a change of stack.
 - Tauri's WebKit refusing contexts or frames at a pane count the app needs. Twenty panes, each
   with its own session, draw today.
-- A harness whose output the DOM renderer cannot keep up with. It is at 37 MB/s on a 13 MB
-  burst, above tmux on the same machine.
+- A harness whose output the app cannot keep up with. It is at 28 MB/s on a 13 MB burst, above
+  tmux on the same machine, with the parse into the grid inside the measurement.
 
 Until one of those happens, GPUI is not the fallback it was: it is an option that costs a
 rewrite of the UI and buys nothing the limits ask for.
@@ -145,5 +180,6 @@ rewrite of the UI and buys nothing the limits ask for.
 `node tools/bench.mjs` in charter-app, with a line in its README. It builds what it needs,
 measures cold start, the hook call, tmux and the window — the window once per renderer arm, one
 WebdriverIO run per spec file so no spec measures what the one before it left running — and
-writes `target/bench/<time>/results.json`. Every number here can be taken again with one
-command, which is the point of it.
+writes `target/bench/<time>/results.json`, with the commit, the machine and the tool versions
+beside the numbers. Every number here can be taken again with one command, which is the point
+of it.

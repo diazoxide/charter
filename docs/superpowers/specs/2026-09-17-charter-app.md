@@ -165,12 +165,15 @@ M0 measured the skeleton against the limits above on the operator's machine and 
 stack: **ADR 0026**. It answers the first of the questions this section left open.
 
 - **The scrollback cap is 5000 lines**, and a hidden session holding that much at 150 columns
-  costs 20.7 MB of the 50 MB the limit allows. Fifty of them cost 1.15 GB.
-- **xterm.js draws with its own DOM renderer.** WebGL was measured beside it and won nothing.
-- **Two limits are not met.** The hook call costs 101.5 ms through Python charter, which is
-  M3's to fix and not the stack's; and a `?2026` animation falls to one frame a second if a
-  harness pauses inside an open update, which the core can close in M1 by never ending a
-  chunk inside one.
+  costs 20.2 MB of the 50 MB the limit allows. Fifty of them add about 1 GB to the app.
+- **xterm.js draws with its own DOM renderer.** WebGL was measured beside it: both meet every
+  limit, and neither is faster at the same things, so the simpler one wins on priority 1. The
+  addon stays behind a switch, because many panes on screen is the one thing it is better at.
+- **The hook call is missed**: 107.6 ms through Python charter, against a 1.8 ms start for the
+  Rust binary. M3 is where it is met, and it is not the stack's to fix.
+- **A `?2026` animation falls to one frame a second** if a writer pauses inside an open update
+  (xterm.js#6071), against 52 draws a second when repaints are written whole. The core can
+  close it in M1 by never ending a chunk inside an open update, with a deadline of its own.
 
 Still open:
 
