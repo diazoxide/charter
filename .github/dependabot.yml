@@ -10,6 +10,13 @@ updates:
     schedule: { interval: weekly }
     groups:
       web: { patterns: ["*"] }
+    ignore:
+      # typescript-eslint 8 declares typescript <7 as its peer range; move both together.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
+      # Types track the Node major in .nvmrc (24), not the newest Node.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule: { interval: weekly }
