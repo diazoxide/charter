@@ -145,3 +145,250 @@ def presser_of(args) -> str:
     """
     client = (getattr(args, "client", None) or "").strip()
     return client if CLIENT_RE.fullmatch(client) else ""
+
+
+def forward(args) -> tuple[str, ...]:
+    """What `_open_palette` splices into the argv of the pane it carves.
+
+    `tabmenu.forward`'s shape, and its empty tuple is load-bearing for the same reason one
+    noun over: the pane is a SECOND process, and every value it acts on has to make the
+    trip. The presser was expanded by tmux in the `run-shell` child that is running this
+    function; the process inside the split is the one that builds the rows.
+
+    **The presser rides for `F2` as well as for `F10`**, because both surfaces carry *Close
+    charter* and both need to know whose terminal it is. Only the flag is conditional.
+
+    A presser charter cannot read contributes nothing rather than an empty positional — an
+    argv holding `""` would hand the pane a client by a different route, and it would stop
+    the `F2` argv of a charter with no presser being byte-identical to what it was.
+    """
+    client = presser_of(args)
+    return ((client,) if client else ()) + ((OPTION,) if wanted(args) else ())
+
+
+def catalogue(fid: str, *, client: str) -> tuple:
+    """The two rows. Detach first, stop second, and no third.
+
+    **The order is the guard `leave.open_rows` states**, arrived at from the other
+    direction: there the destructive row goes last among many, and here there are two, so
+    last means second. What makes it hold on a two-row surface is :class:`Gate`'s cursor —
+    with `palette.aim` alone, a refused first row hands the cursor to this one.
+
+    **The detach row is listed refused rather than dropped** when charter cannot name the
+    presser (#512). Dropping it would leave one row on the surface, which is *stop all
+    chats* under the cursor with nothing above it — the trap the order exists to avoid,
+    reached by removing a row instead of by moving one.
+
+    *fid* is not read yet and is in the signature anyway, for `builtin_actions.build`'s
+    reason: every caller says which chat it is drawing for, and the rows act on that chat
+    at the moment they are chosen (:func:`chose`). Nothing here reads the plane — the
+    warning does, one keypress later, which is §4f's *at the moment of deciding* and
+    `leave.open_rows`' rule that a menu merely being open costs no scan.
+    """
+    from . import builtin_actions, overlay
+    return (
+        overlay.Row(id=DETACH_ID, title=DETACH_TITLE, refused=not client,
+                    note="" if client else builtin_actions.NO_PRESSER_TO_DETACH),
+        overlay.Row(id=STOP_ID, title=STOP_TITLE),
+    )
+
+
+def Gate(**kw):
+    """The gate's surface: a `palette.Palette` whose cursor opens on :data:`DETACH_ID`.
+
+    A factory rather than a module-level subclass, so that importing this module does not
+    import `frame/palette.py` — which pulls in `frame/pane.py`, `termios` and `tty`, and
+    which `charter/instance.py` must not pay for when it asks this module for one string
+    (:func:`instance._gate_key`). The class is built once and cached on the function.
+    """
+    return _gate_class()(**kw)
+
+
+def _gate_class():
+    from . import palette
+    cached = getattr(_gate_class, "_cls", None)
+    if cached is not None:
+        return cached
+
+    class _Gate(palette.Palette):
+        """`palette.Palette` with one rule changed: where the cursor opens.
+
+        **`palette.aim` is right everywhere else and wrong here**, and the difference is
+        worth stating rather than overriding quietly. `aim` answers *the first row that can
+        run*, which is #931's fix for a surface that opened on a refused row and spent the
+        operator's Enter on nothing. This surface has two rows, the first can be refused —
+        charter could not name the presser — and the second stops every harness on the
+        plane. So the rule that protects every other surface would, here, open a menu with
+        the cursor on the one irreversible thing in it.
+
+        **Pinned by ID, not by index.** An index would be a second statement of the
+        order `catalogue` already makes, and it would follow the wrong row the moment a
+        third was added.
+
+        **And only while the row is on screen.** After a query the cursor is `aim`'s again,
+        because an operator who has typed toward the stop row has asked for it — the pin is
+        about where the surface OPENS, which is the whole of what was at stake.
+        """
+
+        def _refilter(self) -> None:
+            super()._refilter()
+            for i, row in enumerate(self.rows):
+                if row.id == DETACH_ID:
+                    self._sel = i
+                    return
+
+    _gate_class._cls = _Gate
+    return _Gate
+
+
+def opens(row, fid: str, *, live):
+    """The surface *row* opens, or ``None`` when it opens none.
+
+    `tabmenu.opens`' job, and the same two-line shape: a doorway is told apart by its id,
+    and what comes back replaces the surface in the pane the operator is already looking at
+    (`palette.own_the_tty`'s *then*) rather than starting a second one.
+
+    **It is `leave`'s own confirmation, not a second one.** `F2 → charter: quit` opens
+    exactly this, over exactly this plan, and the keypress that commits is the row
+    `leave.confirm_rows` mints — so the two routes cannot come to disagree about what
+    stopping the plane costs or about which row does it. Ended tabs are listed with what
+    they get back because `leave.plan` lists them (decision 12), not because this asked.
+
+    *live* is `commands_frame._live_chats`' tri-state, carried through rather than
+    collapsed: ``None`` is *the server would not answer*, which is not *no chats*, and
+    `leave.plan` is what knows the difference.
+
+    *focus* is the chat's own workspace, which is what a QUIT records as the plane's focus
+    (`commands_frame._record_the_plane`) — the gate's stop row is that quit, so it is asked
+    here rather than left empty the way `tabmenu.confirm_rows` leaves it. `chat: close`
+    writes no manifest; this does.
+    """
+    from . import leave, palette, state
+    if row.id != STOP_ID:
+        return None
+    return palette.Palette(
+        catalogue=leave.confirm_rows(
+            leave.plan(live=live, focus=state.own_workspace(fid) or ""),
+            verb=leave.QUIT),
+        label=leave.QUIT, mouse=True)
+
+
+def chose(row, fid: str, *, client: str) -> bool:
+    """Act on the row Enter landed on. Answers whether anything was started.
+
+    **The stop DOORWAY is not here, and its absence is the confirmation** — `tabmenu.chose`'s
+    rule word for word. `chose` starts work; a doorway starts none, it replaces the surface
+    (:func:`opens`). A version that quit the plane on :data:`STOP_ID` would put the most
+    destructive thing charter's frame can do one keypress from a key an operator may well
+    have pressed by accident.
+
+    **A refused row starts nothing**, which is not tidiness: `overlay.Surface` lets Enter
+    land on any row and it is the caller that knows a refusal. Here that is the detach row
+    with no presser, and running it would be charter detaching *something* to answer a
+    question it could not answer.
+
+    **The detach's own sentence is said here**, unlike an action's, because this surface has
+    no registry behind it to report through: `builtin_actions._detach` answers what
+    happened — it detached, or it could not prove the presser — and the pane this menu is
+    drawn in is about to be killed, so the frame's own attention row is the only screen
+    left (`commands_frame._say_on_screen`).
+    """
+    from .. import commands_frame
+    from . import builtin_actions, leave
+    if row.refused:
+        return False
+    if row.id == DETACH_ID:
+        commands_frame._say_on_screen(fid, builtin_actions._detach(fid, client))
+        return True
+    if leave.goes_through(row, leave.QUIT):
+        # `_start_leaving`, so `F10 → stop all chats` and `F2 → charter: quit` are one
+        # teardown started one way: `frame-quit --chat <fid>`, detached, with the presser's
+        # own chat named because this pane is about to stop existing.
+        commands_frame._start_leaving(fid, leave.QUIT)
+        return True
+    return False
+
+
+def act(row, fid: str, *, client: str) -> None:
+    """Act on the row Enter landed on, and say the reason when it could not run.
+
+    `tabmenu.act`'s shape and its argument: one function because the three halves are one
+    decision, and because the surface a refusal would otherwise be drawn on is the pane
+    :func:`draw` is about to kill.
+
+    **A ``None`` row is a cancel and is answered here rather than at the call site.**
+    `own_the_tty` answers ``None`` for Escape, for `overlay.HATCH_KEY` and for the pane's
+    writer going away — the commonest way this surface ends, because the row under the
+    cursor is deliberately the harmless one and leaving without pressing it is the ordinary
+    outcome of an `F10` somebody did not mean. Keeping it here rather than in :func:`draw`
+    is what makes it a line a test can turn red: `draw` needs a tty.
+
+    **A row with nothing to say says nothing**, and the guard is not tidiness: the notice is
+    a WRITE, so an empty one would blank whatever the attention row was already carrying.
+    The rows that reach here having started nothing are the refused detach row, which
+    carries its reason, and the warning's own per-chat rows, which carry `leave.note`, and
+    its *nothing left to stop* row, which carries none.
+    """
+    from .. import commands_frame
+    if row is None or chose(row, fid, client=client):
+        return
+    if row.note:
+        commands_frame._say_on_screen(fid, row.note)
+
+
+def draw(args) -> int:
+    """Be the gate: draw the two rows, take a choice, act on it, hand the pane back.
+
+    `tabmenu.draw`'s shape, and deliberately its shape rather than a branch inside
+    `commands_frame._draw_palette`: every line of that function is about the frame's own
+    catalogue, its registry and its pickers, and this surface has two rows and no registry
+    at all.
+
+    **Inside the operator's own tmux it draws nothing** (decision 7). No key is bound and no
+    button is drawn there, so nothing produces this surface by a gesture — a `charter
+    frame-palette --gate` typed by hand is the only way in, and what it gets is
+    :data:`NOT_HERE` on the attention row. Drawing the menu there would be a first row
+    `builtin_actions._detachable` refuses on every plane and a second that quits one, which
+    is a surface whose only working row is the destructive one.
+
+    **The pane is handed back from a ``finally``**, one layer up from `overlay.Surface.run`'s
+    own, and the notice branch is inside it — so the operator gets their harness back
+    whether the menu drew, refused or raised.
+
+    **Always 0**, for `cmd_palette`'s reason: a non-zero return from a `run-shell` child is
+    printed INTO THE HARNESS PANE and drops it into copy-mode, which is charter drawing in
+    the one rectangle ADR 0018 says it never draws.
+    """
+    import os
+
+    from .. import commands_frame
+    from . import palette, tabmenu, tmuxctl
+    fid, socket, harness, overlay_pane = tabmenu.handback(os.environ)
+    client = presser_of(args)
+    try:
+        if tmuxctl.is_operator_socket(socket):
+            commands_frame._say_on_screen(fid, NOT_HERE)
+            return 0
+        surface = Gate(catalogue=catalogue(fid, client=client), label=LABEL, mouse=True)
+
+        def _then(row):
+            # **On the keypress, never on the open.** `catalogue` reads nothing; the plane
+            # is scanned here, by the Enter that asked for the warning — one `list-windows`
+            # per server, the same round trip `commands_frame._picker` makes for the same
+            # doorway.
+            #
+            # **A drawer, and through the same call** (#921/#927). `_as_a_drawer` passes
+            # `None` straight back, so the detach row is untouched and only the stop
+            # doorway gives the window up — and the size rule stays in the one place that
+            # holds it rather than being restated here.
+            return commands_frame._as_a_drawer(
+                opens(row, fid,
+                      live=commands_frame._plane_live(
+                          commands_frame._plane_servers())[0]),
+                socket=socket, pane=overlay_pane)
+
+        act(palette.own_the_tty(surface, then=_then), fid, client=client)
+    finally:
+        commands_frame._close_palette(socket, harness=harness,
+                                      overlay_pane=overlay_pane)
+    return 0

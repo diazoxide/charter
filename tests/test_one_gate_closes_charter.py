@@ -50,6 +50,23 @@ def _line(text: str, key: str) -> str:
     return next((ln for ln in text.split("\n") if ln.startswith(want)), "")
 
 
+def _doomed(**kw):
+    """One chat a quit would stop, built straight rather than off disk.
+
+    `tests/test_what_a_quit_says_is_spelled_where_it_is_asserted.py`'s own fixture, for its
+    reason: what the gate's doorway is asked here is that it hands `leave.confirm_rows` the
+    plan and draws what comes back, not that `leave.plan` reads a frame root correctly —
+    which is that file's question and is answered there.
+    """
+    from charter.frame import leave
+    base = dict(chat="beta.1", workspace="beta", persona="", harness="claude-code",
+                cwd="/tmp", resume="", server="charter-plane-x", live=True, active=False,
+                exit_code=None, closed=False, homeless=False, cwd_gone=False,
+                cwd_outside=False, conversation=os.path.abspath(__file__))
+    base.update(kw)
+    return leave.Doomed(**base)
+
+
 class TheBindsCarryThePresser(PersonaIso, unittest.TestCase):
     """`conf_text`'s three bind lines, as literals.
 
@@ -427,6 +444,26 @@ class CloseCharterDetachesOnlyThePresser(PersonaIso, unittest.TestCase):
         self.assertFalse(offer.available)
         self.assertIn("your own prefix key", offer.reason)
 
+    def test_the_menu_row_and_the_f2_row_are_the_same_act(self):
+        """One spelling and one implementation. The gate's first row dispatches into
+        exactly the function the `F2` row's `run` calls, so the two cannot come to disagree
+        about what *Close charter* does — which is the whole reason `gate.DETACH_TITLE` is
+        read by both rather than spelled twice."""
+        from charter.frame import builtin_actions
+        said: list[str] = []
+        tmux = _Tmux(clients=f"{self.A}\t$4\n")
+        started: list[list[str]] = []
+        with mock.patch.object(tmuxctl, "run", side_effect=tmux.run), \
+                mock.patch.object(commands_frame, "_say_on_screen",
+                                  side_effect=lambda fid, msg, **kw: said.append(msg)), \
+                mock.patch.object(builtin_actions, "_spawn",
+                                  side_effect=lambda argv, *, fid: started.append(argv)):
+            gate.chose(overlay.Row(id=gate.DETACH_ID, title=gate.DETACH_TITLE),
+                       self.FID, client=self.A)
+        self.assertEqual(started, [tmuxctl.server_argv("charter-plane-x",
+                                                       "detach-client", "-t", self.A)])
+        self.assertEqual(said, ["detaching — the harness keeps running"])
+
     def test_the_row_is_titled_in_the_gates_words(self):
         """One spelling for one act. `F10`'s first row and `F2`'s detach row are the same
         thing, and two sentences about it drift the first time either is edited."""
@@ -434,3 +471,297 @@ class CloseCharterDetachesOnlyThePresser(PersonaIso, unittest.TestCase):
         reg = builtin_actions.build(self.FID, current_density="normal",
                                     current_chrome="off", client=self.A)
         self.assertEqual(reg.get("frame.detach").title, gate.DETACH_TITLE)
+
+
+class TheMenu(PersonaIso, unittest.TestCase):
+    """`gate.draw` and the two rows it draws — `frame/tabmenu.py`'s shape, one surface over.
+
+    **What is different from every other palette in the frame is the cursor**, and that is
+    the one thing worth a class of its own: this surface's first row can be refused, and
+    `palette.aim` answers *the first row that can run*, which here is *stop all chats*. So
+    the cursor is pinned by id and the aim rule is deliberately not used.
+    """
+
+    FID = "beta.1"
+    A = "/dev/ttys003"
+
+    def setUp(self) -> None:
+        super().setUp()
+        from charter.frame import state
+        state.frame_dir(self.FID, create=True)
+        state.record_server(self.FID, "charter-plane-x")
+        state.record_harness_pane(self.FID, "%3")
+        state.record_workspace(self.FID, "beta")
+
+    def test_two_rows_detach_first(self):
+        rows = gate.catalogue(self.FID, client=self.A)
+        self.assertEqual([r.id for r in rows], ["gate:detach", "gate:stop"])
+        self.assertEqual([r.title for r in rows],
+                         ["Close charter (keep chats running)",
+                          "Close charter and stop all chats…"])
+
+    def test_the_cursor_opens_on_close_charter_when_it_can_run(self):
+        surface = gate.Gate(catalogue=gate.catalogue(self.FID, client=self.A),
+                            label=gate.LABEL, mouse=True)
+        self.assertEqual(surface.selected.id, gate.DETACH_ID)
+
+    def test_the_cursor_never_opens_on_stop_even_when_detach_is_refused(self):
+        """**Red with `palette.aim`**, which is the rule every other surface in the frame
+        wants: with the first row refused it opens on the first that can run, and here that
+        is the row that stops every harness on the plane. Enter on the refused row answers
+        with its note instead, which is the whole trade — one keypress that says why,
+        rather than one that ends every chat."""
+        from charter.frame import builtin_actions
+        surface = gate.Gate(catalogue=gate.catalogue(self.FID, client=""),
+                            label=gate.LABEL, mouse=True)
+        row = surface.selected
+        self.assertEqual(row.id, gate.DETACH_ID)
+        self.assertTrue(row.refused)
+        self.assertEqual(row.note, builtin_actions.NO_PRESSER_TO_DETACH)
+        self.assertFalse(gate.chose(row, self.FID, client=""))
+
+    def test_the_refused_row_is_listed_and_not_dropped(self):
+        """#512: an option you cannot see is one you cannot ask about — and dropping it
+        would also put *stop all chats* under the cursor by being the only row left."""
+        rows = gate.catalogue(self.FID, client="")
+        self.assertEqual([r.id for r in rows], ["gate:detach", "gate:stop"])
+
+    def test_the_cursor_follows_a_query_the_operator_typed(self):
+        """The pin is about where the surface OPENS, not a cursor nailed down: an operator
+        who types toward the stop row has asked for it, and `narrow` is what answers. Its
+        own case, because a `_refilter` that forced the index whatever the rows were would
+        leave the cursor on a row that is no longer on screen."""
+        surface = gate.Gate(catalogue=gate.catalogue(self.FID, client=self.A),
+                            label=gate.LABEL, mouse=True)
+        surface.query = "stop all"
+        surface._refilter()
+        self.assertEqual(surface.selected.id, gate.STOP_ID)
+
+    def test_stop_all_chats_opens_the_quit_confirmation_listing_every_chat(self):
+        """The doorway opens `leave`'s own warning, not a second enumeration of it — so
+        `F10 → stop all chats` and `F2 → charter: quit` describe the plane in the same
+        words, ended tabs included (decision 12)."""
+        from charter.frame import leave
+        live = {"beta.1", "beta.2"}
+        surface = gate.opens(overlay.Row(id=gate.STOP_ID, title=gate.STOP_TITLE),
+                             self.FID, live=live)
+        self.assertIsNotNone(surface)
+        self.assertEqual(surface.label, leave.QUIT)
+
+    def test_the_confirmation_lists_an_ended_tab_with_what_it_gets_back(self):
+        """Built from a plan directly, because what is asserted is that the gate hands
+        `leave.confirm_rows` the rows it makes rather than composing its own."""
+        from charter.frame import leave
+        rows = leave.confirm_rows(
+            leave.Plan(chats=(_doomed(chat="beta.1"),
+                              _doomed(chat="beta.2"),
+                              _doomed(chat="beta.3", exit_code=0, ended=True)),
+                       focus="beta"),
+            verb=leave.QUIT)
+        chat_rows = [r for r in rows if r.refused]
+        self.assertEqual(len(chat_rows), 3)
+        self.assertTrue(any("comes back ended" in r.note for r in chat_rows))
+
+    def test_the_confirming_row_runs_frame_quit(self):
+        from charter.frame import builtin_actions, leave
+        go = leave.confirm_rows(leave.Plan(chats=(_doomed(chat="beta.1"),), focus="beta"),
+                                verb=leave.QUIT)[0]
+        started: list[list[str]] = []
+        with mock.patch.object(builtin_actions, "_spawn",
+                               side_effect=lambda argv, *, fid: started.append(argv)):
+            self.assertTrue(gate.chose(go, self.FID, client=""))
+        self.assertEqual(len(started), 1)
+        self.assertEqual(started[0][-3:], ["frame-quit", "--chat", self.FID])
+
+    def test_the_menu_is_not_drawn_inside_the_operators_tmux(self):
+        """Decision 7. Charter binds no key and draws no button there, so nothing opens
+        this surface by a gesture — and a `--gate` typed by hand says where the rows are
+        rather than drawing a menu whose first row is refused on every plane."""
+        from charter.frame import palette as palette_mod
+        from charter.frame import state
+        from tests import _tmuxsocket
+        state.record_server(self.FID, _tmuxsocket.OPERATOR_SOCKET)
+        said, closed = [], []
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": self.FID,
+                                          "TMUX_PANE": "%9"}, clear=True), \
+                mock.patch.object(palette_mod, "own_the_tty") as drew, \
+                mock.patch.object(commands_frame, "_say_on_screen",
+                                  side_effect=lambda fid, msg, **kw: said.append(msg)), \
+                mock.patch.object(commands_frame, "_close_palette",
+                                  side_effect=lambda *a, **kw: closed.append(kw)):
+            self.assertEqual(gate.draw(SimpleNamespace(client=self.A, gate=True)), 0)
+        drew.assert_not_called()
+        self.assertEqual(said, [gate.NOT_HERE])
+        self.assertIn("F2's rows carry it", gate.NOT_HERE)
+        self.assertEqual(len(closed), 1, "the harness never got its pane back")
+
+    def test_the_menu_is_drawn_on_charters_own_server(self):
+        """The control for the case above: without it, a `draw` that refused everywhere
+        would pass there and the gate would exist nowhere."""
+        from charter.frame import palette as palette_mod
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": self.FID,
+                                          "TMUX_PANE": "%9"}, clear=True), \
+                mock.patch.object(palette_mod, "own_the_tty",
+                                  return_value=None) as drew, \
+                mock.patch.object(commands_frame, "_say_on_screen"), \
+                mock.patch.object(commands_frame, "_close_palette"):
+            self.assertEqual(gate.draw(SimpleNamespace(client=self.A, gate=True)), 0)
+        drew.assert_called_once()
+        self.assertEqual([r.id for r in drew.call_args[0][0].rows],
+                         [gate.DETACH_ID, gate.STOP_ID])
+
+    def test_the_menu_always_returns_zero_and_gives_the_harness_back(self):
+        """`cmd_palette`'s rule: a non-zero `run-shell` child is printed INTO THE HARNESS
+        PANE and drops it into copy-mode, which is charter drawing in the one rectangle ADR
+        0018 says it never draws. And the close is a `finally`, one layer up from
+        `Surface.run`'s own."""
+        from charter.frame import palette as palette_mod
+        closed = []
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": self.FID,
+                                          "TMUX_PANE": "%9"}, clear=True), \
+                mock.patch.object(palette_mod, "own_the_tty",
+                                  side_effect=RuntimeError("boom")), \
+                mock.patch.object(commands_frame, "_close_palette",
+                                  side_effect=lambda *a, **kw: closed.append(kw)):
+            with self.assertRaises(RuntimeError):
+                gate.draw(SimpleNamespace(client=self.A, gate=True))
+        self.assertEqual(len(closed), 1)
+
+    def test_a_cancel_starts_nothing_and_says_nothing(self):
+        """`own_the_tty` answers `None` for Escape, for the hatch and for a pane whose
+        writer is gone — the commonest way this surface ends, and the one answer that can
+        never become a wedge."""
+        from charter.frame import builtin_actions
+        from charter.frame import palette as palette_mod
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": self.FID,
+                                          "TMUX_PANE": "%9"}, clear=True), \
+                mock.patch.object(palette_mod, "own_the_tty", return_value=None), \
+                mock.patch.object(commands_frame, "_say_on_screen") as said, \
+                mock.patch.object(builtin_actions, "_spawn") as spawn, \
+                mock.patch.object(commands_frame, "_close_palette"):
+            self.assertEqual(gate.draw(SimpleNamespace(client=self.A, gate=True)), 0)
+        said.assert_not_called()
+        spawn.assert_not_called()
+
+
+class TheGateIsTheSamePaneAsThePalette(PersonaIso, unittest.TestCase):
+    """`--gate` routing: one command, one pane, one sweep, one hatch — five surfaces."""
+
+    FID = "beta.1"
+
+    def setUp(self) -> None:
+        super().setUp()
+        from charter.frame import state
+        state.frame_dir(self.FID, create=True)
+        state.record_server(self.FID, "charter-plane-x")
+        state.record_harness_pane(self.FID, "%3")
+
+    def test_the_flag_makes_this_pane_the_gate(self):
+        with mock.patch.object(gate, "draw", return_value=0) as drew, \
+                mock.patch.object(commands_frame, "_draw_palette") as ordinary, \
+                mock.patch.object(commands_frame.pane, "claim", return_value=None), \
+                mock.patch.object(commands_frame.pane, "release"):
+            commands_frame.cmd_palette(
+                SimpleNamespace(pane=True, gate=True, tab="", ended=False, client=""))
+        drew.assert_called_once()
+        ordinary.assert_not_called()
+
+    def test_without_the_flag_it_is_the_ordinary_palette(self):
+        with mock.patch.object(gate, "draw") as drew, \
+                mock.patch.object(commands_frame, "_draw_palette",
+                                  return_value=0) as ordinary, \
+                mock.patch.object(commands_frame.pane, "claim", return_value=None), \
+                mock.patch.object(commands_frame.pane, "release"):
+            commands_frame.cmd_palette(
+                SimpleNamespace(pane=True, gate=False, tab="", ended=False, client=""))
+        drew.assert_not_called()
+        ordinary.assert_called_once()
+
+    def test_the_pane_it_carves_is_told_the_presser_and_the_flag(self):
+        """The presser has to survive the trip, because the pane is a SECOND process: the
+        key bind's `#{client_name}` was expanded in the `run-shell` child, and the surface
+        that acts on it is the one inside the split."""
+        argvs = self._opened(SimpleNamespace(client="/dev/ttys003", gate=True, chat=""))
+        self.assertIn("/dev/ttys003", argvs)
+        self.assertIn(gate.OPTION, argvs)
+        self.assertLess(argvs.index("/dev/ttys003"), argvs.index(gate.OPTION))
+
+    def test_an_f2_carries_the_presser_and_no_flag(self):
+        argvs = self._opened(SimpleNamespace(client="/dev/ttys003", gate=False, chat=""))
+        self.assertIn("/dev/ttys003", argvs)
+        self.assertNotIn(gate.OPTION, argvs)
+
+    def test_a_presser_charter_cannot_read_rides_nothing_at_all(self):
+        """The empty tuple is load-bearing, for `tabmenu.forward`'s reason: an argv holding
+        an empty positional would be a palette whose `client` is `""` by a different route,
+        and the `F2` argv of a charter with no presser stays byte-identical to what it was.
+        """
+        for bad in ("", "x; kill-server", "#{client_name}"):
+            with self.subTest(bad=bad):
+                argvs = self._opened(SimpleNamespace(client=bad, gate=False, chat=""))
+                self.assertNotIn("", argvs)
+                self.assertNotIn(bad, argvs[1:] if bad else argvs)
+
+    def _opened(self, args) -> list[str]:
+        """The argv `_open_palette` gives the pane it carves."""
+        seen: list[list[str]] = []
+        import subprocess
+        with mock.patch.object(tmuxctl, "version", return_value=(3, 7)), \
+                mock.patch.object(commands_frame, "_close_open_overlays"), \
+                mock.patch.object(
+                    tmuxctl, "run",
+                    side_effect=lambda _w, argv, **kw: (
+                        seen.append(list(argv))
+                        or subprocess.CompletedProcess(argv, 0, "%9\n", ""))), \
+                mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": self.FID},
+                                clear=True):
+            commands_frame._open_palette(args)
+        split = next(a for a in seen if "split-window" in a)
+        return split[split.index("--") + 1:]
+
+
+class ThePaletteActsForThePresserToo(PersonaIso, unittest.TestCase):
+    """`F2`'s own pane reads the positional it has been handed since #1115.
+
+    Its own class because the value makes a different trip on this route: the bind expands
+    it, the `run-shell` child forwards it onto the split's argv, and the process INSIDE the
+    pane is the one that builds the registry.
+    """
+
+    FID = "beta.1"
+
+    def setUp(self) -> None:
+        super().setUp()
+        from charter.frame import state
+        state.frame_dir(self.FID, create=True)
+        state.record_server(self.FID, "charter-plane-x")
+        state.record_harness_pane(self.FID, "%3")
+        state.record_identity(self.FID, {"CHARTER_WORKSPACE": "", "CHARTER_PERSONA": ""})
+
+    def _detach_row(self, client):
+        from charter.frame import builtin_actions
+        from charter.frame import palette as palette_mod
+        built = {}
+        real = builtin_actions.build
+
+        def spy(fid, **kw):
+            built.update(kw)
+            return real(fid, **kw)
+
+        with mock.patch.dict(os.environ, {"CHARTER_SESSION_ID": self.FID}, clear=True), \
+                mock.patch.object(builtin_actions, "build", side_effect=spy), \
+                mock.patch.object(palette_mod, "own_the_tty", return_value=None), \
+                mock.patch.object(commands_frame, "_close_palette"):
+            commands_frame._draw_palette(SimpleNamespace(client=client, pane=True,
+                                                         gate=False, tab="",
+                                                         ended=False))
+        return built
+
+    def test_the_palette_builds_its_rows_for_the_presser(self):
+        self.assertEqual(self._detach_row("/dev/ttys003")["client"], "/dev/ttys003")
+
+    def test_a_palette_with_no_presser_builds_for_none(self):
+        """The control, and the ordinary case on a charter whose installed bind predates
+        the value: `build` is handed `""`, the detach row is listed refused with its reason,
+        and every other row is what it was."""
+        self.assertEqual(self._detach_row("")["client"], "")

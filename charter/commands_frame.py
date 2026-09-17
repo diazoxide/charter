@@ -9650,6 +9650,13 @@ def cmd_palette(args) -> int:
             if getattr(args, "ended", False):
                 from .frame import ended as ended_mod
                 return ended_mod.draw(args)
+            # **`--gate` is the fifth surface, and it is asked before `--tab`** for the
+            # same reason `--ended` is asked before both: it is the more specific. A tab
+            # menu is about whichever chat a pointer landed on; the gate is about leaving
+            # charter, which is neither this frame's catalogue nor one chat's rows — and
+            # `frame/gate.py` is the whole of it, in `tabmenu`'s shape.
+            if gate.wanted(args):
+                return gate.draw(args)
             if tabmenu.wanted(args):
                 return tabmenu.draw(args)
             return _draw_palette(args)
@@ -9695,7 +9702,13 @@ def _open_palette(args) -> int:
         # NOTHING for `F2`, so the ordinary palette's argv is byte-identical to what it was
         # (#846). The pane is still carved off THIS frame's harness whichever it is: the
         # menu is about another tab, but the operator is looking at this one.
+        # `frame/gate.forward` splices the PRESSER in for every route that has one and
+        # `--gate` for the key and the button, and `tabmenu.forward` splices `--tab <chat>`
+        # for a right-click on a tab. Both answer the empty tuple where they have nothing,
+        # so the argv of an `F2` fired by a bind that predates the presser is byte-identical
+        # to what it was (#846's rule, one value later).
         command=util.self_relaunch_argv("frame-palette", "--pane",
+                                        *gate.forward(args),
                                         *tabmenu.forward(args)),
         env=_relayout_pane_env(fid, v))
     if argv is None:
@@ -9856,8 +9869,16 @@ def _draw_palette(args) -> int:
     # here would be a second answer to "which pane am I", on the one path where being wrong
     # means resizing or killing the operator's harness.
     here = os.environ.get("TMUX_PANE", "")
+    # **The presser comes off THIS pane's own argv, not out of the environment**, and that
+    # is the same split `here` above makes for a different value: the frame is ambient (one
+    # tmux server is shared by every frame on the machine) and the keypress is not. The
+    # hotkey's bind expanded `#{client_name}` in the `run-shell` child, `_open_palette`
+    # spliced it onto the `split-window --` argv, and this is the far end of that trip. It
+    # decides one row — *Close charter (keep chats running)* — and an absent one costs
+    # exactly that row, listed with its reason.
     reg = builtin_actions.build(fid, current_density=_current_density(fid),
-                                current_chrome=_current_chrome(fid))
+                                current_chrome=_current_chrome(fid),
+                                client=gate.presser_of(args))
     snapshot = gather.cached(fid) or {}
     opened: list[choose.Roster] = []
     #: The rename input, once one has been opened. **A list for `opened`'s reason exactly**:
