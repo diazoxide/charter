@@ -40,8 +40,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame
-from charter.frame import (builtin_actions, chrome, overlay, palette, pane, panel,
-                           slots, state)
+from charter.frame import (builtin_actions, chrome, gate, overlay, palette, pane,
+                           panel, slots, state)
 
 from tests._isolation import PersonaIso
 
@@ -628,7 +628,7 @@ class ThePalettesPaneIsClaimedAboveItsRegistryToo(PersonaIso, unittest.TestCase)
         # too, so it is asserted — after the thing it is a consequence of.
         painted = _paints(real.getvalue())
         self.assertTrue(painted, f"nothing was drawn in the pane: {real.getvalue()!r}")
-        self.assertIn("detach — leave the harness running", painted[0],
+        self.assertIn(gate.DETACH_TITLE, painted[0],
                       f"the palette's own rows never reached the pane: {painted[0]!r}")
         self.assertEqual(captured.getvalue(), "",
                          "the palette was drawn into a stream the provider installed")

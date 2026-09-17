@@ -1563,10 +1563,15 @@ class LiveOverride(PersonaIso, unittest.TestCase):
         self.assertIn("your own prefix key", offer.reason)
 
     def test_detaching_is_available_on_charters_own_server(self):
-        """The other direction, so the row above cannot pass by never being available."""
+        """The other direction, so the row above cannot pass by never being available.
+
+        *client* is stated since #1115: the row also needs a presser to run, because *Close
+        charter (keep chats running)* detaches the terminal that asked. Which is a different
+        refusal with a different sentence, and it is `tests/test_one_gate_closes_charter
+        .py` that is about it; this case is still about the SERVER."""
         self._run("full")
         reg = builtin_actions.build(self.fid, current_density="full",
-                                    current_chrome="off")
+                                    current_chrome="off", client="/dev/ttys7")
         offer = [o for o in reg.offers(fid=self.fid, snapshot={})
                  if o.id == "frame.detach"][0]
         self.assertTrue(offer.available)

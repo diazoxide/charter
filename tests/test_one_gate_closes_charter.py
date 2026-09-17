@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 from charter import commands_frame, config, instance
@@ -226,3 +227,210 @@ class TheKeyIsReserved(PersonaIso, unittest.TestCase):
         `conf_text` binds for the palette and `gate.GATE_KEY` is what it binds for the
         gate, and the same value in both would emit one bind twice."""
         self.assertNotEqual(config.FRAME["hotkey"], gate.GATE_KEY)
+
+
+class _Tmux:
+    """A tmux that answers by command shape and refuses anything it was not told about.
+
+    **It raises rather than answering a default**, which is this branch's own lesson: a
+    stub that answers the same thing forever turns a deleted guard into a test that hangs
+    or passes for the wrong reason. Every unexpected command is a failure with the argv in
+    it, so a route that grew a fourth round trip says so.
+    """
+
+    def __init__(self, *, place="$4\t@9", clients="", plane=None):
+        self.place, self.clients, self.plane = place, clients, plane
+        self.calls: list[list[str]] = []
+
+    def run(self, _what, argv, **_kw):
+        import subprocess
+        self.calls.append(list(argv))
+        if "list-clients" in argv:
+            return subprocess.CompletedProcess(argv, 0, self.clients, "")
+        if "display-message" in argv:
+            fmt = argv[-1]
+            if "session_id" in fmt and "window_id" in fmt:
+                return subprocess.CompletedProcess(argv, 0, self.place, "")
+            if fmt == "#{@charter_plane}":
+                plane = str(config.STATE_DIR) if self.plane is None else self.plane
+                return subprocess.CompletedProcess(argv, 0, plane, "")
+        raise AssertionError(f"no answer scripted for {argv}")
+
+
+class CloseCharterDetachesOnlyThePresser(PersonaIso, unittest.TestCase):
+    """*Close charter (keep chats running)* — #1097, and decision 2.
+
+    **Every case here is about an argv that is NOT produced**, because the failure this
+    replaces was silent in both directions: on a one-pane chat `detach-client -s default.1`
+    resolved to nothing and the palette said *detaching — the harness keeps running*, and
+    on the ordinary chat with a strip it resolved to the workspace's session and took every
+    attached client with it. So the assertions are *no spawn, and this sentence*, with the
+    one positive case first so they cannot all pass against a function that spawns nothing.
+    """
+
+    FID = "beta.1"
+    A = "/dev/ttys003"
+
+    def setUp(self) -> None:
+        super().setUp()
+        from charter.frame import state
+        state.frame_dir(self.FID, create=True)
+        state.record_server(self.FID, "charter-plane-x")
+        state.record_harness_pane(self.FID, "%3")
+
+    def _detach(self, tmux, client=A):
+        from charter.frame import builtin_actions
+        started: list[list[str]] = []
+        with mock.patch.object(tmuxctl, "run", side_effect=tmux.run), \
+                mock.patch.object(builtin_actions, "_spawn",
+                                  side_effect=lambda argv, *, fid: started.append(argv)):
+            said = builtin_actions._detach(self.FID, client)
+        return started, said
+
+    def test_a_proven_presser_is_detached_alone(self):
+        """One listing proves it: the presser's row names the session the chat's HARNESS
+        PANE is in, and that session answers this plane. Then, and only then,
+        `detach-client -t <client>`."""
+        started, said = self._detach(_Tmux(clients=f"{self.A}\t$4\n/dev/ttys004\t$7\n"))
+        self.assertEqual(started, [tmuxctl.server_argv("charter-plane-x",
+                                                       "detach-client", "-t", self.A)])
+        self.assertIn("detaching", said)
+
+    def test_no_presser_detaches_nothing(self):
+        """The route charter cannot attribute. An older bind carries no client, and a panel
+        whose `@charter_presser` could not be read hands on `""` — neither may fall back to
+        every client of the session, which is the whole of decision 2."""
+        from charter.frame import builtin_actions
+        started, said = self._detach(_Tmux(), client="")
+        self.assertEqual(started, [])
+        self.assertEqual(said, builtin_actions.NO_PRESSER_TO_DETACH)
+
+    def test_a_client_name_outside_its_shape_is_not_used(self):
+        """The value arrives from a tmux format on a server shared with every frame on the
+        machine and is about to be a `-t` target. `#{client_name}` unexpanded — what the
+        option holds if the click bind ever loses its `-F` — is refused by the same line."""
+        from charter.frame import builtin_actions
+        for bad in ("x; kill-server", "#{client_name}", "/dev/ttys003 ; kill-server",
+                    "../../etc/passwd"):
+            with self.subTest(bad=bad):
+                started, said = self._detach(_Tmux(), client=bad)
+                self.assertEqual(started, [])
+                self.assertEqual(said, builtin_actions.NO_PRESSER_TO_DETACH)
+
+    def test_a_presser_attached_to_another_session_is_not_detached(self):
+        """The listing is the proof, and it is a proof about WHICH session. A client
+        attached to another session of the same server is somebody else's terminal."""
+        from charter.frame import builtin_actions
+        started, said = self._detach(_Tmux(clients=f"{self.A}\t$7\n"))
+        self.assertEqual(started, [])
+        self.assertEqual(said, builtin_actions.NOT_ATTACHED_HERE)
+
+    def test_a_presser_the_listing_does_not_name_is_not_detached(self):
+        """A server that did not answer proves nothing (#1100): an empty listing is not
+        `no clients`, it is `no reading`, and both refuse here."""
+        from charter.frame import builtin_actions
+        started, said = self._detach(_Tmux(clients=""))
+        self.assertEqual(started, [])
+        self.assertEqual(said, builtin_actions.NOT_ATTACHED_HERE)
+
+    def test_a_session_of_another_plane_is_not_detached(self):
+        """The plane marker, which is the guard #933 put on every other write charter aims
+        at a pane it found. Two planes can each have a `beta.1` on one server."""
+        from charter.frame import builtin_actions
+        started, said = self._detach(_Tmux(clients=f"{self.A}\t$4\n", plane="/other"))
+        self.assertEqual(started, [])
+        self.assertEqual(said, builtin_actions.NOT_ATTACHED_HERE)
+
+    def test_an_unmarked_session_is_not_detached(self):
+        """A session an older charter created carries no marker, and an unmarked pane is
+        not proven — never adopted."""
+        from charter.frame import builtin_actions
+        started, said = self._detach(_Tmux(clients=f"{self.A}\t$4\n", plane=""))
+        self.assertEqual(started, [])
+        self.assertEqual(said, builtin_actions.NOT_ATTACHED_HERE)
+
+    def test_a_chat_whose_pane_tmux_cannot_place_is_not_detached(self):
+        """`_pane_place` answers `None` for a record charter has lost or for a target tmux
+        would not resolve — and an unresolvable `display-message -p -t` answers rc 0 with
+        empty stdout, so the record alone can never be the target."""
+        from charter.frame import builtin_actions
+        started, said = self._detach(_Tmux(place=""))
+        self.assertEqual(started, [])
+        self.assertEqual(said, builtin_actions.NOT_ATTACHED_HERE)
+
+    def test_no_route_ever_detaches_a_whole_session(self):
+        """Across every case above: no argv charter builds here carries `-s`, and none
+        carries a chat id. Red at `c846740`, where the only argv was
+        `detach-client -s beta.1` — which on a chat carrying a strip detaches every client
+        of the workspace (Step 0's G4)."""
+        cases = [(_Tmux(clients=f"{self.A}\t$4\n"), self.A),
+                 (_Tmux(), ""),
+                 (_Tmux(clients=f"{self.A}\t$7\n"), self.A),
+                 (_Tmux(clients=f"{self.A}\t$4\n", plane="/other"), self.A),
+                 (_Tmux(place=""), self.A)]
+        for tmux, client in cases:
+            started, _said = self._detach(tmux, client=client)
+            for argv in started + tmux.calls:
+                self.assertNotIn("-s", argv)
+                self.assertNotIn(self.FID, argv)
+
+    def test_the_f2_detach_row_detaches_the_hotkeys_presser(self):
+        """`F2 → Close charter (keep chats running)` is the same act by the same code, with
+        the presser the hotkey's bind carried — which is what closes #1097 on the route the
+        issue was filed against."""
+        from charter.frame import builtin_actions
+        started: list[list[str]] = []
+        reg = builtin_actions.build(self.FID, current_density="normal",
+                                    current_chrome="off", client=self.A)
+        tmux = _Tmux(clients=f"{self.A}\t$4\n")
+        with mock.patch.object(tmuxctl, "run", side_effect=tmux.run), \
+                mock.patch.object(builtin_actions, "_spawn",
+                                  side_effect=lambda argv, *, fid: started.append(argv)):
+            reg.get("frame.detach").run(SimpleNamespace(fid=self.FID))
+        self.assertEqual(started, [tmuxctl.server_argv("charter-plane-x",
+                                                       "detach-client", "-t", self.A)])
+
+    def test_the_f2_detach_row_is_refused_without_a_presser(self):
+        """#512: the row stays, listed with the reason, because an option you cannot see is
+        one you cannot ask about — and the reason names the gesture that works."""
+        from charter.frame import builtin_actions
+        reg = builtin_actions.build(self.FID, current_density="normal",
+                                    current_chrome="off", client="")
+        offer = {o.id: o for o in reg.offers(fid=self.FID, snapshot={})}["frame.detach"]
+        self.assertFalse(offer.available)
+        self.assertEqual(offer.reason, builtin_actions.NO_PRESSER_TO_DETACH)
+
+    def test_the_row_is_available_once_there_is_a_presser(self):
+        """The control for the case above: without it, a `build` that refused the row
+        unconditionally would pass there and take *Close charter* away everywhere."""
+        from charter.frame import builtin_actions
+        reg = builtin_actions.build(self.FID, current_density="normal",
+                                    current_chrome="off", client=self.A)
+        offer = {o.id: o for o in reg.offers(fid=self.FID, snapshot={})}["frame.detach"]
+        self.assertTrue(offer.available)
+
+    def test_the_operators_tmux_row_is_refused_with_its_reason(self):
+        """Decision 7 at the `F2` row: inside the operator's own tmux a frame is a WINDOW,
+        their prefix key is what detaches, and charter says so rather than offering a row
+        that would detach a client charter has no business detaching.
+
+        Asserted against the presser being present, so the operator-tmux sentence wins over
+        the no-presser one rather than the two racing on whichever is checked first.
+        """
+        from charter.frame import builtin_actions
+        from charter.frame import state
+        from tests import _tmuxsocket
+        state.record_server(self.FID, _tmuxsocket.OPERATOR_SOCKET)
+        reg = builtin_actions.build(self.FID, current_density="normal",
+                                    current_chrome="off", client=self.A)
+        offer = {o.id: o for o in reg.offers(fid=self.FID, snapshot={})}["frame.detach"]
+        self.assertFalse(offer.available)
+        self.assertIn("your own prefix key", offer.reason)
+
+    def test_the_row_is_titled_in_the_gates_words(self):
+        """One spelling for one act. `F10`'s first row and `F2`'s detach row are the same
+        thing, and two sentences about it drift the first time either is edited."""
+        from charter.frame import builtin_actions
+        reg = builtin_actions.build(self.FID, current_density="normal",
+                                    current_chrome="off", client=self.A)
+        self.assertEqual(reg.get("frame.detach").title, gate.DETACH_TITLE)

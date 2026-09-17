@@ -39,7 +39,14 @@ import unittest
 from pathlib import Path
 
 from charter import commands_frame, config, persona, util
-from charter.frame import overlay, state, tmuxctl
+from charter.frame import gate, overlay, state, tmuxctl
+
+#: The detach row, by the words that survive every width this file draws at.
+#: Since #1115 that row is the exit gate's first row (`Close charter (keep chats
+#: running)`), and the parenthesis is the half a narrow pane truncates — so the
+#: head of the title is what a screen is searched for, read from the constant
+#: rather than spelled, so a reworded row fails here rather than passing wrongly.
+_DETACH_ROW = gate.DETACH_TITLE.split(" (")[0]
 
 from tests import _tmuxreap
 from tests._isolation import PersonaIso
@@ -258,7 +265,7 @@ class _ThePalette(PersonaIso):
                         f"the hotkey opened no pane: {self._panes()}")
         pane = self._palette_pane()
         self.assertTrue(
-            _await(lambda: "detach" in _tmux("capture-pane", "-p", "-t", pane).stdout),
+            _await(lambda: _DETACH_ROW in _tmux("capture-pane", "-p", "-t", pane).stdout),
             f"the palette's pane never drew its rows:\n"
             f"{_tmux('capture-pane', '-p', '-t', pane).stdout}")
         return fd, pane
@@ -294,7 +301,7 @@ class ThePaletteOpensAndRuns(_ThePalette, unittest.TestCase):
 
     def test_the_hotkey_opens_a_palette_listing_the_frames_actions(self):
         _, pane = self._open()
-        for expected in ("detach", "density: minimal", "workspace: alpha — pick another",
+        for expected in (_DETACH_ROW, "density: minimal", "workspace: alpha — pick another",
                          "persona — pick one"):
             self._await_screen(pane, expected)
 
@@ -302,7 +309,7 @@ class ThePaletteOpensAndRuns(_ThePalette, unittest.TestCase):
         fd, pane = self._open()
         self._await_screen(pane, "workspace: alpha")
         os.write(fd, b"workspace")
-        self._await_screen(pane, "detach", present=False)
+        self._await_screen(pane, _DETACH_ROW, present=False)
         screen = self._screen(pane)
         self.assertIn("workspace: alpha", screen, screen)
         self.assertIn("workspace", screen.splitlines()[0],
@@ -328,7 +335,7 @@ class ThePaletteOpensAndRuns(_ThePalette, unittest.TestCase):
         self.assertEqual(self._palette_pane(), pane)
         os.write(fd, b"persona\r")
         # The picker: the names alone, no `persona:` prefix and no `detach` beside them.
-        self._await_screen(pane, "detach", present=False)
+        self._await_screen(pane, _DETACH_ROW, present=False)
         self._await_screen(pane, "scribe")
         self.assertEqual(self._palette_pane(), pane,
                          "the picker opened a second pane instead of reusing this one")
@@ -355,7 +362,7 @@ class ThePaletteOpensAndRuns(_ThePalette, unittest.TestCase):
         self.assertIsNone(persona.for_session(self.fid))
         was = state.version(self.fid)
         os.write(fd, b"scribe")
-        self._await_screen(pane, "detach", present=False)
+        self._await_screen(pane, _DETACH_ROW, present=False)
         screen = self._screen(pane)
         # Past the header, which carries what was typed and would answer for the row.
         row = next((ln for ln in screen.splitlines()[1:] if "scribe" in ln), "")
@@ -388,7 +395,7 @@ class ThePaletteOpensAndRuns(_ThePalette, unittest.TestCase):
         self._await_screen(pane, "workspace: alpha")
         os.write(fd, b"alpha")
         # Both rows are on screen: the doorway is not hidden, it is outranked.
-        self._await_screen(pane, "detach", present=False)
+        self._await_screen(pane, _DETACH_ROW, present=False)
         self._await_screen(pane, "workspace: alpha — pick another")
         os.write(fd, b"\r")
         self.assertTrue(_await(lambda: self._palette_pane() is None),
@@ -506,7 +513,7 @@ class ThereIsNeverMoreThanOnePalettePane(_ThePalette, unittest.TestCase):
                         + (f" other than {replacing}" if replacing else ""))
         pane = self._overlays()[0]
         self.assertTrue(
-            _await(lambda: "detach" in self._screen(pane)),
+            _await(lambda: _DETACH_ROW in self._screen(pane)),
             f"the palette's pane never drew its rows:\n{self._screen(pane)}")
         return pane
 
