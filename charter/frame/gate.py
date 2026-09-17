@@ -169,7 +169,7 @@ def forward(args) -> tuple[str, ...]:
     return ((client,) if client else ()) + ((OPTION,) if wanted(args) else ())
 
 
-def catalogue(fid: str, *, client: str) -> tuple:
+def catalogue(fid: str, *, client: str) -> tuple[overlay.Row, ...]:
     """The two rows. Detach first, stop second, and no third.
 
     **The order is the guard `leave.open_rows` states**, arrived at from the other
@@ -225,7 +225,7 @@ class Gate(palette.Palette):
                 return
 
 
-def opens(row, fid: str, *, live):
+def opens(row, fid: str, *, live) -> "palette.Palette | None":
     """The surface *row* opens, or ``None`` when it opens none.
 
     `tabmenu.opens`' job, and the same two-line shape: a doorway is told apart by its id,

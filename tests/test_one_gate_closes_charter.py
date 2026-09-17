@@ -837,6 +837,20 @@ class TheButton(PersonaIso, unittest.TestCase):
         row = self._top()
         self.assertTrue(row.rstrip().endswith(slots.GATE_BUTTON), row)
 
+    def test_the_button_names_the_key_charter_binds(self):
+        """One key, two surfaces, and the constants are in two modules — `slots.py` is on
+        every panel process's import path and `frame/gate.py` is not, so the button spells
+        the key rather than composing it.
+
+        A button naming a key charter does not bind is exactly the defect `_bottom` already
+        carries the scar of: it hardcoded `F2 palette`, and a plane on `hotkey = "F1"` had
+        its own panel telling every operator the wrong key on every repaint. This is the
+        comparison that was missing there.
+        """
+        from charter.frame import slots
+        self.assertTrue(slots.GATE_BUTTON.startswith(gate.GATE_KEY),
+                        f"{slots.GATE_BUTTON!r} does not name {gate.GATE_KEY!r}")
+
     def test_its_columns_open_the_gate_and_not_the_palette(self):
         """Two column sets rather than one, which is the part of `_Doors`' own docstring
         that stopped holding: it argued against a mapping *"whose values nothing branches
