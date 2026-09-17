@@ -434,7 +434,11 @@ file declares none.
 `charter claude` needs two more things nothing above installs. `claude` itself has to be on
 your `PATH`: without it no frame is drawn, and charter says the binary is not installed and
 exits 127. And the frame needs tmux, because it is a tmux screen; of tmux, only its absence
-stops a launch — below 3.2 the frame still starts. `charter opencode` and `charter codex`
+stops a launch — below 3.2 the frame still starts. **Prefer tmux 3.5 or newer if you get a
+choice**: below it tmux can fail to report a harness that ended, so a chat's tab is not
+always kept. That is a tmux bug fixed upstream in 3.5, not a charter limit, and Ubuntu LTS
+ships 3.4 — see *What it needs* in [frame.md](frame.md) for what it costs and what to do
+about it. `charter opencode` and `charter codex`
 need their own binaries the same way. `charter claude --probe` says whether a frame can run
 here without starting one; [frame.md](frame.md) is the rest. If you ran `charter init` from
 inside a Claude Code session, restart that session first — the plugin loads at the next one.

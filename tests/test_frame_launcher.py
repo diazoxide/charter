@@ -1334,8 +1334,47 @@ class Probe(PersonaIso, unittest.TestCase):
 
     def test_a_tmux_with_the_resize_hook_is_not_warned_about_it(self):
         """The other direction, and what stops the test above from passing against a probe
-        that always warns: at 3.3 (`RESIZE_HOOK_FLOOR` exactly) the hook exists."""
+        that always warns: at 3.3 (`RESIZE_HOOK_FLOOR` exactly) the hook exists.
+
+        **The assertion is about THIS ceiling, not about the count**, since
+        `ENDED_TAB_FLOOR` (3.5) put a real one on this machine — a 3.3 cannot report a
+        harness's exit reliably. `test_an_ordinary_machine_gets_no_ceilings_at_all` is
+        where "a probe that always warns" is caught; this one only has to show that the
+        resize sentence stops at the version that fixes it."""
         with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 3)), \
+             mock.patch.dict(config.FRAME, {"slots": ["top", "bottom"]}):
+            _code, _level, line = commands_frame.frame_ready()
+        self.assertNotIn(tmuxctl.below_resize_hook_message((3, 3)), line)
+
+    def test_a_tmux_that_can_miss_an_exit_is_a_ceiling_the_probe_names(self):
+        """`tmuxctl.ENDED_TAB_FLOOR` (3.5), the fifth standing ceiling and the second to
+        sit ABOVE `FLOOR`. 3.4 exactly, because that is the gap itself: it clears the 3.2
+        floor and the 3.3 resize hook, so a probe that named nothing here would have
+        printed a clean machine for one that can silently swallow a harness's exit — and
+        it is what Ubuntu LTS ships, so it is most of the operators this reaches.
+
+        Reported here rather than at the launch for the reason this whole class exists:
+        charter is never TOLD the exit was missed, so there is no later moment to say it
+        at, and the pre-attach window is 86 bytes ahead of tmux's alternate screen."""
+        with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 4)), \
+             mock.patch.dict(config.FRAME, {"slots": ["top", "bottom"]}), \
+             mock.patch("charter.commands_frame.subprocess.run") as run:
+            code, level, line = commands_frame.frame_ready()
+        run.assert_not_called()
+        self.assertEqual((code, level), (0, "warn"),
+                         "a capability ceiling is not a refusal — cmd_launch still draws")
+        self.assertIn(tmuxctl.below_ended_tab_message((3, 4)), line)
+        self.assertNotIn(tmuxctl.below_floor_message((3, 4)), line,
+                         "3.4 is well above the floor — it must not be reported as below it")
+        self.assertNotIn(tmuxctl.below_resize_hook_message((3, 4)), line,
+                         "3.4 has the resize hook — that ceiling is not this one")
+
+    def test_a_tmux_at_the_ended_tab_floor_is_not_warned_about_it(self):
+        """The other direction, at the floor exactly rather than above it: 3.5 is the
+        version that fixed it, so 3.5 is told none of it. A `<=` written where `<` belongs
+        warns the operator who went and upgraded, which is the fastest way to make a
+        surface stop being read."""
+        with mock.patch("charter.frame.tmuxctl.version", return_value=(3, 5)), \
              mock.patch.dict(config.FRAME, {"slots": ["top", "bottom"]}):
             code, level, line = commands_frame.frame_ready()
         self.assertEqual((code, level), (0, "ok"))
