@@ -1,0 +1,19 @@
+[package]
+name = "fake-harness"
+description = "A stand-in for a harness in scenario tests and benchmarks: replays output, echoes input, runs hooks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+clap.workspace = true
+
+[dev-dependencies]
+charter-core.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true
