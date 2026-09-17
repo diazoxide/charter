@@ -103,6 +103,15 @@ const results = {
 // Cold start: launching the app as it ships, until its window says the first frame is on
 // screen (the `first_frame` command, which prints only when CHARTER_BENCH_LOG is set).
 
+/** Brings a process's window in front, if it has one yet. Failure is ordinary: it has not. */
+function activate(pid) {
+  if (platform() !== "darwin") return;
+  spawnSync("osascript", [
+    "-e",
+    `tell application "System Events" to set frontmost of (first process whose unix id is ${pid}) to true`,
+  ]);
+}
+
 async function coldStart() {
   const cwd = join(tmpdir(), "charter-bench-cold-start");
   mkdirSync(cwd, { recursive: true });
@@ -110,6 +119,10 @@ async function coldStart() {
   for (let n = 0; n < Number(options["cold-starts"]); n++) {
     const from = performance.now();
     const app = spawn(SHIPPED, [], { cwd, env: { ...process.env, CHARTER_BENCH_LOG: "1" } });
+    // A window that comes up behind another draws no frame at all, so it would never reach
+    // the frame this is timing. It is brought forward until it has, as launching it from the
+    // dock would: the time that takes is part of the measurement.
+    const activating = setInterval(() => activate(app.pid), 50);
     const own = await new Promise((resolve, reject) => {
       let seen = "";
       const giveUp = setTimeout(() => reject(new Error("no first frame within 30 s")), 30_000);
@@ -122,7 +135,8 @@ async function coldStart() {
         }
       });
       app.on("exit", (code) => reject(new Error(`the app exited (${code}) before its first frame`)));
-    });
+    }).finally(() => clearInterval(activating));
+    clearInterval(activating);
     samples.push({ ms: own.at - from, appMs: own.appMs });
     // Only the process this started.
     app.removeAllListeners("exit");
@@ -227,6 +241,19 @@ async function tmuxReference() {
 // ---------------------------------------------------------------------------------------------
 // The window: the WebdriverIO benchmark specs, once per renderer arm.
 
+/**
+ * Refuses to measure the window on a machine whose screen is locked.
+ *
+ * A locked session is not drawn, so WebKit hands out no animation frames and no terminal ever
+ * paints: every measurement that waits for one waits forever, and a frame count reads zero.
+ * The chunking spec is the exception — it counts messages, not paints.
+ */
+function screenIsLocked() {
+  if (platform() !== "darwin") return false;
+  const root = text("ioreg", ["-n", "Root", "-d1", "-r", "-a"]) ?? "";
+  return root.includes("CGSSessionScreenIsLocked");
+}
+
 function windowArm(arm) {
   const found = {};
   // One wdio run per spec file: a run keeps one app for all its spec files, and a spec must
@@ -257,9 +284,15 @@ function windowArm(arm) {
 // ---------------------------------------------------------------------------------------------
 
 if (only.has("coldstart")) results.coldStart = await coldStart();
+
 if (only.has("hook")) results.hookCall = hookCall();
 if (only.has("tmux")) results.tmux = await tmuxReference();
 if (only.has("window")) {
+  if (screenIsLocked()) {
+    throw new Error(
+      "the screen is locked, so nothing in the window will draw: unlock it and run again",
+    );
+  }
   results.window = {};
   for (const arm of options.arms.split(",")) {
     results.window[arm] = windowArm(arm);
