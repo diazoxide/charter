@@ -65,7 +65,7 @@ row), and the status of that field where it differs from its file's.
   - [`README.md` — the generated persona roster block](#readmemd--the-generated-persona-roster-block)
   - [Plane-root files that exist but are **not** this area](#plane-root-files-that-exist-but-are-not-this-area)
 - [Workspaces](#workspaces)
-  - [`workspaces/`](#workspaces)
+  - [`workspaces/`](#workspaces-1)
   - [`workspaces/.default`](#workspacesdefault)
   - [`workspaces/<ws>/`](#workspacesws)
   - [`workspaces/<ws>/workspace.md` — the living charter](#workspaceswsworkspacemd--the-living-charter)
@@ -213,9 +213,9 @@ second persona with its own and shared memory; a vault registry; and the session
 harness run leaves in `.charter/`. A file documented here that no fixture holds is one no
 offline command writes; the entry for it says which writer to call instead.
 
-One practical note for an agent working with them: charter's own guard refuses to read a
-vault file, and it cannot know that a fixture vault holds the literal `fixture-not-a-secret`.
-Expect the denial, and do not work around it.
+One practical note for an agent working with them: charter's guard denies tool calls that
+read a `.charter/vaults/` path, and it cannot know that a fixture vault holds only the
+literal `fixture-not-a-secret`. Expect the denial, and do not work around it.
 
 ### Checking the citations
 
@@ -623,6 +623,26 @@ key refuses.
 
 ---
 
+### `charter browser install` — three more plane-root paths
+
+`charter browser` installs a vendor CLI into the plane, and a plane reader meets its
+directories at the root. None is charter's own format; all three are named because an
+enumerator that does not expect them has to guess.
+
+- **`.claude/skills/playwright-cli/`** (`SKILL_DIR`, `charter/browser.py:79`) — the pages the
+  vendor's generator writes, read by Claude Code as project skills. **stable** in the sense
+  that matters here: a harness reads it. Written by the generator, not by charter.
+- **`.playwright/`** (`CONFIG_DIR`, `charter/browser.py:96`) — created by `install` itself
+  (`initWorkspace`), holding `.playwright/cli.config.json`. Project configuration. charter
+  deliberately says nothing about whether a plane commits it (ADR 0017), and writes no
+  `.gitignore` line for it.
+- **`.playwright-cli/`** (`OUTPUT_DIR`, `charter/browser.py:90`) — the vendor's output
+  directory: traces under `.playwright-cli/trace`, plus snapshots, screenshots and PDFs.
+  Created when something is written there, never by `install`. charter **does** append
+  `.playwright-cli/` to the plane's `.gitignore` (`ensure_output_ignored`,
+  `charter/browser.py:151`, header at `charter/browser.py:173`) because a trace carries
+  authenticated network traffic — the one of the three charter takes a position on.
+
 ### Plane-root files that exist but are **not** this area
 
 Named so the assembled doc does not lose them: `vaults.json` (committed shared vault registry,
@@ -630,7 +650,10 @@ Named so the assembled doc does not lose them: `vaults.json` (committed shared v
 plane root (written by `charter init`'s harness wiring — `charter/commands.py:2296`,
 `charter/commands.py:2321`, `charter/commands.py:2098`, `charter/commands.py:1233` — harness
 area), `workspaces/*` (workspaces area), `personas/*` internals (personas area),
-`.charter/*` other than the profile launch record (runtime-state areas).
+`.charter/*` other than the profile launch record (runtime-state areas). The plane's own
+`.claude/skills/**`, `.opencode/agent/**` and `.codex/skills/**` are committed plane content
+that charter copies into a clone rather than authors; they are described where that mirror is
+(`charter/harness/claude_code.py:53`).
 
 ---
 
@@ -650,7 +673,7 @@ Two rules hold for the whole area and are not repeated per file:
   disk is re-checked before it is joined onto a path.
 - **Writer helpers.** `config.write_for` (`charter/config.py:504`) writes whole,
   `config.replace_for` (`charter/config.py:595`) writes atomically through a temp named
-  `<target>.<pid>.<6 random hex>.tmp` (`charter/config.py:592`, `TEMP_SUFFIX = ".tmp"` at
+  `<target>.<pid>.<12 random hex>.tmp` (`charter/config.py:592`, `TEMP_SUFFIX = ".tmp"` at
   `charter/config.py:552`), `config.create_for` (`charter/config.py:517`) creates with
   `O_EXCL` only where nothing is at the name. Files under `.charter/` come out 0600/0700
   (`config.private_mkdir`, `charter/config.py:190`); files inside `workspaces/` keep the umask's mode, because `write_for` dispatches on where the
@@ -953,7 +976,7 @@ automatic writers leave it byte for byte alone; absent is `"absent"`
 - **Written by:** `commands_change._append_landing` (`charter/commands_change.py:1092`), from
   `charter change land` (`charter/commands_change.py:1501`), after the merge is read back.
   `change.record_landing` (`charter/change.py:156`) is a second writer with the same shape
-  — see Open questions.
+  — see the Appendix.
 - **Read by:** `change.read_landings` (`charter/change.py:217`), `change.landings`
   (`charter/change.py:189`), `commands_change.landings` (`charter/commands_change.py:1109`),
   `change.declared_landings` (`charter/change.py:244`).
@@ -1034,8 +1057,9 @@ automatic writers leave it byte for byte alone; absent is `"absent"`
 ### `workspaces/<ws>/.charter-structure` — the layout stamp
 
 - **Format:** plain text: the integer version and `\n`.
-- **Status:** internal — charter writes it and charter reads it; deleting it makes the
-  workspace read as version 0, so the status line flags `⚠ reinit` and
+- **Status:** **stable** — the status line reads it in a different process from the one
+  that wrote it. Deleting it makes the workspace read as version 0, so the status line
+  flags `⚠ reinit` and
   `charter workspace reinit` re-stamps it. Nothing else is lost.
 - **Written by:** `workspace.scaffold` (`charter/workspace.py:1885`), through a raw
   `os.open(..., O_WRONLY|O_CREAT|O_TRUNC|O_NOFOLLOW|O_NONBLOCK, 0o666)`
@@ -1256,9 +1280,9 @@ a command acts on, or record workspace state.
 | `.charter/sessions/<sid>.workspace` | the workspace chosen for that session, `name + "\n"` | stable (read by the status line, hooks, every command) | `charter/workspace.py:66`, written `charter/workspace.py:823` |
 | `.charter/sessions/<sid>.lock` | the workspace that session is locked to, `name + "\n"` | stable | `charter/workspace.py:709`, written `charter/workspace.py:824` |
 | `.charter/terminals/<tid>.workspace` | the terminal pane's workspace | stable | `charter/workspace.py:192`, written `charter/workspace.py:819` |
-| `.charter/workspace-tab-order` | one workspace name per line, the tab strip's order | internal — deleted, the next launch recomputes it (`charter/workspace.py:1066`) | `charter/workspace.py:978`, written `charter/workspace.py:1023` |
-| `.charter/workspace-arrivals/<name>` | empty file; its existence marks "a handoff landed here" | internal — deleting it clears the mark only | `charter/workspace.py:1113`, `charter/workspace.py:1127` |
-| `.charter/unrecorded/<sha256(realpath(tree))[:32]>.json` | `{"errno": …, "says": …}` for a marker publish that failed | internal — a hint; recomputed on the next failed publish | `charter/workspace.py:2960`, written `charter/workspace.py:2977` |
+| `.charter/workspace-tab-order` | one workspace name per line, the tab strip's order | stable — the frame and the palette read the order another process wrote; deleting it costs the order, which the next launch recomputes (`charter/workspace.py:1066`) | `charter/workspace.py:978`, written `charter/workspace.py:1023` |
+| `.charter/workspace-arrivals/<name>` | empty file; its existence marks "a handoff landed here" | stable — one process records the arrival, another reads it; deleting it clears the mark only | `charter/workspace.py:1113`, `charter/workspace.py:1127` |
+| `.charter/unrecorded/<sha256(realpath(tree))[:32]>.json` | `{"errno": …, "says": …}` for a marker publish that failed | stable — `doctor` reads it in another process; recomputed on the next failed publish | `charter/workspace.py:2960`, written `charter/workspace.py:2977` |
 | `.charter/ws-autosave/<ws>` | debounce marker (mtime + a float) for the Stop-hook autosave | internal — deleting it costs one extra commit attempt | `charter/commands_workspace.py:1171`, written `charter/commands_workspace.py:1179` |
 
 Resolution order (`workspace.chosen`, `charter/workspace.py:615`–`649`, and `resolve`
@@ -1797,7 +1821,7 @@ handoff row (`charter/dispatch.py:170` docstring).
 - **Status:** stable (by the brief's rule) — written by hooks and CLI commands in one
   process and read by `charter trace` / `charter persona recall` in another. Machine-local
   and safe to delete (the history is lost; nothing regenerates it), so it is a borderline
-  call — listed under Open questions.
+  call — see the Appendix.
 - **Written by:** `charter/trace.py:69` (`record`) — persona-relevant events:
   `persona-use` (`charter/persona.py:1533`), `memory` (`charter/persona.py:2323`), `note`
   (`charter/commands_persona.py:1821`), `dispatch`/`resume`/`skill` (`charter/hooks.py`),
@@ -1919,14 +1943,17 @@ before it is stored.
 ### `[memory] share` — how it affects persona files
 
 `charter.toml`'s `[memory] share` (`local` | `commit` | `push`, default `local`,
-`charter/instance.py:460`, clamped at `:443`) decides only whether charter *itself* commits
+`charter/instance.py:460`, clamped at `charter/instance.py:444`) decides only whether charter *itself* commits
 and pushes the files above — never their format:
 
 - `charter persona remember` (persistent): commits the memory file **and** its `MEMORY.md`
   (`charter/commands_persona.py:1206`-`:1209` → `charter/planegit.py:98`).
-- `charter persona forget`: commits the memory **directory** (`:1308`-`:1310`).
-- `charter persona optimize --apply`: commits the memory directory (`:1786`-`:1787`).
-- `charter persona dispatch-backfill`: commits every `_dispatch/*.jsonl` (`:1734`-`:1736`).
+- `charter persona forget`: commits the memory **directory**
+  (`charter/commands_persona.py:1308`-`:1310`).
+- `charter persona optimize --apply`: commits the memory directory
+  (`charter/commands_persona.py:1786`-`:1787`).
+- `charter persona dispatch-backfill`: commits every `_dispatch/*.jsonl`
+  (`charter/commands_persona.py:1734`-`:1736`).
 - The dispatch hook: commits the one tally file it appended, under an flock
   (`charter/hooks.py:8189`-`:8216`).
 - `charter persona memory-sync`: commits every uncommitted path matching
@@ -1938,23 +1965,21 @@ therefore shows up in `git status` for a human.
 
 ---
 
-Two areas meet here: the vault registry — its shape, never its contents — and every file
-charter writes for a harness to read, inside the plane and outside it.
+## Vaults: the registry, and nothing inside it
 
-Conventions used below:
+This section and the one after it cover two areas that meet: the vault registry — its shape,
+never its contents — and every file charter writes for a harness to read, inside the plane
+and outside it. Both use two conventions:
+
 - **plane root** = `config.ROOT`; **state dir** = `config.STATE_DIR` = `<plane>/.charter/`
   unless `$CHARTER_HOME` is set, in which case it is that path verbatim
   (`charter/config.py:791`, `charter/config.py:99`).
 - "**IF ABSENT**" = charter writes only the key(s) it owns, only when they are not already
   there, and never repairs or reformats a file it cannot parse.
 
----
-
-## Vaults: the registry, and nothing inside it
-
 No real vault content was read for this section. Shapes come from the writers in
-`charter/secrets/*` plus a throwaway fixture plane whose only value is the literal
-`fixture-not-a-secret`.
+`charter/secrets/*` plus a throwaway plane generated for the survey, whose only value is the
+literal `fixture-not-a-secret`.
 
 ### `vaults.json` (plane root — the SHARED half)
 
@@ -2032,7 +2057,8 @@ Legacy spellings `op_vault` / `op_item` are still read (`charter/secrets/onepass
   (`charter/secrets/base.py:61` → `charter/config.py:190` `private_mkdir`). A directory
   that already exists is left as found and merely *reported*
   (`charter/secrets/base.py:105` `loose_dirs`, rendered by `charter/secrets/base.py:195`).
-- Measured on the fixture plane: `.charter` `drwx------`, `.charter/vaults` `drwx------`,
+- Measured on a plane generated for this survey (modes as charter writes them, which is
+  not what a git checkout of a fixture reproduces): `.charter` `drwx------`, `.charter/vaults` `drwx------`,
   every file inside `-rw-------`.
 - File names: `<vault name>.json` and `<vault name>.meta.json` by default
   (`charter/commands_secrets.py:141`, `charter/secrets/plain_file.py:165`). Any other path
@@ -2185,14 +2211,18 @@ op://<op-vault>/<op-item>/<key>` (`charter/secrets/onepassword.py:223`). Legacy
 one-item-per-key titles `charter-<vault>-<key>` are detected and reported, never written
 (`charter/secrets/onepassword.py:156`, `:581`).
 
-### Guarded paths (why a harness cannot read any of the above)
+### Guarded paths
 
 `charter/hooks.py:553` — `_VAULT_PATH_RE` matches `.charter/vaults…`, `.charter/browser`,
 `.charter/active-`, `.charter/fingerprint`, case-insensitively and in every separator
 spelling; `charter/toolgate.py:276` guards `config.STATE_DIR` and `config.VAULTS_DIR` plus
-each registered vault's own `file` (`charter/toolgate.py:301`, `:322`). Confirmed live: a
-plain `cat .charter/vaults/fixture.json` inside the fixture plane was denied by charter's
-own PreToolUse guard.
+each registered vault's own `file` (`charter/toolgate.py:301`, `:322`). Observed: a
+`cat .charter/vaults/<name>.json` tool call was denied by charter's own PreToolUse guard,
+and a differently-shaped shell command reading the same path in another session was not.
+The guard reads the shape of a tool call, which is what it says of itself (`docs/hooks.md`,
+"When a guard is wrong") — so this section records the paths it names, not a boundary around
+the bytes. A rebuild that reimplements the guard reproduces the matching, and inherits the
+same bound.
 
 ---
 
@@ -2246,7 +2276,7 @@ own PreToolUse guard.
 (`charter/commands.py:1354`) is written verbatim; an `mcp__…` pattern with a wildcard or
 arguments raises `UnexpressibleRule` and nothing is written.
 
-Fixture output (after `init` + `guard ask 'terraform apply *'`):
+Measured after `init` + `guard ask 'terraform apply *'`:
 
 ```json
 { "env": {"CHARTER_HARNESS": "claude-code"},
@@ -2388,7 +2418,7 @@ generated or mirrored** (`charter/harness/base.py:245`-`249`,
   and a trailing newline. Idempotent: the block is replaced, never appended; an
   unterminated block runs to EOF and is replaced whole. A file with no charter block and
   nothing to add is handed back byte for byte (`charter/workspace.py:3424`-`3425`).
-- Fixture block, verbatim:
+- The block, verbatim, as charter writes it:
   `/.claude/settings.json`, `/.charter-generated`, `.charter-generated.*.tmp`.
 - **Temp files:** every write in a checkout goes through
   `.charter-generated.<pid>.<hex12>.tmp` beside the target, fsynced, then `os.replace`,
@@ -2495,7 +2525,7 @@ plugin … --json`, never to Claude Code's files"* (`charter/plugincache.py:27`-
 Charter reads them only as **mtime/size stamps** for its wiring cache
 (`charter/wiring.py:775` `_claude_stamps`).
 
-Measured in the fixture home after `charter init` (written by `claude`, shape recorded here
+Measured in a throwaway `$HOME` after `charter init` (written by `claude`, shape recorded here
 because a Rust implementation will read the same entries through the CLI):
 
 | File | Entry charter cares about | Source |
@@ -2572,9 +2602,10 @@ winning while it exists (`charter/harness/claude_code.py:221`).
 ### `.charter/unrecorded/<sha256[:32]>.json`
 
 - **Format:** `{"errno": "<name or int>", "says": "<strerror>"}` + newline.
-- **Status:** **internal** — written and read by `charter/workspace.py` only, to explain why
-  a checkout's marker could not be published; removed on the first successful publish.
-  Deleting it costs the reason on one `doctor` row.
+- **Status:** **stable** — written by the snapshot path to explain why a checkout's marker
+  could not be published, and read by `doctor` in a different process
+  (`charter/workspace.py:2984`); removed on the first successful publish. Deleting it costs
+  the reason on one `doctor` row, and nothing else.
 - **Written by:** `charter/workspace.py:2977` (`_note_unrecorded`), path
   `charter/workspace.py:2956` (`config.STATE_DIR / "unrecorded" / f"{key}.json"`, key =
   `sha256(realpath(tree))[:32]`).
@@ -2723,8 +2754,12 @@ plane's `.gitignore` (`charter/commands.py:1096` in `_GITIGNORE_BASELINE`,
 - **Read/removed by:** `charter/hooks.py:314` (`_ask_mark_take`)
 - **Git:** gitignored
 - **Encoding:** every component is stripped of chars outside `[A-Za-z0-9._-]`
-  (`charter/hooks.py:275`). **Never cleaned up when the ask is not approved** — 80 stale
-  files in the live plane (see Open questions).
+  (`charter/hooks.py:275`). `_ask_mark_take` unlinks only on approval, and a declined ask
+  **deliberately** leaves its marker: that asymmetry is what makes "asked N, approved M"
+  countable (`charter/workspace.py:875`-`:879`, #290). The leftovers are swept with the rest
+  of `sessions/` after 30 days by `workspace._prune` (`charter/workspace.py:881`), which runs
+  on `set_active` — so a plane nobody switches workspaces in accumulates them (80 were on the
+  plane this was written against).
 
 ### `sessions/<sid>.route-pending`
 - **Format:** plain text, comma-separated persona names + `\n`
@@ -2818,7 +2853,7 @@ Claimed with `claim_private_dir` (`charter/frame/state.py:318`) so a claim is a 
 | `session.durable` | same id + `\n` | `charter/frame/state.py:1094` (`_record_kept_session`) | `kept_harness_session`, `charter/frame/state.py:1099` | stable — survives `clear_harness_session` |
 | `session.adopted` | empty, `create_for` (O_EXCL) | `charter/frame/state.py:1243` (`adopt_report`) | `charter/frame/state.py:1248` | stable — first-writer-wins adoption |
 | `session.start` | `resumed\n` or `fresh\n` | `charter/frame/state.py:1277` | `charter/frame/state.py:1282` | stable |
-| `conversation` | absolute path to the harness transcript `.jsonl` + `\n` | `charter/frame/state.py:1175`, from the hook's `transcript_path` (`charter/hooks.py:6104`) | `charter/frame/state.py:1181` | **stable — hook writes, frame/app reads**; only ever `stat`ed by charter |
+| `conversation` | absolute path to the harness transcript `.jsonl` + `\n` | `charter/frame/state.py:1175`, from the hook's `transcript_path` (`charter/hooks.py:6104`) | `charter/frame/state.py:1181` | **stable — one process writes it, another reads it**; only ever `stat`ed by charter |
 | `server` | tmux socket name (`charter-plane-<hash>`) + `\n` | `charter/frame/state.py:1317` | `charter/frame/state.py:1335` | stable |
 | `workspace` | workspace name + `\n` | `charter/frame/state.py:1384` (`record_workspace`) | `charter/frame/state.py:1514` (`frame_workspace`) → membership (`own_workspace`, `charter/frame/state.py:1619`) | **stable — decides a chat's workspace membership** |
 | `profile` | harness-profile name + `\n` | `charter/frame/state.py:1415` | `charter/frame/state.py:1420` | stable |
@@ -2842,8 +2877,8 @@ Claimed with `claim_private_dir` (`charter/frame/state.py:318`) so a claim is a 
 | `ended` | `1\n`, `create_for` (O_EXCL, claim) | `charter/frame/state.py:2948` (`claim_ended`) | `charter/frame/state.py:2953` | **stable** — exactly-once "this chat ended" claim |
 | `drawer` | pane id + `\n` | `charter/frame/state.py:3015` | `charter/frame/state.py:3020` | stable |
 | `respawn/<slot>` | int + `\n`, in a `respawn/` subdirectory (`charter/frame/state.py:3059`) | `charter/frame/state.py:3133` | `charter/frame/state.py:3124` | internal — attempt counter; `clear_respawn` rmtree's it (`charter/frame/state.py:3165`) |
-| `gather.json` | JSON snapshot of the workspace scan (see below) | `charter/frame/gather.py:408` | `charter/frame/gather.py:483`, panels via `gather.read`/`cached` | **stable — the panel data the app will want** |
-| `tmux.conf` | tmux config text | `charter/commands_frame.py:6621` | tmux itself | stable (read by another program) |
+| `gather.json` | JSON snapshot of the workspace scan (see below); `json.dumps(data)` with **no** indent and **no** trailing newline, written atomically | `charter/frame/gather.py:408` | `charter/frame/gather.py:483`, panels via `gather.read`/`cached` | **stable — the frame's panels read what a detached gather wrote** |
+| `tmux.conf` | tmux config text | the placeholder at `charter/commands_frame.py:6621`, then the real config (`conf_text`) at `charter/commands_frame.py:6744` | tmux itself | stable (read by another program) |
 
 `gather.json` fields (`charter/frame/gather.py:105` for the empty shape,
 `charter/frame/gather.py:191` for a repo row):
@@ -3033,7 +3068,7 @@ Only the **latest** sighting is kept (whole-file overwrite).
 - **Written by:** `charter/hooks.py:7656`; existence checked `charter/hooks.py:7654`
 - **Git:** gitignored
 - **Encoding:** key is `f"{session}-{ws}"` with every char outside `[A-Za-z0-9._-]`
-  removed (`charter/hooks.py:7652`) — **ambiguous by construction** (see Open questions).
+  removed (`charter/hooks.py:7652`) — **ambiguous by construction** (see the Appendix).
   Only written for a **live** workspace (`charter/hooks.py:7810`).
 
 ### `ws-autosave/<workspace>`
@@ -3183,9 +3218,11 @@ semantics below.
 * `$CHARTER_CONFIG_HOME` → `$XDG_CONFIG_HOME` → `~/.config`, then `charter/reporting-consent`
   — a plain text file whose **existence** is the Reporter's consent to open upstream issues
   (`charter/report.py:462`, `charter/report.py:465`, granted `charter/report.py:475`).
-  **stable** (operator-visible, deleted by hand to withdraw), per *machine*, not per plane.
-  Present in this machine's `~/.config/charter/`.
-* Nothing else in this area is written outside the plane. Harness-side files
+  **stable** (operator-visible, deleted by hand to withdraw), per *machine*, not per plane:
+  one consent covers every plane the machine works on.
+* No other **state** in this area is written outside the plane, though charter does write
+  elsewhere: a news probe writes `$TMPDIR/charter-probe-<pid>` (`charter/news.py:1329`).
+  Harness-side files
   (`~/.claude/...`, codex/opencode homes) belong to the config/harness area; this area only
   *stamps* them in `cache/harness-wiring.json`.
 
@@ -3213,7 +3250,12 @@ semantics below.
 
 ### What the tmux frame and the status line read that a **hook** wrote
 
-This is the exact surface the desktop app inherits while Python keeps the hooks:
+One process writes each of these and a different one reads it, which is what makes them
+stable to charter. It is also the shape of the problem the app has: Python's hooks keep
+writing a session's state, and the app has to learn the same facts. It does **not** inherit
+this surface file by file — `frame/` is the tmux frame's own (the ruling above) — so where a
+row below names a `frame/<chat>/` file, the app needs its own answer to the same question,
+and the row says what that question is.
 
 | Written by (Python hook) | File | Read by |
 |---|---|---|
@@ -3228,8 +3270,9 @@ This is the exact surface the desktop app inherits while Python keeps the hooks:
 
 Two of these are *not* keyed the same way: `.usage` is keyed on **Claude Code's** session id
 out of the payload, while everything frame-side is keyed on the **chat id**
-(`$CHARTER_SESSION_ID`). An app that wants a chat's context gauge must map chat → harness
-session through `frame/<chat>/session`.
+(`$CHARTER_SESSION_ID`). A chat's context gauge therefore needs a
+chat → harness-session mapping; `frame/<chat>/session` is where the tmux frame keeps its
+copy, and an app that does not read `frame/` needs one of its own.
 
 ---
 
@@ -3262,7 +3305,7 @@ so each one can be filed on its own merits.
    charter does *not* hold a lock.
 4. **`.charter/harness-profiles-launched.json` is read-modify-written whole with no lock**
    (`charter/profiletrust.py:172`). Its own module documents that it is not a boundary
-   (`charter/profiletrust.py:18`). I marked it **stable** because a second process reads it and
+   (`charter/profiletrust.py:18`). Marked **stable** because a second process reads it and
    it gates command execution — confirm that is the classification the doc wants for a
    `.charter/` file.
 5. **`instance.SCHEMA` vs `workspace.STRUCTURE_VERSION`** are deliberately never compared
@@ -3270,7 +3313,7 @@ so each one can be filed on its own merits.
    doc so a Rust reader does not gate on the workspace number.
 6. **`[[forge]] version`** appears in a code comment as an example of a key `_set_key` must not
    clobber (`charter/instance.py:398`), but no forge code reads a `version` key. It is an
-   example, not a setting — I found no reader. Worth a second pair of eyes.
+   example, not a setting, and the survey found no reader for it.
 7. **`config.GROUP`/`EXCLUDE` are "the first `[[forge]]` block's"** (`charter/config.py:728`,
    `charter/instance.py:148`) while `discover` asks per block (`charter/commands.py:120`). Two
    meanings of one word in one file; both are live.
@@ -3284,28 +3327,28 @@ so each one can be filed on its own merits.
 
 ### In workspaces
 
-1. **`change.record_landing` looks dead.** `charter/change.py:156` is a complete landing-log
-   writer (`config.open_for`, `json.dumps(sort_keys=True)`), but nothing calls it; the only
-   caller of the landing log is `commands_change._append_landing`
+1. **`change.record_landing` has no caller in `charter/`.** `charter/change.py:156` is a
+   complete landing-log writer (`config.open_for`, `json.dumps(sort_keys=True)`), and the
+   suite calls it (`tests/_changerepo.py:122`, `tests/test_change_surface.py:573`) but the
+   product does not: the only caller of the landing log is `commands_change._append_landing`
    (`charter/commands_change.py:1092`, called at `charter/commands_change.py:1501`), which
    uses `contain.json_line` and a raw `os.open(..., 0o644)`. The two agree on the line's
    fields and key order but differ in escaping (`ensure_ascii=True` only in the live one)
-   and in file mode dispatch. A Rust writer should follow `_append_landing`. Flagged, not
+   and in file mode dispatch. A Rust writer should follow `_append_landing` — and deleting
+   `record_landing` as dead would take the behaviour those tests pin with it. Flagged, not
    fixed.
 2. **The brief says `refs/` holds `README.md` and `repos.json`.** There is no `repos.json`
    under a workspace's `refs/`. `repos.json` is `inventory/repos.json`
    (`charter/config.py:783`). `refs/` holds the generated `README.md` and whatever the
    operator drops in.
-3. **`.charter-generated` classification.** I marked it **stable**, not internal, although
-   it is written and read only by charter: a *different process* (a later launch, `doctor`,
-   `reinit`) reads it, and deleting it is not harmless — every generated file then reads as
-   `foreign` and is never refreshed or withdrawn again. If the assembler prefers "internal",
-   the deletion consequence above must still be stated.
-4. **`.charter/workspace-tab-order` and `workspace-arrivals/` marked internal**, though they
-   are read by every frame process on the plane and not only by the writer. They are
-   regenerated at the next launch (`charter/workspace.py:1066`, `charter/workspace.py:1229`),
-   which is why I did not call them stable. Worth a second opinion — the `.charter` agent
-   owns that directory.
+3. **`.charter-generated` is stable**, although only charter reads it: a *different
+   process* (a later launch, `doctor`, `reinit`) does, and deleting it is not harmless —
+   every generated file then reads as `foreign` and is never refreshed or withdrawn again.
+4. **`.charter/workspace-tab-order` and `workspace-arrivals/` are stable**, and the survey
+   first had them as internal because they are regenerated at the next launch
+   (`charter/workspace.py:1066`, `charter/workspace.py:1229`). Every frame process on the
+   plane reads them, which is what the rule turns on; the regeneration is what deleting one
+   costs, and the entries say so.
 5. **Two different manifest orderings.** A manifest charter creates has
    `name, description, repos, updated_at, updated_by, charter_generated`; one written by
    `snapshot`/`fork` keeps whatever order the document on disk had and appends new keys
@@ -3344,16 +3387,17 @@ so each one can be filed on its own merits.
 
 1. **`.charter/persona-state/trace/<session>.jsonl` — stable or internal?** Marked stable
    (written by hooks, read by `charter trace`/`persona recall` in other processes), but it
-   is machine-local, gitignored and losing it costs only history. Call I was unsure about.
+   is machine-local, gitignored and losing it costs only history — but the status line
+   reads it in another process, which is what the rule turns on.
 2. **`.charter/sessions/<sid>.persona` / `terminals/<tid>.persona` / `active-persona`** —
    written by `persona.py`, but the directories belong to the workspaces area. Someone must
    decide which section owns them so they are not documented twice or dropped.
-3. **`.charter/mcp-approved.json`** — `mcpseen.py` is not in my module list, but
+3. **`.charter/mcp-approved.json`** — written by `mcpseen.py`, but
    `persona.py` is its only consumer and it decides whether a generated agent carries the
    vault wrapper. Overlaps the secrets agent.
 4. **`personas/_dispatch` vs `inflight`** — `charter/inflight.py` notes that `_dispatch`
    records a dispatch when it *finishes*; `.charter/dispatch-inflight/` is a separate
-   (gitignored) store I did not document — probably nobody's area yet.
+   (gitignored) store, documented in the `.charter/` section.
 5. **Docs vs code — `persona-state/log/<name>.jsonl`.** `charter/persona.py:15` (module
    docstring) still advertises "an activity log (`log/<name>.jsonl`)"; there is none —
    `charter/persona.py:2458` says so, and activity lives in `trace/`. Docstring is stale.
@@ -3367,8 +3411,9 @@ so each one can be filed on its own merits.
    nor a terminal id (`charter/persona.py:1529`). In a normal session it writes the two
    pointers instead.
 8. **Slug truncation can leave a trailing `-`.** `charter/memstore.py:26`-`:28` strips `-`
-   *before* `[:48]`, so a 48-char cut mid-word keeps the hyphen — live example
-   `personas/steward/memory/1097-is-worse-than-the-issue-says-f2-detach-ran-.md`. Harmless,
+   *before* `[:48]`, so a 48-char cut mid-word keeps the hyphen: a memory titled
+   "1097 is worse than the issue says: F2 detach ran the wrong command" is filed as
+   `1097-is-worse-than-the-issue-says-f2-detach-ran-.md`. Harmless,
    but a byte-identical writer must reproduce it (not fixed here).
 9. **No atomic writes anywhere in this area.** `persona.md`, `.claude/agents/<name>.md`,
    memory files and `MEMORY.md` are all plain `write_text`/`open`; the only concurrency
@@ -3421,11 +3466,11 @@ so each one can be filed on its own merits.
 8. **Marker values are `str | list[str]`** (`charter/workspace.py:2440`). A consumer that
    assumes `str` will mis-read a plane killed mid-write. Worth stating explicitly in the
    doc.
-9. Unsure-and-marked-stable: `.charter/cache/harness-wiring.json` I marked **internal**
+9. `.charter/cache/harness-wiring.json` is marked **internal**
    (one module writes and reads it, safe to delete). It is borderline — two *processes*
    (the selector and a later selector run) read it, and a chat can write it, which is why
    `cached()` re-validates every field. If the doc's rule is "another process reads it", it
-   should be **stable**. Named here as the call I was least sure about.
+   would make it stable; the front matter's cache ruling is why it is not.
 10. `.charter/unrecorded/<hash>.json` — same borderline: written by one module, read by
     `doctor` in a *different* process (`charter/workspace.py:2984` `unrecorded_reason`). I
     marked it internal because it is a diagnostic that regenerates; a stricter reading of
@@ -3433,16 +3478,20 @@ so each one can be filed on its own merits.
 
 ### In `.charter/`
 
-1. **`docs/control-plane.md:868` explicitly disclaims any format stability for
-   `.charter/frame/`** ("no format version and never will … may change shape in any
-   release"), while the Rust app is to read exactly those files. Either the doc or the
-   plan has to give; this is the single biggest code-vs-doc conflict in the area.
-2. **`sessions/<sid>.<tuid>.<kind>.ask-pending` is never swept.** `_ask_mark_take` unlinks
-   only on approval (`charter/hooks.py:314`); a declined or abandoned ask leaves the file
-   forever — 80 of them in the live plane, the oldest weeks old. Unlike `.workspace`/`.lock`
-   they are **not** covered by `workspace._prune` (which prunes any file in `sessions/`
-   older than 30 days, `charter/workspace.py:887`) only because a prune runs on
-   `set_active`; nothing guarantees one. Not fixing, just recording.
+1. **`docs/control-plane.md:868` disclaims any format stability for `.charter/frame/`**
+   ("no format version and never will … may change shape in any release"). The survey
+   raised this as a conflict with an app that reads plane files; the ruling in "How to read
+   it" settles it the other way — the app replaces the tmux frame rather than reading its
+   state, so the disclaimer stands untouched. Recorded because the next person to want a
+   fact that lives only in `frame/` will meet it: that fact has to be promoted here first,
+   and `control-plane.md` amended in the same change.
+2. **Nothing guarantees the `sessions/` sweep runs.** `_prune` unlinks any file in
+   `sessions/` and `terminals/` past 30 days, `.ask-pending` included
+   (`charter/workspace.py:881`-`:889`) — the survey's first reading of this was wrong, and
+   the leave-behind on a declined ask is deliberate and tested, not a leak
+   (`charter/workspace.py:875`-`:879`, #290). What is true is that the sweep only runs from
+   `set_active`, so a plane whose operator does not switch workspaces never sweeps: 80
+   markers had accumulated on the plane this was written against.
 3. **`ws-edit-nudge/<sid>-<ws>` keys are ambiguous.** The key is
    `re.sub(r"[^A-Za-z0-9._-]", "", f"{session}-{ws}")` (`charter/hooks.py:7652`) — session
    `a` + workspace `b-c` and session `a-b` + workspace `c` collide. Harmless (one nudge),
@@ -3459,8 +3508,8 @@ so each one can be filed on its own merits.
    reads or writes it. If the app should ignore it, say so in the spec; if any older
    charter still writes it, the app will see a file this doc calls dead.
 7. **Where does `sessions/<sid>.persona` belong** — this area (it is a `sessions/` file) or
-   the personas section? Same for `active-persona`. I documented them minimally here to
-   avoid a gap; deduplicate at assembly.
+   the personas section, which documents them in full; the entries here are the
+   `.charter/` view of the same files.
 8. **`persona-state/trace/<sid>.jsonl` is read by the status line**
    (`charter/statusline.py:2078`) even though `persona-state/` is the personas section's.
    The "recorded ✎N" chip on the footer depends on it, so the app needs that file's format
@@ -3473,11 +3522,12 @@ so each one can be filed on its own merits.
     writer must not "fix" it.
 11. **Marker-file ordering is load-bearing in at least one place:** `.gate` must be touched
     *before* `.tools` (`charter/toolgate.py:808`). Any Rust writer that reorders them
-    reopens #443. There may be other order dependencies I did not enumerate (the
+    reopens #443. The survey did not enumerate every order dependency (the
     `session`/`session.durable`/`session.adopted` trio is the likely second one,
     `charter/frame/state.py:1023`).
-12. **`frame/probe-1/` in the live plane** is a `<prefix>-<pid>`-shaped frame id, not a chat
-    id, and holds only `gather.json` + `version`. I could not find the writer that mints
-    `probe-1` specifically (`frame_id()` is the shape, but nothing names "probe" in this
-    tree) — possibly a news/statusline probe from an older release. Worth one grep by
-    someone who knows the news probe.
+12. **`frame/probe-1/` on the plane this was written against** is a `<prefix>-<pid>`-shaped
+    frame id, not a chat id, and holds only `gather.json` + `version`. `frame_id()` gives
+    the shape and `charter frame-probe` (`charter/news.py:1052`, `cmd_probe` at
+    `charter/commands_frame.py:599`) is where the name plausibly comes from, but no writer
+    in this tree mints `probe-1` itself — most likely an older release left it. A reader
+    enumerating `frame/` should expect directory names it cannot account for.

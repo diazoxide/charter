@@ -32,18 +32,51 @@ SPEC = REPO / "docs" / "plane-format.md"
 #: `charter/frame/state.py:2084`, with or without the surrounding backticks.
 CITATION = re.compile(r"(charter/[\w/]+\.py):(\d+)")
 
+#: The shorthand a second citation of the same module uses: `` `:2107` ``. It carries no
+#: module of its own, so it means "the module the last full citation named". That runs from
+#: the last full citation *above* it and resets at every heading, which is how a reader
+#: parses it too — and the one place the document's shorthand was ambiguous is the place
+#: this rule disagreed with the code, so the shorthand there was written out in full.
+SHORTHAND = re.compile(r"`:(\d+)`")
+
+#: Both forms in one pass, so the module in scope advances as the line is read.
+TOKEN = re.compile(r"charter/[\w/]+\.py:\d+|`:\d+`")
+
 
 class ThePlaneFormatSpecCitesLinesThatExist(unittest.TestCase):
     def setUp(self) -> None:
-        self.citations = [
-            (n, m.group(1), int(m.group(2)))
-            for n, line in enumerate(SPEC.read_text().splitlines(), 1)
-            for m in CITATION.finditer(line)
-        ]
+        self.citations: list[tuple[int, str, int]] = []
+        self.orphans: list[str] = []
+        self.shorthand = 0
+        module: str | None = None
+        for n, line in enumerate(SPEC.read_text().splitlines(), 1):
+            if line.startswith("#"):
+                module = None  # a heading ends the shorthand's reach
+            for token in TOKEN.finditer(line):
+                full = CITATION.fullmatch(token.group(0))
+                if full:
+                    module = full.group(1)
+                    self.citations.append((n, module, int(full.group(2))))
+                    continue
+                self.shorthand += 1
+                if module is None:
+                    self.orphans.append(
+                        f"plane-format.md:{n} has {token.group(0)} with no module named "
+                        f"above it in this section — write the module out in full"
+                    )
+                    continue
+                self.citations.append(
+                    (n, module, int(SHORTHAND.fullmatch(token.group(0)).group(1)))
+                )
 
     def test_the_spec_cites_the_code_at_all(self) -> None:
         """A spec that stopped citing code would pass every check below vacuously."""
         self.assertGreater(len(self.citations), 1000, "the spec has lost its citations")
+        self.assertGreater(self.shorthand, 100, "the shorthand form has stopped being read")
+
+    def test_every_shorthand_citation_has_a_module_in_scope(self) -> None:
+        """`:2107` means "the module last named". If nothing named one, it means nothing."""
+        self.assertEqual([], self.orphans, "\n".join(self.orphans))
 
     def test_every_citation_points_at_a_line_that_exists_and_is_not_blank(self) -> None:
         source: dict[str, list[str]] = {}
