@@ -21,7 +21,7 @@ jobs:
     name: rust (fmt, clippy, test)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Tauri's Linux build dependencies
         run: |
           sudo apt-get update
@@ -40,7 +40,7 @@ jobs:
     name: rust (licences, advisories)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
 
   web:
@@ -50,7 +50,7 @@ jobs:
       run:
         working-directory: app
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v5
         with:
           node-version-file: .nvmrc
@@ -70,7 +70,7 @@ jobs:
         os: [macos-latest, ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Tauri's Linux build dependencies
         if: runner.os == 'Linux'
         run: |
