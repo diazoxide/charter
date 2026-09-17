@@ -39,6 +39,15 @@ it. The loud check can only speak for the job it runs in; a NEW job that runs th
 without the pin would never reach it. So the workflows are read here too, and the set of
 suite-running jobs is asserted whole.
 
+**And `NoJobsTestInvocationGoesUnclassified` is what makes that true rather than nearly
+true.** "A new job would be caught" holds only for the spellings the reader knows, and the
+first version of this module knew three. `python -m unittest tests.test_x`, `pytest tests/`
+and `make test` all answered "runs no tests", which put such a job outside the set the
+per-job assertion quantifies over AND outside the pinned list — both halves green, no
+coverage, running on tmux 3.4. So :func:`classify` has a third answer: a run block that is
+about the tests and matches no runner this module knows is `UNKNOWN`, and `UNKNOWN` FAILS.
+The default for a shape nobody anticipated is "this must be pinned", not silence.
+
 **This is a CI floor and deliberately not charter's own.** `charter.frame.tmuxctl.FLOOR` is
 what charter refuses an operator below, and raising it to 3.5 would turn a CI defect into a
 refusal aimed at people running 3.4 perfectly happily. What tmux 3.4 costs an operator is a
@@ -80,23 +89,81 @@ ACTION_FILE = REPO / ".github" / "actions" / "tmux" / "action.yml"
 WORKFLOWS = sorted((GITHUB / "workflows").glob("*.y*ml"))
 
 
-def _runs_the_suite(script: str) -> bool:
-    """Does this `run:` body execute charter's test suite?
+#: What a `run:` body does about charter's tests.
+RUNS = "runs"          #: it executes them, so this job must have the pinned tmux
+NOTHING = "nothing"    #: recognised, and it runs none
+UNKNOWN = "unknown"    #: test-shaped and unrecognised — a RED TEST, never a silent pass
 
-    Three spellings, and the third is the one worth naming. `unittest discover` is the
-    suite outright. `sweep.py --plan` traces it once to build the selection map, and
-    `sweep.py --gate` runs the unmutated baseline before it deals a single mutation — a
-    shard whose baseline is red refuses its whole slice, which is exactly what three of
-    them did.
+#: Every spelling this repository could plausibly run its tests by.
+#:
+#: **Deliberately wider than the three spellings CI uses today, and the first version of
+#: this reader is why.** It recognised `unittest discover` and two `sweep.py` flags, and
+#: nothing else — so `python -m unittest tests.test_x`, `pytest tests/` and `make test` all
+#: answered "does not run the suite". A job written any of those ways was therefore absent
+#: from the pinned list AND from the per-job assertion, and would have run on tmux 3.4 with
+#: both halves of this module still green.
+#:
+#: That is the failure mode this module exists to prevent, arriving through the module
+#: itself. A guard that is silent about what it cannot see is worse than no guard, because
+#: the green tick is read as coverage.
+_RUNNERS = re.compile(
+    r"\bunittest\b|\bpytest\b|\bpy\.test\b|\bnosetests?\b|\bnose2\b|\btox\b"
+    r"|\bmake\s+(?:test|check)\b|\brun[-_]?tests?\b", re.IGNORECASE)
 
-    `sweep.py --verdict` is the one sweep mode that runs no tests at all: it adds up
-    artifacts other jobs uploaded. It is excluded by being absent from the list rather than
-    by a denial, and `TheReaderKnowsWhichStepsRunTests` proves that both ways round —
-    because a reader that answered `True` for everything would satisfy every assertion
-    below while checking nothing.
+#: Anything that so much as LOOKS like it touches the tests.
+#:
+#: **This is the fail-closed half.** A script that matches this and is NOT recognised as a
+#: runner above is :data:`UNKNOWN`, and `NoJobsTestInvocationGoesUnclassified` fails on it
+#: by name. So the next test runner somebody reaches for — `nox`, a shell script, a
+#: `tests/` driver invoked directly — is a red test that says what to do, rather than a job
+#: quietly running the real-tmux modules on whatever tmux the image ships.
+#:
+#: Every alternative in :data:`_RUNNERS` appears here too, which
+#: `test_nothing_can_be_a_runner_without_being_test_shaped` holds: were a runner missing
+#: from this pattern, dropping it from `_RUNNERS` later would make it `NOTHING` — silence
+#: again, by exactly the route this is built to close.
+_TEST_SHAPED = re.compile(
+    r"\btests/|\btests\.test_|\btest_\w+\.py\b|\bsweep\.py\b|\bcoverage\b"
+    r"|\bunittest\b|\bpytest\b|\bpy\.test\b|\bnosetests?\b|\bnose2\b|\btox\b"
+    r"|\bmake\s+(?:test|check)\b|\brun[-_]?tests?\b", re.IGNORECASE)
+
+
+def classify(script: str) -> str:
+    """:data:`RUNS`, :data:`NOTHING` or :data:`UNKNOWN` for one `run:` body.
+
+    The `sweep.py` clause is stated as *"every mode but `--verdict`"* rather than as a list
+    of the modes that do run tests, and that direction is the point: `--plan` traces the
+    whole suite for the selection map and `--gate` runs the unmutated baseline before it
+    deals a mutation, but a sweep mode added next year is pinned by default instead of by
+    somebody remembering this line. `--verdict` is the one mode that starts no interpreter
+    — it downloads artifacts other jobs uploaded and adds them up.
     """
-    return ("unittest discover" in script
-            or ("sweep.py" in script and ("--plan" in script or "--gate" in script)))
+    if _RUNNERS.search(script):
+        return RUNS
+    if "sweep.py" in script:
+        return NOTHING if "--verdict" in script else RUNS
+    if _TEST_SHAPED.search(script):
+        return UNKNOWN
+    return NOTHING
+
+
+def _verdict(job: object) -> str:
+    """One answer for a whole job, from its steps.
+
+    :data:`RUNS` outranks :data:`UNKNOWN`: a job already required to carry the pinned tmux
+    gains nothing from also being reported as unclassifiable, and the requirement is the
+    stronger of the two outcomes.
+    """
+    seen = {classify(step["run"])
+            for step in _steps(job) if isinstance(step, dict) and "run" in step}
+    return RUNS if RUNS in seen else UNKNOWN if UNKNOWN in seen else NOTHING
+
+
+def _jobs_where(verdict: str) -> list[tuple[str, str]]:
+    return [(path.name, name)
+            for path in WORKFLOWS
+            for name, job in _jobs(path).items()
+            if _verdict(job) == verdict]
 
 
 def _jobs(workflow: Path) -> dict:
@@ -110,35 +177,113 @@ def _steps(job: object) -> list:
 
 def suite_jobs() -> list[tuple[str, str]]:
     """``(workflow file name, job name)`` for every job that runs the suite."""
-    return [(path.name, name)
-            for path in WORKFLOWS
-            for name, job in _jobs(path).items()
-            if any(_runs_the_suite(step["run"])
-                   for step in _steps(job) if isinstance(step, dict) and "run" in step)]
+    return _jobs_where(RUNS)
+
+
+def unclassified_jobs() -> list[tuple[str, str]]:
+    """``(workflow, job)`` for every job this reader cannot answer for."""
+    return _jobs_where(UNKNOWN)
 
 
 class TheReaderKnowsWhichStepsRunTests(unittest.TestCase):
     """The control. Every assertion below is about a set this reader produces, and a
     reader that had gone blind would hand back an empty set that satisfies all of them —
     the same shape of defect `TheWorkflowQuotesNoCostTheToolDoesNotState` guards next
-    door. So the predicate is exercised on the exact strings the workflows carry."""
+    door. So the classifier is exercised on real strings, in all three directions."""
 
-    def test_the_three_spellings_that_run_the_suite(self):
-        self.assertTrue(_runs_the_suite("python -m unittest discover -s tests -v"))
-        self.assertTrue(_runs_the_suite("python3 tools/sweep.py --plan --warm-map"))
-        self.assertTrue(_runs_the_suite("python3 tools/sweep.py --gate --jobs 4"))
+    def test_the_spellings_ci_uses_today(self):
+        for script in ("python -m unittest discover -s tests -v",
+                       "python3 tools/sweep.py --plan --warm-map",
+                       "python3 tools/sweep.py --gate --jobs 4"):
+            with self.subTest(script=script):
+                self.assertEqual(classify(script), RUNS)
 
-    def test_the_sweep_mode_that_runs_nothing_is_not_one_of_them(self):
-        """`collect` downloads artifacts and adds them up. Requiring a tmux build there
-        would be a minute per run spent on a job with no pane in it."""
-        self.assertFalse(_runs_the_suite("python3 tools/sweep.py --verdict shards"))
-        self.assertFalse(_runs_the_suite("charter --version"))
-        self.assertFalse(_runs_the_suite("uv tool install --force git+https://x@main"))
+    def test_the_spellings_the_first_version_of_this_reader_missed(self):
+        """**The regression this class exists for.** Each of these answered "runs no
+        tests" when this module was first written, so a job spelled any of these ways was
+        invisible to BOTH halves of the guard and would have run on tmux 3.4 green."""
+        for script in ("python -m unittest tests.test_workflows",
+                       "python -m unittest tests.test_frame_tmux_integration -v",
+                       "pytest tests/",
+                       "pytest -q tests/test_frame_launcher.py",
+                       "make test",
+                       "make check",
+                       "tox -e py312",
+                       "./run-tests.sh"):
+            with self.subTest(script=script):
+                self.assertEqual(classify(script), RUNS,
+                                 "a spelling that runs charter's tests must demand the "
+                                 "pinned tmux, not be waved through as unrecognised")
+
+    def test_an_invocation_this_reader_cannot_name_is_loud_rather_than_silent(self):
+        """The whole of the fail-closed property. None of these is a runner this module
+        knows, and every one of them is plainly about the tests — so the answer is
+        UNKNOWN, which fails, rather than NOTHING, which would be a job running the
+        real-tmux modules on an unpinned tmux with this file still green."""
+        for script in ("python tests/harness_driver.py --all",
+                       "bash tests/smoke.sh",
+                       "python -c 'import tests.test_workflows'",
+                       "nox -s tests/",
+                       "coverage run -m mystery_runner",
+                       "python tests/test_frame_launcher.py"):
+            with self.subTest(script=script):
+                self.assertEqual(classify(script), UNKNOWN)
+
+    def test_what_genuinely_runs_no_tests_is_still_quiet(self):
+        """Fail-closed must not mean fail-always: a reader that called everything UNKNOWN
+        would make this module a permanent red and be turned off within a week.
+        `collect` downloads artifacts and adds them up — a tmux build there is time spent
+        on a job with no pane in it."""
+        for script in ("python3 tools/sweep.py --verdict shards",
+                       "charter --version",
+                       "uv tool install --force git+https://x@main",
+                       "pipx run build",
+                       "printf 'deletion sweep: %s\\n' \"$HEADLINE\""):
+            with self.subTest(script=script):
+                self.assertEqual(classify(script), NOTHING)
+
+    def test_nothing_can_be_a_runner_without_being_test_shaped(self):
+        """`_RUNNERS` must be a subset of `_TEST_SHAPED`. Were a runner missing from the
+        wider pattern, deleting it from `_RUNNERS` later would make it NOTHING rather than
+        UNKNOWN — silence again, by the exact route this module closes."""
+        for script in ("unittest", "pytest", "py.test", "nosetests", "nose2", "tox",
+                       "make test", "make check", "run-tests", "runtests"):
+            with self.subTest(script=script):
+                self.assertTrue(_RUNNERS.search(script), "not a runner — fix the case")
+                self.assertTrue(_TEST_SHAPED.search(script),
+                                f"`{script}` is a runner that is not test-shaped")
 
     def test_it_finds_jobs_in_the_real_workflows_at_all(self):
         self.assertTrue(WORKFLOWS, "no workflows found — every check here is vacuous")
         self.assertTrue(suite_jobs(), "no job in this repository appears to run the "
                                       "suite, which means this reader is broken")
+
+
+class NoJobsTestInvocationGoesUnclassified(unittest.TestCase):
+    """**The half that makes the rest fail closed**, and it is not redundant with the
+    per-job assertion next door.
+
+    That one asks "does every job I RECOGNISE as running tests carry the pin?", and a job
+    written in a spelling this reader does not know is not in the set it quantifies over —
+    so it passes, and the pinned list passes too, and nothing anywhere says a job is
+    running the real-tmux modules on an unpinned tmux. Both halves green, no coverage.
+
+    So a run block that is about the tests and matches no runner this module knows is a
+    failure with the job's name in it, and the way out is to teach `_RUNNERS` the spelling
+    (if it runs tests) or to make the script say plainly that it does not.
+    """
+
+    def test_every_job_this_reader_meets_it_can_answer_for(self):
+        found = unclassified_jobs()
+        self.assertEqual(
+            found, [],
+            f"{found} run something test-shaped that this module cannot classify. That "
+            f"is refused rather than skipped: an unrecognised runner is exactly how a job "
+            f"comes to run the real-tmux modules on `ubuntu-latest`'s tmux 3.4 — where "
+            f"they flake about one run in eight (#1116) — with this file still green. If "
+            f"it runs charter's tests, add its spelling to `_RUNNERS` AND `_TEST_SHAPED` "
+            f"and give the job `uses: {TMUX_ACTION}`. If it does not, it should not be "
+            f"reading like it does.")
 
 
 class EveryJobThatRunsTheSuiteInstallsThatTmux(unittest.TestCase):
