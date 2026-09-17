@@ -71,7 +71,9 @@ impl Engine for AlacrittyEngine {
                     if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                         continue;
                     }
-                    text.push(cell.c);
+                    // A tab is a character the program put in the cell, and a blank is what
+                    // the terminal draws for it.
+                    text.push(if cell.c.is_control() { ' ' } else { cell.c });
                     text.extend(cell.zerowidth().unwrap_or_default());
                 }
                 text.truncate(text.trim_end().len());
@@ -90,7 +92,10 @@ impl Engine for AlacrittyEngine {
     }
 
     fn snapshot(&mut self) -> Vec<u8> {
-        self.apply_expired_sync();
+        // Everything this engine has read has to be in the snapshot, because the view it is
+        // for is sent the output that comes after. A synchronized update still open holds
+        // bytes back, so it is ended here: half a frame drawn beats a frame lost.
+        self.parser.stop_sync(&mut self.term);
         super::snapshot::snapshot(&self.term)
     }
 
@@ -410,6 +415,10 @@ mod snapshot_tests {
 
     /// Every cell of the scrollback and the screen, as a person or a later escape sequence
     /// would see a difference.
+    ///
+    /// This is the active screen only: `alacritty_terminal` does not hand out the screen
+    /// behind an open alternate screen, so the loss `snapshot` records there is one no number
+    /// of cases here can catch.
     fn cells(term: &AlacrittyEngine) -> Vec<Vec<String>> {
         let grid = term.term.grid();
         (grid.topmost_line().0..=grid.bottommost_line().0)
@@ -428,9 +437,11 @@ mod snapshot_tests {
                         if orphan {
                             flags &= !Flags::WIDE_CHAR_SPACER;
                         }
+                        // A cell can hold a tab, which draws nothing, and a snapshot puts the
+                        // blank there instead (see `snapshot`).
+                        let mut c = if cell.c.is_control() { ' ' } else { cell.c };
                         // A wide character pushed into the last column, where there is no
                         // room for its second half, is drawn as a blank (see `snapshot`).
-                        let mut c = cell.c;
                         if column + 1 == grid.columns() && flags.contains(Flags::WIDE_CHAR) {
                             flags &= !Flags::WIDE_CHAR;
                             c = ' ';
@@ -478,9 +489,10 @@ mod snapshot_tests {
             };
         let modes = *term.term.mode() & !(TermMode::URGENCY_HINTS | TermMode::VI);
         format!(
-            "cursor {} wrap-pending={} | saved {} | {modes:?}",
+            "cursor {} wrap-pending={} {:?} | saved {} | {modes:?}",
             pen(&grid.cursor),
             grid.cursor.input_needs_wrap,
+            term.term.cursor_style(),
             pen(&grid.saved_cursor),
         )
     }
@@ -607,6 +619,40 @@ mod snapshot_tests {
     }
 
     #[test]
+    fn a_snapshot_draws_a_tab_as_the_blanks_it_leaves_and_not_as_a_tab() {
+        // Written as a tab, the receiving terminal jumps to its own tab stop instead, and
+        // everything after it lands in the wrong column.
+        let mut original = fed(b"ab\tcd");
+
+        let snapshot = original.snapshot();
+
+        assert!(
+            !snapshot.contains(&b'\t'),
+            "the snapshot carries a tab: {:?}",
+            readable(&snapshot)
+        );
+        assert_rebuilt(b"ab\tcd");
+    }
+
+    #[test]
+    fn a_snapshot_taken_inside_a_synchronized_update_carries_what_it_holds_back() {
+        // The bytes of the update are already read and gone; a view opening now can only see
+        // them in its snapshot.
+        let mut original = fed(b"before\x1b[?2026h\x1b[H\x1b[2Jafter");
+
+        let mut copy = fed(&original.snapshot());
+
+        assert_eq!(copy.screen().lines[0], "after");
+        assert_eq!(original.screen().lines[0], "after");
+    }
+
+    #[test]
+    fn a_snapshot_puts_the_cursor_shape_back() {
+        assert_rebuilt(b"\x1b[3 q");
+        assert_rebuilt(b"\x1b[5 q");
+    }
+
+    #[test]
     fn a_snapshot_keeps_a_hyperlink() {
         assert_rebuilt(b"\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\ after");
     }
@@ -623,6 +669,7 @@ mod snapshot_tests {
             Just(b"\r".to_vec()),
             Just(b"\n".to_vec()),
             Just(b"\x08".to_vec()),
+            Just(b"\t".to_vec()),
             (1u8..8, 1u8..14).prop_map(|(row, col)| format!("\x1b[{row};{col}H").into_bytes()),
             prop::sample::select(vec![
                 "0",

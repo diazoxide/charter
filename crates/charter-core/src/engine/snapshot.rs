@@ -12,10 +12,18 @@
 //! where printing the cell again is what leaves the wrap pending. It costs a line joined
 //! differently if the pane is resized before the program draws again.
 //!
-//! Two things are not carried, because `alacritty_terminal` keeps them private: the scroll
-//! region, and the main screen while the alternate screen is open. A snapshot taken then opens
-//! the alternate screen on a blank main screen. Tab stops and character sets are not carried
-//! either. Harnesses redraw on resize, which repairs all of these.
+//! What a snapshot cannot carry, because `alacritty_terminal` keeps it private:
+//!
+//! - **The main screen, while the alternate screen is open**, and the cursor saved on entering
+//!   it. A snapshot taken then opens the alternate screen on a blank main screen, so a pane
+//!   that opened late and then sees the program leave the alternate screen finds the scrollback
+//!   underneath gone. It stays gone: leaving the alternate screen redraws nothing by itself.
+//! - **The scroll region**, and **the tab stops** a program moved. Output that arrives after
+//!   the snapshot and relies on either lands in the wrong row or column until the program sets
+//!   them again.
+//! - **The character set** a program selected, so line-drawing output that arrives after the
+//!   snapshot is drawn as the letters it is mapped from. `ncurses` re-issues the selection
+//!   around every run of such output, which repairs it in practice.
 
 use std::fmt::Write as _;
 
@@ -23,7 +31,7 @@ use alacritty_terminal::grid::{Cursor, Dimensions};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::{Term, TermMode};
-use alacritty_terminal::vte::ansi::{Color, NamedColor};
+use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor};
 
 pub(super) fn snapshot<T>(term: &Term<T>) -> Vec<u8> {
     let grid = term.grid();
@@ -120,6 +128,11 @@ pub(super) fn snapshot<T>(term: &Term<T>) -> Vec<u8> {
         out.text(if mode.contains(flag) { on } else { off });
     }
 
+    // The shape a program chose for the cursor, which a pane would otherwise draw as a block.
+    if let Some(shape) = cursor_shape(term) {
+        let _ = write!(out.bytes, "\x1b[{shape} q");
+    }
+
     let cursor = &grid.cursor;
     if cursor.input_needs_wrap {
         // Only printing into the last column leaves a wrap pending, so the cell there is
@@ -146,6 +159,20 @@ pub(super) fn snapshot<T>(term: &Term<T>) -> Vec<u8> {
     out.bytes.into_bytes()
 }
 
+/// The `DECSCUSR` number for the cursor's shape, or `None` where nothing draws a cursor.
+fn cursor_shape<T>(term: &Term<T>) -> Option<u8> {
+    let style = term.cursor_style();
+    let steady = |blinking: u8| blinking + u8::from(!style.blinking);
+    match style.shape {
+        CursorShape::Block => Some(steady(1)),
+        CursorShape::Underline => Some(steady(3)),
+        CursorShape::Beam => Some(steady(5)),
+        // Neither has a number of its own; a hidden cursor is `?25l`, which the modes carry,
+        // and a hollow block is what a terminal draws for an unfocused window.
+        CursorShape::HollowBlock | CursorShape::Hidden => None,
+    }
+}
+
 /// The bytes written so far, and the pen and hyperlink they leave the terminal with.
 #[derive(Default)]
 struct Out {
@@ -161,7 +188,11 @@ impl Out {
 
     fn cell(&mut self, cell: &Cell) {
         self.pen(cell);
-        self.bytes.push(cell.c);
+        // A cell can hold a tab, which the program put there and which draws nothing. Written
+        // out, it would move the cursor to the next tab stop instead, and everything after it
+        // would land in the wrong column.
+        self.bytes
+            .push(if cell.c.is_control() { ' ' } else { cell.c });
         self.bytes.extend(cell.zerowidth().unwrap_or_default());
     }
 
@@ -264,12 +295,9 @@ fn color(sgr: &mut String, color: Color, normal: &str, bright: &str, extended: &
     };
 }
 
-/// The palette index of one of the sixteen basic colours; `None` for the default colours.
+/// The palette index of one of the sixteen basic colours; `None` for the default colours. A
+/// dim colour is a flag on the cell, never a colour of its own, so there is none here.
 fn basic(name: NamedColor) -> Option<usize> {
     let index = name as usize;
-    if index < 16 {
-        return Some(index);
-    }
-    let dim = NamedColor::DimBlack as usize;
-    (dim..dim + 8).contains(&index).then(|| index - dim)
+    (index < 16).then_some(index)
 }

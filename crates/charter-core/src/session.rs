@@ -12,7 +12,7 @@
 use std::ffi::OsString;
 use std::io::{ErrorKind, Read, Write};
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, SyncSender, TrySendError};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -76,26 +76,31 @@ pub enum SessionError {
     Io(#[from] std::io::Error),
 }
 
-/// Where a view's bytes go. It is called on the session's reading thread, with the session's
-/// terminal locked, so it must hand the bytes on and return; anything it waits for holds up
-/// every view of that session.
-pub type Sink = Box<dyn FnMut(&[u8]) + Send>;
-
 /// A session's terminal, and the views watching it. One lock covers both, so a view opens on
 /// a screen with the output that follows it, and nothing in between is lost or sent twice.
 struct Terminal {
     engine: Box<dyn Engine>,
-    views: Vec<(u64, Sink)>,
+    views: Vec<(u64, Sender<Vec<u8>>)>,
     opened: u64,
 }
 
-/// A view of a session, open until this is dropped.
-pub struct Attachment {
+/// A view of a session: the bytes that draw its screen as it was when the view opened, then
+/// everything the program writes from that moment on. A pane showing the session writes them
+/// all to its terminal, in the order they arrive.
+///
+/// The queue is the session's only claim on whoever is reading it: the session's own thread
+/// never waits for a view, and a view that is read slowly holds its bytes, not the session.
+/// Dropping the view closes it.
+pub struct View {
+    /// The size the screen the view opened on was drawn for. A terminal cannot be told its own
+    /// size by what it is sent, so the pane is told here.
+    pub size: Size,
+    pub output: Receiver<Vec<u8>>,
     terminal: Weak<Mutex<Terminal>>,
     id: u64,
 }
 
-impl Drop for Attachment {
+impl Drop for View {
     fn drop(&mut self) {
         if let Some(terminal) = self.terminal.upgrade() {
             lock(&terminal).views.retain(|(id, _)| *id != self.id);
@@ -194,21 +199,45 @@ impl Session {
 
     /// The screen as the program has drawn it so far.
     pub fn screen(&self) -> Screen {
-        lock(&self.terminal).engine.screen()
+        let (screen, answers) = {
+            let mut terminal = lock(&self.terminal);
+            (terminal.engine.screen(), terminal.engine.take_replies())
+        };
+        self.answer(answers);
+        screen
     }
 
-    /// Opens a view of this session: `sink` is sent the bytes that draw the screen as it is
-    /// now, and then everything the program writes from that moment on, until the returned
-    /// [`Attachment`] is dropped. A pane showing the session writes them all to its terminal.
-    pub fn attach(&self, mut sink: Sink) -> Attachment {
-        let mut terminal = lock(&self.terminal);
-        sink(&terminal.engine.snapshot());
-        terminal.opened += 1;
-        let id = terminal.opened;
-        terminal.views.push((id, sink));
-        Attachment {
+    /// Opens a view of this session, for a pane that is about to show it.
+    pub fn attach(&self) -> View {
+        let (output, answers, size, id) = {
+            let mut terminal = lock(&self.terminal);
+            let snapshot = terminal.engine.snapshot();
+            let size = terminal.engine.screen().size;
+            let answers = terminal.engine.take_replies();
+            let (sender, output) = mpsc::channel();
+            // The screen goes in first, ahead of any output the reading thread sends once
+            // this lock is released.
+            let _ = sender.send(snapshot);
+            terminal.opened += 1;
+            let id = terminal.opened;
+            terminal.views.push((id, sender));
+            (output, answers, size, id)
+        };
+        let view = View {
+            size,
+            output,
             terminal: Arc::downgrade(&self.terminal),
             id,
+        };
+        self.answer(answers);
+        view
+    }
+
+    /// Hands the program what its terminal owes it: answers the engine gathered while
+    /// something other than the reading thread was looking at it.
+    fn answer(&self, answers: Vec<u8>) {
+        if !answers.is_empty() {
+            let _ = self.input.try_send(answers);
         }
     }
 
@@ -309,9 +338,11 @@ fn pump(
             let mut terminal = lock(terminal);
             let output = &buffer[..read];
             terminal.engine.advance(output);
-            for (_, sink) in &mut terminal.views {
-                sink(output);
-            }
+            // A view whose reader has gone is dropped here; until then its bytes wait in its
+            // own queue, and this thread never waits for it.
+            terminal
+                .views
+                .retain(|(_, view)| view.send(output.to_vec()).is_ok());
             terminal.engine.take_replies()
         };
         // A program that floods queries without reading the answers loses the answers it
@@ -593,38 +624,53 @@ mod tests {
         assert!(matches!(session.wait(PATIENCE), Ok(Some(Exit::Signal(_)))));
     }
 
-    /// What a view was sent: the screen it opened on, then the output that followed.
+    /// What a view has been sent: the screen it opened on, then the output that followed.
     #[derive(Default)]
-    struct Handover {
+    struct Seen {
         opened_on: Vec<u8>,
         followed: Vec<u8>,
         pieces: usize,
     }
 
-    fn attached(session: &Session) -> (Attachment, Arc<Mutex<Handover>>) {
-        let handover = Arc::new(Mutex::new(Handover::default()));
-        let collect = {
-            let handover = Arc::clone(&handover);
-            move |bytes: &[u8]| {
-                let mut handover = lock(&handover);
-                handover.pieces += 1;
-                if handover.pieces == 1 {
-                    handover.opened_on.extend_from_slice(bytes);
+    impl Seen {
+        /// Takes everything waiting for the view, without waiting for more.
+        fn take(&mut self, view: &View) -> &mut Self {
+            while let Ok(bytes) = view.output.try_recv() {
+                self.pieces += 1;
+                if self.pieces == 1 {
+                    self.opened_on = bytes;
                 } else {
-                    handover.followed.extend_from_slice(bytes);
+                    self.followed.extend_from_slice(&bytes);
                 }
             }
-        };
-        (session.attach(Box::new(collect)), handover)
+            self
+        }
+
+        /// The screen a terminal ends up with after being sent all of it.
+        fn replayed(&self, size: Size) -> Screen {
+            let mut engine = AlacrittyEngine::new(size, 1000);
+            engine.advance(&self.opened_on);
+            engine.advance(&self.followed);
+            engine.screen()
+        }
     }
 
-    /// The screen a terminal ends up with after being sent everything the view was sent.
-    fn replayed(handover: &Mutex<Handover>, size: Size) -> Screen {
-        let handover = lock(handover);
-        let mut engine = AlacrittyEngine::new(size, 1000);
-        engine.advance(&handover.opened_on);
-        engine.advance(&handover.followed);
-        engine.screen()
+    /// Waits until the view's screen shows `text`, failing with what it last showed.
+    fn view_until(view: &View, text: &str) -> Screen {
+        let mut seen = Seen::default();
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let screen = seen.take(view).replayed(view.size);
+            if screen.lines.iter().any(|line| line.contains(text)) {
+                return screen;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the view never showed {text:?}: {:#?}",
+                screen.lines
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]
@@ -632,31 +678,37 @@ mod tests {
         let session = sh("printf 'printed before the view opened'; sleep 600");
         screen_until(&session, shows("printed before the view opened"));
 
-        let (_attachment, seen) = attached(&session);
+        let view = session.attach();
 
         assert_eq!(
-            replayed(&seen, SIZE).lines,
+            Seen::default().take(&view).replayed(view.size).lines,
             session.screen().lines,
             "the view's screen is the session's screen"
         );
     }
 
     #[test]
+    fn a_view_is_told_the_size_its_screen_was_drawn_for() {
+        let session = sh("sleep 600");
+        let bigger = Size {
+            columns: 120,
+            rows: 40,
+        };
+        session.resize(bigger).unwrap();
+
+        let view = session.attach();
+
+        assert_eq!(view.size, bigger);
+    }
+
+    #[test]
     fn what_the_program_writes_after_a_view_opens_reaches_it() {
         let session = sh("read _; printf 'printed after the view opened'; sleep 600");
-        let (_attachment, seen) = attached(&session);
+        let view = session.attach();
 
         session.write(b"\r").unwrap();
 
-        let deadline = Instant::now() + PATIENCE;
-        while !replayed(&seen, SIZE)
-            .lines
-            .iter()
-            .any(|line| line.contains("printed after the view opened"))
-        {
-            assert!(Instant::now() < deadline, "the view never saw it");
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        view_until(&view, "printed after the view opened");
     }
 
     /// How many lines of the flood below `bytes` mention, in the order they appear.
@@ -681,7 +733,7 @@ mod tests {
         ));
         screen_until(&session, shows("of the flood"));
 
-        let views: Vec<_> = (0..10).map(|_| attached(&session)).collect();
+        let views: Vec<View> = (0..10).map(|_| session.attach()).collect();
 
         assert_eq!(
             session.wait(Duration::ZERO).unwrap(),
@@ -689,13 +741,28 @@ mod tests {
             "the program was already done, so no view opened mid-flood"
         );
         assert_eq!(session.wait(PATIENCE).unwrap(), Some(Exit::Code(0)));
-        for (n, (_attachment, handover)) in views.iter().enumerate() {
+        for (n, view) in views.iter().enumerate() {
             let last = FLOOD - 1;
+            let mut seen = Seen::default();
             let deadline = Instant::now() + PATIENCE;
-            let followed = loop {
-                let followed = flood_lines(&lock(handover).followed);
+            loop {
+                let followed = flood_lines(&seen.take(view).followed);
                 if followed.last() == Some(&last) {
-                    break followed;
+                    let first = *followed.first().expect("a view is sent output");
+                    let on_screen = flood_lines(&seen.opened_on);
+                    let highest = *on_screen.iter().max().expect("the screen shows the flood");
+                    // One line further on is the next line; two is a line the screen holds
+                    // only half of.
+                    assert!(
+                        first <= highest + 2,
+                        "view {n} opened on line {highest} and was sent {first} next"
+                    );
+                    assert!(
+                        followed.iter().copied().eq(first..=last),
+                        "view {n} was not sent every line from {first} to {last} in order, \
+                         once each"
+                    );
+                    break;
                 }
                 assert!(
                     Instant::now() < deadline,
@@ -703,62 +770,39 @@ mod tests {
                     followed.last()
                 );
                 std::thread::sleep(Duration::from_millis(10));
-            };
-            let opened_on = flood_lines(&lock(handover).opened_on);
-            let first = *followed.first().expect("a view is sent output");
-            let highest_on_screen = *opened_on.iter().max().expect("the screen shows the flood");
-            // One line further on is the next line; two is a line the screen holds half of.
-            assert!(
-                first <= highest_on_screen + 2,
-                "view {n} opened on line {highest_on_screen} and was sent {first} next"
-            );
-            assert!(
-                followed.iter().copied().eq(first..=last),
-                "view {n} was not sent every line from {first} to {last} in order, once each"
-            );
+            }
         }
     }
 
     #[test]
     fn two_views_of_one_session_both_get_its_output() {
         let session = sh("read _; printf 'for both views'; sleep 600");
-        let (_first, first_seen) = attached(&session);
-        let (_second, second_seen) = attached(&session);
+        let first = session.attach();
+        let second = session.attach();
 
         session.write(b"\r").unwrap();
 
-        for seen in [&first_seen, &second_seen] {
-            let deadline = Instant::now() + PATIENCE;
-            while !replayed(seen, SIZE)
-                .lines
-                .iter()
-                .any(|line| line.contains("for both views"))
-            {
-                assert!(Instant::now() < deadline, "a view never saw it");
-                std::thread::sleep(Duration::from_millis(10));
-            }
-        }
+        view_until(&first, "for both views");
+        view_until(&second, "for both views");
     }
 
     #[test]
-    fn a_closed_view_is_sent_nothing_more() {
-        let session = sh("read _; printf 'after the view closed'; sleep 600");
-        let (attachment, handover) = attached(&session);
+    fn a_session_keeps_running_for_the_views_it_has_left_when_one_closes() {
+        let session = sh("read _; printf 'after the other view closed'; sleep 600");
+        let closing = session.attach();
+        let staying = session.attach();
 
-        drop(attachment);
+        drop(closing);
         session.write(b"\r").unwrap();
-        screen_until(&session, shows("after the view closed"));
 
-        assert!(
-            lock(&handover).followed.is_empty(),
-            "the closed view was sent output after it closed"
-        );
+        view_until(&staying, "after the other view closed");
+        screen_until(&session, shows("after the other view closed"));
     }
 
     #[test]
     fn a_view_keeps_working_after_the_session_is_resized() {
         let session = sh("read _; stty size; sleep 600");
-        let (_attachment, seen) = attached(&session);
+        let view = session.attach();
         let bigger = Size {
             columns: 100,
             rows: 30,
@@ -767,8 +811,11 @@ mod tests {
         session.resize(bigger).unwrap();
         session.write(b"\r").unwrap();
 
+        let mut seen = Seen::default();
         let deadline = Instant::now() + PATIENCE;
-        while !replayed(&seen, bigger)
+        while !seen
+            .take(&view)
+            .replayed(bigger)
             .lines
             .iter()
             .any(|line| line.contains("30 100"))
@@ -776,6 +823,31 @@ mod tests {
             assert!(Instant::now() < deadline, "the view never saw the new size");
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn a_question_asked_inside_a_synchronized_update_is_answered_once_the_screen_is_read() {
+        // The question is held back inside the update, so the answer is only owed once
+        // something ends it — reading the screen, or a pane opening. Whatever ends it must
+        // hand the answer over, or the program waits for it forever.
+        let session = sh(
+            "stty raw -echo; printf '\\033[?2026h\\033[6n'; dd bs=1 count=6 2>/dev/null >/dev/null; stty sane; echo answered",
+        );
+
+        screen_until(&session, shows("answered"));
+    }
+
+    #[test]
+    fn a_question_asked_inside_a_synchronized_update_is_answered_when_a_pane_opens() {
+        let session = sh(
+            "stty raw -echo; printf '\\033[?2026h\\033[6n'; dd bs=1 count=6 2>/dev/null >/dev/null; stty sane; echo answered",
+        );
+        // Long enough for the question to have been written and held back.
+        std::thread::sleep(Duration::from_millis(100));
+
+        let view = session.attach();
+
+        view_until(&view, "answered");
     }
 
     fn alive(pid: u32) -> bool {
