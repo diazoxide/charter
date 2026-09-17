@@ -2393,12 +2393,17 @@ def check_ended_tab() -> Result:
 
     **It takes its own reading of tmux, and does not borrow `check_frame`'s.** That costs a
     second `tmux -V` per `doctor` run — a local exec beside this command's `git` and forge
-    children — and it is the honest shape: a row reports what it established, and one that
-    rendered a verdict off a value some other row happened to fetch would be asserting a
-    reading it never made, which is the one thing this row exists not to do. The two can in
-    principle disagree (a transient failure on one call and not the other); each would then
-    be saying exactly what it found, which is why neither row claims anything about the
-    other's answer.
+    children — and it is the honest shape: a row reports what it established itself. One
+    that rendered its verdict from a reading some other row happened to take would be
+    vouching for an answer it did not ask for, which is the one thing this row exists not
+    to do. The two can in principle disagree (a transient failure on one call and not the
+    other); each would then be saying exactly what it found, which is why one row says
+    nothing about the other's answer.
+
+    Wiring one reading down from `_checks` was written and thrown away: with both rows
+    reading for themselves the output is identical, so deleting the wiring would change
+    nothing observable — a sweep survivor by construction, and `CONTRIBUTING.md` is plain
+    that such a line should not exist.
     """
     from .frame import tmuxctl
 
