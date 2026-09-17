@@ -21,6 +21,8 @@ allow = [
   "Unicode-3.0",
   "CC0-1.0",
   "0BSD",
+  # Inflector, which tauri-specta uses to name the generated TypeScript.
+  "BSD-2-Clause",
   # File-level copyleft, used by Servo crates under Tauri (cssparser, selectors).
   "MPL-2.0",
 ]
