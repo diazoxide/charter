@@ -8,7 +8,8 @@
 //   node tools/bench.mjs --only window --arms webgl
 //
 // Windows open and close on screen while it runs, and each is brought to the front: WebKit
-// draws nothing in a covered window, so leave the machine alone until it is done.
+// draws nothing in a covered window, and nothing at all while the display sleeps (which
+// `caffeinate` holds off). Leave the machine alone until it is done.
 // The numbers land in target/bench/<timestamp>/results.json, and a table is printed.
 
 import { spawn, spawnSync } from "node:child_process";
@@ -75,6 +76,15 @@ if (!options["skip-build"]) {
     { cwd: APP },
   );
 }
+
+// A display that goes to sleep stops WebKit drawing altogether, and every measurement that
+// waits for a paint waits forever. `caffeinate` keeps it awake for as long as this runs, and
+// no longer: it is told to watch this process.
+const awake =
+  platform() === "darwin"
+    ? spawn("caffeinate", ["-d", "-i", "-w", `${process.pid}`], { stdio: "ignore", detached: true })
+    : undefined;
+awake?.unref();
 
 const results = {
   machine: {
