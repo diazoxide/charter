@@ -1,116 +1,126 @@
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafb);
-}
 :root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 400;
+  --ink: #d8d8d8;
+  --paper: #181818;
+  --edge: #303030;
+  --lit: #6a9fb5;
 
-  color: #0f0f0f;
-  background-color: #f6f6f6;
+  font-family: ui-sans-serif, Inter, Avenir, Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--ink);
+  background: var(--paper);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
 }
 
-.container {
+* {
+  box-sizing: border-box;
+}
+
+body {
   margin: 0;
-  padding-top: 10vh;
+}
+
+/* The window is the bar and the panes, and the panes take whatever is left. */
+.window {
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  text-align: center;
+  height: 100vh;
+  overflow: hidden;
 }
 
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.row {
+.bar {
   display: flex;
-  justify-content: center;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--edge);
 }
 
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
+.tabs,
+.doing,
+.tab {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
 }
 
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
-  text-align: center;
-}
-
-input,
-button {
-  border-radius: 8px;
-  border: 1px solid transparent;
-  padding: 0.6em 1.2em;
-  font-size: 1em;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  transition: border-color 0.25s;
-  box-shadow: 0 2px 2px rgba(0, 0, 0, 0.2);
-}
-
-button {
+.bar button {
+  color: var(--ink);
+  background: #222;
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  padding: 0.2rem 0.5rem;
+  font: inherit;
   cursor: pointer;
 }
 
-button:hover {
-  border-color: #396cd8;
-}
-button:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
+.bar button:hover:not(:disabled) {
+  border-color: var(--lit);
 }
 
-input,
-button {
-  outline: none;
+.bar button:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
-#greet-input {
-  margin-right: 5px;
+.bar [role="tab"][aria-selected="true"] {
+  border-color: var(--lit);
+  background: #2b3338;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
+.plane {
+  margin-left: auto;
+  opacity: 0.7;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 
-  a:hover {
-    color: #24c8db;
-  }
+.trouble {
+  margin: 0;
+  padding: 0.35rem 0.6rem;
+  color: #f2a0a0;
+  background: #2a1a1a;
+  border-bottom: 1px solid var(--edge);
+}
 
-  input,
-  button {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-  }
-  button:active {
-    background-color: #0f0f0f69;
-  }
+.panes {
+  flex: 1;
+  min-height: 0;
+}
+
+.empty {
+  padding: 1rem;
+  opacity: 0.6;
+}
+
+.pane {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+  border: 1px solid transparent;
+}
+
+.pane.focused {
+  border-color: var(--lit);
+}
+
+/* The handle between two panes: thin, and easier to hit than it looks. */
+[data-separator] {
+  background: var(--edge);
+  flex: 0 0 1px;
+}
+
+[data-separator]:hover,
+[data-separator][data-dragging] {
+  background: var(--lit);
+}
+
+.xterm {
+  height: 100%;
+  padding: 2px 4px;
 }

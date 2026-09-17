@@ -27,6 +27,12 @@ tauri-plugin-opener = "2"
 charter-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+specta = { version = "=2.0.0-rc.25", features = ["derive", "function"] }
+specta-typescript = "0.0.12"
+tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
