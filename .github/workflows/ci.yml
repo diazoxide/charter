@@ -93,7 +93,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.1.0
       # The planes are what the Python charter writes, never hand-edited. This regenerates
       # them from the charter commit pinned in generate.py and fails if anything moved.
       - run: tests/fixtures/planes/generate.py --check
