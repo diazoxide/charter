@@ -6,9 +6,12 @@ at commit `50d31dc` (0.62.1).
 
 It exists because charter is being rebuilt as a desktop app on a Rust core (ADR 0025, spec
 `docs/superpowers/specs/2026-09-17-charter-app.md`, decision 13). **The plane format does not
-change.** Through milestones M1–M3 both implementations work on the *same plane at the same
-time*: the app reads plane files directly while every write and every hook still goes to Python
-charter. So a file one of them writes is a file the other one may be reading a moment later.
+change.** The app reads *and writes* the plane in Rust from M1, and answers its own hooks: no
+shipped path crosses languages, and Python charter is the differential oracle in CI rather than a
+dependency of the app (ADR 0025 as amended, spec decisions 14 and 15). Until Python charter is
+retired at M4 both implementations still work on the *same plane at the same time* — the CLI, the
+hooks a plane is already wired with and a running tmux frame are Python — so a file one of them
+writes is a file the other one may be reading a moment later.
 
 This document is the contract between them. It is descriptive, not aspirational: where the code
 and the prose docs disagree, the code is recorded here and the disagreement is named.
