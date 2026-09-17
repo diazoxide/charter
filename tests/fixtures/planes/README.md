@@ -11,6 +11,10 @@ spec decision 13).
 | `minimal/` | What `charter init` leaves behind, and nothing else |
 | `daily/` | A plane in use: a LIVE workspace with a clone, memory, todos and a snapshot; a second workspace left local; a second persona with its own and shared memory; a vault registry; and the session state a harness run leaves in `.charter/` |
 
+`--check` compares the working tree, not the index, so it only means anything on a clean
+checkout: a file left behind by an earlier run makes it pass locally and fail in CI. Run
+`git status --ignored tests/fixtures/planes` if a local pass looks too easy.
+
 **Nothing here is hand-written.** Every byte is what charter wrote, so the fixtures cannot
 drift from the implementation they describe by someone editing them to match a hope. Edit
 `generate.py` and regenerate instead.
@@ -39,10 +43,14 @@ on every machine. The generator pins:
 | User | `fixture` (`$USER`), `Fixture User` (git) | `workspace.json.updated_by` comes from one or the other depending on the writer |
 | Session id | `fixture-session-1` | `$CHARTER_SESSION_ID`; otherwise a run inherits the operator's real session |
 | `PATH` | `/usr/bin:/bin` | With `claude` on `PATH`, charter installs its plugin and writes `enabledPlugins`; without it, it writes its own `hooks.PreToolUse` block. Both shapes are legal — pinning keeps the fixture from depending on whose machine ran it |
-| umask | the caller's, `022` expected | files inside `workspaces/` keep the umask's mode; files under `.charter/` are forced to 0600 by charter |
 
 ## What the fixtures deliberately leave out
 
+- **File modes.** charter writes `.charter/` as `0700` and the files in it as `0600`, and
+  git carries only the executable bit — so on any fresh clone or CI checkout they come back
+  `0755`/`0644`, and `--check` does not compare modes. A test about modes has to create the
+  files and let charter write them; reading a mode off a checked-out fixture measures git,
+  not charter.
 - **Empty directories.** A fresh plane has `inventory/` and `workspaces/` with nothing in
   them, and git cannot carry an empty directory. They are part of the format, so each plane
   records its own in `<plane>.empty-dirs` beside it, and `--check` compares that listing. A
@@ -60,6 +68,12 @@ on every machine. The generator pins:
   (`changes/log/<host>.jsonl`), a real profile launch, and the 1Password vault provider.
   `docs/plane-format.md` documents each of those files; a test that needs one writes it
   through the same writer charter uses.
+
+## A rule for editing `generate.py`
+
+Keep fixture titles ASCII. Memory and todo filenames are slugs of the title, and a title
+with an accented character is stored NFD on macOS and NFC on Linux — the fixture would then
+drift between the machine that generated it and CI, with nothing in the diff to say why.
 
 ## Secrets
 

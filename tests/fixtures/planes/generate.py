@@ -69,7 +69,14 @@ class Plane:
 
     def _env(self) -> dict[str, str]:
         self.clock += STEP
+        # A FRESH dict, never `{**os.environ, ...}`. charter resolves its plane from
+        # `$CHARTER_ROOT` before anything else, so an inherited one — every shell inside a
+        # real plane has it — would point charter at the operator's plane and every write
+        # would land there. Replacing the environment is what stops that; the ancestor walk
+        # in `_refuse_enclosing_plane` only covers the cwd route. `CHARTER_ROOT` is then set
+        # positively, so the plane is pinned rather than merely un-inherited.
         return {
+            "CHARTER_ROOT": str(self.root),
             # A curated PATH, not the caller's: charter writes a DIFFERENT harness layer
             # when `claude` is on PATH (it installs its plugin and writes `enabledPlugins`)
             # than when it is not (it writes its own `hooks.PreToolUse` block). Both shapes
@@ -80,6 +87,7 @@ class Plane:
             "PYTHONPATH": str(self.pins),
             "PYTHONDONTWRITEBYTECODE": "1",
             "TZ": "UTC",
+            "LC_ALL": "C.UTF-8",
             "USER": USER,
             "LOGNAME": USER,
             "FIXTURE_NOW": self.clock.isoformat(),
@@ -111,7 +119,16 @@ class Plane:
         return done.stdout
 
     def git(self, *args: str, cwd: Path | None = None) -> None:
-        subprocess.run(["git", *args], cwd=cwd or self.root, check=True, capture_output=True)
+        # The system and global gitconfig are shut out: `core.autocrlf`, `init.templateDir`,
+        # `core.hooksPath` or `commit.gpgsign` on somebody's machine would otherwise change
+        # what is generated, or stop it generating at all.
+        env = self._env() | {
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
+        }
+        subprocess.run(
+            ["git", *args], cwd=cwd or self.root, check=True, capture_output=True, env=env
+        )
 
     def init_git(self, path: Path) -> None:
         path.mkdir(parents=True, exist_ok=True)
@@ -242,8 +259,19 @@ def build_daily(plane: Plane) -> None:
     plane.charter("ws", "todo", "-w", "alpha", "Review the rollout plan")
     plane.charter("ws", "todo", "-w", "alpha", "done", "write-the-migration")
 
-    # A clone inside the workspace, which gets the generated harness layer.
+    # A second repo that carries a `charter.toml` of its own — charter's own repo is one,
+    # and cloning it into a workspace is ordinary. It is the case charter bug #200 was
+    # about: the nearest manifest is NOT the plane, and a reader that stops at the nearest
+    # one lands in the clone, with the wrong personas and the wrong memory.
+    nested = plane.root.parent / "upstream" / "tool"
+    plane.init_git(nested)
+    (nested / "charter.toml").write_text('schema = 1\n\n[[forge]]\nkind = "github"\n')
+    plane.git("add", "-A", cwd=nested)
+    plane.git("commit", "-qm", "first", cwd=nested)
+
+    # Clones inside the workspace, which get the generated harness layer.
     plane.git("clone", "-q", str(upstream), str(plane.root / "workspaces/alpha/svc"))
+    plane.git("clone", "-q", str(nested), str(plane.root / "workspaces/alpha/tool"))
     plane.charter("workspace", "reinit", "alpha")
     plane.charter("workspace", "snapshot", "alpha")
 
@@ -268,6 +296,22 @@ def build_daily(plane: Plane) -> None:
     # Guard rules, in each harness's own file.
     plane.charter("guard", "ask", "terraform apply *")
 
+    # A dispatch, which is what puts the hostname into a filename: the tally is
+    # `personas/_dispatch/<YYYY-MM>.<host>.jsonl`. Without one, nothing in the fixtures
+    # would exercise the hostname pin, and a break in it would go unseen.
+    plane.charter(
+        "hook", "posttooluse-dispatch",
+        stdin=json.dumps(
+            {
+                "tool_name": "Task",
+                "tool_input": {"subagent_type": "devops", "prompt": "check the rollout"},
+                "tool_response": "agentId: a1b2c3d4",
+                "session_id": SESSION,
+                "cwd": str(plane.root),
+            }
+        ),
+    )
+
     # What a harness session leaves behind: the per-session state a hook writes.
     plane.charter("workspace", "use", "alpha")
     plane.charter(
@@ -289,7 +333,8 @@ PLANES = {"minimal": build_minimal, "daily": build_daily}
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--check", action="store_true", help="regenerate elsewhere and diff")
-    ap.add_argument("planes", nargs="*", default=list(PLANES), help="which planes")
+    ap.add_argument("planes", nargs="*", choices=list(PLANES) + [[]], default=list(PLANES),
+                    help="which planes")
     args = ap.parse_args()
     names = args.planes or list(PLANES)
 
@@ -342,7 +387,7 @@ def _same_tree(committed: Path, fresh: Path) -> bool:
             same = False
 
     recorded = committed.parent / f"{committed.name}.empty-dirs"
-    was = recorded.read_text().split() if recorded.exists() else []
+    was = recorded.read_text().splitlines() if recorded.exists() else []
     now = _empty_dirs(fresh)
     if was != now:
         print(f"    empty directories differ: recorded {was}, fresh {now}")
