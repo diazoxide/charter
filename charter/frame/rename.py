@@ -96,6 +96,14 @@ def normalized(text: str) -> tuple[str | None, str]:
     ``("", "")`` is *no title*, which is how a rename REMOVES one: `state.record_title`
     deletes the file for it, and every surface goes back to drawing the id.
 
+    **There is no early return for the empty title, and its absence is measured rather than
+    assumed.** An `if not shown: return "", ""` in front of the two bounds is the obvious way
+    to say that, and it is a line nothing could tell from its absence: ``"".isprintable()`` is
+    ``True`` and ``len("") > 60`` is ``False``, so the empty string walks past both and
+    reaches the same ``return shown, ""`` — which IS ``("", "")``. `tools/sweep.py` reported
+    it as a survivor and it was right; the sentence above is where that answer is stated, and
+    the two bounds below are what produce it.
+
     Two answers rather than one, because the two callers want different halves: the gate
     (`state.record_title`) acts on the title and never says anything, and the surface
     (`rename.Rename`, `commands_frame.cmd_rename`) has an operator in front of it who has to
@@ -107,8 +115,6 @@ def normalized(text: str) -> tuple[str | None, str]:
     its whitespace was collapsed would be refused for length it does not have.
     """
     shown = " ".join(str(text).split())
-    if not shown:
-        return "", ""
     if not shown.isprintable():
         return None, NOT_PRINTABLE
     if len(shown) > state.TITLE_MAX:
