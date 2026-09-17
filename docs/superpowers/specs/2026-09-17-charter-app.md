@@ -103,7 +103,7 @@ When two choices conflict, the higher priority wins.
     - **Rust:** the stable toolchain, `rustfmt`, `clippy -D warnings`, `cargo-deny` (licences
       and advisories).
     - **TypeScript:** `strict`, ESLint, Prettier.
-    - **Dependencies:** Renovate.
+    - **Dependencies:** Dependabot (built into GitHub, nothing to install).
     - **Tests:** Vitest for UI units, `cargo test` for the core, and scenario tests through
       Tauri's WebdriverIO service.
     - **Releases:** the Tauri updater with signed artifacts.
