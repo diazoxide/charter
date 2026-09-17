@@ -1,0 +1,35 @@
+# https://embarkstudios.github.io/cargo-deny/
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+yanked = "deny"
+# Transitive crates Tauri pulls in (unic-*, proc-macro-error) are reported upstream, not here.
+# Anything charter depends on directly still fails the check.
+unmaintained = "workspace"
+
+[licenses]
+version = 2
+confidence-threshold = 0.9
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-3-Clause",
+  "Zlib",
+  "Unicode-3.0",
+  "CC0-1.0",
+  "0BSD",
+  # File-level copyleft, used by Servo crates under Tauri (cssparser, selectors).
+  "MPL-2.0",
+]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

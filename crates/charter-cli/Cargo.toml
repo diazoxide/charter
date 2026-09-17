@@ -1,0 +1,20 @@
+[package]
+name = "charter-cli"
+description = "The charter command line, called by hooks, scripts and agents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "charter"
+path = "src/main.rs"
+
+[dependencies]
+charter-core.workspace = true
+clap.workspace = true
+
+[lints]
+workspace = true

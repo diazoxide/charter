@@ -1,0 +1,47 @@
+# charter-app
+
+charter as one cross-platform desktop app: run tons of harness sessions (Claude Code, Codex) in
+parallel, across workspaces and repos, and always know which one needs you.
+
+This is the rebuild decided in [ADR 0025](https://github.com/diazoxide/charter/blob/main/docs/adr/0025-charter-is-rebuilt-as-a-desktop-app-on-a-rust-core.md).
+The spec, with its milestones and acceptance limits, is
+[`docs/superpowers/specs/2026-09-17-charter-app.md`](https://github.com/diazoxide/charter/blob/main/docs/superpowers/specs/2026-09-17-charter-app.md)
+in the charter repo. Until M4 the Python charter stays the reference implementation, and both
+work on the same plane.
+
+**Status:** M0, walking skeleton. Not usable yet.
+
+## Layout
+
+| Path | What |
+| --- | --- |
+| `crates/charter-core` | The core: the plane, and later workspaces, personas and sessions. No UI, no Tauri |
+| `crates/charter-cli` | The `charter` binary, called by hooks, scripts and agents |
+| `app/` | The desktop app: React + TypeScript UI |
+| `app/src-tauri` | The app's Rust side: Tauri commands that call the core |
+
+## Develop
+
+Requires stable Rust (`rust-toolchain.toml` picks it) and Node 24 (`.nvmrc`). On Linux, install
+[Tauri's system dependencies](https://v2.tauri.app/start/prerequisites/#linux) first.
+
+```bash
+cd app && npm install
+npm run tauri dev          # the app, with hot reload
+```
+
+Everything CI checks, runnable locally:
+
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo deny check           # licences and advisories (brew install cargo-deny)
+
+cd app
+npm run typecheck && npm run lint && npm run format:check && npm test
+```
+
+## Licence
+
+MIT
