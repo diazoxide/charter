@@ -675,8 +675,14 @@ def _top(fid: str) -> str:
                                 (head_at, "" if line is None else line.head)),
                   gate=(_door_columns(w, (w - tui.width(button), button))
                         if right.endswith(button) else ()))
-    if not right:
-        return tui.truncate(identity, w)
+    # **No early return for the starved rung, and the sweep is why it went.** It used to
+    # read `if not right: return tui.truncate(identity, w)`, and that is the same string
+    # the general path already produces: with *right* empty the row below is
+    # `tui.Cell(identity, w)` beside a zero-width cell, which IS a truncate. Measured
+    # directly against `tui.truncate` at three widths — one with room to spare, one that
+    # cuts mid-word to a `…`, and one three columns wide — byte-identical every time. A
+    # line no input could tell from its absence is the survivor this repository deletes,
+    # and this one composes a string on a path that kills, detaches and claims nothing.
     return tui.Row(tui.Cell(identity, w - tui.width(right)),
                    tui.Cell(right, tui.width(right)), gap="").render(w)[0]
 

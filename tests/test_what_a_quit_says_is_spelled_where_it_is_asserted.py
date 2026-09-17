@@ -74,7 +74,8 @@ from unittest import mock
 from charter import commands_frame, config, contain, util
 from charter.frame import tmuxctl
 from charter import workspace as ws_mod
-from charter.frame import builtin_actions, component, leave, palette, reopen, state
+from charter.frame import (builtin_actions, component, gate, leave, palette, reopen,
+                           state)
 
 from tests._isolation import PersonaIso, wired_as_today
 
@@ -271,6 +272,48 @@ class TheReopenCommandsOwnWordsAreTheseWords(PersonaIso):
         self.assertIn(f"— `tmux -L {tmuxctl.LEGACY_SOCKET} attach` reaches them",
                       said.call_args[0][0])
         self.assertNotIn(tmuxctl.plane_socket(), said.call_args[0][0])
+
+
+class TheExitGatesOwnWordsAreTheseWords(PersonaIso):
+    """What `F10` and its two refusals actually SAY — #1115.
+
+    **Here rather than in `tests/test_one_gate_closes_charter.py`, and for this file's own
+    reason.** Every case over there asserts against the constant
+    (`said == builtin_actions.NO_PRESSER_TO_DETACH`), which is right — it is asking which
+    refusal fired, not how it is worded — and which is exactly why the deletion sweep
+    reported all three literals as unpinned: re-spell any of them and the whole suite stays
+    green. This file is where a reword becomes visible, as it already is for
+    `builtin_actions.NO_TRANSCRIPT` two classes down.
+
+    The row TITLES are not here: `TheMenu.test_two_rows_detach_first` spells both out, and
+    `gate.NOT_HERE` is held by the clause `test_the_menu_is_not_drawn_inside_the_operators
+    _tmux` quotes out of it. Only what nothing spelled is spelled.
+    """
+
+    def test_a_detach_charter_cannot_attribute_names_the_gesture_that_works(self):
+        """CONTEXT.md's prose rule: say the rule worked and name the fix in the same
+        breath. The operator has to be told BOTH that nothing was detached — because the
+        alternative reading is that their other terminal went too — and which press does
+        what they wanted."""
+        self.assertEqual(
+            builtin_actions.NO_PRESSER_TO_DETACH,
+            "charter cannot tell which terminal asked, so it detached nothing — press F10 "
+            "in the terminal you want to close, or close it")
+
+    def test_a_terminal_this_chat_does_not_hold_is_told_it_is_not_this_chats(self):
+        """The other refusal, and it is a different fact: the one above is *charter does
+        not know*, and this is *charter looked and the answer was no*. Both end in
+        `detached nothing`, which is the half an operator acts on."""
+        self.assertEqual(
+            builtin_actions.NOT_ATTACHED_HERE,
+            "that terminal is not attached to this chat's session on this plane, so "
+            "charter detached nothing")
+
+    def test_the_gates_header_names_the_noun_before_the_rows(self):
+        """`palette.HEADING` is the bare word `charter`; this surface needs more, because
+        an operator who pressed a function key by accident has to read what it is about
+        before they read two rows that both start `Close charter`."""
+        self.assertEqual(gate.LABEL, "charter · close")
 
 
 class TheTranscriptRowsOwnWordsAreTheseWords(PersonaIso):

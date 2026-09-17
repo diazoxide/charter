@@ -547,6 +547,14 @@ class TheMenu(PersonaIso, unittest.TestCase):
         self.assertEqual(row.note, builtin_actions.NO_PRESSER_TO_DETACH)
         self.assertFalse(gate.chose(row, self.FID, client=""))
 
+    def test_a_row_that_can_run_carries_no_reason(self):
+        """The note column is *why this cannot run*, so a row that CAN run has to leave it
+        empty — reported by the sweep, which collapsed the conditional and found every
+        working *Close charter* row still drawing `charter cannot tell which terminal
+        asked` beside itself. Paired with the refused case below, which is what stops this
+        passing against a catalogue that never carries a reason at all."""
+        self.assertEqual(gate.catalogue(self.FID, client=self.A)[0].note, "")
+
     def test_the_refused_row_is_listed_and_not_dropped(self):
         """#512: an option you cannot see is one you cannot ask about — and dropping it
         would also put *stop all chats* under the cursor by being the only row left."""
@@ -563,6 +571,41 @@ class TheMenu(PersonaIso, unittest.TestCase):
         surface.query = "stop all"
         surface._refilter()
         self.assertEqual(surface.selected.id, gate.STOP_ID)
+
+    def test_a_row_that_started_nothing_says_why_it_could_not(self):
+        """`act`'s last two lines, and the half `chose` deliberately does not do: a refused
+        row starts nothing, and the operator is told which of the two refusals they hit —
+        on the frame's own attention row, because the pane this surface is drawn in is
+        about to be killed."""
+        said = []
+        with mock.patch.object(commands_frame, "_say_on_screen",
+                               side_effect=lambda fid, msg, **kw: said.append((fid, msg))):
+            gate.act(gate.catalogue(self.FID, client="")[0], self.FID, client="")
+        from charter.frame import builtin_actions
+        self.assertEqual(said, [(self.FID, builtin_actions.NO_PRESSER_TO_DETACH)])
+
+    def test_a_row_with_nothing_to_say_says_nothing(self):
+        """**The pair, and it is what makes the guard above a guard.** A `drop-if` takes the
+        test AND its body, so a case that only asserted the note is said would stay green
+        with both lines gone. The notice is a WRITE — an empty one would blank whatever the
+        attention row was already carrying — and the warning's own *nothing left to stop*
+        row is a real row that reaches here carrying no note at all."""
+        from charter.frame import leave
+        nothing = leave.confirm_rows(leave.Plan(chats=(), focus="beta"), verb=leave.QUIT)[0]
+        self.assertEqual(nothing.note, "", "the fixture row is no longer note-less")
+        with mock.patch.object(commands_frame, "_say_on_screen") as said:
+            gate.act(nothing, self.FID, client="")
+        said.assert_not_called()
+
+    def test_a_cancel_says_nothing_and_starts_nothing(self):
+        """`own_the_tty` answers `None` for Escape, for the hatch and for a pane whose
+        writer is gone. Asked of `act` directly, because `draw` needs a tty."""
+        from charter.frame import builtin_actions
+        with mock.patch.object(commands_frame, "_say_on_screen") as said, \
+                mock.patch.object(builtin_actions, "_spawn") as spawn:
+            gate.act(None, self.FID, client=self.A)
+        said.assert_not_called()
+        spawn.assert_not_called()
 
     def test_stop_all_chats_opens_the_quit_confirmation_listing_every_chat(self):
         """The doorway opens `leave`'s own warning, not a second enumeration of it — so
@@ -901,6 +944,33 @@ class TheButton(PersonaIso, unittest.TestCase):
         row = self._top(cols=12)
         self.assertNotIn("F10 close", row)
         self.assertFalse(any(slots.DOORS.opens_gate(c) for c in range(40)))
+
+    def test_the_version_needs_one_spare_column_and_not_two(self):
+        """`<=` and not `<`, which the sweep reported as an unpinned boundary.
+
+        The fit test reserves **one** column between the identity and the row's right-hand
+        end — the single space that stops a full-width identity butting against the version
+        and reading as one word. With `<` it would reserve two, and the version would come
+        back one column later than it has to on every frame.
+
+        **Asked at the narrowest width that draws it**, which is the only width where the
+        two spellings disagree, and measured as the gap rather than as that width: the
+        version string's own length changes with every release, so a case that named a
+        column number would go red at the next bump for no reason.
+
+        The three is one column the fit test reserves plus the two the identity carries
+        where a persona field would go — this plane has none, which the assertion below
+        states rather than assumes, because a fixture that grew one would move the gap and
+        say nothing about the boundary.
+        """
+        from charter import __version__, statusline
+        self.assertIsNone(statusline._persona_line_parts(),
+                          "this fixture now draws a persona, so the gap is not this gap")
+        first = next(w for w in range(20, 240) if __version__ in self._top(cols=w))
+        self.assertNotIn(__version__, self._top(cols=first - 1))
+        row = self._top(cols=first)
+        at = row.index("charter ")
+        self.assertEqual(at - len(row[:at].rstrip()), 3, row)
 
     def test_no_button_inside_the_operators_tmux(self):
         """Decision 7 on the pointer half: charter binds no `F10` there, so a button

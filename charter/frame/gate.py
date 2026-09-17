@@ -252,15 +252,20 @@ def opens(row, fid: str, *, live) -> "palette.Palette | None":
 
     *focus* is the chat's own workspace, which is what a QUIT records as the plane's focus
     (`commands_frame._record_the_plane`) — the gate's stop row is that quit, so it is asked
-    here rather than left empty the way `tabmenu.confirm_rows` leaves it. `chat: close`
-    writes no manifest; this does.
+    here rather than left empty the way `tabmenu.confirm_rows` leaves it.
+
+    **And it is asked WITHOUT an `or ""` behind it**, which is `commands_frame._picker`'s
+    own finding at the same seam and was reported here by the deletion sweep as a fallback
+    nothing could observe: this path draws rows and writes no manifest, so nothing reads
+    `Plan.focus` at all. The one caller that DOES record a focus is `cmd_quit`, and it
+    spells its own — which is why the row this doorway confirms ends up recording one.
     """
     from . import leave, state
     if row.id != STOP_ID:
         return None
     return palette.Palette(
         catalogue=leave.confirm_rows(
-            leave.plan(live=live, focus=state.own_workspace(fid) or ""),
+            leave.plan(live=live, focus=state.own_workspace(fid)),
             verb=leave.QUIT),
         label=leave.QUIT, mouse=True)
 
