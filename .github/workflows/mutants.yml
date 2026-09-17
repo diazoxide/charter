@@ -1,0 +1,31 @@
+name: mutants
+
+# Mutation testing never gates a PR (spec decision 19). It runs nightly on the core crate alone.
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  core:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+      - run: cargo mutants --package charter-core --shard ${{ matrix.shard }}/4 --no-shuffle
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-${{ matrix.shard }}
+          path: mutants.out
