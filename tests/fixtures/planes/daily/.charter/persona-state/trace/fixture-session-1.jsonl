@@ -1,0 +1,4 @@
+{"ts": "2026-03-02T09:27:00", "event": "memory", "persona": "devops", "scope": "own", "kind": "persistent", "title": "Cluster prod-1 lives in eu-west-1"}
+{"ts": "2026-03-02T09:28:00", "event": "memory", "persona": "devops", "scope": "shared", "kind": "persistent", "title": "The plane is the unit of work"}
+{"ts": "2026-03-02T09:33:00", "event": "dispatch", "agent": "devops"}
+{"ts": "2026-03-02T09:34:00", "event": "workspace-use", "workspace": "alpha", "scope": "session"}
