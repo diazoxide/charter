@@ -667,10 +667,14 @@ def _top(fid: str) -> str:
     # drawn rather than from what was composed, which is `_door_columns`' own rule and the
     # reason every rung of this ladder publishes — including the rungs with no button on
     # them, where a stale map would open the gate from a cell the operator can see is empty.
+    # No `button and` in front of the test: `_door_columns` contributes nothing for a field
+    # whose text is empty, so an operator's-tmux row — where *button* is `""` and
+    # `right.endswith("")` is true of anything — publishes the same empty set either way,
+    # and a second guard for it is a line no input could turn red.
     DOORS.publish(_door_columns(w, (0, left),
                                 (head_at, "" if line is None else line.head)),
                   gate=(_door_columns(w, (w - tui.width(button), button))
-                        if button and right.endswith(button) else ()))
+                        if right.endswith(button) else ()))
     if not right:
         return tui.truncate(identity, w)
     return tui.Row(tui.Cell(identity, w - tui.width(right)),

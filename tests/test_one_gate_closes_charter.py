@@ -255,7 +255,10 @@ class _Tmux:
     it, so a route that grew a fourth round trip says so.
     """
 
-    def __init__(self, *, place="$4\t@9", clients="", plane=None):
+    #: Every answer ends in a newline, because tmux's does. That is not decoration: three
+    #: readers here `strip` one off, and a fake that handed back a bare value would prove
+    #: nothing about the format it claims to be standing in for (#1117).
+    def __init__(self, *, place="$4\t@9\n", clients="", plane=None):
         self.place, self.clients, self.plane = place, clients, plane
         self.calls: list[list[str]] = []
 
@@ -270,7 +273,7 @@ class _Tmux:
                 return subprocess.CompletedProcess(argv, 0, self.place, "")
             if fmt == "#{@charter_plane}":
                 plane = str(config.STATE_DIR) if self.plane is None else self.plane
-                return subprocess.CompletedProcess(argv, 0, plane, "")
+                return subprocess.CompletedProcess(argv, 0, plane + "\n", "")
         raise AssertionError(f"no answer scripted for {argv}")
 
 
@@ -395,7 +398,7 @@ class CloseCharterDetachesOnlyThePresser(PersonaIso, unittest.TestCase):
         would not resolve — and an unresolvable `display-message -p -t` answers rc 0 with
         empty stdout, so the record alone can never be the target."""
         from charter.frame import builtin_actions
-        started, said = self._detach(_Tmux(place=""))
+        started, said = self._detach(_Tmux(place="\n"))
         self.assertEqual(started, [])
         self.assertEqual(said, builtin_actions.NOT_ATTACHED_HERE)
 

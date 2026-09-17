@@ -210,8 +210,10 @@ def _detach(fid: str, client: str) -> str:
     # **Equality on both fields, and the whole row.** A `client in listing` would match a
     # client name that is a prefix of another's — `/dev/ttys3` inside `/dev/ttys30` — and
     # would not check the session at all.
-    here = any(row.split("\t") == [client, session]
-               for row in listing.splitlines() if row)
+    # No `if row` filter: `splitlines` yields no empty entries for a listing that ends in a
+    # newline (which tmux's does) and none at all for an empty one, so a guard for a blank
+    # row is a line no input could turn red.
+    here = any(row.split("\t") == [client, session] for row in listing.splitlines())
     if not here:
         return NOT_ATTACHED_HERE
     # The marker is asked for by `commands_frame`'s own option name rather than a second

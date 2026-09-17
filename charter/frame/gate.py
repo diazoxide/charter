@@ -140,13 +140,21 @@ def presser_of(args) -> str:
     3.7c and at the floor), travels through this process's argv and — for the pointer route
     — through a `split-window --` argument, neither of which is shell-interpreted.
 
+    **No `strip`, unlike `commands_frame._pressers_chat`, which reads its own value off the
+    same trip.** That one repairs padding a WINDOW OPTION can carry; this value is
+    `#{client_name}`, which tmux composes itself out of the client's tty path and never
+    pads. `tabmenu.wanted` makes the same call for the same reason one value over: a repair
+    for damage that cannot arrive is a line nothing can turn red, and a padded value
+    reaching it would be refused here rather than carried onto a `detach-client -t` argv —
+    which is the direction that cannot detach the wrong terminal.
+
     **`""` is an ordinary answer and never an error.** A bind installed by a charter that
     predates this change carries no client at all, and a panel whose `@charter_presser`
     could not be read hands on nothing. Both reach :func:`catalogue` as *no presser*, where
     the detach row is listed refused with the sentence that says what to press instead —
     #512's rule, and the one outcome that cannot detach the wrong terminal.
     """
-    client = (getattr(args, "client", None) or "").strip()
+    client = getattr(args, "client", None) or ""
     return client if CLIENT_RE.fullmatch(client) else ""
 
 
