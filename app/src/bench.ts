@@ -138,6 +138,15 @@ function selectedTab(): string | undefined {
   );
 }
 
+/** The tab button a person would read as `name`. */
+function tabButton(name: string): HTMLElement {
+  const found = [...document.querySelectorAll('[role="tab"]')].find(
+    (one) => one.textContent?.trim() === name,
+  );
+  if (!found) throw new Error(`no tab called ${name}`);
+  return found as HTMLElement;
+}
+
 function pane(session?: number): Pane {
   const id = session ?? subject;
   const found = id === undefined ? undefined : panes.get(id);
@@ -187,6 +196,9 @@ export type Plan =
   | { kind: "keystrokes"; count: number; session?: number }
   /** Press a tab, and measure until the pane it brings back has painted. */
   | { kind: "switch"; tab: string; sentinel: string }
+  /** Press a tab and wait only for its pane to open: for getting somewhere, not timing it.
+   *  A session whose output has no sentinel in it has nothing a `switch` could wait for. */
+  | { kind: "select tab"; tab: string }
   /** Split the pane in front, and measure until the new pane has painted. */
   | { kind: "split"; direction: "Split right" | "Split down"; sentinel: string }
   /** How many times the pane's terminal draws, over `ms`. */
@@ -249,6 +261,23 @@ async function work(plan: Plan): Promise<unknown> {
       return { ...summary(samples), samples_ms: samples };
     }
 
+    case "select tab": {
+      const showing = new Set(panes.keys());
+      const opened = new Promise<number>((found) => {
+        awaited = (session) => {
+          if (showing.has(session)) return;
+          awaited = undefined;
+          subject = session;
+          found(session);
+        };
+      });
+      const from = performance.now();
+      tabButton(plan.tab).click();
+      const session = await Promise.race([opened, sleep(30_000).then(() => undefined)]);
+      if (session === undefined) throw new Error(`tab ${plan.tab} showed no pane`);
+      return { session, ms: performance.now() - from };
+    }
+
     case "switch":
     case "split": {
       // A split redraws the pane it splits as well, so the pane being timed is the first one
@@ -264,11 +293,7 @@ async function work(plan: Plan): Promise<unknown> {
       });
       const from = performance.now();
       if (plan.kind === "switch") {
-        const tab = [...document.querySelectorAll('[role="tab"]')].find(
-          (one) => one.textContent?.trim() === plan.tab,
-        );
-        if (!tab) throw new Error(`no tab called ${plan.tab}`);
-        (tab as HTMLElement).click();
+        tabButton(plan.tab).click();
       } else {
         button(plan.direction).click();
       }

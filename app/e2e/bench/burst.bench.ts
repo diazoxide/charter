@@ -207,6 +207,9 @@ describe("bursts and switches", () => {
   });
 
   it("split: pressed until the new pane has painted", async () => {
+    nextLoad(["--synthetic", "4096", "--sentinel", "SPLIT-FIRST", "--interactive"]);
+    await openTab();
+
     const samples: number[] = [];
     for (let n = 0; n < 5; n++) {
       const sentinel = `SPLIT-${n}`;

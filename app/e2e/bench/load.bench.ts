@@ -50,7 +50,9 @@ describe("fifty sessions, forty-nine of them streaming", () => {
 
       const switches: number[] = [];
       for (let n = 0; n < 10; n++) {
-        await job({ kind: "switch", tab: streaming[n], sentinel: "" });
+        // A streaming session writes no sentinel, so there is nothing to wait for here: the
+        // measurement is the way back.
+        await job({ kind: "select tab", tab: streaming[n] });
         const back = await job<{ ms: number }>({
           kind: "switch",
           tab: front.tab,
