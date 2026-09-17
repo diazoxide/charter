@@ -3367,7 +3367,15 @@ SHARD_REPORT_AT = SHARD_TIMEOUT - SHARD_KILL_MARGIN
 #:
 #: The baseline is the whole suite once, the same run `test.yml` makes in about four
 #: minutes; the clone is the sandbox `git clone` of this checkout.
+#: The tmux figure is five real jobs on this pull request — the four `test.yml`
+#: interpreters and `sweep.yml`'s own `plan` — at 22, 24, 25, 27 and 38 s, taken at the
+#: ceiling for the same reason the map figure is. It is `.github/actions/tmux` building
+#: tmux 3.5a from source, which every job that runs tests now pays because `ubuntu-latest`
+#: ships a tmux that loses `pane-died` (#1116). Itemised rather than absorbed into the
+#: rounding: a fixed cost a shard really pays and this dict does not name is exactly what
+#: `test_the_itemisation_names_every_cost_and_the_map_is_the_largest` exists to refuse.
 SHARD_FIXED_COSTS = {
+    "a tmux that can report a death, built": 38,
     "checkout at fetch-depth 0, and the interpreter": 3,
     "the selection map, traced": 285,
     "the sandbox clone": 15,

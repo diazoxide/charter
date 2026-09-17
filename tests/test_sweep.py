@@ -4427,6 +4427,7 @@ class TheWorkflowQuotesNoCostTheToolDoesNotState(unittest.TestCase):
         against a cost it no longer counts. And "the largest fixed cost a shard pays" is
         the claim `sweep.yml`'s cache step makes about the map — held to the numbers."""
         self.assertEqual(sorted(sweep.SHARD_FIXED_COSTS), [
+            "a tmux that can report a death, built",
             "checkout at fetch-depth 0, and the interpreter",
             "the sandbox clone",
             "the selection map, traced",

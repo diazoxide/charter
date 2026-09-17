@@ -897,9 +897,27 @@ class TheScannerSeesEverything(unittest.TestCase):
         actions = {r.ref.rpartition("@")[0] for r in refs}
         self.assertIn("pypa/gh-action-pypi-publish", actions)
         self.assertIn("actions/download-artifact", actions)
+        # **A local `uses:` is the one action reference with no `@`, and that is GitHub's
+        # rule rather than an omission.** `./.github/actions/tmux` has nothing to pin to —
+        # the file is this commit's — and it earns its immutability by being tracked here,
+        # which `test_every_local_action_is_a_file_committed_to_this_repository` is what
+        # asserts. Carved out exactly the way `EveryActionIsPinnedToSomethingImmutable`
+        # carves it, and not by loosening the assertion: a THIRD-PARTY step with no ref is
+        # still the reader having gone wrong, which is the whole point of this case.
+        #
+        # **Both halves, and `local_target` alone is not the second one.** It resolves any
+        # relative path — `actions/checkout@v7` included — so keyed on it by itself every
+        # third-party ref would be excused and this case would check nothing. What it adds
+        # over `is_local` is the part that matters: `./../elsewhere` is local by spelling
+        # and resolves to nothing in this tree, so it answers None and stays subject to the
+        # assertion rather than being excused by its first two characters. The exemption is
+        # for references that earn immutability by being tracked HERE, which is a property
+        # of the resolved path and not of the prefix.
         self.assertEqual(
-            [r for r in refs if r.kind == ACTION and not r.ref.rpartition("@")[1]], [],
-            "a step in release.yml came out with no ref at all")
+            [r for r in refs if r.kind == ACTION
+             and not (is_local(r.ref) and local_target(r.ref) is not None)
+             and not r.ref.rpartition("@")[1]], [],
+            "a third-party step in release.yml came out with no ref at all")
 
 
 class EveryActionIsPinnedToSomethingImmutable(unittest.TestCase):

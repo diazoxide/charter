@@ -131,6 +131,13 @@ jobs:
           # #508's entire defect, out of the sweep's reach. `sweep.reach()` says so in the
           # report rather than letting a smaller sweep read like a clean one.
           python-version: "3.12"
+      # **The map below is one trace of the WHOLE SUITE, so this job runs the real-tmux
+      # tests too** — and on `ubuntu-latest`'s tmux 3.4 they flake, for the lost-SIGCHLD
+      # reason the action's header sets out (#1116). A map traced against a run that went
+      # red for the runner's tmux is a map that mis-selects, so the pin belongs here and
+      # not only on the shards. Its cost is itemised in `sweep.SHARD_FIXED_COSTS` rather
+      # than quoted here, for #670's reason.
+      - uses: ./.github/actions/tmux
       # The selection map is one trace of the whole suite and, per `SHARD_FIXED_COSTS`, the
       # largest fixed cost a shard pays. It is content-addressed on the tree it measured,
       # so this step saves it once here and every shard below restores it instead of
@@ -212,6 +219,13 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
+      # **A shard's first act is the unmutated baseline, and a shard whose baseline is red
+      # refuses its entire slice.** Three of them did exactly that, on tmux 3.4, because
+      # `test_a_signal_death_ends_the_tab` waits for a `pane-died` that server never fires
+      # (#1116, and the action's header for the mechanism). The refusal is correct — a
+      # sweep that cannot tell a survivor from an already-red tree must not report — so the
+      # fix is the tmux, not the refusal. Cost itemised in `sweep.SHARD_FIXED_COSTS`.
+      - uses: ./.github/actions/tmux
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/sweep/cache

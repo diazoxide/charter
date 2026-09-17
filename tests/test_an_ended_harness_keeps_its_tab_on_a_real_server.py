@@ -23,6 +23,13 @@ If the hook does not fire on Linux for a pane tmux can name neither a status nor
 for, this case is what says so, with the listing in the failure. It is not skipped there and
 it is not softened: the answer to open question 4 is whatever this reports on CI's runner.
 
+**And that last sentence is why the runner's tmux is pinned.** `ubuntu-latest` ships tmux
+3.4, whose server can lose a SIGCHLD and then destroy the pane without firing `pane-died`
+at all — so the reading this module takes off CI was, about one run in eight, not a reading
+about charter. A gate whose answer is "whatever the runner says" has to be run on a runner
+that can answer. `tests/test_ci_runs_a_tmux_that_reaps_its_children` holds the floor and
+carries the mechanism and the measurements; `#1116` is the issue.
+
 **No shim reaches inside these panes.** The plan's task 2 named a `PYTHONPATH` shim standing
 in `selector.pick` and `ended.draw`, citing `TheSelectorOnARealServer`; that shim does not
 exist there or anywhere in this suite — that class patches nothing inside the pane and drives
@@ -66,6 +73,24 @@ _HAS_TMUX = shutil.which("tmux") is not None
 #: Raising this weakens no assertion. The same predicate must still come true, and the same
 #: diagnostic is printed if it does not — what changes is only how long a starved runner is
 #: given to get there.
+#:
+#: **The paragraph above is kept because it is the record, and the reasoning in it has since
+#: been measured wrong.** The failure was NOT contention, and the Python-version argument
+#: does not hold: `ubuntu-latest` ships tmux 3.4, whose server can lose a SIGCHLD and then
+#: destroy the pane WITHOUT firing `pane-died` at all — `#{pane_dead}` `1` with
+#: `#{pane_dead_status}` and `#{pane_dead_signal}` both empty, permanently. Which Python
+#: happened to be red is scheduling noise on a rate, not evidence about a capability:
+#: stripped of charter entirely the miss rate is 8 in 60 on tmux 3.4 and 0 in 40 on 3.5, and
+#: this module's own gate case is 5 in 30 against 0 in 30. `_dying` and `_why` below now
+#: print the two fields that would have said so at the time, and CI installs a tmux above
+#: the floor (`tests/test_ci_runs_a_tmux_that_reaps_its_children`, #1116).
+#:
+#: **So this number is now belt and braces rather than the fix, and it is deliberately not
+#: lowered here.** Nothing in the measurements above says what the right bound is on a
+#: contended runner — they say the event either arrives promptly or never arrives — and
+#: shrinking a bound on the strength of a finding about a different variable is how 45
+#: came to be written on the strength of a finding about this one. Lower it when somebody
+#: has the distribution of *arrival times* on the pinned tmux, and quote it here.
 _HOOK_SECONDS = 45.0
 
 _WIRED = None
@@ -161,9 +186,35 @@ class AnExitOnARealServer(_ARealChatOnARealServer, unittest.TestCase):
                 f"{self._why(fid, state.harness_pane(fid) or '')}")
         return fid
 
+    #: The three fields that together say HOW a pane died, asked in one round trip.
+    #:
+    #: **`#{pane_dead}` alone cannot tell the two failures apart, and that is #1116's whole
+    #: history.** `server_destroy_pane` closes `wp->fd` — which is the entirety of
+    #: `#{pane_dead}` — and only afterwards decides whether to `notify_pane("pane-died")`.
+    #: On tmux 3.4 it can return before that notify (`server-fn.c:329`,
+    #: `remain_on_exit != 0 && (~wp->flags & PANE_STATUSREADY)`), because `PANE_STATUSREADY`
+    #: is set only by `server_child_exited` and that runs off a SIGCHLD the server can lose.
+    #: So a pane reads `dead=1` with BOTH the status and the signal EMPTY and no hook has
+    #: run or ever will.
+    #:
+    #: Read `dead=1` on its own and that looks exactly like "the hook fired and charter
+    #: mishandled it" — which is the reading #1116 recorded, and it sent the investigation
+    #: at a wall-clock bound that was never the variable. The two empty fields beside it are
+    #: what name the real thing.
+    _DYING = "#{pane_dead}|#{pane_dead_status}|#{pane_dead_signal}"
+
+    def _dying(self, pane: str) -> tuple[str, str, str]:
+        """``(dead, status, signal)`` for *pane*, each exactly as tmux spelled it.
+
+        Empty strings are answers here, not missing data: an empty `#{pane_dead_status}`
+        is tmux saying it has no status to report, which is a different fact from `0`.
+        """
+        said = self._tmux("display-message", "-p", "-t", pane, self._DYING).stdout.strip()
+        fields = (said.split("|") + ["", "", ""])[:3]
+        return fields[0], fields[1], fields[2]
+
     def _dead(self, pane: str) -> str:
-        return self._tmux("display-message", "-p", "-t", pane,
-                          "#{pane_dead}").stdout.strip()
+        return self._dying(pane)[0]
 
     def _drawers(self) -> list[str]:
         """Every pane one listing proves is a drawer, by the marker charter wrote.
@@ -177,13 +228,35 @@ class AnExitOnARealServer(_ARealChatOnARealServer, unittest.TestCase):
                 if row.rsplit("|", 1)[-1]]
 
     def _why(self, fid: str, pane: str) -> str:
-        return (f"\n  chat={fid} pane={pane} dead={self._dead(pane)!r}"
+        """Everything the next failure of this shape needs in order to name itself.
+
+        **`dead=` used to be the only death field here, and the omission cost a whole
+        investigation.** #1116 reads a real failure — `dead='1' ended=False exit=None` —
+        as contention, on the grounds that the `exit 0` arm "certainly has a status", and
+        raises a wall-clock bound accordingly. The status was the one thing the listing did
+        not print. On tmux 3.4 it is empty, along with the signal, and the pane-died hook
+        never ran: see `_DYING`. A diagnostic that prints `dead=1` and stops is a
+        diagnostic that can only be read as charter's fault.
+
+        The server's own version goes in for the same reason — it is the discriminator
+        between "charter is wrong" and "this tmux cannot say", and it is asked of the
+        socket running these panes rather than of `tmux -V` on `$PATH`, so a runner with
+        two tmuxes reports the one that actually owns the pane.
+        """
+        dead, status, sig = self._dying(pane)
+        return (f"\n  chat={fid} pane={pane} dead={dead!r}"
+                f" pane_dead_status={status!r} pane_dead_signal={sig!r}"
+                f"\n  (legend: dead=1 with BOTH of those EMPTY means tmux destroyed the"
+                f" pane without ever firing pane-died — a SIGCHLD the server lost, not"
+                f" charter. Below tmux 3.5 that is about 1 run in 8. See #1116.)"
+                f"\n  server tmux={self._tmux('display-message', '-p', '#{version}').stdout.strip()!r}"
                 f"\n  ended={state.is_ended(fid)!r} exit={state.exit_code(fid)!r}"
                 f" drawn={state.was_drawn(fid)!r}"
                 f"\n  windows={self._tmux('list-windows', '-a', '-F', '#{window_name}').stdout.split()}"
-                f"\n  panes=\n    " + self._tmux(
+                f"\n  panes (id|dead|status|signal|chat|plane|drawer)=\n    " + self._tmux(
                     "list-panes", "-a", "-F",
-                    "#{pane_id}|#{pane_dead}|#{@charter_chat}|#{@charter_plane}"
+                    "#{pane_id}|#{pane_dead}|#{pane_dead_status}|#{pane_dead_signal}"
+                    "|#{@charter_chat}|#{@charter_plane}"
                     "|#{@charter_drawer}").stdout.strip().replace("\n", "\n    "))
 
     def test_a_signal_death_ends_the_tab(self):
