@@ -333,10 +333,15 @@ PLANES = {"minimal": build_minimal, "daily": build_daily}
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--check", action="store_true", help="regenerate elsewhere and diff")
-    ap.add_argument("planes", nargs="*", choices=list(PLANES) + [[]], default=list(PLANES),
-                    help="which planes")
+    ap.add_argument("planes", nargs="*", help=f"which planes ({', '.join(PLANES)})")
     args = ap.parse_args()
     names = args.planes or list(PLANES)
+    # Checked here rather than with argparse's `choices`: with `nargs="*"` some Python
+    # versions validate the default list against choices and some do not, so a default that
+    # is fine locally is an error on another interpreter. CI found that the hard way.
+    unknown = [n for n in names if n not in PLANES]
+    if unknown:
+        ap.error(f"no such plane: {', '.join(unknown)} (have {', '.join(PLANES)})")
 
     if not args.check:
         for name in names:
