@@ -358,6 +358,30 @@ class CloseCharterDetachesOnlyThePresser(PersonaIso, unittest.TestCase):
         self.assertEqual(started, [])
         self.assertEqual(said, builtin_actions.NOT_ATTACHED_HERE)
 
+    def test_the_marker_is_compared_as_a_path_and_not_as_a_string(self):
+        """**A second spelling of one directory is not a second plane** — #812's finding,
+        and the one `tests/test_the_gate_detaches_a_real_client.py` measured again on real
+        tmux before this line existed.
+
+        The marker holds whatever spelling the process that wrote it resolved; the detach
+        reads it in the palette's own pane, a different process whose `$CHARTER_ROOT` came
+        off a `-e` payload. On macOS `/var` is a symlink to `/private/var`, so the two
+        sides arrive as `/var/…/.charter` and `/private/var/…/.charter` and a string
+        comparison refuses every detach on that machine, silently.
+
+        Red without the `realpath`, and this case builds the pair the same way the machine
+        does — through a symlink to the real plane, so the two strings differ and the
+        directory does not.
+        """
+        from charter.frame import builtin_actions
+        other = self.tmp / "by-another-name"
+        other.symlink_to(config.STATE_DIR)
+        self.assertNotEqual(str(other), str(config.STATE_DIR))
+        started, said = self._detach(_Tmux(clients=f"{self.A}\t$4\n", plane=str(other)))
+        self.assertEqual(started, [tmuxctl.server_argv("charter-plane-x",
+                                                       "detach-client", "-t", self.A)],
+                         said)
+
     def test_an_unmarked_session_is_not_detached(self):
         """A session an older charter created carries no marker, and an unmarked pane is
         not proven — never adopted."""

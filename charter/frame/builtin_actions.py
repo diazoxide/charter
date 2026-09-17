@@ -221,11 +221,26 @@ def _detach(fid: str, client: str) -> str:
                         tmuxctl.server_argv(
                             server, "display-message", "-p", "-t", session,
                             f"#{{{commands_frame._PLANE_OPTION}}}")).stdout.strip()
-    # One comparison and no `not plane` beside it: an unmarked session answers `""` and
-    # `_this_plane()` is `str(config.STATE_DIR)`, which a resolved plane never is — so a
-    # second guard for the empty answer is a line no input could turn red, which is the
-    # survivor this repository deletes rather than documents.
-    if plane != commands_frame._this_plane():
+    # **Both sides through `realpath`, which is `frame/ended.py`'s reading and was measured
+    # again here on real tmux.** The marker holds whatever spelling the process that WROTE
+    # it resolved, and this one is read in a different process — the palette's pane, whose
+    # `$CHARTER_ROOT` came off a `-e` payload. On macOS `/var` is a symlink to
+    # `/private/var`, and the two sides arrived as `/var/…/.charter` and
+    # `/private/var/…/.charter`: a string comparison refused every detach on this machine,
+    # silently, with the row reporting `NOT_ATTACHED_HERE` about the frame it was pressed
+    # in. `tests/test_the_gate_detaches_a_real_client.py` is what found it; no unit test
+    # could, because both sides are `_this_plane()` inside one interpreter.
+    #
+    # `realpath` and not `Path.resolve()`, for that module's reason: this must never raise
+    # on a plane removed under a running frame, and it normalises a path that no longer
+    # exists rather than refusing it.
+    #
+    # `not plane` stays in front of it, and it is the guard rather than a tidy-up:
+    # `os.path.realpath("")` answers the process's CWD, so an UNMARKED session — one an
+    # older charter created, which the spec's *Limits* says is left alone — would otherwise
+    # be compared as though it were marked with wherever this process happens to stand.
+    if not plane or os.path.realpath(plane) != os.path.realpath(
+            commands_frame._this_plane()):
         return NOT_ATTACHED_HERE
     _spawn(tmuxctl.server_argv(server, "detach-client", "-t", client), fid=fid)
     return "detaching — the harness keeps running"
