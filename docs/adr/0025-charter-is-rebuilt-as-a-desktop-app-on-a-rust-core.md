@@ -40,12 +40,15 @@ that is not about tmux. The Python code does not.
 - **The plane on disk does not change.** The new charter reads and writes the plane the Python
   one does. The format is written down as a spec with fixture planes before any module is
   ported, so "the same plane" is something tested rather than hoped for.
-- **Modules move over one at a time, and Python is the reference.** The app ships first as a
-  GUI plus session manager. It reads plane files directly and hands every write and every hook
-  to the Python `charter`. Each module that moves to Rust passes a differential test: the same
-  plane and the same input give the same result in both. The security-critical parts (hooks
-  guard, gitpolicy, vaults) move last, with the Python behaviour as the proof they did not
-  regress.
+- **Modules move over one at a time, and Python is the reference.** Each module that moves to
+  Rust passes a differential test: the same plane and the same input give the same result in
+  both. **Amended 2026-09-18:** the app never calls Python at runtime, at any milestone. The
+  first plan had it shelling out to Python `charter` for writes and hooks until M3; on the
+  operator's instruction ("fully clean implementation in rust — no need to mix languages")
+  whatever a feature needs is ported before the feature that needs it. Python stays as today's
+  product until cutover and as the differential oracle in CI, never as something the app runs.
+  The security-critical parts (hooks guard, gitpolicy, vaults) keep their external review, and
+  nothing ships on a Python fallback while they wait for it.
 - **There is no terminal frontend.** The terminal story is the `charter` CLI, for hooks,
   scripts and agents. A TUI would be a terminal emulator inside a terminal again, which is
   the problem ADR 0018 measured, and it would be a second UI to keep in step.
