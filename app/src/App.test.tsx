@@ -29,6 +29,7 @@ function core(): { asked: { cmd: string; args: unknown }[] } {
   mockIPC((cmd, args) => {
     asked.push({ cmd, args });
     if (cmd === "plane_root") return "/home/dev/plane";
+    if (cmd === "running_sessions") return [];
     if (cmd === "open_session") return ++opened;
     return null;
   });
@@ -40,7 +41,7 @@ const tabs = () => screen.getAllByRole("tab").map((tab) => tab.textContent);
 
 describe("App", () => {
   it("shows the plane the core found", async () => {
-    mockIPC((cmd) => (cmd === "plane_root" ? "/home/dev/plane" : undefined));
+    mockIPC((cmd) => (cmd === "plane_root" ? "/home/dev/plane" : []));
 
     render(<App />);
 
@@ -159,6 +160,7 @@ describe("App", () => {
     mockIPC(async (cmd, args) => {
       asked.push({ cmd, args });
       if (cmd === "plane_root") return "/home/dev/plane";
+      if (cmd === "running_sessions") return [];
       if (cmd !== "open_session") return null;
       if (++opened === 1) return 1;
       await new Promise<void>((starts) => (letTheSecondSessionStart = starts));
@@ -183,6 +185,7 @@ describe("App", () => {
   it("says so when the core cannot start a session, and opens no tab", async () => {
     mockIPC((cmd) => {
       if (cmd === "plane_root") return "/home/dev/plane";
+      if (cmd === "running_sessions") return [];
       throw new Error('could not start "zsh": no such file or directory');
     });
     render(<App />);

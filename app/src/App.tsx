@@ -46,9 +46,13 @@ function App() {
   useEffect(() => {
     if (swept.current) return;
     swept.current = true;
-    void commands.runningSessions().then((left) => {
-      for (const session of left) void commands.closeSession(session);
-    });
+    void commands
+      .runningSessions()
+      .then((left) => {
+        for (const session of left) void commands.closeSession(session);
+      })
+      // Nothing to sweep is the ordinary case, and a window that cannot ask is still usable.
+      .catch(() => undefined);
   }, []);
 
   useEffect(() => {
