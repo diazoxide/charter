@@ -38,6 +38,9 @@ on a two-client frame is a coin toss over whose terminal to close.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+
+from . import overlay, palette
 
 #: The key this menu opens on, everywhere charter binds keys. It joins
 #: `overlay.HATCH_KEY` and `layout.BAR_ROWS_KEY` in `instance.component_arrangement`'s
@@ -185,7 +188,7 @@ def catalogue(fid: str, *, client: str) -> tuple:
     warning does, one keypress later, which is §4f's *at the moment of deciding* and
     `leave.open_rows`' rule that a menu merely being open costs no scan.
     """
-    from . import builtin_actions, overlay
+    from . import builtin_actions
     return (
         overlay.Row(id=DETACH_ID, title=DETACH_TITLE, refused=not client,
                     note="" if client else builtin_actions.NO_PRESSER_TO_DETACH),
@@ -193,52 +196,33 @@ def catalogue(fid: str, *, client: str) -> tuple:
     )
 
 
-def Gate(**kw):
-    """The gate's surface: a `palette.Palette` whose cursor opens on :data:`DETACH_ID`.
+@dataclass
+class Gate(palette.Palette):
+    """`palette.Palette` with one rule changed: where the cursor opens.
 
-    A factory rather than a module-level subclass, so that importing this module does not
-    import `frame/palette.py` — which pulls in `frame/pane.py`, `termios` and `tty`, and
-    which `charter/instance.py` must not pay for when it asks this module for one string
-    (:func:`instance._gate_key`). The class is built once and cached on the function.
+    **`palette.aim` is right everywhere else and wrong here**, and the difference is worth
+    stating rather than overriding quietly. `aim` answers *the first row that can run*,
+    which is #931's fix for a surface that opened on a refused row and spent the operator's
+    Enter on nothing. This surface has two rows, the first of which can be refused —
+    charter could not name the presser — and the second of which stops every harness on the
+    plane. So the rule that protects every other surface would, here, open a menu with the
+    cursor on the one irreversible thing in it.
+
+    **Pinned by ID, not by index.** An index would be a second statement of the order
+    :func:`catalogue` already makes, and it would follow the wrong row the moment a third
+    was added.
+
+    **And only while the row is on screen.** After a query the cursor is `aim`'s again,
+    because an operator who has typed toward the stop row has asked for it — the pin is
+    about where the surface OPENS, which is the whole of what was at stake.
     """
-    return _gate_class()(**kw)
 
-
-def _gate_class():
-    from . import palette
-    cached = getattr(_gate_class, "_cls", None)
-    if cached is not None:
-        return cached
-
-    class _Gate(palette.Palette):
-        """`palette.Palette` with one rule changed: where the cursor opens.
-
-        **`palette.aim` is right everywhere else and wrong here**, and the difference is
-        worth stating rather than overriding quietly. `aim` answers *the first row that can
-        run*, which is #931's fix for a surface that opened on a refused row and spent the
-        operator's Enter on nothing. This surface has two rows, the first can be refused —
-        charter could not name the presser — and the second stops every harness on the
-        plane. So the rule that protects every other surface would, here, open a menu with
-        the cursor on the one irreversible thing in it.
-
-        **Pinned by ID, not by index.** An index would be a second statement of the
-        order `catalogue` already makes, and it would follow the wrong row the moment a
-        third was added.
-
-        **And only while the row is on screen.** After a query the cursor is `aim`'s again,
-        because an operator who has typed toward the stop row has asked for it — the pin is
-        about where the surface OPENS, which is the whole of what was at stake.
-        """
-
-        def _refilter(self) -> None:
-            super()._refilter()
-            for i, row in enumerate(self.rows):
-                if row.id == DETACH_ID:
-                    self._sel = i
-                    return
-
-    _gate_class._cls = _Gate
-    return _Gate
+    def _refilter(self) -> None:
+        super()._refilter()
+        for i, row in enumerate(self.rows):
+            if row.id == DETACH_ID:
+                self._sel = i
+                return
 
 
 def opens(row, fid: str, *, live):
@@ -263,7 +247,7 @@ def opens(row, fid: str, *, live):
     here rather than left empty the way `tabmenu.confirm_rows` leaves it. `chat: close`
     writes no manifest; this does.
     """
-    from . import leave, palette, state
+    from . import leave, state
     if row.id != STOP_ID:
         return None
     return palette.Palette(
@@ -362,7 +346,7 @@ def draw(args) -> int:
     import os
 
     from .. import commands_frame
-    from . import palette, tabmenu, tmuxctl
+    from . import tabmenu, tmuxctl
     fid, socket, harness, overlay_pane = tabmenu.handback(os.environ)
     client = presser_of(args)
     try:

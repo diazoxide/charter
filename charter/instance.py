@@ -1983,9 +1983,9 @@ def _gate_key() -> str:
 
     Imported inside the function because :func:`frame_of` is on the path of every command,
     `charter --version` included, and must stay as cheap as it was — the same discipline
-    that keeps `component_arrangement`'s four imports out of module scope. `frame/gate.py`
-    is one `import re` and a page of constants, and it is not imported at all by a plane
-    that writes no `[frame] hotkey`.
+    that keeps `component_arrangement`'s four imports out of module scope, and the same one
+    that makes this cost nothing at all on a plane that writes no `[frame] hotkey`, which
+    is every plane charter ships with.
     """
     from .frame import gate as _gate
     return _gate.GATE_KEY
