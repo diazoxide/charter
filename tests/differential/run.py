@@ -207,7 +207,7 @@ SCENARIOS = [
         ignore={
             ".charter/reports": "Python charter does not CATCH its own `ValueError: empty "
             "memory` here — it exits 1 through the crash handler, which drafts a bug report "
-            "into the plane. Filed upstream. Both sides refuse the write, which is what this "
+            "into the plane (charter#1135). Both sides refuse the write, which is what this "
             "scenario pins; the crash artifact is not part of it.",
         },
     ),
