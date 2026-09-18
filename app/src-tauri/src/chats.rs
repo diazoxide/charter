@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use charter_core::engine::Size;
@@ -33,20 +34,43 @@ pub struct Open {
     pub how: Reopened,
 }
 
+/// Where the record goes whenever what is open changes.
+///
+/// It is a callback rather than a file so that this module keeps knowing nothing about the
+/// plane — and so a test can see exactly when a write would happen.
+pub type Recorder = Box<dyn Fn(&Record) + Send + Sync>;
+
 /// Every chat the app has open, and which of them is in front.
 pub struct Chats {
     sessions: Sessions,
     open: Mutex<HashMap<u32, (Chat, Reopened)>>,
     front: Mutex<Option<u32>>,
+    record_it: Recorder,
+    /// Set while a record is being put back, so reading one does not write it again once
+    /// for every chat in it — fifty chats would be fifty writes of the same file, at the
+    /// one moment the app is being measured for cold start.
+    putting_back: AtomicBool,
 }
 
 impl Chats {
-    pub fn new() -> Self {
+    /// Chats whose record is written by `record_it` every time what is open changes.
+    ///
+    /// Quitting writes it too, but only a graceful quit reaches that: an app that is killed,
+    /// or crashes, runs no exit handler. Writing as it goes means such an app comes back on
+    /// the chats it had rather than on none.
+    pub fn recorded_by(record_it: Recorder) -> Self {
         Self {
             sessions: Sessions::new(),
             open: Mutex::new(HashMap::new()),
             front: Mutex::new(None),
+            record_it,
+            putting_back: AtomicBool::new(false),
         }
+    }
+
+    /// Chats nothing records — what the tests use when the record is not what they are about.
+    pub fn new() -> Self {
+        Self::recorded_by(Box::new(|_| {}))
     }
 
     /// The sessions underneath, for everything that is about a terminal and not about a chat.
@@ -71,6 +95,7 @@ impl Chats {
             ..chat.clone()
         };
         lock(&self.open).insert(session, (under, launch.how));
+        self.write_it_down();
         Ok(session)
     }
 
@@ -81,12 +106,18 @@ impl Chats {
         if *front == Some(session) {
             *front = None;
         }
-        self.sessions.close(session)
+        drop(front);
+        let closed = self.sessions.close(session);
+        self.write_it_down();
+        closed
     }
 
     /// Says which chat is in front, so the record knows which one to bring back in front.
     pub fn bring_to_front(&self, session: Option<u32>) {
-        *lock(&self.front) = session;
+        let changed = std::mem::replace(&mut *lock(&self.front), session) != session;
+        if changed {
+            self.write_it_down();
+        }
     }
 
     /// What is open, in the order the sessions were opened.
@@ -138,6 +169,7 @@ impl Chats {
     /// relaunch that failed whole because one harness had been uninstalled would be worse
     /// than one that came back short.
     pub fn put_back(&self, record: &Record, size: Size) -> Vec<Open> {
+        self.putting_back.store(true, Ordering::SeqCst);
         let mut front = None;
         let opened: Vec<u32> = record
             .chats
@@ -151,10 +183,22 @@ impl Chats {
             })
             .collect();
         self.bring_to_front(front);
+        // Once, now that everything is back: what is on disk is a record of this launch and
+        // not of the one before it, so a crash before the first change loses nothing.
+        self.putting_back.store(false, Ordering::SeqCst);
+        self.write_it_down();
         let open = self.open_now();
         open.into_iter()
             .filter(|one| opened.contains(&one.session))
             .collect()
+    }
+
+    /// Hands the record as it now is to whoever writes it.
+    fn write_it_down(&self) {
+        if self.putting_back.load(Ordering::SeqCst) {
+            return;
+        }
+        (self.record_it)(&self.record());
     }
 
     /// How many chats are remembered, which is not the same as how many are running: this
@@ -245,6 +289,106 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// Chats that write every record they make into `wrote`, newest last.
+    fn recorded() -> (Chats, std::sync::Arc<Mutex<Vec<Record>>>) {
+        let wrote = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let keep = std::sync::Arc::clone(&wrote);
+        let chats = Chats::recorded_by(Box::new(move |record| lock(&keep).push(record.clone())));
+        (chats, wrote)
+    }
+
+    #[test]
+    fn opening_a_chat_writes_the_record_without_waiting_for_a_quit() {
+        // An app that is killed, or crashes, runs no exit handler. Everything open would be
+        // lost if the record were only written on the way out.
+        let dir = tempfile::tempdir().unwrap();
+        let (chats, wrote) = recorded();
+
+        chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .unwrap();
+
+        let last = lock(&wrote).last().cloned().expect("a record was written");
+        assert_eq!(last.chats.len(), 1);
+        assert_eq!(last.chats[0].name, "ide.7");
+    }
+
+    #[test]
+    fn closing_a_chat_writes_the_record_without_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (chats, wrote) = recorded();
+        let going = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .unwrap();
+
+        chats.close(going).expect("it closes");
+
+        assert_eq!(lock(&wrote).last().expect("a record").chats, vec![]);
+    }
+
+    #[test]
+    fn bringing_another_chat_to_the_front_writes_the_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let (chats, wrote) = recorded();
+        chats.start(&chat(&claude, "ide.7", None), SIZE).unwrap();
+        let front = chats.start(&chat(&claude, "ide.8", None), SIZE).unwrap();
+
+        chats.bring_to_front(Some(front));
+
+        let last = lock(&wrote).last().cloned().expect("a record");
+        let active: Vec<&str> = last
+            .chats
+            .iter()
+            .filter(|c| c.active)
+            .map(|c| c.name.as_str())
+            .collect();
+        assert_eq!(active, vec!["ide.8"]);
+    }
+
+    #[test]
+    fn bringing_the_same_chat_to_the_front_again_writes_nothing() {
+        // Every click on the tab already in front would otherwise be a write.
+        let dir = tempfile::tempdir().unwrap();
+        let (chats, wrote) = recorded();
+        let only = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .unwrap();
+        chats.bring_to_front(Some(only));
+        let so_far = lock(&wrote).len();
+
+        chats.bring_to_front(Some(only));
+
+        assert_eq!(lock(&wrote).len(), so_far);
+    }
+
+    #[test]
+    fn putting_a_record_back_does_not_write_it_once_for_every_chat_in_it() {
+        // Fifty chats coming back would be fifty writes of the same file, at the one moment
+        // the app is being measured for cold start.
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let (chats, wrote) = recorded();
+
+        chats.put_back(
+            &Record {
+                chats: (0..5)
+                    .map(|n| chat(&claude, &format!("ide.{n}"), None))
+                    .collect(),
+            },
+            SIZE,
+        );
+
+        let written = lock(&wrote).clone();
+        assert_eq!(
+            written.len(),
+            1,
+            "the record was written {} times",
+            written.len()
+        );
+        assert_eq!(written[0].chats.len(), 5);
     }
 
     #[test]

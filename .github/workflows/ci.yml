@@ -133,6 +133,16 @@ jobs:
       - run: xvfb-run -a npm run e2e
         if: runner.os == 'Linux'
         working-directory: app
+      # The app ended and started again, which no scenario spec can do: WebdriverIO's service
+      # keeps one app process for a whole run, so a spec that quits takes the run with it.
+      - name: Reopening what was open, across a real relaunch
+        run: npm run e2e:relaunch
+        if: runner.os == 'macOS'
+        working-directory: app
+      - name: Reopening what was open, across a real relaunch
+        run: xvfb-run -a npm run e2e:relaunch
+        if: runner.os == 'Linux'
+        working-directory: app
       - if: failure()
         uses: actions/upload-artifact@v7
         with:

@@ -136,6 +136,17 @@ fn chat_in_front(chats: tauri::State<'_, Chats>, session: Option<u32>) {
     chats.bring_to_front(session);
 }
 
+/// Asks the app to quit, the way the menu's Quit and the tray's do.
+///
+/// It is the same function they call, so what this goes through is the real path: the ask
+/// is counted, the window is shown, and the window is sent `quit-asked`. The command
+/// palette's own quit action is this too.
+#[tauri::command]
+#[specta::specta]
+fn ask_to_quit(app: tauri::AppHandle) {
+    lifecycle::ask_to_quit(&app);
+}
+
 /// The window's answer to being asked to quit: go.
 #[tauri::command]
 #[specta::specta]
@@ -264,6 +275,7 @@ fn commands() -> Builder<tauri::Wry> {
         running_sessions,
         opened_chats,
         chat_in_front,
+        ask_to_quit,
         quit,
         quit_cancelled,
         hide_window,
@@ -325,7 +337,18 @@ pub fn run() {
             let plane = std::env::current_dir()
                 .ok()
                 .and_then(|cwd| charter_core::plane::find_root(&cwd).ok());
-            let chats = Chats::new();
+            // The record is written as what is open changes, and not only on the way out:
+            // an app that is killed, or crashes, runs no exit handler, and a day's chats
+            // would go with it. Outside a plane there is nowhere to write it, and the app
+            // still runs — it just cannot bring anything back next time.
+            let writing_to = plane.clone();
+            let chats = Chats::recorded_by(Box::new(move |record| {
+                if let Some(root) = &writing_to {
+                    // A record that cannot be written is not worth interrupting the
+                    // operator over; the cost is a relaunch that comes back short.
+                    let _ = reopen::write(root, record);
+                }
+            }));
             // Put back what was open before there is a window, so a relaunch does not
             // depend on a webview having run. The window asks `opened_chats` for the result.
             if let Some(root) = &plane {
