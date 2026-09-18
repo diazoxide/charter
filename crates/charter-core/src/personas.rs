@@ -66,11 +66,17 @@ impl Persona {
         self.writable(&self.dir.join("refs"))?;
         let who = self.who();
         create_absent(
+            &self.plane_root,
             &self.dir.join("memory"),
             memstore::INDEX,
             &index_header(&who),
         )?;
-        create_absent(&self.dir.join("refs"), "README.md", &refs_readme(&who))
+        create_absent(
+            &self.plane_root,
+            &self.dir.join("refs"),
+            "README.md",
+            &refs_readme(&who),
+        )
     }
 
     /// This persona's memories, by filename.
@@ -130,7 +136,10 @@ pub(crate) fn refs_readme(who: &str) -> String {
 /// Exclusive, so a dangling symlink at the name is refused by the kernel rather than
 /// followed — `exists()` answers false for one, and a plain write would have created
 /// whatever it pointed at.
-fn create_absent(dir: &Path, name: &str, body: &str) -> io::Result<()> {
+fn create_absent(root: &Path, dir: &Path, name: &str, body: &str) -> io::Result<()> {
+    // Before the mkdir: a symlinked persona directory otherwise has `memory/` and `refs/`
+    // created wherever it points.
+    crate::contain::writable(root, dir).map_err(refusal)?;
     std::fs::create_dir_all(dir)?;
     match std::fs::OpenOptions::new()
         .write(true)

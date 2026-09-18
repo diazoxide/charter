@@ -80,6 +80,9 @@ pub fn ensure_index(
     // The FILE, not the directory above it: a committed `MEMORY.md -> outside` escaped a
     // gate that only asked about the store.
     gate(root, &index)?;
+    // The directory too, and before it is made: the index being contained does not stop
+    // `create_dir_all` walking a symlinked store out of the plane.
+    gate(root, dir)?;
     std::fs::create_dir_all(dir)?;
     if !index.exists() {
         let header = if header.ends_with('\n') {
@@ -127,6 +130,10 @@ pub fn write(
         Some(t) => py_strip(t).chars().take(TITLE_MAX).collect::<String>(),
         None => title_of(text),
     };
+    // BEFORE the mkdir. `create_dir_all` through a symlinked store creates directories
+    // outside the plane, and a gate that runs after the side effect is no gate: this made
+    // `memory/` and `todos/` appear beside an operator's files.
+    gate(root, dir)?;
     std::fs::create_dir_all(dir)?;
 
     let prefix = if timestamped {
@@ -168,6 +175,7 @@ fn index_append(
     gate(root, index)?;
     if !index.exists() {
         if let Some(parent) = index.parent() {
+            gate(root, parent)?;
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(index, "# Memory Index\n\n")?;
