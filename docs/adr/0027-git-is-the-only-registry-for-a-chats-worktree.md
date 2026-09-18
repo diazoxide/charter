@@ -5,11 +5,11 @@ core. Five of its choices sit against rules written elsewhere in this repo, and 
 re-proposed by whoever picks up the next milestone. They are written down here, together,
 because most of them share one reason.
 
-**Charter shells out to the git binary and withholds git's whole repository-local
-environment by a definition git itself prints; it records nothing of its own about a
-worktree; it confines every worktree operation to one workspace rather than to the plane; it
-ships worktrees that carry no harness layer; and it keeps M1.4's differential comparing
-trees, with the divergences named as ignored paths rather than compared away.**
+**Charter shells out to the git binary and gives it an environment charter constructed
+rather than one it inherited; it records nothing of its own about a worktree; it confines
+every worktree operation to one workspace rather than to the plane; it ships worktrees that
+carry no harness layer; and it keeps M1.4's differential comparing trees, with the
+divergences named as ignored paths rather than compared away.**
 
 ## Git through the binary, not a library
 
@@ -58,13 +58,35 @@ PWNED
 the ordinary case rather than an exotic one. So this is arbitrary code execution as the
 operator, reached through an environment charter never looked at.
 
-**The defence is a definition, not a list.** Python charter arrived here the hard way:
-`charter/workspace.py:3453` records that naming the variables one by one — review round 3's
-`GIT_DIR` and `GIT_WORK_TREE` — missed `GIT_COMMON_DIR` in round 4. Its answer is
-`util.GIT_REPOSITORY_ENV` plus the three `GIT_CONFIG*` names, held to reality by a test that
-runs `git rev-parse --local-env-vars` and fails when git grows a sixteenth variable. The Rust
-core does the same, with the same test, because a hand-written list is a list that is wrong
-the next time git is released.
+**Subtracting a denylist cannot work, so charter builds the child's environment instead.**
+
+The first fix here was Python's: take everything `git rev-parse --local-env-vars` prints, add
+the three `GIT_CONFIG*` names, and hold the list to git with a test. That is right about the
+surface it covers and wrong about the one that matters. `--local-env-vars` is a definition of
+the **redirection** surface — where git looks for a repository. It is not a definition of the
+**execution** surface, and those are different sets:
+
+- `GIT_EXEC_PATH` is not repository-local and is not on that list. `git push` to an https
+  remote runs `git-remote-https`, an external binary resolved out of it. Measured: a
+  `git-remote-https` planted there ran on `git -C r push origin main`.
+- `GIT_TRACE`, and the whole `GIT_TRACE2*` family, take a path and append to it — arbitrary
+  file append as the operator, on *every* verb including the read-only ones, to a path outside
+  the plane that charter never constructs and no containment check ever sees.
+- `GIT_SSH_COMMAND`, `GIT_SSH`, `GIT_ASKPASS`, `SSH_ASKPASS` and `GIT_PROXY_COMMAND` each name
+  a program git runs. `GIT_TERMINAL_PROMPT=0` closes the terminal prompt and not the askpass
+  helper.
+- `PATH` decides which `git` runs at all.
+
+Enumerating that is a list that is wrong the next time git is released, which is the thing
+this ADR already refuses to keep. So the child's environment is **constructed, not inherited**:
+charter builds it from the few variables git needs to work (`HOME`, `PATH` pinned to a
+resolved absolute git, the locale, and the credential-helper variables charter's own auth
+design requires), and nothing else is passed through. A variable git grows next year is absent
+by default rather than present until someone notices.
+
+The denylist test stays as a second line — `git rev-parse --local-env-vars` must name nothing
+that survives into the child — because it turns a mistake in the allowlist into a red test
+rather than a redirection. But it is the check on the fix, not the fix.
 
 ## Nothing records a worktree except git
 
@@ -139,6 +161,14 @@ lands on what the kernel resolves it to. So worktree paths get a stricter bounda
 plane's data directories — the workspace's own worktree root — and the path handed to git is
 resolved, link-free and absolute before git sees it. The design document states, per path,
 which check runs.
+
+**And that boundary is anchored above the part an attacker can move.** Resolving *both* ends —
+asking whether the resolved path starts with the resolved root — is vacuous exactly when it
+matters: point `workspaces/<ws>/.worktrees` at somewhere else and the root resolves there too,
+so every path under it "starts with" it and passes. The anchor is therefore
+`workspaces/<ws>`, which charter created and which the plane's own gate already covers, and
+`.worktrees` itself is required to be link-free rather than followed. A check whose reference
+point the attack can relocate is not a check.
 
 ## A worktree charter cuts carries no harness layer, and says so
 
@@ -229,7 +259,12 @@ says every ported module, not every ported verb charter found convenient.
 - A charter-side file listing worktrees, for any reason, including performance.
 - Inferring a piece's base branch instead of recording it — and inferring that an absent
   record means the worktree is foreign.
-- Gating a worktree path against the plane when the write lands in a workspace.
+- Gating a worktree path against the plane when the write lands in a workspace, or anchoring
+  that gate on a path the attack can relocate.
+- Naming a branch to git as a bare string. Every ref charter passes is fully qualified
+  (`refs/heads/<branch>`): a branch legally named `@` makes `git merge --ff-only @` resolve
+  HEAD instead, print "Already up to date" and exit 0 — a merge charter would report as
+  successful that landed nothing.
 - A silent unwired worktree: if a warning, the label or the persona refusal is removed, the
   layer is ported first.
 - Replacing the differential's tree comparison with a comparison of command output.

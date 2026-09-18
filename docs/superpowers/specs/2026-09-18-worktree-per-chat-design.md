@@ -68,6 +68,12 @@ The branch name is checked for a leading `-` by charter and not by git, because 
 starting with `-` is an *argument* by the time git sees it — `git check-ref-format --branch
 --upload-pack=…` is the injection, and delegating the check does not prevent it.
 
+**Every ref charter names to git is fully qualified**: `refs/heads/<branch>`, never the bare
+name. A branch may legally be called `@`, and `git merge --ff-only @` then resolves HEAD
+rather than the branch — measured: "Already up to date", exit 0, HEAD unmoved, while
+`refs/heads/@` merges the work correctly. A bare name makes charter report a successful merge
+that landed nothing. `--` does not help; qualification does.
+
 **`git check-ref-format --branch` resolves as well as validates.** Measured on git 2.50.1,
 `git check-ref-format --branch '@{-1}'` prints `other` and exits 0: the `@{-n}` syntax names
 the previously checked-out branch. A name that passes the check is therefore not necessarily
@@ -82,15 +88,26 @@ Three distinct checks, and which one runs where is not left to a reader's infere
 
 | Path | Check |
 | --- | --- |
-| `.worktrees` (created by `create_dir_all`) | `within_workspace` |
-| `.worktrees/<repo>` (created) | `within_workspace` |
-| `.worktrees/<repo>/<piece>` (created, removed) | `within_workspace`, **and** `contain::no_link_on_the_way` |
-| the clone `workspaces/<ws>/<repo>` (git writes `.git/worktrees/<id>` into it) | `contain::writable`, **and** `contain::no_link_on_the_way` |
+| `.worktrees` (created by `create_dir_all`) | `within_workspace` **and** `no_link_on_the_way` |
+| `.worktrees/<repo>` (created) | `within_workspace` **and** `no_link_on_the_way` |
+| `.worktrees/<repo>/<piece>` (created, removed) | `within_workspace` **and** `no_link_on_the_way` |
+| the clone `workspaces/<ws>/<repo>` (git writes `.git/worktrees/<id>` into it) | `contain::writable` **and** `no_link_on_the_way` |
 
-`within_workspace` is new and narrow: the resolved path must start with the resolved
-`workspaces/<ws>/.worktrees`. `contain::writable` is not sufficient here — it confines to the
-plane's *data directories*, so a path resolving into **another workspace** passes it. That is
-not theoretical:
+Both checks on every row, including the ones the first draft gave only one. `.worktrees` is
+the component whose corruption defeats everything below it, and it was the row with the
+weakest check. And all four run in **`add`, `remove`, `merge` and `list` alike** — `remove` is
+the destructive one and was the verb the first draft left on `contain::writable`.
+
+`within_workspace` is new and narrow, and its anchor matters more than its comparison: the
+resolved path must start with **`workspaces/<ws>` resolved**, and `.worktrees` must itself be
+link-free. Resolving the worktree root and comparing against *that* would be vacuous exactly
+when it counts — point `.worktrees` at another workspace and the root resolves there too, so
+everything under it "starts with" it and passes. The anchor has to be a path the attack cannot
+move, which is the workspace directory charter created.
+
+`contain::writable` is not sufficient here either — it confines to the plane's *data
+directories*, so a path resolving into **another workspace** passes it. That is not
+theoretical:
 
 ```console
 wsB/victim              ← a live, registered worktree of workspace B
@@ -114,7 +131,10 @@ the one git will act on.
 ### The slug
 
 A chat's name becomes its piece name: lowercased, runs of anything outside the alphabet
-collapsed to `-`, trimmed to 40 characters, leading and trailing `-` stripped. `🔥 hotfix`
+collapsed to `-`, trimmed to 40 characters, and any leading character that is not a letter or
+digit stripped — `_` included, because `_wip` slugs to `_wip` and the piece rule refuses a
+name that does not start alphanumeric. The invariant test drives names beginning with `_`
+and `.` for exactly that reason; without them it passes while proving nothing. `🔥 hotfix`
 gives `hotfix`; `../../etc/passwd` gives `etc-passwd`. If nothing survives, charter refuses
 and asks for a name.
 
@@ -129,19 +149,32 @@ something they would have to refuse.
 
 Through the binary (ADR 0027). Every invocation:
 
-- **withholds git's whole repository-local environment**, defined as everything
-  `git rev-parse --local-env-vars` prints, plus `GIT_CONFIG`, `GIT_CONFIG_PARAMETERS` and
-  `GIT_CONFIG_COUNT`. **A test runs that command and fails when git grows a variable the
-  code does not withhold.** Not a hand-written list: Python charter named them one by one in
-  review round 3 and missed `GIT_COMMON_DIR` in round 4, and the `GIT_CONFIG_*` family is not
-  redirection at all — it injects `core.hooksPath`, and `git worktree add` runs
-  `post-checkout`. That is arbitrary code execution as the operator, reached from the hook
-  environment charter's own binary runs in.
+- **is given an environment charter constructed**, not the one charter inherited. Git is run
+  with `env_clear()` and then the few variables it needs: `HOME`, a `PATH` charter pinned,
+  the locale, and the credential-helper variables charter's auth design requires. Nothing
+  else is passed through, so a variable git grows next year is absent by default.
+
+  Subtracting a denylist does not work here. `git rev-parse --local-env-vars` defines the
+  **redirection** surface (fifteen names on git 2.50.1, `GIT_CONFIG`,
+  `GIT_CONFIG_PARAMETERS` and `GIT_CONFIG_COUNT` among them). It does not define the
+  **execution** surface, and measured on the same git: `GIT_EXEC_PATH` makes `publish` run an
+  attacker's `git-remote-https`; `GIT_TRACE` and the `GIT_TRACE2*` family append to any path
+  on *every* verb, read-only ones included; `GIT_SSH_COMMAND`, `GIT_ASKPASS` and
+  `GIT_PROXY_COMMAND` each name a program git runs; and `PATH` decides which `git` runs at
+  all. None of those is repository-local, so no definition git prints will ever mention them.
+- **runs a `git` resolved to an absolute path**, for the same reason.
+- keeps the denylist **as a test, not as the mechanism**: nothing
+  `git rev-parse --local-env-vars` prints may survive into the child, so a mistake in the
+  allowlist is a red test rather than a redirection.
 - runs with `GIT_TERMINAL_PROMPT=0`. A credential prompt inside a subprocess the UI cannot
   show is an infinite hang. Keychain and `gh` credential helpers still work.
 - passes `--` before user-supplied values wherever the subcommand accepts it.
 
-**Timeouts apply to reads, not to writes.** `git worktree list` gets 5 s, matching Python's
+**`git worktree add` and `git merge` run with no deadline at all; `list`, `status` and
+`config` get 5 s; `publish` gets 120 s.** Stated as the rule rather than left to a constant's
+name, because the first draft defined an untimed constant and then passed the 5 s one anyway.
+
+ `git worktree list` gets 5 s, matching Python's
 `_GIT_TIMEOUT`, which is a listing timeout and always was. `git worktree add` performs a full
 checkout and `merge` rewrites a working tree; on a large repo or a cold cache either exceeds
 5 s routinely, and a killed `worktree add` leaves the registration written and the checkout
