@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { pressAndStart } from "../opening.js";
 import { browser, expect, $, $$ } from "@wdio/globals";
 import { READY } from "../harness.js";
 
@@ -88,7 +89,7 @@ function harnessesRunning(): number {
 
 describe("the window", () => {
   it("opens a session in a new tab, and the pane shows what it wrote", async () => {
-    await press("New tab");
+    await pressAndStart("New tab");
 
     const [pane] = await panes();
     await until(pane, READY);
@@ -103,7 +104,7 @@ describe("the window", () => {
   });
 
   it("splits the pane in front, and each half has a session of its own", async () => {
-    await press("Split right");
+    await pressAndStart("Split right");
 
     const [first, second] = await panes(2);
     await until(second, READY);
@@ -118,7 +119,7 @@ describe("the window", () => {
     // only come from the screen the core kept.
     const [first] = await tabNames();
 
-    await press("New tab");
+    await pressAndStart("New tab");
     // Chained, not one selector: WebdriverIO's `=text` shorthand is a whole selector and
     // cannot follow a CSS descendant part.
     await $('[role="tablist"][aria-label="Tabs"]').$(`[role="tab"]=${first}`).click();
@@ -129,7 +130,7 @@ describe("the window", () => {
 
   it("keeps fifty sessions running at once, and stays usable", async () => {
     for (let opened = 0; harnessesRunning() < 50 && opened < 60; opened++) {
-      await press("New tab");
+      await pressAndStart("New tab");
     }
 
     expect(harnessesRunning()).toBe(50);

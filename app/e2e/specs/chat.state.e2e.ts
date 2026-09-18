@@ -1,4 +1,5 @@
 import { browser, expect, $, $$ } from "@wdio/globals";
+import { pressAndStart } from "../opening.js";
 import { READY } from "../harness.js";
 
 /**
@@ -48,9 +49,7 @@ describe("what a chat is doing", () => {
   before(async () => {
     // The app opens no chat by itself; a person presses this, and so does every other
     // scenario spec.
-    const open = await $("button=New tab");
-    await open.waitForClickable({ timeout: 20_000 });
-    await open.click();
+    await pressAndStart("New tab");
   });
 
   it("shows a turn running, because the harness's hook said so", async () => {

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { pressAndStart } from "../opening.js";
 import { browser, expect, $ } from "@wdio/globals";
 import { READY } from "../harness.js";
 
@@ -99,9 +100,9 @@ async function untilAPaneShows(text: string): Promise<void> {
 describe("the window over a day", () => {
   before(async () => {
     // Two sessions, so the warning has more than one thing to name.
-    await press("New tab");
+    await pressAndStart("New tab");
     await untilAPaneShows(READY);
-    await press("New tab");
+    await pressAndStart("New tab");
     await untilAPaneShows(READY);
   });
 

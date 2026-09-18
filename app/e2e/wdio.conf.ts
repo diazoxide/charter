@@ -21,7 +21,7 @@ const app = built(process.platform === "win32" ? "charter-app.exe" : "charter-ap
 const plane = copyFixturePlane();
 // The plane declares one harness profile, which is what the picker picks from. It is
 // deliberately NOT approved: approving it is the operator's click, and the scenario makes it.
-declareAProfile(plane, built("fake-harness"));
+declareAProfile(plane, writeShell(built("fake-harness")));
 
 export const config: WebdriverIO.Config = {
   runner: "local",

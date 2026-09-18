@@ -1,5 +1,6 @@
 import { browser, expect, $, $$ } from "@wdio/globals";
 import { READY } from "../harness.js";
+import { pickAndStart, pressOnly } from "../opening.js";
 
 /**
  * Picking a harness profile and a persona, against the real app in a copy of the `daily`
@@ -7,50 +8,50 @@ import { READY } from "../harness.js";
  *
  * Nothing here is stubbed. The app reads the plane, probes the profile's own command to see
  * whether charter's guard would run in it, asks the operator to approve a command it has
- * never run, and only then starts anything. The profile's program is a script that answers
- * the probe as a wired Claude Code would and then runs the fake harness.
+ * never run, and only then starts anything. The profile's program is a wrapper that answers
+ * the probe as a wired Claude Code would and then runs the fake harness — which is also the
+ * shape ADR 0022 names, a program that is not called `claude`.
+ *
+ * Every test here is independent of the order the specs run in. They share one app process,
+ * and an approval is recorded per profile, so the approval test picks a profile of its own.
  */
-
-async function press(name: string): Promise<void> {
-  const button = await $(`button=${name}`);
-  await button.waitForClickable({ timeout: 20_000 });
-  await button.click();
-}
 
 const dialog = () => $('[role="dialog"]');
 
 describe("starting a chat", () => {
   it("asks which profile and which persona, and starts nothing until a row is picked", async () => {
-    await press("New tab");
+    const panes = (await $$('[data-testid="pane"]').getElements()).length;
+
+    await pressOnly("New tab");
 
     await expect(dialog()).toBeDisplayed();
-    // The profile the plane declares, and the personas it has. Both come off disk.
+    // Both come off the plane on disk: the profiles it declares, and the personas it has.
     await expect(dialog()).toHaveText(expect.stringContaining("scenario"));
     await expect(dialog()).toHaveText(expect.stringContaining("steward"));
-    // Nothing has started: no pane, and the tab bar is as it was.
-    expect(await $$('[data-testid="pane"]').getElements()).toHaveLength(0);
+    // Nothing has started while the question is still on screen.
+    expect(await $$('[data-testid="pane"]').getElements()).toHaveLength(panes);
+  });
+
+  it("escapes having started nothing", async () => {
+    const panes = (await $$('[data-testid="pane"]').getElements()).length;
+
+    await browser.keys(["Escape"]);
+
+    await expect(dialog()).not.toBeDisplayed();
+    expect(await $$('[data-testid="pane"]').getElements()).toHaveLength(panes);
   });
 
   it("shows the command of a profile charter has never run, and asks before running it", async () => {
     // The file is gitignored, so an edit to it leaves no diff for a reviewer to catch —
-    // the ask is about the words that are about to run.
+    // which is why the ask is about the words that are about to run, not the profile's name.
+    await pressOnly("New tab");
+    await $('input[type="radio"][name="profile"]').waitForExist({ timeout: 20_000 });
+    await (await $("label*=needs-approval")).click();
+
     await expect(dialog()).toHaveText(expect.stringContaining("claude-stand-in"));
     await expect($("button=Approve and start")).toBeDisplayed();
-  });
 
-  it("escapes without starting anything", async () => {
-    await browser.keys(["Escape"]);
-
-    await expect(dialog()).not.toBeDisplayed();
-    expect(await $$('[data-testid="pane"]').getElements()).toHaveLength(0);
-  });
-
-  it("starts the chat on that profile once the operator approves its command", async () => {
-    await press("New tab");
-    await press("Approve and start");
-
-    // The fake harness is running in the pane, which means the profile's command ran with
-    // charter's own arguments on it and the wrapper dropped them.
+    await pickAndStart();
     const pane = await $('[data-testid="pane"]');
     await pane.waitForDisplayed({ timeout: 30_000 });
     await browser.waitUntil(async () => (await pane.getText()).includes(READY), {
@@ -67,7 +68,7 @@ describe("starting a chat", () => {
     await browser.waitUntil(
       async () => {
         const text = await sidebar.getText();
-        return text.includes("scenario") && text.includes("claude");
+        return text.includes("needs-approval") && text.includes("claude");
       },
       {
         timeout: 20_000,
@@ -78,9 +79,10 @@ describe("starting a chat", () => {
   });
 
   it("does not ask again for a profile it has already run, exactly as it stands", async () => {
-    await press("New tab");
+    await pressOnly("New tab");
+    await $('input[type="radio"][name="profile"]').waitForExist({ timeout: 20_000 });
+    await (await $("label*=needs-approval")).click();
 
-    await expect(dialog()).toBeDisplayed();
     await expect($("button=Start")).toBeDisplayed();
     await browser.keys(["Escape"]);
   });

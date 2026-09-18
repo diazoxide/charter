@@ -114,22 +114,26 @@ export function copyFixturePlane(name = "daily"): string {
 }
 
 /**
- * A `charter.local.toml` in `plane` declaring one profile that runs the fake harness.
+ * A `charter.local.toml` in `plane` declaring one profile that runs `program`.
  *
- * The profile's program is a script rather than `fake-harness` itself, for two reasons that
- * are both the real thing being tested. Charter probes a profile's own command with
- * `plugin list --json` before it will start a chat on it — a chat whose config folder holds
- * no charter plugin looks guarded and is not (ADR 0022) — so the script answers that probe
- * as a wired Claude Code would. And charter puts `--session-id <uuid> --name <name>` on the
- * line for a Claude Code chat, which `fake-harness` has no flags for, so the script drops
- * the arguments the way a wrapper profile does.
+ * The profile's own program is a wrapper around `program`, and both halves of that are the
+ * real thing being tested. Charter probes a profile's command with `plugin list --json`
+ * before it will start a chat on it — a chat whose config folder holds no charter plugin
+ * looks guarded and is not (ADR 0022) — so the wrapper answers that probe as a wired Claude
+ * Code would. And charter puts `--session-id <uuid> --name <name>` on the line for a Claude
+ * Code chat, which the fake harness has no flags for, so the wrapper drops its arguments
+ * exactly as a real wrapper profile does.
  *
- * It is NOT approved here. The approval is the operator's click, and the scenario makes it.
+ * Two profiles are declared, not one. `scenario` is the default, which every spec that just
+ * wants a chat picks; `needs-approval` exists only for the picker scenario's approval test.
+ * Approving is recorded per profile and the specs share one app process, so a single profile
+ * would make that test depend on running before every other spec — and the glob does not
+ * promise that.
  */
-export function declareAProfile(plane: string, fakeHarness: string): void {
-  const program = join(plane, "claude-stand-in");
+export function declareAProfile(plane: string, program: string): void {
+  const wrapper = join(plane, "claude-stand-in");
   writeFileSync(
-    program,
+    wrapper,
     [
       "#!/bin/sh",
       "# Written by the scenario tests: a profile's command, which charter probes first.",
@@ -137,14 +141,11 @@ export function declareAProfile(plane: string, fakeHarness: string): void {
       '  echo \'[{"id":"charter@charter","scope":"user","enabled":true}]\'',
       "  exit 0",
       "fi",
-      `exec ${JSON.stringify(fakeHarness)} \\`,
-      "  --synthetic 4096 \\",
-      `  --sentinel ${JSON.stringify(READY)} \\`,
-      "  --interactive",
+      `exec ${JSON.stringify(program)}`,
       "",
     ].join("\n"),
   );
-  chmodSync(program, 0o755);
+  chmodSync(wrapper, 0o755);
   writeFileSync(
     join(plane, "charter.local.toml"),
     [
@@ -153,7 +154,11 @@ export function declareAProfile(plane: string, fakeHarness: string): void {
       "",
       "[harness.scenario]",
       'kind = "claude"',
-      `command = [${JSON.stringify(program)}]`,
+      `command = [${JSON.stringify(wrapper)}]`,
+      "",
+      "[harness.needs-approval]",
+      'kind = "claude"',
+      `command = [${JSON.stringify(wrapper)}]`,
       "",
     ].join("\n"),
   );
