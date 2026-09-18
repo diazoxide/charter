@@ -50,6 +50,8 @@ function core(): { asked: { cmd: string; args: unknown }[] } {
     if (cmd === "plane_root") return "/home/dev/plane";
     if (cmd === "plane_sidebar") return SIDEBAR;
     if (cmd === "running_sessions") return [];
+    if (cmd === "opened_chats") return [];
+    if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "open_session") return ++opened;
     return null;
   });
@@ -57,6 +59,8 @@ function core(): { asked: { cmd: string; args: unknown }[] } {
 }
 
 const panes = () => screen.getAllByTestId("pane").map((pane) => pane.textContent);
+// Scoped to the tab strip: the sidebar lists workspaces as a tablist too, so a query for
+// `role="tab"` across the whole window mixes a workspace in among the tabs.
 const tabs = () =>
   within(screen.getByRole("tablist", { name: "Tabs" }))
     .getAllByRole("tab")
@@ -122,27 +126,9 @@ describe("App", () => {
     expect(await screen.findByText(/No sessions/)).toBeInTheDocument();
   });
 
-  it("ends sessions the core is left holding when the window reloads", async () => {
-    // A reload leaves the window with no tabs and the core with every session it had, which
-    // no pane can ever reach again.
-    const asked: { cmd: string; args: unknown }[] = [];
-    mockIPC((cmd, args) => {
-      asked.push({ cmd, args });
-      if (cmd === "plane_root") return "/home/dev/plane";
-      if (cmd === "plane_sidebar") return SIDEBAR;
-      if (cmd === "running_sessions") return [7, 8];
-      return null;
-    });
-
-    render(<App />);
-
-    await vi.waitFor(() =>
-      expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
-        { session: 7 },
-        { session: 8 },
-      ]),
-    );
-  });
+  // What the window does with sessions the core is already holding is in
+  // `lifecycle.test.tsx`: it draws them as tabs. It used to end them, which a relaunch and a
+  // reload both now depend on it not doing.
 
   it("opens a session in a new tab", async () => {
     const { asked } = core();
@@ -182,7 +168,9 @@ describe("App", () => {
     await userEvent.click(await screen.findByRole("button", { name: "New tab" }));
     await userEvent.click(screen.getByRole("button", { name: "New tab" }));
 
-    await userEvent.click(screen.getAllByRole("tab")[0]);
+    await userEvent.click(
+      within(screen.getByRole("tablist", { name: "Tabs" })).getAllByRole("tab")[0],
+    );
 
     expect(panes()).toEqual(["session 1"]);
   });
@@ -227,6 +215,8 @@ describe("App", () => {
       if (cmd === "plane_root") return "/home/dev/plane";
       if (cmd === "plane_sidebar") return SIDEBAR;
       if (cmd === "running_sessions") return [];
+      if (cmd === "opened_chats") return [];
+      if (cmd === "chats_that_would_not_start") return [];
       if (cmd !== "open_session") return null;
       if (++opened === 1) return 1;
       await new Promise<void>((starts) => (letTheSecondSessionStart = starts));
@@ -253,6 +243,8 @@ describe("App", () => {
       if (cmd === "plane_root") return "/home/dev/plane";
       if (cmd === "plane_sidebar") return SIDEBAR;
       if (cmd === "running_sessions") return [];
+      if (cmd === "opened_chats") return [];
+      if (cmd === "chats_that_would_not_start") return [];
       throw new Error('could not start "zsh": no such file or directory');
     });
     render(<App />);

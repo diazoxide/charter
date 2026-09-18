@@ -125,7 +125,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb dbus-x11
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v7
@@ -146,6 +146,20 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: app
       - run: xvfb-run -a npm run e2e
+        if: runner.os == 'Linux'
+        working-directory: app
+      # The app ended and started again, which no scenario spec can do: WebdriverIO's service
+      # keeps one app process for a whole run, so a spec that quits takes the run with it.
+      - name: Reopening what was open, across a real relaunch
+        run: npm run e2e:relaunch
+        if: runner.os == 'macOS'
+        working-directory: app
+      # `dbus-run-session` because a Linux desktop has a session bus and a bare CI runner
+      # does not: without one the app spends 25 s in `Builder::build()` waiting out a D-Bus
+      # timeout before it ever reaches its chats. That cost is real and is filed separately;
+      # it is not what this test is for.
+      - name: Reopening what was open, across a real relaunch
+        run: dbus-run-session -- xvfb-run -a npm run e2e:relaunch
         if: runner.os == 'Linux'
         working-directory: app
       - if: failure()

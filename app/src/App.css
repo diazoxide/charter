@@ -3,6 +3,8 @@
   --paper: #181818;
   --edge: #303030;
   --lit: #6a9fb5;
+  /* What marks the answer that cannot be undone. */
+  --stop: #c05c5c;
 
   font-family: ui-sans-serif, Inter, Avenir, Helvetica, Arial, sans-serif;
   font-size: 13px;
@@ -190,4 +192,86 @@ body {
 .sidebar h2 {
   font-size: 0.85rem;
   margin: 0 0 0.25rem;
+/* What a chat that was put back says about itself: resumed, or new and why. */
+.came-back {
+  margin: 0;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+  background: var(--edge);
+  border-bottom: 1px solid var(--edge);
+}
+
+.came-back code {
+  opacity: 0.7;
+}
+
+/* Quitting asks first, over everything, because it ends every session. */
+.asking {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 55%);
+}
+
+.warning {
+  max-width: 34rem;
+  max-height: 80vh;
+  overflow: auto;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  background: var(--paper);
+  box-shadow: 0 8px 32px rgb(0 0 0 / 40%);
+}
+
+.warning h2 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
+.ending {
+  margin: 0 0 1rem;
+  padding: 0;
+  list-style: none;
+}
+
+.ending li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.2rem 0;
+  border-top: 1px solid var(--edge);
+}
+
+.ending .what {
+  min-width: 4rem;
+  opacity: 0.7;
+}
+
+.ending .where {
+  font-size: 0.8rem;
+  opacity: 0.55;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The sentence that says what charter does not know. It is not a warning to be styled away. */
+.honest {
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.answer {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+/* The answer that ends everything is marked, and it is not the one Return finds. */
+.answer .ends-it {
+  border-color: var(--stop);
+  color: var(--stop);
 }

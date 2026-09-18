@@ -25,6 +25,9 @@ allow = [
   "BSD-2-Clause",
   # File-level copyleft, used by Servo crates under Tauri (cssparser, selectors).
   "MPL-2.0",
+  # libloading, under the tray icon's Linux appindicator binding. Permissive, OSI approved
+  # and FSF free — the same terms as the BSD-2-Clause already allowed, minus a clause.
+  "ISC",
 ]
 
 [bans]

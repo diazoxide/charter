@@ -13,9 +13,8 @@ export const commands = {
 	firstFrame: () => __TAURI_INVOKE<void>("first_frame"),
 	/**  The plane the app was started in, or why there is none. */
 	planeRoot: () => typedError<string, string>(__TAURI_INVOKE("plane_root")),
-	/**  Starts a session. No program is the operator's shell. */
-	openSession: (program: string | null, args: string[], cwd: string | null, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("open_session", { program, args, cwd, columns, rows })),
-	/**  Ends a session and everything it started. */
+	openSession: (program: string | null, args: string[], cwd: string | null, name: string, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("open_session", { program, args, cwd, name, columns, rows })),
+	/**  Ends a session and everything it started. It is no longer a chat a quit would record. */
 	closeSession: (session: number) => typedError<null, string>(__TAURI_INVOKE("close_session", { session })),
 	/**  Sends what a pane typed to the session's program. */
 	sendInput: (session: number, text: string) => typedError<null, string>(__TAURI_INVOKE("send_input", { session, text })),
@@ -31,23 +30,64 @@ export const commands = {
 	/**  The sessions that are running, in the order they were opened. */
 	runningSessions: () => __TAURI_INVOKE<number[]>("running_sessions"),
 	/**
+	 *  The chats the app already has open — at a launch, the ones put back from the record.
+	 * 
+	 *  The window asks this instead of opening its own: putting the record back happens before
+	 *  there is a window, so that a relaunch does not depend on a webview having run.
+	 */
+	openedChats: () => __TAURI_INVOKE<OpenChat[]>("opened_chats"),
+	/**
+	 *  The chats this launch could not start, by name and reason. They are still recorded, and
+	 *  will be tried again at the next launch.
+	 */
+	chatsThatWouldNotStart: () => __TAURI_INVOKE<([string, string])[]>("chats_that_would_not_start"),
+	/**  Says which chat is in front, so the record brings that one back in front. */
+	chatInFront: (session: number | null) => __TAURI_INVOKE<void>("chat_in_front", { session }),
+	/**
+	 *  Asks the app to quit, the way the menu's Quit and the tray's do.
+	 * 
+	 *  It is the same function they call, so what this goes through is the real path: the ask
+	 *  is counted, the window is shown, and the window is sent `quit-asked`. The command
+	 *  palette's own quit action is this too.
+	 */
+	askToQuit: () => __TAURI_INVOKE<void>("ask_to_quit"),
+	/**  The window's answer to being asked to quit: go. */
+	quit: () => __TAURI_INVOKE<void>("quit"),
+	/**  The window's answer to being asked to quit: not now. The next ask warns again. */
+	quitCancelled: () => __TAURI_INVOKE<void>("quit_cancelled"),
+	/**  Hides the window, which is what its close button does. Every session keeps running. */
+	hideWindow: () => __TAURI_INVOKE<void>("hide_window"),
+	/**  Whether the window is on screen. The scenario tests ask; nothing in the UI does. */
+	windowShowing: () => __TAURI_INVOKE<boolean>("window_showing"),
+	/**
 	 *  The sidebar, read from the plane on disk every time it is asked for.
 	 * 
 	 *  Read fresh rather than cached: the plane is a directory the operator also edits by hand
 	 *  and another charter process writes, so a cache here would be a second answer to "what is
 	 *  on disk" that nothing invalidates.
+	 * 
+	 *  The chats are the ones `Chats` already holds — one model of a chat, not a second derived
+	 *  from the sessions. What files one under a workspace is the directory it works in, because
+	 *  nothing on the plane records a chat: `.charter/frame/` belongs to the tmux frame and the
+	 *  app stays out of it.
 	 */
 	planeSidebar: () => typedError<Sidebar, string>(__TAURI_INVOKE("plane_sidebar")),
 };
 
 /* Types */
-/**
- *  One chat in the sidebar. A chat is the app's own — nothing in the plane records it — so
- *  this is a running session, labelled by where it is working.
- */
-export type Chat = {
+/**  One chat the app has open, as the UI draws it and as the quit warning lists it. */
+export type OpenChat = {
 	session: number,
+	name: string,
 	cwd: string | null,
+	/**  The harness it runs, by the word the plane calls it — or none for a shell. */
+	harness: string | null,
+	/**  Whether it is the chat to show: at a launch, the one that was in front at the quit. */
+	in_front: boolean,
+	/**  The conversation it was resumed by, where it was. The UI says which happened. */
+	resumed: string | null,
+	/**  Why it is a new chat rather than the one it was, where it is. */
+	fresh: string | null,
 };
 
 /**
@@ -61,10 +101,12 @@ export type Sidebar = {
 	personas: string[],
 	persona: string | null,
 	/**  Chats whose directory is in no workspace, so the sidebar can still show them. */
-	unfiled: Chat[],
+	unfiled: OpenChat[],
 };
 
 /**
+ *  Starts a session, and remembers it as a chat so a quit can write it down. No program is
+ *  the operator's shell.
  *  One workspace as the sidebar draws it: what it is for, what it still means to do, and the
  *  chats working in it.
  */
@@ -74,7 +116,7 @@ export type SidebarWorkspace = {
 	path: string,
 	vision: string,
 	todos: string[],
-	chats: Chat[],
+	chats: OpenChat[],
 };
 
 /**

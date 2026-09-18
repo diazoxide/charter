@@ -13,7 +13,16 @@
 // The numbers land in target/bench/<timestamp>/results.json, and a table is printed.
 
 import { spawn, spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { cpus, platform, release, tmpdir, totalmem } from "node:os";
 import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -125,9 +134,41 @@ function activate(pid) {
   ]);
 }
 
-async function coldStart() {
-  const cwd = join(tmpdir(), "charter-bench-cold-start");
-  mkdirSync(cwd, { recursive: true });
+/**
+ * A plane for cold start to launch in, holding a record of `chats` chats to put back.
+ *
+ * With none it is a plain directory with a `charter.toml`, which is the empty-plane case.
+ * With some, the app starts that many programs in `setup`, before the window — the one
+ * thing reopening adds to a launch, and the reason this arm exists.
+ */
+function planeForColdStart(chats) {
+  const cwd = join(tmpdir(), `charter-bench-cold-start-${chats}`);
+  rmSync(cwd, { recursive: true, force: true });
+  mkdirSync(join(cwd, ".charter", "app"), { recursive: true });
+  writeFileSync(join(cwd, "charter.toml"), "");
+  const quiet = join(cwd, "quiet");
+  writeFileSync(quiet, "#!/bin/sh\nwhile :; do sleep 1; done\n");
+  chmodSync(quiet, 0o755);
+  writeFileSync(
+    join(cwd, ".charter", "app", "reopen.json"),
+    JSON.stringify({
+      version: 1,
+      at: 0,
+      chats: Array.from({ length: chats }, (_, n) => ({
+        program: quiet,
+        args: [],
+        cwd,
+        name: `bench.${n}`,
+        resume: "",
+        active: n === 0,
+      })),
+    }),
+  );
+  return cwd;
+}
+
+async function coldStart(chats = 0) {
+  const cwd = planeForColdStart(chats);
   const samples = [];
   for (let n = 0; n < Number(options["cold-starts"]); n++) {
     const from = performance.now();
@@ -307,7 +348,13 @@ function windowArm(arm) {
 
 // ---------------------------------------------------------------------------------------------
 
-if (only.has("coldstart")) results.coldStart = await coldStart();
+if (only.has("coldstart")) {
+  results.coldStart = await coldStart();
+  // The same launch with a record to put back: the app starts one program per chat in
+  // `setup`, before the window, so reopening lands inside what a person experiences as the
+  // launch. The spec's scale is fifty live sessions.
+  results.coldStartReopening50 = await coldStart(50);
+}
 
 if (only.has("hook")) results.hookCall = hookCall();
 if (only.has("tmux")) results.tmux = await tmuxReference();

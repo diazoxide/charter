@@ -23,6 +23,21 @@ function twoTabs(): Tabs {
   return openTab(openTab(noTabs(), 11), 22);
 }
 
+describe("a tab's name", () => {
+  it("is what the chat it shows is called, so a reopened tab is recognisable", () => {
+    // A tab numbered 1 says nothing about which chat came back; `ide.7` does.
+    const tabs = openTab(noTabs(), 7, "ide.7");
+
+    expect(tabs.byId[tabs.order[0]].name).toBe("ide.7");
+  });
+
+  it("falls back to the tab's own number for a chat with no name", () => {
+    const tabs = openTab(noTabs(), 7, "");
+
+    expect(tabs.byId[tabs.order[0]].name).toBe("1");
+  });
+});
+
 describe("tabs and their panes", () => {
   it("opens a tab showing one session, in front", () => {
     const tabs = openTab(noTabs(), 11);

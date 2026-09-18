@@ -17,6 +17,8 @@ export type Layout =
 
 export type Tab = {
   id: number;
+  /** What the tab bar shows: the chat's name, or the tab's own number where it has none. */
+  name: string;
   layout: Layout;
   /** The pane a split or a close acts on. */
   focused: number;
@@ -37,11 +39,19 @@ export function noTabs(): Tabs {
 }
 
 /** Opens a tab with one pane showing `session`, in front. */
-export function openTab(tabs: Tabs, session: number): Tabs {
+export function openTab(tabs: Tabs, session: number, name = ""): Tabs {
   const id = tabs.named.tabs + 1;
   const pane = tabs.named.panes + 1;
   return {
-    byId: { ...tabs.byId, [id]: { id, layout: { kind: "pane", pane, session }, focused: pane } },
+    byId: {
+      ...tabs.byId,
+      [id]: {
+        id,
+        name: name || String(id),
+        layout: { kind: "pane", pane, session },
+        focused: pane,
+      },
+    },
     order: [...tabs.order, id],
     inFront: id,
     named: { tabs: id, panes: pane },

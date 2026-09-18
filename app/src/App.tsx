@@ -1,7 +1,9 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import "./App.css";
-import { commands, type Sidebar as SidebarModel } from "./bindings";
+import { commands, type OpenChat, type Sidebar as SidebarModel } from "./bindings";
+import { QuitWarning } from "./QuitWarning";
 import { SessionPane } from "./SessionPane";
 import { Sidebar } from "./Sidebar";
 import {
@@ -30,6 +32,15 @@ function App() {
   const [trouble, setTrouble] = useState<string>();
   const [sidebar, setSidebar] = useState<SidebarModel>();
   const [focused, setFocused] = useState<string>();
+  /** The chats the core put back at this launch, so a pane can say which came back how. */
+  const [reopened, setReopened] = useState<OpenChat[]>([]);
+  /** Whether the operator is being asked about quitting. */
+  const [asking, setAsking] = useState(false);
+  /** Chats this launch could not start, by name and why. They are still recorded. */
+  const [wouldNotStart, setWouldNotStart] = useState<[string, string][]>([]);
+  /** Whether the core has answered what it already has open. Until it has, "no tabs" is
+   *  "not yet", which is not the same thing as "nothing is running". */
+  const settled = useRef(false);
 
   // The arrangement as it is right now, so that what a button does is decided here and not
   // inside a state update. React may run an update again, and a session must not be opened or
@@ -37,25 +48,67 @@ function App() {
   const now = useRef(tabs);
   const change = useCallback((how: (tabs: Tabs) => Tabs): Tabs => {
     const next = how(now.current);
+    const wasInFront = now.current.inFront;
     now.current = next;
     setTabs(next);
+    // The core records which chat was in front, so it is told whenever that changes — and
+    // only then, rather than on every split and every keystroke.
+    if (next.inFront !== wasInFront) {
+      const front = next.inFront === undefined ? undefined : next.byId[next.inFront];
+      const pane = front && panesOf(next, front.id)[0];
+      void commands.chatInFront(pane ? pane.session : null).catch(() => undefined);
+    }
     return next;
   }, []);
 
-  // A reload — during development, or after a crash in the window — leaves the core holding
-  // sessions no pane can reach. They are ended here, before any tab is opened, and once:
-  // React runs an effect twice in development, and ending a session twice is an error.
-  const swept = useRef(false);
+  // What the core already has open, which at a launch is the record put back before there
+  // was a window. The window draws them; it never ends them — a reload during development,
+  // or a crash in the window, would otherwise take the day's sessions with it.
+  //
+  // Once only: React runs an effect twice in development, and a second pass would draw
+  // every chat again.
+  const adopted = useRef(false);
   useEffect(() => {
-    if (swept.current) return;
-    swept.current = true;
+    if (adopted.current) return;
+    adopted.current = true;
     void commands
-      .runningSessions()
-      .then((left) => {
-        for (const session of left) void commands.closeSession(session);
+      .openedChats()
+      .then((open) => {
+        settled.current = true;
+        void commands
+          // A window that cannot ask, or is answered with nothing, simply says nothing.
+          .chatsThatWouldNotStart()
+          .then((trouble) => setWouldNotStart(trouble ?? []))
+          .catch(() => undefined);
+        if (open.length === 0) return;
+        setReopened(open);
+        const drawn = open.reduce((tabs, chat) => openTab(tabs, chat.session, chat.name), noTabs());
+        const front = open.findIndex((chat) => chat.in_front);
+        change(() => (front < 0 ? drawn : selectTab(drawn, drawn.order[front])));
       })
-      // Nothing to sweep is the ordinary case, and a window that cannot ask is still usable.
-      .catch(() => undefined);
+      // Nothing open is the ordinary first launch, and a window that cannot ask is still
+      // a window the operator can open a chat in.
+      .catch(() => {
+        settled.current = true;
+      });
+  }, [change]);
+
+  // Something asked the app to quit: the menu, the tray, or Cmd-Q. The answer is the
+  // operator's, and it is given here because this is where what would be ended is known.
+  useEffect(() => {
+    // The catch is attached here and not in the cleanup: a window that cannot listen is
+    // still a window, and a rejection nothing is holding yet is an unhandled one.
+    const listening = listen("quit-asked", () => {
+      // Nothing to end is nothing to warn about — but only once the core has said what it
+      // has open. Before that, no tabs means "not yet", and quitting on it would end every
+      // chat the window had not drawn.
+      if (settled.current && now.current.order.length === 0)
+        void commands.quit().catch(() => undefined);
+      else setAsking(true);
+    }).catch(() => undefined);
+    // Unlistening can fail too — the window may be going away under it — and a cleanup
+    // that throws into nothing is an unhandled rejection, not a diagnosis.
+    return () => void listening.then((stop) => stop?.()).catch(() => undefined);
   }, []);
 
   // The sidebar is read from the plane, and re-read whenever the chats change: the plane is a
@@ -66,14 +119,16 @@ function App() {
     void commands
       .planeSidebar()
       .then((answer) => {
-        // Only an `ok` answer is used, and the check is `!== "ok"` rather than
-        // `=== "error"`: the state updater below runs on the NEXT render, outside this
-        // promise, so nothing here would catch a throw from a malformed answer.
-        if (answer.status !== "ok") {
+        // Only an `ok` answer WITH a body is used. Both halves are load-bearing: the
+        // state updater below runs on the NEXT render, outside this promise, so nothing
+        // here catches a throw from it — and an answer whose `data` is absent reads as
+        // `ok` all the same. The window must not go blank because one command answered
+        // oddly; it has its panes to draw.
+        const next = answer.status === "ok" ? answer.data : undefined;
+        if (!next?.workspaces) {
           setSidebar(undefined);
           return;
         }
-        const next = answer.data;
         setSidebar(next);
         // Focus follows the plane rather than being guessed: the first workspace, until
         // somebody picks another and while that one still exists.
@@ -123,27 +178,47 @@ function App() {
   // relating the two. Null — the operator's home — until a plane is read.
   const startIn = sidebar?.workspaces.find((ws) => ws.name === focused)?.path ?? null;
 
-  /** Starts a session for a new pane, or says why it could not start. */
-  const startSession = useCallback(async (): Promise<number | undefined> => {
-    const opened = await commands
-      .openSession(null, [], startIn, STARTING_SIZE.columns, STARTING_SIZE.rows)
-      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-    if (opened.status === "error") {
-      setTrouble(opened.error);
-      return undefined;
-    }
-    setTrouble(undefined);
-    return opened.data;
-  }, [startIn]);
+  /** Starts a session for a new pane, or says why it could not start. The name is what the
+   *  tab will be called, so the record brings the chat back under it. */
+  const startSession = useCallback(
+    async (name: string): Promise<number | undefined> => {
+      const opened = await commands
+        .openSession(null, [], startIn, name, STARTING_SIZE.columns, STARTING_SIZE.rows)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (opened.status === "error") {
+        setTrouble(opened.error);
+        return undefined;
+      }
+      setTrouble(undefined);
+      return opened.data;
+    },
+    [startIn],
+  );
 
   const newTab = useCallback(async () => {
-    const session = await startSession();
-    if (session !== undefined) change((tabs) => openTab(tabs, session));
+    const name = String(now.current.named.tabs + 1);
+    const session = await startSession(name);
+    if (session !== undefined) change((tabs) => openTab(tabs, session, name));
   }, [change, startSession]);
+
+  const quit = useCallback(() => {
+    setAsking(false);
+    void commands.quit().catch(() => undefined);
+  }, []);
+
+  /** Not now: the core is told, so the next ask warns again instead of quitting outright. */
+  const dontQuit = useCallback(() => {
+    setAsking(false);
+    void commands.quitCancelled().catch(() => undefined);
+  }, []);
 
   const split = useCallback(
     async (direction: Direction) => {
-      const session = await startSession();
+      const name =
+        now.current.inFront === undefined
+          ? String(now.current.named.tabs + 1)
+          : now.current.byId[now.current.inFront].name;
+      const session = await startSession(name);
       if (session === undefined) return;
       const before = now.current;
       // The tab that was to be split can have closed while the session was starting. Nothing
@@ -173,10 +248,18 @@ function App() {
   );
 
   const inFront = tabs.inFront === undefined ? undefined : tabs.byId[tabs.inFront];
+  // The chats still open, in the order the tab bar shows them: what a quit would end.
+  const open = tabs.order.flatMap((id) =>
+    panesOf(tabs, id).map(({ session }) => chatOf(reopened, session, tabs.byId[id].name)),
+  );
+  const frontChat =
+    inFront && reopened.find((chat) => chat.session === panesOf(tabs, inFront.id)[0]?.session);
 
   return (
     <main className="window">
       <header className="bar">
+        {/* Named, because the sidebar lists workspaces as a tablist too and a query for
+            `role="tab"` across the whole window would mix the two. */}
         <div className="tabs" role="tablist" aria-label="Tabs">
           {tabs.order.map((id) => (
             <span className="tab" key={id}>
@@ -185,9 +268,9 @@ function App() {
                 aria-selected={id === tabs.inFront}
                 onClick={() => change((tabs) => selectTab(tabs, id))}
               >
-                {id}
+                {tabs.byId[id].name}
               </button>
-              <button aria-label={`Close tab ${id}`} onClick={() => close(id)}>
+              <button aria-label={`Close tab ${tabs.byId[id].name}`} onClick={() => close(id)}>
                 ×
               </button>
             </span>
@@ -217,6 +300,30 @@ function App() {
         </p>
       )}
 
+      {/* What happened to the chat in front when it was put back. Only a chat that came from
+          the record has either, so a chat the operator just opened says nothing. */}
+      {frontChat?.resumed && (
+        <p className="came-back">
+          <strong>{frontChat.name}</strong> was resumed — conversation{" "}
+          <code>{frontChat.resumed}</code>
+        </p>
+      )}
+      {/* Only for a harness. Every chat is a shell until the harness picker lands, and a
+          shell has no conversation to bring back — saying so on every relaunch, forever,
+          is noise about the normal case. */}
+      {frontChat?.fresh && frontChat.harness && (
+        <p className="came-back">
+          <strong>{frontChat.name}</strong> came back as a new chat: {frontChat.fresh}
+        </p>
+      )}
+
+      {wouldNotStart.map(([name, why]) => (
+        <p className="came-back trouble" role="status" key={name}>
+          <strong>{name}</strong> did not start ({why}). It is still recorded, and will be tried
+          again at the next launch.
+        </p>
+      ))}
+
       <div className="body">
         {sidebar && <Sidebar sidebar={sidebar} focused={focused} onFocus={setFocused} />}
         <div className="panes">
@@ -231,7 +338,25 @@ function App() {
           )}
         </div>
       </div>
+
+      {asking && <QuitWarning chats={open} onQuit={quit} onCancel={dontQuit} />}
     </main>
+  );
+}
+
+/** What the quit warning says about one session: what the core told us, or the little the
+ *  window knows about a chat the operator opened itself. */
+function chatOf(reopened: OpenChat[], session: number, name: string): OpenChat {
+  return (
+    reopened.find((chat) => chat.session === session) ?? {
+      session,
+      name,
+      cwd: null,
+      harness: null,
+      in_front: false,
+      resumed: null,
+      fresh: null,
+    }
   );
 }
 

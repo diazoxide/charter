@@ -1,4 +1,4 @@
-import type { Chat, Sidebar as SidebarModel } from "./bindings";
+import type { OpenChat, Sidebar as SidebarModel } from "./bindings";
 
 /** The left-hand side: every workspace with its chats, and the focused one's todos.
  *
@@ -70,11 +70,15 @@ export function Sidebar({
   );
 }
 
-/** One chat: which session it is, and where it is working. */
-function ChatRow({ chat }: { chat: Chat }) {
+/** One chat: what it is called, what it runs, and where it is working.
+ *
+ *  The same `OpenChat` the quit warning lists and the record brings back — one model of a
+ *  chat, not a second derived from the sessions. */
+function ChatRow({ chat }: { chat: OpenChat }) {
   return (
     <>
-      <span className="session">session {chat.session}</span>
+      <span className="session">{chat.name}</span>
+      {chat.harness && <span className="harness"> · {chat.harness}</span>}
       {chat.cwd && <code className="cwd">{chat.cwd}</code>}
     </>
   );

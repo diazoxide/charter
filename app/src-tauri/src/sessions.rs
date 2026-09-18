@@ -216,7 +216,7 @@ fn gone(id: u32) -> String {
 }
 
 /// The operator's shell, or a plain one where the environment does not name it.
-fn shell() -> String {
+pub fn shell() -> String {
     std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned())
 }
 

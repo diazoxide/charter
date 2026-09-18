@@ -2,9 +2,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { Sidebar } from "./Sidebar";
-import type { Sidebar as SidebarModel } from "./bindings";
+import type { OpenChat, Sidebar as SidebarModel } from "./bindings";
 
 afterEach(cleanup);
+
+/** One chat as the core reports it. The sidebar shows what it is called, not its id. */
+function chat(session: number, name: string, cwd: string): OpenChat {
+  return { session, name, cwd, harness: null, in_front: false, resumed: null, fresh: null };
+}
 
 const model: SidebarModel = {
   root: "/home/dev/plane",
@@ -18,8 +23,8 @@ const model: SidebarModel = {
       vision: "Ship the widget",
       todos: ["Review the rollout plan", "Write the migration"],
       chats: [
-        { session: 1, cwd: "/home/dev/plane/workspaces/alpha" },
-        { session: 2, cwd: "/home/dev/plane/workspaces/alpha/svc" },
+        chat(1, "ide.1", "/home/dev/plane/workspaces/alpha"),
+        chat(2, "ide.2", "/home/dev/plane/workspaces/alpha/svc"),
       ],
     },
     {
@@ -45,8 +50,8 @@ describe("Sidebar", () => {
     render(<Sidebar sidebar={model} focused="alpha" onFocus={() => {}} />);
 
     const alpha = screen.getByTestId("workspace-alpha");
-    expect(alpha).toHaveTextContent("session 1");
-    expect(alpha).toHaveTextContent("session 2");
+    expect(alpha).toHaveTextContent("ide.1");
+    expect(alpha).toHaveTextContent("ide.2");
     expect(screen.getByTestId("workspace-beta")).toHaveTextContent("No chats");
   });
 
@@ -98,11 +103,11 @@ describe("Sidebar", () => {
   it("shows a chat working outside every workspace rather than dropping it", () => {
     const stray: SidebarModel = {
       ...model,
-      unfiled: [{ session: 9, cwd: "/tmp" }],
+      unfiled: [chat(9, "stray.1", "/tmp")],
     };
 
     render(<Sidebar sidebar={stray} focused="alpha" onFocus={() => {}} />);
 
-    expect(screen.getByTestId("unfiled")).toHaveTextContent("session 9");
+    expect(screen.getByTestId("unfiled")).toHaveTextContent("stray.1");
   });
 });

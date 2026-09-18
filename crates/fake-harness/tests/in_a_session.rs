@@ -21,20 +21,32 @@ fn harness(args: &[&str]) -> Session {
     .expect("the fake harness starts")
 }
 
-fn screen_until(session: &Session, text: &str) -> Screen {
+/// The screen once `enough` is true of it, or a failure saying what it showed instead.
+///
+/// Nothing may read the screen once and expect the program's whole output to be on it —
+/// not even after the program has exited. `Session::wait` answers when the PROGRAM is
+/// gone, and the bytes it wrote are still travelling: the reader thread has its own pace,
+/// and on a loaded machine it loses this race.
+fn screen_while(session: &Session, what: &str, enough: impl Fn(&Screen) -> bool) -> Screen {
     let deadline = Instant::now() + PATIENCE;
     loop {
         let screen = session.screen();
-        if screen.lines.iter().any(|line| line.contains(text)) {
+        if enough(&screen) {
             return screen;
         }
         assert!(
             Instant::now() < deadline,
-            "{text:?} never appeared: {:#?}",
+            "{what} never happened: {:#?}",
             screen.lines
         );
         std::thread::sleep(Duration::from_millis(10));
     }
+}
+
+fn screen_until(session: &Session, text: &str) -> Screen {
+    screen_while(session, &format!("{text:?} appearing"), |screen| {
+        screen.lines.iter().any(|line| line.contains(text))
+    })
 }
 
 #[test]
@@ -74,11 +86,12 @@ fn loops_replay_the_output_again() {
     let session = harness(&["--corpus", corpus.to_str().unwrap(), "--loops", "3"]);
 
     assert_eq!(session.wait(PATIENCE).unwrap(), Some(Exit::Code(0)));
-    let screen = session.screen();
-    assert_eq!(
-        screen.lines.iter().filter(|line| *line == "once").count(),
-        3
-    );
+    // Waited for, not read once: the program being gone does not mean its last bytes have
+    // reached the screen, and reading straight after the exit is a race this test used to
+    // lose on a loaded runner.
+    screen_while(&session, "three replays arriving", |screen| {
+        screen.lines.iter().filter(|line| *line == "once").count() == 3
+    });
 }
 
 #[test]
