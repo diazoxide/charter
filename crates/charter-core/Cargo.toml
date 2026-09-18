@@ -13,7 +13,10 @@ alacritty_terminal = "0.26"
 # The same searcher vte uses to find these sequences in the same bytes.
 memchr = "2"
 portable-pty = "0.9"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 thiserror.workspace = true
+uuid = { version = "1.26.1", features = ["v4"] }
 
 [dev-dependencies]
 proptest = "1"
