@@ -251,16 +251,7 @@ pub fn detect(p: &Profile, cwd: &Path, root: &Path) -> Wiring {
     }
     match p.kind.as_str() {
         "claude" => claude(p, cwd, root),
-        // Codex's three marks are a file read, and its hook trust is granted only inside a
-        // Codex session — so it is never wired by a launch. Ported in its own pass.
-        "codex" => Wiring {
-            state: State::Unknown,
-            detail: format!(
-                "charter has no wiring check for {} in this app yet",
-                whole(&p.kind)
-            ),
-            fix: install_fix(p),
-        },
+        "codex" => codex(p, root),
         // A kind charter has no wiring check for is an UNKNOWN and therefore a refusal, not
         // a pass: the day a kind joins without one, this is the answer that says so.
         other => Wiring {
@@ -717,4 +708,369 @@ impl Drop for Lock {
             let _ = rustix::fs::flock(&file, rustix::fs::FlockOperation::Unlock);
         }
     }
+}
+
+/// Where Codex keeps an installed plugin, under its home.
+const CODEX_PLUGIN_CACHE: &str = "plugins/cache";
+
+/// The key prefix Codex writes its hook-trust ledger under, per plugin.
+const CODEX_TRUST_PREFIX: &str = "charter@charter:hooks/hooks.json:";
+
+/// The handler of charter's GUARD — the hook on `Bash` that refuses a command.
+///
+/// **A trusted hook is not a trusted guard**: Codex asks about each hook separately, and
+/// neither an approved SessionStart nor an approved dispatch hook says anything about
+/// whether THIS one runs before a shell command. Named by handler and not by position,
+/// because Codex keys trust by `<event>:<group>:<hook>` within the installed plugin's own
+/// `hooks/hooks.json`, and a position is a fact about one version of that file.
+const CODEX_GUARD_HANDLER: &str = "pretooluse";
+
+/// How a Codex plugin is installed. Printed with `CODEX_HOME=` in front of it, never run:
+/// it installs software into an account folder, and running the command IS the consent.
+const CODEX_COMMANDS: [[&str; 5]; 2] = [
+    [
+        "codex",
+        "plugin",
+        "marketplace",
+        "add",
+        "https://github.com/diazoxide/charter",
+    ],
+    ["codex", "plugin", "add", PLUGIN_ID, ""],
+];
+
+/// The step no command can take: Codex asks a person, in a session, to trust each hook.
+const CODEX_APPROVE: &str = "start codex once and approve charter's hooks when it asks";
+
+/// Codex's config file: `$CODEX_HOME/config.toml`, else `~/.codex/config.toml`.
+///
+/// There is no project-level config — a `.codex/config.toml` planted in a project is
+/// ignored. **The home is the one charter can SEE**: one a wrapper script exports on its way
+/// to `codex` is invisible here.
+fn codex_config(env: &BTreeMap<String, String>) -> PathBuf {
+    match env.get("CODEX_HOME").filter(|home| !home.is_empty()) {
+        Some(home) => PathBuf::from(home),
+        None => profiles::home()
+            .unwrap_or_else(|| PathBuf::from("~"))
+            .join(".codex"),
+    }
+    .join("config.toml")
+}
+
+/// Codex: three marks in `$CODEX_HOME/config.toml`, and it needs all three.
+///
+/// The plugin declares the hooks, the policy line is the only thing that can tell a Codex
+/// shell which harness it is, and **a hook Codex has not trusted is inert** — so a plugin
+/// nobody approved is installed and does nothing, which reads exactly like wired to anything
+/// that stops at the plugin table.
+///
+/// The trust rule is the measured one and deliberately weak: `trusted_hash` cannot be
+/// recomputed from the plugin's `hooks.json`, and Codex writes an entry per hook LAZILY, as
+/// each first fires — a wired home on this machine held 12 of the plugin's 18 keys
+/// (2026-09-18), so "an entry for every key" would call it unwired. What charter can honestly
+/// say is that charter's guard hook was approved in this home at least once.
+fn codex(p: &Profile, root: &Path) -> Wiring {
+    let env = environment(p, root);
+    let path = codex_config(&env);
+    let where_ = whole(&path.display().to_string());
+    let fix = install_fix(p);
+
+    let doc = match std::fs::read_to_string(&path) {
+        Ok(text) => match text.parse::<toml::Table>() {
+            Ok(doc) => doc,
+            Err(e) => {
+                return Wiring {
+                    state: State::Unknown,
+                    detail: format!("{where_} could not be read ({})", whole(&e.to_string())),
+                    fix,
+                };
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
+        Err(e) => {
+            return Wiring {
+                state: State::Unknown,
+                detail: format!("{where_} could not be read ({})", whole(&e.to_string())),
+                fix,
+            };
+        }
+    };
+    let home = path.parent().unwrap_or(Path::new("."));
+    let guards = match codex_guard_keys(home) {
+        Ok(keys) => keys,
+        Err(why) => {
+            return Wiring {
+                state: State::Unknown,
+                detail: why,
+                fix,
+            };
+        }
+    };
+    // Every level is checked for being a table before it is read, because each is a line a
+    // chat can write: `plugins."charter@charter" = true` parses. Read without the check that
+    // is a crash in a launch; read with it, an unknown that says which key.
+    let plugin = match table(&doc, &["plugins", PLUGIN_ID]) {
+        Ok(found) => found,
+        Err(key) => return codex_shape(&where_, &key, fix),
+    };
+    let policy = match table(&doc, &["shell_environment_policy", "set"]) {
+        Ok(found) => found,
+        Err(key) => return codex_shape(&where_, &key, fix),
+    };
+    let ledger = match table(&doc, &["hooks", "state"]) {
+        Ok(found) => found,
+        Err(key) => return codex_shape(&where_, &key, fix),
+    };
+
+    let mut trusted = Vec::new();
+    for (key, entry) in &ledger {
+        // Only the guard's own entries are read: another hook's entry, in any shape, says
+        // nothing about the guard.
+        if !guards.contains(key) {
+            continue;
+        }
+        let Some(entry) = entry.as_table() else {
+            return codex_shape(&where_, &format!("hooks.state.\"{}\"", whole(key)), fix);
+        };
+        if entry
+            .get("trusted_hash")
+            .and_then(toml::Value::as_str)
+            .is_some_and(|hash| !hash.is_empty())
+        {
+            trusted.push(key.clone());
+        }
+    }
+
+    let named = policy.get("CHARTER_HARNESS").and_then(toml::Value::as_str) == Some("codex");
+    let mut missing = Vec::new();
+    if plugin.get("enabled") != Some(&toml::Value::Boolean(true)) {
+        missing.push(format!("{PLUGIN_ID} is not an enabled plugin"));
+    }
+    if !named {
+        missing.push("shell_environment_policy.set has no CHARTER_HARNESS = \"codex\"".to_owned());
+    }
+    if guards.is_empty() {
+        missing.push(format!(
+            "no copy of {PLUGIN_ID} under {} places charter's guard hook, so there is no \
+             guard to trust",
+            whole(&home.join(CODEX_PLUGIN_CACHE).display().to_string())
+        ));
+    } else if trusted.is_empty() {
+        missing.push(
+            "no guard hook of charter's is trusted — approve them in a codex session".to_owned(),
+        );
+    }
+    if missing.is_empty() {
+        return Wiring {
+            state: State::Wired,
+            detail: format!(
+                "{where_}: plugin enabled, harness named, {} trusted guard hook(s)",
+                trusted.len()
+            ),
+            fix: String::new(),
+        };
+    }
+    let fix = if named {
+        // Charter's own half is already written, so what is left is Codex's own commands and
+        // a trust prompt only a person can answer. Naming `charter harness install` would
+        // name the command that has already done everything it can.
+        let mut steps = codex_steps(home);
+        let last = steps.pop().unwrap_or_default();
+        format!("{}; then {last}", steps.join("; "))
+    } else if doc.contains_key("shell_environment_policy") {
+        // An install answers `present` for ANY `[shell_environment_policy]` table, so
+        // pointing back at it would print a fix that changes nothing.
+        format!(
+            "{where_} already has a [shell_environment_policy] table without charter's line, \
+             and charter does not edit TOML it did not write — nothing was changed. Add this \
+             line inside that table:\n  set = {{ CHARTER_HARNESS = \"codex\" }}\nor, if the \
+             table already has a `set`, add CHARTER_HARNESS = \"codex\" to it."
+        )
+    } else {
+        fix
+    };
+    Wiring {
+        state: State::Unwired,
+        detail: format!("{where_}: {}", missing.join("; ")),
+        fix,
+    }
+}
+
+fn codex_shape(where_: &str, key: &str, fix: String) -> Wiring {
+    Wiring {
+        state: State::Unknown,
+        detail: format!(
+            "{where_} holds {key} as something other than a table, which Codex never writes"
+        ),
+        fix,
+    }
+}
+
+/// Walk `path` through `doc`, requiring a table at each step. `Err` names the dotted key
+/// whose shape Codex never writes.
+fn table(doc: &toml::Table, path: &[&str]) -> Result<toml::Table, String> {
+    let mut here = doc.clone();
+    let mut seen: Vec<String> = Vec::new();
+    for key in path {
+        seen.push(if key.contains('@') {
+            format!("\"{key}\"")
+        } else {
+            (*key).to_owned()
+        });
+        match here.get(*key) {
+            None => return Ok(toml::Table::new()),
+            Some(toml::Value::Table(found)) => here = found.clone(),
+            Some(_) => return Err(seen.join(".")),
+        }
+    }
+    Ok(here)
+}
+
+/// The trust-ledger keys that are charter's guard in `home`, or why charter could not read
+/// where the guard is.
+///
+/// Read out of the INSTALLED plugin's `hooks/hooks.json`, because that file is what Codex
+/// numbers its keys against: charter's own `hooks.json` has moved groups between releases,
+/// so a hard-coded index is right for one version and silently names the dispatch hook in
+/// another.
+///
+/// **Every cached copy must agree**, and a key only one of them calls the guard is not one:
+/// Codex can keep an older copy beside the current one and charter cannot tell which of them
+/// it numbered the ledger by, so the rule is the one that fails closed. No copy at all is an
+/// empty set — nothing to trust. A copy charter cannot read is an unknown, because it may be
+/// the one that places the guard.
+fn codex_guard_keys(home: &Path) -> Result<std::collections::BTreeSet<String>, String> {
+    let root = home
+        .join(CODEX_PLUGIN_CACHE)
+        .join("charter")
+        .join("charter");
+    let versions = match std::fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(std::collections::BTreeSet::new());
+        }
+        Err(e) => {
+            return Err(format!(
+                "{} could not be read ({})",
+                whole(&root.display().to_string()),
+                whole(&e.to_string())
+            ));
+        }
+    };
+    let mut found: Vec<std::collections::BTreeSet<String>> = Vec::new();
+    for version in versions.flatten() {
+        if !version.path().is_dir() {
+            continue;
+        }
+        let file = version.path().join("hooks").join("hooks.json");
+        match std::fs::read_to_string(&file) {
+            Ok(text) => match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(doc) => found.push(guard_positions(&doc)),
+                Err(e) => {
+                    return Err(format!(
+                        "{} could not be read ({})",
+                        whole(&file.display().to_string()),
+                        whole(&e.to_string())
+                    ));
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                found.push(std::collections::BTreeSet::new());
+            }
+            Err(e) => {
+                return Err(format!(
+                    "{} could not be read ({})",
+                    whole(&file.display().to_string()),
+                    whole(&e.to_string())
+                ));
+            }
+        }
+    }
+    Ok(found
+        .into_iter()
+        .reduce(|a, b| a.intersection(&b).cloned().collect())
+        .unwrap_or_default())
+}
+
+/// Every `<prefix><event>:<group>:<hook>` in a plugin `hooks.json` whose command runs the
+/// guard handler. Codex spells the event in snake case (`PreToolUse` → `pre_tool_use`,
+/// measured on its own ledger). Anything not in the file's documented shape places no guard.
+fn guard_positions(doc: &serde_json::Value) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    let Some(events) = doc.get("hooks").and_then(serde_json::Value::as_object) else {
+        return out;
+    };
+    for (event, groups) in events {
+        let snake = snake_case(event);
+        let Some(groups) = groups.as_array() else {
+            continue;
+        };
+        for (g, group) in groups.iter().enumerate() {
+            let Some(entries) = group.get("hooks").and_then(serde_json::Value::as_array) else {
+                continue;
+            };
+            for (h, hook) in entries.iter().enumerate() {
+                let Some(command) = hook.get("command").and_then(serde_json::Value::as_str) else {
+                    continue;
+                };
+                if hook_handlers(command)
+                    .iter()
+                    .any(|w| w == CODEX_GUARD_HANDLER)
+                {
+                    out.insert(format!("{CODEX_TRUST_PREFIX}{snake}:{g}:{h}"));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `PreToolUse` → `pre_tool_use`.
+fn snake_case(event: &str) -> String {
+    let mut out = String::with_capacity(event.len() + 4);
+    for (i, c) in event.chars().enumerate() {
+        if i > 0 && c.is_uppercase() {
+            out.push('_');
+        }
+        out.extend(c.to_lowercase());
+    }
+    out
+}
+
+/// Every `<name>` in `charter hook <name>` inside a command string. Only that spelling
+/// counts: a manifest also runs other charter commands, and those place no guard.
+fn hook_handlers(command: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let words: Vec<&str> = command.split_whitespace().collect();
+    for window in words.windows(3) {
+        if window[0].ends_with("charter")
+            && window[1] == "hook"
+            && !window[2].is_empty()
+            && window[2]
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            out.push(window[2].to_owned());
+        }
+    }
+    out
+}
+
+/// Codex's own install steps with `CODEX_HOME=` in front of each, then the approval only a
+/// person can give. A list, so no caller has to split a sentence back into steps — a home
+/// whose name holds the separator would come apart in the wrong place.
+fn codex_steps(home: &Path) -> Vec<String> {
+    let prefix = format!("CODEX_HOME={}", quote(&home.display().to_string()));
+    let mut steps: Vec<String> = CODEX_COMMANDS
+        .iter()
+        .map(|argv| {
+            let words: Vec<String> = argv
+                .iter()
+                .filter(|w| !w.is_empty())
+                .map(|w| quote(w))
+                .collect();
+            whole(&format!("{prefix} {}", words.join(" ")))
+        })
+        .collect();
+    steps.push(CODEX_APPROVE.to_owned());
+    steps
 }
