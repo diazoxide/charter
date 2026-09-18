@@ -74,7 +74,11 @@ When two choices conflict, the higher priority wins.
      a harness session, and a chat that inherited its `CLAUDE_PID` would report the launcher's
      identity as its own.
 4. **A worktree per writing chat.** A chat that writes to a repo gets its own git worktree by
-   default. The sidebar shows its branch. Merging back is an explicit action.
+   default. The sidebar shows its branch. Merging back is an explicit action — `merge` lands
+   it locally, fast-forward only, into the branch the piece was cut from; `publish` pushes;
+   neither does the other, and neither takes `--all` (ADR 0020). Git is the only registry,
+   reached through the git binary: **ADR 0027**. The design is
+   `docs/superpowers/specs/2026-09-18-worktree-per-chat-design.md`.
 5. **Lifecycle.** Closing the window hides the app to the tray. Quitting warns if a session is
    mid-turn and then ends every session. On the next launch, chats reopen through each
    harness's own resume.
@@ -175,7 +179,9 @@ Each milestone is something the operator actually uses, not a layer.
   - the plane read *and written* in Rust: workspaces, chats, personas, todos, profiles
   - the workspace sidebar and the "needs you" queue
   - chats with the profile and persona picker
-  - a worktree per chat
+  - a worktree per chat (ADR 0027) — with one gap named there and not papered over: the
+    harness layer is not yet written into a worktree, so such a chat runs without charter's
+    guards, its row says `unwired`, and a persona cannot be attached to it
   - read-only panels and the palette
   - lifecycle: tray, a quit warning mid-turn, reopen on relaunch
   - `charter hook …` answered by the Rust binary, which is also what meets the hook limit
