@@ -195,16 +195,30 @@ const DATA_DIRS: [&str; 3] = ["personas", "workspaces", ".charter/persona-state"
 
 /// A write charter refused, with the reason the operator sees.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
-#[error(
-    "'{path}' resolves to '{resolved}', outside the directories a control plane keeps its \
-     data in (persona-state, personas, workspaces). A committed symlink there redirects the \
-     {verb}, so charter follows a link that lands inside them and refuses one that leaves"
-)]
-pub struct Refused {
-    pub path: String,
-    pub resolved: String,
-    /// `read` or `write` — the same refusal, named for what it stopped.
-    pub verb: &'static str,
+pub enum Refused {
+    #[error(
+        "'{path}' resolves to '{resolved}', outside the directories a control plane keeps \
+         its data in (persona-state, personas, workspaces). A committed symlink there \
+         redirects the {verb}, so charter follows a link that lands inside them and refuses \
+         one that leaves"
+    )]
+    Outside {
+        path: String,
+        resolved: String,
+        /// `read` or `write` — the same refusal, named for what it stopped.
+        verb: &'static str,
+    },
+    /// The link chain was longer than charter follows.
+    ///
+    /// **A refusal, not a pass.** Giving up used to fall through to "take the name as it
+    /// stands", which accepts a path the KERNEL resolves somewhere else entirely — and
+    /// Linux's own limit is also 40, so there was no margin in which charter stopped and the
+    /// kernel did not. Where charter cannot say where a path lands, it does not write there.
+    #[error(
+        "'{path}' is behind more than {MAX_LINKS} symlinks, so charter cannot say where the \
+         {verb} would land — and will not make one it cannot place"
+    )]
+    TooManyLinks { path: String, verb: &'static str },
 }
 
 /// Check that `path` still lands inside `root`'s data directories once every symlink on the
@@ -237,8 +251,12 @@ fn contained(
     path: &std::path::Path,
     verb: &'static str,
 ) -> Result<(), Refused> {
-    let resolved = resolve_existing(path);
-    let base = resolve_existing(root);
+    let too_many = || Refused::TooManyLinks {
+        path: path.display().to_string(),
+        verb,
+    };
+    let resolved = resolve_existing(path).ok_or_else(too_many)?;
+    let base = resolve_existing(root).ok_or_else(too_many)?;
     let inside = DATA_DIRS
         .iter()
         .map(|dir| base.join(dir))
@@ -246,7 +264,7 @@ fn contained(
     if inside {
         Ok(())
     } else {
-        Err(Refused {
+        Err(Refused::Outside {
             path: path.display().to_string(),
             resolved: resolved.display().to_string(),
             verb,
@@ -260,7 +278,12 @@ fn contained(
 /// on macOS a temp plane is under `/var/folders/...`, itself a link to `/private/var/...`,
 /// so comparing a resolved path against an unresolved root refuses everything.
 pub fn within_plane(root: &std::path::Path, path: &std::path::Path) -> bool {
-    resolve_existing(path).starts_with(resolve_existing(root))
+    // An exhausted link budget answers NO here too: "charter cannot say where this lands" is
+    // not "this is fine".
+    match (resolve_existing(path), resolve_existing(root)) {
+        (Some(path), Some(root)) => path.starts_with(root),
+        _ => false,
+    }
 }
 
 /// `path` resolved the way the kernel resolves it: left to right, following each symlink as
@@ -287,12 +310,14 @@ pub fn within_plane(root: &std::path::Path, path: &std::path::Path) -> bool {
 ///
 /// A path that does not exist still resolves: a component with nothing at it is simply
 /// appended, so a file charter is about to CREATE is judged where it would land.
-fn resolve_existing(path: &std::path::Path) -> std::path::PathBuf {
+fn resolve_existing(path: &std::path::Path) -> Option<std::path::PathBuf> {
     use std::path::Component;
 
     /// One step of a path, owned so a symlink's target can be spliced in.
     enum Step {
-        Root(std::path::PathBuf),
+        /// A Windows volume or UNC share, which the root after it must not erase.
+        Prefix(std::ffi::OsString),
+        Root,
         Parent,
         Name(std::ffi::OsString),
     }
@@ -300,8 +325,17 @@ fn resolve_existing(path: &std::path::Path) -> std::path::PathBuf {
     fn steps(path: &std::path::Path) -> Vec<Step> {
         path.components()
             .filter_map(|part| match part {
-                Component::Prefix(p) => Some(Step::Root(p.as_os_str().into())),
-                Component::RootDir => Some(Step::Root(std::path::MAIN_SEPARATOR_STR.into())),
+                // A Windows prefix (`C:`, `\\\\server\\share`) and the root that follows it are
+                // two components, and treating both as "reset to this" threw the prefix
+                // away — `C:\\x` resolved as if it were `\\x`, which is a different volume.
+                //
+                // **Not exercised by any test, deliberately.** `Components` yields a
+                // `Prefix` only on Windows; on Unix `C:` is an ordinary name, so this arm
+                // cannot be driven from the platforms M1 targets. It is written to be right
+                // rather than left broken, and stays unverified until Windows at M4 — where
+                // it needs a test before it is trusted, not after.
+                Component::Prefix(p) => Some(Step::Prefix(p.as_os_str().into())),
+                Component::RootDir => Some(Step::Root),
                 Component::CurDir => None,
                 Component::ParentDir => Some(Step::Parent),
                 Component::Normal(n) => Some(Step::Name(n.to_os_string())),
@@ -316,8 +350,13 @@ fn resolve_existing(path: &std::path::Path) -> std::path::PathBuf {
 
     while let Some(step) = todo.pop() {
         let name = match step {
-            Step::Root(root) => {
-                out = root;
+            Step::Prefix(prefix) => {
+                out = std::path::PathBuf::from(prefix);
+                continue;
+            }
+            Step::Root => {
+                // Pushed rather than assigned, so a prefix already in `out` survives.
+                out.push(std::path::MAIN_SEPARATOR_STR);
                 continue;
             }
             // Pops what has been RESOLVED, which after a link is where the link landed.
@@ -329,11 +368,15 @@ fn resolve_existing(path: &std::path::Path) -> std::path::PathBuf {
         };
         let candidate = out.join(&name);
         match std::fs::read_link(&candidate) {
-            Ok(target) if links < MAX_LINKS => {
+            // The budget is spent BEFORE following, so exhausting it refuses rather than
+            // silently accepting the link's own name.
+            Ok(_) if links >= MAX_LINKS => return None,
+            Ok(target) => {
                 links += 1;
                 // An absolute target restarts the walk; a relative one continues from the
                 // directory the link sits in, which `out` already is.
                 if target.is_absolute() {
+                    // The target carries its own prefix and root, which its steps re-apply.
                     out = std::path::PathBuf::new();
                 }
                 // The target's steps come next, BEFORE whatever followed the link — so a
@@ -342,11 +385,11 @@ fn resolve_existing(path: &std::path::Path) -> std::path::PathBuf {
                 rest.reverse();
                 todo.extend(rest);
             }
-            // Not a link, or too many links deep: take the name as it stands.
-            _ => out = candidate,
+            // Not a link: take the name as it stands.
+            Err(_) => out = candidate,
         }
     }
-    out
+    Some(out)
 }
 
 /// How many links deep to follow before giving up, as the kernel does.
@@ -422,5 +465,52 @@ mod writable_tests {
 
         assert!(writable(dir.path(), &dir.path().join("docs/topology.md")).is_err());
         assert!(writable(dir.path(), std::path::Path::new("/etc/passwd")).is_err());
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    fn plane(dir: &std::path::Path) {
+        std::fs::write(dir.join("charter.toml"), "schema = 1\n").unwrap();
+        std::fs::create_dir_all(dir.join("workspaces/alpha")).unwrap();
+    }
+
+    #[test]
+    fn a_chain_longer_than_the_budget_is_refused_not_accepted() {
+        // Giving up used to fall through to the link's own NAME, which is a path the kernel
+        // resolves somewhere else. Linux stops at 40 too, so there is no margin in which
+        // charter gives up and the kernel does not.
+        let dir = tempfile::tempdir().unwrap();
+        plane(dir.path());
+        let store = dir.path().join("workspaces/alpha");
+        // 45 links, each pointing at the next: longer than MAX_LINKS.
+        for i in 0..45 {
+            std::os::unix::fs::symlink(format!("link{}", i + 1), store.join(format!("link{i}")))
+                .unwrap();
+        }
+
+        let refusal = writable(dir.path(), &store.join("link0"))
+            .expect_err("a chain charter cannot follow is not a chain it writes through");
+
+        assert!(
+            matches!(refusal, Refused::TooManyLinks { .. }),
+            "refused for the right reason: {refusal}"
+        );
+    }
+
+    #[test]
+    fn a_chain_within_the_budget_still_resolves() {
+        // The guard against a limit so tight that ordinary nesting stops working.
+        let dir = tempfile::tempdir().unwrap();
+        plane(dir.path());
+        let store = dir.path().join("workspaces/alpha");
+        for i in 0..20 {
+            std::os::unix::fs::symlink(format!("link{}", i + 1), store.join(format!("link{i}")))
+                .unwrap();
+        }
+
+        assert_eq!(writable(dir.path(), &store.join("link0")), Ok(()));
     }
 }

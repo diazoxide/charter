@@ -1541,3 +1541,72 @@ fn a_heading_below_the_first_line_is_still_the_title() {
 
     assert_eq!(ws.todos().unwrap()[0].title, "The real title");
 }
+
+#[test]
+fn a_persona_index_that_resolves_out_of_the_plane_is_refused_by_containment() {
+    // `create_absent` gates the directory AND the file it opens. Only the directory gate is
+    // needed to keep the file from being written — `create_new` refuses a link at the name
+    // — so this asserts WHICH refusal fires. Without the file gate the error is the
+    // filesystem's `AlreadyExists`, which is being stopped by a flag rather than by
+    // containment, and that is the shape that produced five rounds of findings.
+    let (plane_dir, outside, plane) = plane_and_outside();
+    let store = plane_dir.path().join("personas/devops/memory");
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(outside.path().join("index"), b"OUTSIDE\n").unwrap();
+    std::os::unix::fs::symlink(outside.path().join("index"), store.join("MEMORY.md")).unwrap();
+
+    let refused = plane
+        .persona("devops")
+        .unwrap()
+        .scaffold_memory()
+        .expect_err("an index that resolves outside the plane is refused");
+
+    assert_eq!(
+        refused.kind(),
+        std::io::ErrorKind::PermissionDenied,
+        "refused by containment, not by O_EXCL: {refused}"
+    );
+    assert!(
+        refused.to_string().contains("outside the directories"),
+        "{refused}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(outside.path().join("index")).unwrap(),
+        "OUTSIDE\n"
+    );
+}
+
+#[test]
+fn a_consent_record_that_resolves_out_of_the_plane_is_refused_by_containment() {
+    // Same shape: `private_dir` refusing a symlinked `.charter` and the write ending in a
+    // `rename` both keep the bytes inside, so this asserts that the REFUSAL is containment's
+    // rather than a side effect of how the write happens to be done.
+    let (plane_dir, outside, _plane) = plane_and_outside();
+    let state = plane_dir.path().join(".charter");
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(outside.path().join("record.json"), b"{}\n").unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("record.json"),
+        state.join(profiletrust::RECORD),
+    )
+    .unwrap();
+
+    let print = Fingerprint {
+        kind: "claude".into(),
+        command: vec!["claude".into()],
+        env: BTreeMap::new(),
+    };
+    let refused = profiletrust::record_launched(plane_dir.path(), "p", &print)
+        .expect_err("a record that resolves outside the plane is refused");
+
+    assert_eq!(refused.kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(
+        refused.to_string().contains("outside the plane"),
+        "refused by containment: {refused}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(outside.path().join("record.json")).unwrap(),
+        "{}\n",
+        "and the file outside is untouched"
+    );
+}
