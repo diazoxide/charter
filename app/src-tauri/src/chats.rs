@@ -730,13 +730,17 @@ mod tests {
     }
 
     /// Everything a session has printed, once it has printed `text`.
-    /// Everything a session has printed, once `text` is among it.
+    /// Everything a session has printed, once `text` is among it — as a READER would see
+    /// it, not as the terminal encoded it.
     ///
-    /// **Wait for what you are about to assert, not for a prefix of it.** The stand-in
-    /// `claude` prints `argv:` as a write of its own and its arguments as later ones, so
-    /// waiting for `argv:` returns before a single argument has arrived — it passed only
-    /// because the rest usually landed in the same read, and CI eventually caught it with a
-    /// half-drawn line full of erase-to-end-of-line escapes.
+    /// Two things had to be got right here, and the second cost a CI round. **Wait for what
+    /// you are about to assert**: the stand-in `claude` prints `argv:` as a write of its own
+    /// and its arguments as later ones, so waiting for `argv:` returned before a single
+    /// argument had arrived. And **match against the text, not the encoding**: what a view
+    /// emits is a terminal's output — erase-to-end-of-line, carriage returns, a line wrapped
+    /// at the pane's width — so a long argv is `--resume` then an escape then the rest, and
+    /// no substring of the command line is present as contiguous bytes. Both spellings can
+    /// report a failure that has not happened and miss one that has.
     fn until_printed(chats: &Chats, session: u32, text: &str) -> String {
         use std::sync::Arc;
         use std::time::{Duration, Instant};
@@ -752,15 +756,42 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let so_far = lock(&seen).clone();
-            if so_far.contains(text) {
-                return so_far;
+            let plain = as_a_reader_sees(&so_far);
+            if plain.contains(text) {
+                return plain;
             }
             assert!(
                 Instant::now() < deadline,
-                "{text:?} never arrived, only {so_far:?}"
+                "{text:?} never arrived, only {plain:?} (raw: {so_far:?})"
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// Terminal output as the words on the screen: escape sequences dropped, and the breaks
+    /// a terminal inserts — a wrap, a carriage return — read as the single space that was
+    /// between the words before it laid them out.
+    fn as_a_reader_sees(raw: &str) -> String {
+        let mut out = String::with_capacity(raw.len());
+        let mut chars = raw.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\u{1b}' {
+                // CSI and the rest of the sequence: parameters, then one final byte.
+                if chars.peek() == Some(&'[') {
+                    chars.next();
+                    for c in chars.by_ref() {
+                        if c.is_ascii_alphabetic() || c == '~' {
+                            break;
+                        }
+                    }
+                }
+                continue;
+            }
+            out.push(if c == '\r' || c == '\n' { ' ' } else { c });
+        }
+        // A wrap becomes one space, and so does a run of them, so a command line reads the
+        // way it was written however the pane laid it out.
+        out.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
     /// Chats that write every record they make into `wrote`, newest last.
