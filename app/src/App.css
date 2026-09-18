@@ -192,6 +192,8 @@ body {
 .sidebar h2 {
   font-size: 0.85rem;
   margin: 0 0 0.25rem;
+}
+
 /* What a chat that was put back says about itself: resumed, or new and why. */
 .came-back {
   margin: 0;
