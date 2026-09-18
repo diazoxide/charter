@@ -1,9 +1,10 @@
 //! A session: one program running in its own pseudo-terminal, its screen kept by an [`Engine`].
 //!
-//! Two threads serve each session. The reader feeds everything the program writes into the
+//! Three threads serve each session. The reader feeds everything the program writes into the
 //! engine. The writer delivers typed input and the engine's replies to the program. Neither
 //! ever waits on the other, so a program that stops reading its input cannot stop its output
-//! from being read.
+//! from being read. The third gives up on synchronized updates the program opens and never
+//! closes, so output held back for a pane is never held for ever.
 //!
 //! Dropping a session ends its program and everything the program started in its process
 //! group: there is no daemon, and nothing outlives the app. A program that moves itself into
@@ -14,7 +15,7 @@ use std::io::{ErrorKind, Read, Write};
 use std::path::PathBuf;
 #[cfg(all(test, unix))]
 use std::sync::mpsc::TryRecvError;
-use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -82,8 +83,84 @@ pub enum SessionError {
 /// a screen with the output that follows it, and nothing in between is lost or sent twice.
 struct Terminal {
     engine: Box<dyn Engine>,
-    views: Vec<(u64, Sender<Vec<u8>>)>,
+    views: Vec<Watcher>,
     opened: u64,
+}
+
+/// One view's side of a session: where its bytes go, and the ones held back from it because
+/// sending them would leave its pane inside an open synchronized update.
+struct Watcher {
+    id: u64,
+    sends: Sender<Vec<u8>>,
+    held: Vec<u8>,
+}
+
+impl Terminal {
+    /// Whether any view is holding bytes: whether the stream a pane has been sent so far
+    /// stops inside an update that has not closed.
+    fn holding(&self) -> bool {
+        self.views.iter().any(|view| !view.held.is_empty())
+    }
+
+    /// Holds `output` back from every view. Sent now it would leave a pane inside an open
+    /// update, where xterm.js draws nothing until its own safety timeout.
+    fn hold(&mut self, output: &[u8]) {
+        for view in &mut self.views {
+            view.held.extend_from_slice(output);
+        }
+    }
+
+    /// Sends `output` to every view, behind whatever was held back for it. A view whose
+    /// reader has gone is dropped here; until then its bytes wait in its own queue, and
+    /// whoever calls this never waits for it.
+    fn hand_over(&mut self, output: &[u8]) {
+        self.views.retain_mut(|view| {
+            let bytes = if view.held.is_empty() {
+                output.to_vec()
+            } else {
+                let mut held = std::mem::take(&mut view.held);
+                held.extend_from_slice(output);
+                held
+            };
+            send(view, bytes)
+        });
+    }
+
+    /// Ends an update the engine has given up on for its own screen, for the views as well:
+    /// each is sent what it holds, closed, because half a frame drawn beats a whole one that
+    /// waits on a pane's own safety timeout. Nothing held is nothing to do.
+    fn give_up_on_the_update(&mut self) {
+        self.views.retain_mut(|view| {
+            if view.held.is_empty() {
+                return true;
+            }
+            let held = std::mem::take(&mut view.held);
+            // These bytes are held because the engine read an update as open over them, and
+            // the engine reassembles a sequence split across reads, which the held bytes
+            // cannot show by themselves. So bytes that say nothing either way end one here.
+            match update_after(&held) {
+                UpdateAfter::Ended => view.sends.send(held).is_ok(),
+                UpdateAfter::Opened | UpdateAfter::Unchanged => send_ending_the_update(view, held),
+            }
+        });
+    }
+
+    /// Closes every view, because the program is gone. What is held back goes over first:
+    /// no update the program left open will ever close now, so its last half frame is drawn
+    /// instead of dropped.
+    fn close_views(&mut self) {
+        self.give_up_on_the_update();
+        self.views.clear();
+    }
+
+    /// The same, for whoever has just read the engine and may have ended an update by doing
+    /// it: a screen read applies one whose deadline has passed, and a snapshot ends one
+    /// outright. Either way the views are holding bytes the engine no longer is.
+    fn give_up_if_the_engine_has(&mut self) {
+        if self.engine.open_update().is_none() {
+            self.give_up_on_the_update();
+        }
+    }
 }
 
 /// A view of a session: the bytes that draw its screen as it was when the view opened, then
@@ -111,7 +188,9 @@ impl View {
 }
 
 /// A view held open. Dropping it closes the view: the session stops sending to it, and
-/// whoever is reading its queue sees that queue end.
+/// whoever is reading its queue sees that queue end. Output held back for it inside an open
+/// update goes with it — unlike a program ending, which hands its last half frame over
+/// first, a pane that closes has nothing left to draw it on.
 pub struct Attachment {
     terminal: Weak<Mutex<Terminal>>,
     id: u64,
@@ -120,7 +199,7 @@ pub struct Attachment {
 impl Drop for Attachment {
     fn drop(&mut self) {
         if let Some(terminal) = self.terminal.upgrade() {
-            lock(&terminal).views.retain(|(id, _)| *id != self.id);
+            lock(&terminal).views.retain(|view| view.id != self.id);
         }
     }
 }
@@ -159,16 +238,25 @@ impl Session {
             opened: 0,
         }));
         let (input, queued) = mpsc::sync_channel(INPUT_QUEUE);
+        // One wake is enough to send: what it says is "something is held", and the deadline
+        // is read from the engine. A wake that does not fit is a wake already waiting.
+        let (holding, held) = mpsc::sync_channel(1);
 
         thread::Builder::new()
             .name("charter-session-writer".into())
             .spawn(move || deliver(queued, writer))?;
         thread::Builder::new()
+            .name("charter-session-updates".into())
+            .spawn({
+                let terminal = Arc::clone(&terminal);
+                move || give_up_on_open_updates(held, &terminal)
+            })?;
+        thread::Builder::new()
             .name("charter-session-reader".into())
             .spawn({
                 let terminal = Arc::clone(&terminal);
                 let replies = input.clone();
-                move || pump(reader, &terminal, &replies)
+                move || pump(reader, &terminal, &replies, &holding)
             })?;
 
         let mut command = CommandBuilder::new(&spec.program);
@@ -229,15 +317,26 @@ impl Session {
         let (output, answers, size, id) = {
             let mut terminal = lock(&self.terminal);
             let snapshot = terminal.engine.snapshot();
+            // The snapshot ends any open update, so the views already watching are left
+            // holding bytes the engine is not. They are handed them here rather than waiting
+            // on the deadline: this view is showing a frame those panes have not drawn yet.
+            // None of it goes to this view, whose snapshot is drawn from those same bytes.
+            terminal.give_up_if_the_engine_has();
             let size = terminal.engine.screen().size;
             let answers = terminal.engine.take_replies();
             let (sender, output) = mpsc::channel();
-            // The screen goes in first, ahead of any output the reading thread sends once
-            // this lock is released.
-            let _ = sender.send(snapshot);
             terminal.opened += 1;
             let id = terminal.opened;
-            terminal.views.push((id, sender));
+            let mut watcher = Watcher {
+                id,
+                sends: sender,
+                held: Vec::new(),
+            };
+            // The screen goes in first, ahead of any output the reading thread sends once
+            // this lock is released — and through the same rule as everything else, so that
+            // a snapshot which ever draws itself inside an update cannot leave a pane in one.
+            send(&mut watcher, snapshot);
+            terminal.views.push(watcher);
             (output, answers, size, id)
         };
         let view = View {
@@ -310,6 +409,12 @@ impl Drop for Session {
 
 /// How many writes may wait for a program that is not reading its input.
 pub const INPUT_QUEUE: usize = 1024;
+/// Ends a synchronized update: what a view is sent behind bytes that would leave it inside
+/// one, so its pane draws what it has instead of waiting on its own safety timeout.
+const END_UPDATE: &[u8] = b"\x1b[?2026l";
+/// The private mode a synchronized update is, as a pane reads it: one parameter of a set or
+/// reset, and not necessarily the only one.
+const SYNC_MODE: &[u8] = b"2026";
 const POLL: Duration = Duration::from_millis(10);
 /// How long a program gets to exit on its hangup before its group is killed.
 const HANGUP_GRACE: Duration = Duration::from_millis(500);
@@ -348,32 +453,57 @@ fn end(child: &Mutex<Box<dyn Child + Send + Sync>>) {
 
 /// Feeds the program's output to the engine until the terminal closes, queueing the answers
 /// the engine owes the program. It never waits on the writer.
+///
+/// A view is never sent output that ends inside a synchronized update the program has opened
+/// and not closed: xterm.js skips every render that falls while one is open and draws on a
+/// one-second safety timeout instead (xterm.js#6071), so a pane sent a repaint in pieces
+/// would draw once a second. The pieces wait here until the update closes, and `holding`
+/// wakes the thread that gives up on one that never does.
 fn pump(
     mut reader: Box<dyn Read + Send>,
     terminal: &Mutex<Terminal>,
     replies: &SyncSender<Vec<u8>>,
+    holding: &SyncSender<()>,
 ) {
     let mut buffer = vec![0; 64 * 1024];
     loop {
         let read = match reader.read(&mut buffer) {
             // The program's output has ended, and so has the program. Every view is closed,
             // so a pane showing it can say so instead of showing a screen that is now final.
-            Ok(0) => return lock(terminal).views.clear(),
+            Ok(0) => return lock(terminal).close_views(),
             Ok(read) => read,
             Err(err) if err.kind() == ErrorKind::Interrupted => continue,
-            Err(_) => return lock(terminal).views.clear(),
+            Err(_) => return lock(terminal).close_views(),
         };
-        let answers = {
+        let (answers, held) = {
             let mut terminal = lock(terminal);
             let output = &buffer[..read];
             terminal.engine.advance(output);
-            // A view whose reader has gone is dropped here; until then its bytes wait in its
-            // own queue, and this thread never waits for it.
-            terminal
-                .views
-                .retain(|(_, view)| view.send(output.to_vec()).is_ok());
-            terminal.engine.take_replies()
+            let open = terminal.engine.open_update().is_some();
+            // A session no pane is watching holds nothing, and needs no deadline kept.
+            if !open {
+                // The update this output ends, if any, is closed in it: what the program
+                // wrote is handed over exactly as it wrote it.
+                terminal.hand_over(output);
+            } else {
+                // An update is left open, so this output is cut where the last one it closed
+                // ended: everything before that can be drawn now, and only the piece inside
+                // the open update waits. Cutting matters as much as holding — a harness
+                // writing 4 KB at a time ends nearly every write inside an update, and each
+                // new one puts the deadline off again, so holding whole writes would hold
+                // whole seconds of drawn frames.
+                let closed = closed_updates_end(output);
+                if closed > 0 {
+                    terminal.hand_over(&output[..closed]);
+                }
+                terminal.hold(&output[closed..]);
+            }
+            (terminal.engine.take_replies(), terminal.holding())
         };
+        // Outside the lock, and never waited on: a full queue is a wake already waiting.
+        if held {
+            let _ = holding.try_send(());
+        }
         // A program that floods queries without reading the answers loses the answers it
         // would never have read; its output keeps flowing either way.
         if !answers.is_empty()
@@ -383,6 +513,174 @@ fn pump(
             )
         {
             return;
+        }
+    }
+}
+
+/// Sends `bytes` to `view`, ending a synchronized update they would leave it inside. Answers
+/// whether the view is still open.
+///
+/// **What the pane is sent is what decides whether the pane can draw** — never what the
+/// engine made of the same bytes. The engine leaves an update for reasons of its own that a
+/// pane knows nothing about: its deadline passing as a read arrives, vte's own two-megabyte
+/// sync buffer filling up, or a `?1;2026h` that vte stops tracking inside an update and a
+/// pane still honours. Each of those leaves the engine reporting no open update over bytes
+/// that hold one open, and a pane sent those unended draws nothing until its own safety
+/// timeout. So the answer is read from the bytes, here, where they go out.
+fn send(view: &mut Watcher, bytes: Vec<u8>) -> bool {
+    match update_after(&bytes) {
+        // Nothing in these bytes leaves the pane inside an update, so nothing is added.
+        UpdateAfter::Ended | UpdateAfter::Unchanged => view.sends.send(bytes).is_ok(),
+        UpdateAfter::Opened => send_ending_the_update(view, bytes),
+    }
+}
+
+/// Sends `bytes` and ends the update they leave open — before any half-written sequence they
+/// end with, because an escape of this module's own would abort that sequence, and the rest
+/// of it, arriving next, would be printed as text the program never wrote. Those trailing
+/// bytes are held instead, and go out behind the rest of themselves.
+fn send_ending_the_update(view: &mut Watcher, mut bytes: Vec<u8>) -> bool {
+    view.held = bytes.split_off(whole_sequences_end(&bytes));
+    bytes.extend_from_slice(END_UPDATE);
+    view.sends.send(bytes).is_ok()
+}
+
+/// Where the whole escape sequences in `bytes` end: `bytes.len()`, or where a sequence the
+/// program has only half written begins. Nothing of this module's own may be written between
+/// those bytes and the rest of them, arriving next.
+///
+/// Only the last escape can be the unfinished one, because an escape abandons whatever
+/// sequence came before it, in xterm.js's parser as in vte's. What follows it says how it
+/// ends: a control sequence at any byte from `@` to `~`, a string at a bell or a string
+/// terminator, an escape with an intermediate byte at the character after that, and a bare
+/// escape at the single character that follows.
+fn whole_sequences_end(bytes: &[u8]) -> usize {
+    let Some(escape) = memchr::memrchr(0x1b, bytes) else {
+        return bytes.len();
+    };
+    let rest = &bytes[(escape + 2).min(bytes.len())..];
+    let whole = match bytes.get(escape + 1) {
+        None => false,
+        Some(b'[') => rest.iter().any(|byte| (0x40..=0x7e).contains(byte)),
+        // A string, whose payload runs to a bell or a string terminator. The terminator's own
+        // escape is a later one than this, so it is not what is being asked about here.
+        Some(b']' | b'P' | b'X' | b'^' | b'_') => {
+            rest.contains(&0x07) || rest.windows(2).any(|pair| pair == b"\x1b\\")
+        }
+        // An intermediate byte, and then the character the sequence ends with.
+        Some(b' ' | b'#' | b'%' | b'(' | b')' | b'*' | b'+' | b'-' | b'.' | b'/') => {
+            !rest.is_empty()
+        }
+        Some(_) => true,
+    };
+    if whole { bytes.len() } else { escape }
+}
+
+/// What `bytes` leave a terminal's synchronized update in, as a pane reads them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdateAfter {
+    /// They open one and do not close it.
+    Opened,
+    /// They close one, whether or not they also opened it.
+    Ended,
+    /// They say nothing either way: what was open is still open, and what was not is not.
+    /// Bytes carrying half of the sequence are this, and the rest of it is in what follows.
+    Unchanged,
+}
+
+/// What `bytes` leave a synchronized update in, as a pane reads them.
+///
+/// A pane counts `2026` as a parameter of a private mode set or reset wherever it falls among
+/// them, with sub-parameters of its own and with leading zeros: xterm.js switches on each
+/// parameter in turn (`setModePrivate`), and vte's ordinary parser does the same. vte *inside*
+/// an update counts only the eight bytes exactly, which is where the two part company — and
+/// why this is read from the bytes rather than asked of the engine.
+fn update_after(bytes: &[u8]) -> UpdateAfter {
+    let mut before = bytes.len();
+    while let Some(at) = memchr::memmem::rfind(&bytes[..before], SYNC_MODE) {
+        before = at;
+        if let Some(opens) = private_mode_around(bytes, at) {
+            return if opens {
+                UpdateAfter::Opened
+            } else {
+                UpdateAfter::Ended
+            };
+        }
+    }
+    UpdateAfter::Unchanged
+}
+
+/// Whether the private mode sequence holding `bytes[at..]`, which is [`SYNC_MODE`], sets the
+/// mode rather than resets it — or `None` when those bytes are not a whole parameter of one.
+fn private_mode_around(bytes: &[u8], at: usize) -> Option<bool> {
+    // A parameter of its own, not the tail of `12026`; leading zeros are still it. What this
+    // cannot run past is the `?`, which is also what keeps the indexing below inside `bytes`.
+    let parameters = bytes[..at].iter().rposition(|byte| *byte != b'0')?;
+    if !matches!(bytes[parameters], b';' | b'?') {
+        return None;
+    }
+    // Back over the parameters before it to the escape sequence that introduces them.
+    let opener = bytes[..=parameters]
+        .iter()
+        .rposition(|byte| !matches!(byte, b';' | b'0'..=b'9'))?;
+    if bytes[opener] != b'?' || !bytes[..opener].ends_with(b"\x1b[") {
+        return None;
+    }
+    // Forward over the parameters after it to whichever character ends the sequence. A `:`
+    // here introduces sub-parameters of this parameter, which is 2026 either way; a `:`
+    // before it would have made 2026 a sub-parameter of another mode, which a pane does not
+    // read as this mode at all, and the check above rejects.
+    let end = bytes[at + SYNC_MODE.len()..]
+        .iter()
+        .position(|byte| !matches!(byte, b':' | b';' | b'0'..=b'9'))?;
+    match bytes[at + SYNC_MODE.len() + end] {
+        b'h' => Some(true),
+        b'l' => Some(false),
+        _ => None,
+    }
+}
+
+/// How much of `output` a view can be given: everything up to and including the last
+/// synchronized update that `output` closes, and none of the one it leaves open. Zero when it
+/// closes none.
+///
+/// It looks for the sequence itself, which is what vte does with the bytes inside an update
+/// too (`advance_sync_csi`): exactly `\x1b[?2026l` ends one, for vte and for xterm.js alike.
+/// A sequence split across two reads is not found here — that read is held whole and goes
+/// over behind the next one, late by one read and never cut inside an update.
+fn closed_updates_end(output: &[u8]) -> usize {
+    memchr::memmem::rfind(output, END_UPDATE).map_or(0, |at| at + END_UPDATE.len())
+}
+
+/// Gives up on a synchronized update a program opens and never closes, so output held back
+/// for a pane is never held for ever. It waits until the deadline the engine keeps for the
+/// open update — vte's, the same one the engine applies to its own screen — and hands over
+/// whatever is still held once it passes. It ends when the session's reading thread does.
+fn give_up_on_open_updates(woken: Receiver<()>, terminal: &Mutex<Terminal>) {
+    // Nothing is held: there is nothing to wake for, and no deadline to keep.
+    while woken.recv().is_ok() {
+        loop {
+            let deadline = {
+                let mut terminal = lock(terminal);
+                if !terminal.holding() {
+                    break;
+                }
+                match terminal.engine.open_update() {
+                    Some(deadline) if Instant::now() < deadline => deadline,
+                    // The update is over, or it has run out of time. Either way the pane gets
+                    // what is held, and the engine's screen says the same.
+                    _ => {
+                        terminal.give_up_on_the_update();
+                        break;
+                    }
+                }
+            };
+            // More output may be held while this waits; the wake it sends ends the wait, and
+            // the state is read again above.
+            match woken.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+                Ok(()) | Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
         }
     }
 }
@@ -932,6 +1230,560 @@ mod tests {
         let view = session.attach();
 
         view_until(&view, "answered");
+    }
+
+    const BEGIN_UPDATE: &[u8] = b"\x1b[?2026h";
+    /// What a pane gets for nothing if the core hands it output that ends inside an open
+    /// update: xterm.js draws on its own safety timeout, and on nothing else.
+    const XTERM_SAFETY_TIMEOUT: Duration = Duration::from_secs(1);
+
+    /// How many synchronized updates `bytes` leave open — how many a pane's terminal would
+    /// still be inside after being written them, and so whether it can draw at all.
+    fn updates_left_open(bytes: &[u8]) -> usize {
+        let mut open = 0usize;
+        for at in 0..bytes.len() {
+            let rest = &bytes[at..];
+            if rest.starts_with(BEGIN_UPDATE) {
+                open += 1;
+            } else if rest.starts_with(END_UPDATE) {
+                open = open.saturating_sub(1);
+            }
+        }
+        open
+    }
+
+    /// Everything a view has been sent, in the pieces it arrived in. A pane writes each piece
+    /// to its terminal as it comes, so it is each piece, and not the whole, that decides
+    /// whether the pane can draw.
+    #[derive(Default)]
+    struct Pieces(Vec<Vec<u8>>);
+
+    impl Pieces {
+        fn take(&mut self, view: &View) -> &mut Self {
+            while let Ok(bytes) = view.output.try_recv() {
+                self.0.push(bytes);
+            }
+            self
+        }
+
+        fn all(&self) -> Vec<u8> {
+            self.0.concat()
+        }
+
+        fn holds(&self, text: &str) -> bool {
+            String::from_utf8_lossy(&self.all()).contains(text)
+        }
+
+        /// The screen a pane ends up with after being written everything the view was sent.
+        fn replayed(&self, size: Size) -> Screen {
+            let mut engine = AlacrittyEngine::new(size, 1000);
+            engine.advance(&self.all());
+            engine.screen()
+        }
+
+        /// The output that followed the screen the view opened on.
+        fn followed(&self) -> Vec<u8> {
+            self.0.iter().skip(1).flatten().copied().collect()
+        }
+    }
+
+    /// Waits until the output that followed the screen a view opened on holds `text`.
+    fn pieces_until_followed(view: &View, text: &str, patience: Duration) -> Pieces {
+        let mut pieces = Pieces::default();
+        let deadline = Instant::now() + patience;
+        while !String::from_utf8_lossy(&pieces.take(view).followed()).contains(text) {
+            assert!(
+                Instant::now() < deadline,
+                "the view was never sent {text:?} after the screen it opened on: {:?}",
+                String::from_utf8_lossy(&pieces.followed())
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        pieces
+    }
+
+    /// Waits until everything a view has been sent holds `text`, failing with what it has.
+    fn pieces_until(view: &View, text: &str, patience: Duration) -> Pieces {
+        let mut pieces = Pieces::default();
+        let deadline = Instant::now() + patience;
+        while !pieces.take(view).holds(text) {
+            assert!(
+                Instant::now() < deadline,
+                "the view was never sent {text:?}: {:?}",
+                String::from_utf8_lossy(&pieces.all())
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        pieces
+    }
+
+    /// A real engine, with the answers a test needs to decide: what it says about an open
+    /// update (a function of the real answer, so that what the core does with it needs no
+    /// sleeping to see), and what its snapshot draws.
+    struct AnEngineAsked {
+        real: AlacrittyEngine,
+        open_update: fn(Option<Instant>) -> Option<Instant>,
+        snapshot: fn(Vec<u8>) -> Vec<u8>,
+    }
+
+    /// An engine that has left an update the way vte leaves one for reasons of its own.
+    const STOPPED_TRACKING: fn(Option<Instant>) -> Option<Instant> = |_| None;
+    /// An engine whose deadline for an open update never arrives.
+    const NEVER_EXPIRES: fn(Option<Instant>) -> Option<Instant> =
+        |open| open.map(|_| Instant::now() + Duration::from_secs(3600));
+    /// What the engine really says.
+    const AS_IT_IS: fn(Option<Instant>) -> Option<Instant> = |open| open;
+    /// A snapshot that draws itself inside a synchronized update, as one that wrapped a whole
+    /// screen in one would. Today's does not; nothing should have to notice when it does.
+    const DRAWN_INSIDE_AN_UPDATE: fn(Vec<u8>) -> Vec<u8> = |mut snapshot| {
+        let mut opened = BEGIN_UPDATE.to_vec();
+        opened.append(&mut snapshot);
+        opened
+    };
+
+    impl Engine for AnEngineAsked {
+        fn advance(&mut self, bytes: &[u8]) {
+            self.real.advance(bytes);
+        }
+        fn open_update(&self) -> Option<Instant> {
+            (self.open_update)(self.real.open_update())
+        }
+        fn resize(&mut self, size: Size) {
+            self.real.resize(size);
+        }
+        fn screen(&mut self) -> Screen {
+            self.real.screen()
+        }
+        fn snapshot(&mut self) -> Vec<u8> {
+            (self.snapshot)(self.real.snapshot())
+        }
+        fn take_replies(&mut self) -> Vec<u8> {
+            self.real.take_replies()
+        }
+    }
+
+    /// A session whose engine answers about an open update as `open_update` says.
+    fn sh_asked(script: &str, open_update: fn(Option<Instant>) -> Option<Instant>) -> Session {
+        sh_engine(
+            script,
+            AnEngineAsked {
+                real: AlacrittyEngine::new(SIZE, 1000),
+                open_update,
+                snapshot: |snapshot| snapshot,
+            },
+        )
+    }
+
+    fn sh_engine(script: &str, engine: AnEngineAsked) -> Session {
+        Session::spawn(
+            Spec::new("/bin/sh", SIZE).args(["-c", script]),
+            Box::new(engine),
+        )
+        .expect("the session starts")
+    }
+
+    #[test]
+    fn a_pane_opening_on_a_snapshot_drawn_inside_an_update_is_not_left_in_one() {
+        // The screen a view opens on is a run of bytes like any other, and a snapshot that
+        // wraps a whole screen in one update — which is what a snapshot would do if it were
+        // written for that — must not leave every pane waiting on its safety timeout.
+        let session = sh_engine(
+            "printf 'a line\\r\\n'; sleep 30",
+            AnEngineAsked {
+                real: AlacrittyEngine::new(SIZE, 1000),
+                open_update: AS_IT_IS,
+                snapshot: DRAWN_INSIDE_AN_UPDATE,
+            },
+        );
+
+        let view = session.attach();
+
+        let mut pieces = Pieces::default();
+        let deadline = Instant::now() + PATIENCE;
+        while pieces.take(&view).0.is_empty() {
+            assert!(
+                Instant::now() < deadline,
+                "the view was sent no screen at all"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(
+            updates_left_open(&pieces.0[0]),
+            0,
+            "the screen the view opened on leaves it inside an update: {:?}",
+            String::from_utf8_lossy(&pieces.0[0])
+        );
+    }
+
+    #[test]
+    fn a_pane_opening_hands_the_panes_already_watching_what_they_hold() {
+        // Two panes on one session must not disagree: the pane opening here draws the frame
+        // from its snapshot, so a pane that was already watching cannot be left holding the
+        // same frame undrawn. Its deadline never arrives, so the snapshot is the only thing
+        // that can hand it over.
+        let session = sh_asked(
+            "sleep 0.3; printf '\\033[?2026h\\033[H\\033[2Jheld back\\r\\n'; sleep 30",
+            NEVER_EXPIRES,
+        );
+        let first = session.attach();
+        std::thread::sleep(Duration::from_millis(500));
+
+        let second = session.attach();
+
+        let pieces = pieces_until_followed(&first, "held back", PATIENCE);
+        assert_eq!(
+            updates_left_open(&pieces.followed()),
+            0,
+            "the pane already watching is left inside the update: {:?}",
+            String::from_utf8_lossy(&pieces.followed())
+        );
+        drop(second);
+    }
+
+    #[test]
+    fn a_pane_is_never_sent_bytes_the_program_did_not_write() {
+        // The program is half way through a sequence when its update is given up on. Ending
+        // the update in front of those bytes would abort the sequence, and the rest of it,
+        // arriving next, would be printed: `26l` as text, on screen, for good. What a pane
+        // is written has to draw the screen the engine has, and nothing else.
+        let session = sh(
+            "sleep 0.3; printf '\\033[?2026h\\033[H\\033[2JAAA\\033[?20'; sleep 0.5; \
+             printf '26l'; sleep 30",
+        );
+        let view = session.attach();
+        let mut pieces = pieces_until_followed(&view, "AAA", XTERM_SAFETY_TIMEOUT);
+        // Long enough for the rest of the sequence to have arrived as well.
+        std::thread::sleep(Duration::from_millis(600));
+        pieces.take(&view);
+
+        let pane = pieces.replayed(view.size);
+
+        assert_eq!(
+            pane.lines,
+            session.screen().lines,
+            "the pane and the engine disagree: the pane was sent {:?}",
+            String::from_utf8_lossy(&pieces.followed())
+        );
+    }
+
+    #[test]
+    fn an_update_opened_across_two_reads_is_still_ended_for_the_pane() {
+        // The sequence that opens it is split by a read boundary, so neither read holds it
+        // whole and nothing in the held bytes says an update was opened at all. The engine
+        // reads across the boundary and knows, which is why it is what decides to hold them.
+        let session = sh("sleep 0.3; printf '\\033[?20'; sleep 0.1; \
+             printf '26h\\033[H\\033[2Jhalf a frame'; sleep 30");
+        let view = session.attach();
+
+        let pieces = pieces_until_followed(&view, "half a frame", XTERM_SAFETY_TIMEOUT);
+
+        assert_eq!(
+            updates_left_open(&pieces.followed()),
+            0,
+            "the pane is left inside the update the two reads opened between them: {:?}",
+            String::from_utf8_lossy(&pieces.followed())
+        );
+    }
+
+    #[test]
+    fn a_view_is_not_left_inside_an_update_the_engine_has_stopped_tracking() {
+        // What the pane is sent is what decides whether the pane can draw — never what the
+        // engine made of the same bytes. vte leaves an update for reasons of its own: its
+        // deadline passing as a read arrives, its own two-megabyte buffer filling up, or a
+        // `?1;2026h` that it stops tracking and a pane does not. However it happens, the
+        // engine reports no open update while the bytes for the pane still hold one open, and
+        // the pane is told the update ended rather than left waiting on its safety timeout.
+        let session = sh_asked(
+            "sleep 0.3; printf '\\033[?2026h\\033[H\\033[2Jhalf a frame'; sleep 30",
+            STOPPED_TRACKING,
+        );
+        let view = session.attach();
+
+        let pieces = pieces_until(&view, "half a frame", PATIENCE);
+
+        assert_eq!(
+            updates_left_open(&pieces.followed()),
+            0,
+            "the pane is left inside an update nothing will ever close: {:?}",
+            String::from_utf8_lossy(&pieces.followed())
+        );
+    }
+
+    #[test]
+    fn a_view_is_never_sent_output_that_ends_inside_an_open_update() {
+        // A harness that opens an update and pauses before closing it: xterm.js skips every
+        // render that falls while one is open (xterm.js#6071), so a pane sent the pieces as
+        // they came would draw once a second and no oftener. The core hands over whole
+        // updates instead.
+        let session = sh("i=0; while [ $i -lt 5 ]; do \
+               printf '\\033[?2026h\\033[H\\033[2Jframe %d opens\\r\\n' $i; \
+               sleep 0.05; \
+               printf 'frame %d closes\\r\\n\\033[?2026l' $i; \
+               i=$((i + 1)); \
+             done; printf 'all five frames\\r\\n'");
+        let view = session.attach();
+
+        let pieces = pieces_until(&view, "all five frames", PATIENCE);
+
+        for (nth, piece) in pieces.0.iter().enumerate() {
+            assert_eq!(
+                updates_left_open(piece),
+                0,
+                "piece {nth} of {} leaves an update open: {:?}",
+                pieces.0.len(),
+                String::from_utf8_lossy(piece)
+            );
+        }
+    }
+
+    #[test]
+    fn a_sequence_the_program_has_only_half_written_is_where_the_whole_ones_end() {
+        assert_eq!(whole_sequences_end(b"plain text"), 10);
+        assert_eq!(whole_sequences_end(b"\x1b[?2026h"), 8);
+        // Half a control sequence: no character between `@` and `~` has ended it yet.
+        assert_eq!(whole_sequences_end(b"AAA\x1b[?20"), 3);
+        // Half a string: its payload is all printable, and neither terminator has arrived.
+        assert_eq!(whole_sequences_end(b"AAA\x1b]0;a title"), 3);
+        assert_eq!(whole_sequences_end(b"\x1b]0;t\x07"), 6);
+        assert_eq!(whole_sequences_end(b"\x1b]0;t\x1b\\"), 7);
+        // An escape on its own, an escape and the character it takes, and an escape whose
+        // intermediate byte is still waiting for one.
+        assert_eq!(whole_sequences_end(b"\x1b"), 0);
+        assert_eq!(whole_sequences_end(b"\x1bM"), 2);
+        assert_eq!(whole_sequences_end(b"\x1b(B"), 3);
+        assert_eq!(whole_sequences_end(b"\x1b("), 0);
+    }
+
+    #[test]
+    fn bytes_that_open_an_update_and_do_not_close_it_leave_it_open() {
+        assert_eq!(
+            update_after(b"\x1b[?2026h\x1b[H\x1b[2Jhalf a frame"),
+            UpdateAfter::Opened
+        );
+        assert_eq!(
+            update_after(b"\x1b[?2026hwhole frame\x1b[?2026l"),
+            UpdateAfter::Ended
+        );
+        assert_eq!(update_after(b"a plain line\r\n"), UpdateAfter::Unchanged);
+        assert_eq!(update_after(b""), UpdateAfter::Unchanged);
+    }
+
+    #[test]
+    fn the_mode_counts_wherever_it_falls_among_the_parameters() {
+        // What a pane honours, and what vte honours outside an update but stops tracking
+        // inside one: the engine can report no open update over bytes that hold one open.
+        assert_eq!(update_after(b"\x1b[?1;2026hAAA"), UpdateAfter::Opened);
+        assert_eq!(
+            update_after(b"\x1b[?2026hAAA\x1b[?2026;1lBBB"),
+            UpdateAfter::Ended
+        );
+        // Sub-parameters of its own, and leading zeros: xterm.js reads the parameter as 2026
+        // either way, and either is how vte opens an update it then stops tracking.
+        assert_eq!(update_after(b"\x1b[?2026:5hAAA"), UpdateAfter::Opened);
+        assert_eq!(update_after(b"\x1b[?02026hAAA"), UpdateAfter::Opened);
+        // A sub-parameter of another mode is not this mode: the 2026 belongs to the 1.
+        assert_eq!(update_after(b"\x1b[?1:2026hAAA"), UpdateAfter::Unchanged);
+    }
+
+    #[test]
+    fn bytes_that_only_look_like_the_mode_are_not_it() {
+        assert_eq!(update_after(b"\x1b[?12026h"), UpdateAfter::Unchanged);
+        assert_eq!(
+            update_after(b"the year 2026 arrived"),
+            UpdateAfter::Unchanged
+        );
+        // A neighbouring mode, not a prefix of this one: 2027 is grapheme clustering.
+        assert_eq!(update_after(b"\x1b[?2027h"), UpdateAfter::Unchanged);
+        // Nothing before the parameter to introduce it, and nothing to index behind it.
+        assert_eq!(update_after(b"2026h"), UpdateAfter::Unchanged);
+        // Text that spells it, with no escape to make a sequence of it.
+        assert_eq!(
+            update_after(b"see ?2026h in the docs"),
+            UpdateAfter::Unchanged
+        );
+        // Asking whether the mode is set is not setting it.
+        assert_eq!(update_after(b"\x1b[?2026$p"), UpdateAfter::Unchanged);
+    }
+
+    #[test]
+    fn a_sequence_cut_in_half_says_nothing_about_the_update_either_way() {
+        // Half of it is in these bytes and the rest is in the ones that follow: what was
+        // open is still open, and what was not is not.
+        assert_eq!(update_after(b"\x1b[?2026"), UpdateAfter::Unchanged);
+        assert_eq!(
+            update_after(b"\x1b[?2026habc\x1b[?2026"),
+            UpdateAfter::Opened
+        );
+        assert_eq!(
+            update_after(b"26h\x1b[H\x1b[2Jhalf a frame"),
+            UpdateAfter::Unchanged
+        );
+    }
+
+    #[test]
+    fn output_that_closes_no_update_has_nothing_that_can_be_drawn() {
+        assert_eq!(closed_updates_end(b"\x1b[?2026hhalf a frame"), 0);
+        assert_eq!(closed_updates_end(b"a plain line\r\n"), 0);
+    }
+
+    #[test]
+    fn output_is_cut_after_the_last_update_it_closes() {
+        let output = b"\x1b[?2026hone\x1b[?2026l\x1b[?2026htwo\x1b[?2026l\x1b[?2026hthree";
+
+        let cut = closed_updates_end(output);
+
+        assert_eq!(
+            String::from_utf8_lossy(&output[..cut]),
+            "\x1b[?2026hone\x1b[?2026l\x1b[?2026htwo\x1b[?2026l",
+            "both closed updates are drawn, and the third is not begun for the pane"
+        );
+        assert_eq!(updates_left_open(&output[..cut]), 0);
+    }
+
+    #[test]
+    fn a_repaint_that_closes_reaches_the_view_although_the_next_one_has_begun() {
+        // The shape the benchmark measures. A harness writing 4 KB at a time puts the end of
+        // one repaint and the start of the next in the same write, so every write ends inside
+        // an open update — and each new one puts the deadline off again. Holding all of it
+        // back would draw once, late: what has closed goes over now, and only the piece that
+        // has not closed waits for the rest.
+        let session = sh("printf '\\033[?2026hframe 0 opens\\r\\n'; i=0; \
+             while [ $i -lt 8 ]; do \
+               printf 'frame %d closes\\r\\n\\033[?2026l\\033[?2026hframe %d opens\\r\\n' \
+                 $i $((i + 1)); \
+               sleep 0.02; i=$((i + 1)); \
+             done; sleep 30");
+        let view = session.attach();
+
+        let pieces = pieces_until(&view, "frame 7 closes", PATIENCE);
+
+        let drawable = pieces
+            .0
+            .iter()
+            .filter(|piece| String::from_utf8_lossy(piece).contains("closes"))
+            .count();
+        assert!(
+            drawable >= 5,
+            "eight repaints closed and the view could draw {drawable} of them: {:?}",
+            pieces
+                .0
+                .iter()
+                .map(|piece| String::from_utf8_lossy(piece).len())
+                .collect::<Vec<_>>()
+        );
+        for (nth, piece) in pieces.0.iter().enumerate() {
+            assert_eq!(
+                updates_left_open(piece),
+                0,
+                "piece {nth} leaves an update open: {:?}",
+                String::from_utf8_lossy(piece)
+            );
+        }
+    }
+
+    #[test]
+    fn output_an_update_never_closes_reaches_the_view_on_a_deadline_of_its_own() {
+        // Held back for ever is its own way of freezing a pane. A program that dies or hangs
+        // mid-repaint must not hold its output past the point xterm.js would have drawn it
+        // anyway — the core gives up on the update and ends it, as the engine does for its
+        // own screen.
+        // The pause is so that the frame is output the view is sent, and not part of the
+        // screen it opened on, which would prove nothing about holding it back.
+        let session =
+            sh("sleep 0.3; printf '\\033[?2026h\\033[H\\033[2Jhalf a frame\\r\\n'; sleep 30");
+        let view = session.attach();
+
+        let pieces = pieces_until_followed(&view, "half a frame", XTERM_SAFETY_TIMEOUT);
+
+        assert_eq!(
+            updates_left_open(&pieces.followed()),
+            0,
+            "the view is left inside the update the program never closed: {:?}",
+            String::from_utf8_lossy(&pieces.followed())
+        );
+    }
+
+    #[test]
+    fn a_pane_opening_inside_an_update_leaves_no_other_pane_holding_it() {
+        // Opening a view ends an update on the engine, because its snapshot has to carry
+        // everything the engine has read. Every other view has to be told the update ended
+        // too, or the next thing the program writes is handed to a pane still inside one.
+        let session = sh("printf 'a frame starts\\r\\n'; sleep 0.02; \
+             printf '\\033[?2026h\\033[H\\033[2Jheld back\\r\\n'; \
+             read go; printf 'and more\\r\\n'; sleep 30");
+        let first = session.attach();
+        pieces_until(&first, "a frame starts", PATIENCE);
+        // The update is open by now and its deadline has not passed: 20 ms in, of 150.
+        std::thread::sleep(Duration::from_millis(60));
+
+        let second = session.attach();
+        session.write(b"\n").expect("the program is reading");
+
+        let pieces = pieces_until(&first, "and more", PATIENCE);
+        assert_eq!(
+            updates_left_open(&pieces.all()),
+            0,
+            "the first pane is left inside an update the second pane's snapshot ended: {:?}",
+            String::from_utf8_lossy(&pieces.all())
+        );
+        drop(second);
+    }
+
+    #[test]
+    fn output_a_program_ends_inside_an_update_reaches_the_view_before_it_closes() {
+        // The program is gone, so nothing will close the update and no deadline is worth
+        // waiting for: what it wrote goes to the pane now, ended, or the pane keeps a screen
+        // older than the one the engine holds.
+        let session =
+            sh("sleep 0.3; printf '\\033[?2026h\\033[H\\033[2Jits last half frame\\r\\n'");
+        let view = session.attach();
+
+        let pieces = pieces_until(&view, "its last half frame", PATIENCE);
+
+        assert_eq!(
+            updates_left_open(&pieces.all()),
+            0,
+            "the view is left inside the update the program died in: {:?}",
+            String::from_utf8_lossy(&pieces.all())
+        );
+    }
+
+    #[test]
+    fn a_view_is_sent_every_byte_the_program_wrote_when_updates_are_held_across_writes() {
+        // Holding output back may neither lose it nor repeat it: what the program wrote is
+        // what the pane is written, in order, to the byte, however the writes fell and
+        // whatever was held between them.
+        let wrote = b"\x1b[?2026hone|two\x1b[?2026l\x1b[?2026hthree|four\x1b[?2026l".to_vec();
+        let session = sh(
+            "sleep 0.3; printf '\\033[?2026hone|'; sleep 0.05; printf 'two\\033[?2026l'; \
+             sleep 0.05; printf '\\033[?2026hthree|'; sleep 0.05; \
+             printf 'four\\033[?2026l'; sleep 30",
+        );
+        let view = session.attach();
+
+        let pieces = pieces_until(&view, "four", PATIENCE);
+
+        assert_eq!(
+            String::from_utf8_lossy(&pieces.followed()),
+            String::from_utf8_lossy(&wrote)
+        );
+    }
+
+    #[test]
+    fn a_program_that_closes_its_own_updates_has_its_output_passed_through_untouched() {
+        // Holding output back may not rewrite it: what the program wrote is what the pane is
+        // written, to the byte, whenever the program ends its own updates.
+        let wrote = b"\x1b[?2026h\x1b[H\x1b[2Jone\x1b[?2026ltwo".to_vec();
+        let session =
+            sh("sleep 0.3; printf '\\033[?2026h\\033[H\\033[2Jone\\033[?2026ltwo'; sleep 30");
+        let view = session.attach();
+
+        let pieces = pieces_until(&view, "two", PATIENCE);
+
+        assert_eq!(
+            String::from_utf8_lossy(&pieces.followed()),
+            String::from_utf8_lossy(&wrote)
+        );
     }
 
     fn alive(pid: u32) -> bool {

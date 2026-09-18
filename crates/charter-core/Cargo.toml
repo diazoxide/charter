@@ -10,6 +10,8 @@ publish = false
 
 [dependencies]
 alacritty_terminal = "0.26"
+# The same searcher vte uses to find these sequences in the same bytes.
+memchr = "2"
 portable-pty = "0.9"
 thiserror.workspace = true
 

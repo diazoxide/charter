@@ -3,6 +3,8 @@
 //! The core owns one engine per session, so a hidden session costs memory and no UI resources.
 //! The UI asks for a [`Screen`] only when it shows the pane.
 
+use std::time::Instant;
+
 mod alacritty;
 mod snapshot;
 
@@ -47,6 +49,12 @@ pub struct Screen {
 pub trait Engine: Send {
     /// Feeds output the program wrote to its terminal.
     fn advance(&mut self, bytes: &[u8]);
+
+    /// When a synchronized update (`?2026`) the program has opened must be given up on, or
+    /// `None` when none is open. A terminal left inside an update draws nothing until its own
+    /// safety timeout — a second, in xterm.js — so a session holds back output that would end
+    /// inside one, and this is the deadline it holds it to.
+    fn open_update(&self) -> Option<Instant>;
 
     /// Changes the size, reflowing what is on screen. Sizes below [`Size::MIN`] are raised to it.
     fn resize(&mut self, size: Size);
