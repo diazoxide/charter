@@ -13,6 +13,10 @@ export const commands = {
 	firstFrame: () => __TAURI_INVOKE<void>("first_frame"),
 	/**  The plane the app was started in, or why there is none. */
 	planeRoot: () => typedError<string, string>(__TAURI_INVOKE("plane_root")),
+	/**
+	 *  Starts a session, and remembers it as a chat so a quit can write it down. No program is
+	 *  the operator's shell.
+	 */
 	openSession: (program: string | null, args: string[], cwd: string | null, name: string, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("open_session", { program, args, cwd, name, columns, rows })),
 	/**  Ends a session and everything it started. It is no longer a chat a quit would record. */
 	closeSession: (session: number) => typedError<null, string>(__TAURI_INVOKE("close_session", { session })),
@@ -105,8 +109,6 @@ export type Sidebar = {
 };
 
 /**
- *  Starts a session, and remembers it as a chat so a quit can write it down. No program is
- *  the operator's shell.
  *  One workspace as the sidebar draws it: what it is for, what it still means to do, and the
  *  chats working in it.
  */

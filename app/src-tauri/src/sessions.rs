@@ -48,9 +48,6 @@ struct Running {
     session: Session,
     views: HashMap<u32, Watcher>,
     watched: u32,
-    /// Where the session was started. The sidebar files a chat under a workspace by it, and
-    /// it is kept here rather than looked up later because a session outlives its cwd.
-    cwd: Option<String>,
 }
 
 /// A view of a session that a thread of its own is reading. Dropping this closes the view in
@@ -80,23 +77,9 @@ impl Sessions {
                 session,
                 views: HashMap::new(),
                 watched: 0,
-                cwd: opening.cwd.clone(),
             },
         );
         Ok(id)
-    }
-
-    /// Every running session with the directory it was started in, oldest first.
-    ///
-    /// The app's own record of its chats. Nothing about it is in the plane: `.charter/frame/`
-    /// is the tmux frame's and the app stays out of it, so what a chat *is* belongs to the
-    /// app and only where it works ties it to a workspace.
-    pub fn started_in(&self) -> Vec<(u32, Option<String>)> {
-        let running = lock(&self.running);
-        let mut rows: Vec<(u32, Option<String>)> =
-            running.iter().map(|(id, r)| (*id, r.cwd.clone())).collect();
-        rows.sort_by_key(|(id, _)| *id);
-        rows
     }
 
     /// Ends a session and everything it started. Its views end with it.

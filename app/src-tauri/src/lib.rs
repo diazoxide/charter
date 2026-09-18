@@ -101,9 +101,6 @@ struct OpenChat {
     fresh: Option<String>,
 }
 
-/// Starts a session, and remembers it as a chat so a quit can write it down. No program is
-/// the operator's shell.
-
 /// One workspace as the sidebar draws it: what it is for, what it still means to do, and the
 /// chats working in it.
 #[derive(serde::Serialize, specta::Type)]
@@ -193,6 +190,8 @@ fn plane_sidebar(chats: tauri::State<'_, Chats>) -> Result<Sidebar, String> {
     })
 }
 
+/// Starts a session, and remembers it as a chat so a quit can write it down. No program is
+/// the operator's shell.
 #[tauri::command]
 #[specta::specta]
 fn open_session(

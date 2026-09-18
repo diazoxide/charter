@@ -73,11 +73,15 @@ describe("the sidebar", () => {
 
     await press("New tab");
 
+    // The chat is listed under `alpha` by the directory it works in — which is the only
+    // thing relating a chat to a workspace, since nothing on the plane records one. It is
+    // shown by the name the tab carries, not by its session id.
     const alpha = await $('[data-testid="workspace-alpha"]');
-    await browser.waitUntil(async () => (await alpha.getText()).includes("session"), {
+    await browser.waitUntil(async () => (await alpha.getText()).includes("workspaces/alpha"), {
       timeout: 20_000,
       timeoutMsg: "the chat never appeared under the workspace it was started in",
     });
-    await expect(alpha).toHaveText(expect.stringContaining("workspaces/alpha"));
+    await expect(alpha).toHaveText(expect.stringContaining("1"));
+    await expect(await $('[data-testid="unfiled"]')).not.toBeExisting();
   });
 });
