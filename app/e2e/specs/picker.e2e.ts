@@ -62,20 +62,32 @@ describe("starting a chat", () => {
   });
 
   it("names the profile and the persona on the chat in the sidebar", async () => {
+    // The profile AND its kind. The kind is the one the profile declares, not one read off
+    // the program's name — the program here is `claude-stand-in`, a wrapper, and
+    // `Harness::of_command` answers `None` for one exactly as it does for a shell.
     const sidebar = await $('nav[aria-label="Workspaces"]');
     await sidebar.waitForDisplayed({ timeout: 20_000 });
 
-    await browser.waitUntil(
-      async () => {
-        const text = await sidebar.getText();
-        return text.includes("needs-approval") && text.includes("claude");
-      },
-      {
-        timeout: 20_000,
-        interval: 250,
-        timeoutMsg: "the sidebar never named the profile the chat started on",
-      },
-    );
+    let said = "";
+    await browser
+      .waitUntil(
+        async () => {
+          said = await sidebar.getText();
+          return said.includes("needs-approval") && said.includes("(claude)");
+        },
+        {
+          timeout: 20_000,
+          interval: 250,
+          // What it actually said, so a failure here is one somebody can act on rather than
+          // one they have to reproduce.
+          timeoutMsg: "the sidebar never named the profile the chat started on",
+        },
+      )
+      .catch((why: unknown) => {
+        // What it actually said, so a failure here is one somebody can act on rather than one
+        // they have to reproduce.
+        throw new Error(`${String(why)} — the sidebar said: ${said}`);
+      });
   });
 
   it("does not ask again for a profile it has already run, exactly as it stands", async () => {

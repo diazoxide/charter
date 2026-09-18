@@ -64,7 +64,15 @@ pub struct Chats {
     never_started: Mutex<Option<Box<dyn Fn(u32) + Send + Sync>>>,
     /// The `charter` binary a hook runs, when the app knows where its own is.
     binary: Option<PathBuf>,
-    open: Mutex<HashMap<u32, (Chat, Reopened)>>,
+    /// What is open, by session: the chat as it was started, how it came back, and the
+    /// harness it actually runs.
+    ///
+    /// The harness is KEPT rather than asked of the chat again, because asking means asking
+    /// its program's name, and a profile's command is commonly a wrapper. The board is told
+    /// this same value at the start, so the sidebar and the board can never disagree about
+    /// what a chat is running — which they did: the board learned the profile's kind and
+    /// the sidebar read `claude-wrap` and said "no harness".
+    open: Mutex<HashMap<u32, (Chat, Reopened, Option<Harness>)>>,
     front: Mutex<Option<u32>>,
     /// Chats a launch could not start, and why. They are kept because the record has to
     /// keep them: a workspace directory that has moved, or a harness mid-reinstall, must
@@ -299,7 +307,7 @@ impl Chats {
                 .and_then(|id| charter_core::harness::SessionId::new(id).ok()),
             ..chat.clone()
         };
-        lock(&self.open).insert(session, (under, how));
+        lock(&self.open).insert(session, (under, how, harness));
         self.write_it_down();
         Ok(session)
     }
@@ -340,12 +348,16 @@ impl Chats {
             .running()
             .into_iter()
             .filter_map(|session| {
-                let (chat, how) = open.get(&session)?;
+                let (chat, how, harness) = open.get(&session)?;
                 Some(Open {
                     session,
                     name: chat.name.clone(),
                     cwd: chat.cwd.clone(),
-                    harness: chat.harness(),
+                    // The harness this chat was STARTED as, not one inferred from its
+                    // program's name — a profile's command is commonly a wrapper, and the
+                    // sidebar used to answer "no harness" for one while the board knew the
+                    // kind. One idea of what is running, or the two drift.
+                    harness: *harness,
                     profile: chat.profile.clone(),
                     persona: chat.persona.clone(),
                     in_front: front == Some(session),
@@ -366,7 +378,7 @@ impl Chats {
             .map(|(chat, _)| chat.clone())
             .collect();
         chats.extend(self.sessions.running().into_iter().filter_map(|session| {
-            let (chat, _) = open.get(&session)?;
+            let (chat, _, _) = open.get(&session)?;
             Some(Chat {
                 active: front == Some(session),
                 ..chat.clone()
@@ -1237,6 +1249,59 @@ mod tests {
         assert_eq!(record.chats.len(), 1);
         assert_eq!(record.chats[0].profile.as_deref(), Some("claude-work"));
         assert_eq!(record.chats[0].persona.as_deref(), Some("steward"));
+        let _ = chats.close(session);
+    }
+    #[test]
+    fn the_sidebar_is_told_the_harness_a_chat_was_started_as_not_one_read_off_its_program() {
+        // A profile's command is commonly a WRAPPER (ADR 0022), and `Harness::of_command`
+        // answers `None` for one — the same answer it gives a shell, deliberately. The board
+        // is told the profile's declared kind at the start; the sidebar used to ask the
+        // program's name instead and say "no harness" for the very same chat. A scenario
+        // test caught the disagreement; this is what keeps them one answer.
+        let chats = Chats::new();
+        let chat = Chat {
+            program: "/bin/sh".to_owned(),
+            args: Vec::new(),
+            cwd: None,
+            name: "ide.7".to_owned(),
+            resume: None,
+            active: false,
+            profile: Some("claude-work".to_owned()),
+            persona: None,
+        };
+        assert_eq!(
+            chat.harness(),
+            None,
+            "the premise: the program is not a harness"
+        );
+        let ready = charter_core::start::Ready {
+            program: "/bin/sh".to_owned(),
+            args: vec!["-c".to_owned(), "sleep 30".to_owned()],
+            env: Vec::new(),
+            cwd: None,
+            harness: Some(Harness::ClaudeCode),
+            session: None,
+            how: charter_core::reopen::Reopened::Fresh(
+                charter_core::reopen::Fresh::NoConversationRecorded,
+            ),
+            wired: String::new(),
+        };
+
+        let session = chats
+            .start_ready(
+                &chat,
+                &ready,
+                Size {
+                    columns: 80,
+                    rows: 24,
+                },
+            )
+            .unwrap();
+
+        let open = chats.open_now();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].harness, Some(Harness::ClaudeCode));
+        assert_eq!(open[0].profile.as_deref(), Some("claude-work"));
         let _ = chats.close(session);
     }
 }
