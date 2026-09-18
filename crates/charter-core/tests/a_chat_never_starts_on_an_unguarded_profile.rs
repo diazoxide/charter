@@ -342,3 +342,69 @@ fn the_real_claude_answers_what_this_port_expects() {
         "the same install, asked from a directory it does not cover: {w:?}"
     );
 }
+
+#[test]
+fn a_kind_this_app_does_not_start_is_refused_by_that_name_and_not_by_a_missing_probe() {
+    // Parsing is not launching. `profiles` knows all three kinds, including opencode,
+    // because the Python charter accepts one and this plane is read by both until M4 — an
+    // operator must not get two answers about their own file. What this app will not do is
+    // START one, and that decision is the spec's (decision 6), so it is said here in the
+    // launch path rather than left to fall out of a wiring check that happens not to exist.
+    //
+    // Said HERE and not inferred: a declared `kind` is a known value. `Harness::of_command`
+    // cannot tell a shell from a harness charter has not measured, and no refusal is built
+    // on that.
+    let stand = Stand::new();
+    fs::write(
+        stand.root().join(profiles::LOCAL_FILE),
+        "[harness.work]\nkind = \"opencode\"\ncommand = [\"opencode\"]\n",
+    )
+    .unwrap();
+    let p = stand.profile();
+
+    let answer = wiring::wired_or_refusal(&p, &stand.cwd(), stand.root());
+
+    assert!(!answer.may_start(), "an opencode profile started a chat");
+    assert_eq!(
+        answer.refusal,
+        "profile 'work' runs opencode, which this app does not start — charter-app v1 \
+         starts Claude Code and Codex, and opencode follows. The Python charter on this \
+         same plane still starts it: charter work."
+    );
+    assert_eq!(
+        answer.wired, "",
+        "nothing was installed for a chat that cannot start"
+    );
+}
+
+#[test]
+fn the_kind_refusal_comes_before_every_gate_that_would_run_or_ask_anything() {
+    // A profile that can never start is not worth approving, probing or installing for, and
+    // the sentence an operator wants is the one about v1 rather than one about consent.
+    let stand = Stand::new();
+    fs::write(
+        stand.root().join(profiles::LOCAL_FILE),
+        "[harness.work]\nkind = \"opencode\"\ncommand = [\"opencode\"]\n",
+    )
+    .unwrap();
+    // Deliberately NOT approved, which is the gate that would otherwise answer first.
+    let p = profiles::current(stand.root()).get("work").unwrap().clone();
+
+    let answer = wiring::wired_or_refusal(&p, &stand.cwd(), stand.root());
+
+    assert!(
+        answer.refusal.contains("which this app does not start"),
+        "the approval gate answered for a profile that can never start: {answer:?}"
+    );
+}
+
+#[test]
+fn both_kinds_this_app_does_start_are_taken_by_their_declared_word() {
+    for kind in ["claude", "codex"] {
+        assert!(
+            charter_core::harness::Harness::of_kind(kind).is_some(),
+            "{kind} is a v1 harness and was not recognised by its declared word"
+        );
+    }
+    assert_eq!(charter_core::harness::Harness::of_kind("opencode"), None);
+}

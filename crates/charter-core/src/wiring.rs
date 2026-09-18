@@ -196,6 +196,35 @@ fn quote(word: &str) -> String {
     format!("'{}'", word.replace('\'', "'\"'\"'"))
 }
 
+/// Why this app will not start `p` at all — `None` when it may.
+///
+/// **Parsing is not launching.** [`crate::profiles`] reads all three kinds, `opencode`
+/// included, because the Python charter accepts one and both implementations read one plane
+/// until M4: refusing it at the PARSE would give an operator two different answers about
+/// their own file. What this app will not do is start one, and that is the spec's decision
+/// (decision 6, "Harnesses in v1: Claude Code and Codex. opencode follows").
+///
+/// Said here rather than left to fall out of a wiring check that happens not to exist. A
+/// missing probe is the wrong sentence — it reads as "charter could not look" when the truth
+/// is "this app does not do that yet" — and it would stop being a refusal at all the day
+/// opencode's wiring is ported, silently starting chats no decision ever allowed.
+///
+/// Decided from the DECLARED `kind`, which is a known value
+/// ([`crate::harness::Harness::of_kind`]), never from the program name, which is not.
+fn not_startable(p: &Profile) -> Option<String> {
+    if crate::harness::Harness::of_kind(&p.kind).is_some() {
+        return None;
+    }
+    Some(format!(
+        "profile '{}' runs {}, which this app does not start — charter-app v1 starts Claude \
+         Code and Codex, and opencode follows. The Python charter on this same plane still \
+         starts it: charter {}.",
+        shown::short(&p.name),
+        shown::short(&p.kind),
+        whole(&p.name)
+    ))
+}
+
 /// Why charter may not run `p`'s command to ask it anything — `None` when it may.
 ///
 /// **The same two checks a launch makes before its own, in the same order**: a probe IS a
@@ -252,11 +281,13 @@ pub fn detect(p: &Profile, cwd: &Path, root: &Path) -> Wiring {
     match p.kind.as_str() {
         "claude" => claude(p, cwd, root),
         "codex" => codex(p, root),
-        // A kind charter has no wiring check for is an UNKNOWN and therefore a refusal, not
-        // a pass: the day a kind joins without one, this is the answer that says so.
+        // A kind this app does not start says so, rather than reporting a probe it was
+        // never going to run. A kind charter has neither is still an UNKNOWN and therefore
+        // a refusal, not a pass: the day a kind joins without a check, this says so.
         other => Wiring {
             state: State::Unknown,
-            detail: format!("charter has no wiring check for {}", whole(other)),
+            detail: not_startable(p)
+                .unwrap_or_else(|| format!("charter has no wiring check for {}", whole(other))),
             fix: install_fix(p),
         },
     }
@@ -530,6 +561,15 @@ const DID: [&str; 3] = ["added", "installed", "present"];
 /// A start therefore pays two probes, and the install happens at the first one that sees
 /// unwired so the second finds the folder wired.
 pub fn wired_or_refusal(p: &Profile, cwd: &Path, root: &Path) -> Answer {
+    // First, before any gate that would ask or run anything: a profile that can never start
+    // is not worth approving, probing or installing for, and the sentence an operator wants
+    // is the one about v1 rather than one about consent or a missing probe.
+    if let Some(why) = not_startable(p) {
+        return Answer {
+            refusal: why,
+            wired: String::new(),
+        };
+    }
     if let Some((why, _fix)) = not_asked(p, root) {
         return Answer {
             refusal: why,

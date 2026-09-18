@@ -81,6 +81,25 @@ impl Harness {
         }
     }
 
+    /// The harness a profile's DECLARED `kind` names, or none for a kind this app does not
+    /// start.
+    ///
+    /// Not [`Self::of_command`], and the difference is the whole reason both exist.
+    /// `of_command` INFERS a harness from a program name and cannot tell a shell from a
+    /// harness charter has not measured — both are `None`, deliberately, and no refusal may
+    /// rest on telling them apart. A `kind` is not inferred: the operator wrote one of three
+    /// words in `charter.local.toml` and charter's own validator already refused anything
+    /// else. So this answer IS knowable, and a launch may refuse on it.
+    ///
+    /// `opencode` is a kind `profiles` reads and this app does not start (spec decision 6).
+    pub fn of_kind(kind: &str) -> Option<Self> {
+        match kind {
+            "claude" => Some(Self::ClaudeCode),
+            "codex" => Some(Self::Codex),
+            _ => None,
+        }
+    }
+
     /// The word the plane calls this harness by (`charter.local.toml`'s `kind`).
     pub fn name(self) -> &'static str {
         match self {
