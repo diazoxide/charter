@@ -17,8 +17,9 @@
 //! run at every later launch — before any window, with nothing to click.
 //!
 //! **It is not true that a gitignored `.charter/` keeps this out of a clone.** An ignore rule
-//! does not apply to a tracked path: `git add -f` commits a symlink here, and a fresh clone
-//! materialises it. That assumption is what left the record reachable through a link, so the
+//! does not apply to a tracked path: `git add -f` commits a symlink — or a file far larger
+//! than charter will read — and a fresh clone materialises it. (A FIFO is the one poison git
+//! cannot carry; it needs a local writer.) That assumption is what left the record reachable through a link, so the
 //! path is guarded now (`no_link_on_the_way`) rather than argued about. What remains true is
 //! that anyone who can *write* this file could already write a shell profile — it is not a
 //! way in, it is a way to *survive*: one write buys every launch after it, in another
@@ -35,6 +36,10 @@ pub const VERSION: u32 = 1;
 
 /// Where the record lives, relative to a plane root.
 pub const IN_PLANE: &str = ".charter/app/reopen.json";
+
+/// The largest record charter will read, matching `contain.MAX_BYTES` on the Python side.
+/// A real record is a few hundred bytes per chat; anything approaching this is not one.
+pub const MAX_BYTES: u64 = 1_048_576;
 
 /// One chat as it was: what it was running, where, and the conversation to bring back.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -176,11 +181,16 @@ pub fn path(plane_root: &Path) -> PathBuf {
 /// It does not stop a **hard** link, which no symlink check can see and git cannot carry;
 /// whoever can make one can already write this file.
 ///
-/// The last component is also held to being a regular file. A FIFO is not a link and would
-/// pass a link check, and reading one **blocks for ever** — at launch, before the window and
-/// the tray exist, which leaves an app that can only be killed. `charter/hooks.py` learned
-/// this the hard way ("a FIFO does not raise OSError at all, it *waits*"), and
-/// `docs/plane-format.md` states the rule: never through a symlink, never into a FIFO.
+/// The last component is also held to being a plain file no bigger than [`MAX_BYTES`]. One
+/// `symlink_metadata` answers all three questions, which is how charter's Python side words
+/// it (`contain.py`: "whether this is a link (containment), whether it is a regular file (a
+/// FIFO blocks the read for ever, a device never ends) and how big it is (the bound)").
+///
+/// A FIFO is not a link, so a link check waves it through, and reading one **blocks for
+/// ever** — at launch, before the window and the tray exist, leaving an app that can only be
+/// killed. The size bound is the half that a clone can actually deliver: git cannot store a
+/// FIFO, but a sparse multi-gigabyte file packs small and arrives full size, and reading it
+/// whole at launch is the same failure by another road.
 fn no_link_on_the_way(plane_root: &Path, file: &Path) -> std::io::Result<()> {
     let Ok(rest) = file.strip_prefix(plane_root) else {
         return Err(std::io::Error::new(
@@ -216,6 +226,17 @@ fn no_link_on_the_way(plane_root: &Path, file: &Path) -> std::io::Result<()> {
                     ),
                 ));
             }
+            // Read whole at launch, so a planted giant is a hang with nothing to click on.
+            Ok(found) if walked == *file && found.len() > MAX_BYTES => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "{} is {} bytes, and charter's record is never larger than {MAX_BYTES}",
+                        walked.display(),
+                        found.len()
+                    ),
+                ));
+            }
             // Not there yet is fine: the app creates `.charter/app/` and the file itself.
             _ => {}
         }
@@ -248,12 +269,17 @@ pub fn write(plane_root: &Path, record: &Record) -> std::io::Result<()> {
     std::fs::rename(&beside, &file)
 }
 
-/// What was open, or nothing.
+/// What was open, or nothing, with every refusal swallowed.
+///
+/// Nothing in the app calls this — [`read_or_refusal`] is what a launch uses, because a
+/// refusal an operator never sees is the bug this module already had once. It is kept for
+/// tests, and deliberately not public.
 ///
 /// This never fails. No file is a first launch; a file of another version, or one that is
 /// not the record at all, is nothing open — there is no repair that would be honest, and
 /// refusing to start would be worse than starting empty.
-pub fn read(plane_root: &Path) -> Record {
+#[cfg(test)]
+fn read(plane_root: &Path) -> Record {
     read_or_refusal(plane_root).unwrap_or_default()
 }
 
@@ -267,8 +293,13 @@ pub fn read_or_refusal(plane_root: &Path) -> Result<Record, std::io::Error> {
     // A record reached through a link is not this plane's record, and what it holds is a
     // command line this launch would run.
     no_link_on_the_way(plane_root, &file)?;
-    let Ok(text) = std::fs::read_to_string(&file) else {
-        return Ok(Record::default());
+    let text = match std::fs::read_to_string(&file) {
+        Ok(text) => text,
+        // No record is a first launch. A record that exists and cannot be read — no
+        // permission, a failing disk — is a defect with a repair, and saying "nothing to
+        // reopen" would send the operator looking in the wrong place.
+        Err(gone) if gone.kind() == std::io::ErrorKind::NotFound => return Ok(Record::default()),
+        Err(unreadable) => return Err(unreadable),
     };
     let Ok(on_disk) = serde_json::from_str::<OnDisk>(&text) else {
         return Ok(Record::default());
@@ -799,5 +830,59 @@ mod tests {
         );
         // And the forgiving door still answers, for callers that only want what to reopen.
         assert_eq!(read(&plane), Record::default());
+    }
+
+    #[test]
+    fn a_record_too_large_to_be_one_is_refused_rather_than_read_whole() {
+        // git cannot carry a fifo, but it carries a sparse giant that arrives full size,
+        // and reading it at launch is the same hang by another road.
+        let held = tempfile::tempdir().unwrap();
+        let plane = held.path().to_path_buf();
+        std::fs::create_dir_all(plane.join(".charter/app")).unwrap();
+        let record = std::fs::File::create(path(&plane)).unwrap();
+        record.set_len(MAX_BYTES + 1).unwrap();
+
+        let refusal = read_or_refusal(&plane).expect_err("an oversized record is a refusal");
+
+        assert!(
+            refusal.to_string().contains("never larger than"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_record_of_an_honest_size_is_still_read() {
+        let held = tempfile::tempdir().unwrap();
+        let plane = held.path().to_path_buf();
+        write(&plane, &one_chat()).unwrap();
+
+        assert_eq!(read_or_refusal(&plane).unwrap(), one_chat());
+    }
+
+    #[test]
+    fn a_record_that_exists_but_cannot_be_read_is_a_refusal_not_an_empty_plane() {
+        use std::os::unix::fs::PermissionsExt;
+        let held = tempfile::tempdir().unwrap();
+        let plane = held.path().to_path_buf();
+        write(&plane, &one_chat()).unwrap();
+        std::fs::set_permissions(path(&plane), std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let read_back = read_or_refusal(&plane);
+
+        // Running as root reads it anyway; the point is only that it is never a silent empty.
+        if let Ok(record) = read_back {
+            assert_eq!(
+                record,
+                one_chat(),
+                "an unreadable record read as an empty one"
+            );
+        }
+    }
+
+    #[test]
+    fn a_plane_with_no_record_at_all_is_simply_nothing_to_reopen() {
+        let held = tempfile::tempdir().unwrap();
+
+        assert_eq!(read_or_refusal(held.path()).unwrap(), Record::default());
     }
 }
