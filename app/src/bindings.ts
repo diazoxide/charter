@@ -30,9 +30,53 @@ export const commands = {
 	unwatchSession: (session: number, view: number) => typedError<null, string>(__TAURI_INVOKE("unwatch_session", { session, view })),
 	/**  The sessions that are running, in the order they were opened. */
 	runningSessions: () => __TAURI_INVOKE<number[]>("running_sessions"),
+	/**
+	 *  The sidebar, read from the plane on disk every time it is asked for.
+	 * 
+	 *  Read fresh rather than cached: the plane is a directory the operator also edits by hand
+	 *  and another charter process writes, so a cache here would be a second answer to "what is
+	 *  on disk" that nothing invalidates.
+	 */
+	planeSidebar: () => typedError<Sidebar, string>(__TAURI_INVOKE("plane_sidebar")),
 };
 
 /* Types */
+/**
+ *  One chat in the sidebar. A chat is the app's own — nothing in the plane records it — so
+ *  this is a running session, labelled by where it is working.
+ */
+export type Chat = {
+	session: number,
+	cwd: string | null,
+};
+
+/**
+ *  The whole left-hand side: every workspace with its chats, and the focused workspace's
+ *  persona and todos.
+ */
+export type Sidebar = {
+	root: string,
+	workspaces: SidebarWorkspace[],
+	/**  The plane's personas, and the one a new chat here would adopt. */
+	personas: string[],
+	persona: string | null,
+	/**  Chats whose directory is in no workspace, so the sidebar can still show them. */
+	unfiled: Chat[],
+};
+
+/**
+ *  One workspace as the sidebar draws it: what it is for, what it still means to do, and the
+ *  chats working in it.
+ */
+export type SidebarWorkspace = {
+	name: string,
+	/**  Where the workspace is, so a chat can be started in it. */
+	path: string,
+	vision: string,
+	todos: string[],
+	chats: Chat[],
+};
+
 /**
  *  A view a pane has open, and what its terminal has to match to show the session as it is:
  *  the size the screen was drawn for, so what was wrapped stays wrapped, and how much history

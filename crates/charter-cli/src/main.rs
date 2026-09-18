@@ -4,7 +4,6 @@
 //! name, and the differential tests (`tests/differential/run.py`) prove that by running both
 //! against copies of one fixture plane and comparing the trees they leave.
 
-use std::path::PathBuf;
 use std::process::ExitCode;
 
 use charter_core::workspaces::Plane;
@@ -85,12 +84,7 @@ impl Common {
 fn plane() -> Result<Plane, String> {
     let cwd =
         std::env::current_dir().map_err(|e| format!("cannot read the current directory: {e}"))?;
-    // `$CHARTER_ROOT` wins over the walk up, as it does in Python charter: it is how a
-    // caller pins the plane rather than inheriting whichever one the cwd sits in.
-    if let Some(root) = std::env::var_os("CHARTER_ROOT") {
-        return Ok(Plane::open(PathBuf::from(root)));
-    }
-    charter_core::plane::find_root(&cwd)
+    charter_core::plane::resolve(&cwd)
         .map(Plane::open)
         .map_err(|e| e.to_string())
 }

@@ -382,3 +382,66 @@ fn a_todo_can_be_closed_by_its_bare_slug_without_the_timestamp() {
         "Closed todo: Write the migration"
     );
 }
+
+#[test]
+fn the_planes_default_persona_is_the_one_charter_toml_names() {
+    assert_eq!(daily().default_persona(), Some("steward".to_string()));
+}
+
+#[test]
+fn a_plane_whose_manifest_names_no_persona_has_no_default() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("charter.toml"), "schema = 1\n").unwrap();
+
+    assert_eq!(
+        charter_core::workspaces::Plane::open(dir.path()).default_persona(),
+        None
+    );
+}
+
+#[test]
+fn an_unparseable_charter_toml_names_no_persona_rather_than_failing() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("charter.toml"), "schema = = =\n").unwrap();
+
+    assert_eq!(
+        charter_core::workspaces::Plane::open(dir.path()).default_persona(),
+        None
+    );
+}
+
+#[test]
+fn a_path_inside_a_workspace_names_that_workspace() {
+    let plane = daily();
+    let root = plane.root().to_path_buf();
+
+    assert_eq!(
+        plane.workspace_of(&root.join("workspaces/alpha")),
+        Some("alpha".to_string())
+    );
+    assert_eq!(
+        plane.workspace_of(&root.join("workspaces/alpha/svc/README.md")),
+        Some("alpha".to_string()),
+        "a chat working deep inside a clone still belongs to the workspace"
+    );
+}
+
+#[test]
+fn a_path_outside_the_workspaces_belongs_to_none_of_them() {
+    let plane = daily();
+    let root = plane.root().to_path_buf();
+
+    assert_eq!(plane.workspace_of(&root), None);
+    assert_eq!(plane.workspace_of(&root.join("personas/devops")), None);
+    assert_eq!(plane.workspace_of(Path::new("/tmp")), None);
+}
+
+#[test]
+fn a_path_naming_a_workspace_that_is_not_there_belongs_to_none() {
+    let plane = daily();
+
+    assert_eq!(
+        plane.workspace_of(&plane.root().join("workspaces/ghost/x")),
+        None
+    );
+}

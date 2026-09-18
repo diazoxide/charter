@@ -1,4 +1,12 @@
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import process from "node:process";
@@ -36,4 +44,37 @@ export function writeShell(fakeHarness: string): string {
 export function built(name: string): string {
   const from = process.env.CHARTER_TARGET_DIR ?? join(process.cwd(), "..", "target", "debug");
   return join(from, name);
+}
+
+/**
+ * A writable copy of a fixture plane for the app to be started in.
+ *
+ * The fixtures are committed and the app writes to a plane, so a scenario test never runs
+ * against the ones in the repository. The copy is made fresh for the run and `CHARTER_ROOT`
+ * points the app at it, which is how a plane is pinned rather than inherited from whichever
+ * directory the test runner happens to be in.
+ */
+export function copyFixturePlane(name = "daily"): string {
+  const from = join(import.meta.dirname, "..", "..", "tests", "fixtures", "planes", name);
+  const to = mkdtempSync(join(tmpdir(), `charter-scenario-plane-${name}-`));
+  const root = join(to, name);
+  cpSync(from, root, { recursive: true });
+  // Directories the fixture cannot carry, because git will not track an empty one. The
+  // generator records them beside the plane; restoring them matters because "no todos/" and
+  // "an empty todos/" are different starting states.
+  const listing = join(
+    import.meta.dirname,
+    "..",
+    "..",
+    "tests",
+    "fixtures",
+    "planes",
+    `${name}.empty-dirs`,
+  );
+  if (existsSync(listing)) {
+    for (const rel of readFileSync(listing, "utf8").split(/\s+/).filter(Boolean)) {
+      mkdirSync(join(root, rel), { recursive: true });
+    }
+  }
+  return root;
 }

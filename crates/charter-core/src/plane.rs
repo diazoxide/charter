@@ -21,6 +21,19 @@ pub fn find_root(start: &Path) -> Result<PathBuf, PlaneError> {
         .ok_or_else(|| PlaneError::NotFound(start.to_path_buf()))
 }
 
+/// The plane a process should act on: `$CHARTER_ROOT` if it is set, else the nearest
+/// `charter.toml` at or above `start`.
+///
+/// The variable wins, as it does in Python charter, because it is how a caller PINS a plane
+/// rather than inheriting whichever one its working directory happens to sit in — which is
+/// what a test, a hook and a launched chat all need.
+pub fn resolve(start: &Path) -> Result<PathBuf, PlaneError> {
+    match std::env::var_os("CHARTER_ROOT") {
+        Some(root) if !root.is_empty() => Ok(PathBuf::from(root)),
+        _ => find_root(start),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

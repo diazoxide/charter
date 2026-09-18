@@ -1,5 +1,5 @@
 import process from "node:process";
-import { built, writeShell } from "./harness.js";
+import { built, copyFixturePlane, writeShell } from "./harness.js";
 
 /**
  * The scenario tests: WebdriverIO driving the real app, with the fake harness standing in for
@@ -10,6 +10,9 @@ import { built, writeShell } from "./harness.js";
  * the service's ADR 0002. Both plugins are behind the app's `e2e` cargo feature.
  */
 const app = built(process.platform === "win32" ? "charter-app.exe" : "charter-app");
+
+// The plane the app is started in: a fresh copy of a fixture plane, never the committed one.
+const plane = copyFixturePlane();
 
 export const config: WebdriverIO.Config = {
   runner: "local",
@@ -33,7 +36,7 @@ export const config: WebdriverIO.Config = {
         captureBackendLogs: true,
         captureFrontendLogs: true,
         // Every session the app opens is the fake harness, because that is the shell it finds.
-        env: { SHELL: writeShell(built("fake-harness")) },
+        env: { SHELL: writeShell(built("fake-harness")), CHARTER_ROOT: plane },
       },
     ],
   ],

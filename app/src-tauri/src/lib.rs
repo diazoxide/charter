@@ -48,9 +48,97 @@ fn first_frame() {
 fn plane_root() -> Result<String, String> {
     let cwd = std::env::current_dir()
         .map_err(|err| format!("cannot read the current directory: {err}"))?;
-    charter_core::plane::find_root(&cwd)
+    charter_core::plane::resolve(&cwd)
         .map(|root| root.display().to_string())
         .map_err(|err| err.to_string())
+}
+
+/// One chat in the sidebar. A chat is the app's own — nothing in the plane records it — so
+/// this is a running session, labelled by where it is working.
+#[derive(serde::Serialize, specta::Type)]
+struct Chat {
+    session: u32,
+    cwd: Option<String>,
+}
+
+/// One workspace as the sidebar draws it: what it is for, what it still means to do, and the
+/// chats working in it.
+#[derive(serde::Serialize, specta::Type)]
+struct SidebarWorkspace {
+    name: String,
+    /// Where the workspace is, so a chat can be started in it.
+    path: String,
+    vision: String,
+    todos: Vec<String>,
+    chats: Vec<Chat>,
+}
+
+/// The whole left-hand side: every workspace with its chats, and the focused workspace's
+/// persona and todos.
+#[derive(serde::Serialize, specta::Type)]
+struct Sidebar {
+    root: String,
+    workspaces: Vec<SidebarWorkspace>,
+    /// The plane's personas, and the one a new chat here would adopt.
+    personas: Vec<String>,
+    persona: Option<String>,
+    /// Chats whose directory is in no workspace, so the sidebar can still show them.
+    unfiled: Vec<Chat>,
+}
+
+/// The sidebar, read from the plane on disk every time it is asked for.
+///
+/// Read fresh rather than cached: the plane is a directory the operator also edits by hand
+/// and another charter process writes, so a cache here would be a second answer to "what is
+/// on disk" that nothing invalidates.
+#[tauri::command]
+#[specta::specta]
+fn plane_sidebar(sessions: tauri::State<'_, Sessions>) -> Result<Sidebar, String> {
+    let cwd = std::env::current_dir()
+        .map_err(|err| format!("cannot read the current directory: {err}"))?;
+    let root = charter_core::plane::resolve(&cwd).map_err(|err| err.to_string())?;
+    let plane = charter_core::workspaces::Plane::open(&root);
+
+    let mut filed: std::collections::HashMap<String, Vec<Chat>> = std::collections::HashMap::new();
+    let mut unfiled = Vec::new();
+    for (session, cwd) in sessions.started_in() {
+        let chat = Chat {
+            session,
+            cwd: cwd.clone(),
+        };
+        match cwd
+            .as_deref()
+            .and_then(|c| plane.workspace_of(std::path::Path::new(c)))
+        {
+            Some(name) => filed.entry(name).or_default().push(chat),
+            None => unfiled.push(chat),
+        }
+    }
+
+    let mut workspaces = Vec::new();
+    for name in plane.workspaces().map_err(|err| err.to_string())? {
+        let ws = plane.workspace(&name);
+        workspaces.push(SidebarWorkspace {
+            path: ws.dir().display().to_string(),
+            vision: ws.vision(),
+            todos: ws
+                .todos()
+                .map_err(|err| err.to_string())?
+                .into_iter()
+                .map(|todo| todo.title)
+                .collect(),
+            chats: filed.remove(&name).unwrap_or_default(),
+            name,
+        });
+    }
+
+    Ok(Sidebar {
+        root: root.display().to_string(),
+        workspaces,
+        personas: plane.personas().map_err(|err| err.to_string())?,
+        persona: plane.default_persona(),
+        unfiled,
+    })
 }
 
 /// Starts a session. No program is the operator's shell.
@@ -158,11 +246,17 @@ fn commands() -> Builder<tauri::Wry> {
         watch_session,
         unwatch_session,
         running_sessions,
+        plane_sidebar,
     ])
 }
 
-/// Where the generated TypeScript lives, relative to this crate.
-const BINDINGS: &str = "../src/bindings.ts";
+/// Where the generated TypeScript lives.
+///
+/// Anchored to this crate's directory rather than written relative, because a debug build
+/// exports it on startup and the process's working directory is not this crate's: the
+/// scenario tests launch the app from `app/`, and a relative path wrote a stray
+/// `src/bindings.ts` at the repository root on every run.
+const BINDINGS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/bindings.ts");
 
 /// How the TypeScript is written, so that the app and the test that guards it agree.
 fn typescript() -> specta_typescript::Typescript {

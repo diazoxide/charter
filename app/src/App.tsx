@@ -1,8 +1,9 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import "./App.css";
-import { commands } from "./bindings";
+import { commands, type Sidebar as SidebarModel } from "./bindings";
 import { SessionPane } from "./SessionPane";
+import { Sidebar } from "./Sidebar";
 import {
   closeFocusedPane,
   closeTab,
@@ -27,6 +28,8 @@ function App() {
   const [plane, setPlane] = useState<Plane>({ state: "loading" });
   const [tabs, setTabs] = useState<Tabs>(noTabs);
   const [trouble, setTrouble] = useState<string>();
+  const [sidebar, setSidebar] = useState<SidebarModel>();
+  const [focused, setFocused] = useState<string>();
 
   // The arrangement as it is right now, so that what a button does is decided here and not
   // inside a state update. React may run an update again, and a session must not be opened or
@@ -54,6 +57,35 @@ function App() {
       // Nothing to sweep is the ordinary case, and a window that cannot ask is still usable.
       .catch(() => undefined);
   }, []);
+
+  // The sidebar is read from the plane, and re-read whenever the chats change: the plane is a
+  // directory the operator also edits by hand and another charter process writes, so there is
+  // nothing to invalidate a cache of it. `tabs` is the dependency because opening or ending a
+  // chat is what this window can change about the answer.
+  useEffect(() => {
+    void commands
+      .planeSidebar()
+      .then((answer) => {
+        // Only an `ok` answer is used, and the check is `!== "ok"` rather than
+        // `=== "error"`: the state updater below runs on the NEXT render, outside this
+        // promise, so nothing here would catch a throw from a malformed answer.
+        if (answer.status !== "ok") {
+          setSidebar(undefined);
+          return;
+        }
+        const next = answer.data;
+        setSidebar(next);
+        // Focus follows the plane rather than being guessed: the first workspace, until
+        // somebody picks another and while that one still exists.
+        setFocused((current) =>
+          current && next.workspaces.some((ws) => ws.name === current)
+            ? current
+            : next.workspaces[0]?.name,
+        );
+      })
+      // A window with no readable plane still runs its panes; the header already says so.
+      .catch(() => setSidebar(undefined));
+  }, [tabs]);
 
   // Cold start ends when a person can see the window, which is the frame after the one this
   // paints in. Nothing happens on the other side unless the app was started to be measured,
@@ -86,10 +118,15 @@ function App() {
       .catch((err: unknown) => setPlane({ state: "missing", reason: String(err) }));
   }, []);
 
+  // Where a chat starts: the focused workspace's directory, so the sidebar can file it under
+  // that workspace. Nothing on the plane records a chat, so where it works is the only thing
+  // relating the two. Null — the operator's home — until a plane is read.
+  const startIn = sidebar?.workspaces.find((ws) => ws.name === focused)?.path ?? null;
+
   /** Starts a session for a new pane, or says why it could not start. */
   const startSession = useCallback(async (): Promise<number | undefined> => {
     const opened = await commands
-      .openSession(null, [], null, STARTING_SIZE.columns, STARTING_SIZE.rows)
+      .openSession(null, [], startIn, STARTING_SIZE.columns, STARTING_SIZE.rows)
       .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
     if (opened.status === "error") {
       setTrouble(opened.error);
@@ -97,7 +134,7 @@ function App() {
     }
     setTrouble(undefined);
     return opened.data;
-  }, []);
+  }, [startIn]);
 
   const newTab = useCallback(async () => {
     const session = await startSession();
@@ -140,7 +177,7 @@ function App() {
   return (
     <main className="window">
       <header className="bar">
-        <div className="tabs" role="tablist">
+        <div className="tabs" role="tablist" aria-label="Tabs">
           {tabs.order.map((id) => (
             <span className="tab" key={id}>
               <button
@@ -180,16 +217,19 @@ function App() {
         </p>
       )}
 
-      <div className="panes">
-        {inFront ? (
-          <LayoutPanes
-            layout={inFront.layout}
-            focused={inFront.focused}
-            onFocus={(pane) => change((tabs) => focusPane(tabs, pane))}
-          />
-        ) : (
-          <p className="empty">No sessions. Open one with New tab.</p>
-        )}
+      <div className="body">
+        {sidebar && <Sidebar sidebar={sidebar} focused={focused} onFocus={setFocused} />}
+        <div className="panes">
+          {inFront ? (
+            <LayoutPanes
+              layout={inFront.layout}
+              focused={inFront.focused}
+              onFocus={(pane) => change((tabs) => focusPane(tabs, pane))}
+            />
+          ) : (
+            <p className="empty">No sessions. Open one with New tab.</p>
+          )}
+        </div>
       </div>
     </main>
   );

@@ -65,6 +65,45 @@ impl Plane {
         Ok(names)
     }
 
+    /// The workspace a path sits in, or `None` for a path outside `workspaces/`.
+    ///
+    /// This is how the app files one of its own chats under a workspace: a chat is app state,
+    /// not a plane file, so what relates the two is where the chat is working.
+    pub fn workspace_of(&self, path: &Path) -> Option<String> {
+        let workspaces = self.root.join("workspaces");
+        // Compared after resolving both sides where the filesystem will: a plane reached
+        // through a symlink (`/tmp` is one on macOS) would otherwise never match.
+        let base = workspaces.canonicalize().unwrap_or(workspaces);
+        let target = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let name = target
+            .strip_prefix(&base)
+            .ok()?
+            .components()
+            .next()?
+            .as_os_str()
+            .to_string_lossy()
+            .to_string();
+        // A name that is not a workspace this plane has is not one: a chat's cwd is not a
+        // reason to invent one.
+        self.workspaces()
+            .ok()?
+            .into_iter()
+            .find(|known| *known == name)
+    }
+
+    /// The plane's default persona — `[persona] default` in `charter.toml` — or `None`.
+    pub fn default_persona(&self) -> Option<String> {
+        // A hand-edited `charter.toml` that does not parse is not an error here: the sidebar
+        // still draws, and `charter doctor` is what reports the file.
+        let text = std::fs::read_to_string(self.root.join(crate::plane::MANIFEST)).ok()?;
+        let doc: toml::Table = text.parse().ok()?;
+        doc.get("persona")?
+            .as_table()?
+            .get("default")?
+            .as_str()
+            .map(str::to_string)
+    }
+
     pub fn workspace(&self, name: &str) -> Workspace {
         Workspace {
             dir: self.root.join("workspaces").join(name),
