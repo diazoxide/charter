@@ -63,6 +63,19 @@ export const commands = {
 	hideWindow: () => __TAURI_INVOKE<void>("hide_window"),
 	/**  Whether the window is on screen. The scenario tests ask; nothing in the UI does. */
 	windowShowing: () => __TAURI_INVOKE<boolean>("window_showing"),
+	/**
+	 *  The sidebar, read from the plane on disk every time it is asked for.
+	 * 
+	 *  Read fresh rather than cached: the plane is a directory the operator also edits by hand
+	 *  and another charter process writes, so a cache here would be a second answer to "what is
+	 *  on disk" that nothing invalidates.
+	 * 
+	 *  The chats are the ones `Chats` already holds — one model of a chat, not a second derived
+	 *  from the sessions. What files one under a workspace is the directory it works in, because
+	 *  nothing on the plane records a chat: `.charter/frame/` belongs to the tmux frame and the
+	 *  app stays out of it.
+	 */
+	planeSidebar: () => typedError<Sidebar, string>(__TAURI_INVOKE("plane_sidebar")),
 };
 
 /* Types */
@@ -79,6 +92,33 @@ export type OpenChat = {
 	resumed: string | null,
 	/**  Why it is a new chat rather than the one it was, where it is. */
 	fresh: string | null,
+};
+
+/**
+ *  The whole left-hand side: every workspace with its chats, and the focused workspace's
+ *  persona and todos.
+ */
+export type Sidebar = {
+	root: string,
+	workspaces: SidebarWorkspace[],
+	/**  The plane's personas, and the one a new chat here would adopt. */
+	personas: string[],
+	persona: string | null,
+	/**  Chats whose directory is in no workspace, so the sidebar can still show them. */
+	unfiled: OpenChat[],
+};
+
+/**
+ *  One workspace as the sidebar draws it: what it is for, what it still means to do, and the
+ *  chats working in it.
+ */
+export type SidebarWorkspace = {
+	name: string,
+	/**  Where the workspace is, so a chat can be started in it. */
+	path: string,
+	vision: string,
+	todos: string[],
+	chats: OpenChat[],
 };
 
 /**

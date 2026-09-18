@@ -64,10 +64,15 @@ async function type(pane: Pane, text: string): Promise<void> {
   await pane.$(".xterm-helper-textarea").addValue(`${text}\n`);
 }
 
-/** What the tab bar shows, left to right. Each tab is named by its number. */
+/** What the tab bar shows, left to right. Each tab is named by its number.
+ *
+ *  Scoped to the tab strip by name: the sidebar lists workspaces as tabs too, so a
+ *  document-wide `[role="tab"]` would mix a workspace in among them. */
 async function tabNames(): Promise<string[]> {
   return browser.execute(() =>
-    [...document.querySelectorAll('[role="tab"]')].map((tab) => tab.textContent ?? ""),
+    [...document.querySelectorAll('[role="tablist"][aria-label="Tabs"] [role="tab"]')].map(
+      (tab) => tab.textContent ?? "",
+    ),
   );
 }
 
@@ -110,7 +115,9 @@ describe("the window", () => {
     const [first] = await tabNames();
 
     await press("New tab");
-    await $(`[role="tab"]=${first}`).click();
+    // Chained, not one selector: WebdriverIO's `=text` shorthand is a whole selector and
+    // cannot follow a CSS descendant part.
+    await $('[role="tablist"][aria-label="Tabs"]').$(`[role="tab"]=${first}`).click();
 
     const [pane] = await panes();
     await until(pane, "you said: from the first pane");

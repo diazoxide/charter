@@ -80,7 +80,7 @@ fn first_frame() {
 fn plane_root() -> Result<String, String> {
     let cwd = std::env::current_dir()
         .map_err(|err| format!("cannot read the current directory: {err}"))?;
-    charter_core::plane::find_root(&cwd)
+    charter_core::plane::resolve(&cwd)
         .map(|root| root.display().to_string())
         .map_err(|err| err.to_string())
 }
@@ -99,6 +99,95 @@ struct OpenChat {
     resumed: Option<String>,
     /// Why it is a new chat rather than the one it was, where it is.
     fresh: Option<String>,
+}
+
+/// One workspace as the sidebar draws it: what it is for, what it still means to do, and the
+/// chats working in it.
+#[derive(serde::Serialize, specta::Type)]
+struct SidebarWorkspace {
+    name: String,
+    /// Where the workspace is, so a chat can be started in it.
+    path: String,
+    vision: String,
+    todos: Vec<String>,
+    chats: Vec<OpenChat>,
+}
+
+/// The whole left-hand side: every workspace with its chats, and the focused workspace's
+/// persona and todos.
+#[derive(serde::Serialize, specta::Type)]
+struct Sidebar {
+    root: String,
+    workspaces: Vec<SidebarWorkspace>,
+    /// The plane's personas, and the one a new chat here would adopt.
+    personas: Vec<String>,
+    persona: Option<String>,
+    /// Chats whose directory is in no workspace, so the sidebar can still show them.
+    unfiled: Vec<OpenChat>,
+}
+
+/// The sidebar, read from the plane on disk every time it is asked for.
+///
+/// Read fresh rather than cached: the plane is a directory the operator also edits by hand
+/// and another charter process writes, so a cache here would be a second answer to "what is
+/// on disk" that nothing invalidates.
+///
+/// The chats are the ones `Chats` already holds — one model of a chat, not a second derived
+/// from the sessions. What files one under a workspace is the directory it works in, because
+/// nothing on the plane records a chat: `.charter/frame/` belongs to the tmux frame and the
+/// app stays out of it.
+#[tauri::command]
+#[specta::specta]
+fn plane_sidebar(chats: tauri::State<'_, Chats>) -> Result<Sidebar, String> {
+    let cwd = std::env::current_dir()
+        .map_err(|err| format!("cannot read the current directory: {err}"))?;
+    let root = charter_core::plane::resolve(&cwd).map_err(|err| err.to_string())?;
+    let plane = charter_core::workspaces::Plane::open(&root);
+
+    let mut filed: std::collections::HashMap<String, Vec<OpenChat>> =
+        std::collections::HashMap::new();
+    let mut unfiled = Vec::new();
+    for chat in chats.open_now().into_iter().map(OpenChat::from) {
+        match chat
+            .cwd
+            .as_deref()
+            .and_then(|c| plane.workspace_of(std::path::Path::new(c)))
+        {
+            Some(name) => filed.entry(name).or_default().push(chat),
+            None => unfiled.push(chat),
+        }
+    }
+
+    let mut workspaces = Vec::new();
+    for name in plane.workspaces().map_err(|err| err.to_string())? {
+        // A name off disk is re-checked before it is joined onto a path; one that cannot be
+        // a workspace is left out rather than drawn.
+        let Ok(ws) = plane.workspace(&name) else {
+            continue;
+        };
+        workspaces.push(SidebarWorkspace {
+            path: ws.dir().display().to_string(),
+            vision: ws.vision(),
+            // A store charter cannot read costs that workspace its todo list, not the
+            // window its workspaces.
+            todos: ws
+                .todos()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|todo| todo.title)
+                .collect(),
+            chats: filed.remove(&name).unwrap_or_default(),
+            name,
+        });
+    }
+
+    Ok(Sidebar {
+        root: root.display().to_string(),
+        workspaces,
+        personas: plane.personas().map_err(|err| err.to_string())?,
+        persona: plane.default_persona(),
+        unfiled,
+    })
 }
 
 /// Starts a session, and remembers it as a chat so a quit can write it down. No program is
@@ -307,6 +396,7 @@ fn commands() -> Builder<tauri::Wry> {
         quit_cancelled,
         hide_window,
         window_showing,
+        plane_sidebar,
     ])
 }
 

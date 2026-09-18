@@ -10,16 +10,24 @@ publish = false
 
 [dependencies]
 alacritty_terminal = "0.26"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # The same searcher vte uses to find these sequences in the same bytes.
 memchr = "2"
 portable-pty = "0.9"
 serde = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
+# `preserve_order` keeps a manifest's key order as it was read: charter rewrites a document
+# it read, so a Rust writer that sorted keys would reorder the operator's file.
+# `arbitrary_precision` keeps an integer beyond `u64` exact, which the default turns into an
+# `f64` at PARSE time — the digest would then be taken over a number the file never held.
+serde_json = { workspace = true, features = ["preserve_order", "arbitrary_precision"] }
+sha2 = "0.10"
 thiserror.workspace = true
+toml = "0.9"
 uuid = { version = "1.26.1", features = ["v4"] }
 
 [dev-dependencies]
 proptest = "1"
+serde_json = { workspace = true }
 tempfile.workspace = true
 
 [lints]

@@ -22,6 +22,25 @@ afterEach(() => {
   clearMocks();
 });
 
+/** What the core answers when the sidebar reads the plane. These tests are about the tabs,
+ *  the splits and what they ask the core, so it is the smallest plane that draws: one
+ *  workspace, nothing in it. `Sidebar.test.tsx` is where the sidebar itself is tested. */
+const SIDEBAR = {
+  root: "/home/dev/plane",
+  workspaces: [
+    {
+      name: "alpha",
+      path: "/home/dev/plane/workspaces/alpha",
+      vision: "Ship it",
+      todos: [],
+      chats: [],
+    },
+  ],
+  personas: ["steward"],
+  persona: "steward",
+  unfiled: [],
+};
+
 /** Answers every command the app sends, and records what it was asked. */
 function core(): { asked: { cmd: string; args: unknown }[] } {
   const asked: { cmd: string; args: unknown }[] = [];
@@ -29,6 +48,8 @@ function core(): { asked: { cmd: string; args: unknown }[] } {
   mockIPC((cmd, args) => {
     asked.push({ cmd, args });
     if (cmd === "plane_root") return "/home/dev/plane";
+    if (cmd === "plane_sidebar") return SIDEBAR;
+    if (cmd === "running_sessions") return [];
     if (cmd === "opened_chats") return [];
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "open_session") return ++opened;
@@ -47,7 +68,11 @@ const tabs = () =>
 
 describe("App", () => {
   it("shows the plane the core found", async () => {
-    mockIPC((cmd) => (cmd === "plane_root" ? "/home/dev/plane" : []));
+    mockIPC((cmd) => {
+      if (cmd === "plane_root") return "/home/dev/plane";
+      if (cmd === "plane_sidebar") return SIDEBAR;
+      return [];
+    });
 
     render(<App />);
 
@@ -91,6 +116,7 @@ describe("App", () => {
     mockIPC((cmd) => {
       if (cmd === "first_frame") throw new Error("no");
       if (cmd === "plane_root") return "/home/dev/plane";
+      if (cmd === "plane_sidebar") return SIDEBAR;
       return null;
     });
 
@@ -187,6 +213,8 @@ describe("App", () => {
     mockIPC(async (cmd, args) => {
       asked.push({ cmd, args });
       if (cmd === "plane_root") return "/home/dev/plane";
+      if (cmd === "plane_sidebar") return SIDEBAR;
+      if (cmd === "running_sessions") return [];
       if (cmd === "opened_chats") return [];
       if (cmd === "chats_that_would_not_start") return [];
       if (cmd !== "open_session") return null;
@@ -213,6 +241,8 @@ describe("App", () => {
   it("says so when the core cannot start a session, and opens no tab", async () => {
     mockIPC((cmd) => {
       if (cmd === "plane_root") return "/home/dev/plane";
+      if (cmd === "plane_sidebar") return SIDEBAR;
+      if (cmd === "running_sessions") return [];
       if (cmd === "opened_chats") return [];
       if (cmd === "chats_that_would_not_start") return [];
       throw new Error('could not start "zsh": no such file or directory');

@@ -2,9 +2,10 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import "./App.css";
-import { commands, type OpenChat } from "./bindings";
+import { commands, type OpenChat, type Sidebar as SidebarModel } from "./bindings";
 import { QuitWarning } from "./QuitWarning";
 import { SessionPane } from "./SessionPane";
+import { Sidebar } from "./Sidebar";
 import {
   closeFocusedPane,
   closeTab,
@@ -29,6 +30,8 @@ function App() {
   const [plane, setPlane] = useState<Plane>({ state: "loading" });
   const [tabs, setTabs] = useState<Tabs>(noTabs);
   const [trouble, setTrouble] = useState<string>();
+  const [sidebar, setSidebar] = useState<SidebarModel>();
+  const [focused, setFocused] = useState<string>();
   /** The chats the core put back at this launch, so a pane can say which came back how. */
   const [reopened, setReopened] = useState<OpenChat[]>([]);
   /** Whether the operator is being asked about quitting. */
@@ -108,6 +111,37 @@ function App() {
     return () => void listening.then((stop) => stop?.()).catch(() => undefined);
   }, []);
 
+  // The sidebar is read from the plane, and re-read whenever the chats change: the plane is a
+  // directory the operator also edits by hand and another charter process writes, so there is
+  // nothing to invalidate a cache of it. `tabs` is the dependency because opening or ending a
+  // chat is what this window can change about the answer.
+  useEffect(() => {
+    void commands
+      .planeSidebar()
+      .then((answer) => {
+        // Only an `ok` answer WITH a body is used. Both halves are load-bearing: the
+        // state updater below runs on the NEXT render, outside this promise, so nothing
+        // here catches a throw from it — and an answer whose `data` is absent reads as
+        // `ok` all the same. The window must not go blank because one command answered
+        // oddly; it has its panes to draw.
+        const next = answer.status === "ok" ? answer.data : undefined;
+        if (!next?.workspaces) {
+          setSidebar(undefined);
+          return;
+        }
+        setSidebar(next);
+        // Focus follows the plane rather than being guessed: the first workspace, until
+        // somebody picks another and while that one still exists.
+        setFocused((current) =>
+          current && next.workspaces.some((ws) => ws.name === current)
+            ? current
+            : next.workspaces[0]?.name,
+        );
+      })
+      // A window with no readable plane still runs its panes; the header already says so.
+      .catch(() => setSidebar(undefined));
+  }, [tabs]);
+
   // Cold start ends when a person can see the window, which is the frame after the one this
   // paints in. Nothing happens on the other side unless the app was started to be measured,
   // and nothing about the window depends on the marker arriving: a window that cannot send it
@@ -139,19 +173,27 @@ function App() {
       .catch((err: unknown) => setPlane({ state: "missing", reason: String(err) }));
   }, []);
 
+  // Where a chat starts: the focused workspace's directory, so the sidebar can file it under
+  // that workspace. Nothing on the plane records a chat, so where it works is the only thing
+  // relating the two. Null — the operator's home — until a plane is read.
+  const startIn = sidebar?.workspaces.find((ws) => ws.name === focused)?.path ?? null;
+
   /** Starts a session for a new pane, or says why it could not start. The name is what the
    *  tab will be called, so the record brings the chat back under it. */
-  const startSession = useCallback(async (name: string): Promise<number | undefined> => {
-    const opened = await commands
-      .openSession(null, [], null, name, STARTING_SIZE.columns, STARTING_SIZE.rows)
-      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-    if (opened.status === "error") {
-      setTrouble(opened.error);
-      return undefined;
-    }
-    setTrouble(undefined);
-    return opened.data;
-  }, []);
+  const startSession = useCallback(
+    async (name: string): Promise<number | undefined> => {
+      const opened = await commands
+        .openSession(null, [], startIn, name, STARTING_SIZE.columns, STARTING_SIZE.rows)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (opened.status === "error") {
+        setTrouble(opened.error);
+        return undefined;
+      }
+      setTrouble(undefined);
+      return opened.data;
+    },
+    [startIn],
+  );
 
   const newTab = useCallback(async () => {
     const name = String(now.current.named.tabs + 1);
@@ -282,16 +324,19 @@ function App() {
         </p>
       ))}
 
-      <div className="panes">
-        {inFront ? (
-          <LayoutPanes
-            layout={inFront.layout}
-            focused={inFront.focused}
-            onFocus={(pane) => change((tabs) => focusPane(tabs, pane))}
-          />
-        ) : (
-          <p className="empty">No sessions. Open one with New tab.</p>
-        )}
+      <div className="body">
+        {sidebar && <Sidebar sidebar={sidebar} focused={focused} onFocus={setFocused} />}
+        <div className="panes">
+          {inFront ? (
+            <LayoutPanes
+              layout={inFront.layout}
+              focused={inFront.focused}
+              onFocus={(pane) => change((tabs) => focusPane(tabs, pane))}
+            />
+          ) : (
+            <p className="empty">No sessions. Open one with New tab.</p>
+          )}
+        </div>
       </div>
 
       {asking && <QuitWarning chats={open} onQuit={quit} onCancel={dontQuit} />}

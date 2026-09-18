@@ -14,7 +14,11 @@ path = "src/main.rs"
 
 [dependencies]
 charter-core.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true
