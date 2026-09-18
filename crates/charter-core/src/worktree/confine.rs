@@ -34,6 +34,15 @@ use crate::contain;
 /// A worktree path that does not belong to the workspace it was asked for.
 #[derive(Debug, thiserror::Error)]
 pub enum Outside {
+    #[error("'{0}' does not name a workspace this plane contains")]
+    NotAWorkspaceName(String),
+    #[error(
+        "workspace '{ws}' does not resolve inside this plane ({why}). A committed symlink \
+         there redirects every worktree the workspace cuts, on every machine that clones it"
+    )]
+    NotInPlane { ws: String, why: String },
+    #[error("'{path}' walks up out of its workspace with '..'. A worktree path never needs to")]
+    WalksUp { path: String },
     #[error(
         "'{path}' is not inside workspace '{ws}'. A worktree belongs to one workspace, and \
          charter will not create or remove one through a path that leaves it"
@@ -51,41 +60,69 @@ pub enum Outside {
     ThroughALink { path: String },
 }
 
-/// The workspace directory a worktree path must stay inside, resolved.
+/// The workspace directory a worktree path must stay inside.
+///
+/// **Not `canonicalize`.** Canonicalising follows a link AT `workspaces/<ws>`, which moves the
+/// anchor to wherever that link points — and a *committed* `workspaces/<legal-name> ->
+/// elsewhere` travels to every machine that clones the plane (charter #442). That is the
+/// attack `contain::writable` exists for, so it is asked here rather than assumed: the
+/// workspace directory must itself land inside the plane's data directories, and must be
+/// reached from the plane without passing through a link.
 pub fn workspace_dir(plane: &Path, ws: &str) -> Result<PathBuf, Outside> {
+    if !contain::workspace_name_ok(ws) {
+        return Err(Outside::NotAWorkspaceName(ws.to_string()));
+    }
     let dir = plane.join("workspaces").join(ws);
-    std::fs::canonicalize(&dir).map_err(|why| Outside::NoWorkspace {
+    contain::writable(plane, &dir).map_err(|why| Outside::NotInPlane {
         ws: ws.to_string(),
         why: why.to_string(),
-    })
+    })?;
+    contain::no_link_on_the_way(plane, &dir).map_err(|_| Outside::ThroughALink {
+        path: dir.display().to_string(),
+    })?;
+    if !dir.is_dir() {
+        return Err(Outside::NoWorkspace {
+            ws: ws.to_string(),
+            why: "not a directory".into(),
+        });
+    }
+    Ok(dir)
 }
 
 /// Is `path` inside workspace `ws`, reached without passing through a symlink?
 ///
 /// Asked of every path this module creates or removes, in every verb — `add`, `remove`,
 /// `merge` and `list` alike. `remove` is the destructive one and is the verb an earlier draft
-/// of this design left on `contain::writable` alone, which is the code that deletes another
-/// workspace's tree.
-pub fn within_workspace(plane: &Path, ws: &str, path: &Path) -> Result<(), Outside> {
+/// left on `contain::writable` alone, which is the code that deletes another workspace's tree.
+///
+/// Returns the path that was **checked**, and callers hand THAT to git. An earlier version
+/// built a rebased candidate, checked it, threw it away and passed git the original — so the
+/// string checked and the string used were two different strings, which is exactly how a link
+/// gets laundered past a gate.
+pub fn within_workspace(plane: &Path, ws: &str, path: &Path) -> Result<PathBuf, Outside> {
     let anchor = workspace_dir(plane, ws)?;
-    // The caller builds paths from `plane`, which may itself be unresolved (on macOS a temp
-    // plane is under `/var/folders/…`, a link to `/private/var/…`). Rebase onto the resolved
-    // anchor so the walk below compares like with like.
-    let unresolved = plane.join("workspaces").join(ws);
-    let candidate = if let Ok(rest) = path.strip_prefix(&unresolved) {
-        anchor.join(rest)
-    } else if path.starts_with(&anchor) {
-        path.to_path_buf()
-    } else {
+    let Ok(below) = path.strip_prefix(&anchor) else {
         return Err(Outside::NotInWorkspace {
             path: path.display().to_string(),
             ws: ws.to_string(),
         });
     };
-
-    contain::no_link_on_the_way(&anchor, &candidate).map_err(|_| Outside::ThroughALink {
+    // `strip_prefix` is lexical, so what is left can still begin with `..` — and
+    // `no_link_on_the_way` pushes a `ParentDir` literally and lets the KERNEL fold it, so
+    // every component it stats is a real directory and nothing looks like a link. Measured:
+    // `workspaces/alpha/../../../../etc/passwd` passed. A worktree path never needs `..`.
+    if below
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(Outside::WalksUp {
+            path: path.display().to_string(),
+        });
+    }
+    contain::no_link_on_the_way(&anchor, path).map_err(|_| Outside::ThroughALink {
         path: path.display().to_string(),
-    })
+    })?;
+    Ok(path.to_path_buf())
 }
 
 #[cfg(test)]
@@ -163,6 +200,63 @@ mod tests {
         std::os::unix::fs::symlink(root.join("workspaces/beta"), mine.join("r")).unwrap();
 
         assert!(within_workspace(&root, "alpha", &mine.join("r/p")).is_err());
+    }
+
+    #[test]
+    fn a_path_that_walks_up_out_of_the_workspace_is_refused() {
+        // `strip_prefix` is lexical, so what is left can begin with `..`, and
+        // `no_link_on_the_way` pushes a `ParentDir` literally and lets the KERNEL fold it —
+        // so every component it stats is a real directory and nothing looks like a link.
+        // Measured before this rule: `workspaces/alpha/../../../../etc/passwd` passed.
+        let dir = plane();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+
+        for escape in [
+            "workspaces/alpha/../beta/secret",
+            "workspaces/alpha/../../../etc/passwd",
+            "workspaces/alpha/.worktrees/../../beta/x",
+        ] {
+            let refusal = within_workspace(&root, "alpha", &root.join(escape))
+                .expect_err("{escape} must not be inside workspace alpha");
+            assert!(
+                matches!(refusal, Outside::WalksUp { .. }),
+                "{escape}: {refusal}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_workspace_that_is_a_symlink_anchors_nothing() {
+        // charter #442: a COMMITTED `workspaces/<legal-name> -> elsewhere` travels to every
+        // machine that clones the plane. Canonicalising the workspace directory would follow
+        // it and move the whole boundary with it.
+        let dir = plane();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), root.join("workspaces/ghost")).unwrap();
+
+        let refusal = workspace_dir(&root, "ghost")
+            .expect_err("a workspace reached through a link anchors nothing");
+
+        assert!(
+            matches!(
+                refusal,
+                Outside::ThroughALink { .. } | Outside::NotInPlane { .. }
+            ),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn the_path_that_was_checked_is_the_path_that_comes_back() {
+        // Checking one string and handing git another is how a link is laundered past a gate.
+        let dir = plane();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let asked = root.join("workspaces/alpha/.worktrees/r/p");
+
+        let checked = within_workspace(&root, "alpha", &asked).unwrap();
+
+        assert_eq!(checked, asked);
     }
 
     #[test]

@@ -254,6 +254,123 @@ fn a_piece_replaced_by_a_symlink_after_it_was_cut_is_refused_at_removal() {
 }
 
 #[test]
+fn a_worktrees_root_that_is_a_symlink_cuts_nothing_either() {
+    // The removal side of this is covered above; `add` has its own confinement calls and
+    // needs its own test, or a mutation that deletes them goes unnoticed.
+    let f = support::plane_with_clone("thing");
+    let outside = tempfile::tempdir().unwrap();
+    let root = f.workspace().join(".worktrees");
+    std::os::unix::fs::symlink(outside.path(), &root).unwrap();
+
+    let refusal = worktree::add(&f.plane, &f.ws, &f.repo, "piece", None)
+        .expect_err("a root reached through a link is refused");
+
+    assert!(
+        std::fs::read_dir(outside.path()).unwrap().next().is_none(),
+        "nothing was created behind the link: {refusal}"
+    );
+}
+
+#[test]
+fn a_repo_directory_that_is_a_symlink_cuts_nothing_either() {
+    let f = support::plane_with_clone("thing");
+    let outside = tempfile::tempdir().unwrap();
+    let root = f.workspace().join(".worktrees");
+    std::fs::create_dir_all(&root).unwrap();
+    std::os::unix::fs::symlink(outside.path(), root.join(&f.repo)).unwrap();
+
+    let refusal = worktree::add(&f.plane, &f.ws, &f.repo, "piece", None)
+        .expect_err("a repo directory reached through a link is refused");
+
+    assert!(
+        std::fs::read_dir(outside.path()).unwrap().next().is_none(),
+        "nothing was created behind the link: {refusal}"
+    );
+}
+
+#[test]
+fn a_branch_name_that_resolves_to_another_branch_is_used_under_the_name_git_printed() {
+    // `git check-ref-format --branch '@{-1}'` prints the PREVIOUS branch and exits 0. Using
+    // the string the operator typed would record a base under a branch that does not exist.
+    let f = support::plane_with_clone("thing");
+    support::git(&f.clone, &["switch", "-q", "-c", "other"]);
+    support::git(&f.clone, &["switch", "-q", "main"]);
+
+    match worktree::add(&f.plane, &f.ws, &f.repo, "piece", Some("@{-1}")) {
+        // `other` already exists, so taking git's answer means seeing that it is taken.
+        Err(refusal) => {
+            let said = format!("{refusal}");
+            // CHARTER's refusal, which it can only produce by having resolved the name
+            // itself and looked it up. Git's own error for the same input mentions `other`
+            // too, so asserting on the name alone does not tell the two apart.
+            assert!(said.contains("Reuse it"), "charter looked it up: {said}");
+            assert!(said.contains("--branch other"), "{said}");
+        }
+        Ok(added) => {
+            assert_eq!(
+                added.branch, "other",
+                "the name git printed, not the one passed"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_tree_whose_head_cannot_be_read_is_not_called_detached() {
+    // A failed `rev-parse` became `Detached("")`, which `merge` reported as "on a detached
+    // HEAD at " — an empty sha and the wrong diagnosis.
+    let f = support::plane_with_clone("thing");
+    let added = worktree::add(&f.plane, &f.ws, &f.repo, "piece", None).unwrap();
+    std::fs::write(
+        added.path.join(".git"),
+        "gitdir: /nonexistent/nowhere
+",
+    )
+    .unwrap();
+
+    let refusal = worktree::merge(&f.plane, &f.ws, &f.repo, "piece").unwrap_err();
+
+    let said = format!("{refusal}");
+    assert!(!said.contains("detached HEAD at \n"), "{said}");
+    assert!(
+        said.contains("could not read") || said.contains("could not determine"),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_merge_never_reads_a_tree_through_a_link_out_of_the_workspace() {
+    // `merge` does not write to the piece, so it is easy to think it needs no confinement.
+    // It reads HEAD there, and then merges THAT branch into this workspace's clone — so a
+    // link makes another workspace's work land here under this piece's name.
+    let f = support::plane_with_clone("thing");
+    let victim = victim_worktree(&f);
+    // The victim is made genuinely mergeable — work on it, and a recorded base that would
+    // fast-forward. Without that, `merge` refuses for an unrelated reason (no base recorded)
+    // and the test passes whether or not the confinement check is there at all.
+    f.commit(&victim, "betas-work");
+    support::git(
+        &f.clone,
+        &[
+            "config",
+            "--replace-all",
+            "branch.betas-work.charterBase",
+            "main",
+        ],
+    );
+    let mine = f.workspace().join(".worktrees").join(&f.repo);
+    std::fs::create_dir_all(&mine).unwrap();
+    std::os::unix::fs::symlink(&victim, mine.join("piece")).unwrap();
+    let before = String::from_utf8(support::git(&f.clone, &["rev-parse", "HEAD"]).stdout).unwrap();
+
+    let refusal = worktree::merge(&f.plane, &f.ws, &f.repo, "piece")
+        .expect_err("a piece reached through a link is not this workspace's to merge");
+
+    let after = String::from_utf8(support::git(&f.clone, &["rev-parse", "HEAD"]).stdout).unwrap();
+    assert_eq!(before, after, "nothing landed: {refusal}");
+}
+
+#[test]
 fn an_ordinary_piece_is_still_created_and_removed() {
     // The guard against a containment rule so tight that the feature stops working. Every
     // test above is a refusal; without this one they would all pass on a function that
