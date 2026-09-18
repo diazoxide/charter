@@ -155,12 +155,54 @@ pub fn path(plane_root: &Path) -> PathBuf {
     plane_root.join(IN_PLANE)
 }
 
+/// Refuses a record path that any symlink could take outside the plane.
+///
+/// `.charter/app/reopen.json` is charter's own, created by charter, and nothing legitimate
+/// makes any part of it a link. A committed `.charter/app -> somewhere else` would otherwise
+/// have the app **write** its record outside the plane and, worse, **read** the command line
+/// it launches at startup from out there — with no consent step in the way. So every
+/// component from the plane root down is checked with `symlink_metadata`, which does not
+/// follow links, and one link anywhere in the chain refuses the whole operation.
+///
+/// This is deliberately blunter than resolving the path: a link here has no honest use.
+fn no_link_on_the_way(plane_root: &Path, file: &Path) -> std::io::Result<()> {
+    let Ok(rest) = file.strip_prefix(plane_root) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "{} is not inside the plane at {}",
+                file.display(),
+                plane_root.display()
+            ),
+        ));
+    };
+    let mut walked = plane_root.to_path_buf();
+    for component in rest.components() {
+        walked.push(component);
+        match std::fs::symlink_metadata(&walked) {
+            Ok(found) if found.file_type().is_symlink() => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!(
+                        "{} is a symlink, and charter's own record may not be reached through one",
+                        walked.display()
+                    ),
+                ));
+            }
+            // Not there yet is fine: the app creates `.charter/app/` and the file itself.
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Writes the record, creating `.charter/app/` if it is not there.
 ///
 /// The file is written beside itself and renamed over, so a launch that reads it never sees
 /// half of one — the app can be killed at any moment, and quitting is exactly when it is.
 pub fn write(plane_root: &Path, record: &Record) -> std::io::Result<()> {
     let file = path(plane_root);
+    no_link_on_the_way(plane_root, &file)?;
     let dir = file.parent().expect("the record's path has a directory");
     std::fs::create_dir_all(dir)?;
     let text = serde_json::to_string_pretty(&OnDisk::from(record))
@@ -180,7 +222,13 @@ pub fn write(plane_root: &Path, record: &Record) -> std::io::Result<()> {
 /// not the record at all, is nothing open — there is no repair that would be honest, and
 /// refusing to start would be worse than starting empty.
 pub fn read(plane_root: &Path) -> Record {
-    let Ok(text) = std::fs::read_to_string(path(plane_root)) else {
+    let file = path(plane_root);
+    // A record reached through a link is not this plane's record, and what it holds is a
+    // command line this launch would run. Nothing to put back is the honest answer.
+    if no_link_on_the_way(plane_root, &file).is_err() {
+        return Record::default();
+    }
+    let Ok(text) = std::fs::read_to_string(&file) else {
         return Record::default();
     };
     let Ok(on_disk) = serde_json::from_str::<OnDisk>(&text) else {
@@ -572,5 +620,85 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["ide.8"]
         );
+    }
+
+    /// A plane whose `.charter/app` is a symlink pointing out of it, and the outside
+    /// directory it points at.
+    fn a_plane_whose_record_directory_is_a_link() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let held = tempfile::tempdir().unwrap();
+        let plane = held.path().join("plane");
+        let outside = held.path().join("outside");
+        std::fs::create_dir_all(plane.join(".charter")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, plane.join(".charter/app")).unwrap();
+        (held, plane, outside)
+    }
+
+    fn one_chat() -> Record {
+        Record {
+            chats: vec![Chat {
+                program: "/bin/sh".into(),
+                args: vec!["-c".into(), "touch /tmp/pwned".into()],
+                cwd: Some(PathBuf::from("/tmp")),
+                name: "planted".into(),
+                resume: None,
+                active: true,
+            }],
+        }
+    }
+
+    #[test]
+    fn a_record_directory_that_is_a_link_out_of_the_plane_is_not_written_through() {
+        let (_held, plane, outside) = a_plane_whose_record_directory_is_a_link();
+
+        let refused = write(&plane, &one_chat());
+
+        assert!(refused.is_err(), "writing through the link was allowed");
+        assert!(
+            !outside.join("reopen.json").exists(),
+            "the record was written outside the plane"
+        );
+    }
+
+    #[test]
+    fn a_record_reached_through_a_link_is_nothing_to_put_back() {
+        let (_held, plane, outside) = a_plane_whose_record_directory_is_a_link();
+        // Whoever planted the link also planted what the app would launch.
+        std::fs::write(
+            outside.join("reopen.json"),
+            r#"{"version":1,"at":1789000000,"chats":[{"program":"/bin/sh","args":["-c","touch /tmp/pwned"],"cwd":"/tmp","name":"planted","resume":"","active":true}]}"#,
+        )
+        .unwrap();
+
+        let read_back = read(&plane);
+
+        assert_eq!(
+            read_back,
+            Record::default(),
+            "the app took its launch from outside the plane"
+        );
+    }
+
+    #[test]
+    fn the_record_file_itself_being_a_link_is_refused_too() {
+        let held = tempfile::tempdir().unwrap();
+        let plane = held.path().join("plane");
+        let outside = held.path().join("outside");
+        std::fs::create_dir_all(plane.join(".charter/app")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(outside.join("planted.json"), plane.join(IN_PLANE)).unwrap();
+
+        assert!(write(&plane, &one_chat()).is_err());
+        assert!(!outside.join("planted.json").exists());
+    }
+
+    #[test]
+    fn an_ordinary_plane_still_writes_and_reads_its_record() {
+        let held = tempfile::tempdir().unwrap();
+        let plane = held.path().to_path_buf();
+
+        write(&plane, &one_chat()).expect("an ordinary plane writes its record");
+
+        assert_eq!(read(&plane), one_chat());
     }
 }
