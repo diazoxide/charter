@@ -125,7 +125,11 @@ pub fn section_body(text: &str, header: &str) -> String {
             let mut end = start;
             // charter's reader stops at `^##\s`, which is not the `"## "` its writer scans
             // for: a bare `##` on its own line ends the section for one and not the other.
-            while end < lines.len() && !starts_a_heading(lines[end]) {
+            // The last line is newline-terminated unless the text does not end in one, and
+            // that matters for a BARE `##`: the newline is the `\s` in `^##\s`, so a `##`
+            // at the very end of a file with no trailing newline is not a heading.
+            let terminated = |i: usize| i + 1 < lines.len() || text.ends_with('\n');
+            while end < lines.len() && !starts_a_heading(lines[end], terminated(end)) {
                 end += 1;
             }
             return crate::memstore::py_strip(&lines[start..end].join("\n")).to_string();
@@ -162,12 +166,17 @@ fn matches_header_exactly(line: &str, header: &str) -> bool {
 }
 
 /// `^##\s` — the lookahead charter's vision regex ends a section on.
-fn starts_a_heading(line: &str) -> bool {
+fn starts_a_heading(line: &str, terminated: bool) -> bool {
     // `^##\s` — and a bare `##` line counts, because `split_lines` has already taken the
     // newline that WAS the `\s`. Without this a `##` on its own line does not end a section
     // for the reader, though it does for Python's regex.
-    line.strip_prefix("##")
-        .is_some_and(|rest| rest.is_empty() || rest.starts_with(crate::memstore::is_python_space))
+    line.strip_prefix("##").is_some_and(|rest| {
+        if rest.is_empty() {
+            terminated
+        } else {
+            rest.starts_with(crate::memstore::is_python_space)
+        }
+    })
 }
 
 #[cfg(test)]
@@ -273,6 +282,38 @@ mod reader_tests {
                 "Vision"
             ),
             "Ship the widget"
+        );
+    }
+}
+
+#[cfg(test)]
+mod eof_tests {
+    use super::*;
+
+    // Verified against `read_vision`'s regex directly:
+    //   '## Vision\nbody\n##'      -> 'body\n##'   (no newline after `##`, so no heading)
+    //   '## Vision\nbody\n##\n'    -> 'body'
+    #[test]
+    fn a_bare_hash_hash_ends_a_section_only_when_a_newline_follows_it() {
+        assert_eq!(
+            section_body("## Vision\nbody\n##", "Vision"),
+            "body\n##",
+            "at EOF with no trailing newline there is no whitespace to match `^##\\\\s`"
+        );
+        assert_eq!(section_body("## Vision\nbody\n##\n", "Vision"), "body");
+        assert_eq!(
+            section_body("## Vision\nbody\n##\nmore\n", "Vision"),
+            "body"
+        );
+    }
+
+    #[test]
+    fn a_writer_needs_whitespace_after_the_hashes_or_it_appends_a_new_section() {
+        // `^##\s+Vision` — `##Vision` is not the header, so charter APPENDS rather than
+        // replacing. Dropping that requirement silently destroyed the old body.
+        assert_eq!(
+            replace("##Vision\nold\n", "Vision", "new"),
+            "##Vision\nold\n\n## Vision\n\nnew\n"
         );
     }
 }

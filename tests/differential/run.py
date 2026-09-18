@@ -103,10 +103,14 @@ class Scenario:
     #: Run against each plane copy before the command, for a starting state the fixtures
     #: cannot carry — a symlink, a mode, a file in the way.
     setup: "Callable[[Path], None] | None" = None
-    #: Set when the command is SUPPOSED to be refused. Both sides must then fail, with the
-    #: same status — a scenario that expects a refusal and gets a success is a failure, and
-    #: so is one that stops being refused on only one side.
-    expect_failure: bool = False
+    #: What a refusal must SAY, on the Rust side, as a substring of stderr. Setting it is
+    #: what declares the command refused. "Both exited non-zero" is not a test: a binary
+    #: that panics on every input satisfies it, and one did — three containment scenarios
+    #: reported `ok` against a shim that ran nothing at all.
+    refusal: str = ""
+    #: Why the two stderrs are not expected to match. charter's refusals are prose and the
+    #: Rust CLI's are not, so a refusal scenario states its own shape via `refusal` instead.
+    stderr_differs: str = ""
 
     def rust_args(self) -> list[str]:
         return self.rust if self.rust is not None else self.python
@@ -127,18 +131,31 @@ def _symlink_a_workspace_out_of_the_plane(root: Path) -> None:
 # charter would reactively `git commit` (and try to push) what it just wrote. That is
 # workspace *syncing*, not a plane write, and it is not in M1.1 — so it is switched off rather
 # than compared against nothing.
+#: charter confirms every write on stderr — `✓ Vision set for 'alpha' → …` — and the Rust
+#: CLI is silent. That is the command PRESENTATION layer, which M1.1 does not port: the
+#: binary exists here to drive this comparison, and what M1.1 delivers is the plane read and
+#: written. Recorded per scenario rather than excluded globally, so the day the output is
+#: ported the harness says "drop the note" instead of quietly agreeing.
+CONFIRMS_ON_STDERR = (
+    "charter confirms a write on stderr and the Rust CLI is silent; porting the command "
+    "output is M2's, not M1.1's. The plane each side leaves is what this compares."
+)
+
 SCENARIOS = [
     Scenario(
+        stderr_differs=CONFIRMS_ON_STDERR,
         name="vision",
         plane="daily",
         python=["workspace", "vision", "Ship the widget, then retire it", "-w", "alpha"],
     ),
     Scenario(
+        stderr_differs=CONFIRMS_ON_STDERR,
         name="vision-on-a-fresh-workspace",
         plane="daily",
         python=["workspace", "vision", "First words", "-w", "beta"],
     ),
     Scenario(
+        stderr_differs=CONFIRMS_ON_STDERR,
         name="vision-with-non-ascii",
         plane="daily",
         # An em-dash and a `·`: the characters that separate a faithful writer from one that
@@ -146,6 +163,7 @@ SCENARIOS = [
         python=["workspace", "vision", "Ship it — properly · no shortcuts", "-w", "alpha"],
     ),
     Scenario(
+        stderr_differs=CONFIRMS_ON_STDERR,
         name="remember",
         plane="daily",
         python=["workspace", "remember", "The importer drops rows over 4 MB", "-w", "alpha",
@@ -153,6 +171,7 @@ SCENARIOS = [
         rust=["workspace", "remember", "The importer drops rows over 4 MB", "-w", "alpha"],
     ),
     Scenario(
+        stderr_differs=CONFIRMS_ON_STDERR,
         name="remember-a-multi-line-fact",
         plane="daily",
         python=["workspace", "remember", "Retries are capped at 3\nand the 4th is dropped",
@@ -161,28 +180,33 @@ SCENARIOS = [
               "-w", "alpha"],
     ),
     Scenario(
+        stderr_differs=CONFIRMS_ON_STDERR,
         name="remember-into-an-empty-journal",
         plane="daily",
         python=["workspace", "remember", "Nothing was here before", "-w", "beta", "--no-sync"],
         rust=["workspace", "remember", "Nothing was here before", "-w", "beta"],
     ),
     Scenario(
+        stderr_differs=CONFIRMS_ON_STDERR,
         name="todo-add",
         plane="daily",
         python=["ws", "todo", "Cut the 0.63 release", "-w", "alpha"],
     ),
     Scenario(
+        stderr_differs=CONFIRMS_ON_STDERR,
         name="todo-add-to-a-workspace-with-no-todo-store",
         plane="daily",
         # `beta` has no `todos/` at all, so this also covers scaffolding the index.
         python=["ws", "todo", "Delete the old importer", "-w", "beta"],
     ),
     Scenario(
+        stderr_differs=CONFIRMS_ON_STDERR,
         name="todo-done-by-bare-slug",
         plane="daily",
         python=["ws", "todo", "done", "review-the-rollout-plan", "-w", "alpha"],
     ),
     Scenario(
+        stderr_differs=CONFIRMS_ON_STDERR,
         name="todo-done-by-full-stem",
         plane="daily",
         python=["ws", "todo", "done", "20260302-091400-review-the-rollout-plan", "-w", "alpha"],
@@ -190,6 +214,7 @@ SCENARIOS = [
     # Found by an adversarial review of PR #21: each of these diverged, and three of them
     # lost or misplaced the operator's data.
     Scenario(
+        stderr_differs=CONFIRMS_ON_STDERR,
         name="vision-shown-not-erased-by-empty-text",
         plane="daily",
         # `if text:` in charter, so empty text SHOWS. This wrote an empty vision over a
@@ -199,7 +224,7 @@ SCENARIOS = [
     ),
     Scenario(
         name="vision-on-a-workspace-that-is-not-there",
-        expect_failure=True,
+        refusal="no workspace 'nope'",
         plane="daily",
         # Refused on both sides now. This used to scaffold `workspaces/nope/`, which is what
         # made a traversing `-w` silent.
@@ -207,13 +232,16 @@ SCENARIOS = [
     ),
     Scenario(
         name="vision-name-that-walks-out-of-the-plane",
-        expect_failure=True,
+        refusal="no workspace '../../outside/escaped'",
         plane="daily",
         python=["workspace", "vision", "pwned", "-w", "../../outside/escaped"],
     ),
     Scenario(
         name="remember-a-body-of-only-separator-controls",
-        expect_failure=True,
+        refusal="empty memory",
+        stderr_differs="charter#1135: Python exits through its crash handler with a "
+        "traceback here, so the two stderrs cannot match. `refusal` pins what the Rust "
+        "side must say.",
         plane="daily",
         # U+001F is whitespace to `str.strip()` and not to Rust's `trim`, so this wrote a
         # memory file where charter refuses one.
@@ -227,6 +255,7 @@ SCENARIOS = [
         },
     ),
     Scenario(
+        stderr_differs=CONFIRMS_ON_STDERR,
         name="remember-a-body-padded-with-separator-controls",
         plane="daily",
         python=["workspace", "remember", "\x1fPadded fact\x1f", "-w", "alpha", "--no-sync"],
@@ -239,9 +268,10 @@ SCENARIOS = [
         # committed symlink, which travels with the plane to every machine that clones it.
         setup=_symlink_a_workspace_out_of_the_plane,
         python=["workspace", "vision", "pwned through a link", "-w", "escape"],
-        expect_failure=True,
+        refusal="outside the directories",
     ),
     Scenario(
+        stderr_differs=CONFIRMS_ON_STDERR,
         name="vision-with-a-trailing-separator-control",
         plane="daily",
         python=["workspace", "vision", "Ship it\x1f", "-w", "alpha"],
@@ -326,11 +356,6 @@ def _diff_trees(left: Path, right: Path, ignore: dict[str, str]) -> list[str]:
             if not p.is_file():
                 continue
             rel = str(p.relative_to(root))
-            # `.git` is the workspace's own repository, not the plane format. Python charter
-            # commits into it on a LIVE workspace and the Rust side does not touch git at all
-            # (that is M1.4), so it is out of this comparison by design, not by accident.
-            if rel.split(os.sep)[0] == ".git" or f"{os.sep}.git{os.sep}" in f"{os.sep}{rel}":
-                continue
             if any(rel == k or rel.startswith(f"{k}{os.sep}") for k in ignore):
                 continue
             found.add(rel)
@@ -342,8 +367,6 @@ def _diff_trees(left: Path, right: Path, ignore: dict[str, str]) -> list[str]:
             if not p.is_dir():
                 continue
             rel = str(p.relative_to(root))
-            if ".git" in p.relative_to(root).parts:
-                continue
             if any(rel == k or rel.startswith(f"{k}{os.sep}") for k in ignore):
                 continue
             found.add(rel)
@@ -388,9 +411,6 @@ def _outside(scratch: Path, side: str, root: Path) -> dict[str, bytes]:
         except ValueError:
             pass
         rel = path.relative_to(scratch / side)
-        # `home` and `pins` are the harness's own working directories.
-        if rel.parts[0] in {"home", "pins"}:
-            continue
         try:
             found[str(rel)] = path.read_bytes()
         except OSError:
@@ -443,20 +463,35 @@ def check(scenario: Scenario, binary: Path) -> bool:
         rs = _run(rust_argv, rs_root, rs_home, rs_pins)
 
         problems: list[str] = []
-        # A non-zero status is only a problem when the scenario did not ask for one, or when
-        # the two sides disagree. Two identical refusals are a result, not a failure.
         if py.returncode != rs.returncode:
             problems.append(
                 f"    exit status differs: python {py.returncode} "
                 f"({py.stderr.strip()}), rust {rs.returncode} ({rs.stderr.strip()})"
             )
-        elif scenario.expect_failure and py.returncode == 0:
-            problems.append("    both sides SUCCEEDED, and this scenario expects a refusal")
-        elif not scenario.expect_failure and py.returncode != 0:
-            problems.append(
-                f"    both sides failed ({py.returncode}) and the scenario does not say so — "
-                f"python: {py.stderr.strip()}"
-            )
+        if scenario.refusal:
+            if py.returncode == 0:
+                problems.append("    this scenario expects a refusal and python SUCCEEDED")
+            if scenario.refusal not in rs.stderr:
+                problems.append(
+                    f"    rust did not refuse with {scenario.refusal!r}; it said "
+                    f"{rs.stderr.strip()!r}"
+                )
+        else:
+            if py.returncode != 0:
+                problems.append(
+                    f"    python failed ({py.returncode}) and the scenario does not say so — "
+                    f"{py.stderr.strip()}"
+                )
+            if scenario.stderr_differs:
+                if py.stderr == rs.stderr:
+                    problems.append(
+                        "    stderr now MATCHES, but the scenario still says it differs "
+                        f"({scenario.stderr_differs}) — drop the note"
+                    )
+            elif py.stderr != rs.stderr:
+                problems.append("    stderr differs:")
+                problems.append(f"      python {py.stderr!r}")
+                problems.append(f"      rust   {rs.stderr!r}")
         problems.extend(_diff_trees(py_root, rs_root, scenario.ignore))
         problems.extend(
             _escaped("python", py_before, _outside(scratch, "python", py_root))
@@ -490,6 +525,17 @@ def main() -> int:
     if not args.binary.is_file():
         raise SystemExit(
             f"no Rust charter at {args.binary} — build it with `cargo build -p charter-cli`"
+        )
+    # A stale binary reports 17/17 for code that no longer exists. Cheap to notice: the
+    # newest source file under `crates/` should not be newer than what is being tested.
+    newest = max(
+        (f.stat().st_mtime for f in (REPO / "crates").rglob("*.rs")),
+        default=0.0,
+    )
+    if newest > args.binary.stat().st_mtime:
+        raise SystemExit(
+            f"{args.binary} is older than the sources under crates/ — rebuild it with "
+            f"`cargo build -p charter-cli`, or this run tests code that no longer exists"
         )
 
     wanted = SCENARIOS

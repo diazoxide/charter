@@ -1,8 +1,23 @@
 //! The `charter` command line, in Rust.
 //!
-//! Only the plane commands M1.1 covers are here. Each one is the Python command of the same
-//! name, and the differential tests (`tests/differential/run.py`) prove that by running both
-//! against copies of one fixture plane and comparing the trees they leave.
+//! Only the plane commands M1.1 covers are here, and only as far as the PLANE goes. The
+//! differential tests (`tests/differential/run.py`) prove that by running both
+//! implementations against copies of one fixture plane and comparing the trees they leave.
+//!
+//! Two things this binary deliberately does NOT do yet, both recorded in the harness rather
+//! than left to be discovered:
+//!
+//! - **`-w` is required.** Python resolves a workspace through nine rungs — `-w`,
+//!   `$CHARTER_WORKSPACE`, the working directory, the session and terminal pointers, the
+//!   frame, `workspaces/.default`, `[workspace] default`, then the literal `default`
+//!   (`charter/workspace.py:589` `chosen`). None of that is ported, so omitting `-w` is a
+//!   usage error rather than a guess at the wrong workspace.
+//! - **No command prints its confirmation.** charter says `✓ Vision set for 'alpha' → …` on
+//!   stderr; this is silent. That is the command presentation layer, and porting it is M2's
+//!   "the `charter` binary answers these commands".
+//!
+//! `root` and the hidden `--now` have no Python counterpart at all: `--now` is the test seam
+//! charter itself has as `memstore.write(stamp=…)`.
 
 use std::process::ExitCode;
 
@@ -143,6 +158,19 @@ fn run() -> Result<(), String> {
                 }
                 [verb, slug] if verb == "done" => {
                     ws.close_todo(slug, stamp).map_err(|e| e.to_string())?;
+                }
+                // `forget` abandons a todo silently — no journal entry, unlike `done`.
+                [verb, slug] if verb == "forget" => {
+                    charter_core::memstore::forget(&ws.dir().join("todos"), slug)
+                        .map_err(|e| e.to_string())?;
+                }
+                // A lone verb is NOT todo text. charter refuses it, and the reason is that
+                // `todo done` with a forgotten slug would otherwise record a todo called
+                // "done" and leave the one it meant to close open.
+                [verb] if verb == "done" || verb == "forget" => {
+                    return Err(format!(
+                        "`todo {verb}` needs the slug of the todo to close."
+                    ));
                 }
                 [text] => {
                     ws.add_todo(text, stamp).map_err(|e| e.to_string())?;

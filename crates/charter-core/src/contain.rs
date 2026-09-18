@@ -46,23 +46,48 @@ fn drive_qualified(name: &str) -> bool {
 /// Containment first, then the alphabet: `^[A-Za-z0-9][A-Za-z0-9._-]*$`. The alphabet is the
 /// right rule because charter mints these names itself.
 pub fn workspace_name_ok(name: &str) -> bool {
-    segment_ok(name) && alphabet_ok(name, true)
+    segment_ok(name) && alphabet_ok(name)
 }
 
-/// Can `name` name a persona? The same rule, and `_shared` is allowed its leading `_`.
+/// The one name under `personas/` that is not a persona: the store every persona reads.
+pub const SHARED_PERSONA: &str = "_shared";
+
+/// Can `name` name a persona?
+///
+/// **Lowercase only** — `charter/persona.py:47` is `^[a-z0-9][a-z0-9._-]*$`, a tighter
+/// alphabet than a workspace's, and `Alpha` or `DevOps` is not a persona charter would
+/// mint. On a case-insensitive filesystem accepting `DevOps` would reach `devops`'s files
+/// through a name the plane does not have.
+///
+/// `_shared` is admitted by name and nothing else is: Python never validates it, reaching
+/// that store through a `shared=True` flag instead, so this is where the two models meet.
 pub fn persona_name_ok(name: &str) -> bool {
-    segment_ok(name) && alphabet_ok(name.strip_prefix('_').unwrap_or(name), true)
+    if name == SHARED_PERSONA {
+        return true;
+    }
+    segment_ok(name) && lowercase_alphabet_ok(name)
 }
 
 /// `^[A-Za-z0-9][A-Za-z0-9._-]*$`, hand-rolled rather than pulling in a regex engine for one
 /// rule that never changes.
-fn alphabet_ok(name: &str, dots: bool) -> bool {
+fn alphabet_ok(name: &str) -> bool {
     let mut chars = name.chars();
     match chars.next() {
         Some(c) if c.is_ascii_alphanumeric() => {}
         _ => return false,
     }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || (dots && c == '.'))
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+}
+
+/// `^[a-z0-9][a-z0-9._-]*$` — a persona's alphabet, which admits no capital.
+fn lowercase_alphabet_ok(name: &str) -> bool {
+    let lower = |c: char| c.is_ascii_lowercase() || c.is_ascii_digit();
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(c) if lower(c) => {}
+        _ => return false,
+    }
+    chars.all(|c| lower(c) || c == '-' || c == '_' || c == '.')
 }
 
 #[cfg(test)]
@@ -109,10 +134,31 @@ mod tests {
     }
 
     #[test]
-    fn the_shared_persona_keeps_its_leading_underscore() {
-        assert!(persona_name_ok("_shared"));
+    fn a_persona_name_admits_no_capital_and_only_shared_leads_with_an_underscore() {
+        // `charter/persona.py:47` is `^[a-z0-9][a-z0-9._-]*$`. On a case-insensitive
+        // filesystem `DevOps` would otherwise reach `devops`'s files under a name the plane
+        // does not have.
         assert!(persona_name_ok("devops"));
-        for name in ["../escape", "/abs", "_", "a/b"] {
+        assert!(persona_name_ok("dev-ops.2"));
+        assert!(
+            persona_name_ok("_shared"),
+            "admitted by name, and only this one"
+        );
+        for name in [
+            "Alpha",
+            "ALPHA",
+            "DevOps",
+            "CON",
+            "_a",
+            "__evil",
+            "_SHARED",
+            "_",
+            "A",
+            "../escape",
+            "/abs",
+            "a/b",
+            "",
+        ] {
             assert!(!persona_name_ok(name), "{name:?} must not name a persona");
         }
     }
@@ -120,18 +166,27 @@ mod tests {
 
 /// Where a plane keeps data charter writes. A path that resolves outside all of them is
 /// refused, however legal its name.
-const DATA_DIRS: [&str; 3] = ["workspaces", "personas", ".charter"];
+/// The directories a control plane keeps data in, as `charter/contain.py:data_roots` lists
+/// them: `personas/`, `workspaces/` and `.charter/persona-state`.
+///
+/// **`persona-state` and not `.charter`.** Ephemeral persona memory is data charter is
+/// supposed to read and it lives under the secrets home, which is the whole reason this is a
+/// list of data directories rather than "the plane, minus `.charter/`". Allowing `.charter`
+/// wholesale would put the vaults and every other piece of plane state inside the allowlist.
+const DATA_DIRS: [&str; 3] = ["personas", "workspaces", ".charter/persona-state"];
 
 /// A write charter refused, with the reason the operator sees.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error(
     "'{path}' resolves to '{resolved}', outside the directories a control plane keeps its \
      data in (persona-state, personas, workspaces). A committed symlink there redirects the \
-     write, so charter follows a link that lands inside them and refuses one that leaves"
+     {verb}, so charter follows a link that lands inside them and refuses one that leaves"
 )]
 pub struct Refused {
     pub path: String,
     pub resolved: String,
+    /// `read` or `write` — the same refusal, named for what it stopped.
+    pub verb: &'static str,
 }
 
 /// Check that `path` still lands inside `root`'s data directories once every symlink on the
@@ -146,10 +201,24 @@ pub struct Refused {
 /// deepest ancestor that DOES exist is resolved and the rest appended. That is the part a
 /// symlink can lie about; the remainder is names charter is about to create.
 pub fn writable(root: &std::path::Path, path: &std::path::Path) -> Result<(), Refused> {
-    let refused = |resolved: &std::path::Path| Refused {
-        path: path.display().to_string(),
-        resolved: resolved.display().to_string(),
-    };
+    contained(root, path, "write")
+}
+
+/// The same check before a READ.
+///
+/// charter gates its reads too, for a reason the write side does not cover: a committed
+/// `workspaces/evil -> ../../elsewhere` with a legal name made `workspace vision` PRINT a
+/// file from outside the plane (charter #442). Containing the name does not contain that —
+/// the name was never the wrong part.
+pub fn readable(root: &std::path::Path, path: &std::path::Path) -> Result<(), Refused> {
+    contained(root, path, "read")
+}
+
+fn contained(
+    root: &std::path::Path,
+    path: &std::path::Path,
+    verb: &'static str,
+) -> Result<(), Refused> {
     let resolved = resolve_existing(path);
     let base = resolve_existing(root);
     let inside = DATA_DIRS
@@ -159,8 +228,21 @@ pub fn writable(root: &std::path::Path, path: &std::path::Path) -> Result<(), Re
     if inside {
         Ok(())
     } else {
-        Err(refused(&resolved))
+        Err(Refused {
+            path: path.display().to_string(),
+            resolved: resolved.display().to_string(),
+            verb,
+        })
     }
+}
+
+/// Whether `path` resolves anywhere inside `root`, both ends resolved.
+///
+/// Used where the plane's own state lives rather than its data directories. **Both ends**:
+/// on macOS a temp plane is under `/var/folders/...`, itself a link to `/private/var/...`,
+/// so comparing a resolved path against an unresolved root refuses everything.
+pub fn within_plane(root: &std::path::Path, path: &std::path::Path) -> bool {
+    resolve_existing(path).starts_with(resolve_existing(root))
 }
 
 /// `path` with its deepest existing ancestor canonicalised.

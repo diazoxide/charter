@@ -90,6 +90,21 @@ pub fn last_launched(root: &Path, name: &str) -> Option<Fingerprint> {
 
 /// Write `name` down as launched, keeping every other profile's record.
 pub fn record_launched(root: &Path, name: &str, print: &Fingerprint) -> io::Result<()> {
+    // This file records which commands the operator approved RUNNING, so a link that moves
+    // it out of the plane moves the consent with it. `contain::writable`'s data roots do not
+    // cover it — `.charter` is not one, and Python does not gate this write either — so the
+    // rule is spelled out here: the record stays under this plane's own `.charter`.
+    let state = root.join(".charter");
+    if !crate::contain::within_plane(root, &state) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "'{}' resolves outside the plane — charter will not record consent to run a \
+                 command through a link that leaves it",
+                state.display()
+            ),
+        ));
+    }
     let mut doc = read(root);
     // One object keyed by profile name, read and rewritten whole, so approving one profile
     // today does not make another ask again tomorrow. An existing key keeps its position.
@@ -106,8 +121,20 @@ pub fn record_launched(root: &Path, name: &str, print: &Fingerprint) -> io::Resu
 
 /// Create the state directory, private to the operator.
 fn private_dir(dir: &Path) -> io::Result<()> {
-    if dir.is_dir() {
-        return Ok(());
+    // `symlink_metadata`, not `is_dir`: the latter is true for a symlink TO a directory, so
+    // the early return followed the link instead of refusing it.
+    match std::fs::symlink_metadata(dir) {
+        Ok(meta) if meta.is_dir() => return Ok(()),
+        Ok(meta) if meta.is_symlink() => {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "'{}' is a symlink; charter will not follow one here",
+                    dir.display()
+                ),
+            ));
+        }
+        _ => {}
     }
     #[cfg(unix)]
     {
@@ -135,7 +162,14 @@ fn write_private(target: &Path, bytes: &[u8]) -> io::Result<()> {
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
-    let temp = dir.join(format!("{name}.{}.tmp", std::process::id()));
+    // pid AND a per-call tag, as charter's `config.temp_beside` does: the pid separates two
+    // processes, the tail separates two writers inside one — Tauri runs commands on a thread
+    // pool — and a pid the kernel has recycled.
+    let temp = dir.join(format!(
+        "{name}.{}.{}.tmp",
+        std::process::id(),
+        crate::workspaces::scratch_tag()
+    ));
 
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true).truncate(true);

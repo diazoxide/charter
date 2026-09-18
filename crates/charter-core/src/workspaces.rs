@@ -189,9 +189,19 @@ impl Workspace {
     ///
     /// Asked before every write rather than once at construction: a link can be created,
     /// or repointed, between one command and the next.
-    fn writable(&self) -> io::Result<()> {
-        crate::contain::writable(&self.plane_root, &self.dir)
-            .map_err(|refused| io::Error::new(io::ErrorKind::PermissionDenied, refused.to_string()))
+    /// Refuse a path that resolves out of the plane's data directories.
+    ///
+    /// Asked of the PATH BEING TOUCHED, not of the workspace directory above it: a symlink
+    /// at `workspace.md`, or at `memory/`, redirects the write just as one at the workspace
+    /// does, and checking only the directory left both open.
+    fn writable(&self, path: &Path) -> io::Result<()> {
+        crate::contain::writable(&self.plane_root, path).map_err(refusal)
+    }
+
+    /// The same, before a read: a committed link with a legal name otherwise PRINTS a file
+    /// from outside the plane.
+    fn readable(&self, path: &Path) -> io::Result<()> {
+        crate::contain::readable(&self.plane_root, path).map_err(refusal)
     }
 
     pub fn name(&self) -> &str {
@@ -204,7 +214,12 @@ impl Workspace {
 
     /// The `## Vision` body, or `""` when it is unset, still the placeholder, or unreadable.
     pub fn vision(&self) -> String {
-        let text = std::fs::read_to_string(self.dir.join("workspace.md")).unwrap_or_default();
+        let path = self.dir.join("workspace.md");
+        if self.readable(&path).is_err() {
+            // charter answers "" for a charter it refuses, rather than printing it.
+            return String::new();
+        }
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
         let body = mdsection::section_body(&text, "Vision");
         // charter reads its own placeholder as "no vision", by prefix.
         if body.starts_with("_Not set yet") {
@@ -216,7 +231,11 @@ impl Workspace {
 
     /// `workspace.json`, and who owns it.
     pub fn manifest(&self) -> (Option<serde_json::Value>, manifest::Ownership) {
-        let text = std::fs::read_to_string(self.dir.join("workspace.json")).ok();
+        let path = self.dir.join("workspace.json");
+        if self.readable(&path).is_err() {
+            return (None, manifest::Ownership::Absent);
+        }
+        let text = std::fs::read_to_string(&path).ok();
         let ownership = manifest::ownership(text.as_deref());
         let doc = text.as_deref().and_then(|t| serde_json::from_str(t).ok());
         (doc, ownership)
@@ -225,8 +244,8 @@ impl Workspace {
     /// Create `workspace.md` from the template when it is absent. An existing file is never
     /// overwritten — only its `## Vision` body is ever replaced.
     pub fn scaffold_charter(&self) -> io::Result<()> {
-        self.writable()?;
         let path = self.dir.join("workspace.md");
+        self.writable(&path)?;
         if path.exists() {
             return Ok(());
         }
@@ -247,7 +266,7 @@ impl Workspace {
 
     /// Set the `## Vision` body, creating the charter first when it is missing.
     pub fn set_vision(&self, text: &str) -> io::Result<()> {
-        self.writable()?;
+        self.writable(&self.dir.join("workspace.md"))?;
         self.scaffold_charter()?;
         let path = self.dir.join("workspace.md");
         let current = std::fs::read_to_string(&path)?;
@@ -256,7 +275,7 @@ impl Workspace {
 
     /// Record one todo as its own timestamp-prefixed file, and index it.
     pub fn add_todo(&self, text: &str, stamp: chrono::NaiveDateTime) -> io::Result<PathBuf> {
-        self.writable()?;
+        self.writable(&self.dir.join("todos"))?;
         let dir = self.dir.join("todos");
         memstore::ensure_index(&dir, &TODOS_HEADER.replace("{name}", &self.name))?;
         memstore::write(&dir, text, None, true, "persistent", true, stamp)
@@ -265,7 +284,7 @@ impl Workspace {
     /// Close a todo: write its closing memory into the journal, then delete the todo file
     /// and its index line. There is no state field — a closed todo is a deleted file.
     pub fn close_todo(&self, slug: &str, stamp: chrono::NaiveDateTime) -> io::Result<()> {
-        self.writable()?;
+        self.writable(&self.dir.join("todos"))?;
         let dir = self.dir.join("todos");
         let path = memstore::resolve(&dir, slug).ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, format!("no such todo: {slug}"))
@@ -275,7 +294,7 @@ impl Workspace {
             .unwrap_or_default()
             .to_string_lossy()
             .to_string();
-        let title = read_store(&dir)?
+        let title = read_store(&self.plane_root, &dir)?
             .into_iter()
             .find(|e| e.slug == stem)
             .map(|e| e.title)
@@ -290,7 +309,7 @@ impl Workspace {
 
     /// Record one durable fact in the workspace's journal.
     pub fn remember(&self, text: &str, stamp: chrono::NaiveDateTime) -> io::Result<PathBuf> {
-        self.writable()?;
+        self.writable(&self.dir.join("memory"))?;
         let dir = self.dir.join("memory");
         memstore::ensure_index(&dir, &WS_MEMORY_HEADER.replace("{name}", &self.name))?;
         memstore::write(&dir, text, None, true, "persistent", true, stamp)
@@ -302,7 +321,7 @@ impl Workspace {
     /// document charter wrote keeps its key order and one a hand wrote keeps the position it
     /// chose — which is what Python's `dict` assignment does.
     pub fn write_manifest(&self, doc: &serde_json::Value) -> io::Result<()> {
-        self.writable()?;
+        self.writable(&self.dir.join("workspace.json"))?;
         let mut doc = doc.clone();
         let digest = manifest::digest(&doc);
         if let Some(map) = doc.as_object_mut() {
@@ -317,23 +336,32 @@ impl Workspace {
 
     /// The open todos. There is no state field: a closed todo is a deleted file.
     pub fn todos(&self) -> io::Result<Vec<Entry>> {
-        read_store(&self.dir.join("todos"))
+        let dir = self.dir.join("todos");
+        self.readable(&dir)?;
+        read_store(&self.plane_root, &dir)
     }
 
     /// The workspace's memories, oldest first — the filename stamp orders them.
     pub fn memories(&self) -> io::Result<Vec<Entry>> {
-        read_store(&self.dir.join("memory"))
+        let dir = self.dir.join("memory");
+        self.readable(&dir)?;
+        read_store(&self.plane_root, &dir)
     }
 }
 
 /// Every `*.md` directly in a memory store, `MEMORY.md` excepted, sorted by filename.
-pub(crate) fn read_store(dir: &Path) -> io::Result<Vec<Entry>> {
+pub(crate) fn read_store(plane_root: &Path, dir: &Path) -> io::Result<Vec<Entry>> {
+    crate::contain::readable(plane_root, dir).map_err(refusal)?;
     let mut entries: Vec<Entry> = Vec::new();
     for path in read_dir_sorted(dir)? {
         if !path.is_file() || path.extension().is_none_or(|e| e != "md") {
             continue;
         }
         if file_name(&path) == "MEMORY.md" {
+            continue;
+        }
+        // Each ENTRY too: a single file in the store can be a link out of the plane.
+        if crate::contain::readable(plane_root, &path).is_err() {
             continue;
         }
         // An entry charter cannot read is SKIPPED, not fatal. Python's `_entries_of` does
@@ -422,7 +450,7 @@ fn file_name(path: &Path) -> std::borrow::Cow<'_, str> {
 /// processes (#893 — two commands scaffolding one workspace used to share a single
 /// `workspace.json.tmp`) and the random half separates two writers inside one, which threads
 /// in a single process are.
-fn scratch_tag() -> String {
+pub(crate) fn scratch_tag() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let nanos = std::time::SystemTime::now()
@@ -456,4 +484,9 @@ fn replace_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
             Err(e)
         }
     }
+}
+
+/// A containment refusal as an IO error, so every caller handles one kind of failure.
+fn refusal(refused: crate::contain::Refused) -> io::Error {
+    io::Error::new(io::ErrorKind::PermissionDenied, refused.to_string())
 }

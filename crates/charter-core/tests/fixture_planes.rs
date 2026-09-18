@@ -1128,3 +1128,260 @@ fn a_persona_symlinked_out_of_the_plane_cannot_be_written_through() {
         "nothing outside the plane was written"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Containment, one path component deeper. A second review reproduced every one of these
+// through the real CLI at exit 0; each is the same class as the workspace-directory link,
+// which is why checking only that directory was not enough.
+
+/// A plane with `workspaces/alpha`, and a directory outside it holding `outside.txt`.
+fn plane_and_outside() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    charter_core::workspaces::Plane,
+) {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("charter.toml"), "schema = 1\n").unwrap();
+    std::fs::create_dir_all(dir.path().join("workspaces/alpha")).unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("outside.txt"), "PRIVATE\n").unwrap();
+    let plane = charter_core::workspaces::Plane::open(dir.path());
+    (dir, outside, plane)
+}
+
+#[test]
+fn a_charter_file_that_is_a_link_out_of_the_plane_is_not_written_through() {
+    let (_plane_dir, outside, plane) = plane_and_outside();
+    let victim = outside.path().join("victim");
+    std::fs::write(&victim, "original\n").unwrap();
+    let ws = plane.workspace("alpha").unwrap();
+    std::os::unix::fs::symlink(&victim, ws.dir().join("workspace.md")).unwrap();
+
+    assert!(ws.set_vision("PWNED").is_err());
+    assert!(ws.scaffold_charter().is_err());
+
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "original\n");
+}
+
+#[test]
+fn a_memory_store_that_is_a_link_out_of_the_plane_is_not_written_into() {
+    let (_plane_dir, outside, plane) = plane_and_outside();
+    let ws = plane.workspace("alpha").unwrap();
+    std::os::unix::fs::symlink(outside.path(), ws.dir().join("memory")).unwrap();
+
+    assert!(ws.remember("a fact", pinned()).is_err());
+
+    assert_eq!(
+        std::fs::read_dir(outside.path()).unwrap().count(),
+        1,
+        "only the file the fixture put there"
+    );
+}
+
+#[test]
+fn a_manifest_that_is_a_link_out_of_the_plane_is_not_written_through() {
+    let (_plane_dir, outside, plane) = plane_and_outside();
+    let victim = outside.path().join("victim.json");
+    std::fs::write(&victim, "{}\n").unwrap();
+    let ws = plane.workspace("alpha").unwrap();
+    std::os::unix::fs::symlink(&victim, ws.dir().join("workspace.json")).unwrap();
+
+    assert!(
+        ws.write_manifest(&serde_json::from_str(r#"{"name":"alpha"}"#).unwrap())
+            .is_err()
+    );
+
+    assert_eq!(std::fs::read_to_string(&victim).unwrap(), "{}\n");
+}
+
+#[test]
+fn a_vision_behind_a_link_out_of_the_plane_is_not_printed() {
+    // charter #442: a committed `workspaces/evil -> ../../elsewhere` with a LEGAL name
+    // printed a file from outside the plane. Containing the name does not contain this.
+    let (plane_dir, outside, plane) = plane_and_outside();
+    std::fs::write(
+        outside.path().join("workspace.md"),
+        "# evil\n\n## Vision\n\nEXFILTRATED\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(
+        outside.path(),
+        plane_dir.path().join("workspaces").join("evil"),
+    )
+    .unwrap();
+
+    let ws = plane.workspace("evil").expect("the NAME is legal");
+
+    assert_eq!(ws.vision(), "", "the outside file is not read");
+    assert_eq!(ws.manifest().1, charter_core::manifest::Ownership::Absent);
+}
+
+#[test]
+fn a_store_behind_a_link_out_of_the_plane_is_not_listed() {
+    let (_plane_dir, outside, plane) = plane_and_outside();
+    std::fs::write(
+        outside.path().join("secret.md"),
+        "# Board minutes\n\n_2026-03-02 09:14 · persistent_\n\nCONFIDENTIAL\n",
+    )
+    .unwrap();
+    let ws = plane.workspace("alpha").unwrap();
+    std::os::unix::fs::symlink(outside.path(), ws.dir().join("todos")).unwrap();
+
+    assert!(ws.todos().is_err(), "the store itself resolves outside");
+}
+
+#[test]
+fn a_single_entry_that_links_out_of_the_plane_is_left_out_of_the_listing() {
+    // The store is legitimate; one file in it is a link out. Python gates each entry, not
+    // only the directory.
+    let (_plane_dir, outside, plane) = plane_and_outside();
+    let ws = plane.workspace("alpha").unwrap();
+    ws.remember("a real fact", pinned()).unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join("outside.txt"),
+        ws.dir().join("memory/leak.md"),
+    )
+    .unwrap();
+
+    let titles: Vec<String> = ws
+        .memories()
+        .unwrap()
+        .into_iter()
+        .map(|m| m.title)
+        .collect();
+
+    assert_eq!(titles, vec!["a real fact"]);
+}
+
+#[test]
+fn a_persona_charter_behind_a_link_out_of_the_plane_is_not_read() {
+    let (plane_dir, outside, plane) = plane_and_outside();
+    std::fs::write(
+        outside.path().join("persona.md"),
+        "---\nname: evil\nrole: Exfiltrator\n---\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(plane_dir.path().join("personas")).unwrap();
+    std::os::unix::fs::symlink(
+        outside.path(),
+        plane_dir.path().join("personas").join("devops"),
+    )
+    .unwrap();
+
+    let persona = plane.persona("devops").expect("the NAME is legal");
+
+    assert_eq!(persona.role(), None);
+    assert!(persona.memories().is_err());
+}
+
+#[test]
+fn the_consent_record_is_not_written_through_a_link_that_leaves_the_plane() {
+    // This file says which commands the operator approved RUNNING.
+    let (plane_dir, outside, _plane) = plane_and_outside();
+    std::os::unix::fs::symlink(outside.path(), plane_dir.path().join(".charter")).unwrap();
+
+    let print = Fingerprint {
+        kind: "claude".into(),
+        command: vec!["claude".into()],
+        env: BTreeMap::new(),
+    };
+    assert!(profiletrust::record_launched(plane_dir.path(), "x", &print).is_err());
+
+    assert!(
+        !outside.path().join(profiletrust::RECORD).exists(),
+        "no consent record outside the plane"
+    );
+}
+
+#[test]
+fn only_the_planes_own_data_directories_are_writable() {
+    // Python's data roots are `personas/`, `workspaces/` and `.charter/persona-state` —
+    // NOT `.charter` wholesale, which would put the vaults inside the allowlist.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("charter.toml"), "schema = 1\n").unwrap();
+    let root = dir.path();
+
+    for ok in [
+        "workspaces/alpha/workspace.md",
+        "personas/devops/persona.md",
+        ".charter/persona-state/ephemeral/s/x.md",
+    ] {
+        assert_eq!(
+            charter_core::contain::writable(root, &root.join(ok)),
+            Ok(()),
+            "{ok} is data"
+        );
+    }
+    for refused in [
+        "docs/topology.md",
+        ".charter/vaults/fixture.json",
+        "charter.toml",
+    ] {
+        assert!(
+            charter_core::contain::writable(root, &root.join(refused)).is_err(),
+            "{refused} is not a data directory"
+        );
+    }
+}
+
+#[test]
+fn a_record_missing_a_field_is_no_record_at_all() {
+    // The consent bypass this guards: if a missing `env` defaulted to empty instead of
+    // failing, `{"kind":"claude","command":["claude"]}` would reconstruct as a fingerprint
+    // EQUAL to a profile declared with no env — and launch without asking.
+    let (_tmp, plane) = temp_plane();
+    let dir = plane.root().join(".charter");
+    std::fs::create_dir_all(&dir).unwrap();
+
+    for doc in [
+        r#"{"p": {"kind":"claude","command":["claude"]}}"#,
+        r#"{"p": {"kind":"claude","env":{}}}"#,
+        r#"{"p": {"command":["claude"],"env":{}}}"#,
+        r#"{"p": {"kind":"claude","command":"claude","env":{}}}"#,
+        r#"{"p": {"kind":"claude","command":["claude"],"env":{"A":1}}}"#,
+    ] {
+        std::fs::write(dir.join(profiletrust::RECORD), doc).unwrap();
+        assert_eq!(
+            profiletrust::last_launched(plane.root(), "p"),
+            None,
+            "{doc} must read as no record, so charter asks again"
+        );
+    }
+}
+
+#[test]
+fn an_index_is_not_created_through_a_dangling_symlink() {
+    // `exists()` is false for a dangling link, which HELPS an attacker: a plain write would
+    // create whatever the link names. The create is exclusive so the kernel refuses it.
+    let (_tmp, plane) = temp_plane();
+    let outside = tempfile::tempdir().unwrap();
+    let target = outside.path().join("planted");
+    let ws = plane.workspace("alpha").unwrap();
+    let store = ws.dir().join("memory");
+    std::fs::create_dir_all(&store).unwrap();
+    std::os::unix::fs::symlink(&target, store.join("MEMORY.md")).unwrap();
+
+    let _ = charter_core::memstore::ensure_index(&store, "# Memory Index\n\n");
+
+    assert!(
+        !target.exists(),
+        "the file the link named must not have been created"
+    );
+}
+
+#[test]
+fn a_persona_index_is_not_created_through_a_dangling_symlink() {
+    let (_tmp, plane) = temp_plane();
+    let outside = tempfile::tempdir().unwrap();
+    let target = outside.path().join("planted");
+    std::fs::create_dir_all(plane.root().join("personas/devops/memory")).unwrap();
+    std::os::unix::fs::symlink(
+        &target,
+        plane.root().join("personas/devops/memory/MEMORY.md"),
+    )
+    .unwrap();
+
+    let _ = plane.persona("devops").unwrap().scaffold_memory();
+
+    assert!(!target.exists());
+}

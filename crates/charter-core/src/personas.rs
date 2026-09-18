@@ -33,9 +33,13 @@ impl Persona {
 
     /// Refuse this persona if its directory resolves out of the plane — a committed symlink
     /// at `personas/<legal-name>` redirects every write to it.
-    fn writable(&self) -> io::Result<()> {
-        crate::contain::writable(&self.plane_root, &self.dir)
-            .map_err(|refused| io::Error::new(io::ErrorKind::PermissionDenied, refused.to_string()))
+    /// Refuse a path that resolves out of the plane, asked of the path being TOUCHED.
+    fn writable(&self, path: &Path) -> io::Result<()> {
+        crate::contain::writable(&self.plane_root, path).map_err(refusal)
+    }
+
+    fn readable(&self, path: &Path) -> io::Result<()> {
+        crate::contain::readable(&self.plane_root, path).map_err(refusal)
     }
 
     pub fn name(&self) -> &str {
@@ -58,7 +62,8 @@ impl Persona {
     /// Create the committed `memory/` and `refs/` with the files that make them useful: an
     /// index to read, and a README saying what the directory is for.
     pub fn scaffold_memory(&self) -> io::Result<()> {
-        self.writable()?;
+        self.writable(&self.dir.join("memory"))?;
+        self.writable(&self.dir.join("refs"))?;
         let who = self.who();
         create_absent(
             &self.dir.join("memory"),
@@ -70,12 +75,14 @@ impl Persona {
 
     /// This persona's memories, by filename.
     pub fn memories(&self) -> io::Result<Vec<crate::workspaces::Entry>> {
-        crate::workspaces::read_store(&self.dir.join("memory"))
+        let dir = self.dir.join("memory");
+        self.readable(&dir)?;
+        crate::workspaces::read_store(&self.plane_root, &dir)
     }
 
     /// Record one durable fact. Slug-only filename, `persistent`, indexed.
     pub fn remember(&self, text: &str, stamp: chrono::NaiveDateTime) -> io::Result<PathBuf> {
-        self.writable()?;
+        self.writable(&self.dir.join("memory"))?;
         let dir = self.dir.join("memory");
         memstore::ensure_index(&dir, &index_header(&self.who()))?;
         // `timestamped: false` — a persona memory is addressed by its slug, so the name
@@ -88,7 +95,9 @@ impl Persona {
     /// Not YAML: charter's frontmatter is line-based with no parser, no quote stripping and
     /// no nesting, so this reads it the same way.
     pub fn role(&self) -> Option<String> {
-        let text = std::fs::read_to_string(self.dir.join("persona.md")).ok()?;
+        let path = self.dir.join("persona.md");
+        self.readable(&path).ok()?;
+        let text = std::fs::read_to_string(&path).ok()?;
         frontmatter_value(&text, "role")
     }
 }
@@ -145,4 +154,9 @@ fn frontmatter_value(text: &str, key: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// A containment refusal as an IO error.
+fn refusal(refused: crate::contain::Refused) -> io::Error {
+    io::Error::new(io::ErrorKind::PermissionDenied, refused.to_string())
 }
