@@ -73,3 +73,41 @@ fn an_empty_variable_is_treated_as_unset_rather_than_as_the_root_directory() {
         root.canonicalize().unwrap().display().to_string()
     );
 }
+
+/// Run `charter` in `cwd` with `CHARTER_ROOT` pinned, and return stdout.
+fn output(cwd: &Path, args: &[&str]) -> String {
+    let out = Command::new(charter())
+        .args(args)
+        .current_dir(cwd)
+        .env("CHARTER_ROOT", cwd)
+        .output()
+        .expect("the binary runs");
+    assert!(
+        out.status.success(),
+        "charter {args:?} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
+#[test]
+fn the_default_workspace_is_listed_whether_or_not_its_directory_exists() {
+    // charter adds it because it is the one every plane starts on. Nothing else asserted
+    // this, so deleting the rule passed the whole suite.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = plane(tmp.path().join("plane"));
+    std::fs::create_dir_all(root.join("workspaces/alpha")).unwrap();
+
+    let listed = output(&root, &["workspace", "list"]);
+
+    assert_eq!(listed, "alpha\ndefault\n");
+}
+
+#[test]
+fn a_default_workspace_that_does_exist_is_listed_once() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = plane(tmp.path().join("plane"));
+    std::fs::create_dir_all(root.join("workspaces/default")).unwrap();
+
+    assert_eq!(output(&root, &["workspace", "list"]), "default\n");
+}

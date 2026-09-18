@@ -245,27 +245,72 @@ pub fn within_plane(root: &std::path::Path, path: &std::path::Path) -> bool {
     resolve_existing(path).starts_with(resolve_existing(root))
 }
 
-/// `path` with its deepest existing ancestor canonicalised.
+/// `path` resolved as far as the filesystem allows, then normalised.
+///
+/// Two things beyond canonicalising, each of which was a hole an adversarial review walked
+/// straight through:
+///
+/// - **A link it cannot canonicalize is still followed.** `canonicalize` fails for a
+///   DANGLING symlink, and judging the link by its own name rather than by where it points
+///   let one out of the plane read as contained — after which the write created the file it
+///   named.
+/// - **`..` is folded, not dropped.** `Path::file_name()` is `None` for `..`, so collecting
+///   file names discarded them:
+///   `workspaces/alpha/missing/../../../../../etc/newfile` reconstructed as
+///   `workspaces/alpha/missing/etc/newfile` — inside — while the write landed in `/etc`. It
+///   bit only when a component did not exist, which is the case this function is for.
 fn resolve_existing(path: &std::path::Path) -> std::path::PathBuf {
+    resolve_with_depth(&normalise(path), 0)
+}
+
+/// How many links deep to follow before giving up, as the kernel does.
+const MAX_LINKS: u8 = 40;
+
+fn resolve_with_depth(path: &std::path::Path, depth: u8) -> std::path::PathBuf {
     if let Ok(real) = path.canonicalize() {
         return real;
     }
-    let mut rest = Vec::new();
-    let mut walk = path;
-    while let Some(parent) = walk.parent() {
-        if let Some(name) = walk.file_name() {
-            rest.push(name.to_os_string());
+    if depth < MAX_LINKS {
+        // A dangling link: judged by where it POINTS.
+        if let Ok(target) = std::fs::read_link(path) {
+            let joined = if target.is_absolute() {
+                target
+            } else {
+                path.parent()
+                    .unwrap_or_else(|| std::path::Path::new(""))
+                    .join(target)
+            };
+            return resolve_with_depth(&normalise(&joined), depth + 1);
         }
-        if let Ok(real) = parent.canonicalize() {
-            let mut out = real;
-            for name in rest.iter().rev() {
-                out.push(name);
-            }
-            return out;
-        }
-        walk = parent;
     }
-    path.to_path_buf()
+    // Nothing at this name: resolve the parent and put the name back, so a path charter is
+    // about to CREATE is judged where it will land.
+    match (path.parent(), path.file_name()) {
+        (Some(parent), Some(name)) => {
+            let mut out = resolve_with_depth(parent, depth);
+            out.push(name);
+            out
+        }
+        _ => path.to_path_buf(),
+    }
+}
+
+/// A path with `.` dropped and `..` folded, without touching the filesystem.
+///
+/// Lexical folding is safe here because it happens BEFORE resolution: a `..` that would have
+/// crossed a symlink is folded away, and whatever remains is then resolved for real.
+fn normalise(path: &std::path::Path) -> std::path::PathBuf {
+    let mut out = std::path::PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 #[cfg(test)]

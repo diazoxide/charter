@@ -116,6 +116,28 @@ class Scenario:
         return self.rust if self.rust is not None else self.python
 
 
+def _symlink_a_memory_index_out_of_the_plane(root: Path) -> None:
+    """Point `workspaces/alpha/memory/MEMORY.md` at a file outside the plane."""
+    outside = root.parent / "outside"
+    outside.mkdir(parents=True, exist_ok=True)
+    (outside / "important").write_text("PRECIOUS OPERATOR DATA\n")
+    index = root / "workspaces" / "alpha" / "memory" / "MEMORY.md"
+    index.parent.mkdir(parents=True, exist_ok=True)
+    index.unlink(missing_ok=True)
+    index.symlink_to(outside / "important")
+
+
+def _dangle_a_memory_index_out_of_the_plane(root: Path) -> None:
+    """The same, pointing at a file that does not exist: `canonicalize` fails for a dangling
+    link, which is what let one past."""
+    outside = root.parent / "outside"
+    outside.mkdir(parents=True, exist_ok=True)
+    index = root / "workspaces" / "alpha" / "memory" / "MEMORY.md"
+    index.parent.mkdir(parents=True, exist_ok=True)
+    index.unlink(missing_ok=True)
+    index.symlink_to(outside / "planted")
+
+
 def _symlink_a_workspace_out_of_the_plane(root: Path) -> None:
     """Point `workspaces/escape` at a directory outside the plane, and leave a file there
     both implementations must refuse to touch."""
@@ -294,6 +316,47 @@ SCENARIOS = [
         pins_the_clock=False,
         stdout_differs="charter prints an indented row with an age column and an escaped "
         "title; the Rust CLI prints slug and title. Porting the row is M2's.",
+    ),
+    Scenario(
+        name="todo-forget-with-a-traversing-slug-deletes-nothing",
+        plane="daily",
+        # charter #339: the slug is untrusted, and `remove_file` took a neighbour's file.
+        python=["ws", "todo", "forget", "../../beta/workspace", "-w", "alpha"],
+        refusal="is not the slug of one todo",
+    ),
+    Scenario(
+        name="todo-forget-needs-a-slug",
+        plane="daily",
+        python=["ws", "todo", "forget", "-w", "alpha"],
+        refusal="needs the slug",
+    ),
+    Scenario(
+        name="todo-forget-by-a-real-slug",
+        plane="daily",
+        stderr_differs=CONFIRMS_ON_STDERR,
+        python=["ws", "todo", "forget", "review-the-rollout-plan", "-w", "alpha"],
+    ),
+    Scenario(
+        name="todo-done-with-a-traversing-slug-deletes-nothing",
+        plane="daily",
+        python=["ws", "todo", "done", "../../beta/workspace", "-w", "alpha"],
+        refusal="no such todo",
+    ),
+    Scenario(
+        name="remember-through-a-memory-index-linked-out-of-the-plane",
+        plane="daily",
+        setup=_symlink_a_memory_index_out_of_the_plane,
+        python=["workspace", "remember", "A durable fact", "-w", "alpha", "--no-sync"],
+        rust=["workspace", "remember", "A durable fact", "-w", "alpha"],
+        refusal="outside the directories",
+    ),
+    Scenario(
+        name="remember-through-a-dangling-memory-index-link",
+        plane="daily",
+        setup=_dangle_a_memory_index_out_of_the_plane,
+        python=["workspace", "remember", "A durable fact", "-w", "alpha", "--no-sync"],
+        rust=["workspace", "remember", "A durable fact", "-w", "alpha"],
+        refusal="outside the directories",
     ),
     Scenario(
         name="a-duplicate-todo-is-refused",
@@ -565,8 +628,15 @@ def main() -> int:
         )
     # A stale binary reports 17/17 for code that no longer exists. Cheap to notice: the
     # newest source file under `crates/` should not be newer than what is being tested.
+    # Only what BUILDS the binary: a test file is newer all the time and says nothing about
+    # whether the binary is current.
     newest = max(
-        (f.stat().st_mtime for f in (REPO / "crates").rglob("*.rs")),
+        (
+            f.stat().st_mtime
+            for crate in (REPO / "crates").iterdir()
+            if crate.is_dir()
+            for f in (crate / "src").rglob("*.rs")
+        ),
         default=0.0,
     )
     if newest > args.binary.stat().st_mtime:

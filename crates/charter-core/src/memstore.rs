@@ -71,9 +71,16 @@ pub fn title_of(text: &str) -> String {
 
 /// Create the store directory and its `MEMORY.md` (with `header`) when absent; return the
 /// index path.
-pub fn ensure_index(dir: &std::path::Path, header: &str) -> std::io::Result<std::path::PathBuf> {
-    std::fs::create_dir_all(dir)?;
+pub fn ensure_index(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    header: &str,
+) -> std::io::Result<std::path::PathBuf> {
     let index = dir.join(INDEX);
+    // The FILE, not the directory above it: a committed `MEMORY.md -> outside` escaped a
+    // gate that only asked about the store.
+    gate(root, &index)?;
+    std::fs::create_dir_all(dir)?;
     if !index.exists() {
         let header = if header.ends_with('\n') {
             header.to_string()
@@ -98,6 +105,7 @@ pub fn ensure_index(dir: &std::path::Path, header: &str) -> std::io::Result<std:
 /// Write one memory file into `dir` and, unless `index` is false, append it to the index.
 #[allow(clippy::too_many_arguments)]
 pub fn write(
+    root: &std::path::Path,
     dir: &std::path::Path,
     text: &str,
     title: Option<&str>,
@@ -139,16 +147,25 @@ pub fn write(
         "# {title}\n\n_{} · {kind}_\n\n{text}\n",
         stamp.format("%Y-%m-%d %H:%M")
     );
+    // The chosen name too: the collision loop stops on the first name nothing occupies,
+    // and a dangling link occupies nothing.
+    gate(root, &path)?;
     std::fs::write(&path, body)?;
     if index {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
-        index_append(&dir.join(INDEX), &name, &title)?;
+        index_append(root, &dir.join(INDEX), &name, &title)?;
     }
     Ok(path)
 }
 
 /// Append one `- [title](file)` line. Order is write order: charter never sorts this file.
-fn index_append(index: &std::path::Path, filename: &str, title: &str) -> std::io::Result<()> {
+fn index_append(
+    root: &std::path::Path,
+    index: &std::path::Path,
+    filename: &str,
+    title: &str,
+) -> std::io::Result<()> {
+    gate(root, index)?;
     if !index.exists() {
         if let Some(parent) = index.parent() {
             std::fs::create_dir_all(parent)?;
@@ -231,13 +248,20 @@ pub const DUPLICATE_THRESHOLD: f64 = 0.5;
 /// Jaccard — intersection over UNION. Dividing by the longer side looks equivalent and is
 /// not: on text this short a single shared word is half the content, and "first thing" and
 /// "second thing" scored 0.5.
-pub fn duplicate_of(dir: &std::path::Path, text: &str) -> Option<String> {
+pub fn duplicate_of(root: &std::path::Path, dir: &std::path::Path, text: &str) -> Option<String> {
+    crate::contain::readable(root, dir).ok()?;
     let words = wordset(text);
     if words.is_empty() {
         return None;
     }
-    for path in std::fs::read_dir(dir).ok()?.filter_map(Result::ok) {
-        let path = path.path();
+    // Sorted, as charter's `files()` is: which of two near-duplicates is named must not
+    // depend on directory order.
+    let mut entries: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .collect();
+    entries.sort();
+    for path in entries {
         if path.extension().is_none_or(|e| e != "md") || path.file_name()? == INDEX {
             continue;
         }
@@ -269,7 +293,17 @@ fn title_of_stored(raw: &str) -> String {
 
 /// Delete one memory and its index line. The index is rewritten as the surviving lines
 /// joined with `\n` plus one trailing `\n` — and nothing at all when none survive.
-pub fn forget(dir: &std::path::Path, ident: &str) -> std::io::Result<()> {
+pub fn forget(root: &std::path::Path, dir: &std::path::Path, ident: &str) -> std::io::Result<()> {
+    // The slug is untrusted: `../../../victim` resolved out of the plane and `remove_file`
+    // took it. charter refuses a slug that is not one path segment (#339).
+    // One check, on the name with any `.md` taken off: `../../victim.md` is a legal
+    // FILENAME and not a legal slug, and the first spelling of this let it through.
+    if !crate::contain::segment_ok(ident.strip_suffix(".md").unwrap_or(ident)) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("'{ident}' is not the slug of one todo"),
+        ));
+    }
     let Some(file) = resolve(dir, ident) else {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
@@ -281,11 +315,13 @@ pub fn forget(dir: &std::path::Path, ident: &str) -> std::io::Result<()> {
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
+    gate(root, &file)?;
     std::fs::remove_file(&file)?;
     let index = dir.join(INDEX);
     if !index.exists() {
         return Ok(());
     }
+    gate(root, &index)?;
     let text = std::fs::read_to_string(&index)?;
     let needle = format!("({slug}.md)");
     let kept: Vec<&str> = crate::mdsection::split_lines(&text)
@@ -352,10 +388,13 @@ mod write_tests {
         "2026-03-02T09:14:00".parse().unwrap()
     }
 
+    /// A real plane, because the store gate asks whether a path is inside one.
     fn store() -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
-        let store = dir.path().join("todos");
+        std::fs::write(dir.path().join("charter.toml"), "schema = 1\n").unwrap();
+        let store = dir.path().join("workspaces/alpha/todos");
         ensure_index(
+            dir.path(),
             &store,
             "# Todos — workspace `alpha`\n\nOne line per todo; each links a file holding one thing this task still means to do.\nOpen or done — and done removes it, leaving its trace in the journal instead.\n",
         )
@@ -365,9 +404,10 @@ mod write_tests {
 
     #[test]
     fn a_timestamped_memory_is_named_for_its_second_and_its_title() {
-        let (_tmp, store) = store();
+        let (tmp, store) = store();
 
         let path = write(
+            tmp.path(),
             &store,
             "Review the rollout plan",
             None,
@@ -386,9 +426,10 @@ mod write_tests {
 
     #[test]
     fn a_memory_file_is_a_heading_a_stamp_line_and_the_body() {
-        let (_tmp, store) = store();
+        let (tmp, store) = store();
 
         let path = write(
+            tmp.path(),
             &store,
             "Review the rollout plan",
             None,
@@ -407,9 +448,10 @@ mod write_tests {
 
     #[test]
     fn the_title_of_a_multi_line_body_is_its_first_line_and_the_body_keeps_the_rest() {
-        let (_tmp, store) = store();
+        let (tmp, store) = store();
 
         let path = write(
+            tmp.path(),
             &store,
             "Multi line\nbody here",
             None,
@@ -429,9 +471,10 @@ mod write_tests {
 
     #[test]
     fn two_memories_with_one_title_in_one_second_are_both_kept() {
-        let (_tmp, store) = store();
+        let (tmp, store) = store();
 
         write(
+            tmp.path(),
             &store,
             "Review the rollout plan",
             None,
@@ -442,6 +485,7 @@ mod write_tests {
         )
         .unwrap();
         let second = write(
+            tmp.path(),
             &store,
             "Review the rollout plan",
             None,
@@ -460,9 +504,10 @@ mod write_tests {
 
     #[test]
     fn the_index_gains_one_line_per_memory_in_the_order_they_were_written() {
-        let (_tmp, store) = store();
+        let (tmp, store) = store();
 
         write(
+            tmp.path(),
             &store,
             "Review the rollout plan",
             None,
@@ -473,6 +518,7 @@ mod write_tests {
         )
         .unwrap();
         write(
+            tmp.path(),
             &store,
             "Review the rollout plan",
             None,
@@ -483,6 +529,7 @@ mod write_tests {
         )
         .unwrap();
         write(
+            tmp.path(),
             &store,
             "Multi line\nbody here",
             None,
@@ -501,9 +548,21 @@ mod write_tests {
 
     #[test]
     fn an_empty_body_is_refused_because_a_secret_must_never_be_written_here() {
-        let (_tmp, store) = store();
+        let (tmp, store) = store();
 
-        assert!(write(&store, "   \n\n ", None, true, "persistent", true, stamp()).is_err());
+        assert!(
+            write(
+                tmp.path(),
+                &store,
+                "   \n\n ",
+                None,
+                true,
+                "persistent",
+                true,
+                stamp()
+            )
+            .is_err()
+        );
     }
 }
 
@@ -549,4 +608,10 @@ mod duplicate_tests {
             "some body text"
         );
     }
+}
+
+/// Refuse a path that resolves out of the plane's data directories.
+fn gate(root: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
+    crate::contain::writable(root, path)
+        .map_err(|r| std::io::Error::new(std::io::ErrorKind::PermissionDenied, r.to_string()))
 }

@@ -171,7 +171,7 @@ fn run() -> Result<(), String> {
                 }
                 // `forget` abandons a todo silently — no journal entry, unlike `done`.
                 [verb, slug] if verb == "forget" => {
-                    charter_core::memstore::forget(&ws.dir().join("todos"), slug)
+                    charter_core::memstore::forget(plane()?.root(), &ws.dir().join("todos"), slug)
                         .map_err(|e| e.to_string())?;
                 }
                 // A lone verb is NOT todo text. charter refuses it, and the reason is that
@@ -186,9 +186,11 @@ fn run() -> Result<(), String> {
                     // Duplicate INTENT is worse than duplicate memory: closing one of a
                     // near-identical pair leaves its twin looking outstanding, so the list
                     // starts lying about what is left. Warn and skip rather than merge.
-                    if let Some(dup) =
-                        charter_core::memstore::duplicate_of(&ws.dir().join("todos"), text)
-                    {
+                    if let Some(dup) = charter_core::memstore::duplicate_of(
+                        plane()?.root(),
+                        &ws.dir().join("todos"),
+                        text,
+                    ) {
                         return Err(format!("already on the list: {dup}"));
                     }
                     ws.add_todo(text, stamp).map_err(|e| e.to_string())?;

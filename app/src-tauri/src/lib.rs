@@ -125,9 +125,12 @@ fn plane_sidebar(sessions: tauri::State<'_, Sessions>) -> Result<Sidebar, String
         workspaces.push(SidebarWorkspace {
             path: ws.dir().display().to_string(),
             vision: ws.vision(),
+            // A store charter cannot read costs that workspace its todo list, not the
+            // window its workspaces. `read_store` already skips an entry it cannot read;
+            // propagating one level up turned that into a sidebar with nothing in it.
             todos: ws
                 .todos()
-                .map_err(|err| err.to_string())?
+                .unwrap_or_default()
                 .into_iter()
                 .map(|todo| todo.title)
                 .collect(),

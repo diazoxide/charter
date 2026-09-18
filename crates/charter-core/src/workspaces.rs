@@ -277,8 +277,21 @@ impl Workspace {
     pub fn add_todo(&self, text: &str, stamp: chrono::NaiveDateTime) -> io::Result<PathBuf> {
         self.writable(&self.dir.join("todos"))?;
         let dir = self.dir.join("todos");
-        memstore::ensure_index(&dir, &TODOS_HEADER.replace("{name}", &self.name))?;
-        memstore::write(&dir, text, None, true, "persistent", true, stamp)
+        memstore::ensure_index(
+            &self.plane_root,
+            &dir,
+            &TODOS_HEADER.replace("{name}", &self.name),
+        )?;
+        memstore::write(
+            &self.plane_root,
+            &dir,
+            text,
+            None,
+            true,
+            "persistent",
+            true,
+            stamp,
+        )
     }
 
     /// Close a todo: write its closing memory into the journal, then delete the todo file
@@ -304,15 +317,28 @@ impl Workspace {
         // The journal entry goes in FIRST: charter writes the trace, then deletes the todo,
         // so a failure leaves the todo open rather than closed with nothing recorded.
         self.remember(&format!("Closed todo: {title}"), stamp)?;
-        memstore::forget(&dir, slug)
+        memstore::forget(&self.plane_root, &dir, slug)
     }
 
     /// Record one durable fact in the workspace's journal.
     pub fn remember(&self, text: &str, stamp: chrono::NaiveDateTime) -> io::Result<PathBuf> {
         self.writable(&self.dir.join("memory"))?;
         let dir = self.dir.join("memory");
-        memstore::ensure_index(&dir, &WS_MEMORY_HEADER.replace("{name}", &self.name))?;
-        memstore::write(&dir, text, None, true, "persistent", true, stamp)
+        memstore::ensure_index(
+            &self.plane_root,
+            &dir,
+            &WS_MEMORY_HEADER.replace("{name}", &self.name),
+        )?;
+        memstore::write(
+            &self.plane_root,
+            &dir,
+            text,
+            None,
+            true,
+            "persistent",
+            true,
+            stamp,
+        )
     }
 
     /// Write `workspace.json`, stamping the digest last and replacing the file atomically.
@@ -389,10 +415,10 @@ fn parse_entry(slug: &str, text: &str) -> Entry {
     for (i, line) in crate::mdsection::split_lines(text).into_iter().enumerate() {
         // The first `# ` line anywhere, and `[2..]` ONCE — a stored title of `# Hello`
         // reads as `# Hello`, not `Hello`, because charter takes `ln[2:].strip()`.
-        if title.is_empty() && i == 0 {
-            if let Some(rest) = line.strip_prefix("# ") {
-                title = crate::memstore::py_strip(rest).to_string();
-            }
+        if title.is_empty()
+            && let Some(rest) = line.strip_prefix("# ")
+        {
+            title = crate::memstore::py_strip(rest).to_string();
         } else if stamp.is_empty() && line.starts_with('_') {
             stamp = line
                 .trim_matches('_')

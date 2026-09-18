@@ -84,10 +84,19 @@ impl Persona {
     pub fn remember(&self, text: &str, stamp: chrono::NaiveDateTime) -> io::Result<PathBuf> {
         self.writable(&self.dir.join("memory"))?;
         let dir = self.dir.join("memory");
-        memstore::ensure_index(&dir, &index_header(&self.who()))?;
+        memstore::ensure_index(&self.plane_root, &dir, &index_header(&self.who()))?;
         // `timestamped: false` — a persona memory is addressed by its slug, so the name
         // carries no `YYYYMMDD-HHMMSS-` prefix.
-        memstore::write(&dir, text, None, false, "persistent", true, stamp)
+        memstore::write(
+            &self.plane_root,
+            &dir,
+            text,
+            None,
+            false,
+            "persistent",
+            true,
+            stamp,
+        )
     }
 
     /// The `role:` line of `persona.md`'s frontmatter, if it has one.

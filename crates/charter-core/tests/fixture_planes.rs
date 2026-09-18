@@ -803,7 +803,7 @@ fn an_index_emptied_of_its_last_entry_keeps_its_header() {
     let ws = plane.workspace("alpha").unwrap();
     ws.add_todo("only one", pinned()).unwrap();
 
-    charter_core::memstore::forget(&ws.dir().join("todos"), "only-one").unwrap();
+    charter_core::memstore::forget(plane.root(), &ws.dir().join("todos"), "only-one").unwrap();
 
     let index = std::fs::read_to_string(ws.dir().join("todos/MEMORY.md")).unwrap();
     assert!(
@@ -1361,7 +1361,7 @@ fn an_index_is_not_created_through_a_dangling_symlink() {
     std::fs::create_dir_all(&store).unwrap();
     std::os::unix::fs::symlink(&target, store.join("MEMORY.md")).unwrap();
 
-    let _ = charter_core::memstore::ensure_index(&store, "# Memory Index\n\n");
+    let _ = charter_core::memstore::ensure_index(plane.root(), &store, "# Memory Index\n\n");
 
     assert!(
         !target.exists(),
@@ -1384,4 +1384,160 @@ fn a_persona_index_is_not_created_through_a_dangling_symlink() {
     let _ = plane.persona("devops").unwrap().scaffold_memory();
 
     assert!(!target.exists());
+}
+
+// ---------------------------------------------------------------------------
+// A third review walked through the containment fix. These are what it found.
+
+#[test]
+fn a_slug_that_walks_out_of_the_store_deletes_nothing() {
+    // charter #339: `memstore.resolve` applies no containment of its own, so
+    // `../../<other>/todos/<slug>` resolved to a NEIGHBOUR's file and `unlink` took it.
+    // charter gates the slug with `segment_ok` before it ever reaches the store.
+    let (_plane_dir, outside, plane) = plane_and_outside();
+    let victim = outside.path().join("victim.md");
+    std::fs::write(&victim, "PRECIOUS\n").unwrap();
+    let ws = plane.workspace("alpha").unwrap();
+    let store = ws.dir().join("todos");
+    std::fs::create_dir_all(&store).unwrap();
+
+    for slug in [
+        "../../../../victim",
+        "../beta/todos/victim",
+        "/tmp/victim",
+        "..",
+        // A legal FILENAME that is not a legal slug — the first spelling of the rule let
+        // this through because it ended `.md`.
+        "../../../../victim.md",
+    ] {
+        let refused = charter_core::memstore::forget(plane.root(), &store, slug)
+            .expect_err("a traversing slug is refused");
+        // The SLUG rule specifically, not merely "something said no": the containment gate
+        // would also stop this, and a test that accepts either pins neither.
+        assert!(
+            refused.to_string().contains("is not the slug of one todo"),
+            "{slug:?} must be refused as a slug, got: {refused}"
+        );
+    }
+
+    assert!(victim.exists(), "nothing outside the store was deleted");
+}
+
+#[test]
+fn closing_a_todo_by_a_traversing_slug_deletes_nothing() {
+    let (plane_dir, _outside, plane) = plane_and_outside();
+    std::fs::create_dir_all(plane_dir.path().join("workspaces/beta/todos")).unwrap();
+    let neighbour = plane_dir.path().join("workspaces/beta/todos/victim.md");
+    std::fs::write(
+        &neighbour,
+        "# Victim\n\n_2026-03-02 09:14 · persistent_\n\nx\n",
+    )
+    .unwrap();
+    let ws = plane.workspace("alpha").unwrap();
+    ws.add_todo("Decoy", pinned()).unwrap();
+
+    assert!(ws.close_todo("../../beta/todos/victim", pinned()).is_err());
+
+    assert!(
+        neighbour.exists(),
+        "a neighbour's todo is not ours to close"
+    );
+}
+
+#[test]
+fn a_memory_index_that_links_out_of_the_plane_is_not_appended_to() {
+    // The store directory is legitimate; `MEMORY.md` inside it is a committed link out.
+    let (_plane_dir, outside, plane) = plane_and_outside();
+    let kept = outside.path().join("important");
+    std::fs::write(&kept, "PRECIOUS OPERATOR DATA\n").unwrap();
+    let ws = plane.workspace("alpha").unwrap();
+    let store = ws.dir().join("memory");
+    std::fs::create_dir_all(&store).unwrap();
+    std::os::unix::fs::symlink(&kept, store.join("MEMORY.md")).unwrap();
+
+    assert!(ws.remember("A durable fact", pinned()).is_err());
+
+    assert_eq!(
+        std::fs::read_to_string(&kept).unwrap(),
+        "PRECIOUS OPERATOR DATA\n"
+    );
+}
+
+#[test]
+fn a_dangling_index_link_is_judged_by_where_it_points() {
+    // `canonicalize` fails for a dangling link, and judging it by its own name let it pass —
+    // after which the write CREATED the file it named.
+    let (_plane_dir, outside, plane) = plane_and_outside();
+    let planted = outside.path().join("planted");
+    let ws = plane.workspace("alpha").unwrap();
+    let store = ws.dir().join("memory");
+    std::fs::create_dir_all(&store).unwrap();
+    std::os::unix::fs::symlink(&planted, store.join("MEMORY.md")).unwrap();
+
+    assert!(ws.remember("A durable fact", pinned()).is_err());
+
+    assert!(!planted.exists(), "the link's target was not created");
+}
+
+#[test]
+fn a_path_whose_parent_walks_out_with_dot_dot_is_refused() {
+    // `Path::file_name()` is `None` for `..`, so an ancestor walk that collects names
+    // dropped them: the reconstructed path was inside and the write landed in `/etc`.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("charter.toml"), "schema = 1\n").unwrap();
+    let root = dir.path();
+
+    for escape in [
+        "workspaces/alpha/missing/../../../../../../../etc/newfile",
+        "workspaces/../../../etc/newfile",
+        "workspaces/alpha/../../..",
+    ] {
+        assert!(
+            charter_core::contain::writable(root, &root.join(escape)).is_err(),
+            "{escape} leaves the plane"
+        );
+    }
+    // A `..` that stays inside is still fine.
+    assert_eq!(
+        charter_core::contain::writable(root, &root.join("workspaces/beta/../alpha/x.md")),
+        Ok(())
+    );
+}
+
+#[test]
+fn a_duplicate_check_does_not_read_a_store_outside_the_plane() {
+    // It reported the heading of an outside file on stderr — charter #442's shape, on the
+    // one read path the gate had missed.
+    let (_plane_dir, outside, plane) = plane_and_outside();
+    std::fs::write(
+        outside.path().join("leak.md"),
+        "# Leaked heading from outside\n\n_2026-03-02 09:14 · persistent_\n\nsecret\n",
+    )
+    .unwrap();
+    let ws = plane.workspace("alpha").unwrap();
+    std::os::unix::fs::symlink(outside.path(), ws.dir().join("todos")).unwrap();
+
+    assert_eq!(
+        charter_core::memstore::duplicate_of(
+            plane.root(),
+            &ws.dir().join("todos"),
+            "Leaked heading from outside"
+        ),
+        None
+    );
+}
+
+#[test]
+fn a_heading_below_the_first_line_is_still_the_title() {
+    let (_tmp, plane) = temp_plane();
+    let ws = plane.workspace("alpha").unwrap();
+    let store = ws.dir().join("todos");
+    std::fs::create_dir_all(&store).unwrap();
+    std::fs::write(
+        store.join("20260101-000000-t.md"),
+        "\n\n# The real title\n\n_2026-01-01 00:00 · persistent_\n\nbody\n",
+    )
+    .unwrap();
+
+    assert_eq!(ws.todos().unwrap()[0].title, "The real title");
 }
