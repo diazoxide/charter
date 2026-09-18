@@ -6,6 +6,38 @@ import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
 import type { Moved, OpenChat } from "./bindings";
 
+/** What the picker draws. One profile, so picking is one click. */
+const START_OPTIONS = {
+  profiles: [
+    {
+      name: "claude",
+      kind: "claude",
+      shown: "claude",
+      source: "built-in",
+      is_default: true,
+      approval: null,
+    },
+  ],
+  refused: [],
+  personas: ["steward"],
+  persona: "steward",
+  ignore_fix: null,
+  declares_none: true,
+};
+
+/** Opens a chat the way the operator does now: New tab, then a row, then Start.
+ *
+ *  A harness starts only once a row is picked (ADR 0022) — the dialog shows even when one
+ *  profile is available, because skipping it would bring back the harness nobody picked on
+ *  a one-harness machine. Every test that wants a session goes through here, which is also
+ *  what keeps that rule from being quietly removed: take the picker out of the path and
+ *  every one of these fails.
+ */
+async function openAChat() {
+  await userEvent.click(await screen.findByRole("button", { name: "New tab" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Start" }));
+}
+
 /** What Tauri's own mocks put on the window: the registry `listen` hands its callback to,
  *  which is how a test fires an event the app is listening for. */
 declare global {
@@ -69,6 +101,8 @@ function core(
       return 1;
     }
     if (cmd === "plane_root") return "/home/dev/plane";
+    if (cmd === "start_options") return START_OPTIONS;
+    if (cmd === "start_chat") return { session: ++opened, wired: null };
     if (cmd === "opened_chats") return open;
     if (cmd === "chat_states") return states;
     if (cmd === "chats_that_would_not_start") return wouldNot;
@@ -182,11 +216,11 @@ describe("what the window does with the chats the core already has", () => {
     const { asked } = core();
     render(<App />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "New tab" }));
+    await openAChat();
 
     expect(screen.queryByText(/resumed/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/new chat/i)).not.toBeInTheDocument();
-    expect(of("open_session", asked)).toHaveLength(1);
+    expect(of("start_chat", asked)).toHaveLength(1);
   });
 
   it("tells the core which chat is in front, so the next quit records it", async () => {

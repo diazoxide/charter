@@ -41,6 +41,46 @@ const SIDEBAR = {
   unfiled: [],
 };
 
+/** What the picker draws. One profile, so picking is one click — which is also the shape
+ *  ADR 0022 insists on showing rather than skipping: a one-harness machine still picks. */
+const START_OPTIONS = {
+  profiles: [
+    {
+      name: "claude",
+      kind: "claude",
+      shown: "claude",
+      source: "built-in",
+      is_default: true,
+      approval: null,
+    },
+  ],
+  refused: [],
+  personas: ["steward"],
+  persona: "steward",
+  ignore_fix: null,
+  declares_none: true,
+};
+
+/** Opens a chat the way the operator does now: New tab, then a row, then Start.
+ *
+ *  A harness starts only once a row is picked (ADR 0022) — the dialog shows even when one
+ *  profile is available, because skipping it would bring back the harness nobody picked on
+ *  a one-harness machine. Every test that wants a session goes through here, which is also
+ *  what keeps that rule from being quietly removed: take the picker out of the path and
+ *  every one of these fails.
+ */
+async function openAChat() {
+  await userEvent.click(await screen.findByRole("button", { name: "New tab" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Start" }));
+}
+
+/** Splits the pane in front. A split starts a harness too, so it picks as well — there is
+ *  no path in this app by which a chat starts on a profile nobody chose. */
+async function splitInto(which: "Split right" | "Split down") {
+  await userEvent.click(screen.getByRole("button", { name: which }));
+  await userEvent.click(await screen.findByRole("button", { name: "Start" }));
+}
+
 /** Answers every command the app sends, and records what it was asked. */
 function core(): { asked: { cmd: string; args: unknown }[] } {
   const asked: { cmd: string; args: unknown }[] = [];
@@ -54,6 +94,8 @@ function core(): { asked: { cmd: string; args: unknown }[] } {
     if (cmd === "chat_states") return [];
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "open_session") return ++opened;
+    if (cmd === "start_options") return START_OPTIONS;
+    if (cmd === "start_chat") return { session: ++opened, wired: null };
     return null;
   });
   return { asked };
@@ -137,19 +179,22 @@ describe("App", () => {
     const { asked } = core();
     render(<App />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "New tab" }));
+    await openAChat();
 
     expect(await screen.findByTestId("pane")).toHaveTextContent("session 1");
     expect(tabs()).toEqual(["1"]);
-    expect(asked.some(({ cmd }) => cmd === "open_session")).toBe(true);
+    // `start_chat` and not `open_session`: a chat now starts on the profile that was
+    // picked, and the command that opens a bare shell is not in this path at all.
+    const started = asked.find(({ cmd }) => cmd === "start_chat");
+    expect(started?.args).toMatchObject({ profile: "claude", persona: "steward" });
   });
 
   it("splits the pane in front into two, each with its own session", async () => {
     core();
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "New tab" }));
+    await openAChat();
 
-    await userEvent.click(screen.getByRole("button", { name: "Split right" }));
+    await splitInto("Split right");
 
     expect(panes()).toEqual(["session 1", "session 2"]);
   });
@@ -157,9 +202,9 @@ describe("App", () => {
   it("shows only the panes of the tab in front", async () => {
     core();
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "New tab" }));
+    await openAChat();
 
-    await userEvent.click(screen.getByRole("button", { name: "New tab" }));
+    await openAChat();
 
     expect(tabs()).toEqual(["1", "2"]);
     expect(panes()).toEqual(["session 2"]);
@@ -168,8 +213,8 @@ describe("App", () => {
   it("brings a tab back to the front when it is chosen", async () => {
     core();
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "New tab" }));
-    await userEvent.click(screen.getByRole("button", { name: "New tab" }));
+    await openAChat();
+    await openAChat();
 
     await userEvent.click(
       within(screen.getByRole("tablist", { name: "Tabs" })).getAllByRole("tab")[0],
@@ -181,8 +226,8 @@ describe("App", () => {
   it("ends the sessions of a tab that closes", async () => {
     const { asked } = core();
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "New tab" }));
-    await userEvent.click(screen.getByRole("button", { name: "Split right" }));
+    await openAChat();
+    await splitInto("Split right");
 
     await userEvent.click(screen.getByRole("button", { name: "Close tab 1" }));
 
@@ -196,8 +241,8 @@ describe("App", () => {
   it("ends only the session of a pane that closes", async () => {
     const { asked } = core();
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "New tab" }));
-    await userEvent.click(screen.getByRole("button", { name: "Split down" }));
+    await openAChat();
+    await splitInto("Split down");
 
     await userEvent.click(screen.getByRole("button", { name: "Close pane" }));
 
@@ -221,15 +266,16 @@ describe("App", () => {
       if (cmd === "opened_chats") return [];
       if (cmd === "chat_states") return [];
       if (cmd === "chats_that_would_not_start") return [];
-      if (cmd !== "open_session") return null;
-      if (++opened === 1) return 1;
+      if (cmd === "start_options") return START_OPTIONS;
+      if (cmd !== "start_chat") return null;
+      if (++opened === 1) return { session: 1, wired: null };
       await new Promise<void>((starts) => (letTheSecondSessionStart = starts));
-      return 2;
+      return { session: 2, wired: null };
     });
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "New tab" }));
+    await openAChat();
 
-    await userEvent.click(screen.getByRole("button", { name: "Split right" }));
+    await splitInto("Split right");
     await userEvent.click(screen.getByRole("button", { name: "Close tab 1" }));
     letTheSecondSessionStart();
 
@@ -242,7 +288,11 @@ describe("App", () => {
     expect(screen.queryAllByTestId("pane")).toEqual([]);
   });
 
-  it("says so when the core cannot start a session, and opens no tab", async () => {
+  it("says why a chat would not start, in the picker, and opens no tab", async () => {
+    // Beside the rows and not behind them: the operator is still choosing, and a refusal
+    // they cannot see next to what they picked is one they cannot act on. Every refusal a
+    // launch has arrives this way — an unwired profile, a kind v1 does not start, a file
+    // git would carry.
     mockIPC((cmd) => {
       if (cmd === "plane_root") return "/home/dev/plane";
       if (cmd === "plane_sidebar") return SIDEBAR;
@@ -250,13 +300,16 @@ describe("App", () => {
       if (cmd === "opened_chats") return [];
       if (cmd === "chat_states") return [];
       if (cmd === "chats_that_would_not_start") return [];
-      throw new Error('could not start "zsh": no such file or directory');
+      if (cmd === "start_options") return START_OPTIONS;
+      throw new Error("profile 'claude' is not wired — charter@charter is not installed");
     });
     render(<App />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "New tab" }));
+    await openAChat();
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("could not start");
+    expect(await screen.findByRole("alert")).toHaveTextContent("is not wired");
     expect(screen.queryAllByTestId("pane")).toEqual([]);
+    // Still open, so the operator can pick another row without starting over.
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
 });

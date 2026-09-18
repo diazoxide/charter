@@ -158,30 +158,80 @@ impl Chats {
         }
     }
 
+    /// Starts a chat the core has already worked out the launch for — a chat on a profile.
+    ///
+    /// The harness, the arguments and the environment all come from `ready`, which resolved
+    /// them from the profile's DECLARED kind. Nothing here asks the program's name what it
+    /// is: a profile's command is commonly a wrapper, and the answer would be `None`.
+    pub fn start_ready(
+        &self,
+        chat: &Chat,
+        ready: &charter_core::start::Ready,
+        size: Size,
+    ) -> Result<u32, String> {
+        self.open_it(
+            chat,
+            ready.program.clone(),
+            ready.args.clone(),
+            ready.env.clone(),
+            ready.harness,
+            ready.session.as_ref().map(ToString::to_string),
+            ready.how.clone(),
+            size,
+        )
+    }
+
     /// Starts a chat, and remembers what it was started as.
+    ///
+    /// For a chat that is NOT on a profile — the operator's shell — where what runs is
+    /// decided from the record alone.
     pub fn start(&self, chat: &Chat, size: Size) -> Result<u32, String> {
         let launch = chat.launch();
+        self.open_it(
+            chat,
+            launch.program,
+            launch.args,
+            Vec::new(),
+            chat.harness(),
+            launch.session.as_ref().map(ToString::to_string),
+            launch.how,
+            size,
+        )
+    }
+
+    /// The one place a session is opened and a chat is remembered.
+    ///
+    /// Everything that differs between a profile chat and a shell chat is decided by the
+    /// caller and arrives here as arguments — above all the HARNESS, which for a profile
+    /// comes from its declared kind and must not be asked of the program's name.
+    #[allow(clippy::too_many_arguments)]
+    fn open_it(
+        &self,
+        chat: &Chat,
+        program: String,
+        args: Vec<String>,
+        env: Vec<(String, String)>,
+        harness: Option<Harness>,
+        conversation: Option<String>,
+        how: charter_core::reopen::Reopened,
+        size: Size,
+    ) -> Result<u32, String> {
         // Charter's own words first, and the state hooks before even those: a harness reads
         // its settings before it reads anything else on the line, and a chat's own recorded
         // arguments may end in a positional prompt that nothing may come after.
-        let mut args = self.state_hook_args(chat.harness());
-        args.extend(launch.args);
-        // What the chat will be, worked out before it starts, because the announcement below
-        // has to carry it: a harness fires `SessionStart` at its own exec, and a board that
-        // learned the chat's number afterwards would miss it.
-        let harness = chat.harness();
-        let conversation = launch.session.as_ref().map(ToString::to_string);
+        let mut all = self.state_hook_args(harness);
+        all.extend(args);
         // What the announcement below said, so a start that fails can take it back.
         let announced = std::sync::atomic::AtomicU32::new(0);
         let session = self
             .sessions
             .open(
                 &Opening {
-                    program: Some(launch.program),
-                    args,
+                    program: Some(program),
+                    args: all,
                     cwd: chat.cwd.as_ref().map(|cwd| cwd.display().to_string()),
                     size,
-                    env: Vec::new(),
+                    env,
                 },
                 &|session| {
                     announced.store(session, std::sync::atomic::Ordering::SeqCst);
@@ -191,8 +241,8 @@ impl Chats {
                 },
             )
             .inspect_err(|_| {
-                // The chat was announced and then did not start. Take it back, or the board holds
-                // one entry per failed start for the life of the app.
+                // The chat was announced and then did not start. Take it back, or the board
+                // holds one entry per failed start for the life of the app.
                 let announced = announced.load(std::sync::atomic::Ordering::SeqCst);
                 if announced > 0
                     && let Some(gone) = lock(&self.never_started).as_ref()
@@ -204,10 +254,12 @@ impl Chats {
         // started fresh is under an id the app just chose, and that is what has to be
         // written down for the next launch to resume it.
         let under = Chat {
-            resume: launch.session,
+            resume: conversation
+                .as_deref()
+                .and_then(|id| charter_core::harness::SessionId::new(id).ok()),
             ..chat.clone()
         };
-        lock(&self.open).insert(session, (under, launch.how));
+        lock(&self.open).insert(session, (under, how));
         self.write_it_down();
         Ok(session)
     }

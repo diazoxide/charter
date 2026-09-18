@@ -260,6 +260,182 @@ fn plane_sidebar(chats: tauri::State<'_, Chats>) -> Result<Sidebar, String> {
     })
 }
 
+/// One row of the profile picker: what it runs, where charter read it, and what pressing
+/// Enter on it would do.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+struct ProfileRow {
+    name: String,
+    kind: String,
+    /// The environment and the command as one line a person reads, already contained: a
+    /// profile is a file a chat can write, and a control byte in it must never redraw a row.
+    shown: String,
+    /// `built-in` or `charter.local.toml`.
+    source: String,
+    /// The row the picker starts on. It launches nothing by itself.
+    is_default: bool,
+    /// `new` or `changed` when this profile's command must be shown and approved before it
+    /// runs; absent when charter has already recorded running exactly this.
+    approval: Option<String>,
+}
+
+/// Everything the picker draws, read from the plane when it is opened.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+struct StartOptions {
+    profiles: Vec<ProfileRow>,
+    /// Profiles charter read and will not use, by name and reason, so a row that is missing
+    /// is never merely missing.
+    refused: Vec<(String, String)>,
+    personas: Vec<String>,
+    /// The plane's `[persona] default`, which is the persona row the picker starts on.
+    persona: Option<String>,
+    /// Set when git would carry `charter.local.toml`: every declared profile is refused
+    /// until it is fixed, and this is the one fix for that state.
+    ignore_fix: Option<String>,
+    /// Whether this plane declares no profiles of its own. The built-ins still start, and
+    /// the picker says so rather than looking empty or broken.
+    declares_none: bool,
+}
+
+/// What the picker draws: every profile this machine has, every one charter will not use,
+/// and the plane's personas.
+///
+/// Read fresh every time it is opened, like the sidebar: `charter.local.toml` is a file the
+/// operator edits by hand and a chat can write, so a cache here would be a second answer to
+/// "what is on disk" that nothing invalidates.
+#[tauri::command]
+#[specta::specta]
+fn start_options() -> Result<StartOptions, String> {
+    let root = here()?;
+    let (set, check) = charter_core::profiles::for_launch(&root);
+    let plane = charter_core::workspaces::Plane::open(&root);
+    Ok(StartOptions {
+        profiles: set
+            .profiles()
+            .iter()
+            .map(|p| ProfileRow {
+                name: p.name.clone(),
+                kind: p.kind.clone(),
+                shown: charter_core::profiles::display(p),
+                source: p.source.as_str().to_owned(),
+                is_default: set.default.as_deref() == Some(p.name.as_str()),
+                approval: charter_core::profiletrust::approval_needed(&root, p)
+                    .map(|a| a.as_str().to_owned()),
+            })
+            .collect(),
+        refused: set
+            .refused
+            .iter()
+            .map(|r| {
+                (
+                    if r.name.is_empty() {
+                        r.source.clone()
+                    } else {
+                        r.name.clone()
+                    },
+                    r.reason.clone(),
+                )
+            })
+            .collect(),
+        personas: plane.personas().map_err(|err| err.to_string())?,
+        persona: plane.default_persona(),
+        ignore_fix: (!check.passes()).then(|| check.fix.clone()),
+        declares_none: set
+            .profiles()
+            .iter()
+            .all(|p| p.source == charter_core::profiles::Source::BuiltIn),
+    })
+}
+
+/// Records that the operator approved running this profile's command, exactly as it stands.
+///
+/// Its own command, and a separate click from the one that starts the chat: this IS the
+/// approval, and a command that both asked and ran would be asking nothing.
+#[tauri::command]
+#[specta::specta]
+fn approve_profile(name: String) -> Result<(), String> {
+    let root = here()?;
+    // Read through the LAUNCH read, so a profile in a file git would carry cannot be
+    // approved into existence — the approval would be recorded and the launch would still
+    // refuse, which is a yes that buys nothing.
+    let (set, _check) = charter_core::profiles::for_launch(&root);
+    let profile = set.get(&name).ok_or_else(|| {
+        format!(
+            "no profile '{}' to approve",
+            charter_core::shown::short(&name)
+        )
+    })?;
+    charter_core::profiletrust::record_launched(
+        &root,
+        &profile.name,
+        &charter_core::profiletrust::fingerprint(profile),
+    )
+    .map_err(|err| {
+        format!(
+            "charter could not record that approval ({err}), so it will not \
+                            start the profile — it would only ask again."
+        )
+    })
+}
+
+/// Starts a chat on a harness profile, with a persona.
+///
+/// A command of its own rather than a flag on `open_session`, so neither can be mistaken
+/// for the other by a caller passing null: this one goes through every gate a launch has,
+/// and that one opens the operator's shell.
+#[tauri::command]
+#[specta::specta]
+fn start_chat(
+    chats: tauri::State<'_, Chats>,
+    profile: String,
+    persona: Option<String>,
+    cwd: Option<String>,
+    name: String,
+    columns: u16,
+    rows: u16,
+) -> Result<Started, String> {
+    let root = here()?;
+    let start = charter_core::start::Start {
+        profile: Some(profile.clone()),
+        persona: persona.clone(),
+        name: name.clone(),
+        cwd: cwd.as_deref().map(PathBuf::from),
+        resume: None,
+    };
+    let ready = charter_core::start::ready(&start, &root)?;
+    let chat = Chat {
+        program: ready.program.clone(),
+        // What the RECORD keeps: the profile's own words, without charter's. A resume
+        // spells them differently from a start, and both are decided again at the reopen.
+        args: Vec::new(),
+        cwd: ready.cwd.clone(),
+        name,
+        resume: ready.session.clone(),
+        active: false,
+        profile: Some(profile),
+        persona,
+    };
+    let session = chats.start_ready(&chat, &ready, Size { columns, rows })?;
+    Ok(Started {
+        session,
+        wired: (!ready.wired.is_empty()).then_some(ready.wired),
+    })
+}
+
+/// A chat that started: its session, and the one line to say if charter wired its profile
+/// on the way.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+struct Started {
+    session: u32,
+    wired: Option<String>,
+}
+
+/// The plane this app is acting on.
+fn here() -> Result<PathBuf, String> {
+    let cwd = std::env::current_dir()
+        .map_err(|err| format!("cannot read the current directory: {err}"))?;
+    charter_core::plane::resolve(&cwd).map_err(|err| err.to_string())
+}
+
 /// Starts a session, and remembers it as a chat so a quit can write it down. No program is
 /// the operator's shell.
 #[tauri::command]
@@ -514,6 +690,9 @@ fn commands() -> Builder<tauri::Wry> {
         hide_window,
         window_showing,
         plane_sidebar,
+        start_options,
+        approve_profile,
+        start_chat,
     ])
 }
 

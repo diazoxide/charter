@@ -92,6 +92,30 @@ export const commands = {
 	 *  app stays out of it.
 	 */
 	planeSidebar: () => typedError<Sidebar, string>(__TAURI_INVOKE("plane_sidebar")),
+	/**
+	 *  What the picker draws: every profile this machine has, every one charter will not use,
+	 *  and the plane's personas.
+	 * 
+	 *  Read fresh every time it is opened, like the sidebar: `charter.local.toml` is a file the
+	 *  operator edits by hand and a chat can write, so a cache here would be a second answer to
+	 *  "what is on disk" that nothing invalidates.
+	 */
+	startOptions: () => typedError<StartOptions, string>(__TAURI_INVOKE("start_options")),
+	/**
+	 *  Records that the operator approved running this profile's command, exactly as it stands.
+	 * 
+	 *  Its own command, and a separate click from the one that starts the chat: this IS the
+	 *  approval, and a command that both asked and ran would be asking nothing.
+	 */
+	approveProfile: (name: string) => typedError<null, string>(__TAURI_INVOKE("approve_profile", { name })),
+	/**
+	 *  Starts a chat on a harness profile, with a persona.
+	 * 
+	 *  A command of its own rather than a flag on `open_session`, so neither can be mistaken
+	 *  for the other by a caller passing null: this one goes through every gate a launch has,
+	 *  and that one opens the operator's shell.
+	 */
+	startChat: (profile: string, persona: string | null, cwd: string | null, name: string, columns: number, rows: number) => typedError<Started, string>(__TAURI_INVOKE("start_chat", { profile, persona, cwd, name, columns, rows })),
 };
 
 /* Types */
@@ -123,6 +147,29 @@ export type OpenChat = {
 };
 
 /**
+ *  One row of the profile picker: what it runs, where charter read it, and what pressing
+ *  Enter on it would do.
+ */
+export type ProfileRow = {
+	name: string,
+	kind: string,
+	/**
+	 *  The environment and the command as one line a person reads, already contained: a
+	 *  profile is a file a chat can write, and a control byte in it must never redraw a row.
+	 */
+	shown: string,
+	/**  `built-in` or `charter.local.toml`. */
+	source: string,
+	/**  The row the picker starts on. It launches nothing by itself. */
+	is_default: boolean,
+	/**
+	 *  `new` or `changed` when this profile's command must be shown and approved before it
+	 *  runs; absent when charter has already recorded running exactly this.
+	 */
+	approval: string | null,
+};
+
+/**
  *  The whole left-hand side: every workspace with its chats, and the focused workspace's
  *  persona and todos.
  */
@@ -147,6 +194,38 @@ export type SidebarWorkspace = {
 	vision: string,
 	todos: string[],
 	chats: OpenChat[],
+};
+
+/**  Everything the picker draws, read from the plane when it is opened. */
+export type StartOptions = {
+	profiles: ProfileRow[],
+	/**
+	 *  Profiles charter read and will not use, by name and reason, so a row that is missing
+	 *  is never merely missing.
+	 */
+	refused: ([string, string])[],
+	personas: string[],
+	/**  The plane's `[persona] default`, which is the persona row the picker starts on. */
+	persona: string | null,
+	/**
+	 *  Set when git would carry `charter.local.toml`: every declared profile is refused
+	 *  until it is fixed, and this is the one fix for that state.
+	 */
+	ignore_fix: string | null,
+	/**
+	 *  Whether this plane declares no profiles of its own. The built-ins still start, and
+	 *  the picker says so rather than looking empty or broken.
+	 */
+	declares_none: boolean,
+};
+
+/**
+ *  A chat that started: its session, and the one line to say if charter wired its profile
+ *  on the way.
+ */
+export type Started = {
+	session: number,
+	wired: string | null,
 };
 
 /**
