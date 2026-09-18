@@ -16,7 +16,9 @@ import { built, copyFixturePlane, declareAProfile, writeReportingShell } from ".
 // is about.
 const plane = copyFixturePlane();
 const harness = writeReportingShell(built("fake-harness"), built("charter"));
-declareAProfile(plane, harness);
+// `codex`, because that is the kind this stand-in behaves like: it reports no pid and no
+// conversation id, which is exactly the rule Codex chats are judged by.
+declareAProfile(plane, harness, "codex");
 
 export const config: WebdriverIO.Config = {
   ...base,

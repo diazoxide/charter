@@ -60,14 +60,14 @@ export function writeReportingShell(fakeHarness: string, charter: string): strin
       "#!/bin/sh",
       "# Written by the scenario tests: a harness that reports its own state through hooks.",
       "#",
-      "# It names its own process the way Claude Code does. Since M1.2 a chat's harness comes",
-      '# from its profile\'s declared KIND, so a chat on a `kind = "claude"` profile is judged',
-      "# by Claude Code's rule: a report is its harness speaking only if it carries a matching",
-      "# `CLAUDE_PID` (ADR 0024). A stand-in that never set one was adopted under the narrower",
-      "# pid-less rule while the app thought it was running a shell, and stopped being adopted",
-      "# the moment the app knew better.",
-      "CLAUDE_PID=$$",
-      "export CLAUDE_PID",
+      "# It reports no pid and no conversation id of its own, which is why the profile that",
+      "# runs it declares `kind = \"codex\"`. A chat's harness is known from its profile's",
+      "# declared kind since M1.2, and Claude Code's rule (ADR 0024) admits a report only if",
+      "# it carries a matching `CLAUDE_PID` AND names the conversation charter chose — which",
+      "# a shell script cannot do without implementing Claude Code's whole hook payload.",
+      "# Codex's rule is the narrow one this stand-in actually meets: the first report of a",
+      "# chat is adopted. Declaring it as the kind it BEHAVES like is honest; teaching it to",
+      "# impersonate a Claude Code would be a fixture testing itself.",
       "# The turn's rising edge, before a byte of output exists.",
       `${JSON.stringify(charter)} hook userpromptsubmit </dev/null`,
       `exec ${JSON.stringify(fakeHarness)} \\`,
@@ -139,7 +139,7 @@ export function copyFixturePlane(name = "daily"): string {
  * would make that test depend on running before every other spec — and the glob does not
  * promise that.
  */
-export function declareAProfile(plane: string, program: string): void {
+export function declareAProfile(plane: string, program: string, kind = "claude"): void {
   const wrapper = join(plane, "claude-stand-in");
   writeFileSync(
     wrapper,
@@ -174,11 +174,11 @@ export function declareAProfile(plane: string, program: string): void {
       'default = "scenario"',
       "",
       "[harness.scenario]",
-      'kind = "claude"',
+      `kind = ${JSON.stringify(kind)}`,
       `command = [${JSON.stringify(wrapper)}]`,
       "",
       "[harness.needs-approval]",
-      'kind = "claude"',
+      `kind = ${JSON.stringify(kind)}`,
       `command = [${JSON.stringify(wrapper)}]`,
       "",
     ].join("\n"),
