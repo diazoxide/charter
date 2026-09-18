@@ -1,0 +1,320 @@
+//! The app's side of the hook channel: what a chat is doing, and which one needs you.
+//!
+//! A hook writes one line on a socket this owns (`charter_core::hookwire`), which moves a
+//! chat on the board and, if a reader would see a difference, tells the window. There is no
+//! polling anywhere: the listener blocks on `accept`, and the window is pushed to.
+
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+use charter_core::hookwire::{Listener, Reading, Report};
+use charter_core::session::Exit;
+use charter_core::state::{Board, State};
+
+/// The event the window listens for. One chat, its state, whether it is asking for you.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub struct Moved {
+    pub session: u32,
+    pub state: String,
+    pub needs_you: bool,
+    /// Every chat asking for you, so the queue is never assembled from a series of events
+    /// the window might have missed one of.
+    pub queue: Vec<u32>,
+}
+
+/// The board, the socket, and the thread reading it — the app's whole side of the channel.
+pub struct Hooks {
+    /// Shared with the thread reading the socket: one board, so what the window is told and
+    /// what the window can ask for can never disagree.
+    board: Arc<Mutex<Board>>,
+    /// Kept so the socket lives as long as the app does; dropping it stops the reading.
+    _reading: Option<Reading>,
+    socket: Option<PathBuf>,
+}
+
+/// Where this app listens, and where containment of that path begins.
+///
+/// The two travel together because `Listener::bind` needs both: a link anywhere between them
+/// is refused, and the root is named rather than worked out — a walk from the root of the
+/// filesystem would refuse every path on macOS, where `/tmp` and `/var` are themselves links.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Where {
+    /// A directory the caller already trusts. Nothing above it is checked.
+    pub within: PathBuf,
+    pub socket: PathBuf,
+}
+
+/// Where this app listens for its sessions' hooks.
+///
+/// Beside the record M1.7 already writes (`.charter/app/`) when there is a plane, so
+/// everything the app keeps for a plane is in one place and an operator looking for it finds
+/// it. `Listener::bind` makes that directory 0700.
+///
+/// **There is always somewhere.** The channel belongs to the APP, not to the plane: a chat
+/// started outside a plane is still a chat, and it would be a strange rule that a harness can
+/// report what it is doing only when there happens to be a `charter.toml` above it. An
+/// earlier version answered `None` here, which quietly made every chat in such a run
+/// `unknown` — including every chat in the scenario tests, which is how it was found.
+///
+/// The fallback is keyed by the plane (or by nothing) so two apps do not land on one socket,
+/// and by the user so two accounts on one machine do not either. A path is handed to each
+/// session in its environment, so nothing ever has to guess it.
+pub fn socket_for(plane: Option<&Path>) -> Where {
+    if let Some(plane) = plane {
+        let beside_the_record = plane.join(".charter").join("app").join("hooks.sock");
+        // macOS allows 104 bytes for a unix socket path including the terminator
+        // (`sys/un.h`), Linux 108; the smaller is the one to hold to, since a plane is
+        // portable. A plane nested deeper than that is not a failure, just not somewhere the
+        // socket can live.
+        if beside_the_record.as_os_str().len() <= LONGEST_SOCKET_PATH {
+            // The plane is the root: it is the operator's own tree, and `.charter/app` below
+            // it is charter's own directory (charter-app#28 rules the same for the record
+            // that already lives there).
+            return Where {
+                within: plane.to_path_buf(),
+                socket: beside_the_record,
+            };
+        }
+    }
+    let within = private_dir();
+    let socket = within
+        .join(format!("charter-{}-{:016x}", whoami(), keyed_on(plane)))
+        .join("hooks.sock");
+    Where { within, socket }
+}
+
+/// Where a socket goes when it cannot go beside the plane.
+///
+/// `$XDG_RUNTIME_DIR` first: on Linux it is the standard per-user 0700 directory for exactly
+/// this, and the temp directory there is `/tmp`, which everyone can write to. macOS has no
+/// such variable and its `TMPDIR` is already a per-user 0700 directory.
+///
+/// Either way `Listener::bind` creates the socket's own directory with the mode set as it is
+/// made and refuses one it does not own, so this chooses a good neighbourhood rather than
+/// being the thing that keeps anyone out.
+fn private_dir() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute() && dir.is_dir())
+        .unwrap_or_else(std::env::temp_dir)
+}
+
+/// The longest a unix socket path may be, on the stricter of the two platforms charter builds
+/// for. One byte is left for the terminator.
+const LONGEST_SOCKET_PATH: usize = 103;
+
+/// Something short and stable that differs between users on one machine.
+///
+/// `TMPDIR` is already per-user on macOS and is not on Linux, so this is what keeps two
+/// accounts apart there. It is not a secret and is not relied on to be one — the directory's
+/// 0700 is what keeps others out.
+fn whoami() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("LOGNAME"))
+        .ok()
+        .filter(|user| {
+            user.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        })
+        .unwrap_or_else(|| "charter".to_owned())
+}
+
+/// A short, stable name for a plane — or for having none.
+fn keyed_on(plane: Option<&Path>) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    let bytes = plane.map_or(b"no plane".as_slice(), |plane| {
+        plane.as_os_str().as_encoded_bytes()
+    });
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+impl Hooks {
+    /// Nothing listening: every chat is `unknown`, which is what the spec says a harness with
+    /// no state hook shows. The app runs perfectly well like this.
+    pub fn deaf() -> Self {
+        Self {
+            board: Arc::new(Mutex::new(Board::new())),
+            _reading: None,
+            socket: None,
+        }
+    }
+
+    /// Listens on `socket`, handing each change to `moved`.
+    ///
+    /// A socket that cannot be opened is not worth refusing to start over: the app comes up
+    /// with every chat `unknown` and says so on stderr, which is a working app with one
+    /// feature missing rather than no app at all.
+    pub fn listening_on(
+        at: &Where,
+        moved: Box<dyn Fn(Moved) + Send + Sync + 'static>,
+    ) -> std::io::Result<Self> {
+        let listener = Listener::bind(&at.within, &at.socket)?;
+        let socket = listener.path().to_path_buf();
+        let board = Arc::new(Mutex::new(Board::new()));
+        let reading = listener.each({
+            let board = Arc::clone(&board);
+            Box::new(move |report| {
+                if let Some(what) = apply(&board, &report) {
+                    moved(what);
+                }
+            })
+        });
+        Ok(Self {
+            board,
+            _reading: Some(reading),
+            socket: Some(socket),
+        })
+    }
+
+    pub fn socket(&self) -> Option<&Path> {
+        self.socket.as_deref()
+    }
+
+    pub fn board(&self) -> MutexGuard<'_, Board> {
+        held_board(&self.board)
+    }
+
+    /// The board itself, for a caller that has to outlive this handle — the exit reporting,
+    /// which is armed before the app manages anything.
+    pub fn shared_board(&self) -> Arc<Mutex<Board>> {
+        Arc::clone(&self.board)
+    }
+
+    /// What the window is told when something other than a hook moves a chat: a chat opening
+    /// or closing, or a program that has died.
+    pub fn now(&self, session: u32) -> Moved {
+        now(&self.board, session)
+    }
+}
+
+/// What a reader sees for this chat right now.
+pub fn now(board: &Mutex<Board>, session: u32) -> Moved {
+    seen_by(&held_board(board), session)
+}
+
+/// The same, for a caller that is already holding the board.
+fn seen_by(board: &Board, session: u32) -> Moved {
+    let queue = board.needs_you();
+    Moved {
+        session,
+        state: word(board.state(session)),
+        needs_you: queue.contains(&session),
+        queue,
+    }
+}
+
+/// Applies one report, answering with what a reader would now see differently.
+///
+/// The answer is built under the SAME hold as the change. Reports arrive on a thread each, so
+/// dropping the lock in between let two of them interleave — mutate, mutate, read, read — and
+/// the window could then be sent the older of the two snapshots last and keep it until the
+/// next event. A review found it.
+fn apply(board: &Mutex<Board>, report: &Report) -> Option<Moved> {
+    let mut guard = held_board(board);
+    guard.reported(report).then(|| seen_by(&guard, report.chat))
+}
+
+/// The board, whether or not a thread panicked while holding it.
+///
+/// A poisoned board is one whose last change may not have finished; the state it holds is
+/// still the best answer there is, and refusing to draw anything at all would be worse.
+pub fn held_board(board: &Mutex<Board>) -> MutexGuard<'_, Board> {
+    board
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The word the window draws, which is the word the spec uses.
+pub fn word(state: State) -> String {
+    match state {
+        State::Unknown => "unknown",
+        State::Running => "running",
+        State::Waiting => "waiting",
+        State::Done => "done",
+        State::Failed => "failed",
+    }
+    .to_owned()
+}
+
+/// What an exit says about a chat: the code, or none for a program killed by a signal.
+pub fn code_of(exit: &Exit) -> Option<i32> {
+    match exit {
+        Exit::Code(code) => i32::try_from(*code).ok(),
+        // A signal leaves no code behind, and it is not a clean end.
+        Exit::Signal(_) => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_socket_sits_beside_the_record_the_app_already_writes() {
+        // `.charter/app/` is where M1.7 put `reopen.json`. One place for what the app keeps.
+        assert_eq!(
+            socket_for(Some(Path::new("/Users/o/plane"))).socket,
+            PathBuf::from("/Users/o/plane/.charter/app/hooks.sock")
+        );
+    }
+
+    #[test]
+    fn a_run_outside_any_plane_still_has_somewhere_to_listen() {
+        // The channel is the APP's, not the plane's. A chat started outside a plane is still
+        // a chat, and answering `unknown` for it because there is no `charter.toml` above it
+        // would be a strange rule — it is also how this was found: it made every chat in the
+        // scenario tests unknown.
+        let socket = socket_for(None).socket;
+
+        assert!(socket.starts_with(private_dir()));
+        assert!(socket.as_os_str().len() <= LONGEST_SOCKET_PATH);
+    }
+
+    #[test]
+    fn a_plane_too_deep_for_a_unix_socket_path_falls_back_instead_of_failing() {
+        // macOS allows 104 bytes for the whole path. A plane checked out under a long CI
+        // path, or a deeply nested workspace, would otherwise get no event channel at all —
+        // and the failure would look like hooks being broken rather than a path being long.
+        let deep = PathBuf::from("/Users/operator").join("a".repeat(120));
+
+        let socket = socket_for(Some(&deep)).socket;
+
+        assert!(
+            socket.as_os_str().len() <= LONGEST_SOCKET_PATH,
+            "{} is {} bytes",
+            socket.display(),
+            socket.as_os_str().len()
+        );
+        assert!(socket.starts_with(private_dir()));
+    }
+
+    #[test]
+    fn the_fallback_prefers_the_runtime_directory_where_the_platform_has_one() {
+        // On Linux the temp directory is `/tmp`, which everyone can write to; the standard
+        // per-user place for a socket is `$XDG_RUNTIME_DIR`. macOS names no such variable and
+        // its own temp directory is already per-user.
+        match std::env::var_os("XDG_RUNTIME_DIR") {
+            Some(runtime) => assert!(socket_for(None).socket.starts_with(runtime)),
+            None => assert!(socket_for(None).socket.starts_with(std::env::temp_dir())),
+        }
+    }
+
+    #[test]
+    fn two_deep_planes_do_not_share_one_socket() {
+        let one = PathBuf::from("/Users/operator").join("a".repeat(120));
+        let two = PathBuf::from("/Users/operator").join("b".repeat(120));
+
+        assert_ne!(socket_for(Some(&one)).socket, socket_for(Some(&two)).socket);
+    }
+
+    #[test]
+    fn a_plane_and_no_plane_do_not_share_one_socket() {
+        let deep = PathBuf::from("/Users/operator").join("a".repeat(120));
+
+        assert_ne!(socket_for(Some(&deep)).socket, socket_for(None).socket);
+    }
+}

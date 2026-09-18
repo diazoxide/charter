@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { Sidebar } from "./Sidebar";
+import { nothingKnown } from "./chatState";
 import type { OpenChat, Sidebar as SidebarModel } from "./bindings";
 
 afterEach(cleanup);
@@ -41,13 +42,13 @@ const names = () => screen.getAllByRole("tab").map((el) => el.textContent);
 
 describe("Sidebar", () => {
   it("lists every workspace on the plane", () => {
-    render(<Sidebar sidebar={model} focused="alpha" onFocus={() => {}} />);
+    render(<Sidebar states={nothingKnown} sidebar={model} focused="alpha" onFocus={() => {}} />);
 
     expect(names()).toEqual(["alpha", "beta"]);
   });
 
   it("shows each workspace's chats under it", () => {
-    render(<Sidebar sidebar={model} focused="alpha" onFocus={() => {}} />);
+    render(<Sidebar states={nothingKnown} sidebar={model} focused="alpha" onFocus={() => {}} />);
 
     const alpha = screen.getByTestId("workspace-alpha");
     expect(alpha).toHaveTextContent("ide.1");
@@ -56,7 +57,7 @@ describe("Sidebar", () => {
   });
 
   it("shows the focused workspace's todos and the persona a chat would adopt", () => {
-    render(<Sidebar sidebar={model} focused="alpha" onFocus={() => {}} />);
+    render(<Sidebar states={nothingKnown} sidebar={model} focused="alpha" onFocus={() => {}} />);
 
     const focused = screen.getByTestId("focused");
     expect(focused).toHaveTextContent("Review the rollout plan");
@@ -65,7 +66,7 @@ describe("Sidebar", () => {
   });
 
   it("shows only the focused workspace's todos, not another's", () => {
-    render(<Sidebar sidebar={model} focused="beta" onFocus={() => {}} />);
+    render(<Sidebar states={nothingKnown} sidebar={model} focused="beta" onFocus={() => {}} />);
 
     const focused = screen.getByTestId("focused");
     expect(focused).not.toHaveTextContent("Review the rollout plan");
@@ -86,18 +87,53 @@ describe("Sidebar", () => {
       ],
     };
 
-    render(<Sidebar sidebar={unset} focused="gamma" onFocus={() => {}} />);
+    render(<Sidebar states={nothingKnown} sidebar={unset} focused="gamma" onFocus={() => {}} />);
 
     expect(screen.getByTestId("workspace-gamma")).toHaveTextContent("No vision yet");
   });
 
   it("focuses the workspace that was clicked", async () => {
     const focused: string[] = [];
-    render(<Sidebar sidebar={model} focused="alpha" onFocus={(name) => focused.push(name)} />);
+    render(
+      <Sidebar
+        states={nothingKnown}
+        sidebar={model}
+        focused="alpha"
+        onFocus={(name) => focused.push(name)}
+      />,
+    );
 
     await userEvent.click(screen.getByRole("tab", { name: "beta" }));
 
     expect(focused).toEqual(["beta"]);
+  });
+
+  it("says what each chat is doing, beside the chat", () => {
+    // The sidebar is where a person looks to see which of fifty chats is which, so it is
+    // where the state has to be. It comes from the harness's own hooks and from nothing
+    // else (spec decision 3).
+    render(
+      <Sidebar
+        states={{ bySession: { 1: "running", 2: "waiting" }, needsYou: [2] }}
+        sidebar={model}
+        focused="alpha"
+        onFocus={() => {}}
+      />,
+    );
+
+    const alpha = within(screen.getByTestId("workspace-alpha"));
+    expect(alpha.getByRole("img", { name: "running" })).toBeInTheDocument();
+    expect(alpha.getByRole("img", { name: "waiting on you" })).toBeInTheDocument();
+  });
+
+  it("says a chat whose harness reports nothing is unknown, rather than saying nothing", () => {
+    // A harness with no state hook shows `unknown`, LABELLED as unknown — the spec's own
+    // words. A blank space would read as "nothing is happening", which charter cannot know.
+    render(<Sidebar states={nothingKnown} sidebar={model} focused="alpha" onFocus={() => {}} />);
+
+    expect(
+      within(screen.getByTestId("workspace-alpha")).getAllByRole("img", { name: "unknown" }),
+    ).toHaveLength(2);
   });
 
   it("shows a chat working outside every workspace rather than dropping it", () => {
@@ -106,7 +142,7 @@ describe("Sidebar", () => {
       unfiled: [chat(9, "stray.1", "/tmp")],
     };
 
-    render(<Sidebar sidebar={stray} focused="alpha" onFocus={() => {}} />);
+    render(<Sidebar states={nothingKnown} sidebar={stray} focused="alpha" onFocus={() => {}} />);
 
     expect(screen.getByTestId("unfiled")).toHaveTextContent("stray.1");
   });

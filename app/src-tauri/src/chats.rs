@@ -16,7 +16,9 @@ use charter_core::engine::Size;
 use charter_core::harness::Harness;
 use charter_core::reopen::{Chat, Record, Reopened};
 
-use crate::sessions::{Opening, Sessions};
+use charter_core::harness::StateHooks;
+
+use crate::sessions::{Opening, Reporting, Sessions};
 
 /// One chat the app has open, as the UI and the quit warning see it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,9 +46,20 @@ const MOST_AT_ONCE: usize = 200;
 /// plane — and so a test can see exactly when a write would happen.
 pub type Recorder = Box<dyn Fn(&Record) + Send + Sync>;
 
+/// Told as each chat starts, BEFORE its program does: its number, the harness it runs and the
+/// conversation charter chose for it. Everything the board needs to judge a report about it.
+pub type Starting = Box<dyn Fn(u32, Option<Harness>, Option<String>) + Send + Sync>;
+
 /// Every chat the app has open, and which of them is in front.
 pub struct Chats {
     sessions: Sessions,
+    /// Told as each chat starts, before its program does.
+    starting: Mutex<Option<Starting>>,
+    /// Told when a chat that was announced turned out not to start.
+    #[allow(clippy::type_complexity)]
+    never_started: Mutex<Option<Box<dyn Fn(u32) + Send + Sync>>>,
+    /// The `charter` binary a hook runs, when the app knows where its own is.
+    binary: Option<PathBuf>,
     open: Mutex<HashMap<u32, (Chat, Reopened)>>,
     front: Mutex<Option<u32>>,
     /// Chats a launch could not start, and why. They are kept because the record has to
@@ -70,8 +83,16 @@ impl Chats {
     /// or crashes, runs no exit handler. Writing as it goes means such an app comes back on
     /// the chats it had rather than on none.
     pub fn recorded_by(record_it: Recorder) -> Self {
+        Self::recorded_by_reporting_to(record_it, None)
+    }
+
+    /// The same, with sessions that report what their harness does to `reporting`'s socket.
+    pub fn recorded_by_reporting_to(record_it: Recorder, reporting: Option<Reporting>) -> Self {
         Self {
-            sessions: Sessions::new(),
+            sessions: Sessions::reporting_to(reporting),
+            starting: Mutex::new(None),
+            never_started: Mutex::new(None),
+            binary: None,
             open: Mutex::new(HashMap::new()),
             front: Mutex::new(None),
             would_not_start: Mutex::new(Vec::new()),
@@ -86,20 +107,99 @@ impl Chats {
         Self::recorded_by(Box::new(|_| {}))
     }
 
+    /// Calls `tell` as each chat starts, BEFORE its program does, with everything the board
+    /// needs in order to judge a report about it.
+    pub fn when_one_starts(&self, tell: Starting) {
+        *lock(&self.starting) = Some(tell);
+    }
+
+    /// Calls `tell` when a chat that was announced never started after all.
+    ///
+    /// The announcement has to come before the program, so a program that then fails to start
+    /// leaves the board holding a chat that does not exist. Nothing is misattributed — ids are
+    /// never reused — but it is one entry per failed start for the life of the app.
+    pub fn when_one_does_not_start(&self, tell: Box<dyn Fn(u32) + Send + Sync>) {
+        *lock(&self.never_started) = Some(tell);
+    }
+
     /// The sessions underneath, for everything that is about a terminal and not about a chat.
     pub fn sessions(&self) -> &Sessions {
         &self.sessions
     }
 
+    /// Where the `charter` binary a hook runs is, when the app knows.
+    ///
+    /// Its own executable, because the app and the binary ship together: the one on `PATH`
+    /// may be an older install, or the Python charter, and a hook pointed at either would be
+    /// answering a different program's idea of these events.
+    pub fn arming_with(&mut self, binary: Option<PathBuf>) {
+        self.binary = binary;
+    }
+
+    /// The arguments that arm this harness's state hooks on this session alone, if any.
+    fn state_hook_args(&self, harness: Option<Harness>) -> Vec<String> {
+        let (Some(harness), Some(binary)) = (harness, self.binary.as_ref()) else {
+            return Vec::new();
+        };
+        match harness.state_hooks(binary) {
+            StateHooks::ThisSessionOnly { args, .. } => args,
+            // Nothing is added to the command line, and nothing of the operator's is written
+            // behind their back. The chat shows `unknown` and the UI says why.
+            StateHooks::MachineWideOnly { .. } | StateHooks::None => Vec::new(),
+        }
+    }
+
+    /// Why this chat cannot report its state, where it cannot.
+    pub fn cannot_report(&self, harness: Option<Harness>) -> Option<&'static str> {
+        let binary = self.binary.as_ref()?;
+        match harness?.state_hooks(binary) {
+            StateHooks::MachineWideOnly { why } => Some(why),
+            StateHooks::ThisSessionOnly { .. } | StateHooks::None => None,
+        }
+    }
+
     /// Starts a chat, and remembers what it was started as.
     pub fn start(&self, chat: &Chat, size: Size) -> Result<u32, String> {
         let launch = chat.launch();
-        let session = self.sessions.open(&Opening {
-            program: Some(launch.program),
-            args: launch.args,
-            cwd: chat.cwd.as_ref().map(|cwd| cwd.display().to_string()),
-            size,
-        })?;
+        // Charter's own words first, and the state hooks before even those: a harness reads
+        // its settings before it reads anything else on the line, and a chat's own recorded
+        // arguments may end in a positional prompt that nothing may come after.
+        let mut args = self.state_hook_args(chat.harness());
+        args.extend(launch.args);
+        // What the chat will be, worked out before it starts, because the announcement below
+        // has to carry it: a harness fires `SessionStart` at its own exec, and a board that
+        // learned the chat's number afterwards would miss it.
+        let harness = chat.harness();
+        let conversation = launch.session.as_ref().map(ToString::to_string);
+        // What the announcement below said, so a start that fails can take it back.
+        let announced = std::sync::atomic::AtomicU32::new(0);
+        let session = self
+            .sessions
+            .open(
+                &Opening {
+                    program: Some(launch.program),
+                    args,
+                    cwd: chat.cwd.as_ref().map(|cwd| cwd.display().to_string()),
+                    size,
+                    env: Vec::new(),
+                },
+                &|session| {
+                    announced.store(session, std::sync::atomic::Ordering::SeqCst);
+                    if let Some(starting) = lock(&self.starting).as_ref() {
+                        starting(session, harness, conversation.clone());
+                    }
+                },
+            )
+            .inspect_err(|_| {
+                // The chat was announced and then did not start. Take it back, or the board holds
+                // one entry per failed start for the life of the app.
+                let announced = announced.load(std::sync::atomic::Ordering::SeqCst);
+                if announced > 0
+                    && let Some(gone) = lock(&self.never_started).as_ref()
+                {
+                    gone(announced);
+                }
+            })?;
         // Under the id it was actually given, not the one it was recorded with: a chat
         // started fresh is under an id the app just chose, and that is what has to be
         // written down for the next launch to resume it.
@@ -123,6 +223,11 @@ impl Chats {
         let closed = self.sessions.close(session);
         self.write_it_down();
         closed
+    }
+
+    /// Which chat is in front, or none.
+    pub fn front(&self) -> Option<u32> {
+        *lock(&self.front)
     }
 
     /// Says which chat is in front, so the record knows which one to bring back in front.
@@ -269,6 +374,194 @@ fn lock<T: ?Sized>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_chat_is_announced_before_its_program_starts() {
+        // A harness fires `SessionStart` at its own exec, so anything that learned the chat's
+        // number afterwards would miss it — and for a chat that is then idle, waiting for a
+        // first prompt, no second event ever comes. That is every chat of a relaunch.
+        //
+        // The order is the whole point: the announcement must land before the program can
+        // have run at all.
+        use std::sync::mpsc;
+
+        let chats = Chats::new();
+        let (tx, rx) = mpsc::channel();
+        chats.when_one_starts(Box::new(move |session, harness, conversation| {
+            let _ = tx.send((session, harness, conversation));
+        }));
+
+        let session = chats
+            .start(
+                &Chat {
+                    // A program that prints and stops at once: by the time `start` returns it
+                    // may already be gone, so an announcement made afterwards could be too
+                    // late even in this test.
+                    program: "/bin/echo".to_owned(),
+                    args: vec!["hello".to_owned()],
+                    cwd: None,
+                    name: "ide.7".to_owned(),
+                    resume: None,
+                    active: false,
+                },
+                Size {
+                    columns: 80,
+                    rows: 24,
+                },
+            )
+            .expect("the chat starts");
+
+        assert_eq!(
+            rx.recv_timeout(std::time::Duration::from_secs(5)),
+            Ok((session, None, None)),
+            "the board was not told about the chat"
+        );
+    }
+
+    #[test]
+    fn a_chat_is_announced_before_its_program_could_have_run_a_single_byte() {
+        // **The ORDER is the fix, and a surviving mutant proved the first test does not check
+        // it**: moving the announcement after the spawn still delivers it, so the defect
+        // could come back silently. Checking what the app had bookkept was no better — that
+        // happens after the spawn either way.
+        //
+        // So the announcement WAITS, briefly, for something only a running program could
+        // make. A program that has not been started cannot make it however long we wait; one
+        // that has makes it in milliseconds. The wait is what turns an ordering into
+        // something a test can see.
+        use std::sync::{Arc, Mutex};
+
+        let dir = tempfile::tempdir().expect("a directory");
+        let mark = dir.path().join("the-program-ran");
+        let seen = Arc::new(Mutex::new(None));
+
+        let chats = Chats::new();
+        chats.when_one_starts({
+            let mark = mark.clone();
+            let seen = Arc::clone(&seen);
+            Box::new(move |_, _, _| {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_millis(750);
+                while std::time::Instant::now() < deadline && !mark.exists() {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                *seen.lock().expect("not poisoned") = Some(mark.exists());
+            })
+        });
+
+        chats
+            .start(
+                &Chat {
+                    program: "/bin/sh".to_owned(),
+                    args: vec![
+                        "-c".to_owned(),
+                        format!("touch {}; sleep 30", mark.display()),
+                    ],
+                    cwd: None,
+                    name: "ide.7".to_owned(),
+                    resume: None,
+                    active: false,
+                },
+                Size {
+                    columns: 80,
+                    rows: 24,
+                },
+            )
+            .expect("the chat starts");
+
+        assert_eq!(
+            *seen.lock().expect("not poisoned"),
+            Some(false),
+            "the program had already run when the board was told about its chat"
+        );
+    }
+
+    #[test]
+    fn a_chat_that_was_announced_and_then_did_not_start_is_taken_back() {
+        // The announcement must come before the program, so it can be about a chat that never
+        // happens. Without taking it back, the board holds one entry per failed start for the
+        // life of the app.
+        use std::sync::{Arc, Mutex};
+
+        let chats = Chats::new();
+        let announced = Arc::new(Mutex::new(Vec::new()));
+        let taken_back = Arc::new(Mutex::new(Vec::new()));
+        chats.when_one_starts({
+            let announced = Arc::clone(&announced);
+            Box::new(move |session, _, _| announced.lock().expect("not poisoned").push(session))
+        });
+        chats.when_one_does_not_start({
+            let taken_back = Arc::clone(&taken_back);
+            Box::new(move |session| taken_back.lock().expect("not poisoned").push(session))
+        });
+
+        let refused = chats.start(
+            &Chat {
+                program: "/no/such/program/anywhere".to_owned(),
+                args: Vec::new(),
+                cwd: None,
+                name: "ide.7".to_owned(),
+                resume: None,
+                active: false,
+            },
+            Size {
+                columns: 80,
+                rows: 24,
+            },
+        );
+
+        assert!(refused.is_err(), "a program that is not there started");
+        let announced = announced.lock().expect("not poisoned").clone();
+        assert_eq!(announced.len(), 1, "it was never announced");
+        assert_eq!(*taken_back.lock().expect("not poisoned"), announced);
+    }
+
+    #[test]
+    fn a_chat_is_announced_with_the_harness_and_conversation_it_was_started_under() {
+        // What the board needs in order to judge a report: which rulebook, and which
+        // conversation charter chose. A `claude` nested in the chat's shell reports a
+        // different one, and that is the whole of what keeps it out (ADR 0024, C5).
+        use std::sync::mpsc;
+
+        let chats = Chats::new();
+        let (tx, rx) = mpsc::channel();
+        chats.when_one_starts(Box::new(move |session, harness, conversation| {
+            let _ = tx.send((session, harness, conversation));
+        }));
+
+        // `/bin/echo` named `claude` is what `Harness::of_command` reads, and it is the file
+        // name that decides — so this is a Claude Code chat as far as the app is concerned.
+        let dir = tempfile::tempdir().expect("a directory");
+        let claude = dir.path().join("claude");
+        std::fs::copy("/bin/echo", &claude).expect("a program named claude");
+
+        chats
+            .start(
+                &Chat {
+                    program: claude.display().to_string(),
+                    args: Vec::new(),
+                    cwd: None,
+                    name: "ide.7".to_owned(),
+                    resume: None,
+                    active: false,
+                },
+                Size {
+                    columns: 80,
+                    rows: 24,
+                },
+            )
+            .expect("the chat starts");
+
+        let (_, harness, conversation) = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("the board was told");
+        assert_eq!(harness, Some(Harness::ClaudeCode));
+        // Charter chooses Claude Code's id at the start, so the board has it before the
+        // harness has said anything.
+        assert!(
+            conversation.is_some(),
+            "the chosen conversation was not passed on"
+        );
+    }
     use charter_core::harness::SessionId;
     use charter_core::reopen::Fresh;
 

@@ -51,6 +51,7 @@ function core(): { asked: { cmd: string; args: unknown }[] } {
     if (cmd === "plane_sidebar") return SIDEBAR;
     if (cmd === "running_sessions") return [];
     if (cmd === "opened_chats") return [];
+    if (cmd === "chat_states") return [];
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "open_session") return ++opened;
     return null;
@@ -64,7 +65,9 @@ const panes = () => screen.getAllByTestId("pane").map((pane) => pane.textContent
 const tabs = () =>
   within(screen.getByRole("tablist", { name: "Tabs" }))
     .getAllByRole("tab")
-    .map((tab) => tab.textContent);
+    // The NAME a tab carries, not everything drawn in it: a tab also says what its chat is
+    // doing, and these tests are about which tabs exist.
+    .map((tab) => tab.querySelector(".tab-name")?.textContent);
 
 describe("App", () => {
   it("shows the plane the core found", async () => {
@@ -216,6 +219,7 @@ describe("App", () => {
       if (cmd === "plane_sidebar") return SIDEBAR;
       if (cmd === "running_sessions") return [];
       if (cmd === "opened_chats") return [];
+      if (cmd === "chat_states") return [];
       if (cmd === "chats_that_would_not_start") return [];
       if (cmd !== "open_session") return null;
       if (++opened === 1) return 1;
@@ -244,6 +248,7 @@ describe("App", () => {
       if (cmd === "plane_sidebar") return SIDEBAR;
       if (cmd === "running_sessions") return [];
       if (cmd === "opened_chats") return [];
+      if (cmd === "chat_states") return [];
       if (cmd === "chats_that_would_not_start") return [];
       throw new Error('could not start "zsh": no such file or directory');
     });

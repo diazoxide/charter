@@ -5,6 +5,12 @@ import { built, copyFixturePlane, writeShell } from "./harness.js";
  * The scenario tests: WebdriverIO driving the real app, with the fake harness standing in for
  * Claude Code or Codex.
  *
+ * A build made with `src-tauri/tauri.e2e.conf.json` has its OWN app identifier, so the
+ * single-instance plugin does not confuse it with a charter the operator happens to be
+ * running. Sharing one made a dev app silently break every scenario run: the app under test
+ * handed itself off to the other one and exited 0, and the service reported only "the app
+ * likely crashed during startup".
+ *
  * The app is driven through the WebDriver server inside it (`driverProvider: "embedded"`,
  * the service's default), which is the only path that works on macOS as well as Linux — see
  * the service's ADR 0002. Both plugins are behind the app's `e2e` cargo feature.
@@ -16,7 +22,10 @@ const plane = copyFixturePlane();
 
 export const config: WebdriverIO.Config = {
   runner: "local",
+  // The state specs run separately, against a harness that reports through hooks
+  // (`wdio.state.conf.ts`): the app reads `SHELL` once, and one run is one harness.
   specs: ["./specs/**/*.e2e.ts"],
+  exclude: ["./specs/**/*.state.e2e.ts"],
   maxInstances: 1,
   framework: "mocha",
   reporters: ["spec"],

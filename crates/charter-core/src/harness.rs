@@ -170,6 +170,120 @@ impl Harness {
     }
 }
 
+/// What a harness can tell charter about its own state, and how it is asked to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StateHooks {
+    /// Armed on this session alone, by the arguments given.
+    ///
+    /// Nothing outside this session is changed, and the harness's own configuration — the
+    /// charter plugin's guard included — is untouched.
+    ThisSessionOnly {
+        args: Vec<String>,
+        /// Events it cannot report, by the word `charter hook` takes. Empty is the whole set.
+        cannot_report: Vec<&'static str>,
+    },
+    /// The harness has state hooks, but they cannot be armed for one session: its
+    /// configuration is machine-wide. Says so, so the UI can offer to arm them rather than
+    /// showing a chat as `unknown` with no reason.
+    MachineWideOnly { why: &'static str },
+    /// Charter has not measured how this program reports anything, or it is not a harness.
+    None,
+}
+
+impl Harness {
+    /// How this harness is asked to report its state, with `charter` at `binary`.
+    pub fn state_hooks(self, binary: &std::path::Path) -> StateHooks {
+        match self {
+            // `--settings` MERGES with the settings files already in force rather than
+            // replacing them — measured on claude 2.1.276 by planting a project hook beside
+            // one of these and watching both fire. That is what makes this safe: the charter
+            // plugin's guard hooks keep running exactly as they were.
+            Self::ClaudeCode => StateHooks::ThisSessionOnly {
+                args: words(["--settings", &claude_code_settings(binary)]),
+                cannot_report: Vec::new(),
+            },
+            // codex-cli 0.147.0's hook events, read from the draft-07 schema embedded in the
+            // binary (`charter/harness/codex.py`): PreToolUse, PermissionRequest, PostToolUse,
+            // PreCompact, PostCompact, SessionStart, SessionEnd, UserPromptSubmit,
+            // SubagentStart, SubagentStop, Stop. **There is no Notification**, so a Codex chat
+            // can say it is running and it is done, and can never say it is waiting on you.
+            //
+            // And there is nowhere to put them for one session: a `.codex/config.toml` beside
+            // a project is ignored, so `~/.codex/config.toml` is the only answer and it is
+            // machine-wide. A hook written there is inert until Codex trusts it by hash.
+            Self::Codex => StateHooks::MachineWideOnly {
+                why: "Codex reads no per-project configuration, so its hooks live in \
+                      ~/.codex/config.toml, which every workspace on this machine shares — \
+                      and a hook written there is inert until Codex trusts it. Codex also \
+                      fires no Notification event, so a Codex chat can never say it is \
+                      waiting on you.",
+            },
+        }
+    }
+}
+
+/// The settings that arm Claude Code's state hooks on one session, as JSON on the argument.
+///
+/// On the argument and not in a file: a file would have to be written somewhere, cleaned up
+/// when the chat ends, and cleaned up again after an app that crashed. What is in it is a
+/// path and six event names — nothing secret, so `ps` showing it costs nothing.
+fn claude_code_settings(binary: &std::path::Path) -> String {
+    let command = serde_json::Value::String(binary.display().to_string());
+    let hooks: serde_json::Map<String, serde_json::Value> = CLAUDE_CODE_STATE_EVENTS
+        .iter()
+        .map(|(event, word)| {
+            (
+                (*event).to_owned(),
+                serde_json::json!([{
+                    "hooks": [{
+                        "type": "command",
+                        // Two arguments, no shell: the command is a path charter knows and a
+                        // word from the list below. Nothing here is composed from anything a
+                        // harness, a plane or an operator wrote.
+                        "command": format!("{} hook {word}", shell_quoted(&command)),
+                        // Far more than the 1.8 ms this call was measured at, and far less
+                        // than a turn. A hook that somehow hung must not hold the turn open.
+                        "timeout": 5,
+                    }],
+                }]),
+            )
+        })
+        .collect();
+    serde_json::Value::Object(
+        [("hooks".to_owned(), serde_json::Value::Object(hooks))]
+            .into_iter()
+            .collect(),
+    )
+    .to_string()
+}
+
+/// Claude Code's state-carrying events, and the word `charter hook` takes for each.
+///
+/// Measured live on claude 2.1.276 rather than read from documentation: `SessionStart`,
+/// `UserPromptSubmit`, `Stop` and `SessionEnd` were each seen to fire with a `session_id`
+/// matching `$CLAUDE_CODE_SESSION_ID`. `Notification` and `SubagentStop` did not fire in a
+/// one-turn `-p` run — nothing asked for a human, and nothing dispatched a sub-agent — and
+/// are armed on the harness's documented names.
+const CLAUDE_CODE_STATE_EVENTS: &[(&str, &str)] = &[
+    ("SessionStart", "sessionstart"),
+    ("UserPromptSubmit", "userpromptsubmit"),
+    ("Notification", "notification"),
+    ("SubagentStop", "subagentstop"),
+    ("Stop", "stop"),
+    ("SessionEnd", "sessionend"),
+];
+
+/// A path as one word a shell cannot take apart.
+///
+/// Claude Code runs a hook's `command` through `/bin/sh -c` (ADR 0024 measured the shells in
+/// between), so the path to the binary goes in single quotes. It is charter's own executable
+/// path and not anything a plane wrote, but a person with a quote in their home directory
+/// name is not a security model.
+fn shell_quoted(path: &serde_json::Value) -> String {
+    let path = path.as_str().unwrap_or_default();
+    format!("'{}'", path.replace('\'', r"'\''"))
+}
+
 fn words<const N: usize>(argv: [&str; N]) -> Vec<String> {
     argv.map(str::to_owned).to_vec()
 }
@@ -338,5 +452,104 @@ mod tests {
         // longest both implementations accept.
         assert!(SessionId::new("a".repeat(128)).is_ok());
         assert!(SessionId::new("a".repeat(129)).is_err());
+    }
+
+    #[test]
+    fn claude_code_state_hooks_are_armed_on_this_session_and_change_nothing_else() {
+        // `--settings` MERGES rather than replaces (measured on claude 2.1.276), which is the
+        // whole reason this is safe: the charter plugin's guard hooks keep running. If this
+        // ever became a replacement, arming state here would silently disarm the guard.
+        let hooks = Harness::ClaudeCode.state_hooks(std::path::Path::new("/usr/local/bin/charter"));
+
+        let StateHooks::ThisSessionOnly {
+            args,
+            cannot_report,
+        } = hooks
+        else {
+            panic!("Claude Code's hooks are armed per session");
+        };
+        assert_eq!(args[0], "--settings");
+        assert!(cannot_report.is_empty(), "{cannot_report:?}");
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&args[1]).expect("the settings are JSON");
+        let armed = settings["hooks"].as_object().expect("an object");
+        assert_eq!(armed.len(), 6);
+        for event in [
+            "SessionStart",
+            "UserPromptSubmit",
+            "Notification",
+            "SubagentStop",
+            "Stop",
+            "SessionEnd",
+        ] {
+            assert_eq!(
+                armed[event][0]["hooks"][0]["command"],
+                serde_json::json!(format!(
+                    "'/usr/local/bin/charter' hook {}",
+                    event.to_lowercase()
+                )),
+                "{event} is not armed"
+            );
+            // Far more than the 1.8 ms this call was measured at, and far less than a turn:
+            // a hook that somehow hung must not be able to hold the turn open behind it.
+            assert_eq!(
+                armed[event][0]["hooks"][0]["timeout"],
+                serde_json::json!(5),
+                "{event}'s hook is armed with no short deadline"
+            );
+        }
+    }
+
+    #[test]
+    fn no_guard_hook_is_ever_armed_by_the_app() {
+        // The guard is the Python charter's, it is security-critical, and it is not this
+        // milestone's to answer. Arming one here would run a Rust hook that decides less
+        // than the guard does in front of every tool call.
+        let hooks = Harness::ClaudeCode.state_hooks(std::path::Path::new("/bin/charter"));
+        let StateHooks::ThisSessionOnly { args, .. } = hooks else {
+            panic!("armed per session");
+        };
+
+        for guarded in [
+            "PreToolUse",
+            "PostToolUse",
+            "PermissionRequest",
+            "pretooluse",
+        ] {
+            assert!(
+                !args[1].contains(guarded),
+                "{guarded} appears in the settings the app arms"
+            );
+        }
+    }
+
+    #[test]
+    fn a_path_with_a_quote_in_it_cannot_break_out_of_the_hook_command() {
+        // Claude Code runs the command through `/bin/sh -c`.
+        let hooks = Harness::ClaudeCode.state_hooks(std::path::Path::new("/home/o'brien/charter"));
+        let StateHooks::ThisSessionOnly { args, .. } = hooks else {
+            panic!("armed per session");
+        };
+        let settings: serde_json::Value = serde_json::from_str(&args[1]).expect("JSON");
+
+        assert_eq!(
+            settings["hooks"]["Stop"][0]["hooks"][0]["command"],
+            serde_json::json!(r"'/home/o'\''brien/charter' hook stop")
+        );
+    }
+
+    #[test]
+    fn codex_says_why_its_state_hooks_cannot_be_armed_here() {
+        // codex-cli 0.147.0: no project-level config exists at all, and no Notification
+        // event exists either. A Codex chat that showed `unknown` with no reason would look
+        // like charter was broken rather than like Codex is different.
+        let hooks = Harness::Codex.state_hooks(std::path::Path::new("/bin/charter"));
+
+        let StateHooks::MachineWideOnly { why } = hooks else {
+            panic!("Codex has no per-session answer");
+        };
+        assert!(why.contains("~/.codex/config.toml"));
+        assert!(why.contains("Notification"));
     }
 }

@@ -1,4 +1,6 @@
 import type { OpenChat, Sidebar as SidebarModel } from "./bindings";
+import { ChatState } from "./NeedsYou";
+import { type ChatStates, stateOf } from "./chatState";
 
 /** The left-hand side: every workspace with its chats, and the focused one's todos.
  *
@@ -8,10 +10,13 @@ import type { OpenChat, Sidebar as SidebarModel } from "./bindings";
  *  workspace is shown rather than dropped. */
 export function Sidebar({
   sidebar,
+  states,
   focused,
   onFocus,
 }: {
   sidebar: SidebarModel;
+  /** What each chat is doing, from its harness's own hooks (spec decision 3). */
+  states: ChatStates;
   focused: string | undefined;
   onFocus: (workspace: string) => void;
 }) {
@@ -31,7 +36,7 @@ export function Sidebar({
               <ul className="chats">
                 {ws.chats.map((chat) => (
                   <li key={chat.session}>
-                    <ChatRow chat={chat} />
+                    <ChatRow chat={chat} states={states} />
                   </li>
                 ))}
               </ul>
@@ -46,7 +51,7 @@ export function Sidebar({
           <ul>
             {sidebar.unfiled.map((chat) => (
               <li key={chat.session}>
-                <ChatRow chat={chat} />
+                <ChatRow chat={chat} states={states} />
               </li>
             ))}
           </ul>
@@ -74,10 +79,14 @@ export function Sidebar({
  *
  *  The same `OpenChat` the quit warning lists and the record brings back — one model of a
  *  chat, not a second derived from the sessions. */
-function ChatRow({ chat }: { chat: OpenChat }) {
+function ChatRow({ chat, states }: { chat: OpenChat; states: ChatStates }) {
   return (
     <>
       <span className="session">{chat.name}</span>
+      {/* What it is doing, from its own harness's hooks. A chat whose harness reports none
+          reads `unknown`, which is what the spec says it should (decision 3) — the word is
+          the mark's accessible name, so it is never colour alone. */}
+      <ChatState state={stateOf(states, chat.session)} />
       {chat.harness && <span className="harness"> · {chat.harness}</span>}
       {chat.cwd && <code className="cwd">{chat.cwd}</code>}
     </>

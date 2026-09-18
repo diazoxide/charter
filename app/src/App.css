@@ -277,3 +277,59 @@ body {
   border-color: var(--stop);
   color: var(--stop);
 }
+
+/* What a chat is doing. A mark, plus a shape per state: colour alone is no state at all to
+   anyone who cannot see it, and the accessible name carries the word either way. */
+.state {
+  display: inline-block;
+  width: 0.6rem;
+  height: 0.6rem;
+  margin-inline-start: 0.4rem;
+  border-radius: 50%;
+  vertical-align: middle;
+  flex: none;
+}
+.state-unknown {
+  border: 1px dashed currentcolor;
+  opacity: 0.5;
+  background: none;
+}
+.state-running {
+  background: #2f81f7;
+}
+.state-waiting {
+  background: #d29922;
+  /* A ring, so waiting is told from running without colour. */
+  box-shadow: 0 0 0 2px rgb(210 153 34 / 35%);
+}
+.state-done {
+  background: none;
+  border: 1px solid currentcolor;
+  opacity: 0.45;
+}
+.state-failed {
+  background: #f85149;
+  border-radius: 2px;
+}
+
+.needs-you {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.needs-you ul {
+  display: flex;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.needs-you-count {
+  font-weight: 600;
+}
+.needs-you-empty {
+  opacity: 0.55;
+}
+.mid-turn {
+  font-weight: 600;
+}
