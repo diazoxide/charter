@@ -80,13 +80,17 @@ function App() {
   // Something asked the app to quit: the menu, the tray, or Cmd-Q. The answer is the
   // operator's, and it is given here because this is where what would be ended is known.
   useEffect(() => {
+    // The catch is attached here and not in the cleanup: a window that cannot listen is
+    // still a window, and a rejection nothing is holding yet is an unhandled one.
     const listening = listen("quit-asked", () => {
       // Nothing to end is nothing to warn about. A dialog listing no sessions would be a
       // dialog in the way of quitting.
-      if (now.current.order.length === 0) void commands.quit();
+      if (now.current.order.length === 0) void commands.quit().catch(() => undefined);
       else setAsking(true);
-    });
-    return () => void listening.then((stop) => stop()).catch(() => undefined);
+    }).catch(() => undefined);
+    // Unlistening can fail too — the window may be going away under it — and a cleanup
+    // that throws into nothing is an unhandled rejection, not a diagnosis.
+    return () => void listening.then((stop) => stop?.()).catch(() => undefined);
   }, []);
 
   // Cold start ends when a person can see the window, which is the frame after the one this
@@ -142,7 +146,7 @@ function App() {
 
   const quit = useCallback(() => {
     setAsking(false);
-    void commands.quit();
+    void commands.quit().catch(() => undefined);
   }, []);
 
   /** Not now: the core is told, so the next ask warns again instead of quitting outright. */

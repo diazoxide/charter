@@ -331,7 +331,6 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            lifecycle::tray(app.handle())?;
             app.manage(Quitting::default());
 
             let plane = std::env::current_dir()
@@ -356,6 +355,15 @@ pub fn run() {
             }
             app.manage(chats);
             app.manage(Plane(plane));
+
+            // Last, and never fatal. A tray is somewhere to put the window; the sessions
+            // are the work. A desktop with no system tray at all — some Linux sessions, and
+            // any headless one — must still get its chats back, so a tray that cannot be
+            // built is reported and the app carries on without one. Quit still lives in the
+            // menu, and closing the window still hides it.
+            if let Err(why) = lifecycle::tray(app.handle()) {
+                eprintln!("charter: no tray icon ({why}); the window is reached from the dock");
+            }
             Ok(())
         })
         .build(tauri::generate_context!())

@@ -100,6 +100,8 @@ const plane = aPlane();
 const argvFile = join(plane, "argv.txt");
 const claude = aClaude(plane, argvFile);
 const record = join(plane, ".charter", "app", "reopen.json");
+/** The stamp the test writes, which the app's own write has to move past. */
+const STAMPED = Math.floor(Date.now() / 1000) - 60;
 
 // A record as the app itself writes one, holding one chat under a conversation.
 mkdirSync(join(plane, ".charter", "app"), { recursive: true });
@@ -108,7 +110,7 @@ writeFileSync(
   JSON.stringify(
     {
       version: 1,
-      at: Math.floor(Date.now() / 1000),
+      at: STAMPED,
       chats: [
         {
           program: claude,
@@ -128,7 +130,7 @@ writeFileSync(
 console.log(`a plane at ${plane}`);
 
 const first = await theAppRuns(plane, () => argvSeen(argvFile).length >= 1);
-check("the app starts the chat its record holds", first.ok, first.ok ? "" : first.output.slice(-400));
+check("the app starts the chat its record holds", first.ok, first.ok ? "" : `the app said:\n${first.output}`);
 const started = argvSeen(argvFile);
 check(
   "it is started as a resume of the conversation that was recorded",
@@ -141,9 +143,15 @@ check(
   `it was given: ${JSON.stringify(started[0] ?? "")}`,
 );
 
-// What the app wrote for itself, which is what the next launch has to read.
+// What the app wrote for itself, which is what the next launch has to read. The test wrote
+// this file too, so the only honest evidence that the APP wrote it is that its own stamp
+// moved: checking the chat is still there would pass without the app running at all.
 const written = JSON.parse(readFileSync(record, "utf8"));
-check("the app wrote the record itself, without being quit", written.chats?.length === 1);
+check(
+  "the app wrote the record itself, without being quit",
+  written.at > STAMPED,
+  `the record is stamped ${written.at}, the test wrote ${STAMPED}`,
+);
 check(
   "and kept the conversation, so the chat can be resumed again",
   written.chats?.[0]?.resume === CONVERSATION,
@@ -152,7 +160,7 @@ check(
 
 // The second launch reads what the first one wrote, not what this script hand-wrote.
 const second = await theAppRuns(plane, () => argvSeen(argvFile).length >= 2);
-check("a second launch brings the chat back again", second.ok, second.ok ? "" : second.output.slice(-400));
+check("a second launch brings the chat back again", second.ok, second.ok ? "" : `the app said:\n${second.output}`);
 check(
   "still as a resume of the same conversation",
   argvSeen(argvFile)[1]?.includes(`--resume ${CONVERSATION}`),
