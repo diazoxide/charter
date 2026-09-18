@@ -34,4 +34,4 @@ tempfile.workspace = true
 workspace = true
 
 [target."cfg(unix)".dependencies]
-rustix = { version = "1", features = ["process"] }
+rustix = { version = "1", features = ["fs", "process"] }

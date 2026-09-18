@@ -16,4 +16,5 @@ pub mod reopen;
 pub mod session;
 pub mod shown;
 pub mod state;
+pub mod wiring;
 pub mod workspaces;

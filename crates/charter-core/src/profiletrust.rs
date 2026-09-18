@@ -192,3 +192,49 @@ fn write_private(target: &Path, bytes: &[u8]) -> io::Result<()> {
     }
     result
 }
+
+/// Why a profile is being asked about before its command runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Approval {
+    /// Nothing has recorded this profile.
+    New,
+    /// It was recorded, and what it runs is not what was recorded.
+    Changed,
+}
+
+impl Approval {
+    /// The word a refusal or a prompt says, as the Python charter says it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::New => "new",
+            Self::Changed => "changed",
+        }
+    }
+}
+
+/// What is recorded for `p`: its kind, its command and its environment, as DECLARED.
+pub fn fingerprint(p: &crate::profiles::Profile) -> Fingerprint {
+    Fingerprint {
+        kind: p.kind.clone(),
+        command: p.command.clone(),
+        env: p.env.iter().cloned().collect(),
+    }
+}
+
+/// Whether `p` must be shown and approved before its command runs, and why.
+///
+/// **A built-in never asks.** Its command comes out of charter's own registry rather than
+/// out of a file, so what a chat could have written decides nothing about it — and a
+/// question that never carries risk is one an operator learns to answer yes to without
+/// reading. A profile the file DECLARES with a built-in's name (`[harness.claude]`) is a
+/// declaration and asks with the rest: the name is the built-in's, the command is the file's.
+pub fn approval_needed(root: &Path, p: &crate::profiles::Profile) -> Option<Approval> {
+    if p.source == crate::profiles::Source::BuiltIn {
+        return None;
+    }
+    match last_launched(root, &p.name) {
+        None => Some(Approval::New),
+        Some(was) if was == fingerprint(p) => None,
+        Some(_) => Some(Approval::Changed),
+    }
+}
