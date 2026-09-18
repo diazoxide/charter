@@ -13,9 +13,12 @@ export const commands = {
 	firstFrame: () => __TAURI_INVOKE<void>("first_frame"),
 	/**  The plane the app was started in, or why there is none. */
 	planeRoot: () => typedError<string, string>(__TAURI_INVOKE("plane_root")),
-	/**  Starts a session. No program is the operator's shell. */
-	openSession: (program: string | null, args: string[], cwd: string | null, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("open_session", { program, args, cwd, columns, rows })),
-	/**  Ends a session and everything it started. */
+	/**
+	 *  Starts a session, and remembers it as a chat so a quit can write it down. No program is
+	 *  the operator's shell.
+	 */
+	openSession: (program: string | null, args: string[], cwd: string | null, name: string, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("open_session", { program, args, cwd, name, columns, rows })),
+	/**  Ends a session and everything it started. It is no longer a chat a quit would record. */
 	closeSession: (session: number) => typedError<null, string>(__TAURI_INVOKE("close_session", { session })),
 	/**  Sends what a pane typed to the session's program. */
 	sendInput: (session: number, text: string) => typedError<null, string>(__TAURI_INVOKE("send_input", { session, text })),
@@ -30,9 +33,41 @@ export const commands = {
 	unwatchSession: (session: number, view: number) => typedError<null, string>(__TAURI_INVOKE("unwatch_session", { session, view })),
 	/**  The sessions that are running, in the order they were opened. */
 	runningSessions: () => __TAURI_INVOKE<number[]>("running_sessions"),
+	/**
+	 *  The chats the app already has open — at a launch, the ones put back from the record.
+	 * 
+	 *  The window asks this instead of opening its own: putting the record back happens before
+	 *  there is a window, so that a relaunch does not depend on a webview having run.
+	 */
+	openedChats: () => __TAURI_INVOKE<OpenChat[]>("opened_chats"),
+	/**  Says which chat is in front, so the record brings that one back in front. */
+	chatInFront: (session: number | null) => __TAURI_INVOKE<void>("chat_in_front", { session }),
+	/**  The window's answer to being asked to quit: go. */
+	quit: () => __TAURI_INVOKE<void>("quit"),
+	/**  The window's answer to being asked to quit: not now. The next ask warns again. */
+	quitCancelled: () => __TAURI_INVOKE<void>("quit_cancelled"),
+	/**  Hides the window, which is what its close button does. Every session keeps running. */
+	hideWindow: () => __TAURI_INVOKE<void>("hide_window"),
+	/**  Whether the window is on screen. The scenario tests ask; nothing in the UI does. */
+	windowShowing: () => __TAURI_INVOKE<boolean>("window_showing"),
 };
 
 /* Types */
+/**  One chat the app has open, as the UI draws it and as the quit warning lists it. */
+export type OpenChat = {
+	session: number,
+	name: string,
+	cwd: string | null,
+	/**  The harness it runs, by the word the plane calls it — or none for a shell. */
+	harness: string | null,
+	/**  Whether it is the chat to show: at a launch, the one that was in front at the quit. */
+	in_front: boolean,
+	/**  The conversation it was resumed by, where it was. The UI says which happened. */
+	resumed: string | null,
+	/**  Why it is a new chat rather than the one it was, where it is. */
+	fresh: string | null,
+};
+
 /**
  *  A view a pane has open, and what its terminal has to match to show the session as it is:
  *  the size the screen was drawn for, so what was wrapped stays wrapped, and how much history

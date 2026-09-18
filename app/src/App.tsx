@@ -1,7 +1,9 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import "./App.css";
-import { commands } from "./bindings";
+import { commands, type OpenChat } from "./bindings";
+import { QuitWarning } from "./QuitWarning";
 import { SessionPane } from "./SessionPane";
 import {
   closeFocusedPane,
@@ -27,6 +29,10 @@ function App() {
   const [plane, setPlane] = useState<Plane>({ state: "loading" });
   const [tabs, setTabs] = useState<Tabs>(noTabs);
   const [trouble, setTrouble] = useState<string>();
+  /** The chats the core put back at this launch, so a pane can say which came back how. */
+  const [reopened, setReopened] = useState<OpenChat[]>([]);
+  /** Whether the operator is being asked about quitting. */
+  const [asking, setAsking] = useState(false);
 
   // The arrangement as it is right now, so that what a button does is decided here and not
   // inside a state update. React may run an update again, and a session must not be opened or
@@ -34,25 +40,53 @@ function App() {
   const now = useRef(tabs);
   const change = useCallback((how: (tabs: Tabs) => Tabs): Tabs => {
     const next = how(now.current);
+    const wasInFront = now.current.inFront;
     now.current = next;
     setTabs(next);
+    // The core records which chat was in front, so it is told whenever that changes — and
+    // only then, rather than on every split and every keystroke.
+    if (next.inFront !== wasInFront) {
+      const front = next.inFront === undefined ? undefined : next.byId[next.inFront];
+      const pane = front && panesOf(next, front.id)[0];
+      void commands.chatInFront(pane ? pane.session : null).catch(() => undefined);
+    }
     return next;
   }, []);
 
-  // A reload — during development, or after a crash in the window — leaves the core holding
-  // sessions no pane can reach. They are ended here, before any tab is opened, and once:
-  // React runs an effect twice in development, and ending a session twice is an error.
-  const swept = useRef(false);
+  // What the core already has open, which at a launch is the record put back before there
+  // was a window. The window draws them; it never ends them — a reload during development,
+  // or a crash in the window, would otherwise take the day's sessions with it.
+  //
+  // Once only: React runs an effect twice in development, and a second pass would draw
+  // every chat again.
+  const adopted = useRef(false);
   useEffect(() => {
-    if (swept.current) return;
-    swept.current = true;
+    if (adopted.current) return;
+    adopted.current = true;
     void commands
-      .runningSessions()
-      .then((left) => {
-        for (const session of left) void commands.closeSession(session);
+      .openedChats()
+      .then((open) => {
+        if (open.length === 0) return;
+        setReopened(open);
+        const drawn = open.reduce((tabs, chat) => openTab(tabs, chat.session, chat.name), noTabs());
+        const front = open.findIndex((chat) => chat.in_front);
+        change(() => (front < 0 ? drawn : selectTab(drawn, drawn.order[front])));
       })
-      // Nothing to sweep is the ordinary case, and a window that cannot ask is still usable.
+      // Nothing open is the ordinary first launch, and a window that cannot ask is still
+      // a window the operator can open a chat in.
       .catch(() => undefined);
+  }, [change]);
+
+  // Something asked the app to quit: the menu, the tray, or Cmd-Q. The answer is the
+  // operator's, and it is given here because this is where what would be ended is known.
+  useEffect(() => {
+    const listening = listen("quit-asked", () => {
+      // Nothing to end is nothing to warn about. A dialog listing no sessions would be a
+      // dialog in the way of quitting.
+      if (now.current.order.length === 0) void commands.quit();
+      else setAsking(true);
+    });
+    return () => void listening.then((stop) => stop()).catch(() => undefined);
   }, []);
 
   // Cold start ends when a person can see the window, which is the frame after the one this
@@ -86,10 +120,11 @@ function App() {
       .catch((err: unknown) => setPlane({ state: "missing", reason: String(err) }));
   }, []);
 
-  /** Starts a session for a new pane, or says why it could not start. */
-  const startSession = useCallback(async (): Promise<number | undefined> => {
+  /** Starts a session for a new pane, or says why it could not start. The name is what the
+   *  tab will be called, so the record brings the chat back under it. */
+  const startSession = useCallback(async (name: string): Promise<number | undefined> => {
     const opened = await commands
-      .openSession(null, [], null, STARTING_SIZE.columns, STARTING_SIZE.rows)
+      .openSession(null, [], null, name, STARTING_SIZE.columns, STARTING_SIZE.rows)
       .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
     if (opened.status === "error") {
       setTrouble(opened.error);
@@ -100,13 +135,29 @@ function App() {
   }, []);
 
   const newTab = useCallback(async () => {
-    const session = await startSession();
-    if (session !== undefined) change((tabs) => openTab(tabs, session));
+    const name = String(now.current.named.tabs + 1);
+    const session = await startSession(name);
+    if (session !== undefined) change((tabs) => openTab(tabs, session, name));
   }, [change, startSession]);
+
+  const quit = useCallback(() => {
+    setAsking(false);
+    void commands.quit();
+  }, []);
+
+  /** Not now: the core is told, so the next ask warns again instead of quitting outright. */
+  const dontQuit = useCallback(() => {
+    setAsking(false);
+    void commands.quitCancelled().catch(() => undefined);
+  }, []);
 
   const split = useCallback(
     async (direction: Direction) => {
-      const session = await startSession();
+      const name =
+        now.current.inFront === undefined
+          ? String(now.current.named.tabs + 1)
+          : now.current.byId[now.current.inFront].name;
+      const session = await startSession(name);
       if (session === undefined) return;
       const before = now.current;
       // The tab that was to be split can have closed while the session was starting. Nothing
@@ -136,11 +187,19 @@ function App() {
   );
 
   const inFront = tabs.inFront === undefined ? undefined : tabs.byId[tabs.inFront];
+  // The chats still open, in the order the tab bar shows them: what a quit would end.
+  const open = tabs.order.flatMap((id) =>
+    panesOf(tabs, id).map(({ session }) => chatOf(reopened, session, tabs.byId[id].name)),
+  );
+  const frontChat =
+    inFront && reopened.find((chat) => chat.session === panesOf(tabs, inFront.id)[0]?.session);
 
   return (
     <main className="window">
       <header className="bar">
-        <div className="tabs" role="tablist">
+        {/* Named, because the sidebar lists workspaces as a tablist too and a query for
+            `role="tab"` across the whole window would mix the two. */}
+        <div className="tabs" role="tablist" aria-label="Tabs">
           {tabs.order.map((id) => (
             <span className="tab" key={id}>
               <button
@@ -148,9 +207,9 @@ function App() {
                 aria-selected={id === tabs.inFront}
                 onClick={() => change((tabs) => selectTab(tabs, id))}
               >
-                {id}
+                {tabs.byId[id].name}
               </button>
-              <button aria-label={`Close tab ${id}`} onClick={() => close(id)}>
+              <button aria-label={`Close tab ${tabs.byId[id].name}`} onClick={() => close(id)}>
                 ×
               </button>
             </span>
@@ -180,6 +239,20 @@ function App() {
         </p>
       )}
 
+      {/* What happened to the chat in front when it was put back. Only a chat that came from
+          the record has either, so a chat the operator just opened says nothing. */}
+      {frontChat?.resumed && (
+        <p className="came-back">
+          <strong>{frontChat.name}</strong> was resumed — conversation{" "}
+          <code>{frontChat.resumed}</code>
+        </p>
+      )}
+      {frontChat?.fresh && (
+        <p className="came-back">
+          <strong>{frontChat.name}</strong> came back as a new chat: {frontChat.fresh}
+        </p>
+      )}
+
       <div className="panes">
         {inFront ? (
           <LayoutPanes
@@ -191,7 +264,25 @@ function App() {
           <p className="empty">No sessions. Open one with New tab.</p>
         )}
       </div>
+
+      {asking && <QuitWarning chats={open} onQuit={quit} onCancel={dontQuit} />}
     </main>
+  );
+}
+
+/** What the quit warning says about one session: what the core told us, or the little the
+ *  window knows about a chat the operator opened itself. */
+function chatOf(reopened: OpenChat[], session: number, name: string): OpenChat {
+  return (
+    reopened.find((chat) => chat.session === session) ?? {
+      session,
+      name,
+      cwd: null,
+      harness: null,
+      in_front: false,
+      resumed: null,
+      fresh: null,
+    }
   );
 }
 
