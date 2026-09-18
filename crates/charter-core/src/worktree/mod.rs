@@ -20,6 +20,10 @@ use confine::within_workspace;
 /// The directory under a workspace holding every clone's worktrees.
 pub const DIR_NAME: &str = ".worktrees";
 
+/// How a detached-HEAD base is written into the record, so it cannot be mistaken for a
+/// branch of that name.
+pub const DETACHED_PREFIX: &str = "detached:";
+
 /// The config key holding the branch a piece was cut from.
 fn base_key(branch: &str) -> String {
     format!("branch.{branch}.charterBase")
@@ -74,6 +78,19 @@ pub enum Refusal {
          remove. Check the worktree by hand, or discard with --force"
     )]
     DirtUnknown { piece: String },
+    #[error(
+        "could not determine whether '{piece}' holds commits that exist nowhere else — \
+         refusing to remove. Check the worktree by hand, or discard with --force"
+    )]
+    UniqueUnknown { piece: String },
+    #[error("could not read the state of '{what}' ({why}), so charter will not act on it")]
+    Unreadable { what: String, why: String },
+    #[error(
+        "'{branch}' was cut, but charter could not record the branch it came from ({why}), so \
+         `charter wt merge` would not know where to land it. The worktree is there; record it \
+         by hand: git -C <clone> config --replace-all branch.{branch}.charterBase <base>"
+    )]
+    BaseNotRecorded { branch: String, why: String },
     #[error(
         "'{piece}' has {count} commit(s) that exist nowhere else — refusing to remove. Push \
          the branch or merge it, or discard with --force"
@@ -132,8 +149,17 @@ fn relocation_refusal(plane: &Path) -> Result<(), Refusal> {
 
 /// The clone a piece is cut from, checked to be one.
 fn clone_dir(plane: &Path, ws: &str, repo: &str) -> Result<PathBuf, Refusal> {
+    // Checked here and not only in `path_for`: `list` and `clone_dir` are public entry
+    // points that never call it, and `repo` was being joined straight on — so
+    // `list(plane, ws, "../beta/repo")` ran git in another workspace's clone.
+    if !crate::contain::workspace_name_ok(ws) {
+        return Err(Refusal::BadWorkspace(ws.to_string()));
+    }
+    if !crate::contain::repo_name_ok(repo) {
+        return Err(Refusal::BadRepo(repo.to_string()));
+    }
     let clone = plane.join("workspaces").join(ws).join(repo);
-    within_workspace(plane, ws, &clone)?;
+    let clone = within_workspace(plane, ws, &clone)?;
     let seen = git::run(&clone, &["rev-parse", "--git-dir"], git::READ)?;
     if !seen.ok() {
         return Err(Refusal::NotARepo(repo.to_string()));
@@ -179,13 +205,28 @@ fn head_of(tree: &Path) -> Result<Base, Refusal> {
         return Ok(Base::Branch(branch.line().to_string()));
     }
     let sha = git::run(tree, &["rev-parse", "--short", "HEAD"], git::READ)?;
+    // A failed `rev-parse` used to become `Detached("")`, which `merge` then reported as
+    // "on a detached HEAD at " — an empty sha and the wrong diagnosis for a broken tree.
+    if !sha.ok() || sha.line().is_empty() {
+        return Err(Refusal::Unreadable {
+            what: tree.display().to_string(),
+            why: if sha.err.trim().is_empty() {
+                "git could not read HEAD".into()
+            } else {
+                sha.err.trim().to_string()
+            },
+        });
+    }
     Ok(Base::Detached(sha.line().to_string()))
 }
 
 fn branch_exists(clone: &Path, branch: &str) -> Result<bool, Refusal> {
+    // `show-ref --verify`, not `rev-parse --verify`: the latter still applies git's revision
+    // grammar, so `refs/heads/@` RESOLVES and a branch named `@` is reported as existing when
+    // it does not. `show-ref --verify` asks only whether the ref is there.
     let seen = git::run(
         clone,
-        &["rev-parse", "--verify", "--quiet", &name::as_ref(branch)],
+        &["show-ref", "--verify", "--quiet", &name::as_ref(branch)],
         git::READ,
     )?;
     Ok(seen.ok())
@@ -224,12 +265,6 @@ pub fn add(
     let asked = branch.unwrap_or(piece);
     name::branch_name_ok(asked)?;
 
-    // The exact path charter will create, and the exact parent it will mkdir — both, and both
-    // anchored on the workspace rather than on the plane.
-    let parent = path.parent().expect("a piece path has a parent");
-    within_workspace(plane, ws, parent)?;
-    within_workspace(plane, ws, &path)?;
-
     let clone = clone_dir(plane, ws, repo)?;
 
     // `--branch` RESOLVES as well as validating: measured, `@{-1}` prints the previously
@@ -262,7 +297,21 @@ pub fn add(
         Dirt::Clean => {}
     }
 
-    std::fs::create_dir_all(parent).map_err(|why| Refusal::Io {
+    // The confinement checks sit HERE, immediately before the write, and not at the top of
+    // the function. Five git subprocesses run above — a window of tens of milliseconds, in
+    // which a racer that swapped `.worktrees/<repo>` for a symlink won 8 attempts out of 8.
+    // What remains is the structural check-then-open race `contain.rs` documents as accepted;
+    // what was here before was a race anyone could win at leisure.
+    // One call, not two. `no_link_on_the_way` walks EVERY component below the anchor, so the
+    // path check already covers `.worktrees` and `.worktrees/<repo>`; a separate parent check
+    // is a call that cannot fail on its own, and a guard no mutation can turn red is a guard
+    // nothing is testing.
+    let path = within_workspace(plane, ws, &path)?;
+    let parent = path
+        .parent()
+        .expect("a piece path has a parent")
+        .to_path_buf();
+    std::fs::create_dir_all(&parent).map_err(|why| Refusal::Io {
         what: "create",
         path: parent.display().to_string(),
         why: why.to_string(),
@@ -270,9 +319,9 @@ pub fn add(
     // Untimed: this checks out a tree, and a killed `worktree add` leaves the registration
     // written and the checkout half-done.
     //
-    // No `--` separator: `git worktree add` does not take one, and it does not need one here.
-    // The path is absolute (it is built from the plane root) and the piece name cannot start
-    // with `-`, so neither argument can be read as an option.
+    // No `--` separator: `git worktree add` does not take one, and does not need one here.
+    // The path is absolute and the piece name cannot start with `-`, so neither argument can
+    // be read as an option.
     let created = git::run_untimed(
         &clone,
         &[
@@ -291,14 +340,28 @@ pub fn add(
     }
 
     // Recorded on the BRANCH, which `--branch` makes a different string from the piece, and
-    // with `--replace-all`, because a key already holding two values cannot be overwritten
-    // by a plain `git config` (exit 5).
-    if let Base::Branch(b) = &base {
-        let _ = git::run(
-            &clone,
-            &["config", "--replace-all", &base_key(&branch), b],
-            git::READ,
-        );
+    // with `--replace-all`, because a key already holding two values cannot be overwritten by
+    // a plain `git config` (exit 5).
+    //
+    // A detached HEAD records its sha, so `merge` can say what happened at cut time instead
+    // of reporting the piece as one charter never cut.
+    let recorded = match &base {
+        Base::Branch(b) => b.clone(),
+        Base::Detached(sha) => format!("{DETACHED_PREFIX}{sha}"),
+    };
+    let wrote = git::run(
+        &clone,
+        &["config", "--replace-all", &base_key(&branch), &recorded],
+        git::READ,
+    )?;
+    if !wrote.ok() {
+        // Not dropped with `let _`: this is the one fact ADR 0027 says charter must remember,
+        // and without it `merge` is permanently unavailable for this branch. The worktree
+        // exists, so the message says so and names the repair rather than pretending.
+        return Err(Refusal::BaseNotRecorded {
+            branch,
+            why: wrote.err.trim().to_string(),
+        });
     }
 
     warnings.push(unwired_warning());
@@ -328,8 +391,9 @@ pub fn remove(
     relocation_refusal(plane)?;
     let path = path_for(plane, ws, repo, piece)?;
     // Asked NOW, not remembered from when the piece was created: a path that has become a
-    // symlink since is a path git would resolve somewhere else.
-    within_workspace(plane, ws, &path)?;
+    // symlink since is a path git would resolve somewhere else. The CHECKED path is what git
+    // is given below — checking one string and passing another is how a link is laundered.
+    let path = within_workspace(plane, ws, &path)?;
     let clone = clone_dir(plane, ws, repo)?;
 
     let exists = path.symlink_metadata().is_ok();
@@ -345,13 +409,16 @@ pub fn remove(
                 piece: piece.to_string(),
             });
         };
+        // The path git REPORTED, re-checked: it comes from `.git/worktrees/<id>/gitdir`,
+        // which anything inside the clone can write, and it is the one git will act on.
+        let stale_path = within_workspace(plane, ws, &stale.path)?;
         let cleared = git::run(
             &clone,
             &[
                 "worktree",
                 "remove",
                 "--",
-                &stale.path.display().to_string(),
+                &stale_path.display().to_string(),
             ],
             git::READ,
         )?;
@@ -393,7 +460,10 @@ pub fn remove(
         }
         match unique_commits(&path, branch.as_deref())? {
             None => {
-                return Err(Refusal::DirtUnknown {
+                // Its own refusal: "could not determine whether this holds uncommitted
+                // changes" is not what failed, and telling the operator the wrong thing about
+                // a guard that stopped a deletion is worse than saying nothing.
+                return Err(Refusal::UniqueUnknown {
                     piece: piece.to_string(),
                 });
             }
@@ -472,20 +542,31 @@ pub struct Piece {
 /// machine, none of which are charter's — and without the filter one of them could be handed
 /// to `remove`.
 pub fn list(plane: &Path, ws: &str, repo: &str) -> Result<Vec<Piece>, Refusal> {
+    relocation_refusal(plane)?;
     let clone = clone_dir(plane, ws, repo)?;
     let listed = git::run(&clone, &["worktree", "list", "--porcelain"], git::READ)?;
     if !listed.ok() {
-        return Ok(Vec::new());
+        // An empty list used to be returned for this, so "git did not answer" and "there are
+        // no pieces" were the same answer — and `remove`'s stale path turned that into "no
+        // such piece".
+        return Err(Refusal::Unreadable {
+            what: format!("the worktrees of {repo}"),
+            why: listed.err.trim().to_string(),
+        });
     }
-    let base = match std::fs::canonicalize(root_of(plane, ws).join(repo)) {
+    let root = within_workspace(plane, ws, &root_of(plane, ws).join(repo))?;
+    let base = match std::fs::canonicalize(&root) {
         Ok(base) => base,
+        // Nothing has been cut for this repo yet: the root does not exist, so there are no
+        // pieces. That is a real empty answer, unlike the one above.
         Err(_) => return Ok(Vec::new()),
     };
     let mut out = Vec::new();
     for row in porcelain::parse(&listed.out) {
-        if row.bare {
-            continue;
-        }
+        // No separate `bare` skip: a bare repository's reported path is its git directory,
+        // which the filter below already excludes because it is never under this workspace's
+        // worktree root. A second check for it could never fail on its own.
+        //
         // `prunable` means the directory is gone, so it cannot be canonicalised; compare the
         // path git reported as it stands in that case.
         let resolved = std::fs::canonicalize(&row.path).unwrap_or_else(|_| row.path.clone());
@@ -519,7 +600,7 @@ pub struct Merged {
 pub fn merge(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Merged, Refusal> {
     relocation_refusal(plane)?;
     let path = path_for(plane, ws, repo, piece)?;
-    within_workspace(plane, ws, &path)?;
+    let path = within_workspace(plane, ws, &path)?;
     let clone = clone_dir(plane, ws, repo)?;
 
     let branch = match head_of(&path)? {
@@ -564,6 +645,19 @@ pub fn merge(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Merged, 
                 ),
             });
         }
+        [one] if one.starts_with(DETACHED_PREFIX) => {
+            let sha = one.trim_start_matches(DETACHED_PREFIX);
+            return Err(Refusal::GitRefused {
+                what: "merge".into(),
+                err: format!(
+                    "'{piece}' was cut from a detached HEAD at {sha}, so there is no branch to \
+                     merge it into. Merge it yourself, or record a base: git -C {} config \
+                     --replace-all {} <branch>",
+                    clone.display(),
+                    base_key(&branch)
+                ),
+            });
+        }
         [one] => (*one).to_string(),
         many => {
             return Err(Refusal::GitRefused {
@@ -581,15 +675,34 @@ pub fn merge(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Merged, 
         }
     };
 
-    if dirt(&path) != Dirt::Clean {
-        return Err(Refusal::Dirty {
-            piece: piece.to_string(),
-        });
+    // Three states, not two: an unreadable tree is not a dirty one, and reporting a timed-out
+    // `git status` as "has uncommitted changes" sends the operator looking for changes that
+    // are not there.
+    match dirt(&path) {
+        Dirt::Clean => {}
+        Dirt::Dirty => {
+            return Err(Refusal::Dirty {
+                piece: piece.to_string(),
+            });
+        }
+        Dirt::Unknown => {
+            return Err(Refusal::DirtUnknown {
+                piece: piece.to_string(),
+            });
+        }
     }
-    if dirt(&clone) != Dirt::Clean {
-        return Err(Refusal::Dirty {
-            piece: repo.to_string(),
-        });
+    match dirt(&clone) {
+        Dirt::Clean => {}
+        Dirt::Dirty => {
+            return Err(Refusal::Dirty {
+                piece: repo.to_string(),
+            });
+        }
+        Dirt::Unknown => {
+            return Err(Refusal::DirtUnknown {
+                piece: repo.to_string(),
+            });
+        }
     }
     match head_of(&clone)? {
         Base::Branch(on) if on == base => {}
@@ -627,5 +740,17 @@ pub fn merge(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Merged, 
     let now = git::run(&clone, &["rev-parse", "HEAD"], git::READ)?
         .line()
         .to_string();
+    if was == now {
+        // git reports "Already up to date" at exit 0 when there was nothing to land. Charter
+        // reporting that as a successful merge is the same lie the `@` case produced one
+        // level down, so it is caught here as well as prevented there.
+        return Err(Refusal::GitRefused {
+            what: "merge".into(),
+            err: format!(
+                "'{branch}' had nothing to land in {base}: {repo} is already at {now}. Nothing \
+                 was merged"
+            ),
+        });
+    }
     Ok(Merged { was, now, branch })
 }

@@ -23,6 +23,32 @@
 //! runs **from a hook**, where an attacker-set environment is the ordinary case. So the child
 //! gets `env_clear()` and then only what git needs. A variable git grows next year is absent
 //! by default rather than present until someone notices.
+//!
+//! # `env_clear` alone does not close it, because `HOME` has to stay
+//!
+//! git reads its global config from `HOME`, and that config can name programs to run. With
+//! *exactly* the four variables built below and nothing else, measured:
+//!
+//! ```text
+//! $ env -i HOME=/tmp/evilhome PATH=/usr/bin:/bin GIT_TERMINAL_PROMPT=0 LC_ALL=C \
+//!     git -C repo worktree add -b probe …
+//! → ran /tmp/evilhome's core.hooksPath hook
+//! ```
+//!
+//! An attacker who can set `GIT_EXEC_PATH` can set `HOME`, and gets the same execution. But
+//! `HOME` cannot simply be dropped: git's global config and every credential helper live
+//! there, and `publish` needs them.
+//!
+//! So the execution keys are turned off **on the command line**, where `-c` beats every
+//! config file — `core.hooksPath` and `core.fsmonitor` are the two that run a program on the
+//! verbs this module uses (`worktree add` runs `post-checkout`; `status` runs the fsmonitor).
+//! Measured: the same call with `-c core.hooksPath=/dev/null` does not run the hook.
+//!
+//! **What that leaves.** A repository's own hooks are disabled for charter's calls too, which
+//! is deliberate — charter never commits, and a `post-checkout` charter triggers is not one
+//! the operator asked for. And `HOME` remains the residual surface for anything git grows
+//! that names a program through config; `publish`, when it lands, has to decide about
+//! `credential.helper` and `core.sshCommand`, which it needs and cannot blanket-disable.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -91,22 +117,52 @@ impl Run {
 #[error("charter could not run git: {0}. Install git, or put it on PATH")]
 pub struct GitUnavailable(#[from] std::io::Error);
 
-/// The absolute git binary, resolved once.
-fn git_binary() -> PathBuf {
+/// The absolute git binary, and the `PATH` the child gets.
+///
+/// **The fallback has to be explicit.** Returning a bare `"git"` does not work after
+/// `env_clear`: Rust resolves a bare program name against the CHILD's `PATH`, which is the
+/// fixed list below — so on any machine whose git lives elsewhere (NixOS, asdf/mise,
+/// `~/.local/bin`) every verb would fail with "charter could not run git" while git is on
+/// PATH. So the inherited `PATH` is searched here, in the parent, and what the child gets is
+/// the absolute path that search found plus the directory holding it.
+fn git_binary() -> (PathBuf, String) {
+    let mut dirs: Vec<String> = GIT_DIRS.iter().map(|d| (*d).to_string()).collect();
     for dir in GIT_DIRS {
         let candidate = Path::new(dir).join("git");
         if candidate.is_file() {
-            return candidate;
+            return (candidate, dirs.join(":"));
         }
     }
-    // Last resort: let the OS resolve it. Named here rather than silently, because this is
-    // the one path where the inherited `PATH` still chooses.
-    PathBuf::from("git")
+    // Searched in the PARENT, where `PATH` is still readable, and resolved to an absolute
+    // path before the child is built. An attacker who controls the parent's `PATH` still
+    // chooses here — but they control charter's own binary lookup too, so this adds no
+    // surface that was not already there.
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join("git");
+            if candidate.is_file() {
+                dirs.insert(0, dir.display().to_string());
+                return (candidate, dirs.join(":"));
+            }
+        }
+    }
+    (PathBuf::from("git"), dirs.join(":"))
 }
 
+/// Config keys that name a program git will run, turned off where no config can re-enable
+/// them. `-c` on the command line beats the system, global and repository files.
+///
+/// Not a general hardening list: these are the keys reachable from the verbs this module
+/// runs. `core.hooksPath` covers `post-checkout` on `worktree add` and `post-merge` on
+/// `merge`; `core.fsmonitor` covers `status`, which `dirt` runs on every guard.
+const NO_PROGRAMS: [&str; 2] = ["core.hooksPath=/dev/null", "core.fsmonitor=false"];
+
 fn spawn(dir: &Path, args: &[&str]) -> Result<Child, GitUnavailable> {
-    let dirs = GIT_DIRS.join(":");
-    let mut cmd = Command::new(git_binary());
+    let (binary, dirs) = git_binary();
+    let mut cmd = Command::new(binary);
+    for setting in NO_PROGRAMS {
+        cmd.arg("-c").arg(setting);
+    }
     cmd.arg("-C").arg(dir).args(args);
     cmd.env_clear();
     for (k, v) in child_env(&dirs) {
@@ -196,17 +252,73 @@ mod tests {
         // binary with it, which needs no `unsafe` (the workspace forbids it) and is sound
         // against the concurrent `getenv` that `std::env::set_var` is not.
         if std::env::var_os(CHILD).is_some() {
+            // The child. Its environment is hostile in every way the parent could make it,
+            // including HOME — which is where git reads a config that names programs, and is
+            // the one variable the runner cannot simply drop.
             let dir = repo();
-            // If the environment reached git, this config would be readable.
-            let seen = run(dir.path(), &["config", "--get", "core.hooksPath"], READ).unwrap();
+            std::fs::write(dir.path().join("f"), "x").unwrap();
+            run(dir.path(), &["add", "f"], READ).unwrap();
+            run(
+                dir.path(),
+                &[
+                    "-c",
+                    "user.email=t@e.invalid",
+                    "-c",
+                    "user.name=t",
+                    "commit",
+                    "-q",
+                    "-m",
+                    "one",
+                ],
+                READ,
+            )
+            .unwrap();
+
+            let ran = std::env::var_os("CHARTER_TEST_HOOK_MARKER").expect("the marker path");
+            let ran = std::path::PathBuf::from(ran);
+            let wt = dir.path().join("wt");
+            let cut = run_untimed(
+                dir.path(),
+                &["worktree", "add", "-b", "probe", &wt.display().to_string()],
+            )
+            .unwrap();
+
+            assert!(cut.ok(), "the call still worked: {cut:?}");
             assert!(
-                !seen.ok() && seen.line().is_empty(),
-                "injected config reached git: {seen:?}"
+                !ran.exists(),
+                "a hook named by the hostile HOME's gitconfig ran"
             );
-            let traced = run(dir.path(), &["rev-parse", "--git-dir"], READ).unwrap();
-            assert!(traced.ok(), "and git still worked: {traced:?}");
+            // And the fsmonitor, which `status` would run on every dirt check.
+            let _ = run(dir.path(), &["status", "--porcelain"], READ).unwrap();
+            assert!(!ran.exists(), "the fsmonitor named by that config ran");
             return;
         }
+
+        // The parent. It builds a hostile HOME with a gitconfig that names programs, and a
+        // hostile environment, then re-executes this test inside both.
+        let home = tempfile::tempdir().expect("a home");
+        let hooks = home.path().join("hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let marker = home.path().join("RAN");
+        let script = format!("#!/bin/sh\ntouch {}\n", marker.display());
+        std::fs::write(hooks.join("post-checkout"), &script).unwrap();
+        std::fs::write(hooks.join("query-watchman"), &script).unwrap();
+        for hook in ["post-checkout", "query-watchman"] {
+            std::fs::set_permissions(
+                hooks.join(hook),
+                <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
+            )
+            .unwrap();
+        }
+        std::fs::write(
+            home.path().join(".gitconfig"),
+            format!(
+                "[core]\n\thooksPath = {}\n\tfsmonitor = {}\n",
+                hooks.display(),
+                hooks.join("query-watchman").display()
+            ),
+        )
+        .unwrap();
 
         let trace = std::env::temp_dir().join(format!(
             "charter-hostile-trace-{}-{}",
@@ -224,9 +336,11 @@ mod tests {
                 "--nocapture",
             ])
             .env(CHILD, "1")
+            .env("CHARTER_TEST_HOOK_MARKER", &marker)
+            .env("HOME", home.path())
             .env("GIT_CONFIG_COUNT", "1")
             .env("GIT_CONFIG_KEY_0", "core.hooksPath")
-            .env("GIT_CONFIG_VALUE_0", "/tmp/charter-test-evil-hooks")
+            .env("GIT_CONFIG_VALUE_0", &hooks)
             .env("GIT_EXEC_PATH", "/tmp/charter-test-evil-exec")
             .env("GIT_TRACE", &trace)
             .output()
