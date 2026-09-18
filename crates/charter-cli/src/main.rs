@@ -21,6 +21,10 @@
 
 use std::process::ExitCode;
 
+use std::time::Duration;
+
+use charter_core::hookwire::{self, Report, SOCKET_ENV};
+use charter_core::state::Event;
 use charter_core::workspaces::Plane;
 use clap::{Args, Parser, Subcommand};
 
@@ -42,6 +46,26 @@ enum Command {
     /// Workspaces: their vision, their memory, their todos.
     #[command(subcommand, alias = "ws")]
     Workspace(WorkspaceCommand),
+
+    /// Tell the app what a harness just did. Run by a harness's hooks, never by a person.
+    ///
+    /// It reads the harness's payload on stdin, says one thing on a socket the app owns, and
+    /// gets out of the way. It decides nothing, refuses nothing and prints nothing: the
+    /// guard that answers `pretooluse` is the Python charter's and is not this command.
+    Hook {
+        /// The harness's event, lowercased: `sessionstart`, `userpromptsubmit`,
+        /// `notification`, `subagentstop`, `stop`, `sessionend`.
+        name: String,
+
+        /// The installed plugin's version. Taken and ignored.
+        ///
+        /// The charter plugin's `hooks/hooks.json` puts it on every one of its twelve hook
+        /// commands (`charter hook sessionstart --plugin-version 0.62.1`). It means nothing
+        /// to this binary — the skew check it feeds is the Python charter's — but refusing
+        /// the flag would mean refusing every call the plugin actually makes.
+        #[arg(long)]
+        plugin_version: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -118,8 +142,144 @@ fn workspace(common: &Common) -> Result<charter_core::workspaces::Workspace, Str
         .map_err(|e| e.to_string())
 }
 
-fn run() -> Result<(), String> {
-    match Cli::parse().command {
+/// Whether a word this binary does not own is a TOOL hook, where refusing means blocking.
+///
+/// **The namespace, not a list of words, and not a blanket rule either.** Both of those were
+/// tried and both were wrong, each in the other's direction:
+///
+/// - A list of the nine words in `charter/hooks.py:_HANDLERS` fails OPEN on everything not in
+///   it. `charter hook pretooluse-notebook` exited 1, which a harness logs and ignores, so the
+///   day charter adds a matcher the Rust binary on PATH would allow that tool class silently.
+/// - Blocking every unknown word instead fails the other way: `charter hook stopp`, a typo in
+///   a settings file charter itself wrote, blocked the session from ENDING — which is the
+///   exact hazard this whole file was written around.
+///
+/// The word says which hook it is. In the `pretooluse`/`posttooluse` namespace there is a tool
+/// call to protect and blocking is the safe answer, for every matcher charter has and every
+/// one it adds. Outside it there is nothing to protect and blocking can only wedge a session.
+/// A review found both halves of this.
+fn is_a_tool_hook(name: &str) -> bool {
+    name.starts_with("pretooluse") || name.starts_with("posttooluse")
+}
+
+/// What a harness reads as "block".
+const BLOCK: u8 = 2;
+
+/// How long the payload on stdin is waited for.
+///
+/// **Two seconds, and it used to be 25 milliseconds.** The spec allows the whole call 50 ms
+/// and this binary was measured at 1.8, so 25 looked generous — but a review measured an
+/// 8 MB `UserPromptSubmit` (a pasted log) at 47 ms, and a payload written in two pieces
+/// missed 25 ms every time. Reaching the deadline is not free: charter then cannot establish
+/// which conversation the report is of, and before a chat has adopted a process that costs
+/// the whole report.
+///
+/// This exists only against a harness that opens the hook's stdin and never writes, which
+/// would otherwise hang the turn for good. Two seconds is well under the plugin's own 5 s
+/// hook timeout, so the harness's deadline is still the one that fires first, and no ordinary
+/// payload can reach this one.
+const PAYLOAD_DEADLINE: Duration = Duration::from_secs(2);
+
+/// Reads the harness's payload, or gives up on it.
+///
+/// On its own thread, because a read from a pipe nobody is writing to cannot be interrupted.
+/// The thread is left behind when the deadline passes: the process is about to exit, and
+/// waiting for it is the very thing being avoided.
+fn payload() -> String {
+    use std::io::Read;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = std::io::stdin().read_to_string(&mut text);
+        let _ = tx.send(text);
+    });
+    rx.recv_timeout(PAYLOAD_DEADLINE).unwrap_or_default()
+}
+
+/// `charter hook <name>` — always succeeds, whatever went wrong.
+///
+/// **Never exit 2.** A harness reads 2 as "block": on `Stop` it makes the harness carry on
+/// rather than end. Nothing charter draws is worth that, so every failure here is a silent 0
+/// and the state the app draws is simply the last one it was told.
+fn hook(name: &str, plugin_version: Option<&str>) -> ExitCode {
+    let Some(event) = Event::parse(name) else {
+        let tool = is_a_tool_hook(name);
+        eprintln!(
+            "charter: `{name}` is not one of this binary's events (sessionstart, \
+             userpromptsubmit, notification, subagentstop, stop, sessionend){}. If a plugin \
+             meant this, the `charter` it wants is the Python one — check which is first on \
+             PATH.",
+            if tool {
+                ", and it names a tool hook, so the tool call is refused rather than allowed \
+                 by a program that checked nothing"
+            } else {
+                ""
+            }
+        );
+        // Blocking only where there is a tool call to protect. Everywhere else a refusal that
+        // a harness reads as "block" would wedge the session instead of guarding anything.
+        return if tool {
+            ExitCode::from(BLOCK)
+        } else {
+            ExitCode::FAILURE
+        };
+    };
+    // `--plugin-version` is written by the charter plugin's `hooks.json` and never by the
+    // app, which invokes this binary by absolute path. So its presence says this process was
+    // started by the Python plugin, and this binary answers far less than the Python charter
+    // does for the same word — no persona charter, no memory, no tool-gate ceiling frozen
+    // (charter#432). It still answers, because blocking `sessionstart` would be worse than
+    // a session without its context; but it says so where a person will actually see it.
+    //
+    // `systemMessage` and not stderr: a zero-exit hook's stderr goes to a debug log nobody
+    // reads. `charter/hooks.py` learned that the same way.
+    //
+    // Once per session, not once per hook. The plugin wires `sessionstart`,
+    // `userpromptsubmit` and `stop`, so an ungated notice reaches the operator on every prompt
+    // and every turn end — `charter/hooks.py:_queue_plugin_notices` carries "the gate that
+    // keeps them to sessionstart" for exactly this reason.
+    if plugin_version.is_some() && event == Event::SessionStart {
+        println!(
+            "{}",
+            serde_json::json!({
+                "systemMessage": format!(
+                    "charter: the `charter` on PATH is the desktop app's binary, which \
+                     answers `hook {name}` with session state only — no persona charter, no \
+                     memory, and no tool-gate snapshot. The Python charter should be \
+                     answering this."
+                )
+            })
+        );
+    }
+    let Some(socket) = std::env::var_os(SOCKET_ENV) else {
+        // No app started this session — the operator's own harness in a terminal, with the
+        // hooks pointed here. There is nothing to tell.
+        return ExitCode::SUCCESS;
+    };
+    if let Some(report) = Report::read(event, &payload(), &|name| std::env::var(name).ok())
+        && let Err(why) = hookwire::send(std::path::Path::new(&socket), &report)
+    {
+        // The app may have quit while this session was still running, which is the ordinary
+        // way for this to fail and is not the harness's business — hence the exit 0 below.
+        //
+        // But it is said, because a report that never arrives is otherwise invisible
+        // everywhere: the chat simply stops changing, and there is nothing anywhere to look
+        // at. A zero-exit hook's stderr goes to the harness's debug log, which costs the
+        // operator nothing and is exactly where somebody debugging this would look.
+        eprintln!(
+            "charter: the app did not take this {} ({why})",
+            event.word()
+        );
+    }
+    ExitCode::SUCCESS
+}
+
+fn run(command: Command) -> Result<(), String> {
+    match command {
+        // Answered in `main`, before this: it is the one command whose exit code is not a
+        // plain success or failure, and clap must never be allowed to exit 2 in front of it.
+        Command::Hook { .. } => unreachable!("answered before run"),
         Command::Root => {
             println!("{}", plane()?.root().display());
         }
@@ -203,7 +363,29 @@ fn run() -> Result<(), String> {
 }
 
 fn main() -> ExitCode {
-    match run() {
+    // **`Cli::parse` exits 2 on a bad command line, and 2 is the one code a harness reads as
+    // "block".** A hook that exited 2 by accident would make a session unable to end, so this
+    // binary answers for its own argv before clap can, whatever the command turns out to be.
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => {
+            let _ = err.print();
+            return match err.exit_code() {
+                0 => ExitCode::SUCCESS,
+                _ => ExitCode::FAILURE,
+            };
+        }
+    };
+    // Before `run`, because its exit code is not a plain success or failure: a tool hook this
+    // binary does not answer must BLOCK rather than be read as "allow".
+    if let Command::Hook {
+        name,
+        plugin_version,
+    } = &cli.command
+    {
+        return hook(name, plugin_version.as_deref());
+    }
+    match run(cli.command) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             eprintln!("charter: {message}");

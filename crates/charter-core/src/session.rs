@@ -33,6 +33,12 @@ pub struct Spec {
     /// does not exist is refused, never silently replaced.
     pub cwd: Option<PathBuf>,
     pub env: Vec<(OsString, OsString)>,
+    /// Taken OUT of the program's environment, before anything is put in.
+    ///
+    /// A session inherits the app's environment, and the app inherits whatever started it.
+    /// A variable that names a harness's own identity must not survive that: it would make
+    /// the session look like the process that launched charter.
+    pub env_without: Vec<OsString>,
     pub size: Size,
 }
 
@@ -43,6 +49,7 @@ impl Spec {
             args: Vec::new(),
             cwd: None,
             env: Vec::new(),
+            env_without: Vec::new(),
             size,
         }
     }
@@ -263,6 +270,10 @@ impl Session {
         command.args(&spec.args);
         command.cwd(cwd);
         command.env("TERM", "xterm-256color");
+        // Removed before anything is set, so a caller can always put back what it means to.
+        for key in &spec.env_without {
+            command.env_remove(key);
+        }
         for (key, value) in &spec.env {
             command.env(key, value);
         }
@@ -764,6 +775,42 @@ mod tests {
         let session = sh("printf 'hello from the pty'");
 
         screen_until(&session, shows("hello from the pty"));
+    }
+
+    #[test]
+    fn a_variable_a_session_must_not_inherit_is_taken_out_of_its_environment() {
+        // charter may itself be launched from inside a harness session, and then every chat
+        // it starts inherits that harness's identity — a hook in one of them reports the
+        // LAUNCHER's process and conversation as its own. A scenario test found that; this is
+        // the unit test that was missed, and a surviving mutant proved it was missing.
+        //
+        // `HOME` stands in for the real ones: it is always in the environment (so this tests
+        // removal from the INHERITED set, which is the whole point), and nothing here needs
+        // it — `/bin/sh` is named absolutely and `echo` is a builtin. Setting a variable of
+        // charter's own would need `unsafe`, which this workspace forbids, and would test the
+        // wrong thing anyway.
+        assert!(
+            std::env::var_os("HOME").is_some(),
+            "the test needs an inherited variable"
+        );
+        let mut spec = Spec::new("/bin/sh", SIZE).args(["-c", "echo \"seen<${HOME}>\"; sleep 30"]);
+        spec.env_without = vec!["HOME".into()];
+
+        let session = Session::spawn(spec, Box::new(AlacrittyEngine::new(SIZE, 1000)))
+            .expect("the session starts");
+
+        screen_until(&session, shows("seen<>"));
+    }
+
+    #[test]
+    fn a_variable_nothing_asked_to_remove_is_still_inherited() {
+        // The other half: a session gets the operator's environment, and only what charter
+        // names is taken away.
+        let home = std::env::var("HOME").expect("the test needs an inherited variable");
+
+        let session = sh("echo \"seen<${HOME}>\"; sleep 30");
+
+        screen_until(&session, shows(&format!("seen<{home}>")));
     }
 
     #[test]

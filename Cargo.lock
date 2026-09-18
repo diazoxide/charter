@@ -640,6 +640,7 @@ dependencies = [
  "charter-core",
  "chrono",
  "clap",
+ "serde_json",
  "tempfile",
 ]
 

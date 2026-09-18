@@ -3,6 +3,7 @@
 pub mod contain;
 pub mod engine;
 pub mod harness;
+pub mod hookwire;
 pub mod manifest;
 pub mod mdsection;
 pub mod memstore;
@@ -12,4 +13,5 @@ pub mod profiletrust;
 pub mod pyjson;
 pub mod reopen;
 pub mod session;
+pub mod state;
 pub mod workspaces;

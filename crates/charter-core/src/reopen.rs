@@ -192,56 +192,31 @@ pub fn path(plane_root: &Path) -> PathBuf {
 /// FIFO, but a sparse multi-gigabyte file packs small and arrives full size, and reading it
 /// whole at launch is the same failure by another road.
 fn no_link_on_the_way(plane_root: &Path, file: &Path) -> std::io::Result<()> {
-    let Ok(rest) = file.strip_prefix(plane_root) else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
+    // The walk itself is shared with every other path charter owns (`contain`), because two
+    // copies of a containment gate drift. What is left here is what is specific to a RECORD.
+    crate::contain::no_link_on_the_way(plane_root, file)?;
+    match std::fs::symlink_metadata(file) {
+        // A record that is not a plain file: a FIFO would block the read for ever, a device
+        // never ends. Directories above it are fine, the record itself is not.
+        Ok(found) if !found.file_type().is_file() => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
             format!(
-                "{} is not inside the plane at {}",
-                file.display(),
-                plane_root.display()
+                "{} is not a plain file, and charter reads its record from nothing else",
+                file.display()
             ),
-        ));
-    };
-    let mut walked = plane_root.to_path_buf();
-    for component in rest.components() {
-        walked.push(component);
-        match std::fs::symlink_metadata(&walked) {
-            Ok(found) if found.file_type().is_symlink() => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    format!(
-                        "{} is a symlink, and charter's own record may not be reached through one",
-                        walked.display()
-                    ),
-                ));
-            }
-            // A record that is not a plain file: a FIFO would block the read for ever, a
-            // device never ends. Directories above it are fine, the record itself is not.
-            Ok(found) if walked == *file && !found.file_type().is_file() => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!(
-                        "{} is not a plain file, and charter reads its record from nothing else",
-                        walked.display()
-                    ),
-                ));
-            }
-            // Read whole at launch, so a planted giant is a hang with nothing to click on.
-            Ok(found) if walked == *file && found.len() > MAX_BYTES => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!(
-                        "{} is {} bytes, and charter's record is never larger than {MAX_BYTES}",
-                        walked.display(),
-                        found.len()
-                    ),
-                ));
-            }
-            // Not there yet is fine: the app creates `.charter/app/` and the file itself.
-            _ => {}
-        }
+        )),
+        // Read whole at launch, so a planted giant is a hang with nothing to click on.
+        Ok(found) if found.len() > MAX_BYTES => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "{} is {} bytes, and charter's record is never larger than {MAX_BYTES}",
+                file.display(),
+                found.len()
+            ),
+        )),
+        // Not there yet is fine: the app creates `.charter/app/` and the file itself.
+        _ => Ok(()),
     }
-    Ok(())
 }
 
 /// Writes the record, creating `.charter/app/` if it is not there.
