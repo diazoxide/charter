@@ -52,8 +52,27 @@ When two choices conflict, the higher priority wins.
    - **Palette:** the command palette is the primary input, keyboard first.
 2. **No TUI.** In the terminal, charter is the CLI.
 3. **Session state comes from hooks only.** A hook calls `charter hook …`, which hands an
-   event to the app through a file or socket the app owns. A harness with no such hook shows
-   `unknown`.
+   event to the app through a socket the app owns. A harness with no such hook shows
+   `unknown`. Amended 2026-09-18, by what M1.3 had to settle to build it:
+   - **A socket, and nothing else was needed** — which closes the open question below. The app
+     binds it and names it in the environment of every session it starts, beside that chat's
+     own number. A hook therefore looks nothing up: no plane read, no discovery, no polling
+     loop, and no Tauri plugin beyond the single-instance one already in use.
+   - **`failed` is a non-zero exit.** No hook can report it — the process is gone. An exit
+     status is the program telling the app directly, so it is not the harness OUTPUT that ADR
+     0018 forbids reading. Operator's ruling, 2026-09-18.
+   - **A harness may carry only part of the set.** Codex fires no `Notification` at all
+     (measured, codex-cli 0.147.0), so a Codex chat can say it is running and it is done and
+     can never say it is waiting on you. It shows what it can, and the UI says what it cannot,
+     rather than being flattened to `unknown`. Operator's ruling, 2026-09-18.
+   - **Which chat a report belongs to is decided by the process id, not by the conversation
+     alone.** ADR 0024's C5 (a harness nested in the chat's own shell) and C6 (`/clear`) both
+     report a conversation the chat has not seen, and `$CLAUDE_PID` is the whole of what tells
+     them apart. The payload and the environment must AGREE on the conversation: using one as
+     a fallback for the other is a hole, because the environment holds the OUTER chat's id.
+   - **A chat inherits none of that from charter itself.** charter may be launched from inside
+     a harness session, and a chat that inherited its `CLAUDE_PID` would report the launcher's
+     identity as its own.
 4. **A worktree per writing chat.** A chat that writes to a repo gets its own git worktree by
    default. The sidebar shows its branch. Merging back is an explicit action.
 5. **Lifecycle.** Closing the window hides the app to the tray. Quitting warns if a session is
@@ -190,5 +209,7 @@ stack: **ADR 0026**. It answers the first of the questions this section left ope
 
 Still open:
 
-- Whether the file or socket for hook events (decision 3) needs anything beyond Tauri's own
-  single-instance and IPC plugins.
+- ~~Whether the file or socket for hook events (decision 3) needs anything beyond Tauri's own
+  single-instance and IPC plugins.~~ **Answered 2026-09-18 by M1.3: neither.** A unix socket
+  named in each session's own environment needs no discovery and no plugin. Decision 3 records
+  what else that milestone had to settle.
