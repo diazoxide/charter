@@ -20,8 +20,15 @@ const ROOT = resolve(import.meta.dirname, "..");
 const APP = join(process.env.CHARTER_TARGET_DIR ?? join(ROOT, "target", "debug"), "charter-app");
 /** The conversation the chat is under. The stand-in harness only has to echo it back. */
 const CONVERSATION = "11111111-2222-4333-8444-555555555555";
-/** How long the app is given to start its chats. It spawns them in `setup`, before a window. */
-const PATIENCE = 30_000;
+/**
+ * How long the app is given to start its chats.
+ *
+ * It spawns them in `setup`, which Tauri runs inside `run()` — after the window is up — so
+ * this covers the whole launch and not just the chat. Generous because a CI runner is slow
+ * and a launch that is merely slow should read as slow, not as broken: the marker log says
+ * which step took the time.
+ */
+const PATIENCE = 90_000;
 
 if (!existsSync(APP)) {
   console.error(`no app at ${APP} — build it first (npx tauri build --debug --no-bundle)`);
