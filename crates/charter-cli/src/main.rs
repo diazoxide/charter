@@ -24,6 +24,8 @@ use std::process::ExitCode;
 use std::time::Duration;
 
 use charter_core::hookwire::{self, Report, SOCKET_ENV};
+use charter_core::profiles::{self, ProfileSet, Source};
+use charter_core::shown;
 use charter_core::state::Event;
 use charter_core::workspaces::Plane;
 use clap::{Args, Parser, Subcommand};
@@ -47,6 +49,10 @@ enum Command {
     #[command(subcommand, alias = "ws")]
     Workspace(WorkspaceCommand),
 
+    /// Harness profiles: which program a chat runs, and with what environment.
+    #[command(subcommand)]
+    Harness(HarnessCommand),
+
     /// Tell the app what a harness just did. Run by a harness's hooks, never by a person.
     ///
     /// It reads the harness's payload on stdin, says one thing on a socket the app owns, and
@@ -66,6 +72,12 @@ enum Command {
         #[arg(long)]
         plugin_version: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+enum HarnessCommand {
+    /// Every profile charter read, the file it came from, and why any was refused.
+    List,
 }
 
 #[derive(Subcommand)]
@@ -283,6 +295,14 @@ fn run(command: Command) -> Result<(), String> {
         Command::Root => {
             println!("{}", plane()?.root().display());
         }
+        Command::Harness(HarnessCommand::List) => {
+            let root = plane()?.root().to_path_buf();
+            // The git check runs HERE because a person typed this command; it never runs on
+            // a config read, so no hook pays a git call per tool call.
+            let check = profiles::ignore_check(&root);
+            let set = profiles::with_ignore_check(profiles::current(&root), &check);
+            eprint!("{}", harness_listing(&set, &check));
+        }
         Command::Workspace(WorkspaceCommand::List) => {
             let mut names = plane()?.workspaces().map_err(|e| e.to_string())?;
             // `default` is always listable, whether or not the directory is there: it is the
@@ -392,4 +412,94 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// The profile listing, as `charter harness list` prints it on stderr.
+///
+/// Built-ins first in registry order — a declared replacement keeps its kind's place — then
+/// declared profiles by name. **Every width is measured from the cells about to be printed**
+/// rather than guessed: a fixed `{:<28}` pads a short value and does nothing at all to a
+/// long one, which pushes that row's remaining columns somewhere no other row's land and
+/// stops the table being a table.
+///
+/// Every cell that came out of the file has already been contained by the time it arrives
+/// here (`profiles::display`, `shown::readable`): a command is text a chat can write, and a
+/// carriage return in one would otherwise redraw this line.
+fn harness_listing(set: &ProfileSet, check: &profiles::IgnoreCheck) -> String {
+    let order: Vec<String> = profiles::builtins().into_iter().map(|p| p.name).collect();
+    let mut rows: Vec<&charter_core::profiles::Profile> = set.profiles().iter().collect();
+    rows.sort_by_key(|p| {
+        let place = order.iter().position(|name| *name == p.name);
+        (place.is_none(), place.unwrap_or(0), p.name.clone())
+    });
+
+    let heads = ["NAME", "KIND", "COMMAND"];
+    let body: Vec<[String; 3]> = rows
+        .iter()
+        .map(|p| [shown::short(&p.name), p.kind.clone(), profiles::display(p)])
+        .collect();
+    // Each column is its header, its widest cell, and the gap to the next one — counted
+    // inside the width so a caller pads once rather than padding and then adding spaces.
+    // Every cell is printable ASCII by now, so a character is a column.
+    let widths: Vec<usize> = heads
+        .iter()
+        .enumerate()
+        .map(|(i, head)| {
+            body.iter()
+                .map(|row| row[i].chars().count())
+                .chain(std::iter::once(head.chars().count()))
+                .max()
+                .unwrap_or(0)
+                + 2
+        })
+        .collect();
+
+    let line = |mark: &str, cells: [&str; 3], last: &str| {
+        let mut out = mark.to_owned();
+        for (cell, width) in cells.iter().zip(&widths) {
+            out.push_str(cell);
+            out.extend(std::iter::repeat_n(
+                ' ',
+                width.saturating_sub(cell.chars().count()),
+            ));
+        }
+        out.push_str(last);
+        format!("{}\n", out.trim_end())
+    };
+
+    let mut out = line("  ", heads, "FROM");
+    for (p, cells) in rows.iter().zip(&body) {
+        // The row the selector starts on, marked. It launches nothing by itself.
+        let mark = if set.default.as_deref() == Some(p.name.as_str()) {
+            "* "
+        } else {
+            "  "
+        };
+        let source = match p.source {
+            Source::BuiltIn => Source::BuiltIn.as_str(),
+            Source::Local => Source::Local.as_str(),
+        };
+        out.push_str(&line(mark, [&cells[0], &cells[1], &cells[2]], source));
+    }
+    if !set.refused.is_empty() {
+        out.push_str("refused:\n");
+        for refused in &set.refused {
+            // A whole-file refusal has no profile name, so it is named by its FILE rather
+            // than printing a line that starts with a bare colon.
+            let who = if refused.name.is_empty() {
+                &refused.source
+            } else {
+                &refused.name
+            };
+            out.push_str(&format!("  {who}: {}\n", refused.reason));
+        }
+    }
+    if !check.fix.is_empty() {
+        out.push_str(&format!(
+            "! to use the profiles in {}: {}\n",
+            profiles::LOCAL_FILE,
+            check.fix
+        ));
+    }
+    out
 }

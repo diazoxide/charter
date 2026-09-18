@@ -1,0 +1,202 @@
+//! `charter.local.toml` is gitignored, and charter does not trust its own line.
+//!
+//! The reason it cannot: an ignore rule does not apply to a tracked path. `git add -f`
+//! commits the file, a fresh clone materialises it, and every machine that pulls runs the
+//! commands in it — on a click, with no prompt in between. So while git tracks the file, or
+//! WOULD commit it, every profile it declares is refused by name.
+//!
+//! An answer git could not give refuses too: an unknown is not a pass (ADR 0009).
+
+use std::fs;
+use std::path::Path;
+use std::process::Command;
+
+use charter_core::profiles;
+
+fn git(dir: &Path, args: &[&str]) {
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@e")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@e")
+        .output()
+        .expect("git runs");
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+}
+
+/// A plane that is a git repository, with a local file and whatever `.gitignore` is given.
+fn repo(ignore: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("charter.toml"), "").unwrap();
+    fs::write(
+        dir.path().join(profiles::LOCAL_FILE),
+        "[harness.work]\nkind = \"claude\"\ncommand = [\"claude\"]\n",
+    )
+    .unwrap();
+    if !ignore.is_empty() {
+        fs::write(dir.path().join(".gitignore"), ignore).unwrap();
+    }
+    git(dir.path(), &["init", "-q"]);
+    dir
+}
+
+#[test]
+fn a_plane_that_is_not_a_git_repository_has_nothing_to_commit_to_and_passes() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join(profiles::LOCAL_FILE), "").unwrap();
+
+    assert!(profiles::ignore_check(dir.path()).passes());
+}
+
+#[test]
+fn a_plane_with_no_local_file_declares_nothing_and_passes() {
+    let dir = repo("/charter.local.toml\n");
+    fs::remove_file(dir.path().join(profiles::LOCAL_FILE)).unwrap();
+
+    assert!(profiles::ignore_check(dir.path()).passes());
+}
+
+#[test]
+fn an_ignored_untracked_local_file_is_the_state_the_feature_wants_and_passes() {
+    let dir = repo("/charter.local.toml\n");
+
+    assert!(profiles::ignore_check(dir.path()).passes());
+}
+
+#[test]
+fn a_local_file_git_would_commit_refuses_every_profile_in_it() {
+    // No `.gitignore` line: git reports it as `??`, which means the next `git add .` takes
+    // it, and then every clone has it.
+    let dir = repo("");
+
+    let check = profiles::ignore_check(dir.path());
+
+    assert_eq!(
+        check.reason,
+        "git would commit charter.local.toml, so the profiles in it are refused until it is \
+         ignored — charter reinit adds /charter.local.toml to .gitignore."
+    );
+    assert_eq!(check.fix, "charter reinit");
+}
+
+#[test]
+fn a_tracked_local_file_is_refused_and_told_that_reinit_alone_will_not_fix_it() {
+    // One fix per state: `charter reinit` adds the ignore line, and an ignore rule does not
+    // apply to a path git already tracks.
+    let dir = repo("/charter.local.toml\n");
+    git(dir.path(), &["add", "-f", profiles::LOCAL_FILE]);
+    git(dir.path(), &["commit", "-qm", "forced"]);
+
+    let check = profiles::ignore_check(dir.path());
+
+    assert_eq!(
+        check.reason,
+        "git tracks charter.local.toml, so the profiles in it would reach every clone of \
+         this plane — charter refuses them until it is untracked: git rm --cached \
+         charter.local.toml, commit that removal, then charter reinit."
+    );
+    assert_eq!(
+        check.fix,
+        "git rm --cached charter.local.toml, commit that removal, then charter reinit"
+    );
+}
+
+#[test]
+fn a_file_staged_for_removal_but_not_yet_committed_is_still_tracked() {
+    // `git rm --cached` leaves `D ` beside `!!` until the removal is committed, and the file
+    // is in HEAD until then — so a clone still carries it.
+    let dir = repo("/charter.local.toml\n");
+    git(dir.path(), &["add", "-f", profiles::LOCAL_FILE]);
+    git(dir.path(), &["commit", "-qm", "forced"]);
+    git(dir.path(), &["rm", "-q", "--cached", profiles::LOCAL_FILE]);
+
+    assert!(
+        profiles::ignore_check(dir.path())
+            .reason
+            .starts_with("git tracks charter.local.toml,"),
+        "a removal that is not committed read as untracked"
+    );
+}
+
+#[test]
+fn an_answer_git_could_not_give_refuses_because_an_unknown_is_not_a_pass() {
+    // ADR 0009. There is no git on the PATH this check is given, so it cannot look — which
+    // is not the same as looking and finding the file ignored.
+    let dir = repo("/charter.local.toml\n");
+
+    let check = profiles::ignore_check_with(dir.path(), Path::new("/definitely/not/git"));
+
+    assert!(
+        check
+            .reason
+            .starts_with("git could not say whether charter.local.toml is ignored (")
+            && check.reason.ends_with(
+                "), so the profiles in it are refused — an unknown is not a pass. Run git status \
+             --ignored -- charter.local.toml in the plane to see what git says."
+            ),
+        "{:?}",
+        check.reason
+    );
+    assert!(check.fix.starts_with(
+        "run git status --ignored -- charter.local.toml in the plane by hand; git said: "
+    ));
+}
+
+#[test]
+fn a_refusing_check_moves_every_declared_profile_to_refused_and_leaves_the_built_ins() {
+    // Each of the three sentences says "the profiles in it are refused", so a surface that
+    // asked must show them refused — not as ordinary rows with a warning underneath.
+    let dir = repo("");
+    let set = profiles::current(dir.path());
+    assert!(
+        set.get("work").is_some(),
+        "the profile reads fine on its own"
+    );
+
+    let guarded = profiles::with_ignore_check(set, &profiles::ignore_check(dir.path()));
+
+    assert!(guarded.get("work").is_none());
+    assert_eq!(
+        guarded
+            .profiles()
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect::<Vec<_>>(),
+        ["claude", "opencode", "codex"]
+    );
+    assert!(
+        guarded
+            .refused
+            .iter()
+            .any(|r| r.name == "work" && r.reason.starts_with("git would commit"))
+    );
+}
+
+#[test]
+fn a_replacement_refused_by_the_git_check_does_not_let_its_built_in_stand_in() {
+    // Ruling 19: the operator said how `claude` runs here, and the built-in standing in
+    // would run the command they replaced.
+    let dir = repo("");
+    fs::write(
+        dir.path().join(profiles::LOCAL_FILE),
+        "[harness.claude]\nkind = \"claude\"\ncommand = [\"~/.local/bin/claude\"]\n",
+    )
+    .unwrap();
+
+    let guarded = profiles::with_ignore_check(
+        profiles::current(dir.path()),
+        &profiles::ignore_check(dir.path()),
+    );
+
+    assert_eq!(
+        guarded
+            .profiles()
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect::<Vec<_>>(),
+        ["opencode", "codex"],
+        "the built-in `claude` stood in for the refused replacement"
+    );
+}

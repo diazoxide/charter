@@ -113,6 +113,12 @@ class Scenario:
     #: Why the two stderrs are not expected to match. charter's refusals are prose and the
     #: Rust CLI's are not, so a refusal scenario states its own shape via `refusal` instead.
     stderr_differs: str = ""
+    #: Why the Rust side prints only the FIRST PART of what charter prints — and the claim
+    #: that every byte it does print is charter's, in charter's order. Weaker than an exact
+    #: match and much stronger than `stderr_differs`, which compares nothing at all: it is
+    #: for a command charter answers in two sections where only the first is ported. The
+    #: Rust side must print something, or "a prefix" would be satisfied by silence.
+    stderr_prefix: str = ""
 
     def rust_args(self) -> list[str]:
         return self.rust if self.rust is not None else self.python
@@ -210,7 +216,108 @@ CONFIRMS_ON_STDERR = (
     "output is M2's, not M1.1's. The plane each side leaves is what this compares."
 )
 
+def _declare_harness_profiles(root: Path) -> None:
+    """A `charter.local.toml` in the plane, which no fixture can carry.
+
+    The file is machine-local and gitignored by construction (ADR 0022), so a committed
+    fixture holding one would be the very thing the feature refuses. It is written here, into
+    each side's copy, so both read the same declarations.
+
+    Every refusal class the parser has, in one file, because a refusal SENTENCE is what an
+    operator acts on and a sentence that drifts between the two implementations is a plane
+    that answers differently depending on which charter was asked.
+    """
+    (root / "charter.local.toml").write_text(
+        '''[harness]
+default = "claude-work"
+
+[harness.claude-work]
+kind = "claude"
+command = ["claude", "--model", "opus"]
+env = { CLAUDE_CONFIG_DIR = "~/.claude-work" }
+
+[harness.claude]
+kind = "claude"
+command = ["~/.local/bin/claude"]
+
+[harness.bad-kind]
+kind = "opencodex"
+command = ["x"]
+
+[harness.no-command]
+kind = "codex"
+
+[harness.shell-string]
+kind = "codex"
+command = "codex resume"
+
+[harness.typo-env]
+kind = "claude"
+command = ["claude"]
+enviroment = { CLAUDE_CONFIG_DIR = "~/.x" }
+
+[harness.secret-env]
+kind = "claude"
+command = ["claude"]
+env = { ANTHROPIC_API_KEY = "x" }
+
+[harness.charter-env]
+kind = "claude"
+command = ["claude"]
+env = { CHARTER_HARNESS = "claude-code" }
+
+[harness.runs-charter]
+kind = "claude"
+command = ["charter", "status"]
+
+[harness.save]
+kind = "claude"
+command = ["claude"]
+
+[harness."has.dot"]
+kind = "claude"
+command = ["claude"]
+
+[harness.parent.nested]
+kind = "claude"
+command = ["claude"]
+
+[frame]
+density = "wide"
+''',
+        encoding="utf-8",
+    )
+
+
+#: What `charter harness list` prints after its profile table, and this app does not.
+#: The registry section is the harness REGISTRY's surface — every kind's capability deficits
+#: as prose, opencode's and Codex's included — and porting it is not what M1.2 is. What the
+#: prefix comparison still proves is the whole of the part that IS ported: the table, its
+#: column widths, every refusal sentence, and the git-state fix line.
+HARNESS_LIST_REGISTRY_SECTION = (
+    "charter follows the profile table with the harness registry and its per-kind deficits; "
+    "the app ports profiles, not the registry. Every byte before that section must match."
+)
+
 SCENARIOS = [
+    Scenario(
+        name="harness-list-reads-the-same-profiles-and-refuses-the-same-ones",
+        plane="daily",
+        python=["harness", "list"],
+        pins_the_clock=False,
+        setup=_declare_harness_profiles,
+        stderr_prefix=HARNESS_LIST_REGISTRY_SECTION,
+        ignore={
+            "charter.local.toml": "written by this scenario's own setup, into both copies",
+        },
+    ),
+    Scenario(
+        name="harness-list-on-a-plane-that-declares-nothing",
+        plane="minimal",
+        python=["harness", "list"],
+        pins_the_clock=False,
+        stderr_prefix=HARNESS_LIST_REGISTRY_SECTION,
+    ),
     Scenario(
         stderr_differs=CONFIRMS_ON_STDERR,
         name="vision",
@@ -654,6 +761,16 @@ def check(scenario: Scenario, binary: Path) -> bool:
                         "    stderr now MATCHES, but the scenario still says it differs "
                         f"({scenario.stderr_differs}) — drop the note"
                     )
+            elif scenario.stderr_prefix:
+                if not rs.stderr:
+                    problems.append(
+                        "    rust printed NOTHING, and every string is a prefix of that — "
+                        f"this scenario claims {scenario.stderr_prefix}"
+                    )
+                elif not py.stderr.startswith(rs.stderr):
+                    problems.append("    rust's stderr is not the start of python's:")
+                    problems.append(f"      python {py.stderr[:len(rs.stderr) + 120]!r}")
+                    problems.append(f"      rust   {rs.stderr!r}")
             elif py.stderr != rs.stderr:
                 problems.append("    stderr differs:")
                 problems.append(f"      python {py.stderr!r}")

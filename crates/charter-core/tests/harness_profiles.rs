@@ -1,0 +1,434 @@
+//! What a plane's harness profiles are, and why each refused one is refused.
+//!
+//! Every expectation here was taken FROM the Python charter by running it over the same
+//! `charter.local.toml` these tests write (`charter/profiles.py`, ADR 0022). Two of them
+//! refuted what this file first claimed, which is the reason they are taken that way: the
+//! registry's order is `claude, opencode, codex` and not alphabetical, and a typo'd `env`
+//! key raises TWO refusals rather than one.
+//!
+//! A profile's command runs on a click, with no prompt between the click and the exec. That
+//! is why a refusal here is a refusal and not a warning.
+
+use std::fs;
+use std::path::Path;
+
+use charter_core::profiles::{self, Source};
+
+/// A plane with the two files profiles are read from.
+fn plane(committed: &str, local: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("charter.toml"), committed).unwrap();
+    if !local.is_empty() {
+        fs::write(dir.path().join(profiles::LOCAL_FILE), local).unwrap();
+    }
+    dir
+}
+
+fn why(set: &profiles::ProfileSet, name: &str) -> String {
+    set.refused
+        .iter()
+        .find(|r| r.name == name)
+        .unwrap_or_else(|| panic!("nothing refused '{name}'; refused: {:?}", set.refused))
+        .reason
+        .clone()
+}
+
+fn names(set: &profiles::ProfileSet) -> Vec<&str> {
+    set.profiles().iter().map(|p| p.name.as_str()).collect()
+}
+
+#[test]
+fn a_plane_that_declares_nothing_still_has_one_profile_per_harness_charter_knows() {
+    // `charter/profiles.py:218` — a built-in per registered kind, so a plane that has no
+    // `charter.local.toml` sees no change. In REGISTRY order, which the oracle says is
+    // claude, opencode, codex; not alphabetical, and the listing prints it.
+    let dir = plane("[plane]\nname = \"p\"\n", "");
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(names(&set), ["claude", "opencode", "codex"]);
+    assert!(set.profiles().iter().all(|p| p.source == Source::BuiltIn));
+    assert_eq!(set.refused, []);
+}
+
+#[test]
+fn a_profile_in_the_committed_file_is_refused_with_a_pointer_to_the_local_one() {
+    // ADR 0022's central rule. A command in the committed file could be changed by a merged
+    // pull request and then run on every machine that pulls it.
+    let dir = plane(
+        "[harness.committed-one]\nkind = \"claude\"\ncommand = [\"claude\"]\n",
+        "",
+    );
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(
+        why(&set, "committed-one"),
+        "[harness.committed-one] is in charter.toml, which is committed — a profile's \
+         command runs on a click, so charter reads profiles only from charter.local.toml, \
+         which stays on this machine. Move the table there; charter.toml's [harness] keeps \
+         `default` alone."
+    );
+    assert_eq!(names(&set), ["claude", "opencode", "codex"]);
+}
+
+#[test]
+fn a_declared_profile_replaces_the_built_in_of_its_name_in_that_built_ins_place() {
+    // The operator said how `claude` runs on this machine. Its POSITION is the built-in's,
+    // because the listing is ordered and a replacement is not a new row at the end.
+    let dir = plane(
+        "",
+        "[harness.claude]\nkind = \"claude\"\ncommand = [\"~/.local/bin/claude\"]\n\
+         [harness.work]\nkind = \"claude\"\ncommand = [\"claude\"]\n",
+    );
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(names(&set), ["claude", "opencode", "codex", "work"]);
+    let claude = set.get("claude").unwrap();
+    assert_eq!(claude.command, ["~/.local/bin/claude"]);
+    assert_eq!(claude.source, Source::Local);
+}
+
+#[test]
+fn a_refused_replacement_takes_the_built_in_name_down_with_it() {
+    // Ruling 37: the operator said how that name runs, and the built-in standing in would
+    // run the command they replaced — review 13's `enviroment` typo launching the default
+    // account is exactly that case.
+    let dir = plane(
+        "",
+        "[harness.claude]\nkind = \"claude\"\ncommand = [\"claude\"]\n\
+         enviroment = { CLAUDE_CONFIG_DIR = \"~/.x\" }\n",
+    );
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(names(&set), ["opencode", "codex"]);
+    assert!(set.get("claude").is_none());
+}
+
+#[test]
+fn a_key_a_profile_does_not_have_refuses_that_profile_rather_than_being_ignored() {
+    // Review 13. A typo such as `enviroment` would otherwise DROP `CLAUDE_CONFIG_DIR` and
+    // launch the default account without a word — the failure the feature exists to prevent,
+    // arrived at by spelling. The oracle raises two refusals for this one table, because
+    // once parsed a typo'd key holding an inline table and a dotted name cannot be told
+    // apart, so both readings are named.
+    let dir = plane(
+        "",
+        "[harness.typo-env]\nkind = \"claude\"\ncommand = [\"claude\"]\n\
+         enviroment = { CLAUDE_CONFIG_DIR = \"~/.x\" }\n",
+    );
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(
+        why(&set, "typo-env"),
+        "profile 'typo-env' has enviroment, which charter does not read — a profile is \
+         kind, command and env. Remove it."
+    );
+    assert_eq!(
+        why(&set, "typo-env.enviroment"),
+        "[harness.typo-env] holds a table enviroment, which charter reads neither way — \
+         enviroment is not a key a profile has (kind, command and env), and if a profile \
+         named 'typo-env.enviroment' was meant, a profile's name is letters, digits, '_' \
+         and '-', with no dot, because a dot breaks tmux targets. Rename the key, or give \
+         that profile a name of its own."
+    );
+}
+
+#[test]
+fn a_parent_holding_only_sub_tables_declares_nothing_and_leaves_its_built_in_alone() {
+    // F4: `[harness.claude.alt]` alone is a dotted name written without quotes. The parent
+    // is a declaration only when it carries keys of its own.
+    let dir = plane(
+        "",
+        "[harness.claude.alt]\nkind = \"claude\"\ncommand = [\"claude\"]\n",
+    );
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(names(&set), ["claude", "opencode", "codex"]);
+    assert_eq!(set.get("claude").unwrap().source, Source::BuiltIn);
+    assert!(why(&set, "claude.alt").starts_with("[harness.claude] holds a table alt,"));
+}
+
+#[test]
+fn a_kind_charter_cannot_launch_refuses_the_profile_and_names_every_kind_it_can() {
+    let dir = plane("", "[harness.x]\nkind = \"opencodex\"\ncommand = [\"x\"]\n");
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(
+        why(&set, "x"),
+        "profile 'x' has kind opencodex, which is not a harness charter can launch — one \
+         of: claude, opencode, codex. Set kind to one of them."
+    );
+}
+
+#[test]
+fn a_command_written_as_a_shell_string_is_refused_because_no_shell_runs_it() {
+    let dir = plane(
+        "",
+        "[harness.x]\nkind = \"codex\"\ncommand = \"codex resume\"\n",
+    );
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(
+        why(&set, "x"),
+        "profile 'x' has no usable command — command is a list of arguments, [\"claude\"], \
+         never a shell string, because no shell runs it. Write it as a list."
+    );
+}
+
+#[test]
+fn an_env_name_that_looks_like_a_credential_is_refused_and_points_at_the_harnesss_own_login() {
+    // Measured on Claude Code and Codex: a variable set on the harness process reaches the
+    // shell the model runs. Charter declines to hold a credential in a profile.
+    let dir = plane(
+        "",
+        "[harness.x]\nkind = \"claude\"\ncommand = [\"claude\"]\n\
+         env = { ANTHROPIC_API_KEY = \"x\" }\n",
+    );
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(
+        why(&set, "x"),
+        "profile 'x' sets ANTHROPIC_API_KEY, which is named like a credential — charter \
+         holds no credential in a profile, because anything set on the harness reaches the \
+         model's own shell. Log in inside that harness instead: set CLAUDE_CONFIG_DIR and \
+         run /login inside Claude Code."
+    );
+}
+
+#[test]
+fn a_profile_may_not_set_one_of_charters_own_variables() {
+    // Ruling 14: a profile's `CHARTER_HARNESS` would tell every hook the wrong harness.
+    let dir = plane(
+        "",
+        "[harness.x]\nkind = \"claude\"\ncommand = [\"claude\"]\n\
+         env = { CHARTER_HARNESS = \"claude-code\" }\n",
+    );
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(
+        why(&set, "x"),
+        "profile 'x' sets CHARTER_HARNESS, one of charter's own variables — charter sets \
+         those itself, and a profile's value would tell every hook the wrong harness or \
+         plane. Remove it."
+    );
+}
+
+#[test]
+fn a_name_with_a_dot_is_refused_because_a_dot_breaks_tmux_targets() {
+    let dir = plane(
+        "",
+        "[harness.\"has.dot\"]\nkind = \"claude\"\ncommand = [\"claude\"]\n",
+    );
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(
+        why(&set, "has.dot"),
+        "profile 'has.dot' is not a name charter accepts — letters, digits, '_' and '-', \
+         starting with a letter or digit, and no dot, because a dot breaks tmux targets. \
+         Rename the table."
+    );
+}
+
+#[test]
+fn a_section_other_than_harness_in_the_local_file_is_refused_by_name() {
+    // An ignored file must not change plane policy with no trace in git — `[[forge]]` hosts
+    // steer the one-credential guard.
+    let dir = plane("", "[frame]\ndensity = \"wide\"\n");
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(
+        why(&set, "frame"),
+        "[frame] in charter.local.toml is not read — that file carries [harness] and \
+         nothing else, because an ignored file must not change plane policy with no trace \
+         in git. Put [frame] in charter.toml."
+    );
+}
+
+#[test]
+fn a_local_file_that_does_not_parse_refuses_itself_and_leaves_the_built_ins_standing() {
+    let dir = plane("", "this is not toml\n");
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(names(&set), ["claude", "opencode", "codex"]);
+    assert!(
+        why(&set, "").starts_with("charter.local.toml could not be read ("),
+        "{:?}",
+        why(&set, "")
+    );
+}
+
+#[test]
+fn the_local_files_default_wins_over_the_committed_ones() {
+    let dir = plane(
+        "[harness]\ndefault = \"codex\"\n",
+        "[harness]\ndefault = \"claude\"\n",
+    );
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(set.default.as_deref(), Some("claude"));
+    assert_eq!(set.default_from.as_deref(), Some(profiles::LOCAL_FILE));
+}
+
+#[test]
+fn a_default_naming_no_profile_this_machine_has_marks_no_row_rather_than_refusing_a_launch() {
+    let dir = plane("[harness]\ndefault = \"claude-work\"\n", "");
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(set.default, None);
+    assert_eq!(set.default_refused.as_deref(), Some("claude-work"));
+}
+
+#[test]
+fn a_profile_named_like_a_charter_command_is_refused_because_the_name_is_the_commands() {
+    // `current`, not `derive`: this rule needs charter's own command words.
+    let dir = plane(
+        "",
+        "[harness.save]\nkind = \"claude\"\ncommand = [\"claude\"]\n",
+    );
+
+    let set = profiles::current(dir.path());
+
+    assert_eq!(
+        why(&set, "save"),
+        "profile 'save' is named like the command `charter save`, and that name belongs to \
+         the command. Rename the table."
+    );
+    assert!(set.get("save").is_none());
+}
+
+#[test]
+fn a_profile_that_runs_charter_itself_is_refused() {
+    // Ruling 14. A profile names the harness a chat runs, and charter is not a harness.
+    let dir = plane(
+        "",
+        "[harness.x]\nkind = \"claude\"\ncommand = [\"charter\", \"status\"]\n",
+    );
+
+    let set = profiles::current(dir.path());
+
+    assert_eq!(
+        why(&set, "x"),
+        "profile 'x' runs charter itself — a profile names the harness a chat runs, and \
+         charter is not a harness. Give it the harness's own command."
+    );
+}
+
+#[test]
+fn charter_is_recognised_however_it_is_spelt_including_through_python() {
+    // `charter/hooks.py:840` — `charter`, `edm`, and `python -m charter`, case-folded,
+    // because on a case-insensitive filesystem `CHARTER` runs the same binary.
+    for command in [
+        "[\"charter\"]",
+        "[\"edm\", \"status\"]",
+        "[\"/usr/bin/CHARTER\"]",
+        "[\"python3\", \"-m\", \"charter\"]",
+    ] {
+        let dir = plane(
+            "",
+            &format!("[harness.x]\nkind = \"claude\"\ncommand = {command}\n"),
+        );
+
+        let set = profiles::current(dir.path());
+
+        assert!(
+            set.get("x").is_none(),
+            "{command} was taken as a harness charter could launch"
+        );
+    }
+}
+
+#[test]
+fn a_tilde_is_expanded_at_the_launch_and_never_in_the_file() {
+    // The file is what an edit changes, and a home directory that moved would otherwise
+    // make every profile read as CHANGED and ask again about a command nobody touched.
+    let dir = plane(
+        "",
+        "[harness.x]\nkind = \"claude\"\ncommand = [\"~/bin/claude\", \"~/notes\"]\n\
+         env = { CLAUDE_CONFIG_DIR = \"~/.claude-work\" }\n",
+    );
+    let set = profiles::derive(dir.path());
+    let p = set.get("x").unwrap();
+
+    assert_eq!(p.command, ["~/bin/claude", "~/notes"]);
+    assert_eq!(
+        profiles::expanded_command(p, Path::new("/home/a")),
+        ["/home/a/bin/claude", "~/notes"],
+        "only the program is expanded — an argument is the harness's to interpret"
+    );
+    assert_eq!(
+        profiles::expanded_env(p, Path::new("/home/a")).get("CLAUDE_CONFIG_DIR"),
+        Some(&"/home/a/.claude-work".to_owned())
+    );
+}
+
+#[test]
+fn a_profile_is_shown_as_its_environment_then_a_command_a_person_could_paste() {
+    // `charter/profiles.py:486`, and every piece of it taken from the oracle.
+    let dir = plane(
+        "",
+        "[harness.x]\nkind = \"claude\"\n\
+         command = [\"~/.local/bin/claude\", \"--model\", \"opus 4\"]\n\
+         env = { A = \"b c\" }\n",
+    );
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(
+        profiles::display(set.get("x").unwrap()),
+        "A=b c ~/.local/bin/claude --model 'opus 4'"
+    );
+}
+
+#[test]
+fn a_leading_tilde_stays_bare_so_the_line_can_be_pasted_into_a_shell() {
+    // #1004's proof run: `shlex.quote` puts a leading `~` INSIDE quotes, where a shell does
+    // not expand it, so `'~/.local/bin/codex'` pasted into a terminal names a directory
+    // called `~`. The `~/` stays bare and the rest is quoted.
+    let dir = plane(
+        "",
+        "[harness.x]\nkind = \"claude\"\ncommand = [\"~/a b/claude\"]\n",
+    );
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(profiles::display(set.get("x").unwrap()), "~/'a b/claude'");
+}
+
+#[test]
+fn another_users_home_stays_quoted_whole_because_charter_does_not_guess_which_home() {
+    let dir = plane(
+        "",
+        "[harness.x]\nkind = \"claude\"\ncommand = [\"~other/bin/claude\"]\n",
+    );
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(
+        profiles::display(set.get("x").unwrap()),
+        "'~other/bin/claude'"
+    );
+}
+
+#[test]
+fn a_control_byte_in_a_command_is_shown_escaped_and_never_redraws_the_row() {
+    // Ruling 35: `charter.local.toml` is a file a chat can write, and the selector draws
+    // this line. The quoting happens first and the escaping second, as the oracle does it.
+    let dir = plane(
+        "",
+        "[harness.x]\nkind = \"claude\"\ncommand = [\"cl\\naude\"]\n",
+    );
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(profiles::display(set.get("x").unwrap()), "'cl\\u000aaude'");
+}
