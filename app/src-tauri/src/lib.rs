@@ -44,6 +44,21 @@ struct Watching {
 /// When this process started, as close to it as the app can see.
 static STARTED: LazyLock<Instant> = LazyLock::new(Instant::now);
 
+/// Says how far the launch has got, when `CHARTER_LAUNCH_LOG` is set.
+///
+/// A desktop app that hangs on the way up has nothing to show for it — no window, and on
+/// some desktops not even an icon — and the interesting part happens before any of the app
+/// can report anything. This is the thread to pull: each step, with the time it was
+/// reached. Silent unless the variable is set, which nothing but a person debugging does.
+fn reached(step: &str) {
+    if std::env::var_os("CHARTER_LAUNCH_LOG").is_some() {
+        eprintln!(
+            "charter-launch {:>5} ms  {step}",
+            STARTED.elapsed().as_millis()
+        );
+    }
+}
+
 /// The window says its first frame is on screen, which is where cold start ends.
 ///
 /// It is silent unless `CHARTER_BENCH_LOG` is set — only `tools/bench.mjs` sets it — so in
@@ -314,13 +329,16 @@ pub fn run() {
     // Read first, so that what it holds is when the process started and not when the window
     // first asked.
     LazyLock::force(&STARTED);
+    reached("run() entered");
     let commands = commands();
 
     #[cfg(debug_assertions)]
     commands
         .export(typescript(), BINDINGS)
         .expect("the TypeScript bindings are written");
+    reached("the bindings are written");
 
+    reached("building");
     let app = tauri::Builder::default()
         // First, so a second launch is handed to the app already running rather than
         // starting a second one — which would be a second set of sessions on the same plane.
@@ -349,6 +367,7 @@ pub fn run() {
             }
         })
         .setup(|app| {
+            reached("setup");
             app.manage(Quitting::default());
 
             let plane = std::env::current_dir()
@@ -396,6 +415,7 @@ pub fn run() {
                      (a plane is the nearest directory at or above this one with a charter.toml)"
                 ),
             }
+            reached("the record is back");
             app.manage(chats);
             app.manage(Plane(plane));
 
@@ -410,6 +430,7 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
+        .inspect(|_| reached("built"))
         .expect("error while building tauri application")
         // Tauri ends the process itself, which runs no destructor and waits for no thread, so
         // the sessions are ended here — otherwise their programs are left to the operating
