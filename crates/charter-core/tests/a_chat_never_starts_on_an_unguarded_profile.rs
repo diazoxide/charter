@@ -408,3 +408,39 @@ fn both_kinds_this_app_does_start_are_taken_by_their_declared_word() {
     }
     assert_eq!(charter_core::harness::Harness::of_kind("opencode"), None);
 }
+
+#[test]
+fn detect_says_a_kind_is_not_startable_rather_than_reporting_a_probe_it_never_ran() {
+    // The other half of the same rule. `wired_or_refusal` refuses before it asks anything,
+    // but `detect` is public and `doctor`-shaped callers reach it directly — and its answer
+    // for opencode used to be "charter has no wiring check for opencode", which reads as
+    // *charter could not look* when the truth is *this app does not do that yet*.
+    //
+    // Without this test a mutation INSIDE `not_startable` leaves the detect path unproven:
+    // the refusal is one function with two callers, and only one of them was covered.
+    let stand = Stand::new();
+    fs::write(
+        stand.root().join(profiles::LOCAL_FILE),
+        "[harness.work]\nkind = \"opencode\"\ncommand = [\"opencode\"]\n",
+    )
+    .unwrap();
+
+    let w = wiring::detect(&stand.profile(), &stand.cwd(), stand.root());
+
+    assert_eq!(
+        w.state,
+        State::Unknown,
+        "a kind this app cannot start is not a pass"
+    );
+    assert!(
+        w.detail.contains(
+            "which this app does not start — charter-app v1 starts Claude Code \
+                           and Codex"
+        ),
+        "detect reported a missing probe instead of the v1 decision: {w:?}"
+    );
+    assert!(
+        !w.detail.contains("charter has no wiring check"),
+        "the missing-probe sentence came back: {w:?}"
+    );
+}
