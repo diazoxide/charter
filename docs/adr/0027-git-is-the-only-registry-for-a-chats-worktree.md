@@ -88,6 +88,32 @@ The denylist test stays as a second line — `git rev-parse --local-env-vars` mu
 that survives into the child — because it turns a mistake in the allowlist into a red test
 rather than a redirection. But it is the check on the fix, not the fix.
 
+**And clearing the environment does not finish it, because `HOME` has to stay.** git reads its
+global config from `HOME`, and that config names programs. Measured, with *exactly* the four
+variables the runner builds and nothing else:
+
+```console
+$ env -i HOME=/tmp/evilhome PATH=/usr/bin:/bin GIT_TERMINAL_PROMPT=0 LC_ALL=C \
+    git -C repo worktree add -b probe …
+→ ran the hook named by /tmp/evilhome/.gitconfig's core.hooksPath
+```
+
+`core.fsmonitor` is the same shape on `status`, which every dirt check runs. An attacker who
+can set `GIT_EXEC_PATH` can set `HOME`, so the two are one hole. `HOME` cannot simply be
+dropped: the operator's global config and every credential helper live there, and `publish`
+needs them.
+
+So the execution keys are turned off **on the command line**, where `-c` beats every config
+file: `-c core.hooksPath=/dev/null -c core.fsmonitor=false` on every call. That disables a
+repository's own hooks for charter's calls too, which is deliberate — charter never commits,
+and a `post-checkout` charter triggered is not one the operator asked for.
+
+What remains is stated rather than implied: `HOME` is the residual surface for anything git
+grows that names a program through config, and `publish` will have to decide about
+`credential.helper` and `core.sshCommand`, which it needs and cannot blanket-disable. The
+claim this ADR is entitled to make is "the environment is constructed and the reachable
+execution keys are pinned", not "the execution surface is closed".
+
 ## Nothing records a worktree except git
 
 Python charter's `worktree.py` opens with the rule and the reason: *"Git is the only registry.
@@ -158,17 +184,28 @@ wrong tree.
 This is the failure shape M1.1's five review rounds kept finding, one notch sideways: not a
 gate one level shallower than the write, but a gate on the name charter built while the write
 lands on what the kernel resolves it to. So worktree paths get a stricter boundary than the
-plane's data directories — the workspace's own worktree root — and the path handed to git is
-resolved, link-free and absolute before git sees it. The design document states, per path,
-which check runs.
+plane's data directories — the workspace's own worktree root — and **the path handed to git is
+the path that was checked**. Checking one string and passing another is how a link is
+laundered past a gate, and a first implementation did exactly that: it built a rebased
+candidate, checked it, threw it away and handed git the original.
 
 **And that boundary is anchored above the part an attacker can move.** Resolving *both* ends —
 asking whether the resolved path starts with the resolved root — is vacuous exactly when it
 matters: point `workspaces/<ws>/.worktrees` at somewhere else and the root resolves there too,
 so every path under it "starts with" it and passes. The anchor is therefore
-`workspaces/<ws>`, which charter created and which the plane's own gate already covers, and
-`.worktrees` itself is required to be link-free rather than followed. A check whose reference
-point the attack can relocate is not a check.
+`workspaces/<ws>`, and "the plane's own gate already covers it" is **asked, not assumed** —
+`contain::writable` and a link-free walk from the plane down, because canonicalising that
+directory would follow a link at `workspaces/<ws>` and move the boundary with it, which is
+charter #442 travelling in a committed plane.
+
+Two further rules fall out, both from measurement rather than from reasoning. A path may not
+carry `..` below the anchor: `strip_prefix` is lexical, and `no_link_on_the_way` pushes a
+`ParentDir` literally and lets the kernel fold it, so every component it stats is a real
+directory and nothing looks like a link — `workspaces/alpha/../../../../etc/passwd` passed.
+And the confinement check belongs immediately before the write, not at the top of the verb:
+with five git subprocesses in between, a racer swapping `.worktrees/<repo>` for a symlink
+after two milliseconds won eight attempts out of eight. What is left is the structural
+check-then-open race this repo already accepts, not one anybody can win at leisure.
 
 ## A worktree charter cuts carries no harness layer, and says so
 

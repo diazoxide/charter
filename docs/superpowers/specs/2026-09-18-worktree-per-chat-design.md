@@ -88,15 +88,32 @@ Three distinct checks, and which one runs where is not left to a reader's infere
 
 | Path | Check |
 | --- | --- |
-| `.worktrees` (created by `create_dir_all`) | `within_workspace` **and** `no_link_on_the_way` |
-| `.worktrees/<repo>` (created) | `within_workspace` **and** `no_link_on_the_way` |
-| `.worktrees/<repo>/<piece>` (created, removed) | `within_workspace` **and** `no_link_on_the_way` |
-| the clone `workspaces/<ws>/<repo>` (git writes `.git/worktrees/<id>` into it) | `contain::writable` **and** `no_link_on_the_way` |
+| `workspaces/<ws>` (the anchor) | `contain::writable` **and** a link-free walk from the plane |
+| `.worktrees/<repo>/<piece>` (created, removed, read) | `within_workspace`, which walks every component below the anchor |
+| the clone `workspaces/<ws>/<repo>` | `within_workspace`, plus name validation |
 
-Both checks on every row, including the ones the first draft gave only one. `.worktrees` is
-the component whose corruption defeats everything below it, and it was the row with the
-weakest check. And all four run in **`add`, `remove`, `merge` and `list` alike** — `remove` is
-the destructive one and was the verb the first draft left on `contain::writable`.
+**One call per path, not several.** `no_link_on_the_way` walks every component below the
+anchor, so a separate check on `.worktrees` or on `.worktrees/<repo>` is a call that cannot
+fail on its own — and a guard no mutation can turn red is a guard nothing is testing. The
+same reasoning removed `list`'s `bare` skip: a bare repository's reported path is its git
+directory, which the workspace filter already excludes.
+
+`within_workspace` runs in **`add`, `remove`, `merge` and `list` alike**. `merge` needs it
+even though it does not write to the piece: it reads HEAD there and then merges *that* branch
+into the clone, so a link makes another workspace's work land here under this piece's name.
+
+`within_workspace` **returns the path it checked**, and callers hand git that one. A first
+implementation built a rebased candidate, checked it, threw it away and passed git the
+original — two different strings, which is exactly how a link gets laundered past a gate.
+
+A path may not carry `..` below the anchor. `strip_prefix` is lexical, and
+`no_link_on_the_way` pushes a `ParentDir` literally and lets the kernel fold it, so every
+component it stats is a real directory and nothing looks like a link. Measured:
+`workspaces/alpha/../../../../etc/passwd` passed.
+
+**The checks sit immediately before the write**, not at the top of the verb. With five git
+subprocesses in between, a racer swapping `.worktrees/<repo>` for a symlink after two
+milliseconds won eight attempts out of eight.
 
 `within_workspace` is new and narrow, and its anchor matters more than its comparison: the
 resolved path must start with **`workspaces/<ws>` resolved**, and `.worktrees` must itself be
@@ -162,7 +179,18 @@ Through the binary (ADR 0027). Every invocation:
   on *every* verb, read-only ones included; `GIT_SSH_COMMAND`, `GIT_ASKPASS` and
   `GIT_PROXY_COMMAND` each name a program git runs; and `PATH` decides which `git` runs at
   all. None of those is repository-local, so no definition git prints will ever mention them.
-- **runs a `git` resolved to an absolute path**, for the same reason.
+- **runs a `git` resolved to an absolute path**, for the same reason — resolved by searching
+  the standard directories and then the *inherited* `PATH` **in the parent**, because after
+  `env_clear` a bare `"git"` resolves against the child's `PATH`, and a fixed list would fail
+  every verb on NixOS, asdf/mise or `~/.local/bin` while git is on PATH.
+- **pins the execution keys with `-c`**: `core.hooksPath=/dev/null` and `core.fsmonitor=false`,
+  because `HOME` must stay (the global config and every credential helper live there) and a
+  config under an attacker's `HOME` names programs git runs. Measured: with exactly the four
+  variables above and nothing else, an attacker-set `HOME` ran a hook on `worktree add` and an
+  fsmonitor program on `status`. `-c` beats every config file. This disables the repository's
+  own hooks for charter's calls too, deliberately: charter never commits.
+- leaves `HOME` as the **named residual**. `publish`, when it lands, has to decide about
+  `credential.helper` and `core.sshCommand`, which it needs and cannot blanket-disable.
 - keeps the denylist **as a test, not as the mechanism**: nothing
   `git rev-parse --local-env-vars` prints may survive into the child, so a mistake in the
   allowlist is a red test rather than a redirection.
