@@ -14,12 +14,15 @@
 //! operator never typed. `program`, `args` and `cwd` are **not** checked: they say what to
 //! run, and there is no shape that separates a harness the operator installed from anything
 //! else they might run. So this file is, for whoever can write it, a way to have a command
-//! run at every later launch — before any window, with nothing to click. It lives inside
-//! the operator's own plane, under a gitignored `.charter/`, so it does not arrive over a
-//! `git pull` and anyone who can write it can already write a shell profile; it is not a
-//! way in. It is worth naming anyway, because it survives: one write buys every launch
-//! after it, and an agent that writes it gets a command run later, in another process,
-//! with none of charter's guards in the path.
+//! run at every later launch — before any window, with nothing to click.
+//!
+//! **It is not true that a gitignored `.charter/` keeps this out of a clone.** An ignore rule
+//! does not apply to a tracked path: `git add -f` commits a symlink here, and a fresh clone
+//! materialises it. That assumption is what left the record reachable through a link, so the
+//! path is guarded now (`no_link_on_the_way`) rather than argued about. What remains true is
+//! that anyone who can *write* this file could already write a shell profile — it is not a
+//! way in, it is a way to *survive*: one write buys every launch after it, in another
+//! process, with none of charter's guards in the path.
 
 use std::path::{Path, PathBuf};
 
@@ -155,7 +158,7 @@ pub fn path(plane_root: &Path) -> PathBuf {
     plane_root.join(IN_PLANE)
 }
 
-/// Refuses a record path that any symlink could take outside the plane.
+/// Refuses a record path a symlink could take outside the plane, or that is not a plain file.
 ///
 /// `.charter/app/reopen.json` is charter's own, created by charter, and nothing legitimate
 /// makes any part of it a link. A committed `.charter/app -> somewhere else` would otherwise
@@ -164,7 +167,20 @@ pub fn path(plane_root: &Path) -> PathBuf {
 /// component from the plane root down is checked with `symlink_metadata`, which does not
 /// follow links, and one link anywhere in the chain refuses the whole operation.
 ///
-/// This is deliberately blunter than resolving the path: a link here has no honest use.
+/// This is deliberately blunter than resolving the path: a link here has no honest use, and
+/// charter's Python side words the same rule the same way — "is a symlink, and charter writes
+/// nothing through one". It checks every component BELOW `plane_root`, not the root itself:
+/// a plane reached through a symlinked parent (`/tmp`, a symlinked `$HOME`) is an ordinary,
+/// honest setup, and the app's own root comes from `getcwd()`, which is already resolved.
+///
+/// It does not stop a **hard** link, which no symlink check can see and git cannot carry;
+/// whoever can make one can already write this file.
+///
+/// The last component is also held to being a regular file. A FIFO is not a link and would
+/// pass a link check, and reading one **blocks for ever** — at launch, before the window and
+/// the tray exist, which leaves an app that can only be killed. `charter/hooks.py` learned
+/// this the hard way ("a FIFO does not raise OSError at all, it *waits*"), and
+/// `docs/plane-format.md` states the rule: never through a symlink, never into a FIFO.
 fn no_link_on_the_way(plane_root: &Path, file: &Path) -> std::io::Result<()> {
     let Ok(rest) = file.strip_prefix(plane_root) else {
         return Err(std::io::Error::new(
@@ -185,6 +201,17 @@ fn no_link_on_the_way(plane_root: &Path, file: &Path) -> std::io::Result<()> {
                     std::io::ErrorKind::PermissionDenied,
                     format!(
                         "{} is a symlink, and charter's own record may not be reached through one",
+                        walked.display()
+                    ),
+                ));
+            }
+            // A record that is not a plain file: a FIFO would block the read for ever, a
+            // device never ends. Directories above it are fine, the record itself is not.
+            Ok(found) if walked == *file && !found.file_type().is_file() => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "{} is not a plain file, and charter reads its record from nothing else",
                         walked.display()
                     ),
                 ));
@@ -211,7 +238,12 @@ pub fn write(plane_root: &Path, record: &Record) -> std::io::Result<()> {
     // Beside itself, then renamed over: a rename is atomic on every platform charter runs
     // on, so a launch reading this file sees the whole of one record or the whole of the
     // one before it. Quitting is when the app is most likely to be killed halfway.
+    // The write lands HERE, so this is the path that has to be checked. Guarding only the
+    // file renamed onto left a committed `reopen.json.writing -> outside` writing the whole
+    // record out of the plane, with no race at all — the same "gate one level shallower than
+    // the write" this guard exists to stop.
     let beside = file.with_extension("json.writing");
+    no_link_on_the_way(plane_root, &beside)?;
     std::fs::write(&beside, text + "\n")?;
     std::fs::rename(&beside, &file)
 }
@@ -222,24 +254,31 @@ pub fn write(plane_root: &Path, record: &Record) -> std::io::Result<()> {
 /// not the record at all, is nothing open — there is no repair that would be honest, and
 /// refusing to start would be worse than starting empty.
 pub fn read(plane_root: &Path) -> Record {
+    read_or_refusal(plane_root).unwrap_or_default()
+}
+
+/// What was open, the refusal that stopped it being read, or nothing.
+///
+/// A refusal is returned rather than swallowed: a poisoned record and an empty one would
+/// otherwise render identically, and the operator would read "nothing to reopen" and conclude
+/// their chats were never recorded rather than that a committed file is defective.
+pub fn read_or_refusal(plane_root: &Path) -> Result<Record, std::io::Error> {
     let file = path(plane_root);
     // A record reached through a link is not this plane's record, and what it holds is a
-    // command line this launch would run. Nothing to put back is the honest answer.
-    if no_link_on_the_way(plane_root, &file).is_err() {
-        return Record::default();
-    }
+    // command line this launch would run.
+    no_link_on_the_way(plane_root, &file)?;
     let Ok(text) = std::fs::read_to_string(&file) else {
-        return Record::default();
+        return Ok(Record::default());
     };
     let Ok(on_disk) = serde_json::from_str::<OnDisk>(&text) else {
-        return Record::default();
+        return Ok(Record::default());
     };
     if on_disk.version != VERSION {
-        return Record::default();
+        return Ok(Record::default());
     }
-    Record {
+    Ok(Record {
         chats: on_disk.chats.into_iter().map(Chat::from).collect(),
-    }
+    })
 }
 
 /// The record as JSON, and the only place this file's field names are written down.
@@ -700,5 +739,65 @@ mod tests {
         write(&plane, &one_chat()).expect("an ordinary plane writes its record");
 
         assert_eq!(read(&plane), one_chat());
+    }
+
+    #[test]
+    fn a_link_at_the_path_the_write_actually_lands_on_is_refused() {
+        // The record is written beside itself and renamed over, so the `.json.writing` path
+        // is where the bytes land — guarding only the renamed-onto name left this open.
+        let held = tempfile::tempdir().unwrap();
+        let plane = held.path().join("plane");
+        let outside = held.path().join("outside");
+        std::fs::create_dir_all(plane.join(".charter/app")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let captured = outside.join("captured.json");
+        std::os::unix::fs::symlink(&captured, plane.join(".charter/app/reopen.json.writing"))
+            .unwrap();
+
+        let refused = write(&plane, &one_chat());
+
+        assert!(refused.is_err(), "the temp path was written through");
+        assert!(
+            !captured.exists(),
+            "the record was written outside the plane"
+        );
+    }
+
+    #[test]
+    fn a_record_that_is_not_a_plain_file_is_refused_instead_of_read_for_ever() {
+        // A FIFO is not a link, so a link check waves it through, and read_to_string on one
+        // never returns — at launch, before there is a window to close.
+        let held = tempfile::tempdir().unwrap();
+        let plane = held.path().to_path_buf();
+        std::fs::create_dir_all(plane.join(".charter/app")).unwrap();
+        let made = std::process::Command::new("mkfifo")
+            .arg(path(&plane))
+            .status()
+            .expect("mkfifo runs");
+        assert!(made.success(), "the test needs a fifo to plant");
+
+        // In a thread, because the whole point is that the unguarded version never returns.
+        let (say, heard) = std::sync::mpsc::channel();
+        let asked = plane.clone();
+        std::thread::spawn(move || say.send(read_or_refusal(&asked).is_err()));
+        let answered = heard
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("reading a fifo record must not block");
+
+        assert!(answered, "a fifo record was accepted");
+    }
+
+    #[test]
+    fn a_refusal_is_returned_rather_than_read_as_an_empty_record() {
+        let (_held, plane, _outside) = a_plane_whose_record_directory_is_a_link();
+
+        let refusal = read_or_refusal(&plane).expect_err("a linked record is a refusal");
+
+        assert!(
+            refusal.to_string().contains(".charter/app"),
+            "the refusal must name the path an operator has to repair: {refusal}"
+        );
+        // And the forgiving door still answers, for callers that only want what to reopen.
+        assert_eq!(read(&plane), Record::default());
     }
 }
