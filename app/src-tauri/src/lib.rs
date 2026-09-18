@@ -117,7 +117,11 @@ fn plane_sidebar(sessions: tauri::State<'_, Sessions>) -> Result<Sidebar, String
 
     let mut workspaces = Vec::new();
     for name in plane.workspaces().map_err(|err| err.to_string())? {
-        let ws = plane.workspace(&name);
+        // A name off disk is re-checked before it is joined onto a path; one that cannot be
+        // a workspace is left out rather than drawn.
+        let Ok(ws) = plane.workspace(&name) else {
+            continue;
+        };
         workspaces.push(SidebarWorkspace {
             path: ws.dir().display().to_string(),
             vision: ws.vision(),

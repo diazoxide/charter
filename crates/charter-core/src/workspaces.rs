@@ -24,6 +24,15 @@ const WS_MEMORY_HEADER: &str = "# {name} — task memory\n\nOne file per memory 
 /// The header `todos/MEMORY.md` is created with, `{name}` to fill.
 const TODOS_HEADER: &str = "# Todos — workspace `{name}`\n\nOne line per todo; each links a file holding one thing this task still means to do.\nOpen or done — and done removes it, leaving its trace in the journal instead.\n";
 
+/// A name that cannot name a workspace or a persona this plane contains.
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum NameError {
+    #[error("no workspace '{0}'")]
+    Workspace(String),
+    #[error("no persona '{0}'")]
+    Persona(String),
+}
+
 /// A control plane, rooted at the directory holding `charter.toml`.
 #[derive(Debug, Clone)]
 pub struct Plane {
@@ -58,7 +67,10 @@ impl Plane {
             .into_iter()
             .filter(|p| p.is_dir())
             .filter(|p| !file_name(p).starts_with('.'))
-            .filter(|p| !p.join(".git").exists())
+            // A real clone, not a worktree. Git draws the line: a clone's `.git` is a
+            // DIRECTORY, a linked worktree's `.git` is a FILE holding `gitdir:` — so a
+            // worktree under `workspaces/` is still a workspace.
+            .filter(|p| !p.join(".git").is_dir())
             .map(|p| file_name(&p).to_string())
             .collect();
         names.sort();
@@ -104,11 +116,19 @@ impl Plane {
             .map(str::to_string)
     }
 
-    pub fn workspace(&self, name: &str) -> Workspace {
-        Workspace {
+    /// One workspace of this plane, by name.
+    ///
+    /// The name is checked BEFORE it is joined onto a path. `Path::join` throws the prefix
+    /// away when handed an absolute path and `..` walks out of the plane, so an unchecked
+    /// name here is a write anywhere on the filesystem.
+    pub fn workspace(&self, name: &str) -> Result<Workspace, NameError> {
+        if !crate::contain::workspace_name_ok(name) {
+            return Err(NameError::Workspace(name.to_string()));
+        }
+        Ok(Workspace {
             dir: self.root.join("workspaces").join(name),
             name: name.to_string(),
-        }
+        })
     }
 
     /// The plane's personas: a directory holding `persona.md` whose name does not start with
@@ -285,7 +305,12 @@ fn read_store(dir: &Path) -> io::Result<Vec<Entry>> {
         if file_name(&path) == "MEMORY.md" {
             continue;
         }
-        let text = std::fs::read_to_string(&path)?;
+        // An entry charter cannot read is SKIPPED, not fatal. Python's `_entries_of` does
+        // the same, and the reason is the sidebar: propagating here turned one chmod-000
+        // file in one workspace into a window with no workspaces in it at all.
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
         entries.push(parse_entry(
             path.file_stem()
                 .unwrap_or_default()
@@ -302,9 +327,13 @@ fn parse_entry(slug: &str, text: &str) -> Entry {
     let mut title = String::new();
     let mut stamp = String::new();
     let mut body_from = 0usize;
-    for (i, line) in text.lines().enumerate() {
-        if i == 0 {
-            title = line.trim_start_matches("# ").trim().to_string();
+    for (i, line) in crate::mdsection::split_lines(text).into_iter().enumerate() {
+        // The first `# ` line anywhere, and `[2..]` ONCE — a stored title of `# Hello`
+        // reads as `# Hello`, not `Hello`, because charter takes `ln[2:].strip()`.
+        if title.is_empty() && i == 0 {
+            if let Some(rest) = line.strip_prefix("# ") {
+                title = crate::memstore::py_strip(rest).to_string();
+            }
         } else if stamp.is_empty() && line.starts_with('_') {
             stamp = line
                 .trim_matches('_')
@@ -315,16 +344,20 @@ fn parse_entry(slug: &str, text: &str) -> Entry {
             body_from = i + 1;
         }
     }
-    let body = text
-        .lines()
+    let body = crate::mdsection::split_lines(text)
+        .into_iter()
         .skip(body_from)
         .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_string();
+        .join("\n");
+    let body = crate::memstore::py_strip(&body).to_string();
     Entry {
         slug: slug.to_string(),
-        title,
+        // A file with no heading is named by its stem, as charter names one.
+        title: if title.is_empty() {
+            slug.to_string()
+        } else {
+            title
+        },
         stamp,
         body,
     }
@@ -351,6 +384,24 @@ fn file_name(path: &Path) -> std::borrow::Cow<'_, str> {
     path.file_name().unwrap_or_default().to_string_lossy()
 }
 
+/// Twelve hex characters no other writer in this process will produce, so the temp name is
+/// unique per CALL and not merely per process.
+///
+/// charter's own temp is `<target>.<pid>.<12 random hex>.tmp`: the pid separates two
+/// processes (#893 — two commands scaffolding one workspace used to share a single
+/// `workspace.json.tmp`) and the random half separates two writers inside one, which threads
+/// in a single process are.
+fn scratch_tag() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    let mixed = nanos ^ (NEXT.fetch_add(1, Ordering::Relaxed) << 32);
+    format!("{:012x}", mixed & 0xffff_ffff_ffff)
+}
+
 /// Write `bytes` to `path` through a temp file beside it, then rename.
 ///
 /// One of this file's readers is `git add`, so half a manifest is not a glitch somebody
@@ -359,7 +410,11 @@ fn file_name(path: &Path) -> std::borrow::Cow<'_, str> {
 fn replace_atomically(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     let name = file_name(path);
-    let temp = dir.join(format!("{name}.{}.tmp", std::process::id()));
+    let temp = dir.join(format!(
+        "{name}.{}.{}.tmp",
+        std::process::id(),
+        scratch_tag()
+    ));
     // The mode the file ends up with is the temp file's: `rename` carries the source's,
     // so it is created here under the umask rather than with a private mode.
     std::fs::write(&temp, bytes)?;

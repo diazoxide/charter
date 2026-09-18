@@ -33,9 +33,13 @@ enum Command {
 enum WorkspaceCommand {
     /// List the plane's workspaces, one per line.
     List,
-    /// Set a workspace's `## Vision`.
+    /// Show or set a workspace's `## Vision`.
+    ///
+    /// With text, replace it; without, print it. Empty text is the SHOWING form, as it is
+    /// in Python charter — `if text:` there, so `vision ""` prints rather than erasing a
+    /// committed, hand-edited file.
     Vision {
-        text: String,
+        text: Option<String>,
         #[command(flatten)]
         common: Common,
     },
@@ -89,6 +93,13 @@ fn plane() -> Result<Plane, String> {
         .map_err(|e| e.to_string())
 }
 
+/// The workspace a command names, refusing a name that cannot be one.
+fn workspace(common: &Common) -> Result<charter_core::workspaces::Workspace, String> {
+    plane()?
+        .workspace(&common.workspace)
+        .map_err(|e| e.to_string())
+}
+
 fn run() -> Result<(), String> {
     match Cli::parse().command {
         Command::Root => {
@@ -100,19 +111,29 @@ fn run() -> Result<(), String> {
             }
         }
         Command::Workspace(WorkspaceCommand::Vision { text, common }) => {
-            plane()?
-                .workspace(&common.workspace)
-                .set_vision(&text)
-                .map_err(|e| e.to_string())?;
+            let ws = workspace(&common)?;
+            // A workspace charter does not have is not one this scaffolds: `vision` shows or
+            // replaces, and inventing the directory is what made a bad `-w` silent.
+            if !ws.dir().is_dir() {
+                return Err(format!("no workspace '{}'", common.workspace));
+            }
+            match text.as_deref().filter(|t| !t.is_empty()) {
+                Some(text) => ws.set_vision(text).map_err(|e| e.to_string())?,
+                None => {
+                    let vision = ws.vision();
+                    if !vision.is_empty() {
+                        println!("{vision}");
+                    }
+                }
+            }
         }
         Command::Workspace(WorkspaceCommand::Remember { text, common }) => {
-            plane()?
-                .workspace(&common.workspace)
+            workspace(&common)?
                 .remember(&text, common.stamp()?)
                 .map_err(|e| e.to_string())?;
         }
         Command::Workspace(WorkspaceCommand::Todo { words, common }) => {
-            let ws = plane()?.workspace(&common.workspace);
+            let ws = workspace(&common)?;
             let stamp = common.stamp()?;
             match words.as_slice() {
                 [] => {

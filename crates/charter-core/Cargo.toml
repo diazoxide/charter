@@ -16,7 +16,7 @@ portable-pty = "0.9"
 # `preserve_order` keeps a manifest's key order as it was read: charter rewrites a
 # document it read, so a Rust writer that sorted keys would reorder the operator's file.
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-serde_json = { workspace = true, features = ["preserve_order"] }
+serde_json = { workspace = true, features = ["preserve_order", "arbitrary_precision"] }
 sha2 = "0.10"
 thiserror.workspace = true
 toml = "0.9"

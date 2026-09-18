@@ -4,6 +4,22 @@
 //! beside it. The filename is part of the format — `ws todo done <slug>` closes a todo by
 //! its file stem — so the slug rule is reproduced exactly rather than approximated.
 
+/// Is `c` whitespace to Python's `str.strip()`?
+///
+/// **Not `char::is_whitespace`.** Python drives `strip()` off `str.isspace()`, which is true
+/// for the four separator controls U+001C–U+001F; Rust's `White_Space` property is false for
+/// all four. The difference is not cosmetic here: `write` refuses an empty body so that a
+/// failed substitution cannot land a secret in a memory file, and a body of only U+001F is
+/// empty to Python and not to Rust.
+pub fn is_python_space(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '\u{1c}' | '\u{1d}' | '\u{1e}' | '\u{1f}')
+}
+
+/// `str.strip()`.
+pub fn py_strip(text: &str) -> &str {
+    text.trim_matches(is_python_space)
+}
+
 /// The longest a memory title may be: it becomes a heading, an index row and part of a
 /// filename.
 pub const TITLE_MAX: usize = 72;
@@ -45,7 +61,7 @@ pub fn title_of(text: &str) -> String {
     // One strip, on the line: charter's reader derives the same string, and a second
     // spelling of "first line, stripped, capped" is how the two come to disagree.
     for line in crate::mdsection::split_lines(text) {
-        let line = line.trim();
+        let line = py_strip(line);
         if !line.is_empty() {
             return line.chars().take(TITLE_MAX).collect();
         }
@@ -90,7 +106,7 @@ pub fn write(
     index: bool,
     stamp: chrono::NaiveDateTime,
 ) -> std::io::Result<std::path::PathBuf> {
-    let text = text.trim();
+    let text = py_strip(text);
     if text.is_empty() {
         // charter raises here, and the reason is not tidiness: a secret must never reach a
         // memory file, and an empty body is how a failed substitution arrives.
@@ -100,7 +116,7 @@ pub fn write(
         ));
     }
     let title = match title {
-        Some(t) => t.trim().chars().take(TITLE_MAX).collect::<String>(),
+        Some(t) => py_strip(t).chars().take(TITLE_MAX).collect::<String>(),
         None => title_of(text),
     };
     std::fs::create_dir_all(dir)?;

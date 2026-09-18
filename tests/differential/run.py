@@ -13,8 +13,18 @@ the same fixture plane and the same input give the same output and the same resu
 both implementations. This is that test for the plane writes.
 
 Each scenario copies a fixture plane TWICE. Python charter runs one command against the first
-copy; the Rust `charter` binary runs the same command against the second. Then the two trees are
-compared file by file, byte for byte, and so is stdout.
+copy; the Rust `charter` binary runs the same command against the second. Then:
+
+- every file under either plane is compared, by path and byte for byte;
+- so is the set of directories, so a directory one side creates and the other does not is seen;
+- on POSIX, so is each file's mode, because charter writes 0600 where it means private;
+- so is the exit status;
+- and so is stdout — unless the scenario says `stdout=DIFFERS` with the reason, which is how a
+  known gap is recorded rather than quietly skipped. A scenario that says nothing must match.
+
+Neither side may write OUTSIDE its plane copy. Each copy is laid out under its own directory
+with a sentinel tree beside it, and both are checked afterwards: a containment bug writes where
+`rglob` over the plane cannot see it, so it has to be looked for on purpose.
 
     ./run.py                        # every scenario
     ./run.py --scenario vision      # one
@@ -38,6 +48,7 @@ import argparse
 import filecmp
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -84,6 +95,14 @@ class Scenario:
     rust: list[str] | None = None
     #: Paths (relative to the plane) neither side is compared on, with the reason.
     ignore: dict[str, str] = field(default_factory=dict)
+    #: Why the two stdouts are not expected to match yet. Empty means they must.
+    stdout_differs: str = ""
+    #: Whether the Rust side takes `--now`. A read command does not.
+    pins_the_clock: bool = True
+    #: Set when the command is SUPPOSED to be refused. Both sides must then fail, with the
+    #: same status — a scenario that expects a refusal and gets a success is a failure, and
+    #: so is one that stops being refused on only one side.
+    expect_failure: bool = False
 
     def rust_args(self) -> list[str]:
         return self.rust if self.rust is not None else self.python
@@ -152,6 +171,56 @@ SCENARIOS = [
         name="todo-done-by-full-stem",
         plane="daily",
         python=["ws", "todo", "done", "20260302-091400-review-the-rollout-plan", "-w", "alpha"],
+    ),
+    # Found by an adversarial review of PR #21: each of these diverged, and three of them
+    # lost or misplaced the operator's data.
+    Scenario(
+        name="vision-shown-not-erased-by-empty-text",
+        plane="daily",
+        # `if text:` in charter, so empty text SHOWS. This wrote an empty vision over a
+        # committed, hand-edited file.
+        python=["workspace", "vision", "", "-w", "alpha"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        name="vision-on-a-workspace-that-is-not-there",
+        expect_failure=True,
+        plane="daily",
+        # Refused on both sides now. This used to scaffold `workspaces/nope/`, which is what
+        # made a traversing `-w` silent.
+        python=["workspace", "vision", "invented", "-w", "nope"],
+    ),
+    Scenario(
+        name="vision-name-that-walks-out-of-the-plane",
+        expect_failure=True,
+        plane="daily",
+        python=["workspace", "vision", "pwned", "-w", "../../outside/escaped"],
+    ),
+    Scenario(
+        name="remember-a-body-of-only-separator-controls",
+        expect_failure=True,
+        plane="daily",
+        # U+001F is whitespace to `str.strip()` and not to Rust's `trim`, so this wrote a
+        # memory file where charter refuses one.
+        python=["workspace", "remember", "\x1f", "-w", "alpha", "--no-sync"],
+        rust=["workspace", "remember", "\x1f", "-w", "alpha"],
+        ignore={
+            ".charter/reports": "Python charter does not CATCH its own `ValueError: empty "
+            "memory` here — it exits 1 through the crash handler, which drafts a bug report "
+            "into the plane. Filed upstream. Both sides refuse the write, which is what this "
+            "scenario pins; the crash artifact is not part of it.",
+        },
+    ),
+    Scenario(
+        name="remember-a-body-padded-with-separator-controls",
+        plane="daily",
+        python=["workspace", "remember", "\x1fPadded fact\x1f", "-w", "alpha", "--no-sync"],
+        rust=["workspace", "remember", "\x1fPadded fact\x1f", "-w", "alpha"],
+    ),
+    Scenario(
+        name="vision-with-a-trailing-separator-control",
+        plane="daily",
+        python=["workspace", "vision", "Ship it\x1f", "-w", "alpha"],
     ),
 ]
 
@@ -243,7 +312,24 @@ def _diff_trees(left: Path, right: Path, ignore: dict[str, str]) -> list[str]:
             found.add(rel)
         return found
 
+    def dirs(root: Path) -> set[str]:
+        found = set()
+        for p in root.rglob("*"):
+            if not p.is_dir():
+                continue
+            rel = str(p.relative_to(root))
+            if ".git" in p.relative_to(root).parts:
+                continue
+            if any(rel == k or rel.startswith(f"{k}{os.sep}") for k in ignore):
+                continue
+            found.add(rel)
+        return found
+
     out: list[str] = []
+    for missing in sorted(dirs(left) - dirs(right)):
+        out.append(f"    directory only python made: {missing}")
+    for added in sorted(dirs(right) - dirs(left)):
+        out.append(f"    directory only rust made:   {added}")
     a, b = paths(left), paths(right)
     for rel in sorted(a - b):
         out.append(f"    only python wrote: {rel}")
@@ -253,6 +339,29 @@ def _diff_trees(left: Path, right: Path, ignore: dict[str, str]) -> list[str]:
         if not filecmp.cmp(left / rel, right / rel, shallow=False):
             out.append(f"    differs: {rel}")
             out.extend(_diff_file(left / rel, right / rel))
+        if os.name == "posix":
+            lmode = stat.S_IMODE((left / rel).stat().st_mode)
+            rmode = stat.S_IMODE((right / rel).stat().st_mode)
+            if lmode != rmode:
+                out.append(f"    mode differs: {rel} — python {lmode:o}, rust {rmode:o}")
+    return out
+
+
+def _escaped(scratch: Path, side: str, root: Path) -> list[str]:
+    """Anything written outside *root* — a containment bug, which `rglob` over the plane
+    cannot see by construction."""
+    out = []
+    for path in sorted((scratch / side).rglob("*")):
+        if path.is_dir():
+            continue
+        try:
+            path.relative_to(root)
+        except ValueError:
+            # `home` and `pins` are the harness's own; everything else is an escape.
+            rel = path.relative_to(scratch / side)
+            if rel.parts[0] in {"home", "pins"}:
+                continue
+            out.append(f"    {side} WROTE OUTSIDE ITS PLANE: {rel}")
     return out
 
 
@@ -276,16 +385,39 @@ def check(scenario: Scenario, binary: Path) -> bool:
         rs_root, rs_home, rs_pins = _lay_out(scratch, scenario.plane, "rust")
 
         py = _run([sys.executable, "-m", "charter", *scenario.python], py_root, py_home, py_pins)
-        rs = _run(
-            [str(binary), *scenario.rust_args(), "--now", NOW_NAIVE], rs_root, rs_home, rs_pins
-        )
+        rust_argv = [str(binary), *scenario.rust_args()]
+        if scenario.pins_the_clock:
+            rust_argv += ["--now", NOW_NAIVE]
+        rs = _run(rust_argv, rs_root, rs_home, rs_pins)
 
         problems: list[str] = []
-        if py.returncode != 0:
-            problems.append(f"    python charter failed ({py.returncode}): {py.stderr.strip()}")
-        if rs.returncode != 0:
-            problems.append(f"    rust charter failed ({rs.returncode}): {rs.stderr.strip()}")
+        # A non-zero status is only a problem when the scenario did not ask for one, or when
+        # the two sides disagree. Two identical refusals are a result, not a failure.
+        if py.returncode != rs.returncode:
+            problems.append(
+                f"    exit status differs: python {py.returncode} "
+                f"({py.stderr.strip()}), rust {rs.returncode} ({rs.stderr.strip()})"
+            )
+        elif scenario.expect_failure and py.returncode == 0:
+            problems.append("    both sides SUCCEEDED, and this scenario expects a refusal")
+        elif not scenario.expect_failure and py.returncode != 0:
+            problems.append(
+                f"    both sides failed ({py.returncode}) and the scenario does not say so — "
+                f"python: {py.stderr.strip()}"
+            )
         problems.extend(_diff_trees(py_root, rs_root, scenario.ignore))
+        problems.extend(_escaped(scratch, "python", py_root))
+        problems.extend(_escaped(scratch, "rust", rs_root))
+        if scenario.stdout_differs:
+            if py.stdout == rs.stdout:
+                problems.append(
+                    "    stdout now MATCHES, but the scenario still says it differs "
+                    f"({scenario.stdout_differs}) — drop the note"
+                )
+        elif py.stdout != rs.stdout:
+            problems.append("    stdout differs:")
+            problems.append(f"      python {py.stdout!r}")
+            problems.append(f"      rust   {rs.stdout!r}")
 
         print(("ok   " if not problems else "DIFF ") + scenario.name)
         for line in problems:

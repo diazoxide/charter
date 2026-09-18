@@ -55,7 +55,7 @@ pub fn split_lines(text: &str) -> Vec<&str> {
 pub fn replace(text: &str, header: &str, body: &str) -> String {
     let lines = split_lines(text);
     let mut out: Vec<&str> = Vec::with_capacity(lines.len() + 3);
-    let body = body.trim();
+    let body = crate::memstore::py_strip(body);
     let mut replaced = false;
     let mut i = 0;
     while i < lines.len() {
@@ -76,7 +76,10 @@ pub fn replace(text: &str, header: &str, body: &str) -> String {
         }
         i += 1;
     }
-    let mut result = out.join("\n").trim_end().to_string();
+    let mut result = out
+        .join("\n")
+        .trim_end_matches(crate::memstore::is_python_space)
+        .to_string();
     result.push('\n');
     if !replaced {
         result.push_str(&format!("\n## {header}\n\n{body}\n"));
@@ -89,7 +92,8 @@ fn matches_header(line: &str, header: &str) -> bool {
     let Some(rest) = line.strip_prefix("##") else {
         return false;
     };
-    let trimmed = rest.trim_start_matches(char::is_whitespace);
+    // Python's `\s` in a unicode pattern matches U+001C–U+001F as well.
+    let trimmed = rest.trim_start_matches(crate::memstore::is_python_space);
     // `\s+` — at least one space between `##` and the name.
     if trimmed.len() == rest.len() {
         return false;
@@ -101,15 +105,22 @@ fn matches_header(line: &str, header: &str) -> bool {
     else {
         return false;
     };
-    tail.chars().all(char::is_whitespace)
+    tail.chars().all(crate::memstore::is_python_space)
 }
 
 /// The body under `## <header>`, trimmed, or `""` when there is no such section.
+///
+/// **This is the READER, and it is not the writer's mirror.** charter reads a vision with
+/// `re.search(r"^##\s+Vision\s*$(.*?)(?=^##\s|\Z)", text, MULTILINE | DOTALL)` — no
+/// `IGNORECASE`, unlike `_replace_md_section`, and a regex whose `^`/`$` break on `\n`
+/// alone. So a `## vision` in lower case is NOT this section, and a `## Next` after a
+/// U+2028 does NOT end it, both the opposite of what `replace` does. The asymmetry is
+/// charter's; reproducing it is the point.
 pub fn section_body(text: &str, header: &str) -> String {
-    let lines = split_lines(text);
+    let lines: Vec<&str> = newline_lines(text);
     let mut i = 0;
     while i < lines.len() {
-        if matches_header(lines[i], header) {
+        if matches_header_exactly(lines[i], header) {
             let start = i + 1;
             let mut end = start;
             // charter's reader stops at `^##\s`, which is not the `"## "` its writer scans
@@ -117,17 +128,46 @@ pub fn section_body(text: &str, header: &str) -> String {
             while end < lines.len() && !starts_a_heading(lines[end]) {
                 end += 1;
             }
-            return lines[start..end].join("\n").trim().to_string();
+            return crate::memstore::py_strip(&lines[start..end].join("\n")).to_string();
         }
         i += 1;
     }
     String::new()
 }
 
+/// Lines as a regex with `MULTILINE` sees them: broken on `\n` only, with `$` also matching
+/// before a trailing one.
+fn newline_lines(text: &str) -> Vec<&str> {
+    let mut lines: Vec<&str> = text.split('\n').collect();
+    // A trailing newline does not make a final empty line for the scan.
+    if lines.last().is_some_and(|last| last.is_empty()) {
+        lines.pop();
+    }
+    lines
+}
+
+/// `^##\s+<header>\s*$`, case-SENSITIVE — what the reader's regex matches.
+fn matches_header_exactly(line: &str, header: &str) -> bool {
+    // `\r` is not `\n`, so a CRLF file leaves it on the line and `\s*$` absorbs it.
+    let Some(rest) = line.strip_prefix("##") else {
+        return false;
+    };
+    let trimmed = rest.trim_start_matches(crate::memstore::is_python_space);
+    if trimmed.len() == rest.len() {
+        return false;
+    }
+    trimmed
+        .strip_prefix(header)
+        .is_some_and(|tail| tail.chars().all(crate::memstore::is_python_space))
+}
+
 /// `^##\s` — the lookahead charter's vision regex ends a section on.
 fn starts_a_heading(line: &str) -> bool {
+    // `^##\s` — and a bare `##` line counts, because `split_lines` has already taken the
+    // newline that WAS the `\s`. Without this a `##` on its own line does not end a section
+    // for the reader, though it does for Python's regex.
     line.strip_prefix("##")
-        .is_some_and(|rest| rest.starts_with(char::is_whitespace))
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with(crate::memstore::is_python_space))
 }
 
 #[cfg(test)]
@@ -180,6 +220,59 @@ mod tests {
         assert_eq!(
             replace("## Vision\nold\u{2028}## Next\nkeep\n", "Vision", "new"),
             "## Vision\n\nnew\n\n## Next\nkeep\n"
+        );
+    }
+}
+
+#[cfg(test)]
+mod reader_tests {
+    use super::*;
+
+    // Every expectation verified against `charter.workspace.read_vision`'s regex.
+
+    #[test]
+    fn the_reader_is_case_sensitive_where_the_writer_is_not() {
+        // `read_vision` passes no IGNORECASE; `_replace_md_section` does.
+        assert_eq!(section_body("# t\n\n## vISion   \nold\n", "Vision"), "");
+        assert_eq!(
+            replace("# t\n\n## vISion\nold\n", "Vision", "new"),
+            "# t\n\n## vISion\n\nnew\n",
+            "the writer still matches it"
+        );
+    }
+
+    #[test]
+    fn the_reader_breaks_on_newlines_only_so_a_line_separator_does_not_end_a_section() {
+        // The mirror of the writer's rule, and deliberately not the same.
+        assert_eq!(
+            section_body("## Vision\nold\u{2028}## Next\nkeep\n", "Vision"),
+            "old\u{2028}## Next\nkeep"
+        );
+        assert_eq!(
+            section_body("## Vision\nold\u{b}## Next\nkeep\n", "Vision"),
+            "old\u{b}## Next\nkeep"
+        );
+    }
+
+    #[test]
+    fn a_bare_hash_hash_line_ends_a_section_for_the_reader() {
+        assert_eq!(
+            section_body(
+                "## Vision\nold\n##\nnot a heading for the writer\n",
+                "Vision"
+            ),
+            "old"
+        );
+    }
+
+    #[test]
+    fn the_reader_finds_an_ordinary_section() {
+        assert_eq!(
+            section_body(
+                "# t\n\n## Vision\n\nShip the widget\n\n## Log\nx\n",
+                "Vision"
+            ),
+            "Ship the widget"
         );
     }
 }

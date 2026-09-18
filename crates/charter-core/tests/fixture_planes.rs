@@ -109,9 +109,12 @@ fn a_clone_that_landed_beside_the_workspaces_is_not_one_of_them() {
 
 #[test]
 fn a_workspaces_vision_is_the_body_under_its_vision_heading() {
-    assert_eq!(daily().workspace("alpha").vision(), "Ship the widget");
     assert_eq!(
-        daily().workspace("beta").vision(),
+        daily().workspace("alpha").unwrap().vision(),
+        "Ship the widget"
+    );
+    assert_eq!(
+        daily().workspace("beta").unwrap().vision(),
         "Retire the old importer"
     );
 }
@@ -130,12 +133,12 @@ fn an_unset_vision_reads_as_empty_rather_than_as_its_placeholder() {
 
     let plane = charter_core::workspaces::Plane::open(dir.path());
 
-    assert_eq!(plane.workspace("fresh").vision(), "");
+    assert_eq!(plane.workspace("fresh").unwrap().vision(), "");
 }
 
 #[test]
 fn the_open_todos_of_a_workspace_are_the_files_its_index_lists() {
-    let todos = daily().workspace("alpha").todos().unwrap();
+    let todos = daily().workspace("alpha").unwrap().todos().unwrap();
 
     assert_eq!(todos.len(), 1, "one todo is open; the other was closed");
     assert_eq!(todos[0].title, "Review the rollout plan");
@@ -145,12 +148,12 @@ fn the_open_todos_of_a_workspace_are_the_files_its_index_lists() {
 
 #[test]
 fn a_workspace_that_was_never_given_a_todo_has_none_rather_than_failing() {
-    assert_eq!(daily().workspace("beta").todos().unwrap(), vec![]);
+    assert_eq!(daily().workspace("beta").unwrap().todos().unwrap(), vec![]);
 }
 
 #[test]
 fn the_memories_of_a_workspace_come_back_in_the_order_their_names_give() {
-    let memories = daily().workspace("alpha").memories().unwrap();
+    let memories = daily().workspace("alpha").unwrap().memories().unwrap();
 
     assert_eq!(
         memories
@@ -206,7 +209,7 @@ fn pinned() -> chrono::NaiveDateTime {
 #[test]
 fn a_charter_is_scaffolded_from_the_template_with_the_vision_unset() {
     let (_tmp, plane) = temp_plane();
-    let ws = plane.workspace("alpha");
+    let ws = plane.workspace("alpha").unwrap();
 
     ws.scaffold_charter().unwrap();
 
@@ -225,7 +228,7 @@ fn a_charter_is_scaffolded_from_the_template_with_the_vision_unset() {
 #[test]
 fn a_charter_that_already_exists_is_not_overwritten_by_scaffolding() {
     let (_tmp, plane) = temp_plane();
-    let ws = plane.workspace("alpha");
+    let ws = plane.workspace("alpha").unwrap();
     std::fs::write(
         ws.dir().join("workspace.md"),
         "# mine\n\n## Vision\n\nkeep me\n",
@@ -243,7 +246,7 @@ fn a_charter_that_already_exists_is_not_overwritten_by_scaffolding() {
 #[test]
 fn setting_a_vision_replaces_that_section_and_leaves_the_others_alone() {
     let (_tmp, plane) = temp_plane();
-    let ws = plane.workspace("alpha");
+    let ws = plane.workspace("alpha").unwrap();
 
     ws.set_vision("Ship the widget").unwrap();
 
@@ -263,7 +266,7 @@ fn setting_a_vision_replaces_that_section_and_leaves_the_others_alone() {
 #[test]
 fn a_todo_is_written_and_indexed_the_way_python_writes_one() {
     let (_tmp, plane) = temp_plane();
-    let ws = plane.workspace("alpha");
+    let ws = plane.workspace("alpha").unwrap();
 
     ws.add_todo("Review the rollout plan", pinned()).unwrap();
 
@@ -279,7 +282,7 @@ fn a_todo_is_written_and_indexed_the_way_python_writes_one() {
 #[test]
 fn closing_a_todo_deletes_it_and_leaves_its_trace_in_the_journal() {
     let (_tmp, plane) = temp_plane();
-    let ws = plane.workspace("alpha");
+    let ws = plane.workspace("alpha").unwrap();
     ws.add_todo("Write the migration", pinned()).unwrap();
     let slug = ws.todos().unwrap()[0].slug.clone();
 
@@ -303,7 +306,7 @@ fn closing_a_todo_deletes_it_and_leaves_its_trace_in_the_journal() {
 #[test]
 fn a_remembered_fact_lands_in_the_journal_with_its_index_header() {
     let (_tmp, plane) = temp_plane();
-    let ws = plane.workspace("alpha");
+    let ws = plane.workspace("alpha").unwrap();
 
     ws.remember("The API returns 418 on Mondays", pinned())
         .unwrap();
@@ -320,7 +323,7 @@ fn a_remembered_fact_lands_in_the_journal_with_its_index_header() {
 #[test]
 fn a_written_manifest_carries_the_digest_of_what_it_now_says() {
     let (_tmp, plane) = temp_plane();
-    let ws = plane.workspace("alpha");
+    let ws = plane.workspace("alpha").unwrap();
     let mut doc: serde_json::Value = serde_json::from_str(
         r#"{"name":"alpha","description":"","repos":[],"updated_at":"2026-03-02T09:14:00+00:00","updated_by":"Fixture User","charter_generated":"stale"}"#,
     )
@@ -348,9 +351,49 @@ fn a_written_manifest_carries_the_digest_of_what_it_now_says() {
 }
 
 #[test]
+fn two_writers_at_once_do_not_share_a_temp_file() {
+    // #893: `ensure` scaffolds a manifest and `record_members` rewrites one, and two
+    // commands doing that at once for one workspace used to share a single
+    // `workspace.json.tmp`. The pid in the temp name is what stops that, so this asks for
+    // the property rather than the spelling.
+    // `_keep`, not `_`: binding a value to `_` drops it at once, which deleted the plane
+    // out from under the writers.
+    let (_keep, plane) = temp_plane();
+    let dir = plane.workspace("alpha").unwrap().dir().to_path_buf();
+
+    std::thread::scope(|scope| {
+        for n in 0..8 {
+            let plane = plane.clone();
+            scope.spawn(move || {
+                let doc: serde_json::Value =
+                    serde_json::from_str(&format!(r#"{{"name":"alpha","n":{n}}}"#)).unwrap();
+                plane
+                    .workspace("alpha")
+                    .unwrap()
+                    .write_manifest(&doc)
+                    .expect("every writer succeeds");
+            });
+        }
+    });
+
+    let text = std::fs::read_to_string(dir.join("workspace.json")).unwrap();
+    assert_eq!(
+        charter_core::manifest::ownership(Some(&text)),
+        charter_core::manifest::Ownership::Charter,
+        "the survivor is one whole manifest, not a mix of two: {text}"
+    );
+    let strays: Vec<String> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+        .filter(|n| n.ends_with(".tmp"))
+        .collect();
+    assert_eq!(strays, Vec::<String>::new(), "no temp file is left behind");
+}
+
+#[test]
 fn writing_a_manifest_leaves_no_temp_file_behind() {
     let (_tmp, plane) = temp_plane();
-    let ws = plane.workspace("alpha");
+    let ws = plane.workspace("alpha").unwrap();
     let doc: serde_json::Value = serde_json::from_str(r#"{"name":"alpha"}"#).unwrap();
 
     ws.write_manifest(&doc).unwrap();
@@ -371,7 +414,7 @@ fn writing_a_manifest_leaves_no_temp_file_behind() {
 fn a_todo_can_be_closed_by_its_bare_slug_without_the_timestamp() {
     // `charter ws todo done write-the-migration` is how the fixture generator closes one.
     let (_tmp, plane) = temp_plane();
-    let ws = plane.workspace("alpha");
+    let ws = plane.workspace("alpha").unwrap();
     ws.add_todo("Write the migration", pinned()).unwrap();
 
     ws.close_todo("write-the-migration", pinned()).unwrap();
@@ -444,4 +487,328 @@ fn a_path_naming_a_workspace_that_is_not_there_belongs_to_none() {
         plane.workspace_of(&plane.root().join("workspaces/ghost/x")),
         None
     );
+}
+
+// ---------------------------------------------------------------------------
+// Containment, and the divergences an adversarial review of PR #21 found.
+
+#[test]
+fn a_name_that_walks_out_of_the_plane_is_not_a_workspace() {
+    // `Path::join` throws the prefix away for an absolute path and `..` walks out, so an
+    // unchecked `-w` was a write anywhere on the filesystem.
+    let (_tmp, plane) = temp_plane();
+
+    for name in [
+        "../../outside/escaped",
+        "/tmp/absolute",
+        "..",
+        ".",
+        "",
+        "a/b",
+    ] {
+        assert!(
+            plane.workspace(name).is_err(),
+            "{name:?} must not name a workspace"
+        );
+    }
+}
+
+#[test]
+fn a_linked_worktree_under_workspaces_is_still_a_workspace() {
+    // Git draws the line: a clone's `.git` is a directory, a worktree's is a file.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("charter.toml"), "schema = 1\n").unwrap();
+    let ws = dir.path().join("workspaces");
+    std::fs::create_dir_all(ws.join("clone/.git")).unwrap();
+    std::fs::create_dir_all(ws.join("worktree")).unwrap();
+    std::fs::write(
+        ws.join("worktree/.git"),
+        "gitdir: /elsewhere/.git/worktrees/w\n",
+    )
+    .unwrap();
+
+    let plane = charter_core::workspaces::Plane::open(dir.path());
+
+    assert_eq!(plane.workspaces().unwrap(), vec!["worktree"]);
+}
+
+#[cfg(unix)]
+#[test]
+fn one_unreadable_memory_does_not_cost_the_whole_listing() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_tmp, plane) = temp_plane();
+    let ws = plane.workspace("alpha").unwrap();
+    ws.remember("readable fact", pinned()).unwrap();
+    let hidden = ws.dir().join("memory/unreadable.md");
+    std::fs::write(&hidden, "# nope\n\n_2026-03-02 09:14 · persistent_\n\nx\n").unwrap();
+    std::fs::set_permissions(&hidden, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let memories = ws.memories().unwrap();
+
+    assert_eq!(
+        memories
+            .iter()
+            .map(|m| m.title.as_str())
+            .collect::<Vec<_>>(),
+        vec!["readable fact"],
+        "the unreadable one is skipped, not fatal"
+    );
+}
+
+#[test]
+fn a_memory_with_no_heading_is_named_by_its_file_stem() {
+    let (_tmp, plane) = temp_plane();
+    let ws = plane.workspace("alpha").unwrap();
+    std::fs::create_dir_all(ws.dir().join("memory")).unwrap();
+    std::fs::write(ws.dir().join("memory/hand-written.md"), "no heading here\n").unwrap();
+
+    assert_eq!(ws.memories().unwrap()[0].title, "hand-written");
+}
+
+#[test]
+fn a_title_that_itself_begins_with_a_hash_keeps_it() {
+    // charter takes `ln[2:].strip()`, once — not a repeated prefix strip.
+    let (_tmp, plane) = temp_plane();
+    let ws = plane.workspace("alpha").unwrap();
+    std::fs::create_dir_all(ws.dir().join("memory")).unwrap();
+    std::fs::write(
+        ws.dir().join("memory/hashy.md"),
+        "# # Hello\n\n_2026-03-02 09:14 · persistent_\n\nbody\n",
+    )
+    .unwrap();
+
+    assert_eq!(ws.memories().unwrap()[0].title, "# Hello");
+}
+
+#[test]
+fn a_body_of_only_separator_controls_is_empty_to_charter() {
+    // Python's `str.strip()` is driven by `str.isspace()`, true for U+001C–U+001F; Rust's
+    // `White_Space` is false for all four. `write` refuses an empty body so a failed
+    // substitution cannot land a secret in a memory file.
+    let (_tmp, plane) = temp_plane();
+    let ws = plane.workspace("alpha").unwrap();
+
+    for body in ["\u{1c}", "\u{1d}", "\u{1e}", "\u{1f}", " \u{1f}\n"] {
+        assert!(
+            ws.remember(body, pinned()).is_err(),
+            "{body:?} must read as an empty memory"
+        );
+        assert!(ws.add_todo(body, pinned()).is_err());
+    }
+}
+
+#[test]
+fn a_separator_control_is_stripped_from_a_title_and_a_body_as_python_strips_it() {
+    let (_tmp, plane) = temp_plane();
+    let ws = plane.workspace("alpha").unwrap();
+
+    let path = ws.remember("\u{1f}Padded fact\u{1f}", pinned()).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "# Padded fact\n\n_2026-03-02 09:14 · persistent_\n\nPadded fact\n"
+    );
+}
+
+#[test]
+fn an_unparseable_manifest_belongs_to_the_operator_not_to_nobody() {
+    // This is the branch that stops the automatic writers putting a fresh manifest over the
+    // hand-made file the rule exists to protect.
+    use charter_core::manifest::{Ownership, ownership};
+
+    assert_eq!(ownership(Some("{ not json")), Ownership::Operator);
+    assert_eq!(ownership(Some("")), Ownership::Operator);
+    assert_eq!(ownership(Some(r#"{"name":"alpha"}"#)), Ownership::Operator);
+    assert_eq!(ownership(None), Ownership::Absent);
+}
+
+// ---------------------------------------------------------------------------
+// Rules that a mutation survived, because nothing was asking about them.
+
+#[test]
+fn closing_a_todo_resolves_the_first_match_in_sorted_order() {
+    // `resolve` decides WHICH todo `ws todo done <slug>` closes. Two todos a second apart
+    // share a bare slug, and charter takes the first in sorted order — the older one.
+    let (_tmp, plane) = temp_plane();
+    let ws = plane.workspace("alpha").unwrap();
+    let early: chrono::NaiveDateTime = "2026-03-02T09:14:00".parse().unwrap();
+    let later: chrono::NaiveDateTime = "2026-03-02T09:15:00".parse().unwrap();
+    ws.add_todo("Write the migration", early).unwrap();
+    ws.add_todo("Write the migration", later).unwrap();
+
+    ws.close_todo("write-the-migration", later).unwrap();
+
+    let left = ws.todos().unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(
+        left[0].slug, "20260302-091500-write-the-migration",
+        "the OLDER one was closed; the first hit in sorted order wins"
+    );
+}
+
+#[test]
+fn a_bare_slug_matches_at_a_dash_and_nowhere_else() {
+    // The suffix is `-<ident>.md`. Verified against `charter.memstore.resolve` itself for
+    // `20260302-091400-the-migration.md`:
+    //   "migration"     -> found   (the dash before it is the boundary)
+    //   "the-migration" -> found
+    //   "gration"       -> None    (no dash in front of it)
+    //   "e-migration"   -> None    (the dash is there, but not the whole segment)
+    let (_tmp, plane) = temp_plane();
+    let ws = plane.workspace("alpha").unwrap();
+    ws.add_todo("the migration", pinned()).unwrap();
+    let dir = ws.dir().join("todos");
+
+    assert!(charter_core::memstore::resolve(&dir, "migration").is_some());
+    assert!(charter_core::memstore::resolve(&dir, "the-migration").is_some());
+    assert!(charter_core::memstore::resolve(&dir, "gration").is_none());
+    assert!(charter_core::memstore::resolve(&dir, "e-migration").is_none());
+}
+
+#[test]
+fn an_exact_filename_wins_over_a_suffix_match() {
+    let (_tmp, plane) = temp_plane();
+    let ws = plane.workspace("alpha").unwrap();
+    let dir = ws.dir().join("todos");
+    std::fs::create_dir_all(&dir).unwrap();
+    // The direct name, and a timestamped file that also ends `-note.md`.
+    for name in ["note.md", "20260302-091400-note.md"] {
+        std::fs::write(
+            dir.join(name),
+            "# n\n\n_2026-03-02 09:14 · persistent_\n\nn\n",
+        )
+        .unwrap();
+    }
+
+    let found = charter_core::memstore::resolve(&dir, "note").unwrap();
+
+    assert_eq!(found.file_name().unwrap(), "note.md");
+}
+
+#[test]
+fn a_todo_is_still_open_if_its_closing_memory_could_not_be_written() {
+    // charter writes the journal entry FIRST and deletes second, so a failure leaves the
+    // todo open rather than closed with nothing recorded.
+    let (_tmp, plane) = temp_plane();
+    let ws = plane.workspace("alpha").unwrap();
+    ws.add_todo("Write the migration", pinned()).unwrap();
+    // `memory` occupied by a FILE, so creating the store fails.
+    std::fs::write(ws.dir().join("memory"), "in the way\n").unwrap();
+
+    assert!(ws.close_todo("write-the-migration", pinned()).is_err());
+    assert_eq!(
+        ws.todos().unwrap().len(),
+        1,
+        "the todo survives a journal that could not be written"
+    );
+}
+
+#[test]
+fn an_explicit_title_is_capped_at_the_same_seventy_two_characters() {
+    assert_eq!(charter_core::memstore::TITLE_MAX, 72);
+    assert_eq!(
+        charter_core::memstore::title_of(&"z".repeat(100))
+            .chars()
+            .count(),
+        72
+    );
+    assert_eq!(
+        charter_core::memstore::title_of(&"z".repeat(72))
+            .chars()
+            .count(),
+        72,
+        "exactly 72 is not truncated"
+    );
+}
+
+#[test]
+fn every_break_python_splits_on_ends_a_line_here_too() {
+    use charter_core::mdsection::split_lines;
+
+    for (breaker, name) in [
+        ('\u{a}', "LF"),
+        ('\u{b}', "VT"),
+        ('\u{c}', "FF"),
+        ('\u{d}', "CR"),
+        ('\u{1c}', "FS"),
+        ('\u{1d}', "GS"),
+        ('\u{1e}', "RS"),
+        ('\u{85}', "NEL"),
+        ('\u{2028}', "LS"),
+        ('\u{2029}', "PS"),
+    ] {
+        assert_eq!(
+            split_lines(&format!("a{breaker}b")),
+            vec!["a", "b"],
+            "{name} must end a line"
+        );
+    }
+}
+
+#[test]
+fn carriage_return_newline_is_one_break_and_not_two() {
+    assert_eq!(
+        charter_core::mdsection::split_lines("a\r\nb"),
+        vec!["a", "b"],
+        "a CRLF file must not gain a blank line per row"
+    );
+}
+
+#[test]
+fn a_chat_in_a_directory_that_is_no_workspace_is_not_filed_under_an_invented_one() {
+    // Load-bearing for the sidebar: `plane_sidebar` puts a filed chat into `filed[name]`
+    // and only ever drains keys that are real workspaces, so a chat filed under a name the
+    // plane does not have vanishes from the window entirely — neither filed nor unfiled.
+    //
+    // The directory has to EXIST for this to test anything: for a path that is not there,
+    // `canonicalize` fails and `strip_prefix` refuses it whatever the name check does. A
+    // clone dropped straight into `workspaces/` is the real case — it is a directory, and
+    // it is not a workspace.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("charter.toml"), "schema = 1\n").unwrap();
+    let stray = dir.path().join("workspaces/stray");
+    std::fs::create_dir_all(stray.join(".git")).unwrap();
+    std::fs::create_dir_all(stray.join("src")).unwrap();
+    let plane = charter_core::workspaces::Plane::open(dir.path());
+    assert_eq!(plane.workspaces().unwrap(), Vec::<String>::new());
+
+    assert_eq!(plane.workspace_of(&stray.join("src")), None);
+}
+
+#[test]
+fn the_refs_readme_is_not_a_memory() {
+    // `refs/README.md` sits beside a store and is not one of its entries.
+    let (_tmp, plane) = temp_plane();
+    let ws = plane.workspace("alpha").unwrap();
+    ws.remember("a real fact", pinned()).unwrap();
+    std::fs::write(ws.dir().join("memory/MEMORY.md.bak"), "not markdown\n").unwrap();
+
+    let titles: Vec<String> = ws
+        .memories()
+        .unwrap()
+        .into_iter()
+        .map(|m| m.title)
+        .collect();
+
+    assert_eq!(titles, vec!["a real fact"]);
+}
+
+#[test]
+fn an_index_emptied_of_its_last_entry_keeps_its_header() {
+    let (_tmp, plane) = temp_plane();
+    let ws = plane.workspace("alpha").unwrap();
+    ws.add_todo("only one", pinned()).unwrap();
+
+    charter_core::memstore::forget(&ws.dir().join("todos"), "only-one").unwrap();
+
+    let index = std::fs::read_to_string(ws.dir().join("todos/MEMORY.md")).unwrap();
+    assert!(
+        index.starts_with("# Todos — workspace `alpha`\n"),
+        "{index}"
+    );
+    assert!(
+        index.ends_with('\n'),
+        "one trailing newline survives: {index:?}"
+    );
+    assert!(!index.contains("- ["), "and no entry rows: {index:?}");
 }
