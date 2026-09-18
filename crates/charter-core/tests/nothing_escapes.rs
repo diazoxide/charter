@@ -287,23 +287,36 @@ fn two_hop(plane: &Path, at: &str, outside: &Path, lands_at: &str) {
 
 #[test]
 fn nothing_outside_the_plane_is_touched_through_two_hops() {
-    // The name each write would choose, so the link is already sitting at it.
-    let stamped = format!("{}-a-durable-fact.md", "20260302-091400");
-    let places: [(&str, &str); 6] = [
-        ("workspaces/alpha/memory/jump-target.md", "authorized_keys"),
+    // Only paths a writer opens PLAINLY are listed. An earlier version of this test also
+    // covered `workspace.md`, `workspace.json`, `todos/MEMORY.md` and the persona index —
+    // all four stayed green with the resolver reverted, because `create_new`/O_EXCL refuses
+    // to follow a link at the name, or the write ends in a `rename` that replaces the link,
+    // or nothing writes there at all. A row stopped by a flag two lines below the gate is
+    // not testing the gate; each row below was checked to go RED with the fix reverted.
+    let places: [(&str, &str); 4] = [
+        // The memory file itself: `fs::write` on the chosen name.
         (
             "workspaces/alpha/memory/20260302-091400-a-durable-fact.md",
             "authorized_keys",
         ),
+        // The index, through `index_append`'s plain write when nothing is at the name.
         ("workspaces/alpha/memory/MEMORY.md", "index_out_there"),
-        ("workspaces/alpha/todos/MEMORY.md", "todo_index_out_there"),
-        ("workspaces/alpha/workspace.md", "charter_out_there"),
+        // The todo file, same shape as the memory file.
         (
-            "personas/devops/memory/MEMORY.md",
-            "persona_index_out_there",
+            "workspaces/alpha/todos/20260302-091400-a-todo.md",
+            "todo_out_there",
         ),
+        // A persona memory, whose filename is the slug alone.
+        (
+            "personas/devops/memory/a-persona-fact.md",
+            "persona_out_there",
+        ),
+        // NOT here: any chain whose final target EXISTS. `canonicalize` is `realpath`, so
+        // it resolves such a chain correctly even with the old resolver — overwriting an
+        // existing file outside the plane was never reachable, and a row for it would be
+        // green either way. The primitive this defends against is create-only: a new file
+        // at a path of the attacker's choosing, holding content of their choosing.
     ];
-    assert!(stamped.ends_with("a-durable-fact.md"));
 
     let mut broken = Vec::new();
     for (at, lands_at) in places {
