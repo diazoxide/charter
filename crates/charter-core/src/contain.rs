@@ -563,3 +563,13 @@ mod budget_tests {
         assert_eq!(writable(dir.path(), &store.join("link0")), Ok(()));
     }
 }
+
+/// Can `name` name a repo cloned into a workspace?
+///
+/// The same rule as a workspace's, and separate from it on purpose: a repo name arrives from
+/// `inventory/repos.json`, written from what a FORGE reported, while a workspace name is one
+/// charter minted. They are equal today; the day a forge name needs a wider alphabet, the two
+/// must be able to move apart without the other following.
+pub fn repo_name_ok(name: &str) -> bool {
+    segment_ok(name) && alphabet_ok(name)
+}
