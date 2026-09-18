@@ -65,6 +65,8 @@ PLANES = REPO / "tests" / "fixtures" / "planes"
 # string through `--now` on the Rust side; TZ is pinned to UTC so "local" is one thing.
 NOW = datetime(2026, 5, 4, 11, 32, 17, tzinfo=timezone.utc)
 NOW_NAIVE = NOW.replace(tzinfo=None).isoformat()
+#: The stamp a memory written at `NOW` carries in its filename.
+NOW_NAIVE_STAMP = NOW.strftime("%Y%m%d-%H%M%S")
 
 HOSTNAME = "fixture-host"
 USER = "fixture"
@@ -114,6 +116,30 @@ class Scenario:
 
     def rust_args(self) -> list[str]:
         return self.rust if self.rust is not None else self.python
+
+
+def _two_hop_out_of_the_plane(root: Path) -> None:
+    """A link out of the plane, and a second link THROUGH it carrying `..`.
+
+    `memory/jump -> <outside>/inner`, then the memory file charter is about to create ->
+    `jump/../authorized_keys`. Folding `..` before resolving turns that into
+    `authorized_keys` — dropping the component that leaves — so the path reads as contained
+    while the write lands outside. `os.path.realpath` resolves left to right and refuses it,
+    so this is a port divergence and belongs here.
+
+    The link is placed at the exact name the write would choose, which is why the clock is
+    pinned: the filename carries `%Y%m%d-%H%M%S` of it.
+    """
+    outside = root.parent / "outside"
+    (outside / "inner").mkdir(parents=True, exist_ok=True)
+    store = root / "workspaces" / "alpha" / "memory"
+    store.mkdir(parents=True, exist_ok=True)
+    jump = store / "jump"
+    if not jump.exists():
+        jump.symlink_to(outside / "inner")
+    target = store / f"{NOW_NAIVE_STAMP}-ssh-rsa-aaaa-attacker-example-com.md"
+    target.unlink(missing_ok=True)
+    target.symlink_to("jump/../authorized_keys")
 
 
 def _symlink_a_memory_index_out_of_the_plane(root: Path) -> None:
@@ -348,6 +374,15 @@ SCENARIOS = [
         setup=_symlink_a_memory_index_out_of_the_plane,
         python=["workspace", "remember", "A durable fact", "-w", "alpha", "--no-sync"],
         rust=["workspace", "remember", "A durable fact", "-w", "alpha"],
+        refusal="outside the directories",
+    ),
+    Scenario(
+        name="remember-through-two-hops-out-of-the-plane",
+        plane="daily",
+        setup=_two_hop_out_of_the_plane,
+        python=["workspace", "remember", "ssh-rsa AAAA attacker@example.com", "-w", "alpha",
+                "--no-sync"],
+        rust=["workspace", "remember", "ssh-rsa AAAA attacker@example.com", "-w", "alpha"],
         refusal="outside the directories",
     ),
     Scenario(

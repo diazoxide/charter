@@ -6,9 +6,27 @@
 //! `Path::join` throws the prefix away when handed an absolute path, and `..` walks out of
 //! the plane, so a name that is not checked is a write anywhere on the filesystem.
 //!
-//! Deliberately a question about the *string*, never about the disk: asking the filesystem
-//! would make a traversal succeed exactly when the attacker's target happens to exist, which
-//! is the one case where the answer must not change.
+//! The name rule is deliberately a question about the *string*, never about the disk: asking
+//! the filesystem would make a traversal succeed exactly when the attacker's target happens
+//! to exist, which is the one case where the answer must not change.
+//!
+//! # What this does not defend against, on purpose
+//!
+//! **The gate is a `stat`; the write is a path open.** Nothing holds a file descriptor
+//! across the two, and no call uses `openat` or `O_NOFOLLOW`. So a writer racing inside the
+//! plane — a `git checkout`, another agent, an editor saving — can replace a checked path
+//! with a link between the check and the open, and win. Measured: under 10 ms in a loop.
+//!
+//! That is accepted here rather than overlooked, for two reasons. Python charter has the
+//! same shape (`contain.file_refusal` stats, then the caller opens), so closing it in Rust
+//! alone would be a divergence in the half of the pair that is supposed to match. And the
+//! attacker it would stop already has write access inside the plane, where they can simply
+//! commit the link instead — which is the attack the gate DOES stop, because a committed
+//! link travels to every machine that clones the plane.
+//!
+//! Closing it properly means `openat` with `O_NOFOLLOW` on each component, held as a
+//! descriptor, for every read and write on both sides. That belongs with the security
+//! tranche (spec decision 16) and its external review, not bolted on here.
 
 /// The separators no single name may contain, on any platform charter runs on.
 ///
@@ -245,73 +263,94 @@ pub fn within_plane(root: &std::path::Path, path: &std::path::Path) -> bool {
     resolve_existing(path).starts_with(resolve_existing(root))
 }
 
-/// `path` resolved as far as the filesystem allows, then normalised.
+/// `path` resolved the way the kernel resolves it: left to right, following each symlink as
+/// it is reached, and applying `..` to what has been resolved so far.
 ///
-/// Two things beyond canonicalising, each of which was a hole an adversarial review walked
-/// straight through:
+/// **The order is the whole point, and getting it wrong was a live escape.** An earlier
+/// version folded `..` lexically BEFORE resolving anything, on the reasoning that folding
+/// could only make a path look more escaped than it is. That is backwards. Given
 ///
-/// - **A link it cannot canonicalize is still followed.** `canonicalize` fails for a
-///   DANGLING symlink, and judging the link by its own name rather than by where it points
-///   let one out of the plane read as contained — after which the write created the file it
-///   named.
-/// - **`..` is folded, not dropped.** `Path::file_name()` is `None` for `..`, so collecting
-///   file names discarded them:
-///   `workspaces/alpha/missing/../../../../../etc/newfile` reconstructed as
-///   `workspaces/alpha/missing/etc/newfile` — inside — while the write landed in `/etc`. It
-///   bit only when a component did not exist, which is the case this function is for.
+/// ```text
+/// memory/jump      -> <outside>/inner        (a link out)
+/// memory/<name>.md -> jump/../authorized_keys
+/// ```
+///
+/// lexical folding turns `jump/../authorized_keys` into `authorized_keys`, DISCARDING the
+/// component that leaves the plane, so the path reads as contained — while the real write
+/// follows `jump` out, applies `..`, and creates `<outside>/authorized_keys` with content
+/// the caller chose. `..` after a symlink belongs to where the link LANDED, not to the name
+/// written before it.
+///
+/// Python does not have this bug because `contain.within_data` goes through
+/// `os.path.realpath`, which resolves component by component. This was a port divergence,
+/// which is why a differential scenario now covers it.
+///
+/// A path that does not exist still resolves: a component with nothing at it is simply
+/// appended, so a file charter is about to CREATE is judged where it would land.
 fn resolve_existing(path: &std::path::Path) -> std::path::PathBuf {
-    resolve_with_depth(&normalise(path), 0)
-}
+    use std::path::Component;
 
-/// How many links deep to follow before giving up, as the kernel does.
-const MAX_LINKS: u8 = 40;
+    /// One step of a path, owned so a symlink's target can be spliced in.
+    enum Step {
+        Root(std::path::PathBuf),
+        Parent,
+        Name(std::ffi::OsString),
+    }
 
-fn resolve_with_depth(path: &std::path::Path, depth: u8) -> std::path::PathBuf {
-    if let Ok(real) = path.canonicalize() {
-        return real;
+    fn steps(path: &std::path::Path) -> Vec<Step> {
+        path.components()
+            .filter_map(|part| match part {
+                Component::Prefix(p) => Some(Step::Root(p.as_os_str().into())),
+                Component::RootDir => Some(Step::Root(std::path::MAIN_SEPARATOR_STR.into())),
+                Component::CurDir => None,
+                Component::ParentDir => Some(Step::Parent),
+                Component::Normal(n) => Some(Step::Name(n.to_os_string())),
+            })
+            .collect()
     }
-    if depth < MAX_LINKS {
-        // A dangling link: judged by where it POINTS.
-        if let Ok(target) = std::fs::read_link(path) {
-            let joined = if target.is_absolute() {
-                target
-            } else {
-                path.parent()
-                    .unwrap_or_else(|| std::path::Path::new(""))
-                    .join(target)
-            };
-            return resolve_with_depth(&normalise(&joined), depth + 1);
-        }
-    }
-    // Nothing at this name: resolve the parent and put the name back, so a path charter is
-    // about to CREATE is judged where it will land.
-    match (path.parent(), path.file_name()) {
-        (Some(parent), Some(name)) => {
-            let mut out = resolve_with_depth(parent, depth);
-            out.push(name);
-            out
-        }
-        _ => path.to_path_buf(),
-    }
-}
 
-/// A path with `.` dropped and `..` folded, without touching the filesystem.
-///
-/// Lexical folding is safe here because it happens BEFORE resolution: a `..` that would have
-/// crossed a symlink is folded away, and whatever remains is then resolved for real.
-fn normalise(path: &std::path::Path) -> std::path::PathBuf {
+    let mut todo: Vec<Step> = steps(path);
+    todo.reverse();
     let mut out = std::path::PathBuf::new();
-    for part in path.components() {
-        match part {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                out.pop();
+    let mut links = 0u8;
+
+    while let Some(step) = todo.pop() {
+        let name = match step {
+            Step::Root(root) => {
+                out = root;
+                continue;
             }
-            other => out.push(other),
+            // Pops what has been RESOLVED, which after a link is where the link landed.
+            Step::Parent => {
+                out.pop();
+                continue;
+            }
+            Step::Name(name) => name,
+        };
+        let candidate = out.join(&name);
+        match std::fs::read_link(&candidate) {
+            Ok(target) if links < MAX_LINKS => {
+                links += 1;
+                // An absolute target restarts the walk; a relative one continues from the
+                // directory the link sits in, which `out` already is.
+                if target.is_absolute() {
+                    out = std::path::PathBuf::new();
+                }
+                // The target's steps come next, BEFORE whatever followed the link — so a
+                // `..` after it pops the target, not the link's own name.
+                let mut rest = steps(&target);
+                rest.reverse();
+                todo.extend(rest);
+            }
+            // Not a link, or too many links deep: take the name as it stands.
+            _ => out = candidate,
         }
     }
     out
 }
+
+/// How many links deep to follow before giving up, as the kernel does.
+const MAX_LINKS: u8 = 40;
 
 #[cfg(test)]
 mod writable_tests {

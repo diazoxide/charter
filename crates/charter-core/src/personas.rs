@@ -137,9 +137,11 @@ pub(crate) fn refs_readme(who: &str) -> String {
 /// followed — `exists()` answers false for one, and a plain write would have created
 /// whatever it pointed at.
 fn create_absent(root: &Path, dir: &Path, name: &str, body: &str) -> io::Result<()> {
-    // Before the mkdir: a symlinked persona directory otherwise has `memory/` and `refs/`
-    // created wherever it points.
+    // Both, and the FILE is the one that matters. Gating only the directory left this safe
+    // by accident — `create_new` refuses to follow a link at the name — and "safe because
+    // of the flag two lines down" is the shape that has produced five rounds of findings.
     crate::contain::writable(root, dir).map_err(refusal)?;
+    crate::contain::writable(root, &dir.join(name)).map_err(refusal)?;
     std::fs::create_dir_all(dir)?;
     match std::fs::OpenOptions::new()
         .write(true)

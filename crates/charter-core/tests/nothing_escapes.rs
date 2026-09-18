@@ -39,6 +39,15 @@ impl Outside {
         self.dir.path()
     }
 
+    /// Take the baseline again, once the scenario's own scaffolding is in place.
+    ///
+    /// A two-hop setup has to create its own directory out here for the first link to point
+    /// at. That is the test's doing, not charter's, and counting it would be the test
+    /// accusing itself.
+    fn settled(&mut self) {
+        self.before = snapshot(self.path());
+    }
+
     /// Everything that changed out here, as lines to print.
     fn changed(&self) -> Vec<String> {
         let now = snapshot(self.path());
@@ -255,5 +264,88 @@ fn the_plane_itself_is_still_written_when_nothing_is_linked_out() {
             .join(charter_core::profiletrust::RECORD)
             .is_file(),
         "the consent record was written"
+    );
+}
+
+/// Place `jump -> <outside>` beside `at`, then point `at` through it with `..`.
+///
+/// Two hops, which is what defeated resolving that folded `..` before following links: the
+/// fold discards `jump`, so the path reads as contained while the write follows the link out
+/// and `..` back up. The kernel resolves left to right; so does `resolve_existing` now.
+fn two_hop(plane: &Path, at: &str, outside: &Path, lands_at: &str) {
+    let target = plane.join(at);
+    let dir = target.parent().unwrap();
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::create_dir_all(outside.join("inner")).unwrap();
+    let jump = dir.join("jump");
+    if !jump.exists() {
+        std::os::unix::fs::symlink(outside.join("inner"), &jump).unwrap();
+    }
+    let _ = std::fs::remove_file(&target);
+    std::os::unix::fs::symlink(format!("jump/../{lands_at}"), &target).unwrap();
+}
+
+#[test]
+fn nothing_outside_the_plane_is_touched_through_two_hops() {
+    // The name each write would choose, so the link is already sitting at it.
+    let stamped = format!("{}-a-durable-fact.md", "20260302-091400");
+    let places: [(&str, &str); 6] = [
+        ("workspaces/alpha/memory/jump-target.md", "authorized_keys"),
+        (
+            "workspaces/alpha/memory/20260302-091400-a-durable-fact.md",
+            "authorized_keys",
+        ),
+        ("workspaces/alpha/memory/MEMORY.md", "index_out_there"),
+        ("workspaces/alpha/todos/MEMORY.md", "todo_index_out_there"),
+        ("workspaces/alpha/workspace.md", "charter_out_there"),
+        (
+            "personas/devops/memory/MEMORY.md",
+            "persona_index_out_there",
+        ),
+    ];
+    assert!(stamped.ends_with("a-durable-fact.md"));
+
+    let mut broken = Vec::new();
+    for (at, lands_at) in places {
+        let (dir, plane) = plane();
+        let mut outside = Outside::new();
+        two_hop(dir.path(), at, outside.path(), lands_at);
+        outside.settled();
+
+        exercise_everything(&plane);
+
+        let changed = outside.changed();
+        if !changed.is_empty() {
+            broken.push(format!("  {at} -> ../{lands_at}: {changed:?}"));
+        }
+    }
+
+    assert!(
+        broken.is_empty(),
+        "two hops reached outside the plane:\n{}",
+        broken.join("\n")
+    );
+}
+
+#[test]
+fn a_parent_after_a_link_pops_where_the_link_landed_not_the_name_before_it() {
+    // The rule the two-hop escape turned on, asked of `contain` directly.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("charter.toml"), "schema = 1\n").unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let store = dir.path().join("workspaces/alpha/memory");
+    std::fs::create_dir_all(store.join("real")).unwrap();
+    std::fs::create_dir_all(outside.path().join("inner")).unwrap();
+    std::os::unix::fs::symlink(outside.path().join("inner"), store.join("jump")).unwrap();
+
+    // Through the link: `..` pops `<outside>/inner`, landing outside.
+    assert!(
+        charter_core::contain::writable(dir.path(), &store.join("jump/../escaped")).is_err(),
+        "`..` after a link belongs to where the link landed"
+    );
+    // Through a real directory: `..` pops it and stays inside.
+    assert_eq!(
+        charter_core::contain::writable(dir.path(), &store.join("real/../kept.md")),
+        Ok(())
     );
 }

@@ -94,8 +94,13 @@ pub fn record_launched(root: &Path, name: &str, print: &Fingerprint) -> io::Resu
     // it out of the plane moves the consent with it. `contain::writable`'s data roots do not
     // cover it — `.charter` is not one, and Python does not gate this write either — so the
     // rule is spelled out here: the record stays under this plane's own `.charter`.
+    // The record itself, not only the directory holding it. Gating `.charter` left this
+    // safe because `private_dir` refuses a symlinked state directory and the write ends in
+    // a `rename` — true, and one level shallower than the thing opened.
     let state = root.join(".charter");
-    if !crate::contain::within_plane(root, &state) {
+    if !crate::contain::within_plane(root, &path(root))
+        || !crate::contain::within_plane(root, &state)
+    {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(
