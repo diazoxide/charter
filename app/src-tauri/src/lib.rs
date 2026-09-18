@@ -381,8 +381,12 @@ pub fn run() {
             let chats = Chats::recorded_by(Box::new(move |record| {
                 if let Some(root) = &writing_to {
                     // A record that cannot be written is not worth interrupting the
-                    // operator over; the cost is a relaunch that comes back short.
-                    let _ = reopen::write(root, record);
+                    // operator over, but it is worth saying: a refused record means every
+                    // later launch comes back empty, and silence makes that look like a
+                    // plane that never had chats in it.
+                    if let Err(why) = reopen::write(root, record) {
+                        eprintln!("charter: what is open was not recorded ({why})");
+                    }
                 }
             }));
             // Put back what was open before there is a window, so a relaunch does not
@@ -393,7 +397,18 @@ pub fn run() {
             // nothing at all to look at — and neither does a CI log.
             match &plane {
                 Some(root) => {
-                    let record = reopen::read(root);
+                    let record = match reopen::read_or_refusal(root) {
+                        Ok(record) => record,
+                        Err(why) => {
+                            // Not the same thing as an empty plane, and an operator told
+                            // "nothing to reopen" would go looking in the wrong place.
+                            eprintln!(
+                                "charter: the record of what was open was refused ({why}); \
+                                 nothing is reopened and nothing will be recorded until it is repaired"
+                            );
+                            reopen::Record::default()
+                        }
+                    };
                     let wanted = record.chats.len();
                     let back = chats.put_back(&record, STARTING).len();
                     if wanted > 0 {
@@ -441,8 +456,10 @@ pub fn run() {
                 // Written before the sessions are ended, because ending them is what makes
                 // there be nothing to write. A failure here is not worth refusing to exit
                 // over: the next launch reads no record and starts empty.
-                if let Plane(Some(root)) = &*app.state::<Plane>() {
-                    let _ = reopen::write(root, &chats.record());
+                if let Plane(Some(root)) = &*app.state::<Plane>()
+                    && let Err(why) = reopen::write(root, &chats.record())
+                {
+                    eprintln!("charter: what was open was not recorded ({why})");
                 }
                 chats.end_all();
             }

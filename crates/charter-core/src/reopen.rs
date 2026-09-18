@@ -14,12 +14,16 @@
 //! operator never typed. `program`, `args` and `cwd` are **not** checked: they say what to
 //! run, and there is no shape that separates a harness the operator installed from anything
 //! else they might run. So this file is, for whoever can write it, a way to have a command
-//! run at every later launch — before any window, with nothing to click. It lives inside
-//! the operator's own plane, under a gitignored `.charter/`, so it does not arrive over a
-//! `git pull` and anyone who can write it can already write a shell profile; it is not a
-//! way in. It is worth naming anyway, because it survives: one write buys every launch
-//! after it, and an agent that writes it gets a command run later, in another process,
-//! with none of charter's guards in the path.
+//! run at every later launch — before any window, with nothing to click.
+//!
+//! **It is not true that a gitignored `.charter/` keeps this out of a clone.** An ignore rule
+//! does not apply to a tracked path: `git add -f` commits a symlink — or a file far larger
+//! than charter will read — and a fresh clone materialises it. (A FIFO is the one poison git
+//! cannot carry; it needs a local writer.) That assumption is what left the record reachable through a link, so the
+//! path is guarded now (`no_link_on_the_way`) rather than argued about. What remains true is
+//! that anyone who can *write* this file could already write a shell profile — it is not a
+//! way in, it is a way to *survive*: one write buys every launch after it, in another
+//! process, with none of charter's guards in the path.
 
 use std::path::{Path, PathBuf};
 
@@ -32,6 +36,10 @@ pub const VERSION: u32 = 1;
 
 /// Where the record lives, relative to a plane root.
 pub const IN_PLANE: &str = ".charter/app/reopen.json";
+
+/// The largest record charter will read, matching `contain.MAX_BYTES` on the Python side.
+/// A real record is a few hundred bytes per chat; anything approaching this is not one.
+pub const MAX_BYTES: u64 = 1_048_576;
 
 /// One chat as it was: what it was running, where, and the conversation to bring back.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -155,12 +163,94 @@ pub fn path(plane_root: &Path) -> PathBuf {
     plane_root.join(IN_PLANE)
 }
 
+/// Refuses a record path a symlink could take outside the plane, or that is not a plain file.
+///
+/// `.charter/app/reopen.json` is charter's own, created by charter, and nothing legitimate
+/// makes any part of it a link. A committed `.charter/app -> somewhere else` would otherwise
+/// have the app **write** its record outside the plane and, worse, **read** the command line
+/// it launches at startup from out there — with no consent step in the way. So every
+/// component from the plane root down is checked with `symlink_metadata`, which does not
+/// follow links, and one link anywhere in the chain refuses the whole operation.
+///
+/// This is deliberately blunter than resolving the path: a link here has no honest use, and
+/// charter's Python side words the same rule the same way — "is a symlink, and charter writes
+/// nothing through one". It checks every component BELOW `plane_root`, not the root itself:
+/// a plane reached through a symlinked parent (`/tmp`, a symlinked `$HOME`) is an ordinary,
+/// honest setup, and the app's own root comes from `getcwd()`, which is already resolved.
+///
+/// It does not stop a **hard** link, which no symlink check can see and git cannot carry;
+/// whoever can make one can already write this file.
+///
+/// The last component is also held to being a plain file no bigger than [`MAX_BYTES`]. One
+/// `symlink_metadata` answers all three questions, which is how charter's Python side words
+/// it (`contain.py`: "whether this is a link (containment), whether it is a regular file (a
+/// FIFO blocks the read for ever, a device never ends) and how big it is (the bound)").
+///
+/// A FIFO is not a link, so a link check waves it through, and reading one **blocks for
+/// ever** — at launch, before the window and the tray exist, leaving an app that can only be
+/// killed. The size bound is the half that a clone can actually deliver: git cannot store a
+/// FIFO, but a sparse multi-gigabyte file packs small and arrives full size, and reading it
+/// whole at launch is the same failure by another road.
+fn no_link_on_the_way(plane_root: &Path, file: &Path) -> std::io::Result<()> {
+    let Ok(rest) = file.strip_prefix(plane_root) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "{} is not inside the plane at {}",
+                file.display(),
+                plane_root.display()
+            ),
+        ));
+    };
+    let mut walked = plane_root.to_path_buf();
+    for component in rest.components() {
+        walked.push(component);
+        match std::fs::symlink_metadata(&walked) {
+            Ok(found) if found.file_type().is_symlink() => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!(
+                        "{} is a symlink, and charter's own record may not be reached through one",
+                        walked.display()
+                    ),
+                ));
+            }
+            // A record that is not a plain file: a FIFO would block the read for ever, a
+            // device never ends. Directories above it are fine, the record itself is not.
+            Ok(found) if walked == *file && !found.file_type().is_file() => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "{} is not a plain file, and charter reads its record from nothing else",
+                        walked.display()
+                    ),
+                ));
+            }
+            // Read whole at launch, so a planted giant is a hang with nothing to click on.
+            Ok(found) if walked == *file && found.len() > MAX_BYTES => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "{} is {} bytes, and charter's record is never larger than {MAX_BYTES}",
+                        walked.display(),
+                        found.len()
+                    ),
+                ));
+            }
+            // Not there yet is fine: the app creates `.charter/app/` and the file itself.
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Writes the record, creating `.charter/app/` if it is not there.
 ///
 /// The file is written beside itself and renamed over, so a launch that reads it never sees
 /// half of one — the app can be killed at any moment, and quitting is exactly when it is.
 pub fn write(plane_root: &Path, record: &Record) -> std::io::Result<()> {
     let file = path(plane_root);
+    no_link_on_the_way(plane_root, &file)?;
     let dir = file.parent().expect("the record's path has a directory");
     std::fs::create_dir_all(dir)?;
     let text = serde_json::to_string_pretty(&OnDisk::from(record))
@@ -169,29 +259,57 @@ pub fn write(plane_root: &Path, record: &Record) -> std::io::Result<()> {
     // Beside itself, then renamed over: a rename is atomic on every platform charter runs
     // on, so a launch reading this file sees the whole of one record or the whole of the
     // one before it. Quitting is when the app is most likely to be killed halfway.
+    // The write lands HERE, so this is the path that has to be checked. Guarding only the
+    // file renamed onto left a committed `reopen.json.writing -> outside` writing the whole
+    // record out of the plane, with no race at all — the same "gate one level shallower than
+    // the write" this guard exists to stop.
     let beside = file.with_extension("json.writing");
+    no_link_on_the_way(plane_root, &beside)?;
     std::fs::write(&beside, text + "\n")?;
     std::fs::rename(&beside, &file)
 }
 
-/// What was open, or nothing.
+/// What was open, or nothing, with every refusal swallowed.
+///
+/// Nothing in the app calls this — [`read_or_refusal`] is what a launch uses, because a
+/// refusal an operator never sees is the bug this module already had once. It is kept for
+/// tests, and deliberately not public.
 ///
 /// This never fails. No file is a first launch; a file of another version, or one that is
 /// not the record at all, is nothing open — there is no repair that would be honest, and
 /// refusing to start would be worse than starting empty.
-pub fn read(plane_root: &Path) -> Record {
-    let Ok(text) = std::fs::read_to_string(path(plane_root)) else {
-        return Record::default();
+#[cfg(test)]
+fn read(plane_root: &Path) -> Record {
+    read_or_refusal(plane_root).unwrap_or_default()
+}
+
+/// What was open, the refusal that stopped it being read, or nothing.
+///
+/// A refusal is returned rather than swallowed: a poisoned record and an empty one would
+/// otherwise render identically, and the operator would read "nothing to reopen" and conclude
+/// their chats were never recorded rather than that a committed file is defective.
+pub fn read_or_refusal(plane_root: &Path) -> Result<Record, std::io::Error> {
+    let file = path(plane_root);
+    // A record reached through a link is not this plane's record, and what it holds is a
+    // command line this launch would run.
+    no_link_on_the_way(plane_root, &file)?;
+    let text = match std::fs::read_to_string(&file) {
+        Ok(text) => text,
+        // No record is a first launch. A record that exists and cannot be read — no
+        // permission, a failing disk — is a defect with a repair, and saying "nothing to
+        // reopen" would send the operator looking in the wrong place.
+        Err(gone) if gone.kind() == std::io::ErrorKind::NotFound => return Ok(Record::default()),
+        Err(unreadable) => return Err(unreadable),
     };
     let Ok(on_disk) = serde_json::from_str::<OnDisk>(&text) else {
-        return Record::default();
+        return Ok(Record::default());
     };
     if on_disk.version != VERSION {
-        return Record::default();
+        return Ok(Record::default());
     }
-    Record {
+    Ok(Record {
         chats: on_disk.chats.into_iter().map(Chat::from).collect(),
-    }
+    })
 }
 
 /// The record as JSON, and the only place this file's field names are written down.
@@ -572,5 +690,199 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["ide.8"]
         );
+    }
+
+    /// A plane whose `.charter/app` is a symlink pointing out of it, and the outside
+    /// directory it points at.
+    fn a_plane_whose_record_directory_is_a_link() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let held = tempfile::tempdir().unwrap();
+        let plane = held.path().join("plane");
+        let outside = held.path().join("outside");
+        std::fs::create_dir_all(plane.join(".charter")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, plane.join(".charter/app")).unwrap();
+        (held, plane, outside)
+    }
+
+    fn one_chat() -> Record {
+        Record {
+            chats: vec![Chat {
+                program: "/bin/sh".into(),
+                args: vec!["-c".into(), "touch /tmp/pwned".into()],
+                cwd: Some(PathBuf::from("/tmp")),
+                name: "planted".into(),
+                resume: None,
+                active: true,
+            }],
+        }
+    }
+
+    #[test]
+    fn a_record_directory_that_is_a_link_out_of_the_plane_is_not_written_through() {
+        let (_held, plane, outside) = a_plane_whose_record_directory_is_a_link();
+
+        let refused = write(&plane, &one_chat());
+
+        assert!(refused.is_err(), "writing through the link was allowed");
+        assert!(
+            !outside.join("reopen.json").exists(),
+            "the record was written outside the plane"
+        );
+    }
+
+    #[test]
+    fn a_record_reached_through_a_link_is_nothing_to_put_back() {
+        let (_held, plane, outside) = a_plane_whose_record_directory_is_a_link();
+        // Whoever planted the link also planted what the app would launch.
+        std::fs::write(
+            outside.join("reopen.json"),
+            r#"{"version":1,"at":1789000000,"chats":[{"program":"/bin/sh","args":["-c","touch /tmp/pwned"],"cwd":"/tmp","name":"planted","resume":"","active":true}]}"#,
+        )
+        .unwrap();
+
+        let read_back = read(&plane);
+
+        assert_eq!(
+            read_back,
+            Record::default(),
+            "the app took its launch from outside the plane"
+        );
+    }
+
+    #[test]
+    fn the_record_file_itself_being_a_link_is_refused_too() {
+        let held = tempfile::tempdir().unwrap();
+        let plane = held.path().join("plane");
+        let outside = held.path().join("outside");
+        std::fs::create_dir_all(plane.join(".charter/app")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(outside.join("planted.json"), plane.join(IN_PLANE)).unwrap();
+
+        assert!(write(&plane, &one_chat()).is_err());
+        assert!(!outside.join("planted.json").exists());
+    }
+
+    #[test]
+    fn an_ordinary_plane_still_writes_and_reads_its_record() {
+        let held = tempfile::tempdir().unwrap();
+        let plane = held.path().to_path_buf();
+
+        write(&plane, &one_chat()).expect("an ordinary plane writes its record");
+
+        assert_eq!(read(&plane), one_chat());
+    }
+
+    #[test]
+    fn a_link_at_the_path_the_write_actually_lands_on_is_refused() {
+        // The record is written beside itself and renamed over, so the `.json.writing` path
+        // is where the bytes land — guarding only the renamed-onto name left this open.
+        let held = tempfile::tempdir().unwrap();
+        let plane = held.path().join("plane");
+        let outside = held.path().join("outside");
+        std::fs::create_dir_all(plane.join(".charter/app")).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let captured = outside.join("captured.json");
+        std::os::unix::fs::symlink(&captured, plane.join(".charter/app/reopen.json.writing"))
+            .unwrap();
+
+        let refused = write(&plane, &one_chat());
+
+        assert!(refused.is_err(), "the temp path was written through");
+        assert!(
+            !captured.exists(),
+            "the record was written outside the plane"
+        );
+    }
+
+    #[test]
+    fn a_record_that_is_not_a_plain_file_is_refused_instead_of_read_for_ever() {
+        // A FIFO is not a link, so a link check waves it through, and read_to_string on one
+        // never returns — at launch, before there is a window to close.
+        let held = tempfile::tempdir().unwrap();
+        let plane = held.path().to_path_buf();
+        std::fs::create_dir_all(plane.join(".charter/app")).unwrap();
+        let made = std::process::Command::new("mkfifo")
+            .arg(path(&plane))
+            .status()
+            .expect("mkfifo runs");
+        assert!(made.success(), "the test needs a fifo to plant");
+
+        // In a thread, because the whole point is that the unguarded version never returns.
+        let (say, heard) = std::sync::mpsc::channel();
+        let asked = plane.clone();
+        std::thread::spawn(move || say.send(read_or_refusal(&asked).is_err()));
+        let answered = heard
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("reading a fifo record must not block");
+
+        assert!(answered, "a fifo record was accepted");
+    }
+
+    #[test]
+    fn a_refusal_is_returned_rather_than_read_as_an_empty_record() {
+        let (_held, plane, _outside) = a_plane_whose_record_directory_is_a_link();
+
+        let refusal = read_or_refusal(&plane).expect_err("a linked record is a refusal");
+
+        assert!(
+            refusal.to_string().contains(".charter/app"),
+            "the refusal must name the path an operator has to repair: {refusal}"
+        );
+        // And the forgiving door still answers, for callers that only want what to reopen.
+        assert_eq!(read(&plane), Record::default());
+    }
+
+    #[test]
+    fn a_record_too_large_to_be_one_is_refused_rather_than_read_whole() {
+        // git cannot carry a fifo, but it carries a sparse giant that arrives full size,
+        // and reading it at launch is the same hang by another road.
+        let held = tempfile::tempdir().unwrap();
+        let plane = held.path().to_path_buf();
+        std::fs::create_dir_all(plane.join(".charter/app")).unwrap();
+        let record = std::fs::File::create(path(&plane)).unwrap();
+        record.set_len(MAX_BYTES + 1).unwrap();
+
+        let refusal = read_or_refusal(&plane).expect_err("an oversized record is a refusal");
+
+        assert!(
+            refusal.to_string().contains("never larger than"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_record_of_an_honest_size_is_still_read() {
+        let held = tempfile::tempdir().unwrap();
+        let plane = held.path().to_path_buf();
+        write(&plane, &one_chat()).unwrap();
+
+        assert_eq!(read_or_refusal(&plane).unwrap(), one_chat());
+    }
+
+    #[test]
+    fn a_record_that_exists_but_cannot_be_read_is_a_refusal_not_an_empty_plane() {
+        use std::os::unix::fs::PermissionsExt;
+        let held = tempfile::tempdir().unwrap();
+        let plane = held.path().to_path_buf();
+        write(&plane, &one_chat()).unwrap();
+        std::fs::set_permissions(path(&plane), std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let read_back = read_or_refusal(&plane);
+
+        // Running as root reads it anyway; the point is only that it is never a silent empty.
+        if let Ok(record) = read_back {
+            assert_eq!(
+                record,
+                one_chat(),
+                "an unreadable record read as an empty one"
+            );
+        }
+    }
+
+    #[test]
+    fn a_plane_with_no_record_at_all_is_simply_nothing_to_reopen() {
+        let held = tempfile::tempdir().unwrap();
+
+        assert_eq!(read_or_refusal(held.path()).unwrap(), Record::default());
     }
 }
