@@ -341,7 +341,11 @@ fn start_options() -> Result<StartOptions, String> {
             })
             .collect(),
         personas: plane.personas().map_err(|err| err.to_string())?,
-        persona: plane.default_persona(),
+        // Only a persona this plane HAS. `[persona] default` is a committed line that
+        // nothing checks, so it can name a deleted persona or `_shared` — and preselecting
+        // one the picker does not draw means the operator presses Start and is refused over
+        // a persona they never chose.
+        persona: charter_core::start::persona_for_a_new_chat(&root),
         ignore_fix: (!check.passes()).then(|| check.fix.clone()),
         declares_none: set
             .profiles()

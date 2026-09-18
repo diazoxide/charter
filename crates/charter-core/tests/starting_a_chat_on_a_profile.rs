@@ -323,3 +323,69 @@ fn an_opencode_profile_refuses_here_too_because_this_is_where_a_chat_starts() {
         "{why}"
     );
 }
+
+#[test]
+fn the_persona_a_new_chat_starts_on_is_one_the_plane_actually_has() {
+    // `[persona] default` is a line in a committed file and nothing checks that the persona
+    // it names exists. Offering it as the picker's preselection anyway means the operator
+    // presses Start and is refused over a persona they never chose.
+    let plane = Plane::new();
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[persona]\ndefault = \"steward\"\n",
+    )
+    .unwrap();
+
+    assert_eq!(
+        start::persona_for_a_new_chat(plane.root()),
+        Some("steward".to_owned()),
+        "the plane has personas/steward/persona.md, so its default stands"
+    );
+}
+
+#[test]
+fn a_default_persona_the_plane_does_not_have_is_offered_to_nobody() {
+    let plane = Plane::new();
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[persona]\ndefault = \"gone\"\n",
+    )
+    .unwrap();
+
+    assert_eq!(start::persona_for_a_new_chat(plane.root()), None);
+}
+
+#[test]
+fn the_shared_store_is_never_the_persona_a_new_chat_adopts() {
+    // `_shared` is the store every persona reads, not a persona. It is admitted by name
+    // wherever a persona directory is resolved, and it is NOT in the list of personas — so
+    // a plane whose default names it would preselect a row the picker does not even draw.
+    let plane = Plane::new();
+    fs::create_dir_all(plane.root().join("personas/_shared")).unwrap();
+    fs::write(
+        plane.root().join("personas/_shared/persona.md"),
+        "# shared\n",
+    )
+    .unwrap();
+    fs::write(
+        plane.root().join("charter.toml"),
+        "[persona]\ndefault = \"_shared\"\n",
+    )
+    .unwrap();
+
+    assert_eq!(start::persona_for_a_new_chat(plane.root()), None);
+}
+
+#[test]
+fn a_plane_with_no_personas_at_all_offers_none_rather_than_failing() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("charter.toml"), "").unwrap();
+
+    assert_eq!(start::persona_for_a_new_chat(dir.path()), None);
+    assert_eq!(
+        charter_core::workspaces::Plane::open(dir.path())
+            .personas()
+            .expect("a plane with no personas directory has no personas, and that is not a fault"),
+        Vec::<String>::new()
+    );
+}

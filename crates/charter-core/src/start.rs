@@ -217,3 +217,25 @@ fn environment(profile: &Profile, root: &Path, persona: Option<&str>) -> Vec<(St
     env.sort();
     env
 }
+
+/// The persona a new chat on this plane would adopt — the plane's `[persona] default`, but
+/// **only when it is one the plane actually has**.
+///
+/// `[persona] default` is a line in a committed file and nothing checks that the persona it
+/// names exists: it can point at a persona that was deleted, or at `_shared`, which is the
+/// store every persona reads rather than a persona anybody adopts. Offering either as the
+/// picker's preselection means the operator presses Start and is refused over a persona
+/// they never chose — so what is offered is filtered against the list that is drawn beside
+/// it, and the two cannot disagree.
+///
+/// The sidebar still shows `[persona] default` as it is written, because that is a report
+/// of what the file says. This is a different question: what would START.
+pub fn persona_for_a_new_chat(root: &Path) -> Option<String> {
+    let plane = crate::workspaces::Plane::open(root.to_path_buf());
+    let wanted = plane.default_persona()?;
+    plane
+        .personas()
+        .ok()?
+        .into_iter()
+        .find(|have| *have == wanted)
+}

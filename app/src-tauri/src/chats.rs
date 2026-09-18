@@ -1329,4 +1329,60 @@ mod tests {
         assert_eq!(open[0].profile.as_deref(), Some("claude-work"));
         let _ = chats.close(session);
     }
+    #[test]
+    fn the_board_is_told_the_harness_the_profile_declared_before_the_program_starts() {
+        // The board judges every report against the harness it was told at the start, and a
+        // chat on a wrapper profile would otherwise be told `None` — the narrowest rule
+        // there is — while the sidebar said Claude Code. One announcement, one answer.
+        //
+        // Before the program starts, because a harness fires `SessionStart` at its own exec
+        // and a board that learned the chat's number afterwards would miss it.
+        let told = std::sync::Arc::new(Mutex::new(
+            Vec::<(u32, Option<Harness>, Option<String>)>::new(),
+        ));
+        let chats = Chats::new();
+        {
+            let told = std::sync::Arc::clone(&told);
+            chats.when_one_starts(Box::new(move |session, harness, conversation| {
+                lock(&told).push((session, harness, conversation));
+            }));
+        }
+        let chat = Chat {
+            program: "/bin/sh".to_owned(),
+            args: Vec::new(),
+            cwd: None,
+            name: "ide.7".to_owned(),
+            resume: None,
+            active: false,
+            profile: Some("claude-work".to_owned()),
+            persona: Some("steward".to_owned()),
+        };
+        assert_eq!(
+            chat.harness(),
+            None,
+            "the premise: the program is not a harness"
+        );
+        let ready = charter_core::start::Ready {
+            program: "/bin/sh".to_owned(),
+            args: vec!["-c".to_owned(), "sleep 30".to_owned()],
+            env: Vec::new(),
+            cwd: None,
+            harness: Some(Harness::ClaudeCode),
+            session: charter_core::harness::SessionId::new(ID).ok(),
+            how: charter_core::reopen::Reopened::Fresh(
+                charter_core::reopen::Fresh::NoConversationRecorded,
+            ),
+            wired: String::new(),
+        };
+
+        let session = chats.start_ready(&chat, &ready, SIZE).unwrap();
+
+        let told = lock(&told).clone();
+        assert_eq!(
+            told,
+            vec![(session, Some(Harness::ClaudeCode), Some(ID.to_owned()))],
+            "the board was told something other than the profile's declared kind"
+        );
+        let _ = chats.close(session);
+    }
 }

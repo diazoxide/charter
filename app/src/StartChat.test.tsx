@@ -156,4 +156,28 @@ describe("the picker a chat starts from", () => {
 
     expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus();
   });
+  it("offers a chat with no persona at all when the plane declares none", () => {
+    // A plane with no `personas/` at all is the ordinary first state, and `_shared` is the
+    // store every persona reads rather than a persona anybody adopts — so a plane can
+    // legitimately have nothing to list here. The picker still starts a chat.
+    const { onStart, user } = show({ personas: [], persona: null });
+
+    expect(screen.getByRole("radio", { name: "none" })).toBeChecked();
+
+    return user.click(screen.getByRole("button", { name: "Start" })).then(() => {
+      expect(onStart).toHaveBeenCalledWith("claude", null);
+    });
+  });
+
+  it("never preselects a persona it does not draw a row for", async () => {
+    // The core filters `[persona] default` against the personas the plane has, so this
+    // should be unreachable from the app. Pinned anyway: if it ever arrives, the picker
+    // must not start a chat on a persona the operator cannot see or change.
+    const { onStart, user } = show({ personas: ["release"], persona: "gone" });
+
+    await user.click(screen.getByRole("button", { name: "Start" }));
+
+    const [, persona] = onStart.mock.calls[0] as [string, string | null];
+    expect(["release", null]).toContain(persona);
+  });
 });

@@ -35,7 +35,13 @@ export function StartChat({
   const [profile, setProfile] = useState<string | undefined>(
     () => options.profiles.find((p) => p.is_default)?.name ?? options.profiles[0]?.name,
   );
-  const [persona, setPersona] = useState<string | null>(options.persona);
+  // Only a persona there is a row for. The core already filters `[persona] default`
+  // against the personas the plane has, so this should be unreachable from the app — but
+  // the alternative, if it ever arrives, is a chat started on a persona the operator can
+  // neither see nor change, and refused for it a moment later.
+  const [persona, setPersona] = useState<string | null>(
+    options.persona !== null && options.personas.includes(options.persona) ? options.persona : null,
+  );
   const picked = options.profiles.find((p) => p.name === profile);
 
   // Escape starts nothing. Listened for on the window rather than the dialog, so it answers
