@@ -48,7 +48,10 @@ function chat(one: Partial<OpenChat> & { session: number }): OpenChat {
 }
 
 /** The core, answering with `open` as the chats it already has. */
-function core(open: OpenChat[] = []): {
+function core(
+  open: OpenChat[] = [],
+  wouldNot: [string, string][] = [],
+): {
   asked: Asked[];
   /** Fires the event the app is sent when something asks it to quit. */
   askToQuit: () => Promise<void>;
@@ -65,6 +68,7 @@ function core(open: OpenChat[] = []): {
     }
     if (cmd === "plane_root") return "/home/dev/plane";
     if (cmd === "opened_chats") return open;
+    if (cmd === "chats_that_would_not_start") return wouldNot;
     if (cmd === "open_session") return open.length + ++opened;
     return null;
   });
@@ -135,6 +139,38 @@ describe("what the window does with the chats the core already has", () => {
     expect(await screen.findByText(/new chat/i)).toHaveTextContent(
       "no conversation was recorded for it",
     );
+  });
+
+  it("says nothing about a shell that was not resumed", async () => {
+    // Every chat is a shell until the harness picker lands, and a shell has no conversation
+    // to bring back. Explaining that on every relaunch, forever, is noise about the normal
+    // case — the note is for a harness that could have been resumed and was not.
+    core([
+      chat({
+        session: 7,
+        harness: null,
+        fresh: "charter has not measured how this program resumes",
+        in_front: true,
+      }),
+    ]);
+
+    render(<App />);
+
+    await vi.waitFor(() => expect(tabs()).toHaveLength(1));
+    expect(screen.queryByText(/new chat/i)).not.toBeInTheDocument();
+  });
+
+  it("names the chats this launch could not start, and says they are still recorded", async () => {
+    // A chat whose directory has moved would otherwise just be a tab that is quietly not
+    // there — and the operator has no way to know it is still coming back.
+    core([chat({ session: 7, in_front: true })], [["ide.9", "no such file or directory"]]);
+
+    render(<App />);
+
+    const said = await screen.findByText(/did not start/i);
+    expect(said).toHaveTextContent("ide.9");
+    expect(said).toHaveTextContent("no such file or directory");
+    expect(said).toHaveTextContent(/still recorded/i);
   });
 
   it("says nothing about either when a chat is one the operator just opened", async () => {
@@ -220,6 +256,39 @@ describe("being asked to quit", () => {
     expect(of("close_session", asked)).toEqual([]);
     // And the core is told, so the next Cmd-Q warns again instead of quitting outright.
     expect(of("quit_cancelled", asked)).toHaveLength(1);
+  });
+
+  it("warns rather than quitting while it is still finding out what is open", async () => {
+    // A launch answers `opened_chats` after the window is already interactive. Quitting on
+    // "no tabs yet" would end fifty chats the window had not drawn.
+    const asked: Asked[] = [];
+    const listeners = new Map<string, number>();
+    let letTheChatsArrive = () => {};
+    mockIPC(async (cmd, args) => {
+      asked.push({ cmd, args });
+      if (cmd === "plugin:event|listen") {
+        const { event, handler } = args as { event: string; handler: number };
+        listeners.set(event, handler);
+        return 1;
+      }
+      if (cmd === "plane_root") return "/home/dev/plane";
+      if (cmd === "chats_that_would_not_start") return [];
+      if (cmd !== "opened_chats") return null;
+      await new Promise<void>((arrive) => (letTheChatsArrive = arrive));
+      return [chat({ session: 7 })];
+    });
+    render(<App />);
+    await vi.waitFor(() => expect(listeners.has("quit-asked")).toBe(true));
+
+    window.__TAURI_INTERNALS__.runCallback(listeners.get("quit-asked") as number, {
+      event: "quit-asked",
+      id: 1,
+      payload: null,
+    });
+
+    await vi.waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+    expect(of("quit", asked)).toEqual([]);
+    letTheChatsArrive();
   });
 
   it("quits straight away when there is nothing to end", async () => {

@@ -129,6 +129,14 @@ fn opened_chats(chats: tauri::State<'_, Chats>) -> Vec<OpenChat> {
     chats.open_now().into_iter().map(OpenChat::from).collect()
 }
 
+/// The chats this launch could not start, by name and reason. They are still recorded, and
+/// will be tried again at the next launch.
+#[tauri::command]
+#[specta::specta]
+fn chats_that_would_not_start(chats: tauri::State<'_, Chats>) -> Vec<(String, String)> {
+    chats.would_not_start()
+}
+
 /// Says which chat is in front, so the record brings that one back in front.
 #[tauri::command]
 #[specta::specta]
@@ -196,6 +204,9 @@ impl From<chats::Open> for OpenChat {
                 }
                 Reopened::Fresh(Fresh::NoResumeForThisProgram) => {
                     Some("charter has not measured how this program resumes".to_owned())
+                }
+                Reopened::Fresh(Fresh::SessionNamedByTheOperator) => {
+                    Some("its own arguments name a session, so charter added none".to_owned())
                 }
             },
         }
@@ -274,6 +285,7 @@ fn commands() -> Builder<tauri::Wry> {
         unwatch_session,
         running_sessions,
         opened_chats,
+        chats_that_would_not_start,
         chat_in_front,
         ask_to_quit,
         quit,
@@ -283,8 +295,14 @@ fn commands() -> Builder<tauri::Wry> {
     ])
 }
 
-/// Where the generated TypeScript lives, relative to this crate.
-const BINDINGS: &str = "../src/bindings.ts";
+/// Where the generated TypeScript lives.
+///
+/// Anchored to this crate's own directory, not to the working directory. A debug build
+/// writes it at every start, and the app is started from wherever the operator is — so a
+/// relative path scatters a `src/bindings.ts` beside every plane, every temp directory a
+/// test runs in, and anywhere else the app is launched from. One such file was committed
+/// before this was noticed.
+const BINDINGS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/bindings.ts");
 
 /// How the TypeScript is written, so that the app and the test that guards it agree.
 fn typescript() -> specta_typescript::Typescript {
@@ -350,8 +368,33 @@ pub fn run() {
             }));
             // Put back what was open before there is a window, so a relaunch does not
             // depend on a webview having run. The window asks `opened_chats` for the result.
-            if let Some(root) = &plane {
-                chats.put_back(&reopen::read(root), STARTING);
+            //
+            // What happened is said out loud, on stderr. An operator who launched charter
+            // somewhere without a plane, or whose chats did not come back, otherwise has
+            // nothing at all to look at — and neither does a CI log.
+            match &plane {
+                Some(root) => {
+                    let record = reopen::read(root);
+                    let wanted = record.chats.len();
+                    let back = chats.put_back(&record, STARTING).len();
+                    if wanted > 0 {
+                        eprintln!(
+                            "charter: plane {}, {back} of {wanted} chats back",
+                            root.display()
+                        );
+                        for (name, why) in chats.would_not_start() {
+                            eprintln!(
+                                "charter: {name} did not start ({why}); it is still recorded"
+                            );
+                        }
+                    } else {
+                        eprintln!("charter: plane {}, nothing to reopen", root.display());
+                    }
+                }
+                None => eprintln!(
+                    "charter: no plane here, so nothing is reopened and nothing is recorded \
+                     (a plane is the nearest directory at or above this one with a charter.toml)"
+                ),
             }
             app.manage(chats);
             app.manage(Plane(plane));

@@ -40,6 +40,11 @@ export const commands = {
 	 *  there is a window, so that a relaunch does not depend on a webview having run.
 	 */
 	openedChats: () => __TAURI_INVOKE<OpenChat[]>("opened_chats"),
+	/**
+	 *  The chats this launch could not start, by name and reason. They are still recorded, and
+	 *  will be tried again at the next launch.
+	 */
+	chatsThatWouldNotStart: () => __TAURI_INVOKE<([string, string])[]>("chats_that_would_not_start"),
 	/**  Says which chat is in front, so the record brings that one back in front. */
 	chatInFront: (session: number | null) => __TAURI_INVOKE<void>("chat_in_front", { session }),
 	/**

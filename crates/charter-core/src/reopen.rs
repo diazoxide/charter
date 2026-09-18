@@ -4,10 +4,22 @@
 //! tmux frame's `.charter/frame/reopen.json` — that one belongs to the frame this app
 //! replaces, and the app never touches it (`docs/plane-format.md`).
 //!
-//! Nothing here trusts the file. It is written by a process that may have been killed
-//! halfway, edited by hand, or left behind by an older version, and every value in it
-//! becomes part of a command line — so reading is a conversion into types that hold their
-//! own shape, and anything that does not convert is dropped rather than repaired.
+//! The file is written by a process that may have been killed halfway, edited by hand, or
+//! left behind by an older version, so reading is a conversion: a record of another
+//! version, a file that is not JSON, and a `resume` that is not a session id all read as
+//! "nothing to put back" rather than as an error a launch would have to handle.
+//!
+//! **What that does and does not cover.** `resume` is held to a shape because it is the one
+//! field charter itself puts on a command line, where a leading `-` would be a flag the
+//! operator never typed. `program`, `args` and `cwd` are **not** checked: they say what to
+//! run, and there is no shape that separates a harness the operator installed from anything
+//! else they might run. So this file is, for whoever can write it, a way to have a command
+//! run at every later launch — before any window, with nothing to click. It lives inside
+//! the operator's own plane, under a gitignored `.charter/`, so it does not arrive over a
+//! `git pull` and anyone who can write it can already write a shell profile; it is not a
+//! way in. It is worth naming anyway, because it survives: one write buys every launch
+//! after it, and an agent that writes it gets a command run later, in another process,
+//! with none of charter's guards in the path.
 
 use std::path::{Path, PathBuf};
 
@@ -61,6 +73,9 @@ pub enum Fresh {
     NoConversationRecorded,
     /// Its program is not a harness charter has measured a resume for — a shell, say.
     NoResumeForThisProgram,
+    /// Its own arguments already name a session, so charter added none of its own. What
+    /// happens then is between the operator and the harness.
+    SessionNamedByTheOperator,
 }
 
 /// What starts a chat, and what the app has to remember about having started it.
@@ -83,11 +98,20 @@ impl Chat {
 
     /// The program and arguments that bring this chat back, and which of the two happened.
     ///
-    /// The recorded arguments come first and charter's own go after them, which is the order
-    /// the Python charter uses: the operator's own words are never rewritten, only added to.
+    /// Charter's own words go FIRST and the chat's recorded arguments after them, which is
+    /// the order `charter/frame/launcher.py:707` uses (`[*cmd, *words, *rest]`). It is not
+    /// cosmetic: Codex resumes through a subcommand (`codex resume <id>`), and a subcommand
+    /// after a positional prompt is not the same command line at all.
     pub fn launch(&self) -> Launch {
-        let mut args = self.args.clone();
         let (added, session, how) = match (self.harness(), self.resume.as_ref()) {
+            // The operator already named a session in the chat's own arguments, so charter
+            // adds none of its own: two `--resume` on one command line is not a harness
+            // anyone has measured, and the one the operator typed is the one they meant.
+            (Some(harness), _) if harness.session_named_in(&self.args) => (
+                Vec::new(),
+                None,
+                Reopened::Fresh(Fresh::SessionNamedByTheOperator),
+            ),
             // Not a harness charter has measured — a shell. It comes back as itself, and
             // there is nothing to resume it by.
             (None, _) => (
@@ -115,7 +139,8 @@ impl Chat {
                 (argv, chosen, Reopened::Fresh(Fresh::NoConversationRecorded))
             }
         };
-        args.extend(added);
+        let mut args = added;
+        args.extend(self.args.iter().cloned());
         Launch {
             program: self.program.clone(),
             args,
@@ -349,7 +374,7 @@ mod tests {
         assert_eq!(launch.program, "claude");
         assert_eq!(
             launch.args,
-            vec!["--model", "opus", "--resume", ID, "--name", "ide.7"]
+            vec!["--resume", ID, "--name", "ide.7", "--model", "opus"]
         );
         assert_eq!(launch.how, Reopened::Resumed(SessionId::new(ID).unwrap()));
     }
@@ -384,7 +409,12 @@ mod tests {
             .map(|at| launch.args[at + 1].clone())
             .expect("a new Claude Code chat is given an id");
         assert!(SessionId::new(&chosen).is_ok(), "{chosen:?} is not an id");
-        assert_eq!(launch.args[..2], ["--model", "opus"]);
+        assert_eq!(
+            launch.args[launch.args.len() - 2..],
+            ["--model", "opus"],
+            "the chat's own arguments no longer come last: {:?}",
+            launch.args
+        );
     }
 
     #[test]
@@ -404,6 +434,20 @@ mod tests {
     }
 
     #[test]
+    fn codex_resumes_through_its_subcommand_before_the_chat_s_own_arguments() {
+        // `codex resume <id>` is a subcommand. `codex --model opus resume <id>` is not the
+        // same command line, and with a prompt among the arguments it is not one at all.
+        let chat = Chat {
+            program: "codex".to_owned(),
+            ..claude("ide.7", Some(ID))
+        };
+
+        let launch = chat.launch();
+
+        assert_eq!(launch.args, vec!["resume", ID, "--model", "opus"]);
+    }
+
+    #[test]
     fn a_resumed_chat_stays_under_the_id_it_was_resumed_by() {
         let launch = claude("ide.7", Some(ID)).launch();
 
@@ -419,6 +463,26 @@ mod tests {
         .launch();
 
         assert_eq!(launch.session, None);
+    }
+
+    #[test]
+    fn a_chat_whose_own_arguments_name_a_session_is_not_given_a_second_one() {
+        // `charter/harness/base.py:308` — the operator's flag wins. Charter adding
+        // `--resume` beside one the operator typed gives a command line no harness has been
+        // measured against.
+        let chat = Chat {
+            args: vec!["--continue".to_owned()],
+            ..claude("ide.7", Some(ID))
+        };
+
+        let launch = chat.launch();
+
+        assert_eq!(launch.args, vec!["--continue"]);
+        assert_eq!(launch.session, None);
+        assert_eq!(
+            launch.how,
+            Reopened::Fresh(Fresh::SessionNamedByTheOperator)
+        );
     }
 
     #[test]

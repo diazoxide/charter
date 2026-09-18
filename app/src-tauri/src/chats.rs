@@ -34,6 +34,10 @@ pub struct Open {
     pub how: Reopened,
 }
 
+/// The most chats one record may start at a launch. The product's scale is fifty (the
+/// spec's limits table); this is only a backstop against a record nobody meant.
+const MOST_AT_ONCE: usize = 200;
+
 /// Where the record goes whenever what is open changes.
 ///
 /// It is a callback rather than a file so that this module keeps knowing nothing about the
@@ -45,7 +49,14 @@ pub struct Chats {
     sessions: Sessions,
     open: Mutex<HashMap<u32, (Chat, Reopened)>>,
     front: Mutex<Option<u32>>,
+    /// Chats a launch could not start, and why. They are kept because the record has to
+    /// keep them: a workspace directory that has moved, or a harness mid-reinstall, must
+    /// not silently delete the chat on the next write.
+    would_not_start: Mutex<Vec<(Chat, String)>>,
     record_it: Recorder,
+    /// Held across building a record and handing it over, so two changes at once cannot
+    /// write themselves out of order and leave the older one on disk.
+    writing: Mutex<()>,
     /// Set while a record is being put back, so reading one does not write it again once
     /// for every chat in it — fifty chats would be fifty writes of the same file, at the
     /// one moment the app is being measured for cold start.
@@ -63,7 +74,9 @@ impl Chats {
             sessions: Sessions::new(),
             open: Mutex::new(HashMap::new()),
             front: Mutex::new(None),
+            would_not_start: Mutex::new(Vec::new()),
             record_it,
+            writing: Mutex::new(()),
             putting_back: AtomicBool::new(false),
         }
     }
@@ -147,20 +160,20 @@ impl Chats {
     pub fn record(&self) -> Record {
         let open = lock(&self.open);
         let front = *lock(&self.front);
-        Record {
-            chats: self
-                .sessions
-                .running()
-                .into_iter()
-                .filter_map(|session| {
-                    let (chat, _) = open.get(&session)?;
-                    Some(Chat {
-                        active: front == Some(session),
-                        ..chat.clone()
-                    })
-                })
-                .collect(),
-        }
+        // The ones that could not be started come first, in the order they were recorded,
+        // so they keep their place and are tried again at the next launch.
+        let mut chats: Vec<Chat> = lock(&self.would_not_start)
+            .iter()
+            .map(|(chat, _)| chat.clone())
+            .collect();
+        chats.extend(self.sessions.running().into_iter().filter_map(|session| {
+            let (chat, _) = open.get(&session)?;
+            Some(Chat {
+                active: front == Some(session),
+                ..chat.clone()
+            })
+        }));
+        Record { chats }
     }
 
     /// Puts a record back: one session per chat it holds, resumed where it can be.
@@ -170,23 +183,39 @@ impl Chats {
     /// than one that came back short.
     pub fn put_back(&self, record: &Record, size: Size) -> Vec<Open> {
         self.putting_back.store(true, Ordering::SeqCst);
+        // Every chat here starts a program, synchronously, before there is a window. A
+        // record with thousands in it — a runaway, or a file nobody meant — would give an
+        // app that hangs on launch with no way to intervene. The cap is far above the
+        // fifty the product is for, so it never meets an operator; it is only ever a
+        // backstop. What it leaves out stays recorded, like anything else that did not
+        // start.
+        let (starting, too_many) = record.chats.split_at(record.chats.len().min(MOST_AT_ONCE));
+        for chat in too_many {
+            lock(&self.would_not_start).push((
+                chat.clone(),
+                format!("more than {MOST_AT_ONCE} chats were recorded"),
+            ));
+        }
         let mut front = None;
-        let opened: Vec<u32> = record
-            .chats
-            .iter()
-            .filter_map(|chat| {
-                let session = self.start(chat, size).ok()?;
-                if chat.active {
-                    front = Some(session);
+        let mut opened: Vec<u32> = Vec::new();
+        for chat in starting {
+            match self.start(chat, size) {
+                Ok(session) => {
+                    if chat.active {
+                        front = Some(session);
+                    }
+                    opened.push(session);
                 }
-                Some(session)
-            })
-            .collect();
+                // Kept, not dropped: the next record has to hold it too, or a directory
+                // that has moved deletes the chat for good.
+                Err(why) => lock(&self.would_not_start).push((chat.clone(), why)),
+            }
+        }
         self.bring_to_front(front);
-        // Once, now that everything is back: what is on disk is a record of this launch and
-        // not of the one before it, so a crash before the first change loses nothing.
+        // Nothing is written here. What is on disk is the record that was just read, which
+        // is still true — and writing what came back would be writing the chats that did
+        // not, out of it.
         self.putting_back.store(false, Ordering::SeqCst);
-        self.write_it_down();
         let open = self.open_now();
         open.into_iter()
             .filter(|one| opened.contains(&one.session))
@@ -198,7 +227,18 @@ impl Chats {
         if self.putting_back.load(Ordering::SeqCst) {
             return;
         }
+        // The record is built and handed over under one lock, so that two changes landing
+        // together cannot write themselves out of order and leave the older one on disk.
+        let _writing = lock(&self.writing);
         (self.record_it)(&self.record());
+    }
+
+    /// The chats a launch could not start, by name and reason. The window says so.
+    pub fn would_not_start(&self) -> Vec<(String, String)> {
+        lock(&self.would_not_start)
+            .iter()
+            .map(|(chat, why)| (chat.name.clone(), why.clone()))
+            .collect()
     }
 
     /// How many chats are remembered, which is not the same as how many are running: this
@@ -212,6 +252,7 @@ impl Chats {
     pub fn end_all(&self) {
         self.sessions.end_all();
         lock(&self.open).clear();
+        lock(&self.would_not_start).clear();
         *lock(&self.front) = None;
     }
 }
@@ -365,9 +406,11 @@ mod tests {
     }
 
     #[test]
-    fn putting_a_record_back_does_not_write_it_once_for_every_chat_in_it() {
-        // Fifty chats coming back would be fifty writes of the same file, at the one moment
-        // the app is being measured for cold start.
+    fn putting_a_record_back_does_not_write_the_record() {
+        // Fifty chats coming back must not be fifty writes at the one moment cold start is
+        // measured — and not one write either: what is on disk is the record just read,
+        // which is still true, and rewriting it would write out the chats that did not
+        // come back.
         let dir = tempfile::tempdir().unwrap();
         let claude = a_claude(dir.path());
         let (chats, wrote) = recorded();
@@ -384,11 +427,12 @@ mod tests {
         let written = lock(&wrote).clone();
         assert_eq!(
             written.len(),
-            1,
-            "the record was written {} times",
+            0,
+            "putting a record back wrote it {} times; what is on disk is the record that \
+             was just read, which is still true — and rewriting it would write out the \
+             chats that did not come back",
             written.len()
         );
-        assert_eq!(written[0].chats.len(), 5);
     }
 
     #[test]
@@ -616,6 +660,96 @@ mod tests {
         );
 
         assert_eq!(open[0].how, Reopened::Fresh(Fresh::NoConversationRecorded));
+    }
+
+    #[test]
+    fn a_chat_that_could_not_be_started_stays_in_the_record_for_the_next_launch() {
+        // Otherwise a workspace directory that is moved, or a harness that is being
+        // reinstalled, silently deletes the chat: it fails to start once, the record is
+        // written without it, and by the launch after that there is no trace it existed.
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let (chats, wrote) = recorded();
+
+        chats.put_back(
+            &Record {
+                chats: vec![
+                    chat("/definitely/not/a/program", "ide.7", Some(ID)),
+                    chat(&claude, "ide.8", None),
+                ],
+            },
+            SIZE,
+        );
+
+        let names: Vec<String> = chats
+            .record()
+            .chats
+            .iter()
+            .map(|c| c.name.clone())
+            .collect();
+        assert_eq!(names, vec!["ide.7", "ide.8"]);
+        assert!(lock(&wrote).is_empty(), "putting a record back rewrote it");
+    }
+
+    #[test]
+    fn a_record_cannot_ask_a_launch_to_start_an_unbounded_number_of_programs() {
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let chats = Chats::new();
+
+        let open = chats.put_back(
+            &Record {
+                chats: (0..MOST_AT_ONCE + 3)
+                    .map(|n| chat(&claude, &format!("ide.{n}"), None))
+                    .collect(),
+            },
+            SIZE,
+        );
+
+        assert_eq!(open.len(), MOST_AT_ONCE);
+        // And the ones it would not start are kept, not thrown away.
+        assert_eq!(chats.would_not_start().len(), 3);
+        chats.end_all();
+    }
+
+    #[test]
+    fn a_chat_that_could_not_be_started_is_named_with_the_reason() {
+        // The operator is told, rather than finding a tab quietly missing. Nothing here
+        // starts, so there is no stand-in harness to put anywhere.
+        let (chats, _) = recorded();
+
+        chats.put_back(
+            &Record {
+                chats: vec![chat("/definitely/not/a/program", "ide.7", Some(ID))],
+            },
+            SIZE,
+        );
+
+        let trouble = chats.would_not_start();
+        assert_eq!(trouble.len(), 1);
+        assert_eq!(trouble[0].0, "ide.7");
+        assert!(!trouble[0].1.is_empty(), "no reason was kept");
+    }
+
+    #[test]
+    fn a_chat_that_could_not_be_started_is_still_recorded_after_a_later_change() {
+        // The record is written again as soon as anything changes; the chat that could not
+        // start has to survive that write too, not just the launch.
+        let dir = tempfile::tempdir().unwrap();
+        let claude = a_claude(dir.path());
+        let (chats, wrote) = recorded();
+        chats.put_back(
+            &Record {
+                chats: vec![chat("/definitely/not/a/program", "ide.7", Some(ID))],
+            },
+            SIZE,
+        );
+
+        chats.start(&chat(&claude, "ide.9", None), SIZE).unwrap();
+
+        let last = lock(&wrote).last().cloned().expect("a record was written");
+        let names: Vec<String> = last.chats.iter().map(|c| c.name.clone()).collect();
+        assert_eq!(names, vec!["ide.7", "ide.9"]);
     }
 
     #[test]

@@ -30,6 +30,7 @@ function core(): { asked: { cmd: string; args: unknown }[] } {
     asked.push({ cmd, args });
     if (cmd === "plane_root") return "/home/dev/plane";
     if (cmd === "opened_chats") return [];
+    if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "open_session") return ++opened;
     return null;
   });
@@ -187,6 +188,7 @@ describe("App", () => {
       asked.push({ cmd, args });
       if (cmd === "plane_root") return "/home/dev/plane";
       if (cmd === "opened_chats") return [];
+      if (cmd === "chats_that_would_not_start") return [];
       if (cmd !== "open_session") return null;
       if (++opened === 1) return 1;
       await new Promise<void>((starts) => (letTheSecondSessionStart = starts));
@@ -212,6 +214,7 @@ describe("App", () => {
     mockIPC((cmd) => {
       if (cmd === "plane_root") return "/home/dev/plane";
       if (cmd === "opened_chats") return [];
+      if (cmd === "chats_that_would_not_start") return [];
       throw new Error('could not start "zsh": no such file or directory');
     });
     render(<App />);

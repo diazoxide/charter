@@ -12,8 +12,7 @@
 // what the first one wrote rather than what a test hand-wrote.
 
 import { spawn } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { existsSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -55,7 +54,9 @@ function aClaude(where, argvFile) {
     [
       "#!/bin/sh",
       `printf '%s\\n' "$*" >> ${JSON.stringify(argvFile)}`,
-      "while :; do sleep 600; done",
+      // Short sleeps, so that if anything ever does outlive its parent it is gone in a
+      // second rather than sitting on the machine for ten minutes.
+      "while :; do sleep 1; done",
       "",
     ].join("\n"),
   );

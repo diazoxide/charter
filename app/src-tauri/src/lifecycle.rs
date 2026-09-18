@@ -6,10 +6,13 @@
 //! work. Quitting goes to the window first, so the operator sees what is about to be ended,
 //! and only the window's answer exits.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
+use std::sync::PoisonError;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+
 use tauri::{AppHandle, Emitter, Manager, Runtime, Wry};
 
 /// The event the window is sent when something asks the app to quit. The window answers by
@@ -25,15 +28,24 @@ pub const WINDOW: &str = "main";
 const QUIT: &str = "quit";
 const SHOW: &str = "show";
 
-/// Whether the window has already been asked to quit.
+/// How long an unanswered ask keeps the next one armed to quit outright.
 ///
-/// The second ask exits without waiting for an answer. This is the way out of a window that
-/// cannot answer — a wedged webview, a renderer that crashed — which would otherwise leave
-/// an app that can only be killed. Pressing quit twice is a thing people already do to an
-/// app that seems not to have heard.
+/// It expires, and that is the point. Without a deadline one `quit-asked` the window never
+/// received — pressed while it was still starting, say — would leave the app armed for the
+/// rest of the day, and the next Cmd-Q would end every session with no warning at all.
+/// Pressing quit twice in a few seconds is someone insisting; pressing it again an hour
+/// later is someone quitting.
+const INSISTING: Duration = Duration::from_secs(5);
+
+/// Whether the window has already been asked to quit, and when.
+///
+/// A second ask while the first is unanswered exits without waiting. This is the way out of
+/// a window that cannot answer — a wedged webview, a renderer that crashed — which would
+/// otherwise leave an app that can only be killed. Pressing quit twice is a thing people
+/// already do to an app that seems not to have heard.
 #[derive(Default)]
 pub struct Quitting {
-    asked: AtomicBool,
+    asked: Mutex<Option<Instant>>,
 }
 
 /// What an ask to quit means this time.
@@ -47,7 +59,15 @@ pub enum Ask {
 
 impl Quitting {
     pub fn ask(&self) -> Ask {
-        if self.asked.swap(true, Ordering::SeqCst) {
+        self.asked_at(Instant::now())
+    }
+
+    /// `ask`, at a moment a test can choose.
+    fn asked_at(&self, now: Instant) -> Ask {
+        let mut asked = self.asked.lock().unwrap_or_else(PoisonError::into_inner);
+        let insisting = asked.is_some_and(|before| now.duration_since(before) < INSISTING);
+        *asked = Some(now);
+        if insisting {
             Ask::QuitAnyway
         } else {
             Ask::AskTheWindow
@@ -56,7 +76,7 @@ impl Quitting {
 
     /// The window answered "not now", so the next ask is a first ask again.
     pub fn never_mind(&self) {
-        self.asked.store(false, Ordering::SeqCst);
+        *self.asked.lock().unwrap_or_else(PoisonError::into_inner) = None;
     }
 }
 
@@ -186,6 +206,31 @@ mod tests {
         quitting.ask();
 
         assert_eq!(quitting.ask(), Ask::QuitAnyway);
+    }
+
+    #[test]
+    fn an_ask_the_window_never_answered_stops_arming_the_next_one() {
+        // A `quit-asked` the window never received — pressed while it was still starting —
+        // would otherwise leave the app armed for the rest of the day, and the next Cmd-Q
+        // would end every session with no warning at all.
+        let quitting = Quitting::default();
+        let when = Instant::now();
+        quitting.asked_at(when);
+
+        let later = quitting.asked_at(when + INSISTING + Duration::from_millis(1));
+
+        assert_eq!(later, Ask::AskTheWindow);
+    }
+
+    #[test]
+    fn asking_twice_in_a_moment_is_someone_insisting() {
+        let quitting = Quitting::default();
+        let when = Instant::now();
+        quitting.asked_at(when);
+
+        let again = quitting.asked_at(when + Duration::from_millis(500));
+
+        assert_eq!(again, Ask::QuitAnyway);
     }
 
     #[test]

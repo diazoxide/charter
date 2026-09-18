@@ -33,6 +33,11 @@ function App() {
   const [reopened, setReopened] = useState<OpenChat[]>([]);
   /** Whether the operator is being asked about quitting. */
   const [asking, setAsking] = useState(false);
+  /** Chats this launch could not start, by name and why. They are still recorded. */
+  const [wouldNotStart, setWouldNotStart] = useState<[string, string][]>([]);
+  /** Whether the core has answered what it already has open. Until it has, "no tabs" is
+   *  "not yet", which is not the same thing as "nothing is running". */
+  const settled = useRef(false);
 
   // The arrangement as it is right now, so that what a button does is decided here and not
   // inside a state update. React may run an update again, and a session must not be opened or
@@ -66,6 +71,12 @@ function App() {
     void commands
       .openedChats()
       .then((open) => {
+        settled.current = true;
+        void commands
+          // A window that cannot ask, or is answered with nothing, simply says nothing.
+          .chatsThatWouldNotStart()
+          .then((trouble) => setWouldNotStart(trouble ?? []))
+          .catch(() => undefined);
         if (open.length === 0) return;
         setReopened(open);
         const drawn = open.reduce((tabs, chat) => openTab(tabs, chat.session, chat.name), noTabs());
@@ -74,7 +85,9 @@ function App() {
       })
       // Nothing open is the ordinary first launch, and a window that cannot ask is still
       // a window the operator can open a chat in.
-      .catch(() => undefined);
+      .catch(() => {
+        settled.current = true;
+      });
   }, [change]);
 
   // Something asked the app to quit: the menu, the tray, or Cmd-Q. The answer is the
@@ -83,9 +96,11 @@ function App() {
     // The catch is attached here and not in the cleanup: a window that cannot listen is
     // still a window, and a rejection nothing is holding yet is an unhandled one.
     const listening = listen("quit-asked", () => {
-      // Nothing to end is nothing to warn about. A dialog listing no sessions would be a
-      // dialog in the way of quitting.
-      if (now.current.order.length === 0) void commands.quit().catch(() => undefined);
+      // Nothing to end is nothing to warn about — but only once the core has said what it
+      // has open. Before that, no tabs means "not yet", and quitting on it would end every
+      // chat the window had not drawn.
+      if (settled.current && now.current.order.length === 0)
+        void commands.quit().catch(() => undefined);
       else setAsking(true);
     }).catch(() => undefined);
     // Unlistening can fail too — the window may be going away under it — and a cleanup
@@ -251,11 +266,21 @@ function App() {
           <code>{frontChat.resumed}</code>
         </p>
       )}
-      {frontChat?.fresh && (
+      {/* Only for a harness. Every chat is a shell until the harness picker lands, and a
+          shell has no conversation to bring back — saying so on every relaunch, forever,
+          is noise about the normal case. */}
+      {frontChat?.fresh && frontChat.harness && (
         <p className="came-back">
           <strong>{frontChat.name}</strong> came back as a new chat: {frontChat.fresh}
         </p>
       )}
+
+      {wouldNotStart.map(([name, why]) => (
+        <p className="came-back trouble" role="status" key={name}>
+          <strong>{name}</strong> did not start ({why}). It is still recorded, and will be tried
+          again at the next launch.
+        </p>
+      ))}
 
       <div className="panes">
         {inFront ? (

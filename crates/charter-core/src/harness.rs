@@ -27,10 +27,14 @@ impl SessionId {
     /// which is what makes an id off disk safe to put in argv: it can never be read as a flag.
     pub fn new(text: impl Into<String>) -> Result<Self, SessionIdError> {
         let text = text.into();
+        // Length first: a value that is far too long is refused without walking it.
+        if text.is_empty() || text.len() > MOST {
+            return Err(SessionIdError::Malformed(text));
+        }
         let mut bytes = text.bytes();
         let starts = bytes.next().is_some_and(|b| b.is_ascii_alphanumeric());
         let rest = bytes.all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
-        if starts && rest && text.len() <= MOST {
+        if starts && rest {
             Ok(Self(text))
         } else {
             Err(SessionIdError::Malformed(text))
@@ -104,6 +108,41 @@ impl Harness {
         match self {
             Self::ClaudeCode => words(["--session-id", id.as_str(), "--name", name]),
             Self::Codex => Vec::new(),
+        }
+    }
+
+    /// Whether `args` already name a session themselves, so charter adds none of its own.
+    ///
+    /// The operator's flag wins: two `--resume` on one command line is not a harness charter
+    /// has measured, and the one the operator typed is the one they meant.
+    pub fn session_named_in(self, args: &[String]) -> bool {
+        args.iter().any(|arg| {
+            self.session_words().iter().any(|word| {
+                // A flag may carry its value attached (`--resume=<id>`); a longer flag that
+                // merely starts the same way (`--resume-later`) is a different flag.
+                arg == word
+                    || (word.starts_with('-')
+                        && arg.starts_with(word)
+                        && arg.as_bytes().get(word.len()) == Some(&b'='))
+            })
+        })
+    }
+
+    /// The arguments by which an operator already names a session themselves.
+    ///
+    /// `charter/harness/claude_code.py:298` and `charter/harness/codex.py:261`. Codex's are
+    /// subcommands rather than flags, which is why they carry no dashes.
+    fn session_words(self) -> &'static [&'static str] {
+        match self {
+            Self::ClaudeCode => &[
+                "--session-id",
+                "--resume",
+                "-r",
+                "--continue",
+                "-c",
+                "--fork-session",
+            ],
+            Self::Codex => &["resume", "fork"],
         }
     }
 
@@ -184,6 +223,45 @@ mod tests {
                 "11111111-2222-4333-8444-555555555555".to_owned(),
             ])
         );
+    }
+
+    #[test]
+    fn a_launch_that_already_names_a_session_is_left_alone() {
+        // `charter/harness/claude_code.py:298` and `codex.py:261` — every flag by which an
+        // operator names a session themselves. Adding charter's beside one of these gives a
+        // command line no harness has been measured against.
+        for flag in [
+            "--session-id",
+            "--resume",
+            "-r",
+            "--continue",
+            "-c",
+            "--fork-session",
+        ] {
+            assert!(
+                Harness::ClaudeCode.session_named_in(&[flag.to_owned()]),
+                "{flag} was not read as the operator naming a session"
+            );
+        }
+        for word in ["resume", "fork"] {
+            assert!(Harness::Codex.session_named_in(&[word.to_owned()]));
+        }
+    }
+
+    #[test]
+    fn an_ordinary_launch_does_not_look_like_one_that_names_a_session() {
+        assert!(!Harness::ClaudeCode.session_named_in(&["--model".to_owned(), "opus".to_owned()]));
+        // Codex's are subcommands, not flags, so a word that merely contains one is not one.
+        assert!(!Harness::Codex.session_named_in(&["--resume".to_owned()]));
+        assert!(!Harness::ClaudeCode.session_named_in(&[]));
+    }
+
+    #[test]
+    fn a_flag_written_with_its_value_attached_still_names_a_session() {
+        // `--resume=<id>` is one argument, and a harness reads it as the flag it is.
+        assert!(Harness::ClaudeCode.session_named_in(&["--resume=abc".to_owned()]));
+        // But a longer flag that merely starts the same way is a different flag.
+        assert!(!Harness::ClaudeCode.session_named_in(&["--resume-later".to_owned()]));
     }
 
     #[test]
