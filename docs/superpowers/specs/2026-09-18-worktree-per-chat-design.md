@@ -1,7 +1,9 @@
 # M1.4 — a chat that writes to a repo gets its own git worktree
 
 **Status:** agreed 2026-09-18 in a grill between the operator and the `steward` persona
-(workspace `ide`). The choices that sit against written rules are
+(workspace `ide`), and revised the same day after an adversarial review found a code-execution
+hole, a cross-workspace deletion and four contradictions in the first draft. The choices that
+sit against written rules are
 [ADR 0027](../../adr/0027-git-is-the-only-registry-for-a-chats-worktree.md). The product
 decision is decision 4 of [the charter-app spec](2026-09-17-charter-app.md); the merge-back
 shape follows [ADR 0020](../../adr/0020-there-is-no-cross-repo-merge-loop.md).
@@ -23,7 +25,7 @@ Three pull requests, in order:
    while M1.2 is still in flight.
 2. **Tauri commands and UI** — the start dialogue's worktree section, the sidebar row, the
    remove and merge actions.
-3. **Scenario tests and the narrowed differential.**
+3. **Scenario tests and the differential.**
 
 The containment work is in PR 1 alone, and deliberately: burying it under a React diff is how
 the M1.1 holes survived five review rounds.
@@ -50,28 +52,64 @@ error: this plane relocates its worktree root ([plane] worktrees = "../charter.w
 ## Containment
 
 Paths are the danger here. A worktree path is built from a repo name and a branch name, both
-of which can arrive from a clone.
+of which can arrive from a clone — and the destructive verb hands its path to **git**, which
+resolves symlinks itself.
 
-Every component is checked **as a string, before it is joined onto a path**:
+### Names, before any of them is joined
 
 | Component | Rule |
 | --- | --- |
 | `ws` | `contain::workspace_name_ok` |
-| `repo` | `repo_name_ok` — `segment_ok` plus charter's alphabet |
+| `repo` | `contain::repo_name_ok` — `segment_ok` plus charter's alphabet |
 | `piece` | the same alphabet; no leading `.`, no leading `-` |
-| `branch` | not a path segment. Leading `-` refused by charter; the rest delegated to `git check-ref-format --branch` |
-
-Then `contain::writable(plane_root, path)` on **the exact path** charter is about to create or
-remove, and separately on the exact parent it is about to `mkdir`. Not the directory above it.
-The gate one level shallower than the write is the shape four of the five M1.1 holes had.
+| `branch` | not a path segment. Leading `-` refused by charter; the rest delegated to git, with the caveat below |
 
 The branch name is checked for a leading `-` by charter and not by git, because a name
 starting with `-` is an *argument* by the time git sees it — `git check-ref-format --branch
---upload-pack=…` is the injection, and delegating the check does not prevent it. Everything
-after that first rule is git's own ref grammar, which charter does not reimplement.
+--upload-pack=…` is the injection, and delegating the check does not prevent it.
 
-Charter reuses `contain::no_link_on_the_way` rather than adding a sixth path walk to this
-repository.
+**`git check-ref-format --branch` resolves as well as validates.** Measured on git 2.50.1,
+`git check-ref-format --branch '@{-1}'` prints `other` and exits 0: the `@{-n}` syntax names
+the previously checked-out branch. A name that passes the check is therefore not necessarily
+the name git will use. Charter takes **the name git printed**, not the one it was given, and
+records and reports that one — so `add` on `@{-1}` either operates on the branch git resolved,
+under its real name, or is refused because that name is taken. Nothing is recorded under a
+string that names no branch.
+
+### Paths, stated per path
+
+Three distinct checks, and which one runs where is not left to a reader's inference:
+
+| Path | Check |
+| --- | --- |
+| `.worktrees` (created by `create_dir_all`) | `within_workspace` |
+| `.worktrees/<repo>` (created) | `within_workspace` |
+| `.worktrees/<repo>/<piece>` (created, removed) | `within_workspace`, **and** `contain::no_link_on_the_way` |
+| the clone `workspaces/<ws>/<repo>` (git writes `.git/worktrees/<id>` into it) | `contain::writable`, **and** `contain::no_link_on_the_way` |
+
+`within_workspace` is new and narrow: the resolved path must start with the resolved
+`workspaces/<ws>/.worktrees`. `contain::writable` is not sufficient here — it confines to the
+plane's *data directories*, so a path resolving into **another workspace** passes it. That is
+not theoretical:
+
+```console
+wsB/victim              ← a live, registered worktree of workspace B
+wsA/.worktrees/r/piece  → wsB/victim   (a symlink)
+
+$ git -C r worktree remove …/wsA/.worktrees/r/piece   # exit 0; B's tree is gone
+```
+
+Every tree-safety guard passes in that run, because they ran against B's tree. So the
+worktree path is additionally required to be **link-free** (`no_link_on_the_way`), and what is
+handed to git is the **resolved, absolute** path — never a relative one and never a bare piece
+name, because `git worktree remove` falls back to suffix matching on anything that is not a
+working tree, which would make a relative argument mean "any worktree on this machine whose
+path ends this way".
+
+For a `prunable` registration the path charter checks is the path **git reports**, not the one
+charter would construct, because the reported one comes from `.git/worktrees/<id>/gitdir` —
+attacker-writable inside the clone, and able to name anywhere on the filesystem — and it is
+the one git will act on.
 
 ### The slug
 
@@ -83,20 +121,33 @@ and asks for a name.
 The slug is shown in an editable field before anything is created, so the operator sees what
 they are about to get and can change a branch name they will have to live with.
 
-**Sanitising is a convenience, never the containment.** The gate above runs on the result
-regardless, and the tests drive it with names that are already legal-looking as well as with
-hostile ones.
+**Sanitising is a convenience, never the containment.** The checks above run on the result
+regardless, and a test drives the slug with hostile names to pin that it can never hand them
+something they would have to refuse.
 
 ## Git
 
 Through the binary (ADR 0027). Every invocation:
 
-- runs with the repository-local git environment cleared — `GIT_DIR`, `GIT_WORK_TREE`,
-  `GIT_INDEX_FILE` and their relatives. Inherited from a hook, these silently point
-  `git -C <clone>` at a different repository.
+- **withholds git's whole repository-local environment**, defined as everything
+  `git rev-parse --local-env-vars` prints, plus `GIT_CONFIG`, `GIT_CONFIG_PARAMETERS` and
+  `GIT_CONFIG_COUNT`. **A test runs that command and fails when git grows a variable the
+  code does not withhold.** Not a hand-written list: Python charter named them one by one in
+  review round 3 and missed `GIT_COMMON_DIR` in round 4, and the `GIT_CONFIG_*` family is not
+  redirection at all — it injects `core.hooksPath`, and `git worktree add` runs
+  `post-checkout`. That is arbitrary code execution as the operator, reached from the hook
+  environment charter's own binary runs in.
 - runs with `GIT_TERMINAL_PROMPT=0`. A credential prompt inside a subprocess the UI cannot
   show is an infinite hang. Keychain and `gh` credential helpers still work.
-- has a timeout: 5 s for local verbs, 120 s for `publish`, which crosses a network.
+- passes `--` before user-supplied values wherever the subcommand accepts it.
+
+**Timeouts apply to reads, not to writes.** `git worktree list` gets 5 s, matching Python's
+`_GIT_TIMEOUT`, which is a listing timeout and always was. `git worktree add` performs a full
+checkout and `merge` rewrites a working tree; on a large repo or a cold cache either exceeds
+5 s routinely, and a killed `worktree add` leaves the registration written and the checkout
+half-done — an operator with a broken piece and a "branch already exists" error on the retry.
+Python imposes no timeout on those calls, and neither does this. `publish` gets 120 s because
+it crosses a network and a hung push is a different failure from a slow checkout.
 
 ## The verbs
 
@@ -108,13 +159,14 @@ charter wt merge   <repo> <piece>     # local, --ff-only, into the recorded base
 charter wt publish <repo> <piece>     # push the branch. Never merges.
 ```
 
-The piece name is **required on the CLI** and derived in the UI: the slug below comes from a
-chat's name, and the CLI has no chat.
+The piece name is **required on the CLI** and derived in the UI: the slug comes from a chat's
+name, and the CLI has no chat.
 
 Same spelling as Python's, because having to remember which binary you are talking to is worse
-than the collision it avoids. All five reach the UI as well: a merge the operator has to leave
-the app to run is a merge they will do in a terminal forever, and then the app's picture of
-their branches is permanently behind. One refusal message constant, two call sites.
+than the collision it avoids — with one consequence that has to be paid rather than accepted
+silently, in `add` below. All five reach the UI as well: a merge the operator has to leave the
+app to run is a merge they will do in a terminal forever, and then the app's picture of their
+branches is permanently behind. One refusal message constant, two call sites.
 
 **Neither `merge` nor `publish` takes `--all`, and the parser refuses it.** A test asserts
 that. ADR 0020's argument — a flag the agent can pass is a flag the agent will pass, and a
@@ -123,8 +175,8 @@ from where it was written.
 
 ### `add`
 
-Records `branch.<branch>.charterBase` with the clone's current branch — keyed on the branch
-the worktree is really on, which `--branch` makes different from the piece name.
+Records the base with `git config --replace-all branch.<branch>.charterBase <base>`, keyed on
+the branch the worktree is really on, which `--branch` makes different from the piece name.
 
 - A **dirty clone warns**, and does not refuse: uncommitted changes stay in the clone and are
   not carried into the worktree, and a dirty clone is the normal state of the tree a worktree
@@ -139,6 +191,18 @@ the worktree is really on, which `--branch` makes different from the piece name.
   `dev-scripts` was empty while the clone's was in sync. Charter reports it and does not run
   `git submodule update`: that is a network fetch nobody asked for, on the path where the
   operator is waiting for a chat to start.
+- **The missing harness layer is warned about, here, in the command's own output.** This is
+  the path with no UI in it, and it is the path where the same command name means the opposite
+  thing: Python's `charter wt add` wires the layer before it prints `enter: cd <path> &&
+  claude` (charter #951 is the bug report for not doing so). The Rust one does not wire it, so
+  it says so:
+
+  ```
+  ! this worktree has no charter layer: no persona agents, no ask/deny rules, no
+    $CHARTER_HARNESS. A harness started here runs without them. Wire it with the Python
+    charter: charter reinit
+  ```
+
 - **A race for one piece** is decided by git, not by charter's check. Where `git worktree add`
   fails, charter re-reads the repository; if the path or the branch is now held, that is the
   cause it reports, established by looking rather than by reading git's English (ADR 0009).
@@ -147,13 +211,25 @@ the worktree is really on, which `--branch` makes different from the piece name.
 
 `git merge --ff-only <piece-branch>` in the clone.
 
+The base is read with `git config --get-all branch.<branch>.charterBase`. **More than one
+value is a refusal**, not a last-one-wins: `.git/config` is writable by anything in the clone,
+and `--get` returns the final value with exit 0 and no warning, so a second line is somebody
+else choosing what charter merges into. **No value is a refusal too**, and its sentence says
+the base was never recorded rather than implying the worktree is foreign — Python charter
+records no `charterBase`, so every Python-cut piece is in exactly this state during the
+cutover, and the repair is to name the base explicitly.
+
 Refuses, each with the repair named: an unreadable or dirty worktree; a dirty clone; a clone
-that is not on the recorded base; a piece cut from a detached HEAD; a branch that does not
+that is not on the recorded base; a recorded base that no longer exists, or that is not an
+ancestor of the clone's current branch (a base renamed or deleted and recreated leaves the
+record naming something else); a piece cut from a detached HEAD; a branch that does not
 fast-forward.
 
 **Allowed while the chat is still running.** It writes only in the clone, and refusing it
 would mean stopping a chat to land its own work — the friction that sends the operator back
-to the terminal.
+to the terminal. What it does write in the clone is a working tree, so a chat *reading* the
+clone mid-build can see it change underneath. That is the price of not blocking, it is
+smaller than the alternative, and it is named here so nobody discovers it as a bug.
 
 Fast-forward only, and charter does not resolve the divergence for you:
 
@@ -180,15 +256,23 @@ silent when it is not rather than guessing.
 that reaches another machine, and a rejected non-fast-forward push is the human that ADR 0020
 insists on having in the loop. `--force-with-lease` remains the operator's to type.
 
+### `list`
+
+`git worktree list --porcelain` in the clone, parsed, and **filtered to registrations whose
+resolved path lies under this workspace's worktree root**. The clone's own entry, a bare
+repository's entry and anything registered elsewhere on the machine are all reported by git
+and are none of charter's business; without the filter, a worktree somebody made in another
+location would be listed as a piece and could then be handed to `remove`.
+
 ### `remove`
 
 Refused while the chat's session is alive, naming the chat: the dirt guard cannot see a write
 that has not happened yet.
 
 That guard is **the app's**, not the CLI's. Only the app owns sessions; the `charter wt
-remove` a person runs in a terminal has no way to know a chat is live, and inventing a
-lock file for it would be the second registry ADR 0027 refuses. The CLI keeps the guards
-that read the tree, which are the ones that protect the work itself.
+remove` a person runs in a terminal has no way to know a chat is live, and inventing a lock
+file for it would be the second registry ADR 0027 refuses. The CLI keeps the guards that read
+the tree, which are the ones that protect the work itself.
 
 Otherwise it carries Python's guards whole — they exist because parallel agents are how work
 gets orphaned:
@@ -210,21 +294,37 @@ gets a path that skips every tree-safety check. It is shown as `stale` with an e
 never cleared automatically on launch: charter removing a git registration nobody asked it to
 touch, during a launch, with nothing to read afterwards, is the wrong shape.
 
+**The clear is `git worktree remove` on the reported path, and it fails when anything exists
+there.** Measured: with the registered directory absent, `git worktree remove` clears the
+registration and exits 0; with a directory recreated at that path, it exits 128 with
+`validation failed … '.git' does not exist`, and `--force` does not change that. So the clear
+works in the benign case and refuses in the case where something has been put back — which is
+the racy one, and the right place to stop. The refusal says so and names
+`git -C <clone> worktree prune` as the operator's move, without charter running it: `prune` is
+repository-wide and would clear registrations charter never made.
+
 ## The UI
 
 **Start dialogue.** A worktree section with a checkbox, on by default, disabled when the
 workspace holds no repo. One repo is selected automatically; several require a pick, because
 charter guessing from the chat's text is charter inferring a cause it cannot establish.
 
-**Sidebar row.** The branch, and nothing else that costs a subprocess. The branch comes from
-path arithmetic on the chat's cwd — the layout is a contract, and this renders for every chat
-on every update. Fifty rows times a `git status` is the kind of cost that shows up as the app
-feeling slow. Dirty and ahead counts belong to M1.5's repo panel, where it is one focused
-workspace rather than every row.
+**Sidebar row.** The branch — and it comes from `list`, not from path arithmetic. The layout
+gives the *piece*, and `--branch` makes the piece and the branch different strings, so
+arithmetic would show a wrong branch as fact on the one row this milestone is named after.
+The cost is one `git worktree list --porcelain` per repo, cached and refreshed when the app
+already has reason to, not one `git status` per row: fifty rows times a subprocess is the kind
+of cost that shows up as the app feeling slow. Dirty and ahead counts stay out, and belong to
+M1.5's repo panel where it is one focused workspace.
 
-Two labels, both read from the tree rather than remembered:
+Two labels:
 
-- `unwired` when the worktree has no `.charter-generated` marker (ADR 0027).
+- `unwired` when the worktree has no harness layer. The marker is **not** taken at face value:
+  charter's own `.charter-generated` is per-checkout and untracked, so a *tracked* one is
+  content a cloned repository committed and says nothing about this tree —
+  `workspace.py:2176` already treats a tracked marker as untrusted, and so does this. Without
+  that rule, any repo carrying a committed `.charter-generated` would make every piece of it
+  read as wired, which would silence this label *and* the persona refusal at once.
 - `stale` for a prunable registration.
 
 **Relaunch with the worktree gone** drops the chat from the reopen record and says so in the
@@ -238,35 +338,44 @@ rule one level down.
 **Adversarial first, and each gate hand-mutated to confirm a test goes red.** Green CI is not
 evidence — it was green through every round of M1.1.
 
-Containment:
+Containment and environment:
 
 - repo and piece names that are `..`, `a/b`, `a\b`, absolute, drive-qualified, NUL-bearing,
   empty, leading `.`, leading `-`.
-- `.worktrees` a symlink out of the plane; `.worktrees/<repo>` a symlink out of the plane —
-  on `add` and on `remove`.
-- a removal target that resolves outside the workspace through a link chain, asserting **the
-  outside file still exists** after the refusal.
+- `.worktrees` and `.worktrees/<repo>` as symlinks out of the plane, on `add` and on `remove`.
+- **a worktree path resolving into another workspace, asserting that workspace's tree still
+  exists afterwards** — the `within_workspace` boundary, which `contain::writable` does not
+  provide.
+- a removal target replaced by a symlink after it was cut, asserting the file outside is still
+  there.
 - a branch name starting with `-` never reaching git's argv; `a..b`, `a b`, `refs/../x`
-  refused by the ref-format check.
-- `GIT_DIR` and `GIT_WORK_TREE` in the environment not redirecting any operation.
+  refused by git; **`@{-1}` not recorded under the string it was given.**
+- **every variable `git rev-parse --local-env-vars` prints is withheld**, driven by running
+  that command rather than by a literal list, plus the three `GIT_CONFIG*` names — and a test
+  that a `core.hooksPath` injected through `GIT_CONFIG_COUNT` does not run a hook.
 - a link chain longer than the budget refusing rather than falling through.
 
 Behaviour:
 
 - `remove` refused for dirt, for unreadable dirt, for unique commits — each leaving the
-  directory in place.
+  directory in place; and the stale clear refusing when something exists at the reported path.
 - `merge` refused for a non-fast-forward, for a dirty clone, for a clone on the wrong branch,
-  for a detached-HEAD piece — each leaving the clone's HEAD unmoved.
+  for a detached-HEAD piece, for **two** `charterBase` values, for **no** `charterBase` value,
+  and for a recorded base that no longer exists — each leaving the clone's HEAD unmoved.
 - `--all` refused by the parser on both `merge` and `publish`.
+- `list` not reporting the clone itself, a bare entry, or a worktree registered elsewhere.
 - a plane declaring `[plane] worktrees` refused by name.
 - not a git repository, a repository with no commits, and a branch that already exists — each
   refused with the sentence naming its repair.
+- `add` printing the unwired warning; a tracked `.charter-generated` not reading as wired.
 - the slug function, including the names that sanitise to nothing.
 
-**Differential** (ADR 0027): `tests/differential/run.py` gains a scenario kind that compares
-captured command output instead of trees. Both implementations cut a piece in a throwaway
-repository built with pinned author and dates; `git worktree list --porcelain`, the branch and
-the commit must match.
+**Differential.** A tree comparison, kept (ADR 0027), with the deliberate divergences as
+`ignore` entries carrying their reason — the guest layer, the piece history, and `.git/**`
+because a git repository does not compare byte for byte against itself. The escape sentinel
+(`_outside`/`_escaped`) and the directory-set comparison are kept, because they are what would
+catch a containment bug and a second registry respectively. Scenarios cover `add`, `remove`,
+`merge` and `publish`, against a throwaway repository built with pinned author and dates.
 
 **Scenario:** the app creates a chat with a worktree against a throwaway git repo the test
 builds, the branch shows on its row, the merge-back action runs, and the clone's HEAD has
@@ -275,8 +384,10 @@ moved.
 ## What M1.4 does not do
 
 - It does not write the harness layer into a worktree. A chat in a charter-cut worktree runs
-  without charter's guards, the row says `unwired`, and a persona cannot be attached to such a
-  chat. Recorded as a todo in the `ide` workspace; the reasoning is ADR 0027.
+  without the plane's ask/deny rules and persona agents; `add` warns, the row says `unwired`,
+  and a persona cannot be attached. This is a debt against decision 14, not a reading of it —
+  ADR 0027 states it at full size, including that today's only repair is a Python command.
+  Recorded as a todo in the `ide` workspace.
 - It does not keep piece history. Git is the only registry.
 - It does not follow a relocated worktree root.
 - It does not batch anything, and will not grow a flag that does.

@@ -4,7 +4,7 @@
 
 **Goal:** A chat that writes to a repo gets its own git worktree on its own branch, cut and listed by the Rust core, with the branch on its sidebar row and merging back an explicit operator action.
 
-**Architecture:** A new `charter_core::worktree` module drives the **git binary** through a small runner that clears the repository-local git environment and applies a timeout. It records nothing of its own: the worktree registry is git's, and the one fact charter must remember — a piece's base branch — lives in the clone's git config. Every path is gated by `contain::writable` on the exact path created or removed. The CLI and the Tauri layer both call the same core functions, so a refusal reads identically in a terminal and in the app.
+**Architecture:** A new `charter_core::worktree` module drives the **git binary** through a small runner that clears the repository-local git environment and applies a timeout. It records nothing of its own: the worktree registry is git's, and the one fact charter must remember — a piece's base branch — lives in the clone's git config. Every path is confined to **one workspace** — not to the plane, because `contain::writable` admits any path under `workspaces/` and `git worktree remove` follows symlinks, which together delete another workspace's live tree at exit 0. The CLI and the Tauri layer both call the same core functions, so a refusal reads identically in a terminal and in the app.
 
 **Tech Stack:** Rust (stable, `rust-toolchain.toml`), `clap` derive for the CLI, `tauri-specta` for typed IPC, React + TypeScript for the UI, WebdriverIO for scenario tests, `tests/differential/run.py` with Python charter as the test oracle.
 
@@ -37,6 +37,7 @@
 | `crates/charter-core/src/worktree/porcelain.rs` | Parsing `git worktree list --porcelain` into rows, and filtering to a workspace's root. |
 | `crates/charter-core/src/worktree/git.rs` | The runner: argv, cleared environment, timeout, captured output. Nothing here decides anything. |
 | `crates/charter-core/src/contain.rs` | *Modified* — gains `repo_name_ok`. |
+| `crates/charter-core/src/worktree/confine.rs` | `within_workspace`: the resolved path must sit under this workspace's worktree root. The boundary `contain::writable` does not draw. |
 | `crates/charter-core/src/lib.rs` | *Modified* — `pub mod worktree;`. |
 | `crates/charter-cli/src/main.rs` | *Modified* — the `wt` subcommand. |
 | `crates/charter-core/tests/nothing_escapes_a_worktree.rs` | The adversarial containment suite. |
@@ -333,6 +334,67 @@ mod tests {
     }
 
     #[test]
+    fn every_variable_git_calls_repository_local_is_withheld() {
+        // Held to GIT's answer, not to a list someone maintains: the list is wrong the next
+        // time git is released, and this repo has already shipped that bug once.
+        let dir = tempfile::tempdir().unwrap();
+        run(dir.path(), &["init", "-q", "."], LOCAL).unwrap();
+        let printed = run(dir.path(), &["rev-parse", "--local-env-vars"], LOCAL).unwrap();
+        for name in printed.out.split_whitespace() {
+            assert!(
+                WITHHELD.contains(&name),
+                "git calls {name} repository-local and the runner does not withhold it"
+            );
+        }
+    }
+
+    #[test]
+    fn config_injected_through_the_environment_cannot_make_git_run_a_hook() {
+        // Measured on git 2.50.1: GIT_CONFIG_COUNT + core.hooksPath makes `worktree add`
+        // run post-checkout. Charter's binary runs FROM a hook, where that environment is
+        // the ordinary case.
+        let dir = tempfile::tempdir().unwrap();
+        run(dir.path(), &["init", "-q", "-b", "main", "."], LOCAL).unwrap();
+        std::fs::write(dir.path().join("x"), "x").unwrap();
+        run(dir.path(), &["add", "x"], LOCAL).unwrap();
+        run(dir.path(), &["-c", "user.email=t@e.invalid", "-c", "user.name=t",
+                          "commit", "-q", "-m", "one"], LOCAL).unwrap();
+        let hooks = dir.path().join("evil-hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let ran = dir.path().join("RAN");
+        std::fs::write(
+            hooks.join("post-checkout"),
+            format!("#!/bin/sh\ntouch {}\n", ran.display()),
+        )
+        .unwrap();
+        std::os::unix::fs::PermissionsExt::set_mode(
+            &mut std::fs::metadata(hooks.join("post-checkout")).unwrap().permissions(),
+            0o755,
+        );
+        std::fs::set_permissions(
+            hooks.join("post-checkout"),
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        // SAFETY of the test, not the code.
+        unsafe {
+            std::env::set_var("GIT_CONFIG_COUNT", "1");
+            std::env::set_var("GIT_CONFIG_KEY_0", "core.hooksPath");
+            std::env::set_var("GIT_CONFIG_VALUE_0", hooks.display().to_string());
+        }
+
+        let wt = dir.path().join("wt");
+        let _ = run(dir.path(), &["worktree", "add", &wt.display().to_string(), "-b", "p"], LOCAL);
+
+        unsafe {
+            std::env::remove_var("GIT_CONFIG_COUNT");
+            std::env::remove_var("GIT_CONFIG_KEY_0");
+            std::env::remove_var("GIT_CONFIG_VALUE_0");
+        }
+        assert!(!ran.exists(), "an injected core.hooksPath must not have run");
+    }
+
+    #[test]
     fn a_git_that_never_returns_is_given_up_on_rather_than_waited_for() {
         let dir = tempfile::tempdir().unwrap();
         run(dir.path(), &["init", "-q", "."], LOCAL).unwrap();
@@ -388,23 +450,49 @@ use std::time::Duration;
 
 use wait_timeout::ChildExt;
 
-/// The deadline for a call that only touches this machine.
+/// The deadline for a READ — a listing, a status, a config lookup.
+///
+/// **Not for `worktree add` or `merge`.** Those check out a tree: on a large repo or a cold
+/// cache five seconds is routine, and a killed `worktree add` leaves the registration
+/// written and the checkout half-done, so the retry meets "branch already exists". Python
+/// times out its LISTING and nothing else (`workspace._GIT_TIMEOUT`); so does this.
 pub const LOCAL: Duration = Duration::from_secs(5);
+
+/// No deadline: a checkout takes as long as the repository takes.
+pub const UNTIMED: Duration = Duration::from_secs(60 * 60 * 24);
 
 /// The deadline for a call that crosses a network. `publish` is the only one.
 pub const NETWORK: Duration = Duration::from_secs(120);
 
-/// The git variables that would point a call at another repository, or at another index.
+/// Every variable git itself calls repository-local, plus the three that inject config.
 ///
-/// Cleared on EVERY call, not only where it seemed to matter. These are inherited by any
-/// process a hook starts, and a hook is exactly where charter's own binary runs.
-const REDIRECTING: [&str; 6] = [
+/// **Held to git by a test, never maintained by hand.** `git rev-parse --local-env-vars`
+/// prints these; Python charter named them one by one in review round 3 and missed
+/// `GIT_COMMON_DIR` in round 4 (`charter/workspace.py:3453`). The `GIT_CONFIG*` three are
+/// not on that list and are not redirection at all: they inject configuration into a call
+/// that already named its repository with `-C`, and configuration includes
+/// `core.hooksPath` — which `git worktree add` then runs as `post-checkout`.
+const WITHHELD: [&str; 18] = [
+    // `git rev-parse --local-env-vars`, git 2.50.1. The test below is what keeps this true.
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY",
     "GIT_DIR",
     "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
     "GIT_INDEX_FILE",
-    "GIT_OBJECT_DIRECTORY",
-    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
     "GIT_COMMON_DIR",
+    // Not printed by that command, and the ones that give code execution.
+    "GIT_CONFIG_KEY_0",
+    "GIT_CONFIG_VALUE_0",
+    "GIT_EXTERNAL_DIFF",
 ];
 
 /// What one git call answered. `code` is `None` when the deadline passed.
@@ -430,7 +518,7 @@ pub struct GitUnavailable(std::io::Error);
 pub fn run(dir: &Path, args: &[&str], timeout: Duration) -> Result<Run, GitUnavailable> {
     let mut cmd = Command::new("git");
     cmd.arg("-C").arg(dir).args(args);
-    for var in REDIRECTING {
+    for var in WITHHELD {
         cmd.env_remove(var);
     }
     // A credential prompt inside a subprocess the UI cannot show is an infinite hang, and
@@ -856,6 +944,47 @@ fn a_repo_directory_under_the_root_that_is_a_link_out_is_refused_too() {
 }
 
 #[test]
+fn a_piece_path_resolving_into_another_workspace_is_refused() {
+    // `contain::writable` says Ok here — the target IS under `workspaces/`. Measured:
+    // `git worktree remove` through such a link deleted the other workspace's live tree at
+    // exit 0, and every tree-safety check passed because it ran against THAT tree.
+    let f = support::repo::plane_with_clone("thing");
+    let other = f.plane.join("workspaces").join("beta").join("victim");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join("PRECIOUS"), "keep\n").unwrap();
+    let root = worktree::root_of(&f.plane, &f.ws).join(&f.repo);
+    std::fs::create_dir_all(&root).unwrap();
+    std::os::unix::fs::symlink(&other, root.join("piece")).unwrap();
+
+    let refusal = worktree::remove(&f.plane, &f.ws, &f.repo, "piece", true, false)
+        .expect_err("a path landing in another workspace is not this workspace's to remove");
+
+    assert!(format!("{refusal}").contains("workspace"), "{refusal}");
+    assert!(other.join("PRECIOUS").exists(), "the other workspace's work is untouched");
+}
+
+#[test]
+fn a_branch_name_that_resolves_to_another_branch_is_recorded_under_the_name_git_used() {
+    // `git check-ref-format --branch '@{-1}'` prints the PREVIOUS branch and exits 0.
+    // Recording under the string the operator typed would name a branch that does not exist.
+    let f = support::repo::plane_with_clone("thing");
+    support::repo::git(&f.clone, &["switch", "-q", "-c", "other"]);
+    support::repo::git(&f.clone, &["switch", "-q", "main"]);
+
+    match worktree::add(&f.plane, &f.ws, &f.repo, "piece", Some("@{-1}")) {
+        // Either charter refuses it outright...
+        Err(refusal) => assert!(format!("{refusal}").contains("@"), "{refusal}"),
+        // ...or it used the name git resolved, and recorded THAT.
+        Ok(added) => {
+            assert_eq!(added.branch, "other");
+            let key = support::repo::git(
+                &f.clone, &["config", "--get-all", "branch.other.charterBase"]);
+            assert!(!String::from_utf8(key.stdout).unwrap().trim().is_empty());
+        }
+    }
+}
+
+#[test]
 fn a_branch_name_that_is_an_argument_never_reaches_gits_argv() {
     let f = support::repo::plane_with_clone("thing");
     for bad in ["-force", "--upload-pack=/bin/sh", "--exec=evil"] {
@@ -982,16 +1111,28 @@ pub fn add(
     name::branch_name_ok(branch)?;                   // charter's one rule: not an option
 
     // The EXACT path charter will create, and the exact parent it will mkdir. Not the
-    // directory above them.
+    // directory above them — and NOT `contain::writable`, which confines to the plane's
+    // data directories and so lets a path resolving into ANOTHER WORKSPACE through.
+    // Measured: `git worktree remove` follows a symlink and deleted workspace B's live
+    // tree at exit 0, with every tree-safety check passing because they ran against B's.
     let parent = path.parent().expect("a piece path has a parent");
-    crate::contain::writable(plane, parent)?;
-    crate::contain::writable(plane, &path)?;
+    within_workspace(plane, ws, parent)?;
+    within_workspace(plane, ws, &path)?;
+    // git resolves what charter hands it, so charter hands it something with nothing left
+    // to resolve.
+    crate::contain::no_link_on_the_way(plane, &path)?;
 
     let clone = clone_dir(plane, ws, repo)?;         // and that it IS a git repository
-    // git validates the rest of the ref grammar; charter does not reimplement it.
-    if !git::run(&clone, &["check-ref-format", "--branch", branch], git::LOCAL)?.ok() {
+    // git validates the rest of the ref grammar; charter does not reimplement it. But
+    // `--branch` RESOLVES as well as validating: measured, `@{-1}` prints the previously
+    // checked-out branch and exits 0. So the name charter goes on to use, record and
+    // report is the one git PRINTED, never the one it was handed.
+    let checked = git::run(&clone, &["check-ref-format", "--branch", branch], git::LOCAL)?;
+    if !checked.ok() {
         return Err(Refusal::BadBranchName(branch.to_string()));
     }
+    let branch = checked.out.trim().to_string();
+    let branch = branch.as_str();
     if branch_exists(&clone, branch)? {
         return Err(Refusal::BranchTaken { repo: repo.into(), branch: branch.into() });
     }
@@ -1026,14 +1167,23 @@ pub fn add(
     // Recorded on the BRANCH, which `--branch` makes a different string from the piece.
     // In git, because git is the only registry (ADR 0027).
     if let Base::Branch(b) = &base {
+        // `--replace-all`: a key that already holds two values cannot be overwritten with
+        // a plain `git config` (exit 5), and a plain `--get` of one returns the LAST value
+        // with exit 0 and no warning — so a second line is somebody else choosing what
+        // charter merges into.
         let _ = git::run(
             &clone,
-            &["config", &format!("branch.{branch}.charterBase"), b],
+            &["config", "--replace-all", &format!("branch.{branch}.charterBase"), b],
             git::LOCAL,
         );
     }
 
     warnings.extend(submodule_drift(&path)?);
+    // The path with no UI in it. Python's `charter wt add` wires the guest layer before it
+    // prints `enter: cd <path> && claude` (#951); this one does not, and the verb is spelled
+    // the same, so it says so rather than letting the operator infer a guarantee from a
+    // command name.
+    warnings.push(unwired_warning());
     Ok(Added { path, branch: branch.to_string(), base, warnings })
 }
 ```
@@ -1206,7 +1356,11 @@ cargo test -p charter-core --test a_worktree_keeps_the_work_in_it 2>&1 | tail -3
 
 - [ ] **Step 3: Implement `list` and `remove`**
 
-`list` runs `git worktree list --porcelain` in the clone, parses with `porcelain::parse`, and keeps only rows whose **resolved** path starts with the resolved `root_of(plane, ws).join(repo)`. `wired` is `path.join(".charter-generated").exists()` — one `exists()` per row, no subprocess.
+`list` runs `git worktree list --porcelain` in the clone, parses with `porcelain::parse`, and keeps only rows whose **resolved** path starts with the resolved `root_of(plane, ws).join(repo)` — without that filter the clone's own entry, a bare repository's entry and any worktree registered elsewhere on the machine all read as pieces, and could then be handed to `remove`.
+
+`wired` is `path.join(".charter-generated")` existing **and untracked**. A *tracked* marker is content some cloned repository committed and says nothing about this tree; `charter/workspace.py:2176` (`_marker_untrusted`) already reads it that way. Without that rule, any repo carrying a committed `.charter-generated` silences the `unwired` label *and* the persona refusal at once — both bounds, on a repo the operator merely cloned. `git ls-files --error-unmatch` answers it, once per repo in the same pass as the listing rather than once per row.
+
+The **stale clear** is `git worktree remove` on the path git reported — not the path charter would construct, because the reported one comes from `.git/worktrees/<id>/gitdir`, which is attacker-writable inside the clone, and it is the one git will act on. Measured: with the directory truly absent it clears at exit 0; with anything recreated at that path it exits 128 (`validation failed … '.git' does not exist`) and `--force` does not change that. The refusal names `git -C <clone> worktree prune` as the operator's move and charter does not run it: `prune` is repository-wide and would clear registrations charter never made.
 
 `remove` in order: `relocation_refusal`; `path_for`; **`contain::writable(plane, &path)` on the exact path, asked now and not remembered from `add`**; if the directory is absent, look for a `prunable` row and take the stale path, which skips every tree check because there is no tree; otherwise, unless `force`, refuse on `Dirt::Unknown`, on `Dirt::Dirty`, and on `unique_commits(&path)? > 0`, where `unique_commits` is `rev-list --count HEAD --exclude=<branch> --branches --remotes` and `None` (git could not answer) is itself a refusal. Capture the branch with `head_of(&path)` **before** the tree disappears, since `--branch` makes it differ from the piece name. Then `git worktree remove [--force] <path>`. Delete the branch only when asked.
 
@@ -1315,6 +1469,49 @@ fn a_piece_cut_from_a_detached_head_says_why_it_cannot_be_merged() {
     let refusal = worktree::merge(&f.plane, &f.ws, &f.repo, "piece").unwrap_err();
 
     assert!(format!("{refusal}").contains("detached HEAD"), "{refusal}");
+}
+
+#[test]
+fn two_recorded_bases_are_a_refusal_and_not_a_last_one_wins() {
+    // `.git/config` is writable by anything in the clone, and `git config --get` returns
+    // the LAST value with exit 0 and no warning. A second line is somebody else choosing
+    // what charter merges into.
+    let f = support::repo::plane_with_clone("thing");
+    let added = worktree::add(&f.plane, &f.ws, &f.repo, "piece", None).unwrap();
+    f.commit(&added.path, "work");
+    support::repo::git(&f.clone, &["config", "--add", "branch.piece.charterBase", "evil"]);
+
+    let refusal = worktree::merge(&f.plane, &f.ws, &f.repo, "piece").unwrap_err();
+
+    assert!(format!("{refusal}").contains("more than one"), "{refusal}");
+}
+
+#[test]
+fn a_piece_with_no_recorded_base_says_so_rather_than_calling_it_foreign() {
+    // Python charter records no charterBase at all, so EVERY Python-cut piece is in this
+    // state for the whole cutover. "charter did not cut this" would be a lie about it.
+    let f = support::repo::plane_with_clone("thing");
+    let added = worktree::add(&f.plane, &f.ws, &f.repo, "piece", None).unwrap();
+    f.commit(&added.path, "work");
+    support::repo::git(&f.clone, &["config", "--unset-all", "branch.piece.charterBase"]);
+
+    let refusal = worktree::merge(&f.plane, &f.ws, &f.repo, "piece").unwrap_err();
+
+    let said = format!("{refusal}");
+    assert!(said.contains("was not recorded"), "{said}");
+    assert!(!said.contains("did not cut"), "it must not claim the piece is foreign: {said}");
+}
+
+#[test]
+fn a_recorded_base_that_no_longer_exists_is_reported_rather_than_acted_on() {
+    let f = support::repo::plane_with_clone("thing");
+    let added = worktree::add(&f.plane, &f.ws, &f.repo, "piece", None).unwrap();
+    f.commit(&added.path, "work");
+    support::repo::git(&f.clone, &["branch", "-m", "main", "trunk"]);
+
+    let refusal = worktree::merge(&f.plane, &f.ws, &f.repo, "piece").unwrap_err();
+
+    assert!(format!("{refusal}").contains("no longer"), "{refusal}");
 }
 
 #[test]
@@ -1545,6 +1742,9 @@ test("one repo is chosen already, and several are not", () => {
   expect(screen.getByLabelText("Repo")).toHaveValue("");
 });
 
+// The branch comes from `worktree_list`, NOT from path arithmetic on the cwd: the layout
+// yields the PIECE, and `--branch` makes the piece and the branch different strings, so
+// arithmetic would print a wrong branch as fact on the one row this milestone is named for.
 test("a chat on a worktree shows its branch", () => {
   render(<ChatRow chat={{ ...base, branch: "fix-login" }} />);
   expect(screen.getByText("fix-login")).toBeInTheDocument();
@@ -1624,7 +1824,12 @@ Green CI is not evidence — it was green through every round of M1.1. For each 
 - [ ] Make `dirt` return `Clean` when `git status` fails → `a_tree_charter_could_not_read_is_not_a_tree_charter_clears_for_deletion` must fail.
 - [ ] Make `unique_commits` return `0` when git could not answer → the same suite must fail.
 - [ ] Remove the leading-`-` rule from `branch_name_ok` → `a_branch_name_that_is_an_argument_never_reaches_gits_argv` must fail.
-- [ ] Drop `REDIRECTING` from the runner → `a_repository_local_git_environment_cannot_redirect_a_call` must fail.
+- [ ] Drop `WITHHELD` from the runner → `a_repository_local_git_environment_cannot_redirect_a_call` **and** `config_injected_through_the_environment_cannot_make_git_run_a_hook` must fail.
+- [ ] Remove one name from `WITHHELD` → `every_variable_git_calls_repository_local_is_withheld` must fail.
+- [ ] Replace `within_workspace` with `contain::writable` in `remove` → `a_piece_path_resolving_into_another_workspace_is_refused` must fail. **This is the mutation that matters most**: it is the code the first draft of this design specified.
+- [ ] Use the branch name as passed instead of the one `check-ref-format` printed → `a_branch_name_that_resolves_to_another_branch_is_recorded_under_the_name_git_used` must fail.
+- [ ] Read the base with `--get` instead of `--get-all` → `two_recorded_bases_are_a_refusal_and_not_a_last_one_wins` must fail.
+- [ ] Treat a tracked `.charter-generated` as wired → the untrusted-marker test must fail.
 - [ ] Change `merge` to `--no-ff` → `a_piece_that_does_not_fast_forward_is_refused…` must fail.
 - [ ] Add `--force` to `publish` → `a_diverged_publish_is_refused_by_git_and_charter_does_not_force_it` must fail.
 - [ ] Accept `--all` on `merge` → `neither_merge_nor_publish_takes_an_all_flag` must fail.
@@ -1662,15 +1867,17 @@ Green CI is not evidence — it was green through every round of M1.1. For each 
 > merged main before starting this task** and read that change first; do not resolve a
 > conflict by reverting either side.
 
-- [ ] **Step 1: Write the scenario** — both implementations cut a piece in a reproducible repo; the compared artifact is captured stdout: `git worktree list --porcelain` with the plane's path normalised, plus `git rev-parse HEAD` and the branch.
-- [ ] **Step 2: Run it and watch it fail** for a real reason (the Rust side not yet registered as a scenario).
-- [ ] **Step 3: Implement** the output-comparison scenario kind: where a tree comparison asks "are these trees equal", this one asks "are these captured outputs equal", and says which line differs.
+> **This task was rewritten after review.** An earlier draft replaced the tree comparison with a comparison of captured command output. That would have dropped `_outside`/`_escaped` — the sentinel for writes landing outside the plane, whose docstring is *"a containment bug writes where `rglob` over the plane cannot see it, so it has to be looked for on purpose"* — in the one milestone whose stated main risk is containment. It would also have dropped the directory-set comparison, which is what would notice the Rust side growing a second registry file. And `run.py` already has the mechanism: `Scenario.ignore` is *"paths … neither side is compared on, **with the reason**"*.
+
+- [ ] **Step 1: Write the scenarios** — four, one per verb (`add`, `remove`, `merge`, `publish`), each against a throwaway repo with pinned author and dates. The comparison stays a tree comparison, with `ignore` entries carrying their reason: the guest layer paths (Rust does not write them, ADR 0027), the pieces log (same), and `.git/**` (a git repository does not compare byte for byte against itself — reflog entries take the real clock, which `--now` does not pin, because charter shells out to git).
+- [ ] **Step 2: Run them and watch each fail** for a real reason before its `ignore` entry is written. An `ignore` added before the failure is seen is an exclusion nobody read.
+- [ ] **Step 3: Keep the sentinel and the directory set on.** Neither is ignored for any scenario. If the escape sentinel fires, that is the finding, not the noise.
 - [ ] **Step 4: Run both**
 
 ```bash
 cargo build -p charter-cli
 tests/differential/run.py                       # every scenario
-tests/differential/run.py --scenario worktree_add
+tests/differential/run.py --scenario worktree_add   # and worktree_remove, _merge, _publish
 ```
 
 - [ ] **Step 5: Commit and open PR 3.** Reviewer over the pushed head.
