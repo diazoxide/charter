@@ -52,6 +52,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -99,6 +100,9 @@ class Scenario:
     stdout_differs: str = ""
     #: Whether the Rust side takes `--now`. A read command does not.
     pins_the_clock: bool = True
+    #: Run against each plane copy before the command, for a starting state the fixtures
+    #: cannot carry — a symlink, a mode, a file in the way.
+    setup: "Callable[[Path], None] | None" = None
     #: Set when the command is SUPPOSED to be refused. Both sides must then fail, with the
     #: same status — a scenario that expects a refusal and gets a success is a failure, and
     #: so is one that stops being refused on only one side.
@@ -106,6 +110,17 @@ class Scenario:
 
     def rust_args(self) -> list[str]:
         return self.rust if self.rust is not None else self.python
+
+
+def _symlink_a_workspace_out_of_the_plane(root: Path) -> None:
+    """Point `workspaces/escape` at a directory outside the plane, and leave a file there
+    both implementations must refuse to touch."""
+    outside = root.parent / "outside"
+    outside.mkdir(parents=True, exist_ok=True)
+    (outside / "workspace.md").write_text("# untouched\n")
+    link = root / "workspaces" / "escape"
+    if not link.exists():
+        link.symlink_to(outside)
 
 
 # `--no-sync` on every Python write that takes it: `alpha` is a LIVE workspace, so Python
@@ -216,6 +231,15 @@ SCENARIOS = [
         plane="daily",
         python=["workspace", "remember", "\x1fPadded fact\x1f", "-w", "alpha", "--no-sync"],
         rust=["workspace", "remember", "\x1fPadded fact\x1f", "-w", "alpha"],
+    ),
+    Scenario(
+        name="vision-through-a-workspace-symlinked-out-of-the-plane",
+        plane="daily",
+        # The NAME is legal, so the name rule cannot see this. What redirects the write is a
+        # committed symlink, which travels with the plane to every machine that clones it.
+        setup=_symlink_a_workspace_out_of_the_plane,
+        python=["workspace", "vision", "pwned through a link", "-w", "escape"],
+        expect_failure=True,
     ),
     Scenario(
         name="vision-with-a-trailing-separator-control",
@@ -347,21 +371,44 @@ def _diff_trees(left: Path, right: Path, ignore: dict[str, str]) -> list[str]:
     return out
 
 
-def _escaped(scratch: Path, side: str, root: Path) -> list[str]:
-    """Anything written outside *root* — a containment bug, which `rglob` over the plane
-    cannot see by construction."""
-    out = []
+def _outside(scratch: Path, side: str, root: Path) -> dict[str, bytes]:
+    """Every file beside the plane copy, with its contents.
+
+    Taken before the command and again after, so what is reported is what the command
+    WROTE — a scenario's own setup may legitimately put a file out here for the command to
+    be refused against.
+    """
+    found = {}
     for path in sorted((scratch / side).rglob("*")):
         if path.is_dir():
             continue
         try:
             path.relative_to(root)
+            continue  # inside the plane; the tree comparison covers it
         except ValueError:
-            # `home` and `pins` are the harness's own; everything else is an escape.
-            rel = path.relative_to(scratch / side)
-            if rel.parts[0] in {"home", "pins"}:
-                continue
-            out.append(f"    {side} WROTE OUTSIDE ITS PLANE: {rel}")
+            pass
+        rel = path.relative_to(scratch / side)
+        # `home` and `pins` are the harness's own working directories.
+        if rel.parts[0] in {"home", "pins"}:
+            continue
+        try:
+            found[str(rel)] = path.read_bytes()
+        except OSError:
+            found[str(rel)] = b"<unreadable>"
+    return found
+
+
+def _escaped(side: str, before: dict[str, bytes], after: dict[str, bytes]) -> list[str]:
+    """Anything the command wrote outside its plane copy — a containment bug, which `rglob`
+    over the plane cannot see by construction."""
+    out = []
+    for rel in sorted(set(after) - set(before)):
+        out.append(f"    {side} WROTE OUTSIDE ITS PLANE: {rel} (created)")
+    for rel in sorted(set(before) & set(after)):
+        if before[rel] != after[rel]:
+            out.append(f"    {side} WROTE OUTSIDE ITS PLANE: {rel} (changed)")
+    for rel in sorted(set(before) - set(after)):
+        out.append(f"    {side} DELETED OUTSIDE ITS PLANE: {rel}")
     return out
 
 
@@ -383,6 +430,11 @@ def check(scenario: Scenario, binary: Path) -> bool:
         scratch = Path(tmp)
         py_root, py_home, py_pins = _lay_out(scratch, scenario.plane, "python")
         rs_root, rs_home, rs_pins = _lay_out(scratch, scenario.plane, "rust")
+        if scenario.setup is not None:
+            scenario.setup(py_root)
+            scenario.setup(rs_root)
+        py_before = _outside(scratch, "python", py_root)
+        rs_before = _outside(scratch, "rust", rs_root)
 
         py = _run([sys.executable, "-m", "charter", *scenario.python], py_root, py_home, py_pins)
         rust_argv = [str(binary), *scenario.rust_args()]
@@ -406,8 +458,10 @@ def check(scenario: Scenario, binary: Path) -> bool:
                 f"python: {py.stderr.strip()}"
             )
         problems.extend(_diff_trees(py_root, rs_root, scenario.ignore))
-        problems.extend(_escaped(scratch, "python", py_root))
-        problems.extend(_escaped(scratch, "rust", rs_root))
+        problems.extend(
+            _escaped("python", py_before, _outside(scratch, "python", py_root))
+        )
+        problems.extend(_escaped("rust", rs_before, _outside(scratch, "rust", rs_root)))
         if scenario.stdout_differs:
             if py.stdout == rs.stdout:
                 problems.append(

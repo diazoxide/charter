@@ -19,11 +19,23 @@ pub const SHARED: &str = "_shared";
 pub struct Persona {
     dir: PathBuf,
     name: String,
+    plane_root: PathBuf,
 }
 
 impl Persona {
-    pub(crate) fn at(dir: PathBuf, name: String) -> Self {
-        Self { dir, name }
+    pub(crate) fn at(dir: PathBuf, name: String, plane_root: PathBuf) -> Self {
+        Self {
+            dir,
+            name,
+            plane_root,
+        }
+    }
+
+    /// Refuse this persona if its directory resolves out of the plane — a committed symlink
+    /// at `personas/<legal-name>` redirects every write to it.
+    fn writable(&self) -> io::Result<()> {
+        crate::contain::writable(&self.plane_root, &self.dir)
+            .map_err(|refused| io::Error::new(io::ErrorKind::PermissionDenied, refused.to_string()))
     }
 
     pub fn name(&self) -> &str {
@@ -46,6 +58,7 @@ impl Persona {
     /// Create the committed `memory/` and `refs/` with the files that make them useful: an
     /// index to read, and a README saying what the directory is for.
     pub fn scaffold_memory(&self) -> io::Result<()> {
+        self.writable()?;
         let who = self.who();
         create_absent(
             &self.dir.join("memory"),
@@ -62,6 +75,7 @@ impl Persona {
 
     /// Record one durable fact. Slug-only filename, `persistent`, indexed.
     pub fn remember(&self, text: &str, stamp: chrono::NaiveDateTime) -> io::Result<PathBuf> {
+        self.writable()?;
         let dir = self.dir.join("memory");
         memstore::ensure_index(&dir, &index_header(&self.who()))?;
         // `timestamped: false` — a persona memory is addressed by its slug, so the name

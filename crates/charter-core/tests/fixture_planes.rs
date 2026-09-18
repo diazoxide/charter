@@ -1079,3 +1079,52 @@ fn a_non_ascii_env_value_is_escaped_in_the_record_as_python_escapes_it() {
         "and it reads back as what was written"
     );
 }
+
+#[test]
+fn a_workspace_symlinked_out_of_the_plane_cannot_be_written_through() {
+    // The name rule cannot see this: `escape` is a perfectly legal name. What redirects the
+    // write is a COMMITTED symlink, which travels with the plane to every machine that
+    // clones it. Python refuses it in `contain.writable` with the same reasoning.
+    let (_tmp, plane) = temp_plane();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::write(outside.path().join("workspace.md"), "# untouched\n").unwrap();
+    std::os::unix::fs::symlink(
+        outside.path(),
+        plane.root().join("workspaces").join("escape"),
+    )
+    .unwrap();
+    let ws = plane.workspace("escape").expect("the NAME is legal");
+
+    assert!(ws.set_vision("written through a symlink").is_err());
+    assert!(ws.remember("a fact", pinned()).is_err());
+    assert!(ws.add_todo("a todo", pinned()).is_err());
+    assert!(ws.scaffold_charter().is_err());
+    assert!(
+        ws.write_manifest(&serde_json::from_str(r#"{"name":"escape"}"#).unwrap())
+            .is_err()
+    );
+
+    assert_eq!(
+        std::fs::read_to_string(outside.path().join("workspace.md")).unwrap(),
+        "# untouched\n",
+        "nothing outside the plane was written"
+    );
+}
+
+#[test]
+fn a_persona_symlinked_out_of_the_plane_cannot_be_written_through() {
+    let (_tmp, plane) = temp_plane();
+    let outside = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(plane.root().join("personas")).unwrap();
+    std::os::unix::fs::symlink(outside.path(), plane.root().join("personas").join("devops"))
+        .unwrap();
+    let persona = plane.persona("devops").expect("the NAME is legal");
+
+    assert!(persona.scaffold_memory().is_err());
+    assert!(persona.remember("a fact", pinned()).is_err());
+    assert_eq!(
+        std::fs::read_dir(outside.path()).unwrap().count(),
+        0,
+        "nothing outside the plane was written"
+    );
+}

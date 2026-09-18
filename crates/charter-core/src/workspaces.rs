@@ -87,6 +87,7 @@ impl Plane {
         Ok(crate::personas::Persona::at(
             self.root.join("personas").join(name),
             name.to_string(),
+            self.root.clone(),
         ))
     }
 
@@ -141,6 +142,7 @@ impl Plane {
         Ok(Workspace {
             dir: self.root.join("workspaces").join(name),
             name: name.to_string(),
+            plane_root: self.root.clone(),
         })
     }
 
@@ -179,9 +181,19 @@ impl Plane {
 pub struct Workspace {
     dir: PathBuf,
     name: String,
+    plane_root: PathBuf,
 }
 
 impl Workspace {
+    /// Refuse this workspace if its directory resolves out of the plane.
+    ///
+    /// Asked before every write rather than once at construction: a link can be created,
+    /// or repointed, between one command and the next.
+    fn writable(&self) -> io::Result<()> {
+        crate::contain::writable(&self.plane_root, &self.dir)
+            .map_err(|refused| io::Error::new(io::ErrorKind::PermissionDenied, refused.to_string()))
+    }
+
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -213,6 +225,7 @@ impl Workspace {
     /// Create `workspace.md` from the template when it is absent. An existing file is never
     /// overwritten — only its `## Vision` body is ever replaced.
     pub fn scaffold_charter(&self) -> io::Result<()> {
+        self.writable()?;
         let path = self.dir.join("workspace.md");
         if path.exists() {
             return Ok(());
@@ -234,6 +247,7 @@ impl Workspace {
 
     /// Set the `## Vision` body, creating the charter first when it is missing.
     pub fn set_vision(&self, text: &str) -> io::Result<()> {
+        self.writable()?;
         self.scaffold_charter()?;
         let path = self.dir.join("workspace.md");
         let current = std::fs::read_to_string(&path)?;
@@ -242,6 +256,7 @@ impl Workspace {
 
     /// Record one todo as its own timestamp-prefixed file, and index it.
     pub fn add_todo(&self, text: &str, stamp: chrono::NaiveDateTime) -> io::Result<PathBuf> {
+        self.writable()?;
         let dir = self.dir.join("todos");
         memstore::ensure_index(&dir, &TODOS_HEADER.replace("{name}", &self.name))?;
         memstore::write(&dir, text, None, true, "persistent", true, stamp)
@@ -250,6 +265,7 @@ impl Workspace {
     /// Close a todo: write its closing memory into the journal, then delete the todo file
     /// and its index line. There is no state field — a closed todo is a deleted file.
     pub fn close_todo(&self, slug: &str, stamp: chrono::NaiveDateTime) -> io::Result<()> {
+        self.writable()?;
         let dir = self.dir.join("todos");
         let path = memstore::resolve(&dir, slug).ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, format!("no such todo: {slug}"))
@@ -274,6 +290,7 @@ impl Workspace {
 
     /// Record one durable fact in the workspace's journal.
     pub fn remember(&self, text: &str, stamp: chrono::NaiveDateTime) -> io::Result<PathBuf> {
+        self.writable()?;
         let dir = self.dir.join("memory");
         memstore::ensure_index(&dir, &WS_MEMORY_HEADER.replace("{name}", &self.name))?;
         memstore::write(&dir, text, None, true, "persistent", true, stamp)
@@ -285,6 +302,7 @@ impl Workspace {
     /// document charter wrote keeps its key order and one a hand wrote keeps the position it
     /// chose — which is what Python's `dict` assignment does.
     pub fn write_manifest(&self, doc: &serde_json::Value) -> io::Result<()> {
+        self.writable()?;
         let mut doc = doc.clone();
         let digest = manifest::digest(&doc);
         if let Some(map) = doc.as_object_mut() {
