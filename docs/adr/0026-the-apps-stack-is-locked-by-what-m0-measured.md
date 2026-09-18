@@ -68,7 +68,7 @@ with a reason rather than reporting zeros.
 | **13 MB burst: the same** | 460 ms (28.4 MB/s); longest frame 52 ms; in the pane beside it, the one keystroke that landed while the burst was still arriving took **110 ms**, and the other nineteen took 23–34 ms | met — no freeze, one hitch |
 | **Keystroke to screen ≤ 50 ms while 49 others stream** | worst 26 ms with 49 streaming at ~1 MB/s each, worst 26 ms with 49 flat out (30 samples each) | met |
 | **Tab or pane switch ≤ 100 ms** | back to a light tab worst 39 ms; to a tab whose session holds all 5000 lines of history worst 48 ms; back to the typed tab under the 49-session load worst 41 ms (10 samples each) | met |
-| **Hook call ≤ 50 ms** | `charter hook pretooluse` through Python charter: **p50 107.6 ms**, worst 114 ms (30 samples) | **missed** |
+| **Hook call ≤ 50 ms** | `charter hook pretooluse` through Python charter: **p50 107.6 ms**, worst 114 ms (30 samples) | **missed here; met in M1.3** |
 | **Cold start ≤ 2 s** | p50 370 ms to the first frame on screen; worst 510 ms, the first launch after the build and the only one cold on disk | met |
 | **Idle hidden session ≤ 50 MB at the shipped scrollback cap** | **20.2 MB** each: fifty sessions holding 5000 lines at 150 columns took the app's process from 118.9 MB to 1129.7 MB | met |
 | **`?2026` animation ≥ 30 fps** | **52.4 draws/s** for a 3 KB repaint written whole, **52.0** for a 10 KB full-screen repaint written whole, both against a 60 fps display; **1.0 draws/s** when the writer pauses inside an open update | met, with a hazard recorded below |
@@ -115,6 +115,13 @@ screen at once becomes an ordinary way to work, the twenty-pane row above is the
 pull.**
 
 ## The hook call is missed, and not by this stack
+
+**Met on 2026-09-18, in M1.3, earlier than this ADR expected.** The Rust binary answers
+`charter hook stop` at **p50 1.7 ms**, worst 2.2 — 30 samples, the same method, now an arm of
+`node tools/bench.mjs --only hook` in charter-app. The like-for-like Python row measures
+93.2 ms on that run (`charter hook stop`, not the guard). Everything below stands as the
+reasoning; only "M3 is where it is met" was wrong, and it was wrong because the EVENT path
+turned out to be separable from the guard, which is still Python's and still misses the limit.
 
 `charter hook pretooluse` costs 107.6 ms at the median. That is the Python start ADR 0025
 already counted as a reason for the rewrite, measured again: the hook path today is Python
