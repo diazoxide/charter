@@ -104,6 +104,32 @@ fn matches_header(line: &str, header: &str) -> bool {
     tail.chars().all(char::is_whitespace)
 }
 
+/// The body under `## <header>`, trimmed, or `""` when there is no such section.
+pub fn section_body(text: &str, header: &str) -> String {
+    let lines = split_lines(text);
+    let mut i = 0;
+    while i < lines.len() {
+        if matches_header(lines[i], header) {
+            let start = i + 1;
+            let mut end = start;
+            // charter's reader stops at `^##\s`, which is not the `"## "` its writer scans
+            // for: a bare `##` on its own line ends the section for one and not the other.
+            while end < lines.len() && !starts_a_heading(lines[end]) {
+                end += 1;
+            }
+            return lines[start..end].join("\n").trim().to_string();
+        }
+        i += 1;
+    }
+    String::new()
+}
+
+/// `^##\s` — the lookahead charter's vision regex ends a section on.
+fn starts_a_heading(line: &str) -> bool {
+    line.strip_prefix("##")
+        .is_some_and(|rest| rest.starts_with(char::is_whitespace))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

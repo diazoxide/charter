@@ -7,3 +7,4 @@ pub mod memstore;
 pub mod plane;
 pub mod pyjson;
 pub mod session;
+pub mod workspaces;

@@ -54,6 +54,18 @@ cargo test -p charter-app -- --ignored
 CI also runs clippy on the app crate (`--workspace`), after creating an empty `app/dist` so it
 compiles without a frontend build.
 
+Every plane write is also checked against the Python charter itself: the same command is run by
+both implementations against copies of one fixture plane, and the trees they leave are compared
+byte for byte (spec decision 14). Python is a dev dependency of that run and of nothing else —
+never of the app, the binary or an installer (decision 15). `uv` fetches it, pinned to the
+commit that generated the fixtures:
+
+```bash
+cargo build -p charter-cli
+tests/differential/run.py                    # every scenario
+tests/differential/run.py --scenario vision  # one, with a diff when it differs
+```
+
 To measure the app against the spec's limits, with tmux beside it as a reference (macOS; it
 takes about twenty minutes, opens windows on screen and brings each to the front, and needs the
 screen unlocked — a locked or sleeping display is not drawn, so nothing would paint):

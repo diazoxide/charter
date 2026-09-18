@@ -637,6 +637,7 @@ name = "charter-cli"
 version = "0.1.0"
 dependencies = [
  "charter-core",
+ "chrono",
  "clap",
 ]
 
@@ -645,6 +646,7 @@ name = "charter-core"
 version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
+ "chrono",
  "memchr",
  "portable-pty",
  "proptest",

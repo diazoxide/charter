@@ -97,6 +97,21 @@ jobs:
       # The planes are what the Python charter writes, never hand-edited. This regenerates
       # them from the charter commit pinned in generate.py and fails if anything moved.
       - run: tests/fixtures/planes/generate.py --check
+
+  differential:
+    name: differential (python charter vs rust)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v10.1.0
+      - name: The Rust charter the run compares against Python
+        run: cargo build -p charter-cli
+      # Spec decision 14: every module that moves to Rust passes a differential test. Python
+      # charter is a dev dependency of THIS JOB and nothing else (decision 15) — the run
+      # installs it, pinned to the commit that generated the fixture planes.
+      - run: tests/differential/run.py
   scenario:
     name: scenario tests (${{ matrix.os }})
     strategy:
