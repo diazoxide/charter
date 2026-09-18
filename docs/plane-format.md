@@ -164,6 +164,8 @@ row), and the status of that field where it differs from its file's.
   - [`frame/reopen.json`](#framereopenjson)
   - [`frame/<chat>.transcript`](#framechattranscript)
   - [`frame/<frame-id>/` for a non-chat frame (e.g. the live plane's `probe-1`)](#frameframe-id-for-a-non-chat-frame-eg-the-live-planes-probe-1)
+  - [`app/` — the desktop app's own state](#app--the-desktop-apps-own-state)
+  - [`app/reopen.json`](#appreopenjson)
   - [Top-level markers, gates and ledgers](#top-level-markers-gates-and-ledgers)
   - [`chat-turns/<chat>`](#chat-turnschat)
   - [`dispatch-inflight/<agent>.<random>.json`](#dispatch-inflightagentrandomjson)
@@ -2950,6 +2952,52 @@ Unknown keys are dropped on read; non-string values become `""`
 ### `frame/<frame-id>/` for a non-chat frame (e.g. the live plane's `probe-1`)
 Same directory shape, name minted by `frame_id(workspace, pid)`
 (`charter/frame/state.py:121`). Only `gather.json` + `version` are typically present.
+
+---
+
+### `app/` — the desktop app's own state
+
+`.charter/app/` is the **charter-app** rebuild's, the way `.charter/frame/` is the tmux
+frame's. Python charter neither reads nor writes anything under it, and the app stays out
+of `frame/` in the same way — the app replaces that frame rather than sharing its state
+(ADR 0025, and the note at the top of this file).
+
+It is recorded here because this file records every file charter's implementations put in a
+plane, and because the two share a plane during the migration: an operator running both
+will see this directory, and whoever next changes the app should find its format written
+down rather than read off the code.
+
+### `app/reopen.json`
+- **Format:** JSON, `indent=2`, trailing `\n`. Written beside itself as
+  `reopen.json.writing` and renamed over, so a launch never reads half of one.
+- **Status:** **internal** — written and read by the app alone. Deleting it costs one
+  relaunch's worth of chats: the app starts with none open, which is what a first launch
+  does anyway. No second process reads it, which is what would make it stable.
+- **Written by:** `app/src-tauri/src/lib.rs` (charter-app) — whenever what is open changes
+  (a chat started, closed, or brought to front), and again on the way out. Not only on the
+  way out: an app that is killed, or crashes, runs no exit handler.
+- **Read by:** `app/src-tauri/src/lib.rs`, in Tauri's `setup`, before there is a window —
+  so a relaunch does not depend on a webview having run.
+- **Git:** gitignored already, by the plane's own `/.charter/` line.
+- **No lock** — one app per plane (Tauri's single-instance plugin), and last writer wins.
+
+| Field | Type | Required / default | Meaning |
+|---|---|---|---|
+| `version` | int | `1`; any other value and the record is ignored whole | format version |
+| `at` | int epoch | required | when it was written; nothing reads it |
+| `chats[]` | list | required | one entry per chat that was open |
+| `chats[].program` | str | required | the program, as it was launched: a path or a bare name |
+| `chats[].args` | list[str] | default `[]` | its arguments, **without** any charter added — a resume spells those differently from a start, so they are decided again at the reopen |
+| `chats[].cwd` | str | default `""` (absent) | the directory it ran in |
+| `chats[].name` | str | default `""` | what the operator calls the chat; a harness that takes a name is given it again |
+| `chats[].resume` | str | default `""` | the harness session id to resume. Held to `[A-Za-z0-9][A-Za-z0-9_-]{0,127}` — the Python charter's `SESSION_ID_RE` (`charter/frame/state.py:1128`) — on the way in, and a value that is not one reads as empty. It reaches a command line, and one starting with `-` would be a flag the operator never typed. The chat still comes back, as a new one |
+| `chats[].active` | bool | default `false` | whether it was the chat in front |
+
+Which harness a chat runs is **not** recorded: it is read from `program`'s file name, so a
+record cannot disagree with what is about to be started. Only a harness charter has
+measured a resume for is resumed (`crates/charter-core/src/harness.rs`, which carries the
+same values as `charter/harness/`); a Codex chat has no `resume` to record at all, because
+Codex reports its id only through a hook, inside its first turn (ADR 0024).
 
 ---
 
