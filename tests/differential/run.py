@@ -257,6 +257,25 @@ command = ["~/.local/bin/claude"]
 kind = "opencodex"
 command = ["x"]
 
+# The spellings a refusal has to QUOTE BACK rather than merely refuse. Three of these were
+# only in a Rust unit test, so the two implementations could disagree about how they read a
+# wrong value back to the operator and nothing would say so.
+[harness.kind-bool]
+kind = true
+command = ["claude"]
+
+[harness.kind-array]
+kind = ["claude"]
+command = ["claude"]
+
+[harness.kind-table]
+kind = { a = 1 }
+command = ["claude"]
+
+[harness.kind-number]
+kind = 7
+command = ["claude"]
+
 [harness.no-command]
 kind = "codex"
 
