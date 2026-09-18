@@ -41,12 +41,30 @@ impl Plane {
     /// A stand-in whose folder reads as WIRED, which is what every test that expects a chat
     /// to start needs — the wiring gate is `wiring.rs`'s subject, not this file's.
     fn wired(&self) -> PathBuf {
-        self.stand_in("[{\"id\":\"charter@charter\",\"scope\":\"user\",\"enabled\":true}]")
+        self.wired_as("claude-stand-in")
+    }
+
+    /// The same, under a program name of your choosing.
+    ///
+    /// Every stand-in here answers the probe ITSELF. An earlier version of the wrapper test
+    /// below wrote `exec claude "$@"`, and it passed on a machine that happens to have a
+    /// wired Claude Code installed — it was reading the developer's own `~/.claude` — then
+    /// failed the moment CI ran it, where there is no `claude` at all. A test that needs a
+    /// harness on the PATH is a test about the machine it runs on.
+    fn wired_as(&self, program: &str) -> PathBuf {
+        self.stand_in_named(
+            program,
+            "[{\"id\":\"charter@charter\",\"scope\":\"user\",\"enabled\":true}]",
+        )
     }
 
     /// The program a profile points at: a stand-in `claude` answering the wiring probe.
     fn stand_in(&self, answer: &str) -> PathBuf {
-        let bin = self.root().join("claude-stand-in");
+        self.stand_in_named("claude-stand-in", answer)
+    }
+
+    fn stand_in_named(&self, program: &str, answer: &str) -> PathBuf {
+        let bin = self.root().join(program);
         fs::write(&bin, format!("#!/bin/sh\ncat <<'JSON'\n{answer}\nJSON\n")).unwrap();
         fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
         bin
@@ -125,9 +143,10 @@ fn the_harness_a_chat_runs_comes_from_the_declared_kind_and_not_from_the_program
     // Inferring from it hands the board `None`, which is the narrowest rule there is, and
     // the chat silently loses the session id that makes it resumable at all.
     let plane = Plane::new();
-    let wrapper = plane.root().join("claude-wrap");
-    fs::write(&wrapper, "#!/bin/sh\nexec claude \"$@\"\n").unwrap();
-    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+    // A wrapper, which is the shape ADR 0022 names: a program that is not called `claude`.
+    // It answers the probe itself rather than exec-ing a real harness, so this test is
+    // about the port and not about what is installed on the machine running it.
+    let wrapper = plane.wired_as("claude-wrap");
     plane.profile("claude", &wrapper, "");
 
     let ready = start::ready(&plane.start("work"), plane.root()).expect("it starts");
