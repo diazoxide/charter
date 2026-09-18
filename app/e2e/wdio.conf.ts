@@ -1,5 +1,5 @@
 import process from "node:process";
-import { built, copyFixturePlane, writeShell } from "./harness.js";
+import { built, copyFixturePlane, declareAProfile, writeShell } from "./harness.js";
 
 /**
  * The scenario tests: WebdriverIO driving the real app, with the fake harness standing in for
@@ -19,6 +19,9 @@ const app = built(process.platform === "win32" ? "charter-app.exe" : "charter-ap
 
 // The plane the app is started in: a fresh copy of a fixture plane, never the committed one.
 const plane = copyFixturePlane();
+// The plane declares one harness profile, which is what the picker picks from. It is
+// deliberately NOT approved: approving it is the operator's click, and the scenario makes it.
+declareAProfile(plane, built("fake-harness"));
 
 export const config: WebdriverIO.Config = {
   runner: "local",

@@ -144,6 +144,10 @@ export type OpenChat = {
 	resumed: string | null,
 	/**  Why it is a new chat rather than the one it was, where it is. */
 	fresh: string | null,
+	/**  The harness profile it started on, where it started on one. */
+	profile: string | null,
+	/**  The persona it adopted. */
+	persona: string | null,
 };
 
 /**

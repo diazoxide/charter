@@ -455,6 +455,8 @@ function chatOf(reopened: OpenChat[], session: number, name: string): OpenChat {
       in_front: false,
       resumed: null,
       fresh: null,
+      profile: null,
+      persona: null,
     }
   );
 }

@@ -8,8 +8,19 @@ import type { OpenChat, Sidebar as SidebarModel } from "./bindings";
 afterEach(cleanup);
 
 /** One chat as the core reports it. The sidebar shows what it is called, not its id. */
-function chat(session: number, name: string, cwd: string): OpenChat {
-  return { session, name, cwd, harness: null, in_front: false, resumed: null, fresh: null };
+function chat(session: number, name: string, cwd: string, on: Partial<OpenChat> = {}): OpenChat {
+  return {
+    session,
+    name,
+    cwd,
+    harness: null,
+    in_front: false,
+    resumed: null,
+    fresh: null,
+    profile: null,
+    persona: null,
+    ...on,
+  };
 }
 
 const model: SidebarModel = {
@@ -145,5 +156,33 @@ describe("Sidebar", () => {
     render(<Sidebar states={nothingKnown} sidebar={stray} focused="alpha" onFocus={() => {}} />);
 
     expect(screen.getByTestId("unfiled")).toHaveTextContent("stray.1");
+  });
+
+  it("names the profile a chat started on, and the persona it adopted", () => {
+    // A profile is what the operator picked and what a relaunch looks up again; the kind is
+    // what the plane calls the harness. One without the other hides either which account a
+    // chat is on or which harness it runs.
+    const on = {
+      ...model,
+      workspaces: [
+        {
+          ...model.workspaces[0],
+          chats: [
+            chat(1, "ide.1", "/home/dev/plane/workspaces/alpha", {
+              harness: "claude",
+              profile: "claude-work",
+              persona: "steward",
+            }),
+          ],
+        },
+      ],
+    };
+
+    render(<Sidebar states={nothingKnown} sidebar={on} focused="alpha" onFocus={() => {}} />);
+
+    const row = screen.getByText("ide.1").parentElement as HTMLElement;
+    expect(within(row).getByText(/claude-work/)).toBeInTheDocument();
+    expect(within(row).getByText(/\(claude\)/)).toBeInTheDocument();
+    expect(within(row).getByText(/steward/)).toBeInTheDocument();
   });
 });

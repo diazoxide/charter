@@ -112,3 +112,49 @@ export function copyFixturePlane(name = "daily"): string {
   }
   return root;
 }
+
+/**
+ * A `charter.local.toml` in `plane` declaring one profile that runs the fake harness.
+ *
+ * The profile's program is a script rather than `fake-harness` itself, for two reasons that
+ * are both the real thing being tested. Charter probes a profile's own command with
+ * `plugin list --json` before it will start a chat on it — a chat whose config folder holds
+ * no charter plugin looks guarded and is not (ADR 0022) — so the script answers that probe
+ * as a wired Claude Code would. And charter puts `--session-id <uuid> --name <name>` on the
+ * line for a Claude Code chat, which `fake-harness` has no flags for, so the script drops
+ * the arguments the way a wrapper profile does.
+ *
+ * It is NOT approved here. The approval is the operator's click, and the scenario makes it.
+ */
+export function declareAProfile(plane: string, fakeHarness: string): void {
+  const program = join(plane, "claude-stand-in");
+  writeFileSync(
+    program,
+    [
+      "#!/bin/sh",
+      "# Written by the scenario tests: a profile's command, which charter probes first.",
+      'if [ "$1" = "plugin" ]; then',
+      '  echo \'[{"id":"charter@charter","scope":"user","enabled":true}]\'',
+      "  exit 0",
+      "fi",
+      `exec ${JSON.stringify(fakeHarness)} \\`,
+      "  --synthetic 4096 \\",
+      `  --sentinel ${JSON.stringify(READY)} \\`,
+      "  --interactive",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(program, 0o755);
+  writeFileSync(
+    join(plane, "charter.local.toml"),
+    [
+      "[harness]",
+      'default = "scenario"',
+      "",
+      "[harness.scenario]",
+      'kind = "claude"',
+      `command = [${JSON.stringify(program)}]`,
+      "",
+    ].join("\n"),
+  );
+}

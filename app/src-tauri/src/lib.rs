@@ -169,6 +169,10 @@ struct OpenChat {
     resumed: Option<String>,
     /// Why it is a new chat rather than the one it was, where it is.
     fresh: Option<String>,
+    /// The harness profile it started on, where it started on one.
+    profile: Option<String>,
+    /// The persona it adopted.
+    persona: Option<String>,
 }
 
 /// One workspace as the sidebar draws it: what it is for, what it still means to do, and the
@@ -554,6 +558,8 @@ impl From<chats::Open> for OpenChat {
             name: open.name,
             cwd: open.cwd.map(|cwd| cwd.display().to_string()),
             harness: open.harness.map(Harness::name).map(str::to_owned),
+            profile: open.profile,
+            persona: open.persona,
             in_front: open.in_front,
             resumed: match &open.how {
                 Reopened::Resumed(id) => Some(id.to_string()),
@@ -871,7 +877,7 @@ pub fn run() {
                         }
                     };
                     let wanted = record.chats.len();
-                    let back = chats.put_back(&record, STARTING).len();
+                    let back = chats.put_back(&record, root, STARTING).len();
                     if wanted > 0 {
                         eprintln!(
                             "charter: plane {}, {back} of {wanted} chats back",

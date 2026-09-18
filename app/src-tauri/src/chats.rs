@@ -27,6 +27,10 @@ pub struct Open {
     pub name: String,
     pub cwd: Option<PathBuf>,
     pub harness: Option<Harness>,
+    /// The harness profile it started on, and the persona it adopted — what the sidebar
+    /// names a chat by, beside its harness.
+    pub profile: Option<String>,
+    pub persona: Option<String>,
     /// Whether it is the chat in front. At a launch this is the one that was in front when
     /// the app was quit, so the window comes back looking as it was left.
     pub in_front: bool,
@@ -181,6 +185,42 @@ impl Chats {
         )
     }
 
+    /// [`Self::put_back`] against a plane the test does not care about — every chat in
+    /// these records is a shell, which is resolved from the record alone.
+    #[cfg(test)]
+    fn put_back_here(&self, record: &Record, size: Size) -> Vec<Open> {
+        self.put_back(record, std::path::Path::new("/nonexistent-plane"), size)
+    }
+
+    /// Starts one chat out of the record, on its own profile where it had one.
+    ///
+    /// **The profile is looked up again**, never taken from the record: an edit to it takes
+    /// effect at this launch rather than a stale copy running, and a profile that is gone
+    /// means this chat is skipped BY NAME — another profile may be another account, where
+    /// this chat's resume id does not exist and where its workspace's code was never meant
+    /// to go. It stays in the record, so declaring the profile again brings it back.
+    fn start_recorded(
+        &self,
+        chat: &Chat,
+        root: &std::path::Path,
+        size: Size,
+    ) -> Result<u32, String> {
+        let Some(profile) = chat.profile.clone() else {
+            return self.start(chat, size);
+        };
+        let ready = charter_core::start::ready(
+            &charter_core::start::Start {
+                profile: Some(profile),
+                persona: chat.persona.clone(),
+                name: chat.name.clone(),
+                cwd: chat.cwd.clone(),
+                resume: chat.resume.clone(),
+            },
+            root,
+        )?;
+        self.start_ready(chat, &ready, size)
+    }
+
     /// Starts a chat, and remembers what it was started as.
     ///
     /// For a chat that is NOT on a profile — the operator's shell — where what runs is
@@ -306,6 +346,8 @@ impl Chats {
                     name: chat.name.clone(),
                     cwd: chat.cwd.clone(),
                     harness: chat.harness(),
+                    profile: chat.profile.clone(),
+                    persona: chat.persona.clone(),
                     in_front: front == Some(session),
                     how: how.clone(),
                 })
@@ -338,7 +380,7 @@ impl Chats {
     /// A chat whose program cannot be started is left out and the rest still open — a
     /// relaunch that failed whole because one harness had been uninstalled would be worse
     /// than one that came back short.
-    pub fn put_back(&self, record: &Record, size: Size) -> Vec<Open> {
+    pub fn put_back(&self, record: &Record, root: &std::path::Path, size: Size) -> Vec<Open> {
         self.putting_back.store(true, Ordering::SeqCst);
         // Every chat here starts a program, synchronously, before there is a window. A
         // record with thousands in it — a runaway, or a file nobody meant — would give an
@@ -356,7 +398,7 @@ impl Chats {
         let mut front = None;
         let mut opened: Vec<u32> = Vec::new();
         for chat in starting {
-            match self.start(chat, size) {
+            match self.start_recorded(chat, root, size) {
                 Ok(session) => {
                     if chat.active {
                         front = Some(session);
@@ -770,7 +812,7 @@ mod tests {
         let claude = a_claude(dir.path());
         let (chats, wrote) = recorded();
 
-        chats.put_back(
+        chats.put_back_here(
             &Record {
                 chats: (0..5)
                     .map(|n| chat(&claude, &format!("ide.{n}"), None))
@@ -916,7 +958,7 @@ mod tests {
             ..chat(&claude, "ide.8", None)
         };
 
-        chats.put_back(
+        chats.put_back_here(
             &Record {
                 chats: vec![chat(&claude, "ide.7", None), was_in_front],
             },
@@ -939,7 +981,7 @@ mod tests {
         let claude = a_claude(dir.path());
         let chats = Chats::new();
 
-        let open = chats.put_back(
+        let open = chats.put_back_here(
             &Record {
                 chats: vec![
                     chat(&claude, "ide.7", Some(ID)),
@@ -960,7 +1002,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let chats = Chats::new();
 
-        let open = chats.put_back(
+        let open = chats.put_back_here(
             &Record {
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", Some(ID))],
             },
@@ -983,7 +1025,7 @@ mod tests {
         let claude = a_claude(dir.path());
         let chats = Chats::new();
 
-        let open = chats.put_back(
+        let open = chats.put_back_here(
             &Record {
                 chats: vec![
                     chat(&claude, "ide.7", None),
@@ -1011,7 +1053,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let chats = Chats::new();
 
-        let open = chats.put_back(
+        let open = chats.put_back_here(
             &Record {
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", None)],
             },
@@ -1030,7 +1072,7 @@ mod tests {
         let claude = a_claude(dir.path());
         let (chats, wrote) = recorded();
 
-        chats.put_back(
+        chats.put_back_here(
             &Record {
                 chats: vec![
                     chat("/definitely/not/a/program", "ide.7", Some(ID)),
@@ -1056,7 +1098,7 @@ mod tests {
         let claude = a_claude(dir.path());
         let chats = Chats::new();
 
-        let open = chats.put_back(
+        let open = chats.put_back_here(
             &Record {
                 chats: (0..MOST_AT_ONCE + 3)
                     .map(|n| chat(&claude, &format!("ide.{n}"), None))
@@ -1077,7 +1119,7 @@ mod tests {
         // starts, so there is no stand-in harness to put anywhere.
         let (chats, _) = recorded();
 
-        chats.put_back(
+        chats.put_back_here(
             &Record {
                 chats: vec![chat("/definitely/not/a/program", "ide.7", Some(ID))],
             },
@@ -1097,7 +1139,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let claude = a_claude(dir.path());
         let (chats, wrote) = recorded();
-        chats.put_back(
+        chats.put_back_here(
             &Record {
                 chats: vec![chat("/definitely/not/a/program", "ide.7", Some(ID))],
             },
@@ -1117,7 +1159,7 @@ mod tests {
         let claude = a_claude(dir.path());
         let chats = Chats::new();
 
-        let open = chats.put_back(
+        let open = chats.put_back_here(
             &Record {
                 chats: vec![
                     chat("/definitely/not/a/program", "ide.7", Some(ID)),
@@ -1136,7 +1178,7 @@ mod tests {
         // A relaunch that lost the record would resume once and never again.
         let dir = tempfile::tempdir().unwrap();
         let chats = Chats::new();
-        chats.put_back(
+        chats.put_back_here(
             &Record {
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", Some(ID))],
             },
