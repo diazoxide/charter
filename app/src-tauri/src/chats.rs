@@ -54,6 +54,21 @@ pub type Recorder = Box<dyn Fn(&Record) + Send + Sync>;
 /// conversation charter chose for it. Everything the board needs to judge a report about it.
 pub type Starting = Box<dyn Fn(u32, Option<Harness>, Option<String>) + Send + Sync>;
 
+/// One chat the app has open: what it was started as, how it came back, and the harness it
+/// actually runs.
+///
+/// The harness is KEPT rather than asked of the chat again, because asking means asking its
+/// program's NAME, and a profile's command is commonly a wrapper. The board is told this
+/// same value at the start, so the sidebar and the board cannot disagree about what a chat
+/// is running — which they did: the board learned the profile's declared kind while the
+/// sidebar read `claude-stand-in` and said "no harness".
+#[derive(Debug)]
+struct Running {
+    chat: Chat,
+    how: Reopened,
+    harness: Option<Harness>,
+}
+
 /// Every chat the app has open, and which of them is in front.
 pub struct Chats {
     sessions: Sessions,
@@ -64,15 +79,7 @@ pub struct Chats {
     never_started: Mutex<Option<Box<dyn Fn(u32) + Send + Sync>>>,
     /// The `charter` binary a hook runs, when the app knows where its own is.
     binary: Option<PathBuf>,
-    /// What is open, by session: the chat as it was started, how it came back, and the
-    /// harness it actually runs.
-    ///
-    /// The harness is KEPT rather than asked of the chat again, because asking means asking
-    /// its program's name, and a profile's command is commonly a wrapper. The board is told
-    /// this same value at the start, so the sidebar and the board can never disagree about
-    /// what a chat is running — which they did: the board learned the profile's kind and
-    /// the sidebar read `claude-wrap` and said "no harness".
-    open: Mutex<HashMap<u32, (Chat, Reopened, Option<Harness>)>>,
+    open: Mutex<HashMap<u32, Running>>,
     front: Mutex<Option<u32>>,
     /// Chats a launch could not start, and why. They are kept because the record has to
     /// keep them: a workspace directory that has moved, or a harness mid-reinstall, must
@@ -307,7 +314,14 @@ impl Chats {
                 .and_then(|id| charter_core::harness::SessionId::new(id).ok()),
             ..chat.clone()
         };
-        lock(&self.open).insert(session, (under, how, harness));
+        lock(&self.open).insert(
+            session,
+            Running {
+                chat: under,
+                how,
+                harness,
+            },
+        );
         self.write_it_down();
         Ok(session)
     }
@@ -348,7 +362,8 @@ impl Chats {
             .running()
             .into_iter()
             .filter_map(|session| {
-                let (chat, how, harness) = open.get(&session)?;
+                let running = open.get(&session)?;
+                let chat = &running.chat;
                 Some(Open {
                     session,
                     name: chat.name.clone(),
@@ -357,11 +372,11 @@ impl Chats {
                     // program's name — a profile's command is commonly a wrapper, and the
                     // sidebar used to answer "no harness" for one while the board knew the
                     // kind. One idea of what is running, or the two drift.
-                    harness: *harness,
+                    harness: running.harness,
                     profile: chat.profile.clone(),
                     persona: chat.persona.clone(),
                     in_front: front == Some(session),
-                    how: how.clone(),
+                    how: running.how.clone(),
                 })
             })
             .collect()
@@ -378,7 +393,7 @@ impl Chats {
             .map(|(chat, _)| chat.clone())
             .collect();
         chats.extend(self.sessions.running().into_iter().filter_map(|session| {
-            let (chat, _, _) = open.get(&session)?;
+            let chat = &open.get(&session)?.chat;
             Some(Chat {
                 active: front == Some(session),
                 ..chat.clone()
