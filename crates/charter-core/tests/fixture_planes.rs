@@ -1610,3 +1610,31 @@ fn a_consent_record_that_resolves_out_of_the_plane_is_refused_by_containment() {
         "and the file outside is untouched"
     );
 }
+
+#[test]
+fn a_single_todo_linked_out_of_the_plane_is_not_read_by_the_duplicate_check() {
+    // The STORE is legitimate; one entry in it is a committed link out. Gating only the
+    // directory left every entry ungated, so this file was read, its heading echoed back by
+    // `ws todo`'s refusal, and its body used as the comparison oracle.
+    let (_plane_dir, outside, plane) = plane_and_outside();
+    std::fs::write(
+        outside.path().join("secret.md"),
+        "# Board minutes: layoffs in Q3\n\n_2026-03-02 09:14 · persistent_\n\nCONFIDENTIAL\n",
+    )
+    .unwrap();
+    let ws = plane.workspace("alpha").unwrap();
+    let store = ws.dir().join("todos");
+    std::fs::create_dir_all(&store).unwrap();
+    std::os::unix::fs::symlink(outside.path().join("secret.md"), store.join("leak.md")).unwrap();
+
+    assert_eq!(
+        charter_core::memstore::duplicate_of(plane.root(), &store, "Board minutes: layoffs in Q3"),
+        None,
+        "an entry outside the plane is not an existing todo"
+    );
+
+    // And the write it was blocking goes through.
+    ws.add_todo("Board minutes: layoffs in Q3", pinned())
+        .unwrap();
+    assert_eq!(ws.todos().unwrap().len(), 1);
+}

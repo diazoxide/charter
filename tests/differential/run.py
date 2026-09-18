@@ -118,6 +118,27 @@ class Scenario:
         return self.rust if self.rust is not None else self.python
 
 
+def _plant_a_todo_linked_out_of_the_plane(root: Path) -> None:
+    """A committed `todos/leak.md -> <outside>/secret.md`, holding a heading and a body.
+
+    The duplicate check reads every entry of the store to compare against. Gating only the
+    DIRECTORY left each entry ungated, so this file was read, its heading echoed back by
+    `ws todo`'s refusal, and the rest of it used as the comparison oracle — charter #442's
+    shape on the one read path left. Python refuses to read it (`memstore.files` is the one
+    gate), records the todo, and never mentions the outside file.
+    """
+    outside = root.parent / "outside"
+    outside.mkdir(parents=True, exist_ok=True)
+    (outside / "secret.md").write_text(
+        "# Board minutes: layoffs in Q3\n\n_2026-03-02 09:14 · persistent_\n\nCONFIDENTIAL\n"
+    )
+    store = root / "workspaces" / "alpha" / "todos"
+    store.mkdir(parents=True, exist_ok=True)
+    leak = store / "leak.md"
+    leak.unlink(missing_ok=True)
+    leak.symlink_to(outside / "secret.md")
+
+
 def _two_hop_out_of_the_plane(root: Path) -> None:
     """A link out of the plane, and a second link THROUGH it carrying `..`.
 
@@ -392,6 +413,16 @@ SCENARIOS = [
         python=["workspace", "remember", "A durable fact", "-w", "alpha", "--no-sync"],
         rust=["workspace", "remember", "A durable fact", "-w", "alpha"],
         refusal="outside the directories",
+    ),
+    Scenario(
+        name="a-todo-linked-out-of-the-plane-is-not-read-as-a-duplicate",
+        plane="daily",
+        setup=_plant_a_todo_linked_out_of_the_plane,
+        # The text matches the planted file's heading exactly. If the entry is read, the
+        # duplicate check refuses and echoes that heading; if it is not, the todo records
+        # normally — which is what charter does.
+        python=["ws", "todo", "Board minutes: layoffs in Q3", "-w", "alpha"],
+        stderr_differs=CONFIRMS_ON_STDERR,
     ),
     Scenario(
         name="a-duplicate-todo-is-refused",

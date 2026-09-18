@@ -273,6 +273,14 @@ pub fn duplicate_of(root: &std::path::Path, dir: &std::path::Path, text: &str) -
         if path.extension().is_none_or(|e| e != "md") || path.file_name()? == INDEX {
             continue;
         }
+        // Each ENTRY, before it is read. The filters above are an extension, a name and a
+        // parse — none of them containment — so a committed `leak.md -> /outside/secret.md`
+        // was read here, its heading echoed by `ws todo <text>`'s refusal, and the rest of
+        // it used as the Jaccard oracle. Same gate `read_store` applies, for the same
+        // reason: in charter this listing IS the gate (`memstore.files`).
+        if crate::contain::readable(root, &path).is_err() {
+            continue;
+        }
         let Ok(raw) = std::fs::read_to_string(&path) else {
             continue;
         };
