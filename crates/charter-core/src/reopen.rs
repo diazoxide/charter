@@ -56,6 +56,16 @@ pub struct Chat {
     pub resume: Option<SessionId>,
     /// Whether this was the chat in front.
     pub active: bool,
+    /// The harness profile this chat started on, where it started on one.
+    ///
+    /// The NAME, and never the command or the environment it resolves to. The reopen reads
+    /// `charter.local.toml` again, which is ADR 0022's rule and is load-bearing twice: an
+    /// edit to the profile takes effect instead of a stale copy running, and a profile that
+    /// is GONE means this chat is skipped by name rather than started on another account's.
+    /// It also keeps that account out of a file that outlives the app.
+    pub profile: Option<String>,
+    /// The persona this chat adopted.
+    pub persona: Option<String>,
 }
 
 /// Every chat that was open.
@@ -317,6 +327,14 @@ struct ChatOnDisk {
     resume: String,
     #[serde(default)]
     active: bool,
+    /// The profile's name, or empty. A value that is not a name charter would mint reads as
+    /// empty — it reaches a sidebar and a refusal sentence, and a name off disk is a name
+    /// somebody else may have written.
+    #[serde(default)]
+    profile: String,
+    /// The persona's name, or empty, under the same rule.
+    #[serde(default)]
+    persona: String,
 }
 
 impl From<&Record> for OnDisk {
@@ -345,6 +363,8 @@ impl From<&Record> for OnDisk {
                         .map(SessionId::to_string)
                         .unwrap_or_default(),
                     active: chat.active,
+                    profile: chat.profile.clone().unwrap_or_default(),
+                    persona: chat.persona.clone().unwrap_or_default(),
                 })
                 .collect(),
         }
@@ -360,6 +380,10 @@ impl From<ChatOnDisk> for Chat {
             name: chat.name,
             resume: SessionId::new(chat.resume).ok(),
             active: chat.active,
+            // Held to the shape charter mints, for the same reason `resume` is: these come
+            // off a file anyone who can write the plane's state directory can write.
+            profile: Some(chat.profile).filter(|name| crate::contain::workspace_name_ok(name)),
+            persona: Some(chat.persona).filter(|name| crate::contain::persona_name_ok(name)),
         }
     }
 }
@@ -377,6 +401,8 @@ mod tests {
             name: name.to_owned(),
             resume: resume.map(|id| SessionId::new(id).expect("a valid id in a test")),
             active: false,
+            profile: None,
+            persona: None,
         }
     }
 
@@ -645,6 +671,8 @@ mod tests {
         let plane = tempfile::tempdir().unwrap();
         let front = Chat {
             active: true,
+            profile: None,
+            persona: None,
             ..claude("ide.8", None)
         };
         write(
@@ -688,6 +716,8 @@ mod tests {
                 name: "planted".into(),
                 resume: None,
                 active: true,
+                profile: None,
+                persona: None,
             }],
         }
     }

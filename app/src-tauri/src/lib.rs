@@ -280,6 +280,12 @@ fn open_session(
         name,
         resume: None,
         active: false,
+        // A chat opened through this command is not on a profile: it is the shell the app
+        // opens, which is what this command is for. `start_chat` is the one that carries a
+        // profile, and it is a command of its own so that neither can be mistaken for the
+        // other by a caller passing null.
+        profile: None,
+        persona: None,
     };
     // The board already knows about it: `Chats` announces a chat BEFORE its program starts,
     // so its very first hook lands somewhere. Registering it here would be too late.

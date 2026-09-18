@@ -403,6 +403,8 @@ mod tests {
                     name: "ide.7".to_owned(),
                     resume: None,
                     active: false,
+                    profile: None,
+                    persona: None,
                 },
                 Size {
                     columns: 80,
@@ -460,6 +462,8 @@ mod tests {
                     name: "ide.7".to_owned(),
                     resume: None,
                     active: false,
+                    profile: None,
+                    persona: None,
                 },
                 Size {
                     columns: 80,
@@ -502,6 +506,8 @@ mod tests {
                 name: "ide.7".to_owned(),
                 resume: None,
                 active: false,
+                profile: None,
+                persona: None,
             },
             Size {
                 columns: 80,
@@ -543,6 +549,8 @@ mod tests {
                     name: "ide.7".to_owned(),
                     resume: None,
                     active: false,
+                    profile: None,
+                    persona: None,
                 },
                 Size {
                     columns: 80,
@@ -595,6 +603,8 @@ mod tests {
             name: name.to_owned(),
             resume: resume.map(|id| SessionId::new(id).expect("a valid id in a test")),
             active: false,
+            profile: None,
+            persona: None,
         }
     }
 
@@ -849,6 +859,8 @@ mod tests {
         let chats = Chats::new();
         let was_in_front = Chat {
             active: true,
+            profile: None,
+            persona: None,
             ..chat(&claude, "ide.8", None)
         };
 
@@ -925,6 +937,8 @@ mod tests {
                     chat(&claude, "ide.7", None),
                     Chat {
                         active: true,
+                        profile: None,
+                        persona: None,
                         ..chat(&claude, "ide.8", None)
                     },
                 ],
@@ -1095,5 +1109,40 @@ mod tests {
 
         assert_eq!(chats.record(), Record::default());
         assert_eq!(chats.sessions().running(), Vec::<u32>::new());
+    }
+    #[test]
+    fn the_record_keeps_the_profile_and_persona_a_chat_was_started_on() {
+        // `record()` rebuilds each chat with `..chat.clone()`, so these ride along — which
+        // means nothing says so when they stop. A struct literal that names one field and
+        // spreads the rest is exactly where a later edit drops one silently, and an edit
+        // that added `profile: None` beside the spread would do it: the record would still
+        // be written, still be read, and every chat would come back as a shell.
+        let chats = Chats::new();
+        let chat = Chat {
+            program: "/bin/sh".to_owned(),
+            args: vec!["-c".to_owned(), "sleep 30".to_owned()],
+            cwd: None,
+            name: "ide.7".to_owned(),
+            resume: None,
+            active: false,
+            profile: Some("claude-work".to_owned()),
+            persona: Some("steward".to_owned()),
+        };
+
+        let session = chats
+            .start(
+                &chat,
+                Size {
+                    columns: 80,
+                    rows: 24,
+                },
+            )
+            .unwrap();
+        let record = chats.record();
+
+        assert_eq!(record.chats.len(), 1);
+        assert_eq!(record.chats[0].profile.as_deref(), Some("claude-work"));
+        assert_eq!(record.chats[0].persona.as_deref(), Some("steward"));
+        let _ = chats.close(session);
     }
 }
