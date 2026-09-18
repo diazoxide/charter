@@ -17,3 +17,4 @@ pub mod session;
 pub mod shown;
 pub mod state;
 pub mod workspaces;
+pub mod worktree;
