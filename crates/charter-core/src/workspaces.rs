@@ -77,6 +77,19 @@ impl Plane {
         Ok(names)
     }
 
+    /// One persona of this plane, by name. `_shared` names the store every persona reads.
+    ///
+    /// Checked before it is joined onto a path, for the same reason a workspace name is.
+    pub fn persona(&self, name: &str) -> Result<crate::personas::Persona, NameError> {
+        if !crate::contain::persona_name_ok(name) {
+            return Err(NameError::Persona(name.to_string()));
+        }
+        Ok(crate::personas::Persona::at(
+            self.root.join("personas").join(name),
+            name.to_string(),
+        ))
+    }
+
     /// The workspace a path sits in, or `None` for a path outside `workspaces/`.
     ///
     /// This is how the app files one of its own chats under a workspace: a chat is app state,
@@ -296,7 +309,7 @@ impl Workspace {
 }
 
 /// Every `*.md` directly in a memory store, `MEMORY.md` excepted, sorted by filename.
-fn read_store(dir: &Path) -> io::Result<Vec<Entry>> {
+pub(crate) fn read_store(dir: &Path) -> io::Result<Vec<Entry>> {
     let mut entries: Vec<Entry> = Vec::new();
     for path in read_dir_sorted(dir)? {
         if !path.is_file() || path.extension().is_none_or(|e| e != "md") {

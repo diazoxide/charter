@@ -510,6 +510,10 @@ fn a_name_that_walks_out_of_the_plane_is_not_a_workspace() {
             plane.workspace(name).is_err(),
             "{name:?} must not name a workspace"
         );
+        assert!(
+            plane.persona(name).is_err(),
+            "{name:?} must not name a persona either"
+        );
     }
 }
 
@@ -811,4 +815,267 @@ fn an_index_emptied_of_its_last_entry_keeps_its_header() {
         "one trailing newline survives: {index:?}"
     );
     assert!(!index.contains("- ["), "and no entry rows: {index:?}");
+}
+
+use std::collections::BTreeMap;
+
+// ---------------------------------------------------------------------------
+// Personas and their memory.
+
+#[test]
+fn a_personas_memories_are_read_by_slug_with_no_timestamp_in_the_name() {
+    let devops = daily().persona("devops").unwrap();
+
+    let memories = devops.memories().unwrap();
+
+    assert_eq!(memories.len(), 1);
+    assert_eq!(memories[0].slug, "cluster-prod-1-lives-in-eu-west-1");
+    assert_eq!(memories[0].title, "Cluster prod-1 lives in eu-west-1");
+    assert_eq!(memories[0].body, "Cluster prod-1 lives in eu-west-1");
+}
+
+#[test]
+fn the_shared_store_is_the_one_every_persona_reads() {
+    let shared = daily().persona(charter_core::personas::SHARED).unwrap();
+
+    let memories = shared.memories().unwrap();
+
+    assert_eq!(
+        memories
+            .iter()
+            .map(|m| m.title.as_str())
+            .collect::<Vec<_>>(),
+        vec!["The plane is the unit of work"]
+    );
+}
+
+#[test]
+fn a_persona_carries_the_role_its_charter_file_declares() {
+    assert_eq!(
+        daily().persona("devops").unwrap().role(),
+        Some("DevOps Engineer".to_string())
+    );
+    assert_eq!(daily().persona("nobody").unwrap().role(), None);
+}
+
+#[test]
+fn scaffolding_a_persona_writes_the_index_and_the_refs_readme_charter_writes() {
+    let (_tmp, plane) = temp_plane();
+    let devops = plane.persona("devops").unwrap();
+
+    devops.scaffold_memory().unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(devops.dir().join("memory/MEMORY.md")).unwrap(),
+        "# Memory Index — devops\n\nOne line per memory; each links a file holding a single durable fact.\nWritten by the persona as it learns; committed and shared.\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(devops.dir().join("refs/README.md")).unwrap(),
+        "# References — devops\n\nCurated docs, links, and snippets this role collects. Committed and shared. Never store secrets here — those live only in the vault.\n"
+    );
+}
+
+#[test]
+fn the_shared_store_is_scaffolded_for_all_personas_not_for_one_named_shared() {
+    let (_tmp, plane) = temp_plane();
+    let shared = plane.persona(charter_core::personas::SHARED).unwrap();
+
+    shared.scaffold_memory().unwrap();
+
+    assert!(
+        std::fs::read_to_string(shared.dir().join("memory/MEMORY.md"))
+            .unwrap()
+            .starts_with("# Memory Index — shared (all personas)\n"),
+    );
+}
+
+#[test]
+fn a_remembered_persona_fact_is_named_for_its_slug_alone() {
+    let (_tmp, plane) = temp_plane();
+    let devops = plane.persona("devops").unwrap();
+    devops.scaffold_memory().unwrap();
+
+    let path = devops
+        .remember("Cluster prod-1 lives in eu-west-1", pinned())
+        .unwrap();
+
+    assert_eq!(
+        path.file_name().unwrap(),
+        "cluster-prod-1-lives-in-eu-west-1.md"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        "# Cluster prod-1 lives in eu-west-1\n\n_2026-03-02 09:14 · persistent_\n\nCluster prod-1 lives in eu-west-1\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(devops.dir().join("memory/MEMORY.md")).unwrap(),
+        "# Memory Index — devops\n\nOne line per memory; each links a file holding a single durable fact.\nWritten by the persona as it learns; committed and shared.\n- [Cluster prod-1 lives in eu-west-1](cluster-prod-1-lives-in-eu-west-1.md)\n"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Which harness profiles the operator approved. Every unreadable state means ASK AGAIN.
+
+use charter_core::profiletrust::{self, Fingerprint};
+
+fn a_print() -> Fingerprint {
+    Fingerprint {
+        kind: "claude".into(),
+        command: vec!["claude".into(), "--dangerously-skip-permissions".into()],
+        env: [("CLAUDE_CONFIG_DIR".to_string(), "~/.work".to_string())]
+            .into_iter()
+            .collect(),
+    }
+}
+
+#[test]
+fn a_plane_with_no_record_has_approved_nothing() {
+    let (_tmp, plane) = temp_plane();
+
+    assert_eq!(
+        profiletrust::last_launched(plane.root(), "claude-work"),
+        None
+    );
+}
+
+#[test]
+fn a_record_charter_cannot_parse_reads_as_no_approval_rather_than_as_one() {
+    let (_tmp, plane) = temp_plane();
+    let dir = plane.root().join(".charter");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join(profiletrust::RECORD), "{ this is not json").unwrap();
+
+    assert_eq!(
+        profiletrust::last_launched(plane.root(), "claude-work"),
+        None,
+        "a file charter cannot read says nothing about what was approved"
+    );
+}
+
+#[test]
+fn an_entry_that_is_not_a_fingerprint_is_not_an_approval() {
+    // The file is a plain JSON object a chat can write, so this has to read as no record at
+    // all rather than as something to compare against.
+    let (_tmp, plane) = temp_plane();
+    let dir = plane.root().join(".charter");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join(profiletrust::RECORD),
+        "{\n  \"claude-work\": \"approved, honest\"\n}\n",
+    )
+    .unwrap();
+
+    assert_eq!(
+        profiletrust::last_launched(plane.root(), "claude-work"),
+        None
+    );
+}
+
+#[test]
+fn recording_a_launch_writes_the_fingerprint_as_declared() {
+    let (_tmp, plane) = temp_plane();
+
+    profiletrust::record_launched(plane.root(), "claude-work", &a_print()).unwrap();
+
+    assert_eq!(
+        std::fs::read_to_string(plane.root().join(".charter").join(profiletrust::RECORD)).unwrap(),
+        "{\n  \"claude-work\": {\n    \"kind\": \"claude\",\n    \"command\": [\n      \"claude\",\n      \"--dangerously-skip-permissions\"\n    ],\n    \"env\": {\n      \"CLAUDE_CONFIG_DIR\": \"~/.work\"\n    }\n  }\n}\n",
+        "`~` is recorded unexpanded: the file is what an edit changes"
+    );
+    assert_eq!(
+        profiletrust::last_launched(plane.root(), "claude-work"),
+        Some(a_print())
+    );
+}
+
+#[test]
+fn approving_one_profile_does_not_make_another_ask_again() {
+    let (_tmp, plane) = temp_plane();
+    profiletrust::record_launched(plane.root(), "claude-work", &a_print()).unwrap();
+
+    let other = Fingerprint {
+        kind: "codex".into(),
+        command: vec!["codex".into()],
+        env: BTreeMap::new(),
+    };
+    profiletrust::record_launched(plane.root(), "codex-work", &other).unwrap();
+
+    assert_eq!(
+        profiletrust::last_launched(plane.root(), "claude-work"),
+        Some(a_print())
+    );
+    assert_eq!(
+        profiletrust::last_launched(plane.root(), "codex-work"),
+        Some(other)
+    );
+}
+
+#[test]
+fn re_recording_a_profile_keeps_the_place_it_already_had() {
+    let (_tmp, plane) = temp_plane();
+    profiletrust::record_launched(plane.root(), "aaa", &a_print()).unwrap();
+    profiletrust::record_launched(plane.root(), "zzz", &a_print()).unwrap();
+
+    let changed = Fingerprint {
+        kind: "claude".into(),
+        command: vec!["claude".into()],
+        env: BTreeMap::new(),
+    };
+    profiletrust::record_launched(plane.root(), "aaa", &changed).unwrap();
+
+    let text =
+        std::fs::read_to_string(plane.root().join(".charter").join(profiletrust::RECORD)).unwrap();
+    assert!(
+        text.find("\"aaa\"") < text.find("\"zzz\""),
+        "an updated key keeps its position: {text}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_record_and_its_directory_are_private_to_the_operator() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_tmp, plane) = temp_plane();
+
+    profiletrust::record_launched(plane.root(), "claude-work", &a_print()).unwrap();
+
+    let dir = plane.root().join(".charter");
+    let file = dir.join(profiletrust::RECORD);
+    assert_eq!(
+        std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o600,
+        "it records consent to run a command"
+    );
+    assert_eq!(
+        std::fs::metadata(&dir).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+}
+
+#[test]
+fn a_non_ascii_env_value_is_escaped_in_the_record_as_python_escapes_it() {
+    // Verified against `charter.profiletrust.record_launched` itself: this file is
+    // `json.dumps(..., indent=2)`, so `ensure_ascii` applies here as it does to a manifest.
+    let (_tmp, plane) = temp_plane();
+    let print = Fingerprint {
+        kind: "claude".into(),
+        command: vec!["claude".into()],
+        env: [("LANG_HINT".to_string(), "café — ok".to_string())]
+            .into_iter()
+            .collect(),
+    };
+
+    profiletrust::record_launched(plane.root(), "fancy", &print).unwrap();
+
+    let text =
+        std::fs::read_to_string(plane.root().join(".charter").join(profiletrust::RECORD)).unwrap();
+    assert!(
+        text.contains(r#""LANG_HINT": "caf\u00e9 \u2014 ok""#),
+        "{text}"
+    );
+    assert_eq!(
+        profiletrust::last_launched(plane.root(), "fancy"),
+        Some(print),
+        "and it reads back as what was written"
+    );
 }
