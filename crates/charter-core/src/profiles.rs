@@ -1,8 +1,16 @@
 //! Harness profiles: which program a chat runs, with what environment, on THIS machine.
 //!
-//! A port of `charter/profiles.py`, decided by [ADR 0022]. Every refusal sentence here is
-//! that file's, word for word, because both implementations read one plane and an operator
-//! must not get two different answers about their own file.
+//! A port of `charter/profiles.py`, decided by [ADR 0022]. Every refusal sentence charter
+//! WRITES is that file's, word for word, because both implementations read one plane and an
+//! operator must not get two different answers about their own file.
+//!
+//! **Three details are quoted from somewhere else and do not match**, found in review and
+//! recorded here rather than left to be discovered: the TOML parser's message for a
+//! `charter.local.toml` that will not parse, the operating system's message for one that
+//! cannot be read, and the same for `git`. Those are `toml_edit`'s and Rust's words against
+//! `tomllib`'s and CPython's. The sentence AROUND them is identical, which is what a
+//! differential scenario pins — it masks the parenthesised detail and compares the rest —
+//! and what an operator acts on is the sentence and the fix, not the parser's diagnostic.
 //!
 //! **Why a refusal and not a warning.** A profile's `command` runs on a click. Between
 //! pressing "New chat" and the exec there is no harness permission prompt, no tool call a
@@ -475,8 +483,23 @@ pub fn derive(root: &Path) -> ProfileSet {
     settle(set)
 }
 
+/// Every profile this plane has **and may be launched**: [`current`] with [`ignore_check`]
+/// already applied, and the check itself for a caller that also prints its fix.
+///
+/// The one function a launch surface calls. [`current`] alone is the unchecked read, and
+/// pairing it with the git check by hand is a pairing one caller will forget — the thing it
+/// would let through is a command out of a file every clone of this plane carries.
+pub fn for_launch(root: &Path) -> (ProfileSet, IgnoreCheck) {
+    let check = ignore_check(root);
+    (with_ignore_check(current(root), &check), check)
+}
+
 /// Every profile this plane has, with the two rules that need charter's own command surface:
 /// a name `charter <name>` already means, and a command that runs charter itself.
+///
+/// **This is the unchecked read.** It does not ask git whether `charter.local.toml` would
+/// reach every clone of this plane, so nothing that decides a LAUNCH may call it — use
+/// [`for_launch`].
 pub fn current(root: &Path) -> ProfileSet {
     let mut set = derive(root);
     for profile in set.profiles.clone() {
@@ -539,6 +562,12 @@ fn settle(mut set: ProfileSet) -> ProfileSet {
         // for a value that ends up on a command line.
         Some(wanted) if set.get(&wanted).is_some() => {
             set.default = set.get(&wanted).map(|p| p.name.clone());
+            // The two are mutually exclusive, as they are in Python: a default that stands
+            // clears any earlier refusal of one. Without this line a `default` refused in
+            // `charter.toml` survived beside a good one from the local file, and the first
+            // surface to print it would tell an operator their working default named
+            // nothing. Found in review.
+            set.default_refused = None;
         }
         Some(wanted) => set.default_refused = Some(shown::short(&wanted)),
         None => {}
@@ -681,14 +710,44 @@ fn name_ok(name: &str) -> bool {
 /// A TOML value as Python's `str()` renders it, for the one place a refusal repeats a value
 /// back that need not be text.
 ///
-/// Exact for a string, which is every value an operator writing a `kind` or a `default`
-/// actually writes. A number or a boolean renders in TOML's spelling rather than Python's
-/// (`true`, not `True`), which is a divergence in how one wrong value is QUOTED and never in
-/// whether it is refused.
+/// Every spelling, not just the easy ones. A review measured three that TOML and Python
+/// disagree about — `true`/`True`, `["claude"]`/`['claude']`, `{ a = 1 }`/`{'a': 1}` — and
+/// a refusal that quotes a value back differently is the second answer this port exists to
+/// prevent, however wrong the value being quoted.
 fn py_str(value: &toml::Value) -> String {
-    match value.as_str() {
-        Some(text) => text.to_owned(),
-        None => value.to_string(),
+    match value {
+        toml::Value::String(text) => text.clone(),
+        toml::Value::Boolean(yes) => (if *yes { "True" } else { "False" }).to_owned(),
+        toml::Value::Array(items) => format!(
+            "[{}]",
+            items.iter().map(py_repr).collect::<Vec<_>>().join(", ")
+        ),
+        toml::Value::Table(pairs) => format!(
+            "{{{}}}",
+            pairs
+                .iter()
+                .map(|(k, v)| format!("{}: {}", py_repr_str(k), py_repr(v)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        other => other.to_string(),
+    }
+}
+
+/// A value as Python `repr`s it INSIDE a container, where a string gains quotes.
+fn py_repr(value: &toml::Value) -> String {
+    match value {
+        toml::Value::String(text) => py_repr_str(text),
+        other => py_str(other),
+    }
+}
+
+/// Python's `repr` of a string: single quotes, unless it holds one and no double quote.
+fn py_repr_str(text: &str) -> String {
+    if text.contains('\'') && !text.contains('"') {
+        format!("\"{text}\"")
+    } else {
+        format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'"))
     }
 }
 
@@ -747,9 +806,23 @@ pub fn display(p: &Profile) -> String {
         .iter()
         .map(|(name, value)| shown::short(&format!("{name}={value}")))
         .collect();
-    let mut words = vec![program_word(&p.command[0])];
-    words.extend(p.command[1..].iter().map(|w| quote(w)));
-    pieces.push(shown::short(&words.join(" ")));
+    // A profile that passed validation has a non-empty command, but this is `pub` and the
+    // listing runs it over whatever it is handed — and indexing `command[0]` was an
+    // undocumented precondition that aborted `charter harness list` when it did not hold.
+    // Found in review. An empty command shows as nothing rather than ending the process.
+    let mut words: Vec<String> = p
+        .command
+        .first()
+        .map(|w| program_word(w))
+        .into_iter()
+        .collect();
+    words.extend(p.command.iter().skip(1).map(|w| quote(w)));
+    // Nothing rather than the blank marker: `A=b ""` reads as a command that IS two quote
+    // characters, and a profile with no command at all is one validation already refused —
+    // this path exists so showing one answers instead of ending the process.
+    if !words.is_empty() {
+        pieces.push(shown::short(&words.join(" ")));
+    }
     pieces.join(" ")
 }
 

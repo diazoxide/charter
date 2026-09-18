@@ -8,6 +8,7 @@
 //! An answer git could not give refuses too: an unknown is not a pass (ADR 0009).
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 
@@ -17,6 +18,12 @@ fn git(dir: &Path, args: &[&str]) {
     let out = Command::new("git")
         .args(args)
         .current_dir(dir)
+        // Hermetic: the operator's own global config is not this test's business, and it
+        // broke the suite once — a `commit.gpgsign` pointing at a 1Password signer failed
+        // the commit with "failed to fill whole buffer" and reddened two tests that are
+        // about git's answer, not about signing.
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("GIT_AUTHOR_NAME", "t")
         .env("GIT_AUTHOR_EMAIL", "t@e")
         .env("GIT_COMMITTER_NAME", "t")
@@ -198,5 +205,31 @@ fn a_replacement_refused_by_the_git_check_does_not_let_its_built_in_stand_in() {
             .collect::<Vec<_>>(),
         ["opencode", "codex"],
         "the built-in `claude` stood in for the refused replacement"
+    );
+}
+
+#[test]
+fn a_git_that_never_answers_refuses_too_because_a_hang_is_not_a_pass() {
+    // The unknown branch was only ever driven by a git that EXITS. A git that hangs is the
+    // one that would turn "an unknown is not a pass" into a pass, and it was unexercised —
+    // found in review. This test waits out the real timeout, which is why it is the slow one.
+    let dir = repo("/charter.local.toml\n");
+    let hanging = dir.path().join("git-that-hangs");
+    fs::write(&hanging, "#!/bin/sh\nsleep 300\n").unwrap();
+    fs::set_permissions(&hanging, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let check = profiles::ignore_check_with(dir.path(), &hanging);
+
+    assert!(
+        check
+            .reason
+            .contains("git could not say whether charter.local.toml is ignored"),
+        "{:?}",
+        check.reason
+    );
+    assert!(
+        check.reason.contains("did not answer within"),
+        "{:?}",
+        check.reason
     );
 }

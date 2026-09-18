@@ -432,3 +432,190 @@ fn a_control_byte_in_a_command_is_shown_escaped_and_never_redraws_the_row() {
 
     assert_eq!(profiles::display(set.get("x").unwrap()), "'cl\\u000aaude'");
 }
+
+// ---------------------------------------------------------------------------
+// Added after an adversarial review found each of these guards untested: every
+// mutation below survived the suite as it first stood. Expectations taken from
+// the oracle, run over the same declarations.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn every_word_that_names_a_credential_is_refused_and_not_only_the_one_that_was_tested() {
+    // The guard is four words and only `KEY` was ever exercised, through
+    // `ANTHROPIC_API_KEY` — so dropping `PASSWORD` from the list reddened nothing.
+    for (var, kind) in [
+        ("ANTHROPIC_API_KEY", "KEY"),
+        ("GH_TOKEN", "TOKEN"),
+        ("MY_SECRET", "SECRET"),
+        ("DB_PASSWORD", "PASSWORD"),
+    ] {
+        let dir = plane(
+            "",
+            &format!(
+                "[harness.x]\nkind = \"claude\"\ncommand = [\"claude\"]\n\
+                 env = {{ {var} = \"x\" }}\n"
+            ),
+        );
+
+        let set = profiles::derive(dir.path());
+
+        assert!(
+            why(&set, "x").starts_with(&format!(
+                "profile 'x' sets {var}, which is named like a credential"
+            )),
+            "{kind} was not refused through {var}"
+        );
+    }
+}
+
+#[test]
+fn a_credential_name_is_caught_whichever_case_it_is_written_in() {
+    // The match is case-folded, and that folding is the guard's whole point: `my_api_token`
+    // reaches the model's shell exactly as `MY_API_TOKEN` would.
+    let dir = plane(
+        "",
+        "[harness.x]\nkind = \"claude\"\ncommand = [\"claude\"]\n\
+         env = { my_api_token = \"x\" }\n",
+    );
+
+    let set = profiles::derive(dir.path());
+
+    assert!(
+        why(&set, "x")
+            .starts_with("profile 'x' sets my_api_token, which is named like a credential"),
+        "{:?}",
+        why(&set, "x")
+    );
+}
+
+#[test]
+fn a_command_holding_an_empty_word_has_no_usable_command() {
+    let dir = plane(
+        "",
+        "[harness.x]\nkind = \"claude\"\ncommand = [\"claude\", \"\"]\n",
+    );
+
+    assert!(profiles::derive(dir.path()).get("x").is_none());
+}
+
+#[test]
+fn an_empty_command_list_has_no_usable_command() {
+    // And this rule is the only thing standing between `charter harness list` and a profile
+    // with no program to show. Both halves are pinned: the refusal, and that showing such a
+    // profile answers rather than ending the process.
+    let dir = plane("", "[harness.x]\nkind = \"claude\"\ncommand = []\n");
+    let set = profiles::derive(dir.path());
+
+    assert!(set.get("x").is_none());
+    assert_eq!(
+        profiles::display(&profiles::Profile {
+            name: "x".into(),
+            kind: "claude".into(),
+            harness: "claude-code".into(),
+            command: Vec::new(),
+            env: vec![("A".into(), "b".into())],
+            source: profiles::Source::Local,
+        }),
+        "A=b"
+    );
+}
+
+#[test]
+fn a_kind_that_is_not_text_is_quoted_back_the_way_the_oracle_quotes_it() {
+    // A refusal that quotes a value back differently is the second answer this port exists
+    // to prevent, however wrong the value being quoted is.
+    for (declared, shown) in [
+        ("true", "True"),
+        ("[\"claude\"]", "['claude']"),
+        ("{ a = 1 }", "{'a': 1}"),
+        ("7", "7"),
+    ] {
+        let dir = plane(
+            "",
+            &format!("[harness.x]\nkind = {declared}\ncommand = [\"claude\"]\n"),
+        );
+
+        assert_eq!(
+            why(&profiles::derive(dir.path()), "x"),
+            format!(
+                "profile 'x' has kind {shown}, which is not a harness charter can launch — \
+                 one of: claude, opencode, codex. Set kind to one of them."
+            ),
+            "kind = {declared}"
+        );
+    }
+}
+
+#[test]
+fn a_control_byte_in_an_environment_value_is_shown_escaped_too() {
+    // The command piece was contained and checked; the `NAME=value` pieces were contained
+    // and not checked, so the containment could have been dropped from them unnoticed.
+    let dir = plane(
+        "",
+        "[harness.x]\nkind = \"claude\"\ncommand = [\"claude\"]\n\
+         env = { A = \"\\u001b[2K\\rEVIL\" }\n",
+    );
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(
+        profiles::display(set.get("x").unwrap()),
+        "A=\\u001b[2K\\u000dEVIL claude"
+    );
+}
+
+#[test]
+fn charter_is_recognised_through_python_whatever_case_the_module_is_written_in() {
+    // The program's casing was pinned and the MODULE's was not, so folding it could have
+    // been dropped and `python3 -m CHARTER` would have become a profile charter launches.
+    let dir = plane(
+        "",
+        "[harness.x]\nkind = \"claude\"\ncommand = [\"python3\", \"-m\", \"CHARTER\"]\n",
+    );
+
+    assert!(profiles::current(dir.path()).get("x").is_none());
+}
+
+#[test]
+fn a_default_that_stands_leaves_no_refused_default_beside_it() {
+    // The two are mutually exclusive. A `default` refused in the committed file used to
+    // survive beside a good one from the local file, and the first surface to print it
+    // would have told an operator their working default named nothing.
+    let dir = plane(
+        "[harness]\ndefault = 7\n",
+        "[harness]\ndefault = \"claude\"\n",
+    );
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(set.default.as_deref(), Some("claude"));
+    assert_eq!(set.default_refused, None);
+}
+
+#[test]
+fn the_launch_read_is_the_one_that_has_already_asked_git() {
+    // `current` is the unchecked read; pairing it with the git check by hand is a pairing
+    // one caller will forget, and what that lets through is a command out of a file every
+    // clone of this plane carries.
+    let dir = plane(
+        "",
+        "[harness.work]\nkind = \"claude\"\ncommand = [\"claude\"]\n",
+    );
+    std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(dir.path())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .output()
+        .expect("git runs");
+
+    let (set, check) = profiles::for_launch(dir.path());
+
+    assert!(
+        set.get("work").is_none(),
+        "a git-carried profile reached a launch"
+    );
+    assert_eq!(check.fix, "charter reinit");
+    assert!(
+        profiles::current(dir.path()).get("work").is_some(),
+        "the unchecked read is still the unchecked read"
+    );
+}

@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import filecmp
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -113,12 +114,24 @@ class Scenario:
     #: Why the two stderrs are not expected to match. charter's refusals are prose and the
     #: Rust CLI's are not, so a refusal scenario states its own shape via `refusal` instead.
     stderr_differs: str = ""
-    #: Why the Rust side prints only the FIRST PART of what charter prints — and the claim
-    #: that every byte it does print is charter's, in charter's order. Weaker than an exact
-    #: match and much stronger than `stderr_differs`, which compares nothing at all: it is
-    #: for a command charter answers in two sections where only the first is ported. The
-    #: Rust side must print something, or "a prefix" would be satisfied by silence.
-    stderr_prefix: str = ""
+    #: The literal charter's stderr is CUT AT for this scenario, when only the first part
+    #: of a command's output is ported. Everything before that marker must match byte for
+    #: byte; the marker and everything after it is charter's alone.
+    #:
+    #: **Not a `startswith` test.** That was the first spelling and it was near-vacuous: it
+    #: accepts any TRUNCATION of charter's output, so a Rust side that printed the table
+    #: and dropped every refusal sentence — the whole reason a profile scenario exists —
+    #: passed unchanged. An adversarial review proved it with two mutants. Cutting at a
+    #: DECLARED boundary and comparing the rest exactly is the check that was meant.
+    stderr_cut_at: str = ""
+    #: Why that cut is where it is.
+    stderr_cut_why: str = ""
+    #: `(regex, why)` pairs whose matches are blanked on BOTH sides before stderr is
+    #: compared. For a detail neither implementation writes: a TOML parser's diagnostic, an
+    #: OS error string. The sentence around it still has to match byte for byte, which is
+    #: the part charter wrote — so this hides a known quotation, never a difference of
+    #: charter's own words.
+    stderr_mask: list = field(default_factory=list)
 
     def rust_args(self) -> list[str]:
         return self.rust if self.rust is not None else self.python
@@ -294,19 +307,83 @@ density = "wide"
 #: as prose, opencode's and Codex's included — and porting it is not what M1.2 is. What the
 #: prefix comparison still proves is the whole of the part that IS ported: the table, its
 #: column widths, every refusal sentence, and the git-state fix line.
+#: Where charter's `harness list` stops being about profiles: a blank line, then the harness
+#: REGISTRY and its per-kind deficits as prose. The app ports profiles, not the registry.
+HARNESS_LIST_REGISTRY_CUT = "\n\u2022 "
 HARNESS_LIST_REGISTRY_SECTION = (
     "charter follows the profile table with the harness registry and its per-kind deficits; "
-    "the app ports profiles, not the registry. Every byte before that section must match."
+    "the app ports profiles, not the registry."
+)
+
+def _declare_a_profile_per_command_word(root: Path) -> None:
+    """One profile named after every `charter <word>`, taken from the ORACLE's own list.
+
+    `profiles.rs` carries that list as a hand-copied constant, and nothing tied the two
+    together: the next command charter adds would silently become a name the Rust side
+    accepts and the Python side refuses. Generating the fixture from `cli.command_words()`
+    is the tie — a word only Python knows about shows up here as a profile Rust lists and
+    Python refuses, and the scenario goes red.
+    """
+    # Asked of the ORACLE as a subprocess, under the same interpreter the scenarios run it
+    # with, rather than imported here: this file must keep working whether or not charter is
+    # importable in its own process.
+    said = subprocess.run(
+        [sys.executable, "-c",
+         "from charter import cli; print('\\n'.join(sorted(cli.command_words())))"],
+        capture_output=True, text=True, check=True,
+    )
+    lines = []
+    for word in said.stdout.split():
+        # The names charter's own validator refuses for other reasons are not this
+        # scenario's subject; it is about the clash rule alone.
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", word):
+            continue
+        lines.append(f'[harness."{word}"]\nkind = "claude"\ncommand = ["claude"]\n')
+    (root / "charter.local.toml").write_text("\n".join(lines), encoding="utf-8")
+
+
+def _malform_the_local_file(root: Path) -> None:
+    """A `charter.local.toml` that will not parse — the likeliest real state of the file,
+    and one no other scenario reaches."""
+    (root / "charter.local.toml").write_text("[harness\n", encoding="utf-8")
+
+
+#: What a TOML parser says, which is its own words in both implementations.
+TOML_DIAGNOSTIC = (
+    r"could not be read \(.*?\), so no declared profile",
+    "tomllib's diagnostic against toml_edit's; the sentence around it must still match",
 )
 
 SCENARIOS = [
+    Scenario(
+        name="harness-list-refuses-every-name-that-is-a-charter-command",
+        plane="minimal",
+        python=["harness", "list"],
+        pins_the_clock=False,
+        setup=_declare_a_profile_per_command_word,
+        stderr_cut_at=HARNESS_LIST_REGISTRY_CUT,
+        stderr_cut_why=HARNESS_LIST_REGISTRY_SECTION,
+        ignore={"charter.local.toml": "written by this scenario's own setup"},
+    ),
+    Scenario(
+        name="harness-list-on-a-local-file-that-will-not-parse",
+        plane="minimal",
+        python=["harness", "list"],
+        pins_the_clock=False,
+        setup=_malform_the_local_file,
+        stderr_cut_at=HARNESS_LIST_REGISTRY_CUT,
+        stderr_cut_why=HARNESS_LIST_REGISTRY_SECTION,
+        stderr_mask=[TOML_DIAGNOSTIC],
+        ignore={"charter.local.toml": "written by this scenario's own setup"},
+    ),
     Scenario(
         name="harness-list-reads-the-same-profiles-and-refuses-the-same-ones",
         plane="daily",
         python=["harness", "list"],
         pins_the_clock=False,
         setup=_declare_harness_profiles,
-        stderr_prefix=HARNESS_LIST_REGISTRY_SECTION,
+        stderr_cut_at=HARNESS_LIST_REGISTRY_CUT,
+        stderr_cut_why=HARNESS_LIST_REGISTRY_SECTION,
         ignore={
             "charter.local.toml": "written by this scenario's own setup, into both copies",
         },
@@ -316,7 +393,8 @@ SCENARIOS = [
         plane="minimal",
         python=["harness", "list"],
         pins_the_clock=False,
-        stderr_prefix=HARNESS_LIST_REGISTRY_SECTION,
+        stderr_cut_at=HARNESS_LIST_REGISTRY_CUT,
+        stderr_cut_why=HARNESS_LIST_REGISTRY_SECTION,
     ),
     Scenario(
         stderr_differs=CONFIRMS_ON_STDERR,
@@ -761,16 +839,24 @@ def check(scenario: Scenario, binary: Path) -> bool:
                         "    stderr now MATCHES, but the scenario still says it differs "
                         f"({scenario.stderr_differs}) — drop the note"
                     )
-            elif scenario.stderr_prefix:
-                if not rs.stderr:
+            elif scenario.stderr_cut_at:
+                if scenario.stderr_cut_at not in py.stderr:
                     problems.append(
-                        "    rust printed NOTHING, and every string is a prefix of that — "
-                        f"this scenario claims {scenario.stderr_prefix}"
+                        f"    python's stderr never reaches {scenario.stderr_cut_at!r}, so "
+                        "this scenario is cutting at a boundary that no longer exists"
                     )
-                elif not py.stderr.startswith(rs.stderr):
-                    problems.append("    rust's stderr is not the start of python's:")
-                    problems.append(f"      python {py.stderr[:len(rs.stderr) + 120]!r}")
-                    problems.append(f"      rust   {rs.stderr!r}")
+                else:
+                    want = py.stderr.split(scenario.stderr_cut_at, 1)[0]
+                    got = rs.stderr
+                    for pattern, _why in scenario.stderr_mask:
+                        want = re.sub(pattern, "<masked>", want)
+                        got = re.sub(pattern, "<masked>", got)
+                    if want != got:
+                        problems.append(
+                            f"    stderr differs before {scenario.stderr_cut_at!r}:"
+                        )
+                        problems.append(f"      python {want!r}")
+                        problems.append(f"      rust   {got!r}")
             elif py.stderr != rs.stderr:
                 problems.append("    stderr differs:")
                 problems.append(f"      python {py.stderr!r}")
