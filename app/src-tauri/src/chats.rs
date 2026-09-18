@@ -730,6 +730,13 @@ mod tests {
     }
 
     /// Everything a session has printed, once it has printed `text`.
+    /// Everything a session has printed, once `text` is among it.
+    ///
+    /// **Wait for what you are about to assert, not for a prefix of it.** The stand-in
+    /// `claude` prints `argv:` as a write of its own and its arguments as later ones, so
+    /// waiting for `argv:` returns before a single argument has arrived — it passed only
+    /// because the rest usually landed in the same read, and CI eventually caught it with a
+    /// half-drawn line full of erase-to-end-of-line escapes.
     fn until_printed(chats: &Chats, session: u32, text: &str) -> String {
         use std::sync::Arc;
         use std::time::{Duration, Instant};
@@ -901,12 +908,14 @@ mod tests {
             .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
             .unwrap();
 
-        let printed = until_printed(&chats, session, "argv:");
-
+        // The id charter chose is known before the harness has finished printing it, so the
+        // wait is for that exact id rather than for the line it will appear on.
         let recorded = chats.record().chats[0]
             .resume
             .clone()
             .expect("the chat has a conversation");
+        let printed = until_printed(&chats, session, recorded.as_str());
+
         assert!(
             printed.contains(recorded.as_str()),
             "the record says {recorded}, but claude was given {printed:?}"
@@ -1037,9 +1046,10 @@ mod tests {
         );
 
         assert_eq!(open[0].how, Reopened::Resumed(SessionId::new(ID).unwrap()));
-        let printed = until_printed(&chats, open[0].session, "argv:");
+        let want = format!("--resume {ID} --name ide.7");
+        let printed = until_printed(&chats, open[0].session, &want);
         assert!(
-            printed.contains(&format!("--resume {ID} --name ide.7")),
+            printed.contains(&want),
             "claude was not asked to resume: {printed:?}"
         );
     }
