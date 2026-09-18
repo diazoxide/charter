@@ -140,6 +140,12 @@ export function copyFixturePlane(name = "daily"): string {
  * promise that.
  */
 export function declareAProfile(plane: string, program: string, kind = "claude"): void {
+  // A Codex profile is gated on a file, not on a probe: charter refuses to start a Codex
+  // chat unless `$CODEX_HOME/config.toml` carries all three marks — the plugin enabled, the
+  // harness named, and a guard hook the operator trusted — because a hook Codex has not
+  // trusted is inert, and a plugin nobody approved reads exactly like wired to anything that
+  // stops at the plugin table. So a plane that declares one writes that home.
+  const env: Record<string, string> = kind === "codex" ? { CODEX_HOME: writeCodexHome(plane) } : {};
   const wrapper = join(plane, "claude-stand-in");
   writeFileSync(
     wrapper,
@@ -176,11 +182,56 @@ export function declareAProfile(plane: string, program: string, kind = "claude")
       "[harness.scenario]",
       `kind = ${JSON.stringify(kind)}`,
       `command = [${JSON.stringify(wrapper)}]`,
+      ...envLines(env),
       "",
       "[harness.needs-approval]",
       `kind = ${JSON.stringify(kind)}`,
       `command = [${JSON.stringify(wrapper)}]`,
+      ...envLines(env),
       "",
     ].join("\n"),
   );
+}
+
+/** A profile's `env` table, or nothing when it sets none. */
+function envLines(env: Record<string, string>): string[] {
+  const names = Object.keys(env);
+  if (names.length === 0) return [];
+  return [`env = { ${names.map((n) => `${n} = ${JSON.stringify(env[n])}`).join(", ")} }`];
+}
+
+/**
+ * A `CODEX_HOME` inside `plane` carrying the three marks charter requires, and an installed
+ * plugin whose `hooks.json` places charter's guard.
+ *
+ * The trust key is spelled the way Codex spells it — `<plugin>:hooks/hooks.json:<event>:
+ * <group>:<hook>`, with the event in snake case — and the position is read out of the
+ * INSTALLED plugin's own manifest rather than hard-coded, which is why this writes a
+ * manifest at all rather than only a config.
+ */
+function writeCodexHome(plane: string): string {
+  const home = join(plane, "codex-home");
+  const hooks = join(home, "plugins", "cache", "charter", "charter", "0.62.1", "hooks");
+  mkdirSync(hooks, { recursive: true });
+  writeFileSync(
+    join(hooks, "hooks.json"),
+    JSON.stringify({
+      hooks: { PreToolUse: [{ hooks: [{ command: "charter hook pretooluse" }] }] },
+    }),
+  );
+  writeFileSync(
+    join(home, "config.toml"),
+    [
+      '[plugins."charter@charter"]',
+      "enabled = true",
+      "",
+      "[shell_environment_policy.set]",
+      'CHARTER_HARNESS = "codex"',
+      "",
+      '[hooks.state."charter@charter:hooks/hooks.json:pre_tool_use:0:0"]',
+      'trusted_hash = "written-by-the-scenario-tests"',
+      "",
+    ].join("\n"),
+  );
+  return home;
 }
