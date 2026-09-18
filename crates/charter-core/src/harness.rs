@@ -89,6 +89,20 @@ impl Harness {
         }
     }
 
+    /// Whether this harness tells a hook which process it is running under.
+    ///
+    /// Claude Code sets `$CLAUDE_PID` in every hook's environment, and that is the whole of
+    /// what tells `/clear` (a new conversation from the same process, ADR 0024 C6) from a
+    /// `claude` started inside the chat's own shell (a new conversation from a different
+    /// one, C5). Codex names no such variable, so it gets the narrower rule: the first
+    /// report of a chat is adopted and a later different id is ignored.
+    pub fn reports_its_process(self) -> bool {
+        match self {
+            Self::ClaudeCode => true,
+            Self::Codex => false,
+        }
+    }
+
     /// Whether charter chooses this harness's session id and hands it over at the start, so
     /// the link exists before the harness does.
     pub fn chooses_session_id(self) -> bool {

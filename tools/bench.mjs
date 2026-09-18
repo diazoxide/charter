@@ -13,6 +13,7 @@
 // The numbers land in target/bench/<timestamp>/results.json, and a table is printed.
 
 import { spawn, spawnSync } from "node:child_process";
+import net from "node:net";
 import {
   chmodSync,
   cpSync,
@@ -207,10 +208,20 @@ async function coldStart(chats = 0) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Hook call: what the plugin runs before every Bash tool call, today — Python charter's
-// `charter hook pretooluse` — in a copy of the fixture plane, since the hook writes into its
-// plane. And the Rust `charter` binary's own start, which is the floor the Rust hook will
-// have once M2 and M3 move hooks there.
+// Hook call: the spec's 50 ms limit, from three sides.
+//
+//   - `charter hook stop` through the RUST binary, with an app listening: the call the app's
+//     own sessions make, and the one the limit is now measured against.
+//   - `charter hook pretooluse` through PYTHON charter, in a copy of the fixture plane since
+//     that hook writes into its plane: the guard, which is still Python's and is not this
+//     milestone's to move. ADR 0026 measured it at 107.6 ms.
+//   - the Rust binary's own start (`charter root`), which is the floor either can reach.
+//
+// The listening socket is a plain `net` server. It never gets a turn on the event loop while
+// `spawnSync` is blocking, and that is not a flaw in the measurement: the kernel accepts into
+// the listen backlog, and the hook never waits to be read — the harness is not made to wait
+// for charter to draw anything. The reports are counted once the samples are in, so a run
+// that measured a hook quietly failing to deliver is not reported as a fast one.
 
 function timed(command, args, how, count) {
   const samples = [];
@@ -221,6 +232,58 @@ function timed(command, args, how, count) {
     if (done.status !== 0) throw new Error(`${command} ${args.join(" ")} failed: ${done.status}`);
   }
   return summary(samples);
+}
+
+async function rustHookCall() {
+  const socket = join(tmpdir(), `charter-bench-hook-${process.pid}.sock`);
+  rmSync(socket, { force: true });
+  // Connections, not `data` events: a report delivered in two chunks fires `data` twice, so
+  // counting those could show 33 with only 32 reports behind it. An independent review
+  // pointed that out.
+  let taken = 0;
+  const app = net.createServer(() => { taken += 1; });
+  await new Promise((listening) => app.listen(socket, listening));
+
+  const conversation = "11111111-2222-4333-8444-555555555555";
+  const input = JSON.stringify({
+    session_id: conversation,
+    transcript_path: "",
+    cwd: tmpdir(),
+    hook_event_name: "Stop",
+    stop_hook_active: false,
+    last_assistant_message: "pong",
+  });
+  const how = {
+    cwd: tmpdir(),
+    input,
+    env: {
+      ...process.env,
+      CHARTER_HOOK_SOCKET: socket,
+      CHARTER_CHAT: "7",
+      CLAUDE_CODE_SESSION_ID: conversation,
+    },
+  };
+  const rust = join(RELEASE, "charter");
+  timed(rust, ["hook", "stop"], how, 3);
+  const measured = timed(rust, ["hook", "stop"], how, 30);
+
+  // The samples are in; let the server drain before it is asked what it got.
+  await new Promise((done) => setTimeout(done, 300));
+  app.close();
+  rmSync(socket, { force: true });
+  // 33 = the three warm-ups and the thirty samples. Anything less and the numbers above are
+  // the cost of a hook that did not arrive, which is not a measurement of anything. This
+  // THROWS rather than recording a field: an earlier version computed `everyReportArrived`
+  // and then never looked at it, so a run that lost reports still printed a fast number and
+  // a green table. An independent review pointed that out too.
+  const expected = 33;
+  if (taken !== expected) {
+    throw new Error(
+      `the hook benchmark measured ${expected} calls but the app took only ${taken} reports; ` +
+        `the numbers would be the cost of a hook that never arrived`,
+    );
+  }
+  return { command: "charter hook stop", ...measured, reportsTheAppTook: taken };
 }
 
 function hookCall() {
@@ -243,8 +306,26 @@ function hookCall() {
       version: python,
       ...timed("charter", ["hook", "pretooluse", "--plugin-version", version], { cwd: plane, input }, 30),
     };
+    // The LIKE-FOR-LIKE row, and the one the Rust number should be read against. ADR 0026
+    // measured `pretooluse`, which is the guard and does much more work — quoting it beside
+    // `charter hook stop` in Rust invites "97 to 1.8" to be read as this port's speedup when
+    // it is two different hooks. Python has a `stop` handler (`hooks._HANDLERS`), so the
+    // honest comparison was available all along; an independent review measured it first.
+    const stopInput = JSON.stringify({
+      session_id: "bench",
+      transcript_path: "",
+      cwd: plane,
+      hook_event_name: "Stop",
+      stop_hook_active: false,
+    });
+    timed("charter", ["hook", "stop", "--plugin-version", version], { cwd: plane, input: stopInput }, 3);
+    out.pythonCharterStop = {
+      version: python,
+      ...timed("charter", ["hook", "stop", "--plugin-version", version], { cwd: plane, input: stopInput }, 30),
+    };
   } else {
     out.pythonCharterPretooluse = "no `charter` on PATH";
+    out.pythonCharterStop = "no `charter` on PATH";
   }
   const rust = join(RELEASE, "charter");
   timed(rust, ["root"], { cwd: plane }, 3);
@@ -356,7 +437,10 @@ if (only.has("coldstart")) {
   results.coldStartReopening50 = await coldStart(50);
 }
 
-if (only.has("hook")) results.hookCall = hookCall();
+if (only.has("hook")) {
+  results.hookCall = hookCall();
+  results.hookCall.rustCharterHook = await rustHookCall();
+}
 if (only.has("tmux")) results.tmux = await tmuxReference();
 if (only.has("window")) {
   if (screenIsLocked()) {

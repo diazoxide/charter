@@ -182,6 +182,55 @@ mod tests {
     }
 }
 
+/// Refuses a path reached through a symlink, walking every component below `root`.
+///
+/// **One implementation, because two drift.** `reopen` needs it for the record it keeps under
+/// `.charter/app/`, and `hookwire` needs it for the socket it binds in the same directory —
+/// and a second, subtly different walk is the failure mode this repo has found five times.
+/// What each caller does about its own LEAF (a record must be a plain bounded file; a socket
+/// must not be a file at all) stays with that caller. This is only the way there.
+///
+/// **`root` is named by the caller and never worked out here.** A walk from the root of the
+/// filesystem would refuse every path on macOS, where `/tmp` and `/var` are themselves links.
+/// The caller passes somewhere it already trusts — the plane, or the runtime directory — and
+/// only the components below it are checked.
+///
+/// Deliberately blunt: these are charter's own paths, created by charter, so a link anywhere
+/// on the way has no honest use and there is nothing here to resolve. A component that does
+/// not exist yet is fine — charter is about to make it.
+///
+/// It is a `stat` and the caller's use is a path open, so a writer racing between the two
+/// still wins. That is structural, shared with every gate here, and belongs to one decision
+/// about `openat`/`O_NOFOLLOW` across the core rather than to this function.
+pub fn no_link_on_the_way(root: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
+    let Ok(below) = path.strip_prefix(root) else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("{} is not inside {}", path.display(), root.display()),
+        ));
+    };
+    let mut walked = root.to_path_buf();
+    for step in below.components() {
+        walked.push(step);
+        match std::fs::symlink_metadata(&walked) {
+            Ok(found) if found.file_type().is_symlink() => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    format!(
+                        "{} is a symlink, and charter's own path may not be reached through one",
+                        walked.display()
+                    ),
+                ));
+            }
+            // Not there yet is fine: charter is about to make it. A component it cannot stat
+            // is one it cannot traverse either, so whatever the caller does next fails on the
+            // same path a moment later.
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// Where a plane keeps data charter writes. A path that resolves outside all of them is
 /// refused, however legal its name.
 /// The directories a control plane keeps data in, as `charter/contain.py:data_roots` lists
