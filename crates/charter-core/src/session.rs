@@ -216,6 +216,9 @@ pub struct Session {
     input: SyncSender<Vec<u8>>,
     master: Mutex<Box<dyn MasterPty + Send>>,
     child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
+    /// Taken by [`Session::when_it_ends`]. The reading thread sends on it once, when the
+    /// program's output ends — which is when the program has.
+    ended: Mutex<Option<Receiver<()>>>,
 }
 
 impl Session {
@@ -248,6 +251,11 @@ impl Session {
         // One wake is enough to send: what it says is "something is held", and the deadline
         // is read from the engine. A wake that does not fit is a wake already waiting.
         let (holding, held) = mpsc::sync_channel(1);
+        // One message, once, when the program's output ends. A caller that wants to know how
+        // it ended blocks on this rather than asking again and again: fifty sessions polled
+        // for an exit that almost never comes is fifty sessions' worth of waking up to learn
+        // nothing.
+        let (over, ended) = mpsc::sync_channel(1);
 
         thread::Builder::new()
             .name("charter-session-writer".into())
@@ -263,7 +271,7 @@ impl Session {
             .spawn({
                 let terminal = Arc::clone(&terminal);
                 let replies = input.clone();
-                move || pump(reader, &terminal, &replies, &holding)
+                move || pump(reader, &terminal, &replies, &holding, &over)
             })?;
 
         let mut command = CommandBuilder::new(&spec.program);
@@ -289,6 +297,7 @@ impl Session {
             input,
             master: Mutex::new(pair.master),
             child: Arc::new(Mutex::new(child)),
+            ended: Mutex::new(Some(ended)),
         })
     }
 
@@ -395,6 +404,52 @@ impl Session {
         end(&child);
     }
 
+    /// Calls `tell` once, with how the program ended, on a thread of its own.
+    ///
+    /// The thread is blocked on a channel for the whole of the session's life and costs
+    /// nothing until the program goes. Only the first caller is answered: this is the app
+    /// learning that one of its chats died, not a general subscription.
+    ///
+    /// The output ending is what wakes it, and the status is read after — a program whose
+    /// output has ended has ended, but the operating system may not have reaped it in the
+    /// same instant, so the status is asked for until it is there.
+    pub fn when_it_ends(&self, tell: Box<dyn FnOnce(Exit) + Send>) {
+        let Some(ended) = lock(&self.ended).take() else {
+            return;
+        };
+        let child = Arc::clone(&self.child);
+        let started = thread::Builder::new()
+            .name("charter-session-end".into())
+            .spawn(move || {
+                // `Err` is the session being dropped before its program ended, which is a
+                // chat the operator closed: there is no exit to report and nobody left to
+                // report it to.
+                if ended.recv().is_err() {
+                    return;
+                }
+                let deadline = Instant::now() + REAPING;
+                loop {
+                    match lock(&child).try_wait() {
+                        Ok(Some(status)) => {
+                            return tell(match status.signal() {
+                                Some(signal) => Exit::Signal(signal.to_owned()),
+                                None => Exit::Code(status.exit_code()),
+                            });
+                        }
+                        // Reaped by something else — `wait` beat this thread to it. The
+                        // status is gone, and the one honest thing left to say is that the
+                        // program is no longer running.
+                        Err(_) => return,
+                        Ok(None) if Instant::now() >= deadline => return,
+                        Ok(None) => thread::sleep(POLL),
+                    }
+                }
+            });
+        // A thread that will not start is one chat whose death goes unreported, which is not
+        // worth failing the session that is otherwise running perfectly well.
+        let _ = started;
+    }
+
     /// The operating system's id for the program, while it runs.
     pub fn process_id(&self) -> Option<u32> {
         lock(&self.child).process_id()
@@ -427,6 +482,12 @@ const END_UPDATE: &[u8] = b"\x1b[?2026l";
 /// reset, and not necessarily the only one.
 const SYNC_MODE: &[u8] = b"2026";
 const POLL: Duration = Duration::from_millis(10);
+
+/// How long [`Session::when_it_ends`] waits for a status after the output has ended.
+///
+/// The program is already gone by then; this covers only the gap before the operating system
+/// has it reaped. Bounded so the thread cannot outlive the answer it is waiting for.
+const REAPING: Duration = Duration::from_secs(5);
 /// How long a program gets to exit on its hangup before its group is killed.
 const HANGUP_GRACE: Duration = Duration::from_millis(500);
 
@@ -475,16 +536,24 @@ fn pump(
     terminal: &Mutex<Terminal>,
     replies: &SyncSender<Vec<u8>>,
     holding: &SyncSender<()>,
+    over: &SyncSender<()>,
 ) {
     let mut buffer = vec![0; 64 * 1024];
+    // Said once, whichever way the loop leaves, so that nothing has to remember to say it on
+    // a path added later. The channel holds one, so it is kept for whoever asks — including
+    // a caller that asks after the program is already gone.
+    let announce_the_end = || {
+        let _ = over.try_send(());
+        lock(terminal).close_views();
+    };
     loop {
         let read = match reader.read(&mut buffer) {
             // The program's output has ended, and so has the program. Every view is closed,
             // so a pane showing it can say so instead of showing a screen that is now final.
-            Ok(0) => return lock(terminal).close_views(),
+            Ok(0) => return announce_the_end(),
             Ok(read) => read,
             Err(err) if err.kind() == ErrorKind::Interrupted => continue,
-            Err(_) => return lock(terminal).close_views(),
+            Err(_) => return announce_the_end(),
         };
         let (answers, held) = {
             let mut terminal = lock(terminal);
@@ -818,6 +887,47 @@ mod tests {
         let session = sh("exit 3");
 
         assert_eq!(session.wait(PATIENCE).unwrap(), Some(Exit::Code(3)));
+    }
+
+    #[test]
+    fn a_session_says_how_its_program_ended_without_being_asked() {
+        // The app has to know a chat failed, and no hook can tell it — the process is gone.
+        // Asking would mean polling fifty sessions forever to catch the one that dies.
+        let session = sh("exit 3");
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        session.when_it_ends(Box::new(move |exit| {
+            let _ = tx.send(exit);
+        }));
+
+        assert_eq!(rx.recv_timeout(PATIENCE), Ok(Exit::Code(3)));
+    }
+
+    #[test]
+    fn a_session_whose_program_was_killed_says_that_instead_of_a_code() {
+        let session = sh("kill -9 $$");
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        session.when_it_ends(Box::new(move |exit| {
+            let _ = tx.send(exit);
+        }));
+
+        assert!(matches!(rx.recv_timeout(PATIENCE), Ok(Exit::Signal(_))));
+    }
+
+    #[test]
+    fn a_session_that_ends_before_anyone_asks_still_says_so() {
+        // The program is quick and the app is busy. The end must be waiting for whoever
+        // asks next, not lost because nobody was listening at the moment it happened.
+        let session = sh("exit 7");
+        assert_eq!(session.wait(PATIENCE).unwrap(), Some(Exit::Code(7)));
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        session.when_it_ends(Box::new(move |exit| {
+            let _ = tx.send(exit);
+        }));
+
+        assert_eq!(rx.recv_timeout(PATIENCE), Ok(Exit::Code(7)));
     }
 
     #[test]

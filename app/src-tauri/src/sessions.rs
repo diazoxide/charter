@@ -5,11 +5,13 @@
 //! output; a pane that goes away closes its view, and the session keeps running.
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use charter_core::engine::{AlacrittyEngine, Size};
-use charter_core::session::{Attachment, Session, Spec};
+use charter_core::hookwire::{CHAT_ENV, SOCKET_ENV};
+use charter_core::session::{Attachment, Exit, Session, Spec};
 
 /// How many lines of history each session keeps. The pane showing it is told, so its own
 /// terminal keeps the same.
@@ -26,7 +28,13 @@ pub struct Opening {
     pub args: Vec<String>,
     pub cwd: Option<String>,
     pub size: Size,
+    /// Set in the program's environment, on top of what the app itself was started with.
+    pub env: Vec<(String, String)>,
 }
+
+/// Told how each session ended, as it ends. An `Arc` so a session can hold it for as long as
+/// its program runs without borrowing from `Sessions`.
+type Ended = Arc<dyn Fn(u32, Exit) + Send + Sync>;
 
 /// Where a view's text goes. It is called on the view's own thread, one batch at a time.
 pub type Sink = Box<dyn FnMut(String) + Send>;
@@ -38,10 +46,24 @@ pub struct Watching {
     pub size: Size,
 }
 
+/// What a session is told, so a hook running inside it can find its way back.
+///
+/// A hook is a descendant of the session's own program, so it inherits this and has to look
+/// nothing up: no plane read, no file, no discovery. That is most of why the call costs 1.8 ms.
+#[derive(Debug, Clone)]
+pub struct Reporting {
+    pub socket: PathBuf,
+}
+
 /// Every session the app is running, by the id the UI calls it by.
 pub struct Sessions {
     running: Mutex<HashMap<u32, Running>>,
     opened: AtomicU32,
+    /// Where sessions are told to report, when the app is listening. None is an app that
+    /// could not open its channel: every chat then shows `unknown`, which is honest.
+    reporting: Option<Reporting>,
+    /// Told how each session ended, as it ends.
+    ended: Mutex<Option<Ended>>,
 }
 
 struct Running {
@@ -56,21 +78,66 @@ type Watcher = Attachment;
 
 impl Sessions {
     pub fn new() -> Self {
+        Self::reporting_to(None)
+    }
+
+    /// Sessions that tell `reporting`'s socket what their harness does.
+    pub fn reporting_to(reporting: Option<Reporting>) -> Self {
         Self {
             running: Mutex::new(HashMap::new()),
             opened: AtomicU32::new(0),
+            reporting,
+            ended: Mutex::new(None),
         }
     }
 
+    /// Calls `tell` as each session's program ends, with the id and how it ended.
+    pub fn when_one_ends(&self, tell: Box<dyn Fn(u32, Exit) + Send + Sync>) {
+        *lock(&self.ended) = Some(Arc::from(tell));
+    }
+
     /// Starts a session, and answers with the id it is called by from now on.
-    pub fn open(&self, opening: &Opening) -> Result<u32, String> {
+    ///
+    /// `announce` is called with that id BEFORE the program starts. A harness fires
+    /// `SessionStart` at its own exec, and anything that learned the chat's number afterwards
+    /// would miss it — for a chat that is then idle, waiting for a first prompt, no second
+    /// event ever comes and it reads `unknown` for the rest of the run. A review found that
+    /// on the relaunch path, where a whole record's worth of chats start at once.
+    pub fn open(&self, opening: &Opening, announce: &dyn Fn(u32)) -> Result<u32, String> {
         let program = opening.program.clone().unwrap_or_else(shell);
         let mut spec = Spec::new(program, opening.size).args(&opening.args);
         spec.cwd = opening.cwd.as_ref().map(Into::into);
+        // The id is chosen BEFORE the program starts, because the program's own hooks have
+        // to carry it: a chat that learned its number afterwards would have a first turn
+        // nothing could attribute.
+        let id = self.opened.fetch_add(1, Ordering::Relaxed) + 1;
+        spec.env = opening
+            .env
+            .iter()
+            .map(|(key, value)| (key.into(), value.into()))
+            .collect();
+        // Whatever charter itself was launched from, a chat starts without its harness's
+        // identity: only the harness this session starts may say which conversation and
+        // which process a hook belongs to.
+        spec.env_without = charter_core::hookwire::NOT_INHERITED
+            .iter()
+            .map(Into::into)
+            .collect();
+        if let Some(reporting) = &self.reporting {
+            spec.env
+                .push((SOCKET_ENV.into(), reporting.socket.clone().into()));
+            spec.env.push((CHAT_ENV.into(), id.to_string().into()));
+        }
+        // Before the program exists, so its very first hook lands somewhere.
+        announce(id);
         let engine = AlacrittyEngine::new(opening.size, SCROLLBACK as usize);
         let session = Session::spawn(spec, Box::new(engine)).map_err(|err| err.to_string())?;
 
-        let id = self.opened.fetch_add(1, Ordering::Relaxed) + 1;
+        // No hook reports a program dying, and none can — the process is gone. This is the
+        // operating system telling the app, not charter reading a screen (ADR 0018).
+        if let Some(tell) = lock(&self.ended).clone() {
+            session.when_it_ends(Box::new(move |exit| tell(id, exit)));
+        }
         lock(&self.running).insert(
             id,
             Running {
@@ -274,6 +341,7 @@ mod tests {
             args: vec!["-c".to_owned(), script.to_owned()],
             cwd: None,
             size: SIZE,
+            env: Vec::new(),
         }
     }
 
@@ -306,7 +374,7 @@ mod tests {
     fn a_view_is_sent_what_the_session_prints() {
         let sessions = Sessions::new();
         let id = sessions
-            .open(&opening("printf 'output for the pane'; sleep 600"))
+            .open(&opening("printf 'output for the pane'; sleep 600"), &|_| {})
             .expect("the session opens");
 
         let (_view, seen) = watching(&sessions, id);
@@ -318,9 +386,10 @@ mod tests {
     fn what_the_pane_types_reaches_the_program() {
         let sessions = Sessions::new();
         let id = sessions
-            .open(&opening(
-                "read line; printf 'you typed %s' \"$line\"; sleep 600",
-            ))
+            .open(
+                &opening("read line; printf 'you typed %s' \"$line\"; sleep 600"),
+                &|_| {},
+            )
             .expect("the session opens");
         let (_view, seen) = watching(&sessions, id);
 
@@ -333,9 +402,10 @@ mod tests {
     fn a_closed_view_is_sent_no_more_output() {
         let sessions = Sessions::new();
         let id = sessions
-            .open(&opening(
-                "read _; printf 'after the pane went away'; sleep 600",
-            ))
+            .open(
+                &opening("read _; printf 'after the pane went away'; sleep 600"),
+                &|_| {},
+            )
             .expect("the session opens");
         let (view, seen) = watching(&sessions, id);
 
@@ -354,7 +424,7 @@ mod tests {
     fn a_pane_is_told_when_the_program_it_is_showing_has_ended() {
         let sessions = Sessions::new();
         let id = sessions
-            .open(&opening("printf 'the last thing it printed'"))
+            .open(&opening("printf 'the last thing it printed'"), &|_| {})
             .expect("the session opens");
 
         let (_view, seen) = watching(&sessions, id);
@@ -369,9 +439,10 @@ mod tests {
         let programs: Vec<u32> = (0..5)
             .map(|_| {
                 let id = sessions
-                    .open(&opening(
-                        "trap '' HUP; echo guarded; while :; do sleep 600; done",
-                    ))
+                    .open(
+                        &opening("trap '' HUP; echo guarded; while :; do sleep 600; done"),
+                        &|_| {},
+                    )
                     .expect("the session opens");
                 let (_view, seen) = watching(&sessions, id);
                 until_seen(&seen, "guarded");
@@ -407,7 +478,7 @@ mod tests {
     fn a_resize_reaches_the_program() {
         let sessions = Sessions::new();
         let id = sessions
-            .open(&opening("read _; stty size; sleep 600"))
+            .open(&opening("read _; stty size; sleep 600"), &|_| {})
             .expect("the session opens");
         let (_view, seen) = watching(&sessions, id);
 
@@ -428,7 +499,9 @@ mod tests {
     #[test]
     fn a_view_is_told_the_size_the_screen_it_opened_on_was_drawn_for() {
         let sessions = Sessions::new();
-        let id = sessions.open(&opening("sleep 600")).expect("it opens");
+        let id = sessions
+            .open(&opening("sleep 600"), &|_| {})
+            .expect("it opens");
         let bigger = Size {
             columns: 120,
             rows: 40,
@@ -450,9 +523,10 @@ mod tests {
         let watched: Vec<(u32, Arc<Mutex<String>>)> = (0..50)
             .map(|n| {
                 let id = sessions
-                    .open(&opening(&format!(
-                        "printf 'session {n} is running'; sleep 600"
-                    )))
+                    .open(
+                        &opening(&format!("printf 'session {n} is running'; sleep 600")),
+                        &|_| {},
+                    )
                     .expect("the session opens");
                 let (_view, seen) = watching(&sessions, id);
                 (id, seen)
@@ -468,7 +542,9 @@ mod tests {
     #[test]
     fn a_closed_session_is_no_longer_running() {
         let sessions = Sessions::new();
-        let id = sessions.open(&opening("sleep 600")).expect("it opens");
+        let id = sessions
+            .open(&opening("sleep 600"), &|_| {})
+            .expect("it opens");
         assert_eq!(sessions.running(), vec![id]);
 
         sessions.close(id).expect("it closes");
@@ -493,7 +569,7 @@ mod tests {
         let mut opening = opening("true");
         opening.program = Some("/definitely/not/a/program".to_owned());
 
-        assert!(sessions.open(&opening).is_err());
+        assert!(sessions.open(&opening, &|_| {}).is_err());
     }
 
     #[test]

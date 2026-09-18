@@ -155,11 +155,18 @@ describe("the window over a day", () => {
     }
   });
 
-  it("says it cannot tell whether a session is mid-turn", async () => {
-    // Session state comes from harness hooks only, and there are none until M1.3. The
-    // dialog says so rather than implying the app knows a harness is thinking.
-    await expect($('[role="dialog"]')).toHaveText(expect.stringContaining("cannot yet tell"));
-    await expect($('[role="dialog"]')).toHaveText(expect.stringContaining("mid-turn"));
+  it("names the sessions that report no state rather than calling them idle", async () => {
+    // This replaces M1.7's "charter cannot yet tell whether a session is mid-turn". It can
+    // now, for a harness whose hooks say so (spec decision 3) — but the harness in THIS run
+    // reports nothing, and the honest answer for one of those is still that charter cannot
+    // tell. What it must never do is fold them into a reassuring "nothing is running".
+    //
+    // A harness that does report is the subject of `chat.state.e2e.ts`, which runs against a
+    // different harness and so is a run of its own.
+    const dialog = await $('[role="dialog"]');
+    await expect(dialog).toHaveText(expect.stringContaining("report no state"));
+    await expect(dialog).toHaveText(expect.stringContaining("mid-turn"));
+    await expect(dialog).not.toHaveText(expect.stringContaining("cannot yet tell"));
   });
 
   it("ends nothing when the answer is no", async () => {

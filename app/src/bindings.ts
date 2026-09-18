@@ -34,6 +34,22 @@ export const commands = {
 	/**  The sessions that are running, in the order they were opened. */
 	runningSessions: () => __TAURI_INVOKE<number[]>("running_sessions"),
 	/**
+	 *  What every chat is doing, and which of them are asking for you.
+	 * 
+	 *  The window asks once, when it opens; after that it is told (`chat-moved`). A chat the app
+	 *  has never heard from is `unknown`, which is what the spec says a harness with no state
+	 *  hook shows.
+	 */
+	chatStates: () => __TAURI_INVOKE<Moved[]>("chat_states"),
+	/**
+	 *  Why this chat can never report its state, where it cannot.
+	 * 
+	 *  Codex is the case: its hooks live only in a machine-wide file, and it fires no
+	 *  `Notification` at all. A chat showing `unknown` with no reason looks like charter is
+	 *  broken rather than like the harness is different.
+	 */
+	whyUnknown: (session: number) => __TAURI_INVOKE<string | null>("why_unknown", { session }),
+	/**
 	 *  The chats the app already has open — at a launch, the ones put back from the record.
 	 * 
 	 *  The window asks this instead of opening its own: putting the record back happens before
@@ -79,6 +95,18 @@ export const commands = {
 };
 
 /* Types */
+/**  The event the window listens for. One chat, its state, whether it is asking for you. */
+export type Moved = {
+	session: number,
+	state: string,
+	needs_you: boolean,
+	/**
+	 *  Every chat asking for you, so the queue is never assembled from a series of events
+	 *  the window might have missed one of.
+	 */
+	queue: number[],
+};
+
 /**  One chat the app has open, as the UI draws it and as the quit warning lists it. */
 export type OpenChat = {
 	session: number,

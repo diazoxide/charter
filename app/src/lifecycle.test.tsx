@@ -4,7 +4,7 @@ import { cleanup, render as renderBare, screen, within } from "@testing-library/
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
-import type { OpenChat } from "./bindings";
+import type { Moved, OpenChat } from "./bindings";
 
 /** What Tauri's own mocks put on the window: the registry `listen` hands its callback to,
  *  which is how a test fires an event the app is listening for. */
@@ -51,6 +51,8 @@ function chat(one: Partial<OpenChat> & { session: number }): OpenChat {
 function core(
   open: OpenChat[] = [],
   wouldNot: [string, string][] = [],
+  /** What each chat is doing, as the hooks would have reported it. */
+  states: Moved[] = [],
 ): {
   asked: Asked[];
   /** Fires the event the app is sent when something asks it to quit. */
@@ -68,6 +70,7 @@ function core(
     }
     if (cmd === "plane_root") return "/home/dev/plane";
     if (cmd === "opened_chats") return open;
+    if (cmd === "chat_states") return states;
     if (cmd === "chats_that_would_not_start") return wouldNot;
     if (cmd === "open_session") return open.length + ++opened;
     return null;
@@ -90,7 +93,9 @@ function core(
 const tabs = () =>
   within(screen.getByRole("tablist", { name: "Tabs" }))
     .getAllByRole("tab")
-    .map((tab) => tab.textContent);
+    // The NAME a tab carries, not everything drawn in it: a tab also says what its chat is
+    // doing, and these tests are about which tabs exist.
+    .map((tab) => tab.querySelector(".tab-name")?.textContent);
 const panes = () => screen.getAllByTestId("pane").map((pane) => pane.textContent);
 const of = (cmd: string, asked: Asked[]) => asked.filter((one) => one.cmd === cmd);
 
@@ -208,24 +213,65 @@ describe("being asked to quit", () => {
     await askToQuit();
 
     const dialog = within(screen.getByRole("dialog"));
-    expect(dialog.getByText(/2 sessions/)).toBeInTheDocument();
-    expect(dialog.getByText(/ide\.7/)).toBeInTheDocument();
-    expect(dialog.getByText(/ide\.8/)).toBeInTheDocument();
+    expect(dialog.getByText(/2 sessions will be ended/)).toBeInTheDocument();
+    // `getAllBy`: a chat that reports no state is named twice on purpose — once in the list
+    // of what is ending, and once in the sentence saying charter cannot tell if it is
+    // mid-turn. This test is about the list.
+    expect(within(dialog.getByRole("list")).getByText("ide.7")).toBeInTheDocument();
+    expect(within(dialog.getByRole("list")).getByText("ide.8")).toBeInTheDocument();
   });
 
-  it("does not claim to know whether a session is mid-turn", async () => {
-    // Session state comes from hooks only (spec decision 3), and hooks are M1.3. The dialog
-    // says what charter can tell and names what it cannot, rather than implying it knows a
-    // harness is thinking.
-    const { askToQuit } = core([chat({ session: 7 })]);
+  /** What a hook would have reported, as the core hands it to the window. */
+  function doing(session: number, state: string, needsYou = false): Moved {
+    return { session, state, needs_you: needsYou, queue: needsYou ? [session] : [] };
+  }
+
+  it("says which session is mid-turn, now that a hook can tell it", async () => {
+    // This is the sentence M1.3 was written to replace. Until hooks landed the dialog said
+    // charter "cannot yet tell"; a harness's own `UserPromptSubmit` now says so (spec
+    // decision 3), and nothing is inferred from what the session printed (ADR 0018).
+    const { askToQuit } = core(
+      [chat({ session: 7, name: "ide.7" }), chat({ session: 8, name: "ide.8" })],
+      [],
+      [doing(7, "running"), doing(8, "waiting")],
+    );
+    render(<App />);
+    await vi.waitFor(() => expect(tabs()).toHaveLength(2));
+
+    await askToQuit();
+
+    const dialog = within(screen.getByRole("dialog"));
+    expect(dialog.getByText(/ide\.7 is mid-turn and will be interrupted/)).toBeInTheDocument();
+    expect(dialog.queryByText(/cannot yet tell/i)).not.toBeInTheDocument();
+  });
+
+  it("says plainly when nothing is mid-turn", async () => {
+    const { askToQuit } = core([chat({ session: 7 })], [], [doing(7, "waiting")]);
     render(<App />);
     await vi.waitFor(() => expect(tabs()).toHaveLength(1));
 
     await askToQuit();
 
-    expect(within(screen.getByRole("dialog")).getByText(/cannot yet tell/i)).toHaveTextContent(
-      "mid-turn",
-    );
+    expect(
+      within(screen.getByRole("dialog")).getByText("No session is mid-turn."),
+    ).toBeInTheDocument();
+  });
+
+  it("still admits it cannot tell for a harness that reports no state", async () => {
+    // The honest half of what M1.7 said, kept for the case that still deserves it. A Codex
+    // chat reports nothing, and folding it into "no session is mid-turn" would be the app
+    // claiming something it cannot see.
+    const { askToQuit } = core([chat({ session: 7, name: "ide.7", harness: "codex" })]);
+    render(<App />);
+    await vi.waitFor(() => expect(tabs()).toHaveLength(1));
+
+    await askToQuit();
+
+    expect(
+      within(screen.getByRole("dialog")).getByText(
+        /ide\.7 reports no state, so charter cannot tell whether it is mid-turn/,
+      ),
+    ).toBeInTheDocument();
   });
 
   it("quits when that is the answer", async () => {

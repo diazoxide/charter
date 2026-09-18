@@ -40,6 +40,40 @@ export function writeShell(fakeHarness: string): string {
   return shell;
 }
 
+/**
+ * The same, for a harness that reports its state the way a real one does — by running
+ * `charter hook` from inside its own session.
+ *
+ * Nothing is faked past the harness itself: the hook is the real binary, the socket is the
+ * one the app opened, and it finds both in the environment the app put the session in. It
+ * reports a turn beginning before it writes anything, then holds its output until a line is
+ * typed (`--wait-for-input`), so a test can see `running` without racing the turn's end —
+ * and fires `stop` once the output is done.
+ */
+export function writeReportingShell(fakeHarness: string, charter: string): string {
+  const where = join(tmpdir(), "charter-scenario");
+  mkdirSync(where, { recursive: true });
+  const shell = join(where, "reporting-harness-as-a-shell");
+  writeFileSync(
+    shell,
+    [
+      "#!/bin/sh",
+      "# Written by the scenario tests: a harness that reports its own state through hooks.",
+      "# The turn's rising edge, before a byte of output exists.",
+      `${JSON.stringify(charter)} hook userpromptsubmit </dev/null`,
+      `exec ${JSON.stringify(fakeHarness)} \\`,
+      "  --synthetic 4096 \\",
+      "  --wait-for-input \\",
+      `  --sentinel ${JSON.stringify(READY)} \\`,
+      `  --hook ${JSON.stringify(`${charter} hook stop </dev/null`)} \\`,
+      "  --interactive",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(shell, 0o755);
+  return shell;
+}
+
 /** Where the built binaries are, which CI and a person both pass in. */
 export function built(name: string): string {
   const from = process.env.CHARTER_TARGET_DIR ?? join(process.cwd(), "..", "target", "debug");

@@ -19,6 +19,8 @@ import {
   type Layout,
   type Tabs,
 } from "./tabs";
+import { ChatState, NeedsYou } from "./NeedsYou";
+import { stateOf, useChatStates } from "./chatState";
 
 type Plane =
   { state: "loading" } | { state: "found"; root: string } | { state: "missing"; reason: string };
@@ -29,6 +31,8 @@ const STARTING_SIZE = { columns: 80, rows: 24 };
 function App() {
   const [plane, setPlane] = useState<Plane>({ state: "loading" });
   const [tabs, setTabs] = useState<Tabs>(noTabs);
+  /** What every chat is doing. Pushed from the core; nothing here polls. */
+  const states = useChatStates();
   const [trouble, setTrouble] = useState<string>();
   const [sidebar, setSidebar] = useState<SidebarModel>();
   const [focused, setFocused] = useState<string>();
@@ -268,7 +272,11 @@ function App() {
                 aria-selected={id === tabs.inFront}
                 onClick={() => change((tabs) => selectTab(tabs, id))}
               >
-                {tabs.byId[id].name}
+                <span className="tab-name">{tabs.byId[id].name}</span>
+                {/* The first pane's session is the tab's own chat. Its own element, so what
+                    a tab IS stays separate from what it is DOING — a tab whose text changed
+                    every time a turn began would be unreadable, and untestable. */}
+                <ChatState state={stateOf(states, panesOf(tabs, id)[0]?.session ?? -1)} />
               </button>
               <button aria-label={`Close tab ${tabs.byId[id].name}`} onClick={() => close(id)}>
                 ×
@@ -288,6 +296,20 @@ function App() {
             Close pane
           </button>
         </div>
+        <NeedsYou
+          queue={states.needsYou}
+          nameOf={(session: number) =>
+            tabs.order
+              .filter((id) => panesOf(tabs, id).some((pane) => pane.session === session))
+              .map((id) => tabs.byId[id].name)[0] ?? String(session)
+          }
+          show={(session: number) => {
+            const tab = tabs.order.find((id) =>
+              panesOf(tabs, id).some((pane) => pane.session === session),
+            );
+            if (tab !== undefined) change((tabs) => selectTab(tabs, tab));
+          }}
+        />
         <span className="plane">
           {plane.state === "found" && <code>{plane.root}</code>}
           {plane.state === "missing" && <span role="alert">No plane: {plane.reason}</span>}
@@ -325,7 +347,9 @@ function App() {
       ))}
 
       <div className="body">
-        {sidebar && <Sidebar sidebar={sidebar} focused={focused} onFocus={setFocused} />}
+        {sidebar && (
+          <Sidebar sidebar={sidebar} states={states} focused={focused} onFocus={setFocused} />
+        )}
         <div className="panes">
           {inFront ? (
             <LayoutPanes
@@ -339,7 +363,7 @@ function App() {
         </div>
       </div>
 
-      {asking && <QuitWarning chats={open} onQuit={quit} onCancel={dontQuit} />}
+      {asking && <QuitWarning chats={open} states={states} onQuit={quit} onCancel={dontQuit} />}
     </main>
   );
 }

@@ -135,8 +135,8 @@ jobs:
           cache-dependency-path: app/package-lock.json
       - run: npm ci
         working-directory: app
-      - name: The harness the scenario tests run in every pane
-        run: cargo build -p fake-harness
+      - name: The harness the scenario tests run in every pane, and the binary its hooks run
+        run: cargo build -p fake-harness -p charter-cli
       # The `e2e` feature puts WebdriverIO's embedded WebDriver server inside the app, which is
       # what drives it on macOS as well as Linux. It is in no build anyone is given.
       - name: Build the app for the scenario tests
@@ -146,6 +146,17 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: app
       - run: xvfb-run -a npm run e2e
+        if: runner.os == 'Linux'
+        working-directory: app
+      # A harness reporting its own state through `charter hook`, all the way to what the
+      # window draws. Its own run, because the app reads `SHELL` once and this harness is a
+      # different one.
+      - name: What a chat is doing, from a real hook
+        run: npm run e2e:state
+        if: runner.os == 'macOS'
+        working-directory: app
+      - name: What a chat is doing, from a real hook
+        run: xvfb-run -a npm run e2e:state
         if: runner.os == 'Linux'
         working-directory: app
       # The app ended and started again, which no scenario spec can do: WebdriverIO's service

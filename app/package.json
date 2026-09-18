@@ -15,7 +15,8 @@
     "test": "vitest run",
     "e2e": "wdio run e2e/wdio.conf.ts",
     "e2e:relaunch": "node ../tools/relaunch.mjs",
-    "build:e2e": "tsc && vite build --mode e2e"
+    "build:e2e": "tsc && vite build --mode e2e",
+    "e2e:state": "wdio run e2e/wdio.state.conf.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

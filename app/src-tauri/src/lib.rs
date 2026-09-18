@@ -2,6 +2,7 @@
 //! TypeScript by `tauri-specta`, so no shape is written by hand on either side.
 
 mod chats;
+mod hooks;
 mod lifecycle;
 mod sessions;
 
@@ -12,12 +13,81 @@ use std::time::Instant;
 use charter_core::engine::Size;
 use charter_core::harness::Harness;
 use charter_core::reopen::{self, Chat, Fresh, Reopened};
+use tauri::Emitter;
 use tauri::Manager;
 use tauri::ipc::Channel;
+use tauri_plugin_notification::NotificationExt;
 use tauri_specta::{Builder, collect_commands};
 
 use chats::Chats;
+use hooks::{Hooks, Moved};
 use lifecycle::Quitting;
+
+/// The `charter` binary a hook runs, or none when the app cannot find one.
+///
+/// Its own directory first, because the app and the binary are built and shipped together —
+/// the one on `PATH` may be an older install, or the Python charter, and a hook pointed at
+/// either would be answering a different program's idea of these events. `CHARTER_BINARY`
+/// overrides it, which is how a scenario test points the hooks at the binary it just built.
+///
+/// It must EXIST: arming a hook at a path that is not there would put an error in the
+/// harness's log on every single event, which is worse than the chats reading `unknown`.
+fn charter_binary() -> Option<PathBuf> {
+    let named = std::env::var_os("CHARTER_BINARY").map(PathBuf::from);
+    let beside = std::env::current_exe()
+        .ok()
+        .and_then(|exe| Some(exe.parent()?.join("charter")));
+    named.into_iter().chain(beside).find(|path| path.is_file())
+}
+
+/// What the window is sent whenever a chat moves, and the one case that also interrupts.
+///
+/// The window is always told; the notification is the narrow part. It fires on the edge into
+/// the needs-you queue and only when the operator is not already looking at that chat — the
+/// window hidden, the window not focused, or a different chat in front. At fifty sessions a
+/// popup about the chat already on screen is noise, and noise is how a queue stops being read.
+///
+/// One wait cannot notify twice: the board answers "something changed" only on a change, so a
+/// `Stop` that lands on a chat already waiting from a `Notification` moves nothing and says
+/// nothing.
+fn told(app: &tauri::AppHandle, moved: Moved) {
+    let _ = app.emit("chat-moved", &moved);
+    if moved.needs_you && !already_looking_at(app, moved.session) {
+        let name = app
+            .try_state::<Chats>()
+            .and_then(|chats| {
+                chats
+                    .open_now()
+                    .into_iter()
+                    .find(|open| open.session == moved.session)
+                    .map(|open| open.name)
+            })
+            .unwrap_or_else(|| format!("chat {}", moved.session));
+        // Best effort, always. A desktop that refuses notifications, or an operator who
+        // turned them off, is not a reason for anything else here to stop working.
+        let _ = app
+            .notification()
+            .builder()
+            .title(name)
+            .body("needs you")
+            .show();
+    }
+}
+
+/// Whether the operator is already looking at this chat.
+fn already_looking_at(app: &tauri::AppHandle, session: u32) -> bool {
+    let Some(window) = app.get_webview_window("main") else {
+        return false;
+    };
+    // A window that cannot say is treated as not being looked at: a notification the
+    // operator did not need costs a glance, and one they needed and did not get costs a chat
+    // sitting unanswered.
+    if !window.is_visible().unwrap_or(false) || !window.is_focused().unwrap_or(false) {
+        return false;
+    }
+    app.try_state::<Chats>()
+        .is_some_and(|chats| chats.front() == Some(session))
+}
 
 /// The size a session starts at. The pane it lands in tells it the real one at once, and a
 /// chat put back at a launch has no pane yet to ask.
@@ -203,24 +273,32 @@ fn open_session(
     columns: u16,
     rows: u16,
 ) -> Result<u32, String> {
-    chats.start(
-        &Chat {
-            program: program.unwrap_or_else(sessions::shell),
-            args,
-            cwd: cwd.map(PathBuf::from),
-            name,
-            resume: None,
-            active: false,
-        },
-        Size { columns, rows },
-    )
+    let chat = Chat {
+        program: program.unwrap_or_else(sessions::shell),
+        args,
+        cwd: cwd.map(PathBuf::from),
+        name,
+        resume: None,
+        active: false,
+    };
+    // The board already knows about it: `Chats` announces a chat BEFORE its program starts,
+    // so its very first hook lands somewhere. Registering it here would be too late.
+    chats.start(&chat, Size { columns, rows })
 }
 
 /// Ends a session and everything it started. It is no longer a chat a quit would record.
 #[tauri::command]
 #[specta::specta]
-fn close_session(chats: tauri::State<'_, Chats>, session: u32) -> Result<(), String> {
-    chats.close(session)
+fn close_session(
+    chats: tauri::State<'_, Chats>,
+    hooks: tauri::State<'_, Hooks>,
+    session: u32,
+) -> Result<(), String> {
+    chats.close(session)?;
+    // Off the board entirely, not merely ended: a report that arrives for it afterwards —
+    // from a hook that outlived the harness by a moment — moves nothing.
+    hooks.board().closed(session);
+    Ok(())
 }
 
 /// The chats the app already has open — at a launch, the ones put back from the record.
@@ -317,6 +395,37 @@ impl From<chats::Open> for OpenChat {
     }
 }
 
+/// What every chat is doing, and which of them are asking for you.
+///
+/// The window asks once, when it opens; after that it is told (`chat-moved`). A chat the app
+/// has never heard from is `unknown`, which is what the spec says a harness with no state
+/// hook shows.
+#[tauri::command]
+#[specta::specta]
+fn chat_states(chats: tauri::State<'_, Chats>, hooks: tauri::State<'_, Hooks>) -> Vec<Moved> {
+    chats
+        .open_now()
+        .into_iter()
+        .map(|open| hooks.now(open.session))
+        .collect()
+}
+
+/// Why this chat can never report its state, where it cannot.
+///
+/// Codex is the case: its hooks live only in a machine-wide file, and it fires no
+/// `Notification` at all. A chat showing `unknown` with no reason looks like charter is
+/// broken rather than like the harness is different.
+#[tauri::command]
+#[specta::specta]
+fn why_unknown(chats: tauri::State<'_, Chats>, session: u32) -> Option<String> {
+    let harness = chats
+        .open_now()
+        .into_iter()
+        .find(|open| open.session == session)?
+        .harness;
+    chats.cannot_report(harness).map(str::to_owned)
+}
+
 /// Sends what a pane typed to the session's program.
 #[tauri::command]
 #[specta::specta]
@@ -388,6 +497,8 @@ fn commands() -> Builder<tauri::Wry> {
         watch_session,
         unwatch_session,
         running_sessions,
+        chat_states,
+        why_unknown,
         opened_chats,
         chats_that_would_not_start,
         chat_in_front,
@@ -435,7 +546,8 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             lifecycle::show(app);
         }))
-        .plugin(tauri_plugin_opener::init());
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init());
 
     // What the scenario tests drive the window through. The feature is off in every build
     // anyone is given, so nothing here can be reached in one.
@@ -467,18 +579,92 @@ pub fn run() {
             // an app that is killed, or crashes, runs no exit handler, and a day's chats
             // would go with it. Outside a plane there is nowhere to write it, and the app
             // still runs — it just cannot bring anything back next time.
+            // The channel a hook writes to, beside the record M1.7 already keeps. An app
+            // that cannot open it still runs: every chat reads `unknown`, which is exactly
+            // what the spec says a harness with no state hook shows.
+            let socket = hooks::socket_for(plane.as_deref());
+            let hooks = {
+                let window = app.handle().clone();
+                Hooks::listening_on(&socket, Box::new(move |moved| told(&window, moved)))
+                    .unwrap_or_else(|why| {
+                        eprintln!(
+                            "charter: no hook channel at {} ({why}); every chat will show \
+                             as unknown",
+                            socket.socket.display()
+                        );
+                        Hooks::deaf()
+                    })
+            };
+            let reporting = hooks.socket().map(|socket| sessions::Reporting {
+                socket: socket.to_path_buf(),
+            });
+
             let writing_to = plane.clone();
-            let chats = Chats::recorded_by(Box::new(move |record| {
-                if let Some(root) = &writing_to {
-                    // A record that cannot be written is not worth interrupting the
-                    // operator over, but it is worth saying: a refused record means every
-                    // later launch comes back empty, and silence makes that look like a
-                    // plane that never had chats in it.
-                    if let Err(why) = reopen::write(root, record) {
-                        eprintln!("charter: what is open was not recorded ({why})");
+            let mut chats = Chats::recorded_by_reporting_to(
+                Box::new(move |record| {
+                    if let Some(root) = &writing_to {
+                        // A record that cannot be written is not worth interrupting the
+                        // operator over, but it is worth saying: a refused record means every
+                        // later launch comes back empty, and silence makes that look like a
+                        // plane that never had chats in it.
+                        if let Err(why) = reopen::write(root, record) {
+                            eprintln!("charter: what is open was not recorded ({why})");
+                        }
                     }
-                }
-            }));
+                }),
+                reporting,
+            );
+            // Which `charter` a hook runs. Without one, nothing is armed and every chat
+            // reads `unknown` — never a hook pointed at a path that is not there.
+            let binary = charter_binary();
+            if binary.is_none() {
+                eprintln!(
+                    "charter: no `charter` binary beside the app, so no chat can report its \
+                     state; every one will show as unknown"
+                );
+            }
+            chats.arming_with(binary);
+            // **Before a single session is started, because `put_back` below starts them.**
+            // A harness fires `SessionStart` at its own exec, and a board that learned the
+            // chat's number afterwards would miss it — for a chat that is then idle, waiting
+            // for a first prompt, no second event ever comes and it reads `unknown` for the
+            // rest of the run. That is every chat of a relaunch, which is exactly the case
+            // the sidebar exists for. A review found it.
+            {
+                let board = hooks.shared_board();
+                chats.when_one_starts(Box::new({
+                    let board = std::sync::Arc::clone(&board);
+                    move |session, harness, conversation| {
+                        hooks::held_board(&board).opened(session, harness, conversation);
+                    }
+                }));
+                // And taken back if the program then fails to start: the announcement has to
+                // come first, so it can be about a chat that never happens.
+                chats.when_one_does_not_start(Box::new(move |session| {
+                    hooks::held_board(&board).closed(session);
+                }));
+            }
+            // Armed before a single session is started, because `put_back` starts them: a
+            // chat restored by a relaunch whose program dies at once must still be able to
+            // say so. The board is held directly rather than through the app's state, which
+            // is not managed yet at this point.
+            //
+            // No hook can report a program dying (the process is gone), so the operating
+            // system does. That is not charter reading a harness's output (ADR 0018) — it is
+            // the process's own exit status, and the only honest source for `failed`.
+            {
+                let board = hooks.shared_board();
+                let window = app.handle().clone();
+                chats
+                    .sessions()
+                    .when_one_ends(Box::new(move |session, exit| {
+                        let changed =
+                            hooks::held_board(&board).exited(session, hooks::code_of(&exit));
+                        if changed {
+                            told(&window, hooks::now(&board, session));
+                        }
+                    }));
+            }
             // Put back what was open before there is a window, so a relaunch does not
             // depend on a webview having run. The window asks `opened_chats` for the result.
             //
@@ -521,6 +707,7 @@ pub fn run() {
                 ),
             }
             reached("the record is back");
+            app.manage(hooks);
             app.manage(chats);
             app.manage(Plane(plane));
 

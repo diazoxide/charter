@@ -79,7 +79,11 @@ async function tabNames(): Promise<string[]> {
 /** How many fake harnesses this machine is running, asked of the operating system. */
 function harnessesRunning(): number {
   const ps = execFileSync("ps", ["-A", "-o", "command="], { encoding: "utf8" });
-  return ps.split("\n").filter((line) => line.includes("fake-harness")).length;
+  // The program a line RUNS, not any line that mentions the name, and one line is not one
+  // process: a command line containing newlines is several lines of `ps` output. Both
+  // mattered — a Claude Code session whose prompt discussed `fake-harness` was counted three
+  // times, and this test failed at 53 of an expected 50 with nothing wrong.
+  return ps.split("\n").filter((line) => /^\S*\/fake-harness(\s|$)/.test(line)).length;
 }
 
 describe("the window", () => {
