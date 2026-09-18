@@ -276,6 +276,33 @@ SCENARIOS = [
         plane="daily",
         python=["workspace", "vision", "Ship it\x1f", "-w", "alpha"],
     ),
+    # The read commands. Their OUTPUT is the presentation layer M1.1 does not port, but a
+    # read must not change the plane, and until these existed nothing checked that.
+    Scenario(
+        name="workspace-list-changes-nothing",
+        plane="daily",
+        python=["workspace", "list"],
+        pins_the_clock=False,
+        stdout_differs="charter prints a table — active workspace, mode, vision — and the "
+        "Rust CLI prints one name per line. Both list the same workspaces, including "
+        "`default`, which is listable whether or not its directory exists.",
+    ),
+    Scenario(
+        name="todo-list-changes-nothing",
+        plane="daily",
+        python=["ws", "todo", "-w", "alpha"],
+        pins_the_clock=False,
+        stdout_differs="charter prints an indented row with an age column and an escaped "
+        "title; the Rust CLI prints slug and title. Porting the row is M2's.",
+    ),
+    Scenario(
+        name="a-duplicate-todo-is-refused",
+        plane="daily",
+        # `alpha` already has "Review the rollout plan". Duplicate INTENT is refused because
+        # closing one of a near-identical pair leaves its twin looking outstanding.
+        python=["ws", "todo", "Review the rollout plan", "-w", "alpha"],
+        refusal="already on the list",
+    ),
 ]
 
 
@@ -350,39 +377,49 @@ def _run(argv: list[str], root: Path, home: Path, pins: Path) -> subprocess.Comp
 def _diff_trees(left: Path, right: Path, ignore: dict[str, str]) -> list[str]:
     """Every way the two planes differ, as lines to print. Empty means identical."""
 
-    def paths(root: Path) -> set[str]:
-        found = set()
-        for p in root.rglob("*"):
-            if not p.is_file():
-                continue
-            rel = str(p.relative_to(root))
-            if any(rel == k or rel.startswith(f"{k}{os.sep}") for k in ignore):
-                continue
-            found.add(rel)
-        return found
+    def nodes(root: Path) -> dict[str, str]:
+        """Every entry under *root* by path, with WHAT IT IS.
 
-    def dirs(root: Path) -> set[str]:
-        found = set()
+        Built from `lstat`, never `is_file()`: that follows a link, so a symlink whose target
+        has matching bytes was indistinguishable from a regular file — and the most
+        security-relevant scenario here is about a symlink. A dangling link was in neither
+        the file set nor the directory set, so it was invisible altogether.
+        """
+        found = {}
         for p in root.rglob("*"):
-            if not p.is_dir():
-                continue
             rel = str(p.relative_to(root))
             if any(rel == k or rel.startswith(f"{k}{os.sep}") for k in ignore):
                 continue
-            found.add(rel)
+            if p.is_symlink():
+                # Relative to the side's own directory: each copy lives under `python/` or
+                # `rust/`, so an identical link reads as two different absolute paths.
+                target = os.readlink(p)
+                side = root.parent
+                if os.path.isabs(target):
+                    try:
+                        target = f"<side>/{Path(target).relative_to(side)}"
+                    except ValueError:
+                        pass
+                found[rel] = f"symlink -> {target}"
+            elif p.is_dir():
+                found[rel] = "dir"
+            elif p.is_file():
+                found[rel] = "file"
+            else:
+                found[rel] = "other"
         return found
 
     out: list[str] = []
-    for missing in sorted(dirs(left) - dirs(right)):
-        out.append(f"    directory only python made: {missing}")
-    for added in sorted(dirs(right) - dirs(left)):
-        out.append(f"    directory only rust made:   {added}")
-    a, b = paths(left), paths(right)
-    for rel in sorted(a - b):
-        out.append(f"    only python wrote: {rel}")
-    for rel in sorted(b - a):
-        out.append(f"    only rust wrote:   {rel}")
-    for rel in sorted(a & b):
+    a, b = nodes(left), nodes(right)
+    for rel in sorted(set(a) - set(b)):
+        out.append(f"    only python has: {rel} ({a[rel]})")
+    for rel in sorted(set(b) - set(a)):
+        out.append(f"    only rust has:   {rel} ({b[rel]})")
+    for rel in sorted(set(a) & set(b)):
+        if a[rel] != b[rel]:
+            out.append(f"    kind differs: {rel} — python {a[rel]}, rust {b[rel]}")
+    # Only real files have bytes and a mode worth comparing.
+    for rel in sorted(k for k in set(a) & set(b) if a[k] == "file" == b[k]):
         if not filecmp.cmp(left / rel, right / rel, shallow=False):
             out.append(f"    differs: {rel}")
             out.extend(_diff_file(left / rel, right / rel))

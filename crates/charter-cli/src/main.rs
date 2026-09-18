@@ -100,6 +100,9 @@ impl Common {
     }
 }
 
+/// The workspace every plane starts on, whether or not its directory exists.
+const DEFAULT_WORKSPACE: &str = "default";
+
 fn plane() -> Result<Plane, String> {
     let cwd =
         std::env::current_dir().map_err(|e| format!("cannot read the current directory: {e}"))?;
@@ -121,7 +124,14 @@ fn run() -> Result<(), String> {
             println!("{}", plane()?.root().display());
         }
         Command::Workspace(WorkspaceCommand::List) => {
-            for name in plane()?.workspaces().map_err(|e| e.to_string())? {
+            let mut names = plane()?.workspaces().map_err(|e| e.to_string())?;
+            // `default` is always listable, whether or not the directory is there: it is the
+            // one every plane starts on, and charter adds it the same way.
+            if !names.iter().any(|n| n == DEFAULT_WORKSPACE) {
+                names.push(DEFAULT_WORKSPACE.to_string());
+                names.sort();
+            }
+            for name in names {
                 println!("{name}");
             }
         }
@@ -173,6 +183,14 @@ fn run() -> Result<(), String> {
                     ));
                 }
                 [text] => {
+                    // Duplicate INTENT is worse than duplicate memory: closing one of a
+                    // near-identical pair leaves its twin looking outstanding, so the list
+                    // starts lying about what is left. Warn and skip rather than merge.
+                    if let Some(dup) =
+                        charter_core::memstore::duplicate_of(&ws.dir().join("todos"), text)
+                    {
+                        return Err(format!("already on the list: {dup}"));
+                    }
                     ws.add_todo(text, stamp).map_err(|e| e.to_string())?;
                 }
                 _ => return Err("usage: charter ws todo [-w WS] [\"<text>\" | done <slug>]".into()),

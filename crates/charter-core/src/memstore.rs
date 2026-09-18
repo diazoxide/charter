@@ -188,6 +188,85 @@ pub fn resolve(dir: &std::path::Path, ident: &str) -> Option<std::path::PathBuf>
     hits.into_iter().next()
 }
 
+/// The comparable words in `text` — `memstore.wordset`'s tokenizer.
+///
+/// Lowercased, split on runs of non-word characters, and **only words longer than three
+/// characters** survive. Both near-duplicate callers must tokenize identically or the shared
+/// threshold means two different things.
+pub fn wordset(text: &str) -> std::collections::BTreeSet<String> {
+    text.to_lowercase()
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|w| w.chars().count() > 3)
+        .map(str::to_string)
+        .collect()
+}
+
+/// A memory's content with its `# title` and `_stamp_` lines dropped and whitespace
+/// normalised — the basis for duplicate comparison.
+pub fn comparable_body(text: &str) -> String {
+    let kept: Vec<&str> = crate::mdsection::split_lines(text)
+        .into_iter()
+        .filter(|line| !line.starts_with("# "))
+        .filter(|line| {
+            let t = line.trim();
+            !(t.starts_with('_') && t.ends_with('_') && t.contains('·'))
+        })
+        .collect();
+    kept.join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// Above this share of words in common, two todos are "the same intent".
+pub const DUPLICATE_THRESHOLD: f64 = 0.5;
+
+/// The title of a stored todo that already says this, or `None`.
+///
+/// Duplicate INTENT is worse than duplicate memory: closing one of a near-identical pair
+/// leaves its twin looking outstanding, so the list starts lying about what is left. charter
+/// warns and skips rather than merging, so the writer learns it is already there.
+///
+/// Jaccard — intersection over UNION. Dividing by the longer side looks equivalent and is
+/// not: on text this short a single shared word is half the content, and "first thing" and
+/// "second thing" scored 0.5.
+pub fn duplicate_of(dir: &std::path::Path, text: &str) -> Option<String> {
+    let words = wordset(text);
+    if words.is_empty() {
+        return None;
+    }
+    for path in std::fs::read_dir(dir).ok()?.filter_map(Result::ok) {
+        let path = path.path();
+        if path.extension().is_none_or(|e| e != "md") || path.file_name()? == INDEX {
+            continue;
+        }
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let title = title_of_stored(&raw);
+        let other = wordset(&format!("{title} {}", comparable_body(&raw)));
+        if other.is_empty() {
+            continue;
+        }
+        let shared = words.intersection(&other).count() as f64;
+        let union = words.union(&other).count() as f64;
+        if shared / union >= DUPLICATE_THRESHOLD {
+            return Some(title);
+        }
+    }
+    None
+}
+
+/// The `# ` heading of a stored memory.
+fn title_of_stored(raw: &str) -> String {
+    crate::mdsection::split_lines(raw)
+        .into_iter()
+        .find_map(|line| line.strip_prefix("# "))
+        .map(|rest| py_strip(rest).to_string())
+        .unwrap_or_default()
+}
+
 /// Delete one memory and its index line. The index is rewritten as the surviving lines
 /// joined with `\n` plus one trailing `\n` — and nothing at all when none survive.
 pub fn forget(dir: &std::path::Path, ident: &str) -> std::io::Result<()> {
@@ -425,5 +504,49 @@ mod write_tests {
         let (_tmp, store) = store();
 
         assert!(write(&store, "   \n\n ", None, true, "persistent", true, stamp()).is_err());
+    }
+}
+
+#[cfg(test)]
+mod duplicate_tests {
+    use super::*;
+
+    // Oracles from `charter.memstore.wordset` / `.body` and `charter.todos._same_text`.
+
+    #[test]
+    fn only_words_longer_than_three_characters_count() {
+        assert_eq!(
+            wordset("Review the rollout plan")
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec!["plan", "review", "rollout"],
+            "`the` is three characters and is dropped"
+        );
+        assert_eq!(
+            wordset("a ab abc abcd abcde")
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec!["abcd", "abcde"]
+        );
+    }
+
+    #[test]
+    fn a_word_is_unicode_so_an_accented_one_is_not_split_apart() {
+        assert_eq!(
+            wordset("café déjà-vu naïve")
+                .into_iter()
+                .collect::<Vec<_>>(),
+            vec!["café", "déjà", "naïve"]
+        );
+    }
+
+    #[test]
+    fn the_comparable_body_drops_the_heading_and_the_stamp_and_collapses_space() {
+        assert_eq!(
+            comparable_body(
+                "# Title here\n\n_2026-03-02 09:14 · persistent_\n\nSome   body\ntext\n"
+            ),
+            "some body text"
+        );
     }
 }
