@@ -238,23 +238,29 @@ fn a_change_that_is_not_a_whole_number_above_zero_is_dropped_and_the_row_still_d
 fn a_sigil_that_is_not_one_of_the_two_a_forge_uses_is_dropped() {
     let (_keep, at) = plane();
     let svc = tree(&at);
-    cache_holding(
-        &at,
-        &svc,
-        &format!(
-            r#"{{"branch": "main", "ts": {}, "change": 4, "sigil": "\u001b[2J"}}"#,
-            now()
-        ),
-    );
+    // A whole escape sequence AND a single ordinary character. Only the second holds the
+    // allowlist: the first is refused by the length check alone, so a version that took any
+    // single character passed a test written with the escape sequence only. A mutation found
+    // that.
+    for hostile in [r#""\u001b[2J""#, r#""x""#] {
+        cache_holding(
+            &at,
+            &svc,
+            &format!(
+                r#"{{"branch": "main", "ts": {}, "change": 4, "sigil": {hostile}}}"#,
+                now()
+            ),
+        );
 
-    let reading = cistate::read(&at)
-        .expect("the cache reads")
-        .about(&svc, "main");
+        let reading = cistate::read(&at)
+            .expect("the cache reads")
+            .about(&svc, "main");
 
-    assert!(
-        matches!(reading, Reading::Fetched { sigil: None, .. }),
-        "{reading:?}"
-    );
+        assert!(
+            matches!(reading, Reading::Fetched { sigil: None, .. }),
+            "{hostile} was taken as a sigil: {reading:?}"
+        );
+    }
 }
 
 #[test]

@@ -260,8 +260,12 @@ fn a_tree_charter_could_not_read_says_so_and_never_reads_as_clean() {
 
     let said = format!("{refusal}");
     assert!(said.contains("not the same as it being clean"), "{said}");
-    // git's own words, so the operator is sent to the thing that is actually wrong.
+    // git's OWN words, so the operator is sent to the thing that is actually wrong. Asserted
+    // against charter's fallback specifically: with the failed-exit branch taken out, the
+    // read still ends in an error — the one that says the output named no branch — and a
+    // test that only asked for "some error" would not notice the diagnosis had gone.
     assert!(!refusal.why.is_empty(), "{refusal:?}");
+    assert_ne!(refusal.why, "git named no branch", "{refusal:?}");
 }
 
 #[test]

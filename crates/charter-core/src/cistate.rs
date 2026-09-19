@@ -324,6 +324,11 @@ mod tests {
         assert_eq!(taken("\"##\""), None);
         assert_eq!(taken("\"\\u001b[2J\""), None);
         assert_eq!(taken("7"), None);
+        // ONE character that is not a sigil. Without this the allowlist is held by nothing:
+        // every other case above is refused by the length check alone, so a version that
+        // took any single character passed the whole test. A mutation found that.
+        assert_eq!(taken("\"x\""), None);
+        assert_eq!(taken("\"\\u0007\""), None);
     }
 
     #[test]
