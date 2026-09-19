@@ -723,6 +723,44 @@ fn a_profiles_own_env_table_is_not_mistaken_for_a_nested_profile() {
 }
 
 #[test]
+fn an_env_holding_a_value_that_is_not_text_refuses_the_profile() {
+    // Same run, the same file. `env = { A = 1 }` was let through as `A=""` once the guard
+    // on every value being text was widened to `true` — the operator's value replaced by
+    // nothing, and the chat started anyway.
+    let dir = plane(
+        "",
+        "[harness.x]\nkind = \"claude\"\ncommand = [\"claude\"]\nenv = { A = 1 }\n",
+    );
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(
+        why(&set, "x"),
+        "profile 'x' has an env that is not a table of text values — write env = { NAME = \
+         \"value\" }."
+    );
+    assert!(set.get("x").is_none());
+}
+
+#[test]
+fn a_quoted_back_value_holding_an_apostrophe_is_quoted_the_way_python_quotes_it() {
+    // Python's `repr` switches to double quotes for a string holding a `'` and no `"` —
+    // `["it's"]`, not `['it\'s']`. Only strings with neither were ever quoted back, so the
+    // switch could be deleted unnoticed and the two implementations would give two answers
+    // about the same file.
+    let dir = plane(
+        "",
+        "[harness.x]\nkind = [\"it's\"]\ncommand = [\"claude\"]\n",
+    );
+
+    assert_eq!(
+        why(&profiles::derive(dir.path()), "x"),
+        "profile 'x' has kind [\"it's\"], which is not a harness charter can launch — one of: \
+         claude, opencode, codex. Set kind to one of them."
+    );
+}
+
+#[test]
 fn the_launch_read_is_the_one_that_has_already_asked_git() {
     // `current` is the unchecked read; pairing it with the git check by hand is a pairing
     // one caller will forget, and what that lets through is a command out of a file every
