@@ -374,7 +374,7 @@ fn mirrored(plane: &Path) -> BTreeMap<String, String> {
 /// refuse the whole layer and mirror nothing at all. The question that belongs here is the
 /// one `within_plane` answers — does this resolve inside the plane — with both ends resolved,
 /// which is also what makes a macOS `/var` plane work at all.
-fn readable_text(plane: &Path, path: &Path) -> Option<String> {
+fn readable_text(_plane: &Path, path: &Path) -> Option<String> {
     // MUTATION: the plane containment gate, dropped.
     std::fs::read_to_string(path).ok()
 }
@@ -622,7 +622,7 @@ enum Plan {
     Foreign,
 }
 
-fn planned(tree: &Path, rel: &str, text: &str, record: &BTreeMap<String, String>) -> Plan {
+fn planned(tree: &Path, rel: &str, text: &str, _record: &BTreeMap<String, String>) -> Plan {
     let path = tree.join(rel);
     let Ok(on_disk) = std::fs::read_to_string(&path) else {
         // Absent, a directory, unreadable, or not text. `symlink_metadata` tells the first
@@ -657,11 +657,8 @@ fn write_into(tree: &Path, rel: &str, text: &str) -> Result<(), String> {
     // outside every checkout, before any containment check ever ran. The second is for the
     // component swapped for a link between the two, which narrows the window `contain`
     // documents as structural.
-    let linked = || {
-        Err("it is reached through a symlink, and charter will not write through one".to_owned())
-    };
+    // MUTATION: the refusal this used to build, dropped with the checks.
     // MUTATION: both link checks, dropped.
-    let _ = &linked;
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     write_whole(&path, text)
 }
@@ -744,7 +741,7 @@ fn git_dir(root: &Path) -> Option<PathBuf> {
 /// pattern in the main repository's `.git/info/exclude` hides it. `commondir` is the pointer
 /// git itself leaves for this, holding a path relative to the worktree's gitdir.
 pub fn exclude_file(root: &Path) -> Option<PathBuf> {
-    let mut dir = git_dir(root)?;
+    let dir = git_dir(root)?;
     // MUTATION: the commondir hop, dropped.
     Some(dir.join("info").join("exclude"))
 }
