@@ -10,7 +10,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use charter_core::cistate::{self, Reading};
+use charter_core::cistate::{self, NotRead, Reading};
 
 /// A plane with a `.charter/cache/` in it, and nothing else.
 fn plane() -> (tempfile::TempDir, PathBuf) {
@@ -301,7 +301,12 @@ fn a_cache_file_that_is_a_symlink_is_refused_rather_than_followed() {
 
     let refusal = cistate::read(&at).expect_err("charter's own path may not be a link");
 
-    assert!(format!("{refusal}").contains("symlink"), "{refusal}");
+    // The VARIANT, not the word: a link at the leaf is also "not a regular file", and a test
+    // that accepted either would stay green with the link walk taken out entirely.
+    assert!(
+        matches!(refusal, NotRead::ThroughALink { .. }),
+        "refused for the right reason: {refusal}"
+    );
 }
 
 #[test]
@@ -320,7 +325,10 @@ fn a_cache_directory_that_is_a_symlink_is_refused_too() {
 
     let refusal = cistate::read(&at).expect_err("charter's own path may not be a link");
 
-    assert!(format!("{refusal}").contains("symlink"), "{refusal}");
+    assert!(
+        matches!(refusal, NotRead::ThroughALink { .. }),
+        "refused for the right reason: {refusal}"
+    );
 }
 
 #[test]
@@ -331,6 +339,10 @@ fn a_cache_that_is_not_a_regular_file_is_refused_rather_than_opened() {
 
     let refusal = cistate::read(&at).expect_err("a directory is not a cache");
 
+    assert!(
+        matches!(refusal, NotRead::NotAFile { .. }),
+        "refused for the right reason: {refusal}"
+    );
     assert!(format!("{refusal}").contains("directory"), "{refusal}");
 }
 
