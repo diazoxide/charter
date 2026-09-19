@@ -1,8 +1,13 @@
-import { describe, expect, test, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, test, vi } from "vitest";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { RemovePiece, WorktreeMark } from "./Worktree";
 import type { ChatWorktree } from "./bindings";
+
+// This project does not run vitest with `globals`, so nothing unmounts a render on its own:
+// every test file here registers this, and without it a later test sees the earlier one's
+// DOM still on the page.
+afterEach(cleanup);
 
 const piece: ChatWorktree = {
   workspace: "ide",
