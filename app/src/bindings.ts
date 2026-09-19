@@ -102,7 +102,16 @@ export const commands = {
 	 */
 	startOptions: () => typedError<StartOptions, string>(__TAURI_INVOKE("start_options")),
 	/**
-	 *  Records that the operator approved running this profile's command, exactly as it stands.
+	 *  Records that the operator approved running this profile's command — **the one they were
+	 *  shown**.
+	 * 
+	 *  `shown` is the exact line the dialog drew. It is checked against the file again here,
+	 *  and a mismatch refuses: between the picker reading the profile and the operator pressing
+	 *  the button, `charter.local.toml` can change — it is gitignored, so an edit to it leaves
+	 *  no diff for a reviewer to catch, and nothing stops a chat writing plane config. Without
+	 *  this check the approval recorded whatever was on disk at CLICK time, so the operator
+	 *  could approve, and charter could run, a command they never read. A review probe found
+	 *  it, and it defeats the one prompt ADR 0022 exists to put in front of a launch.
 	 * 
 	 *  Its own command, and a separate click from the one that starts the chat: this IS the
 	 *  approval, and a command that both asked and ran would be asking nothing.
