@@ -2,7 +2,13 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import "./App.css";
-import { commands, type OpenChat, type Sidebar as SidebarModel } from "./bindings";
+import {
+  commands,
+  type OpenChat,
+  type Sidebar as SidebarModel,
+  type StartOptions,
+} from "./bindings";
+import { StartChat } from "./StartChat";
 import { QuitWarning } from "./QuitWarning";
 import { SessionPane } from "./SessionPane";
 import { Sidebar } from "./Sidebar";
@@ -40,6 +46,18 @@ function App() {
   const [reopened, setReopened] = useState<OpenChat[]>([]);
   /** Whether the operator is being asked about quitting. */
   const [asking, setAsking] = useState(false);
+  /** The picker, when a new chat has been asked for, and what to do with the session it
+   *  starts. A harness starts only once a row in it is picked: nothing is opened until then,
+   *  so cancelling leaves nothing to tear down. Both a new tab and a split come through
+   *  here, because both start a harness and ADR 0022 admits no path that does not pick. */
+  const [picking, setPicking] = useState<{
+    options: StartOptions;
+    where: { tab: true } | { split: Direction };
+  }>();
+  /** Why the last start did not happen, shown in the picker rather than behind it. */
+  const [pickerTrouble, setPickerTrouble] = useState<string>();
+  /** The one line to say when charter wired a profile on its way to starting a chat. */
+  const [wired, setWired] = useState<string>();
   /** Chats this launch could not start, by name and why. They are still recorded. */
   const [wouldNotStart, setWouldNotStart] = useState<[string, string][]>([]);
   /** Whether the core has answered what it already has open. Until it has, "no tabs" is
@@ -182,28 +200,77 @@ function App() {
   // relating the two. Null — the operator's home — until a plane is read.
   const startIn = sidebar?.workspaces.find((ws) => ws.name === focused)?.path ?? null;
 
-  /** Starts a session for a new pane, or says why it could not start. The name is what the
-   *  tab will be called, so the record brings the chat back under it. */
-  const startSession = useCallback(
-    async (name: string): Promise<number | undefined> => {
-      const opened = await commands
-        .openSession(null, [], startIn, name, STARTING_SIZE.columns, STARTING_SIZE.rows)
+  /** Asks which profile and which persona. It starts nothing by itself. */
+  const ask = useCallback(async (where: { tab: true } | { split: Direction }) => {
+    setPickerTrouble(undefined);
+    const options = await commands
+      .startOptions()
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    if (options.status === "error") {
+      setTrouble(options.error);
+      return;
+    }
+    setPicking({ options: options.data, where });
+  }, []);
+
+  const newTab = useCallback(() => void ask({ tab: true }), [ask]);
+
+  /** A row was picked: the chat starts on that profile, with that persona. */
+  const startPicked = useCallback(
+    async (profile: string, persona: string | null) => {
+      const where = picking?.where;
+      if (where === undefined) return;
+      const inFront = now.current.inFront;
+      const name =
+        "split" in where && inFront !== undefined
+          ? now.current.byId[inFront].name
+          : String(now.current.named.tabs + 1);
+      const started = await commands
+        .startChat(profile, persona, startIn, name, STARTING_SIZE.columns, STARTING_SIZE.rows)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-      if (opened.status === "error") {
-        setTrouble(opened.error);
-        return undefined;
+      if (started.status === "error") {
+        // In the picker, not behind it: the operator is still choosing, and a refusal they
+        // cannot see beside the rows is one they cannot act on.
+        setPickerTrouble(started.error);
+        return;
       }
-      setTrouble(undefined);
-      return opened.data;
+      setPicking(undefined);
+      setPickerTrouble(undefined);
+      // Software went into somebody's config folder, so it is said.
+      setWired(started.data.wired ?? undefined);
+      const session = started.data.session;
+      if ("tab" in where) {
+        change((tabs) => openTab(tabs, session, name));
+        return;
+      }
+      const before = now.current;
+      // The tab that was to be split can have closed while the picker was open. Nothing
+      // would show that session, so it is ended rather than left running unseen.
+      if (change((tabs) => splitFocusedPane(tabs, where.split, session)) === before) {
+        void commands.closeSession(session);
+      }
     },
-    [startIn],
+    [change, picking, startIn],
   );
 
-  const newTab = useCallback(async () => {
-    const name = String(now.current.named.tabs + 1);
-    const session = await startSession(name);
-    if (session !== undefined) change((tabs) => openTab(tabs, session, name));
-  }, [change, startSession]);
+  /** The approval IS this click. After it, the whole chain of checks runs again from the
+   *  top before anything is exec'd, so a yes never walks past a refusal standing behind it. */
+  const approveAndStart = useCallback(
+    async (profile: string, persona: string | null, shown: string) => {
+      const said = await commands
+        .approveProfile(profile, shown)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (said.status === "error") {
+        setPickerTrouble(said.error);
+        return;
+      }
+      // The persona the OPERATOR picked, carried up from the dialog with the profile. It
+      // used to take the plane's default out of the options instead, which silently threw
+      // away the choice on the one path where a profile is being used for the first time.
+      await startPicked(profile, persona);
+    },
+    [startPicked],
+  );
 
   const quit = useCallback(() => {
     setAsking(false);
@@ -216,23 +283,7 @@ function App() {
     void commands.quitCancelled().catch(() => undefined);
   }, []);
 
-  const split = useCallback(
-    async (direction: Direction) => {
-      const name =
-        now.current.inFront === undefined
-          ? String(now.current.named.tabs + 1)
-          : now.current.byId[now.current.inFront].name;
-      const session = await startSession(name);
-      if (session === undefined) return;
-      const before = now.current;
-      // The tab that was to be split can have closed while the session was starting. Nothing
-      // would show that session, so it is ended rather than left running unseen.
-      if (change((tabs) => splitFocusedPane(tabs, direction, session)) === before) {
-        void commands.closeSession(session);
-      }
-    },
-    [change, startSession],
-  );
+  const split = useCallback((direction: Direction) => void ask({ split: direction }), [ask]);
 
   const closePane = useCallback(() => {
     const tab =
@@ -286,10 +337,10 @@ function App() {
           <button onClick={() => void newTab()}>New tab</button>
         </div>
         <div className="doing">
-          <button disabled={!inFront} onClick={() => void split("row")}>
+          <button disabled={!inFront} onClick={() => split("row")}>
             Split right
           </button>
-          <button disabled={!inFront} onClick={() => void split("column")}>
+          <button disabled={!inFront} onClick={() => split("column")}>
             Split down
           </button>
           <button disabled={!inFront} onClick={closePane}>
@@ -319,6 +370,14 @@ function App() {
       {trouble && (
         <p className="trouble" role="alert">
           {trouble}
+        </p>
+      )}
+
+      {/* Software went into a config folder on the way to starting a chat, so it says what
+          and where. Dismissible, because it is news and not a fault. */}
+      {wired && (
+        <p className="came-back" role="status">
+          {wired} <button onClick={() => setWired(undefined)}>dismiss</button>
         </p>
       )}
 
@@ -363,6 +422,19 @@ function App() {
         </div>
       </div>
 
+      {picking && (
+        <StartChat
+          options={picking.options}
+          trouble={pickerTrouble}
+          onStart={(profile, persona) => void startPicked(profile, persona)}
+          onApprove={(profile, persona, shown) => void approveAndStart(profile, persona, shown)}
+          onCancel={() => {
+            setPicking(undefined);
+            setPickerTrouble(undefined);
+          }}
+        />
+      )}
+
       {asking && <QuitWarning chats={open} states={states} onQuit={quit} onCancel={dontQuit} />}
     </main>
   );
@@ -380,6 +452,8 @@ function chatOf(reopened: OpenChat[], session: number, name: string): OpenChat {
       in_front: false,
       resumed: null,
       fresh: null,
+      profile: null,
+      persona: null,
     }
   );
 }

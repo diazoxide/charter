@@ -1,5 +1,5 @@
 import { config as base } from "./wdio.conf.js";
-import { built, writeReportingShell } from "./harness.js";
+import { built, copyFixturePlane, declareAProfile, writeReportingShell } from "./harness.js";
 
 /**
  * The scenario tests for what a chat is doing — a run of their own, because the harness is
@@ -11,6 +11,15 @@ import { built, writeReportingShell } from "./harness.js";
  * output until a line is typed, so `running` can be seen without racing the turn's end. Two
  * harnesses is two runs.
  */
+// A plane of its own, with a profile whose program is the REPORTING harness: a chat here
+// starts through the picker like any other, and what it runs has to be the harness this run
+// is about.
+const plane = copyFixturePlane();
+const harness = writeReportingShell(built("fake-harness"), built("charter"));
+// `codex`, because that is the kind this stand-in behaves like: it reports no pid and no
+// conversation id, which is exactly the rule Codex chats are judged by.
+declareAProfile(plane, harness, "codex");
+
 export const config: WebdriverIO.Config = {
   ...base,
   specs: ["./specs/**/*.state.e2e.ts"],
@@ -24,7 +33,7 @@ export const config: WebdriverIO.Config = {
         appBinaryPath: built(process.platform === "win32" ? "charter-app.exe" : "charter-app"),
         captureBackendLogs: true,
         captureFrontendLogs: true,
-        env: { SHELL: writeReportingShell(built("fake-harness"), built("charter")) },
+        env: { SHELL: harness, CHARTER_ROOT: plane },
       },
     ],
   ],

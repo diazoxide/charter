@@ -87,7 +87,20 @@ function ChatRow({ chat, states }: { chat: OpenChat; states: ChatStates }) {
           reads `unknown`, which is what the spec says it should (decision 3) — the word is
           the mark's accessible name, so it is never colour alone. */}
       <ChatState state={stateOf(states, chat.session)} />
-      {chat.harness && <span className="harness"> · {chat.harness}</span>}
+      {/* The PROFILE where there is one, and the harness otherwise. A profile is what the
+          operator picked and what a relaunch looks up again; the kind is what the plane
+          calls the harness. Showing the profile alone would hide which harness it runs, and
+          showing the kind alone would hide which account. */}
+      {chat.profile ? (
+        <span className="harness">
+          {" · "}
+          {chat.profile}
+          {chat.harness && <span className="kind"> ({chat.harness})</span>}
+        </span>
+      ) : (
+        chat.harness && <span className="harness"> · {chat.harness}</span>
+      )}
+      {chat.persona && <span className="persona"> · {chat.persona}</span>}
       {chat.cwd && <code className="cwd">{chat.cwd}</code>}
     </>
   );

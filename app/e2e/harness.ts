@@ -59,6 +59,15 @@ export function writeReportingShell(fakeHarness: string, charter: string): strin
     [
       "#!/bin/sh",
       "# Written by the scenario tests: a harness that reports its own state through hooks.",
+      "#",
+      "# It reports no pid and no conversation id of its own, which is why the profile that",
+      "# runs it declares `kind = \"codex\"`. A chat's harness is known from its profile's",
+      "# declared kind since M1.2, and Claude Code's rule (ADR 0024) admits a report only if",
+      "# it carries a matching `CLAUDE_PID` AND names the conversation charter chose — which",
+      "# a shell script cannot do without implementing Claude Code's whole hook payload.",
+      "# Codex's rule is the narrow one this stand-in actually meets: the first report of a",
+      "# chat is adopted. Declaring it as the kind it BEHAVES like is honest; teaching it to",
+      "# impersonate a Claude Code would be a fixture testing itself.",
       "# The turn's rising edge, before a byte of output exists.",
       `${JSON.stringify(charter)} hook userpromptsubmit </dev/null`,
       `exec ${JSON.stringify(fakeHarness)} \\`,
@@ -111,4 +120,118 @@ export function copyFixturePlane(name = "daily"): string {
     }
   }
   return root;
+}
+
+/**
+ * A `charter.local.toml` in `plane` declaring one profile that runs `program`.
+ *
+ * The profile's own program is a wrapper around `program`, and both halves of that are the
+ * real thing being tested. Charter probes a profile's command with `plugin list --json`
+ * before it will start a chat on it — a chat whose config folder holds no charter plugin
+ * looks guarded and is not (ADR 0022) — so the wrapper answers that probe as a wired Claude
+ * Code would. And charter puts `--session-id <uuid> --name <name>` on the line for a Claude
+ * Code chat, which the fake harness has no flags for, so the wrapper drops its arguments
+ * exactly as a real wrapper profile does.
+ *
+ * Two profiles are declared, not one. `scenario` is the default, which every spec that just
+ * wants a chat picks; `needs-approval` exists only for the picker scenario's approval test.
+ * Approving is recorded per profile and the specs share one app process, so a single profile
+ * would make that test depend on running before every other spec — and the glob does not
+ * promise that.
+ */
+export function declareAProfile(plane: string, program: string, kind = "claude"): void {
+  // A Codex profile is gated on a file, not on a probe: charter refuses to start a Codex
+  // chat unless `$CODEX_HOME/config.toml` carries all three marks — the plugin enabled, the
+  // harness named, and a guard hook the operator trusted — because a hook Codex has not
+  // trusted is inert, and a plugin nobody approved reads exactly like wired to anything that
+  // stops at the plugin table. So a plane that declares one writes that home.
+  const env: Record<string, string> = kind === "codex" ? { CODEX_HOME: writeCodexHome(plane) } : {};
+  const wrapper = join(plane, "claude-stand-in");
+  writeFileSync(
+    wrapper,
+    [
+      "#!/bin/sh",
+      "# Written by the scenario tests: a profile's command, which charter probes first.",
+      'if [ "$1" = "plugin" ]; then',
+      '  echo \'[{"id":"charter@charter","scope":"user","enabled":true}]\'',
+      "  exit 0",
+      "fi",
+      "# Charter starts a Claude Code chat under an id it chose (`--session-id <uuid>`),",
+      "# and a report counts as that chat's harness speaking only if it names the SAME",
+      "# id (ADR 0024). A real Claude Code reports the id it was given; this stand-in has",
+      "# to as well, so it reads the flag off its own command line and puts it where a",
+      "# hook looks. Everything else is dropped, which is what a wrapper profile does.",
+      "while [ $# -gt 0 ]; do",
+      '  if [ "$1" = "--session-id" ]; then',
+      "    CLAUDE_CODE_SESSION_ID=$2",
+      "    export CLAUDE_CODE_SESSION_ID",
+      "  fi",
+      "  shift",
+      "done",
+      `exec ${JSON.stringify(program)}`,
+      "",
+    ].join("\n"),
+  );
+  chmodSync(wrapper, 0o755);
+  writeFileSync(
+    join(plane, "charter.local.toml"),
+    [
+      "[harness]",
+      'default = "scenario"',
+      "",
+      "[harness.scenario]",
+      `kind = ${JSON.stringify(kind)}`,
+      `command = [${JSON.stringify(wrapper)}]`,
+      ...envLines(env),
+      "",
+      "[harness.needs-approval]",
+      `kind = ${JSON.stringify(kind)}`,
+      `command = [${JSON.stringify(wrapper)}]`,
+      ...envLines(env),
+      "",
+    ].join("\n"),
+  );
+}
+
+/** A profile's `env` table, or nothing when it sets none. */
+function envLines(env: Record<string, string>): string[] {
+  const names = Object.keys(env);
+  if (names.length === 0) return [];
+  return [`env = { ${names.map((n) => `${n} = ${JSON.stringify(env[n])}`).join(", ")} }`];
+}
+
+/**
+ * A `CODEX_HOME` inside `plane` carrying the three marks charter requires, and an installed
+ * plugin whose `hooks.json` places charter's guard.
+ *
+ * The trust key is spelled the way Codex spells it — `<plugin>:hooks/hooks.json:<event>:
+ * <group>:<hook>`, with the event in snake case — and the position is read out of the
+ * INSTALLED plugin's own manifest rather than hard-coded, which is why this writes a
+ * manifest at all rather than only a config.
+ */
+function writeCodexHome(plane: string): string {
+  const home = join(plane, "codex-home");
+  const hooks = join(home, "plugins", "cache", "charter", "charter", "0.62.1", "hooks");
+  mkdirSync(hooks, { recursive: true });
+  writeFileSync(
+    join(hooks, "hooks.json"),
+    JSON.stringify({
+      hooks: { PreToolUse: [{ hooks: [{ command: "charter hook pretooluse" }] }] },
+    }),
+  );
+  writeFileSync(
+    join(home, "config.toml"),
+    [
+      '[plugins."charter@charter"]',
+      "enabled = true",
+      "",
+      "[shell_environment_policy.set]",
+      'CHARTER_HARNESS = "codex"',
+      "",
+      '[hooks.state."charter@charter:hooks/hooks.json:pre_tool_use:0:0"]',
+      'trusted_hash = "written-by-the-scenario-tests"',
+      "",
+    ].join("\n"),
+  );
+  return home;
 }

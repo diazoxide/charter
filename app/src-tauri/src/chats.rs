@@ -27,6 +27,10 @@ pub struct Open {
     pub name: String,
     pub cwd: Option<PathBuf>,
     pub harness: Option<Harness>,
+    /// The harness profile it started on, and the persona it adopted — what the sidebar
+    /// names a chat by, beside its harness.
+    pub profile: Option<String>,
+    pub persona: Option<String>,
     /// Whether it is the chat in front. At a launch this is the one that was in front when
     /// the app was quit, so the window comes back looking as it was left.
     pub in_front: bool,
@@ -50,6 +54,21 @@ pub type Recorder = Box<dyn Fn(&Record) + Send + Sync>;
 /// conversation charter chose for it. Everything the board needs to judge a report about it.
 pub type Starting = Box<dyn Fn(u32, Option<Harness>, Option<String>) + Send + Sync>;
 
+/// One chat the app has open: what it was started as, how it came back, and the harness it
+/// actually runs.
+///
+/// The harness is KEPT rather than asked of the chat again, because asking means asking its
+/// program's NAME, and a profile's command is commonly a wrapper. The board is told this
+/// same value at the start, so the sidebar and the board cannot disagree about what a chat
+/// is running — which they did: the board learned the profile's declared kind while the
+/// sidebar read `claude-stand-in` and said "no harness".
+#[derive(Debug)]
+struct Running {
+    chat: Chat,
+    how: Reopened,
+    harness: Option<Harness>,
+}
+
 /// Every chat the app has open, and which of them is in front.
 pub struct Chats {
     sessions: Sessions,
@@ -60,7 +79,7 @@ pub struct Chats {
     never_started: Mutex<Option<Box<dyn Fn(u32) + Send + Sync>>>,
     /// The `charter` binary a hook runs, when the app knows where its own is.
     binary: Option<PathBuf>,
-    open: Mutex<HashMap<u32, (Chat, Reopened)>>,
+    open: Mutex<HashMap<u32, Running>>,
     front: Mutex<Option<u32>>,
     /// Chats a launch could not start, and why. They are kept because the record has to
     /// keep them: a workspace directory that has moved, or a harness mid-reinstall, must
@@ -158,30 +177,116 @@ impl Chats {
         }
     }
 
+    /// Starts a chat the core has already worked out the launch for — a chat on a profile.
+    ///
+    /// The harness, the arguments and the environment all come from `ready`, which resolved
+    /// them from the profile's DECLARED kind. Nothing here asks the program's name what it
+    /// is: a profile's command is commonly a wrapper, and the answer would be `None`.
+    pub fn start_ready(
+        &self,
+        chat: &Chat,
+        ready: &charter_core::start::Ready,
+        size: Size,
+    ) -> Result<u32, String> {
+        self.open_it(
+            chat,
+            ready.program.clone(),
+            ready.args.clone(),
+            ready.env.clone(),
+            ready.harness,
+            ready.session.as_ref().map(ToString::to_string),
+            ready.how.clone(),
+            size,
+        )
+    }
+
+    /// [`Self::put_back`] against a plane the test does not care about — every chat in
+    /// these records is a shell, which is resolved from the record alone.
+    #[cfg(test)]
+    fn put_back_here(&self, record: &Record, size: Size) -> Vec<Open> {
+        self.put_back(record, std::path::Path::new("/nonexistent-plane"), size)
+    }
+
+    /// Starts one chat out of the record, on its own profile where it had one.
+    ///
+    /// **The profile is looked up again**, never taken from the record: an edit to it takes
+    /// effect at this launch rather than a stale copy running, and a profile that is gone
+    /// means this chat is skipped BY NAME — another profile may be another account, where
+    /// this chat's resume id does not exist and where its workspace's code was never meant
+    /// to go. It stays in the record, so declaring the profile again brings it back.
+    fn start_recorded(
+        &self,
+        chat: &Chat,
+        root: &std::path::Path,
+        size: Size,
+    ) -> Result<u32, String> {
+        let Some(profile) = chat.profile.clone() else {
+            return self.start(chat, size);
+        };
+        let ready = charter_core::start::ready(
+            &charter_core::start::Start {
+                profile: Some(profile),
+                persona: chat.persona.clone(),
+                name: chat.name.clone(),
+                cwd: chat.cwd.clone(),
+                resume: chat.resume.clone(),
+            },
+            root,
+        )?;
+        self.start_ready(chat, &ready, size)
+    }
+
     /// Starts a chat, and remembers what it was started as.
+    ///
+    /// For a chat that is NOT on a profile — the operator's shell — where what runs is
+    /// decided from the record alone.
     pub fn start(&self, chat: &Chat, size: Size) -> Result<u32, String> {
         let launch = chat.launch();
+        self.open_it(
+            chat,
+            launch.program,
+            launch.args,
+            Vec::new(),
+            chat.harness(),
+            launch.session.as_ref().map(ToString::to_string),
+            launch.how,
+            size,
+        )
+    }
+
+    /// The one place a session is opened and a chat is remembered.
+    ///
+    /// Everything that differs between a profile chat and a shell chat is decided by the
+    /// caller and arrives here as arguments — above all the HARNESS, which for a profile
+    /// comes from its declared kind and must not be asked of the program's name.
+    #[allow(clippy::too_many_arguments)]
+    fn open_it(
+        &self,
+        chat: &Chat,
+        program: String,
+        args: Vec<String>,
+        env: Vec<(String, String)>,
+        harness: Option<Harness>,
+        conversation: Option<String>,
+        how: charter_core::reopen::Reopened,
+        size: Size,
+    ) -> Result<u32, String> {
         // Charter's own words first, and the state hooks before even those: a harness reads
         // its settings before it reads anything else on the line, and a chat's own recorded
         // arguments may end in a positional prompt that nothing may come after.
-        let mut args = self.state_hook_args(chat.harness());
-        args.extend(launch.args);
-        // What the chat will be, worked out before it starts, because the announcement below
-        // has to carry it: a harness fires `SessionStart` at its own exec, and a board that
-        // learned the chat's number afterwards would miss it.
-        let harness = chat.harness();
-        let conversation = launch.session.as_ref().map(ToString::to_string);
+        let mut all = self.state_hook_args(harness);
+        all.extend(args);
         // What the announcement below said, so a start that fails can take it back.
         let announced = std::sync::atomic::AtomicU32::new(0);
         let session = self
             .sessions
             .open(
                 &Opening {
-                    program: Some(launch.program),
-                    args,
+                    program: Some(program),
+                    args: all,
                     cwd: chat.cwd.as_ref().map(|cwd| cwd.display().to_string()),
                     size,
-                    env: Vec::new(),
+                    env,
                 },
                 &|session| {
                     announced.store(session, std::sync::atomic::Ordering::SeqCst);
@@ -191,8 +296,8 @@ impl Chats {
                 },
             )
             .inspect_err(|_| {
-                // The chat was announced and then did not start. Take it back, or the board holds
-                // one entry per failed start for the life of the app.
+                // The chat was announced and then did not start. Take it back, or the board
+                // holds one entry per failed start for the life of the app.
                 let announced = announced.load(std::sync::atomic::Ordering::SeqCst);
                 if announced > 0
                     && let Some(gone) = lock(&self.never_started).as_ref()
@@ -204,10 +309,19 @@ impl Chats {
         // started fresh is under an id the app just chose, and that is what has to be
         // written down for the next launch to resume it.
         let under = Chat {
-            resume: launch.session,
+            resume: conversation
+                .as_deref()
+                .and_then(|id| charter_core::harness::SessionId::new(id).ok()),
             ..chat.clone()
         };
-        lock(&self.open).insert(session, (under, launch.how));
+        lock(&self.open).insert(
+            session,
+            Running {
+                chat: under,
+                how,
+                harness,
+            },
+        );
         self.write_it_down();
         Ok(session)
     }
@@ -248,14 +362,21 @@ impl Chats {
             .running()
             .into_iter()
             .filter_map(|session| {
-                let (chat, how) = open.get(&session)?;
+                let running = open.get(&session)?;
+                let chat = &running.chat;
                 Some(Open {
                     session,
                     name: chat.name.clone(),
                     cwd: chat.cwd.clone(),
-                    harness: chat.harness(),
+                    // The harness this chat was STARTED as, not one inferred from its
+                    // program's name — a profile's command is commonly a wrapper, and the
+                    // sidebar used to answer "no harness" for one while the board knew the
+                    // kind. One idea of what is running, or the two drift.
+                    harness: running.harness,
+                    profile: chat.profile.clone(),
+                    persona: chat.persona.clone(),
                     in_front: front == Some(session),
-                    how: how.clone(),
+                    how: running.how.clone(),
                 })
             })
             .collect()
@@ -272,7 +393,7 @@ impl Chats {
             .map(|(chat, _)| chat.clone())
             .collect();
         chats.extend(self.sessions.running().into_iter().filter_map(|session| {
-            let (chat, _) = open.get(&session)?;
+            let chat = &open.get(&session)?.chat;
             Some(Chat {
                 active: front == Some(session),
                 ..chat.clone()
@@ -286,7 +407,7 @@ impl Chats {
     /// A chat whose program cannot be started is left out and the rest still open — a
     /// relaunch that failed whole because one harness had been uninstalled would be worse
     /// than one that came back short.
-    pub fn put_back(&self, record: &Record, size: Size) -> Vec<Open> {
+    pub fn put_back(&self, record: &Record, root: &std::path::Path, size: Size) -> Vec<Open> {
         self.putting_back.store(true, Ordering::SeqCst);
         // Every chat here starts a program, synchronously, before there is a window. A
         // record with thousands in it — a runaway, or a file nobody meant — would give an
@@ -304,7 +425,7 @@ impl Chats {
         let mut front = None;
         let mut opened: Vec<u32> = Vec::new();
         for chat in starting {
-            match self.start(chat, size) {
+            match self.start_recorded(chat, root, size) {
                 Ok(session) => {
                     if chat.active {
                         front = Some(session);
@@ -403,6 +524,8 @@ mod tests {
                     name: "ide.7".to_owned(),
                     resume: None,
                     active: false,
+                    profile: None,
+                    persona: None,
                 },
                 Size {
                     columns: 80,
@@ -460,6 +583,8 @@ mod tests {
                     name: "ide.7".to_owned(),
                     resume: None,
                     active: false,
+                    profile: None,
+                    persona: None,
                 },
                 Size {
                     columns: 80,
@@ -502,6 +627,8 @@ mod tests {
                 name: "ide.7".to_owned(),
                 resume: None,
                 active: false,
+                profile: None,
+                persona: None,
             },
             Size {
                 columns: 80,
@@ -543,6 +670,8 @@ mod tests {
                     name: "ide.7".to_owned(),
                     resume: None,
                     active: false,
+                    profile: None,
+                    persona: None,
                 },
                 Size {
                     columns: 80,
@@ -595,10 +724,23 @@ mod tests {
             name: name.to_owned(),
             resume: resume.map(|id| SessionId::new(id).expect("a valid id in a test")),
             active: false,
+            profile: None,
+            persona: None,
         }
     }
 
     /// Everything a session has printed, once it has printed `text`.
+    /// Everything a session has printed, once `text` is among it — as a READER would see
+    /// it, not as the terminal encoded it.
+    ///
+    /// Two things had to be got right here, and the second cost a CI round. **Wait for what
+    /// you are about to assert**: the stand-in `claude` prints `argv:` as a write of its own
+    /// and its arguments as later ones, so waiting for `argv:` returned before a single
+    /// argument had arrived. And **match against the text, not the encoding**: what a view
+    /// emits is a terminal's output — erase-to-end-of-line, carriage returns, a line wrapped
+    /// at the pane's width — so a long argv is `--resume` then an escape then the rest, and
+    /// no substring of the command line is present as contiguous bytes. Both spellings can
+    /// report a failure that has not happened and miss one that has.
     fn until_printed(chats: &Chats, session: u32, text: &str) -> String {
         use std::sync::Arc;
         use std::time::{Duration, Instant};
@@ -614,15 +756,42 @@ mod tests {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
             let so_far = lock(&seen).clone();
-            if so_far.contains(text) {
-                return so_far;
+            let plain = as_a_reader_sees(&so_far);
+            if plain.contains(text) {
+                return plain;
             }
             assert!(
                 Instant::now() < deadline,
-                "{text:?} never arrived, only {so_far:?}"
+                "{text:?} never arrived, only {plain:?} (raw: {so_far:?})"
             );
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// Terminal output as the words on the screen: escape sequences dropped, and the breaks
+    /// a terminal inserts — a wrap, a carriage return — read as the single space that was
+    /// between the words before it laid them out.
+    fn as_a_reader_sees(raw: &str) -> String {
+        let mut out = String::with_capacity(raw.len());
+        let mut chars = raw.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\u{1b}' {
+                // CSI and the rest of the sequence: parameters, then one final byte.
+                if chars.peek() == Some(&'[') {
+                    chars.next();
+                    for c in chars.by_ref() {
+                        if c.is_ascii_alphabetic() || c == '~' {
+                            break;
+                        }
+                    }
+                }
+                continue;
+            }
+            out.push(if c == '\r' || c == '\n' { ' ' } else { c });
+        }
+        // A wrap becomes one space, and so does a run of them, so a command line reads the
+        // way it was written however the pane laid it out.
+        out.split_whitespace().collect::<Vec<_>>().join(" ")
     }
 
     /// Chats that write every record they make into `wrote`, newest last.
@@ -708,7 +877,7 @@ mod tests {
         let claude = a_claude(dir.path());
         let (chats, wrote) = recorded();
 
-        chats.put_back(
+        chats.put_back_here(
             &Record {
                 chats: (0..5)
                     .map(|n| chat(&claude, &format!("ide.{n}"), None))
@@ -770,12 +939,14 @@ mod tests {
             .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
             .unwrap();
 
-        let printed = until_printed(&chats, session, "argv:");
-
+        // The id charter chose is known before the harness has finished printing it, so the
+        // wait is for that exact id rather than for the line it will appear on.
         let recorded = chats.record().chats[0]
             .resume
             .clone()
             .expect("the chat has a conversation");
+        let printed = until_printed(&chats, session, recorded.as_str());
+
         assert!(
             printed.contains(recorded.as_str()),
             "the record says {recorded}, but claude was given {printed:?}"
@@ -849,10 +1020,12 @@ mod tests {
         let chats = Chats::new();
         let was_in_front = Chat {
             active: true,
+            profile: None,
+            persona: None,
             ..chat(&claude, "ide.8", None)
         };
 
-        chats.put_back(
+        chats.put_back_here(
             &Record {
                 chats: vec![chat(&claude, "ide.7", None), was_in_front],
             },
@@ -875,7 +1048,7 @@ mod tests {
         let claude = a_claude(dir.path());
         let chats = Chats::new();
 
-        let open = chats.put_back(
+        let open = chats.put_back_here(
             &Record {
                 chats: vec![
                     chat(&claude, "ide.7", Some(ID)),
@@ -896,7 +1069,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let chats = Chats::new();
 
-        let open = chats.put_back(
+        let open = chats.put_back_here(
             &Record {
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", Some(ID))],
             },
@@ -904,9 +1077,10 @@ mod tests {
         );
 
         assert_eq!(open[0].how, Reopened::Resumed(SessionId::new(ID).unwrap()));
-        let printed = until_printed(&chats, open[0].session, "argv:");
+        let want = format!("--resume {ID} --name ide.7");
+        let printed = until_printed(&chats, open[0].session, &want);
         assert!(
-            printed.contains(&format!("--resume {ID} --name ide.7")),
+            printed.contains(&want),
             "claude was not asked to resume: {printed:?}"
         );
     }
@@ -919,12 +1093,14 @@ mod tests {
         let claude = a_claude(dir.path());
         let chats = Chats::new();
 
-        let open = chats.put_back(
+        let open = chats.put_back_here(
             &Record {
                 chats: vec![
                     chat(&claude, "ide.7", None),
                     Chat {
                         active: true,
+                        profile: None,
+                        persona: None,
                         ..chat(&claude, "ide.8", None)
                     },
                 ],
@@ -945,7 +1121,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let chats = Chats::new();
 
-        let open = chats.put_back(
+        let open = chats.put_back_here(
             &Record {
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", None)],
             },
@@ -964,7 +1140,7 @@ mod tests {
         let claude = a_claude(dir.path());
         let (chats, wrote) = recorded();
 
-        chats.put_back(
+        chats.put_back_here(
             &Record {
                 chats: vec![
                     chat("/definitely/not/a/program", "ide.7", Some(ID)),
@@ -990,7 +1166,7 @@ mod tests {
         let claude = a_claude(dir.path());
         let chats = Chats::new();
 
-        let open = chats.put_back(
+        let open = chats.put_back_here(
             &Record {
                 chats: (0..MOST_AT_ONCE + 3)
                     .map(|n| chat(&claude, &format!("ide.{n}"), None))
@@ -1011,7 +1187,7 @@ mod tests {
         // starts, so there is no stand-in harness to put anywhere.
         let (chats, _) = recorded();
 
-        chats.put_back(
+        chats.put_back_here(
             &Record {
                 chats: vec![chat("/definitely/not/a/program", "ide.7", Some(ID))],
             },
@@ -1031,7 +1207,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let claude = a_claude(dir.path());
         let (chats, wrote) = recorded();
-        chats.put_back(
+        chats.put_back_here(
             &Record {
                 chats: vec![chat("/definitely/not/a/program", "ide.7", Some(ID))],
             },
@@ -1051,7 +1227,7 @@ mod tests {
         let claude = a_claude(dir.path());
         let chats = Chats::new();
 
-        let open = chats.put_back(
+        let open = chats.put_back_here(
             &Record {
                 chats: vec![
                     chat("/definitely/not/a/program", "ide.7", Some(ID)),
@@ -1070,7 +1246,7 @@ mod tests {
         // A relaunch that lost the record would resume once and never again.
         let dir = tempfile::tempdir().unwrap();
         let chats = Chats::new();
-        chats.put_back(
+        chats.put_back_here(
             &Record {
                 chats: vec![chat(&a_claude(dir.path()), "ide.7", Some(ID))],
             },
@@ -1095,5 +1271,149 @@ mod tests {
 
         assert_eq!(chats.record(), Record::default());
         assert_eq!(chats.sessions().running(), Vec::<u32>::new());
+    }
+    #[test]
+    fn the_record_keeps_the_profile_and_persona_a_chat_was_started_on() {
+        // `record()` rebuilds each chat with `..chat.clone()`, so these ride along — which
+        // means nothing says so when they stop. A struct literal that names one field and
+        // spreads the rest is exactly where a later edit drops one silently, and an edit
+        // that added `profile: None` beside the spread would do it: the record would still
+        // be written, still be read, and every chat would come back as a shell.
+        let chats = Chats::new();
+        let chat = Chat {
+            program: "/bin/sh".to_owned(),
+            args: vec!["-c".to_owned(), "sleep 30".to_owned()],
+            cwd: None,
+            name: "ide.7".to_owned(),
+            resume: None,
+            active: false,
+            profile: Some("claude-work".to_owned()),
+            persona: Some("steward".to_owned()),
+        };
+
+        let session = chats
+            .start(
+                &chat,
+                Size {
+                    columns: 80,
+                    rows: 24,
+                },
+            )
+            .unwrap();
+        let record = chats.record();
+
+        assert_eq!(record.chats.len(), 1);
+        assert_eq!(record.chats[0].profile.as_deref(), Some("claude-work"));
+        assert_eq!(record.chats[0].persona.as_deref(), Some("steward"));
+        let _ = chats.close(session);
+    }
+    #[test]
+    fn the_sidebar_is_told_the_harness_a_chat_was_started_as_not_one_read_off_its_program() {
+        // A profile's command is commonly a WRAPPER (ADR 0022), and `Harness::of_command`
+        // answers `None` for one — the same answer it gives a shell, deliberately. The board
+        // is told the profile's declared kind at the start; the sidebar used to ask the
+        // program's name instead and say "no harness" for the very same chat. A scenario
+        // test caught the disagreement; this is what keeps them one answer.
+        let chats = Chats::new();
+        let chat = Chat {
+            program: "/bin/sh".to_owned(),
+            args: Vec::new(),
+            cwd: None,
+            name: "ide.7".to_owned(),
+            resume: None,
+            active: false,
+            profile: Some("claude-work".to_owned()),
+            persona: None,
+        };
+        assert_eq!(
+            chat.harness(),
+            None,
+            "the premise: the program is not a harness"
+        );
+        let ready = charter_core::start::Ready {
+            program: "/bin/sh".to_owned(),
+            args: vec!["-c".to_owned(), "sleep 30".to_owned()],
+            env: Vec::new(),
+            cwd: None,
+            harness: Some(Harness::ClaudeCode),
+            session: None,
+            how: charter_core::reopen::Reopened::Fresh(
+                charter_core::reopen::Fresh::NoConversationRecorded,
+            ),
+            wired: String::new(),
+        };
+
+        let session = chats
+            .start_ready(
+                &chat,
+                &ready,
+                Size {
+                    columns: 80,
+                    rows: 24,
+                },
+            )
+            .unwrap();
+
+        let open = chats.open_now();
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].harness, Some(Harness::ClaudeCode));
+        assert_eq!(open[0].profile.as_deref(), Some("claude-work"));
+        let _ = chats.close(session);
+    }
+    #[test]
+    fn the_board_is_told_the_harness_the_profile_declared_before_the_program_starts() {
+        // The board judges every report against the harness it was told at the start, and a
+        // chat on a wrapper profile would otherwise be told `None` — the narrowest rule
+        // there is — while the sidebar said Claude Code. One announcement, one answer.
+        //
+        // Before the program starts, because a harness fires `SessionStart` at its own exec
+        // and a board that learned the chat's number afterwards would miss it.
+        let told = std::sync::Arc::new(Mutex::new(
+            Vec::<(u32, Option<Harness>, Option<String>)>::new(),
+        ));
+        let chats = Chats::new();
+        {
+            let told = std::sync::Arc::clone(&told);
+            chats.when_one_starts(Box::new(move |session, harness, conversation| {
+                lock(&told).push((session, harness, conversation));
+            }));
+        }
+        let chat = Chat {
+            program: "/bin/sh".to_owned(),
+            args: Vec::new(),
+            cwd: None,
+            name: "ide.7".to_owned(),
+            resume: None,
+            active: false,
+            profile: Some("claude-work".to_owned()),
+            persona: Some("steward".to_owned()),
+        };
+        assert_eq!(
+            chat.harness(),
+            None,
+            "the premise: the program is not a harness"
+        );
+        let ready = charter_core::start::Ready {
+            program: "/bin/sh".to_owned(),
+            args: vec!["-c".to_owned(), "sleep 30".to_owned()],
+            env: Vec::new(),
+            cwd: None,
+            harness: Some(Harness::ClaudeCode),
+            session: charter_core::harness::SessionId::new(ID).ok(),
+            how: charter_core::reopen::Reopened::Fresh(
+                charter_core::reopen::Fresh::NoConversationRecorded,
+            ),
+            wired: String::new(),
+        };
+
+        let session = chats.start_ready(&chat, &ready, SIZE).unwrap();
+
+        let told = lock(&told).clone();
+        assert_eq!(
+            told,
+            vec![(session, Some(Harness::ClaudeCode), Some(ID.to_owned()))],
+            "the board was told something other than the profile's declared kind"
+        );
+        let _ = chats.close(session);
     }
 }

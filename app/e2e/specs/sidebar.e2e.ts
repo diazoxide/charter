@@ -1,4 +1,5 @@
 import { browser, expect, $, $$ } from "@wdio/globals";
+import { pressAndStart } from "../opening.js";
 
 /**
  * The sidebar, against the real app started in a copy of the `daily` fixture plane — the
@@ -71,7 +72,7 @@ describe("the sidebar", () => {
     await untilListed(["alpha", "beta"]);
     await press("alpha");
 
-    await press("New tab");
+    await pressAndStart("New tab");
 
     // The chat is listed under `alpha` by the directory it works in — which is the only
     // thing relating a chat to a workspace, since nothing on the plane records one. It is

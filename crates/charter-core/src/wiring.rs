@@ -490,6 +490,12 @@ fn config_home(env: &BTreeMap<String, String>) -> String {
 ///
 /// One answer for all of them on purpose. Every one means charter could not look, and the
 /// caller must not be able to tell them apart into a pass.
+///
+/// **The pipes are drained while the program runs, not after it exits**, and that is not a
+/// tidy-up: an earlier version polled for exit and read afterwards, so a harness that wrote
+/// more than a pipe holds blocked on its own write, never exited, and the launch sat on the
+/// full timeout before refusing a chat that was perfectly fine. A probe found it. A plugin
+/// list is exactly the sort of output that grows.
 fn run(
     argv: &[String],
     cwd: &Path,
@@ -507,25 +513,51 @@ fn run(
         .stderr(std::process::Stdio::piped())
         .spawn()
         .ok()?;
+    // A reader per pipe, so neither can fill and stop the program. Both end when the
+    // program closes its end, which a killed program also does.
+    let drain = |pipe: Option<std::process::ChildStdout>| {
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(mut pipe) = pipe {
+                use std::io::Read;
+                let _ = pipe.read_to_string(&mut text);
+            }
+            text
+        })
+    };
+    let out = drain(child.stdout.take());
+    let errs = {
+        let pipe = child.stderr.take();
+        std::thread::spawn(move || {
+            let mut text = String::new();
+            if let Some(mut pipe) = pipe {
+                use std::io::Read;
+                let _ = pipe.read_to_string(&mut text);
+            }
+            text
+        })
+    };
     let deadline = std::time::Instant::now() + timeout;
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(status)) => break status,
             Ok(None) if std::time::Instant::now() < deadline => {
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();
+                // The readers end with the pipes the kill closed; nothing is left running.
+                let _ = out.join();
+                let _ = errs.join();
                 return None;
             }
             Err(_) => return None,
         }
-    }
-    let out = child.wait_with_output().ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    let _ = errs.join();
+    let read = out.join().ok()?;
+    status.success().then_some(read)
 }
 
 /// One step of an install, and what it said.
