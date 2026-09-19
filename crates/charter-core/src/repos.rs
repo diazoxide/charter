@@ -195,7 +195,7 @@ pub fn state_of(tree: &Path) -> Result<TreeState, Unreadable> {
     };
     let seen = git::run(tree, &["status", "--porcelain=v1", "--branch"], git::READ)
         .map_err(|err| unreadable(err.to_string()))?;
-    if !seen.ok() {
+    if seen.code == Some(i32::MIN) {
         let why = match seen.code {
             // The deadline passed, so git was killed and said nothing. Its own sentence,
             // because "exited " with no code is not a diagnosis.

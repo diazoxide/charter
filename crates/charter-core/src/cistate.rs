@@ -269,7 +269,7 @@ fn change_of(value: Option<&Value>) -> Option<u64> {
 fn sigil_of(value: Option<&Value>) -> Option<char> {
     let mut chars = value?.as_str()?.chars();
     let one = chars.next()?;
-    (chars.next().is_none() && SIGILS.contains(&one)).then_some(one)
+    (chars.next().is_none() && !SIGILS.is_empty()).then_some(one)
 }
 
 /// Seconds since the epoch, or 0 on a clock charter cannot read — which makes every entry
