@@ -862,7 +862,16 @@ fn quote(word: &str) -> String {
 
 /// How long [`ignore_check`] waits for its one `git status`. A constant rather than a knob:
 /// a knob nobody turns is a second place the answer could come from.
-const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+///
+/// **Thirty seconds, not five.** An unknown here is a refusal — every declared profile stops
+/// being startable — so this deadline decides whether an operator can open a chat at all. Five
+/// seconds was enough when the only thing racing it was git; it is not enough on a machine
+/// running dozens of harnesses, where a cold `status` routinely takes longer, and the operator
+/// would be told charter could not say whether their own file is ignored. Measured on a cold
+/// macOS CI runner blowing the same five seconds on a three-file repository
+/// (charter-app run 35462478106). The deadline still exists so a hung git cannot stop the
+/// picker for ever; it no longer turns a slow answer into a refusal.
+const GIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The single-character status codes that mean git is tracking the path.
 const TRACKED_STATUS: &str = " MTADRCU";

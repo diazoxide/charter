@@ -61,7 +61,17 @@ use std::time::{Duration, Instant};
 /// cache five seconds is routine, and a killed `worktree add` leaves the registration written
 /// and the checkout half-done, so the retry meets "branch already exists". Python times out
 /// its listing and nothing else (`workspace._GIT_TIMEOUT`); so does this.
-pub const READ: Duration = Duration::from_secs(5);
+///
+/// **Thirty seconds, not five.** Five was Python's number for a listing, and it is wrong for
+/// a `status`: measured on `main` (run 35462478106), a cold macOS CI runner blew it on a
+/// three-file fixture repo, and the panel told the operator "charter could not read the
+/// working tree … git did not answer within 5 seconds" about a repository that was perfectly
+/// readable. The same is true of any machine under load — which is the machine charter is
+/// built for, running dozens of harnesses at once. Nothing waits on this: the read is on
+/// `spawn_blocking` and the cell says so until it answers. The deadline is here to stop a
+/// hung git holding a thread for ever, and thirty seconds does that just as well as five
+/// while no longer calling a slow answer a broken repository.
+pub const READ: Duration = Duration::from_secs(30);
 
 /// The deadline for a call that crosses a network. `publish` is the only one.
 pub const NETWORK: Duration = Duration::from_secs(120);
