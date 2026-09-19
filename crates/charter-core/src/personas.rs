@@ -412,6 +412,11 @@ pub fn memory_title(text: &str, title: Option<&str>) -> String {
         .collect()
 }
 
+/// A containment refusal as an IO error.
+fn refusal(refused: crate::contain::Refused) -> io::Error {
+    io::Error::new(io::ErrorKind::PermissionDenied, refused.to_string())
+}
+
 #[cfg(test)]
 mod name_tests {
     use super::*;
@@ -512,9 +517,4 @@ mod name_tests {
             "spaces are a title of nothing"
         );
     }
-}
-
-/// A containment refusal as an IO error.
-fn refusal(refused: crate::contain::Refused) -> io::Error {
-    io::Error::new(io::ErrorKind::PermissionDenied, refused.to_string())
 }

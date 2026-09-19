@@ -430,7 +430,7 @@ pub fn recall(root: &Path, ask: &Ask) -> Recalled {
             }
         }
         // Stable, as Python's `sort(reverse=True)` is.
-        items.sort_by(|a, b| b.0.cmp(&a.0));
+        items.sort_by_key(|item| std::cmp::Reverse(item.0));
         rows = items.into_iter().map(|(_, hit)| hit).collect();
     }
     // Once each: a path met twice is one thing unread.

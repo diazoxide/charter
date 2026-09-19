@@ -147,7 +147,7 @@ pub fn report(
             }
         }
     }
-    stale.sort_by(|a, b| b.2.cmp(&a.2));
+    stale.sort_by_key(|s| std::cmp::Reverse(s.2));
 
     let (orphans, missing) = memstore::index_drift(root, dir)?;
 
@@ -156,7 +156,7 @@ pub fn report(
         .map(|f| (name_of(f), f.title.clone(), rule_score(&f.text)))
         .filter(|r| r.2 >= 2)
         .collect();
-    rules.sort_by(|a, b| b.2.cmp(&a.2));
+    rules.sort_by_key(|r| std::cmp::Reverse(r.2));
     rules.truncate(10);
 
     Ok(Report {
