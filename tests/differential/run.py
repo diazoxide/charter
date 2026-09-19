@@ -45,7 +45,9 @@ LOCAL clock — would differ by the second the two processes happened to run in.
 from __future__ import annotations
 
 import argparse
+import difflib
 import filecmp
+import json
 import os
 import re
 import shutil
@@ -142,6 +144,12 @@ class Scenario:
     #: Paths beside the plane (relative to the side's directory) that PYTHON may write, with
     #: the reason. Only Python's: the Rust side writing any of them is still an escape.
     python_writes_outside: dict[str, str] = field(default_factory=dict)
+    #: What each side's plane must agree on that is not a file the tree comparison can read
+    #: byte for byte — a clone's branch, commit and config, which live under a `.git` whose
+    #: index and reflogs carry timestamps and inode numbers. Run against each plane after the
+    #: command; the two answers must be equal. The `.git` itself is then `ignore`d, and this
+    #: is what stands in for it rather than nothing.
+    facts: "Callable[[Path], str] | None" = None
 
     def rust_args(self) -> list[str]:
         return self.rust if self.rust is not None else self.python
@@ -586,6 +594,336 @@ INIT_SCENARIOS = [
 ]
 
 
+# --------------------------------------------------------------------------------------------
+# The repo commands, against a forge that is not one
+# --------------------------------------------------------------------------------------------
+#
+# CI cannot reach a real forge, and a recorded HTTP exchange would test a transport neither
+# implementation owns. So each side gets its own stand-in, beside its plane copy:
+#
+# - **A directory of bare repositories as the forge's git side.** Charter builds the HTTPS URL
+#   itself (`https://github.com/acme/widget.git`) and never sees anything else; the side's own
+#   `$HOME/.gitconfig` rewrites that prefix to the directory with `url.<base>.insteadOf`. So
+#   what is compared is the real path — the URL built, the destination gated, `git clone` run
+#   — and git's own config decides where the bytes come from, as it would behind a mirror.
+# - **A recorded `gh` as the forge's API side.** A shell script first on `PATH` that answers
+#   the calls `discover` makes with fixed JSON, and anything else with an error. Both sides
+#   find it the same way — Python through `PATH`, Rust through `PATH` first (`forge.rs` says
+#   why) — and it writes nothing, so it cannot trip the outside-the-plane check.
+#
+# What the stand-in cannot reach, and the Rust tests do instead (`repo_commands.rs`): a clone
+# over a real network, and the credential helper git would call there.
+
+#: The instant every commit in a stand-in forge is made at, so both sides' shas agree.
+FORGE_ENV = {
+    "GIT_AUTHOR_NAME": "Fixture User",
+    "GIT_AUTHOR_EMAIL": "fixture@example.invalid",
+    "GIT_COMMITTER_NAME": "Fixture User",
+    "GIT_COMMITTER_EMAIL": "fixture@example.invalid",
+    "GIT_AUTHOR_DATE": "2026-05-04T10:00:00+00:00",
+    "GIT_COMMITTER_DATE": "2026-05-04T10:00:00+00:00",
+    "GIT_CONFIG_NOSYSTEM": "1",
+    "PATH": "/usr/bin:/bin",
+}
+
+
+def _git(side: Path, *args: str, cwd: Path | None = None) -> str:
+    """git, for a scenario's own setup, under the side's home — never either charter's."""
+    done = subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, text=True,
+        env={**FORGE_ENV, "HOME": str(side / "home")},
+    )
+    if done.returncode != 0:
+        raise SystemExit(f"setup: git {args} failed: {done.stderr}")
+    return done.stdout.strip()
+
+
+def _forge_repo(root: Path, name: str, branch: str) -> Path:
+    """`acme/<name>` on the side's stand-in forge, one commit on `branch`; its source tree."""
+    side = root.parent
+    (side / "home").mkdir(parents=True, exist_ok=True)
+    (side / "home" / ".gitconfig").write_text(
+        f'[url "file://{side}/forge/acme/"]\n\tinsteadOf = https://github.com/acme/\n'
+    )
+    src = side / "forge" / f"{name}-src"
+    src.mkdir(parents=True)
+    _git(side, "init", "-q", "-b", branch, ".", cwd=src)
+    (src / "README.md").write_text(f"# {name}\n")
+    _git(side, "add", "-A", cwd=src)
+    _git(side, "commit", "-q", "-m", "one", cwd=src)
+    _git(side, "clone", "-q", "--bare", str(src), str(side / "forge" / "acme" / f"{name}.git"))
+    return src
+
+
+def _advance(root: Path, name: str, file: str, text: str) -> None:
+    """One more commit on the stand-in forge's `acme/<name>`."""
+    side = root.parent
+    src = side / "forge" / f"{name}-src"
+    (src / file).write_text(text)
+    _git(side, "add", "-A", cwd=src)
+    _git(side, "commit", "-q", "-m", f"add {file}", cwd=src)
+    branch = _git(side, "symbolic-ref", "--short", "HEAD", cwd=src)
+    _git(side, "push", "-q", str(side / "forge" / "acme" / f"{name}.git"), branch, cwd=src)
+
+
+def _record(name: str, **over) -> dict:
+    """An inventory record in the shape `discover` writes."""
+    return {
+        "name": name, "path_with_namespace": f"acme/{name}",
+        "ssh_url": f"git@github.com:acme/{name}.git", "default_branch": "trunk",
+        "kind": "app", "stack": "unknown", "description": "", "topics": [],
+        "web_url": f"https://github.com/acme/{name}", "forge": "github", **over,
+    }
+
+
+def _inventory(root: Path, *records: dict) -> None:
+    (root / "inventory").mkdir(parents=True, exist_ok=True)
+    (root / "inventory" / "repos.json").write_text(json.dumps(
+        {"group": "acme", "count": len(records), "repos": list(records)}, indent=2) + "\n")
+
+
+def _a_widget_on_the_forge(root: Path) -> None:
+    _forge_repo(root, "widget", "trunk")
+    _inventory(root, _record("widget"))
+
+
+def _a_widget_already_cloned(root: Path) -> None:
+    """The same, and an operator's own clone of it already in the workspace."""
+    _a_widget_on_the_forge(root)
+    _git(root.parent, "clone", "-q", "https://github.com/acme/widget.git",
+         str(root / "workspaces" / "alpha" / "widget"))
+
+
+def _a_record_named_like_a_path(root: Path) -> None:
+    _forge_repo(root, "widget", "trunk")
+    _inventory(root, _record("../escape", web_url="https://github.com/acme/widget"))
+
+
+def _a_record_whose_url_is_a_command(root: Path) -> None:
+    # #335: `ext::` is a transport that runs a command, and the record is a tracked file.
+    _inventory(root, _record("widget", web_url="",
+                             ssh_url="ext::sh -c 'touch /tmp/charter-differential-pwned'"))
+
+
+def _a_record_the_forge_does_not_have(root: Path) -> None:
+    _forge_repo(root, "widget", "trunk")
+    _inventory(root, _record("gone"))
+
+
+def _behind_the_forge(root: Path) -> None:
+    """A clean clone one commit behind its remote."""
+    _a_widget_already_cloned(root)
+    _advance(root, "widget", "NEWS.md", "news\n")
+
+
+def _behind_with_work_in_the_tree(root: Path) -> None:
+    _behind_the_forge(root)
+    (root / "workspaces" / "alpha" / "widget" / "README.md").write_text("mine, uncommitted\n")
+
+
+def _diverged_from_the_forge(root: Path) -> None:
+    _behind_the_forge(root)
+    clone = root / "workspaces" / "alpha" / "widget"
+    (clone / "MINE.md").write_text("mine\n")
+    _git(root.parent, "add", "-A", cwd=clone)
+    _git(root.parent, "commit", "-q", "-m", "mine", cwd=clone)
+
+
+def _clone_facts(name: str) -> "Callable[[Path], str]":
+    """What a clone's `.git` says that the tree comparison cannot read."""
+
+    def facts(root: Path) -> str:
+        clone = root / "workspaces" / "alpha" / name
+        if not (clone / ".git").is_dir():
+            return "no clone"
+
+        def ask(*args: str) -> str:
+            return subprocess.run(
+                ["git", "-C", str(clone), *args], capture_output=True, text=True,
+                env={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "GIT_CONFIG_NOSYSTEM": "1"},
+            ).stdout
+
+        exclude = clone / ".git" / "info" / "exclude"
+        return (f"head: {ask('symbolic-ref', '-q', 'HEAD')}"
+                f"commit: {ask('rev-parse', 'HEAD')}"
+                f"config:\n{ask('config', '--local', '--list')}"
+                f"exclude:\n{exclude.read_text() if exclude.exists() else '<none>'}\n"
+                f"status:\n{ask('status', '--porcelain')}")
+
+    return facts
+
+
+def _stub_gh(root: Path, authed: bool = True) -> None:
+    """A recorded `gh` first on the side's `PATH`: three repos, two trees, one failing probe."""
+    bin_dir = root.parent / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    repos = [
+        {"id": 11, "name": "widget", "full_name": "acme/widget", "default_branch": "trunk",
+         "description": "The widget — made well", "html_url": "https://github.com/acme/widget",
+         "ssh_url": "git@github.com:acme/widget.git", "topics": ["core", "ü"]},
+        {"id": 12, "name": "api-gateway", "full_name": "acme/api-gateway",
+         "default_branch": "main", "description": None,
+         "html_url": "https://github.com/acme/api-gateway",
+         "ssh_url": "git@github.com:acme/api-gateway.git", "topics": []},
+        {"id": 13, "name": "legacy", "full_name": "acme/legacy", "default_branch": None,
+         "description": "  x|y\nz ", "html_url": "https://github.com/acme/legacy",
+         "ssh_url": "git@github.com:acme/legacy.git", "topics": []},
+        # A name no directory can hold: dropped from the inventory by both.
+        {"id": 14, "name": "../evil", "full_name": "acme/evil", "default_branch": "main",
+         "description": "", "html_url": "https://github.com/acme/evil",
+         "ssh_url": "git@github.com:acme/evil.git", "topics": []},
+    ]
+    (bin_dir / "repos.json").write_text(json.dumps(repos))
+    (bin_dir / "tree-widget.json").write_text(json.dumps(
+        {"tree": [{"path": "Cargo.toml"}, {"path": "src"}, {"path": "src/main.rs"}]}))
+    (bin_dir / "tree-api.json").write_text(json.dumps({"tree": [{"path": "package.json"}]}))
+    auth = "exit 0" if authed else 'echo "You are not logged into any GitHub hosts." >&2; exit 1'
+    gh = bin_dir / "gh"
+    gh.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        f'  "auth status --hostname github.com") {auth};;\n'
+        f'  "api --hostname github.com orgs/acme/repos?per_page=100&page=1") '
+        f"cat '{bin_dir}/repos.json'; exit 0;;\n"
+        f'  "api --hostname github.com repos/acme/widget/git/trees/trunk") '
+        f"cat '{bin_dir}/tree-widget.json'; exit 0;;\n"
+        f'  "api --hostname github.com repos/acme/api-gateway/git/trees/main") '
+        f"cat '{bin_dir}/tree-api.json'; exit 0;;\n"
+        "esac\n"
+        'echo "gh: Server Error (HTTP 502)" >&2\n'
+        "exit 1\n"
+    )
+    gh.chmod(0o755)
+
+
+def _stub_gh_logged_out(root: Path) -> None:
+    _stub_gh(root, authed=False)
+
+
+#: What Python charter writes beside a clone that the Rust one has no counterpart for: the
+#: tmux frame's repaint counter and the in-flight record's directory. The app watches the
+#: plane itself and draws its own progress, so neither is part of what `clone` leaves.
+CLONE_FRAME_STATE = {
+    ".charter/frame": "the tmux frame's repaint counter (`notify.plane_changed_everywhere`); "
+    "the app has no frame to notify",
+    ".charter/dispatch-inflight": "Python's in-flight record directory, created by the "
+    "clone and emptied when it ends; the app draws its own progress",
+}
+
+#: A clone's `.git`, whose index and reflogs carry timestamps and inode numbers. `facts`
+#: compares what it says instead.
+def _clone_git(name: str) -> dict[str, str]:
+    return {f"workspaces/alpha/{name}/.git": "compared through `facts`: the index and the "
+            "reflogs carry timestamps and inodes no two runs share"}
+
+
+REPO_SCENARIOS = [
+    Scenario(
+        name="clone-checks-out-the-default-branch-and-wires-the-layer",
+        plane="daily",
+        setup=_a_widget_on_the_forge,
+        python=["clone", "widget", "-w", "alpha"],
+        facts=_clone_facts("widget"),
+        ignore={**CLONE_FRAME_STATE, **_clone_git("widget")},
+    ),
+    Scenario(
+        name="clone-of-a-repo-already-cloned-records-and-wires-it",
+        plane="daily",
+        setup=_a_widget_already_cloned,
+        python=["clone", "widget", "-w", "alpha"],
+        facts=_clone_facts("widget"),
+        ignore={**CLONE_FRAME_STATE, **_clone_git("widget")},
+    ),
+    Scenario(
+        name="clone-refuses-a-record-named-like-a-path",
+        plane="daily",
+        setup=_a_record_named_like_a_path,
+        python=["clone", "../escape", "-w", "alpha"],
+        refusal="✗ '../escape': not cloned — '../escape' is not a name — it is a path.",
+        ignore=CLONE_FRAME_STATE,
+    ),
+    Scenario(
+        name="clone-refuses-a-url-it-did-not-build",
+        plane="daily",
+        setup=_a_record_whose_url_is_a_command,
+        python=["clone", "widget", "-w", "alpha"],
+        refusal="✗ 'widget': not cloned — its inventory record carries no HTTPS clone URL",
+        ignore=CLONE_FRAME_STATE,
+    ),
+    Scenario(
+        name="clone-of-a-repo-not-in-the-inventory",
+        plane="daily",
+        setup=_a_widget_on_the_forge,
+        python=["clone", "nope", "-w", "alpha"],
+        refusal="✗ No matching repos.",
+        pins_the_clock=False,
+    ),
+    Scenario(
+        name="clone-of-a-repo-the-forge-does-not-have",
+        plane="daily",
+        setup=_a_record_the_forge_does_not_have,
+        python=["clone", "gone", "-w", "alpha"],
+        refusal="✗ gone: clone failed — no access, network, or gh isn't authed "
+        "(`gh auth status`). Skipping.",
+        ignore=CLONE_FRAME_STATE,
+    ),
+    Scenario(
+        name="sync-fast-forwards-a-clean-clone",
+        plane="daily",
+        setup=_behind_the_forge,
+        python=["sync", "-w", "alpha"],
+        pins_the_clock=False,
+        facts=_clone_facts("widget"),
+        ignore=_clone_git("widget"),
+    ),
+    Scenario(
+        name="sync-skips-a-clone-with-uncommitted-work",
+        plane="daily",
+        setup=_behind_with_work_in_the_tree,
+        python=["sync", "-w", "alpha"],
+        pins_the_clock=False,
+        facts=_clone_facts("widget"),
+        ignore=_clone_git("widget"),
+    ),
+    Scenario(
+        name="sync-leaves-a-diverged-clone-as-it-is",
+        plane="daily",
+        setup=_diverged_from_the_forge,
+        python=["sync", "-w", "alpha"],
+        pins_the_clock=False,
+        facts=_clone_facts("widget"),
+        ignore=_clone_git("widget"),
+    ),
+    Scenario(
+        name="sync-with-nothing-cloned",
+        plane="daily",
+        python=["sync", "-w", "beta"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        name="discover-writes-the-inventory-and-the-topology",
+        plane="daily",
+        setup=_stub_gh,
+        python=["discover"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        name="discover-without-probing-or-docs",
+        plane="daily",
+        setup=_stub_gh,
+        python=["discover", "--no-probe", "--no-docs"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        name="discover-refuses-when-the-forge-cli-is-logged-out",
+        plane="daily",
+        setup=_stub_gh_logged_out,
+        python=["discover"],
+        pins_the_clock=False,
+        refusal="gh is not authenticated for github.com. Run: gh auth login",
+    ),
+]
+
 SCENARIOS = [
     *INIT_SCENARIOS,
     Scenario(
@@ -850,6 +1188,7 @@ SCENARIOS = [
         python=["ws", "todo", "Review the rollout plan", "-w", "alpha"],
         refusal="already on the list",
     ),
+    *REPO_SCENARIOS,
 ]
 
 
@@ -865,7 +1204,9 @@ def _env(root: Path, home: Path, pins: Path) -> dict[str, str]:
         "CHARTER_ROOT": str(root),
         # A curated PATH for the same reason the fixture generator curates one: charter writes
         # a different harness layer when `claude` is on PATH than when it is not.
-        "PATH": "/usr/bin:/bin",
+        # The side's own `bin/` first: where a repo scenario puts its recorded `gh`. Absent
+        # for every other scenario, which is the same PATH as before.
+        "PATH": f"{root.parent / 'bin'}:/usr/bin:/bin",
         "HOME": str(home),
         "PYTHONPATH": str(pins),
         "PYTHONDONTWRITEBYTECODE": "1",
@@ -1107,6 +1448,15 @@ def check(scenario: Scenario, binary: Path) -> bool:
                 problems.append(f"      python {py.stderr!r}")
                 problems.append(f"      rust   {rs.stderr!r}")
         problems.extend(_diff_trees(py_root, rs_root, scenario.ignore))
+        if scenario.facts is not None:
+            py_facts, rs_facts = scenario.facts(py_root), scenario.facts(rs_root)
+            if py_facts != rs_facts:
+                problems.append("    facts differ:")
+                problems.extend(
+                    f"      {line}" for line in difflib.unified_diff(
+                        py_facts.splitlines(), rs_facts.splitlines(), "python", "rust",
+                        lineterm="", n=1)
+                )
         problems.extend(
             line for line in _escaped("python", py_before, _outside(scratch, "python", py_root))
             if not any(f": {path} (" in line for path in scenario.python_writes_outside)
