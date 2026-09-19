@@ -895,6 +895,15 @@ REPO_SCENARIOS = [
         ignore=_clone_git("widget"),
     ),
     Scenario(
+        name="sync-all-workspaces-reaches-the-clone-in-one-of-them",
+        plane="daily",
+        setup=_behind_the_forge,
+        python=["sync", "--all"],
+        pins_the_clock=False,
+        facts=_clone_facts("widget"),
+        ignore=_clone_git("widget"),
+    ),
+    Scenario(
         name="sync-with-nothing-cloned",
         plane="daily",
         python=["sync", "-w", "beta"],
