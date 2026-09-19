@@ -134,8 +134,17 @@ measured 9.37 µs and 9.30 µs — the same number twice. It is a flag on a call
 being made, so there is no throughput question to answer: ADR 0026's 13 MB burst is terminal
 output, and the record is written when a chat changes or the app quits.
 
-The harness, and the numbers as they were printed, are in the charter-app pull request that
-carries this ADR's implementation.
+**The harness is committed**, so the next person to ask gets real numbers instead of these:
+`the_window_each_gate_leaves` in
+`crates/charter-core/tests/nothing_escapes_while_a_writer_races.rs`, run with
+
+```console
+cargo test -p charter-core --test nothing_escapes_while_a_writer_races -- \
+    --ignored --nocapture the_window_each_gate_leaves
+```
+
+It drives the shipped gates through their public names rather than a copy of them, because a
+script with its own copy of a containment gate is the drift `contain` is built to avoid.
 
 ## What is closed, and it is the half charter owns alone
 
