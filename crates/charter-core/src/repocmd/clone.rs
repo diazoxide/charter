@@ -220,8 +220,7 @@ fn workspace_dir(root: &Path, ws: &str) -> Result<PathBuf, String> {
 
 /// Clone every target, [`WORKERS`] at a time, answering in the order asked.
 fn clone_all(root: &Path, ws: &str, ws_dir: &Path, targets: &[Value]) -> Vec<Outcome> {
-    let slots: Mutex<Vec<Option<Outcome>>> =
-        Mutex::new((0..targets.len()).map(|_| None).collect());
+    let slots: Mutex<Vec<Option<Outcome>>> = Mutex::new((0..targets.len()).map(|_| None).collect());
     let next = AtomicUsize::new(0);
     std::thread::scope(|scope| {
         for _ in 0..WORKERS.min(targets.len()) {
@@ -270,7 +269,8 @@ pub fn destination(root: &Path, ws: &str, ws_dir: &Path, name: &str) -> Result<P
             crate::shown::escaped(name)
         ));
     }
-    let dest = confine::within_workspace(root, ws, &ws_dir.join(name)).map_err(|e| e.to_string())?;
+    let dest =
+        confine::within_workspace(root, ws, &ws_dir.join(name)).map_err(|e| e.to_string())?;
     contain::writable(root, &dest).map_err(|e| e.to_string())?;
     Ok(dest)
 }
@@ -295,10 +295,12 @@ pub fn https_url(record: &Value, root: &Path) -> Result<String, String> {
         match forms.iter().find(|p| ssh.starts_with(p.as_str())) {
             Some(prefix) => format!("{base}{}", &ssh[prefix.len()..]),
             None => {
-                return Err("its inventory record carries no HTTPS clone URL, and the `ssh_url` \
+                return Err(
+                    "its inventory record carries no HTTPS clone URL, and the `ssh_url` \
                             it does carry is not a form this forge recognises — charter will \
                             not hand git a string it did not build"
-                    .into());
+                        .into(),
+                );
             }
         }
     };
@@ -377,11 +379,15 @@ fn clone_one(root: &Path, ws: &str, ws_dir: &Path, record: &Value) -> Outcome {
         };
     }
     crate::gitpolicy::apply(&dest, root);
-    let branch = git::run(&dest, &["symbolic-ref", "--quiet", "--short", "HEAD"], git::READ)
-        .ok()
-        .filter(|r| r.ok())
-        .map(|r| r.line().to_string())
-        .unwrap_or_default();
+    let branch = git::run(
+        &dest,
+        &["symbolic-ref", "--quiet", "--short", "HEAD"],
+        git::READ,
+    )
+    .ok()
+    .filter(|r| r.ok())
+    .map(|r| r.line().to_string())
+    .unwrap_or_default();
     Outcome::Cloned {
         dest,
         forge,
@@ -528,7 +534,10 @@ fn record_membership(request: &Request, members: &[String], say: Sink) {
     if let Some(map) = doc.as_object_mut() {
         map.insert("repos".into(), Value::Array(all));
         map.insert("updated_at".into(), Value::String(now));
-        map.insert("updated_by".into(), Value::String(request.author.to_string()));
+        map.insert(
+            "updated_by".into(),
+            Value::String(request.author.to_string()),
+        );
     }
     // A manifest charter could not write is Python's "blocked", which it does not announce.
     let _ = ws.write_manifest(&doc);
@@ -542,7 +551,11 @@ mod tests {
     fn plane() -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
-        std::fs::write(root.join("charter.toml"), "[[forge]]\nkind = \"github\"\nowner = \"acme\"\n").unwrap();
+        std::fs::write(
+            root.join("charter.toml"),
+            "[[forge]]\nkind = \"github\"\nowner = \"acme\"\n",
+        )
+        .unwrap();
         std::fs::create_dir_all(root.join("workspaces/alpha")).unwrap();
         (dir, root)
     }
@@ -551,11 +564,26 @@ mod tests {
     fn a_name_that_is_a_path_or_an_option_or_hidden_gets_no_destination() {
         let (_dir, root) = plane();
         let ws = root.join("workspaces/alpha");
-        for hostile in ["..", ".", "../escape", "a/b", "a\\b", "/etc", "-rf", "--upload-pack=x", ".github", "", "a\0b"] {
+        for hostile in [
+            "..",
+            ".",
+            "../escape",
+            "a/b",
+            "a\\b",
+            "/etc",
+            "-rf",
+            "--upload-pack=x",
+            ".github",
+            "",
+            "a\0b",
+        ] {
             let refused = destination(&root, "alpha", &ws, hostile);
             assert!(refused.is_err(), "{hostile:?} was given {refused:?}");
         }
-        assert_eq!(destination(&root, "alpha", &ws, "widget").unwrap(), ws.join("widget"));
+        assert_eq!(
+            destination(&root, "alpha", &ws, "widget").unwrap(),
+            ws.join("widget")
+        );
     }
 
     #[test]
@@ -577,12 +605,19 @@ mod tests {
     fn the_url_is_https_from_the_record_or_the_forges_own_ssh_rewrite() {
         let (_dir, root) = plane();
         assert_eq!(
-            https_url(&json!({"web_url": "https://github.com/acme/widget/"}), &root).unwrap(),
+            https_url(
+                &json!({"web_url": "https://github.com/acme/widget/"}),
+                &root
+            )
+            .unwrap(),
             "https://github.com/acme/widget.git"
         );
         assert_eq!(
-            https_url(&json!({"ssh_url": "git@github.com:acme/widget.git", "forge": "github"}), &root)
-                .unwrap(),
+            https_url(
+                &json!({"ssh_url": "git@github.com:acme/widget.git", "forge": "github"}),
+                &root
+            )
+            .unwrap(),
             "https://github.com/acme/widget.git"
         );
     }

@@ -630,7 +630,10 @@ mod tests {
             let read = std::fs::read_to_string(read).expect("the alias ran");
             assert!(network.contains("GH_TOKEN=tok-under-test"), "{network}");
             assert!(!read.contains("tok-under-test"), "{read}");
-            assert!(!network.contains("CHARTER_TEST_NOT_A_CREDENTIAL"), "{network}");
+            assert!(
+                !network.contains("CHARTER_TEST_NOT_A_CREDENTIAL"),
+                "{network}"
+            );
             return;
         }
         let me = std::env::current_exe().expect("the test binary");

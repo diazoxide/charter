@@ -87,8 +87,7 @@ fn in_progress(git_dir: &Path) -> Option<&'static str> {
 
 /// Whether a remote URL goes over SSH: `ssh://…`, or scp-style `host:path`.
 fn is_ssh(url: &str) -> bool {
-    if url.starts_with("ssh://") || url.starts_with("git+ssh://") || url.starts_with("ssh+git://")
-    {
+    if url.starts_with("ssh://") || url.starts_with("git+ssh://") || url.starts_with("ssh+git://") {
         return true;
     }
     !url.contains("://") && !forge::host_of(url).is_empty()

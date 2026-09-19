@@ -351,15 +351,16 @@ fn repo_command(command: &Command) -> Option<ExitCode> {
             let now = match now {
                 Some(text) => match text.parse::<chrono::NaiveDateTime>() {
                     // A naive stamp is LOCAL time, as `--now` is everywhere in this binary.
-                    Ok(naive) => match chrono::TimeZone::from_local_datetime(&chrono::Local, &naive)
-                        .single()
-                    {
-                        Some(local) => local.with_timezone(&chrono::Utc),
-                        None => {
-                            eprintln!("charter: --now names no single local instant");
-                            return Some(ExitCode::FAILURE);
+                    Ok(naive) => {
+                        match chrono::TimeZone::from_local_datetime(&chrono::Local, &naive).single()
+                        {
+                            Some(local) => local.with_timezone(&chrono::Utc),
+                            None => {
+                                eprintln!("charter: --now names no single local instant");
+                                return Some(ExitCode::FAILURE);
+                            }
                         }
-                    },
+                    }
                     Err(e) => {
                         eprintln!("charter: --now is not a local naive timestamp: {e}");
                         return Some(ExitCode::FAILURE);
