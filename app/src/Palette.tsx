@@ -49,6 +49,9 @@ export function Palette({
   /** Where the keyboard was when the palette opened, so Escape can give it back. */
   const came = useRef<Element | null>(null);
   const box = useRef<HTMLInputElement>(null);
+  /** Whether it is up, for the one listener that is registered once and must not be torn
+   *  down and rebuilt on every open. */
+  const up = useRef(false);
 
   const close = useCallback(() => {
     setOpen(false);
@@ -63,27 +66,44 @@ export function Palette({
     if (back instanceof HTMLElement && back.isConnected) back.focus();
   }, [onOpened]);
 
-  // The one key that opens it, listened for on the window and CAPTURED. A pane's terminal
-  // would otherwise take the keystroke and send it to the harness: xterm reads from its own
-  // textarea, and a capturing listener on the window runs before that textarea's does.
+  // The key that opens it and the key that always leaves, listened for on the window and
+  // CAPTURED. A pane's terminal would otherwise take the keystroke and send it to the
+  // harness: xterm reads from its own textarea, and a capturing listener on the window runs
+  // before that textarea's does.
+  //
+  // **Escape is here rather than on the box**, which is where it started. On the box it only
+  // works while the box has the keyboard, and "the one key that always leaves" has to be true
+  // wherever the focus has got to — a row reached by clicking, a browser that moved focus on
+  // its own, or a surface that took it. A palette that cannot be left is the worst thing a
+  // modal surface can be, and it is not a state to be one stray focus away from.
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (!opensIt(e)) return;
-      e.preventDefault();
-      e.stopPropagation();
-      setOpen((was) => {
-        if (was) return was;
-        came.current = document.activeElement;
-        onOpened?.(true);
-        return true;
-      });
+      if (opensIt(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        setOpen((was) => {
+          if (was) return was;
+          came.current = document.activeElement;
+          onOpened?.(true);
+          return true;
+        });
+        return;
+      }
+      // Only while it is up: the picker and the quit warning listen for Escape too, and
+      // swallowing theirs would leave them with no way out for the same reason.
+      if (e.key === "Escape" && up.current) {
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+      }
     };
     window.addEventListener("keydown", key, true);
     return () => window.removeEventListener("keydown", key, true);
-  }, [onOpened]);
+  }, [close, onOpened]);
 
   // The box takes the keyboard as soon as it exists, so the first thing typed narrows.
   useEffect(() => {
+    up.current = open;
     if (open) box.current?.focus();
   }, [open]);
 
@@ -143,10 +163,8 @@ export function Palette({
             setHeld(undefined);
           }}
           onKeyDown={(e) => {
-            if (e.key === "Escape") {
-              e.preventDefault();
-              close();
-            } else if (e.key === "ArrowDown") {
+            // Escape is not here: it is on the window, so it leaves from anywhere.
+            if (e.key === "ArrowDown") {
               e.preventDefault();
               move(1);
             } else if (e.key === "ArrowUp") {

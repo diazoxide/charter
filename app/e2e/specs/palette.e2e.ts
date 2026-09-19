@@ -6,9 +6,11 @@ import { pickAndStart, pressAndStart, pressOnly } from "../opening.js";
  *
  * **Not one click in this file reaches the palette.** `F2` opens it, the driver types into
  * the box it focused itself, Enter runs the aimed row and Escape leaves — which is the whole
- * claim spec decision 1 makes about it being the primary input. The one mouse press here is
- * the OTHER route: the bar's own button, in the test that runs the same action both ways and
- * compares what the window became.
+ * claim spec decision 1 makes about it being the primary input.
+ *
+ * Two things here ARE clicked, and neither is the palette: the bar's own button, in the test
+ * that runs the same action both ways and compares what the window became; and the profile
+ * picker a row opens, for the WKWebView reason `answerThePicker` sets out.
  *
  * The characters are sent with `addValue` on the box rather than `browser.keys`, for the
  * reason `panes.e2e.ts` gives about typing into a terminal: keys aimed at the window go
@@ -67,19 +69,38 @@ async function tabNames(): Promise<string[]> {
   );
 }
 
-/** Answers the profile picker without a pointer: Cancel has the focus, Start is next. */
-async function pickAndStartByKeyboard() {
-  const dialog = await $('[role="dialog"][aria-labelledby="start-chat"]');
-  await dialog.waitForDisplayed({ timeout: 20_000 });
-  // Cancel is focused first and on purpose: starting a chat runs a command with nothing
-  // between the key and the exec, so it is never what a stray Return finds.
-  await expect($("button=Cancel")).toBeFocused();
-  await browser.keys(["Tab"]);
-  await browser.keys(["Enter"]);
-  await dialog.waitForDisplayed({ reverse: true, timeout: 30_000 });
+/**
+ * Answers the profile picker the palette opened.
+ *
+ * **`pickAndStart`, the shared helper, and not the keyboard** — which is a statement about
+ * WKWebView rather than about either surface. macOS ships "press Tab to highlight each item
+ * on a webpage" OFF, so in the webview this app runs in Tab moves between form fields and
+ * skips buttons entirely: Cancel has the focus (the picker puts it there on purpose, so a
+ * stray Return never launches anything) and Tab does not reach Start from it. A first run
+ * proved that the hard way, and the picker is M1.2c's surface, not this milestone's.
+ *
+ * What this file claims, and tests, is narrower and true: **the palette needs no pointer.**
+ * Every row is reached and run here by keystroke alone.
+ */
+async function answerThePicker() {
+  await pickAndStart();
 }
 
 describe("the command palette", () => {
+  // **Nothing below this file depends on it having run, and nothing it opens outlives it.**
+  // `lifecycle.e2e.ts` states the same rule; this file learned it. One failed assertion left
+  // the profile picker on screen, and because WebdriverIO's Tauri service keeps ONE app
+  // process for the whole run, every spec after it failed on a modal it never opened.
+  afterEach(async () => {
+    for (const selector of [PALETTE, '[role="dialog"][aria-labelledby="start-chat"]']) {
+      const dialog = await $(selector);
+      if (await dialog.isDisplayed().catch(() => false)) {
+        await browser.keys(["Escape"]);
+        await dialog.waitForDisplayed({ reverse: true, timeout: 10_000 }).catch(() => undefined);
+      }
+    }
+  });
+
   it("opens on a keystroke, wherever the keyboard happened to be", async () => {
     const up = await openPalette();
 
@@ -134,7 +155,7 @@ describe("the command palette", () => {
 
     // The palette got out of the way, and the question ADR 0022 insists on is on screen.
     await expect($(PALETTE)).not.toBeDisplayed();
-    await pickAndStartByKeyboard();
+    await answerThePicker();
     await expect($('[data-testid="pane"]')).toBeDisplayed();
   });
 
@@ -165,7 +186,7 @@ describe("the command palette", () => {
     await openPalette();
     await typeIntoPalette("split right");
     await browser.keys(["Enter"]);
-    await pickAndStartByKeyboard();
+    await answerThePicker();
     const byPalette = await arrangement();
 
     expect(byPalette).toEqual(byButton);

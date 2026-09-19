@@ -174,6 +174,20 @@ describe("the command palette", () => {
     expect(onRun).not.toHaveBeenCalled();
   });
 
+  it("leaves on Escape even when the keyboard has moved off the box", async () => {
+    // The one key that always leaves has to be true wherever the focus has got to. On the
+    // box it was only true while the box had it, and a modal surface nobody can leave is the
+    // worst thing a modal surface can be.
+    render(<Palette offers={OFFERS} onRun={ok} />);
+    await open();
+    screen.getByRole("combobox").blur();
+    expect(document.activeElement).not.toBe(screen.getByRole("combobox"));
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("gives the keyboard back to whatever had it", async () => {
     // An operator opens this mid-sentence, from inside a pane's terminal. Escape has to put
     // them back in it, or the palette costs a click every time it is opened by mistake.
