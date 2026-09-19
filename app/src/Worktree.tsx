@@ -19,7 +19,10 @@ export function WorktreeMark({ worktree }: { worktree: ChatWorktree }) {
     <span className="worktree">
       {worktree.branch && <code className="branch">{worktree.branch}</code>}
       {worktree.stale && (
-        <span className="label stale" title="git still has this worktree registered, but its directory is gone">
+        <span
+          className="label stale"
+          title="git still has this worktree registered, but its directory is gone"
+        >
           stale
         </span>
       )}
