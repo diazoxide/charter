@@ -92,6 +92,9 @@ struct Terminal {
     engine: Box<dyn Engine>,
     views: Vec<Watcher>,
     opened: u64,
+    /// The program has ended and every view was closed for it. A view opened from now on
+    /// has no reading thread left to close it, so it is closed as it opens.
+    ended: bool,
 }
 
 /// One view's side of a session: where its bytes go, and the ones held back from it because
@@ -152,10 +155,11 @@ impl Terminal {
         });
     }
 
-    /// Closes every view, because the program is gone. What is held back goes over first:
-    /// no update the program left open will ever close now, so its last half frame is drawn
-    /// instead of dropped.
+    /// Closes every view, because the program is gone — and every view opened after it, which
+    /// no one else is left to close. What is held back goes over first: no update the program
+    /// left open will ever close now, so its last half frame is drawn instead of dropped.
     fn close_views(&mut self) {
+        self.ended = true;
         self.give_up_on_the_update();
         self.views.clear();
     }
@@ -246,6 +250,7 @@ impl Session {
             engine,
             views: Vec::new(),
             opened: 0,
+            ended: false,
         }));
         let (input, queued) = mpsc::sync_channel(INPUT_QUEUE);
         // One wake is enough to send: what it says is "something is held", and the deadline
@@ -332,7 +337,9 @@ impl Session {
         screen
     }
 
-    /// Opens a view of this session, for a pane that is about to show it.
+    /// Opens a view of this session, for a pane that is about to show it. A view of a program
+    /// that has already ended is its last screen, and then it closes, as every view did when
+    /// the program ended.
     pub fn attach(&self) -> View {
         let (output, answers, size, id) = {
             let mut terminal = lock(&self.terminal);
@@ -357,6 +364,12 @@ impl Session {
             // a snapshot which ever draws itself inside an update cannot leave a pane in one.
             send(&mut watcher, snapshot);
             terminal.views.push(watcher);
+            // The reading thread closes every view when the program ends, once, and then it is
+            // gone: a view opened after that would wait for ever on a screen that is final.
+            // Under this same lock, so the end cannot fall between the check and the push.
+            if terminal.ended {
+                terminal.close_views();
+            }
             (output, answers, size, id)
         };
         let view = View {
@@ -532,28 +545,36 @@ fn end(child: &Mutex<Box<dyn Child + Send + Sync>>) {
 /// would draw once a second. The pieces wait here until the update closes, and `holding`
 /// wakes the thread that gives up on one that never does.
 fn pump(
-    mut reader: Box<dyn Read + Send>,
+    reader: Box<dyn Read + Send>,
     terminal: &Mutex<Terminal>,
     replies: &SyncSender<Vec<u8>>,
     holding: &SyncSender<()>,
     over: &SyncSender<()>,
 ) {
+    read_until_the_output_ends(reader, terminal, replies, holding);
+    // The program's output has ended, and so has the program. Said here, after the loop and
+    // not inside it, so that no way out of the loop can skip it — one did (charter-app#20),
+    // and a path added later cannot. The channel holds one, so it is kept for whoever asks,
+    // including a caller that asks after the program is already gone. Every view is closed,
+    // so a pane showing it can say so instead of showing a screen that is now final.
+    let _ = over.try_send(());
+    lock(terminal).close_views();
+}
+
+/// The reading loop of [`pump`]: returns once the program's output has ended, and only then.
+fn read_until_the_output_ends(
+    mut reader: Box<dyn Read + Send>,
+    terminal: &Mutex<Terminal>,
+    replies: &SyncSender<Vec<u8>>,
+    holding: &SyncSender<()>,
+) {
     let mut buffer = vec![0; 64 * 1024];
-    // Said once, whichever way the loop leaves, so that nothing has to remember to say it on
-    // a path added later. The channel holds one, so it is kept for whoever asks — including
-    // a caller that asks after the program is already gone.
-    let announce_the_end = || {
-        let _ = over.try_send(());
-        lock(terminal).close_views();
-    };
     loop {
         let read = match reader.read(&mut buffer) {
-            // The program's output has ended, and so has the program. Every view is closed,
-            // so a pane showing it can say so instead of showing a screen that is now final.
-            Ok(0) => return announce_the_end(),
+            Ok(0) => return,
             Ok(read) => read,
             Err(err) if err.kind() == ErrorKind::Interrupted => continue,
-            Err(_) => return announce_the_end(),
+            Err(_) => return,
         };
         let (answers, held) = {
             let mut terminal = lock(terminal);
@@ -585,14 +606,11 @@ fn pump(
             let _ = holding.try_send(());
         }
         // A program that floods queries without reading the answers loses the answers it
-        // would never have read; its output keeps flowing either way.
-        if !answers.is_empty()
-            && matches!(
-                replies.try_send(answers),
-                Err(TrySendError::Disconnected(_))
-            )
-        {
-            return;
+        // would never have read; its output keeps flowing either way. So does one whose input
+        // has closed: that is the program ending, and what it wrote before it went is still
+        // read, to the end, where the loop leaves the one way it can.
+        if !answers.is_empty() {
+            let _ = replies.try_send(answers);
         }
     }
 }
@@ -1171,6 +1189,20 @@ mod tests {
         );
     }
 
+    /// Whether the view's queue ends within `patience`: whatever it was already sent is read
+    /// and set aside, and then nothing more may be coming.
+    fn closes_within(view: &View, patience: Duration) -> bool {
+        let deadline = Instant::now() + patience;
+        loop {
+            match view.output.try_recv() {
+                Err(TryRecvError::Disconnected) => return true,
+                Ok(_already_sent) => continue,
+                Err(TryRecvError::Empty) if Instant::now() >= deadline => return false,
+                Err(TryRecvError::Empty) => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
+    }
+
     #[test]
     fn a_view_is_closed_when_the_program_ends_so_a_pane_can_tell() {
         // A pane showing a program that has ended must be able to say so, rather than showing
@@ -1181,17 +1213,79 @@ mod tests {
 
         assert_eq!(session.wait(PATIENCE).unwrap(), Some(Exit::Code(0)));
 
-        let deadline = Instant::now() + PATIENCE;
-        loop {
-            match view.output.try_recv() {
-                Err(TryRecvError::Disconnected) => return,
-                _ => assert!(
-                    Instant::now() < deadline,
-                    "the view was never closed after the program ended"
-                ),
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        }
+        assert!(
+            closes_within(&view, PATIENCE),
+            "the view was never closed after the program ended"
+        );
+    }
+
+    #[test]
+    fn a_view_opened_after_the_program_has_ended_is_closed_behind_its_last_screen() {
+        // A pane can open on a session whose program is already gone: a tab brought back to
+        // the front after its chat died, or a harness that failed the moment it started. Its
+        // view is the last screen and then nothing, so the pane can say the program has ended.
+        //
+        // The test above used to reach this by accident, about one run in ten (charter-app#20):
+        // its program ends at once, and under load the session's reading thread saw the end
+        // before the view was opened. Here it is on purpose. The first view closing is the
+        // session having said the program ended, so the second opens on an ended session
+        // every time.
+        let session = sh("read _; printf 'the last thing it printed'");
+        let watching = session.attach();
+        session.write(b"\r").unwrap();
+        view_until(&watching, "the last thing it printed");
+        assert!(
+            closes_within(&watching, PATIENCE),
+            "the program never ended"
+        );
+
+        let late = session.attach();
+
+        view_until(&late, "the last thing it printed");
+        assert!(
+            closes_within(&late, PATIENCE),
+            "a view opened after the program had ended was never closed"
+        );
+    }
+
+    #[test]
+    fn the_end_is_announced_even_when_the_program_can_no_longer_be_answered() {
+        // Output the terminal owes an answer to, arriving after the queue that carries answers
+        // to the program has closed: the program's input ends with the program, so that is
+        // the order a program asking a question as it exits produces. The reading thread may
+        // drop the answer; it may not stop without saying the program has ended, or no pane
+        // showing it is told and no one waiting on the session hears it die.
+        let terminal = Mutex::new(Terminal {
+            engine: Box::new(AlacrittyEngine::new(SIZE, 100)),
+            views: Vec::new(),
+            opened: 0,
+            ended: false,
+        });
+        let (sends, output) = mpsc::channel();
+        lock(&terminal).views.push(Watcher {
+            id: 1,
+            sends,
+            held: Vec::new(),
+        });
+        let (replies, input_gone) = mpsc::sync_channel(INPUT_QUEUE);
+        drop(input_gone);
+        let (holding, _held) = mpsc::sync_channel(1);
+        let (over, ended) = mpsc::sync_channel(1);
+        // Where is the cursor? — a question the terminal answers, and the last thing it wrote.
+        let program = Box::new(std::io::Cursor::new(b"asking\x1b[6n".to_vec()));
+
+        pump(program, &terminal, &replies, &holding, &over);
+
+        assert_eq!(
+            ended.try_recv(),
+            Ok(()),
+            "the program's end was never announced"
+        );
+        while output.try_recv().is_ok() {}
+        assert!(
+            matches!(output.try_recv(), Err(TryRecvError::Disconnected)),
+            "a view was left open after the program ended"
+        );
     }
 
     #[test]

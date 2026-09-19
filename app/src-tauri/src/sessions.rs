@@ -434,6 +434,29 @@ mod tests {
     }
 
     #[test]
+    fn a_pane_opened_on_a_program_that_has_already_ended_is_told_so() {
+        // A chat that died keeps its session, so its tab still shows the last screen. Bringing
+        // that tab to the front opens a new view on a program that is already gone, and the
+        // pane must still say so (charter-app#20). The first pane being told is the session
+        // having ended; the second opens after it, every time.
+        let sessions = Sessions::new();
+        let id = sessions
+            .open(
+                &opening("read _; printf 'the last thing it printed'"),
+                &|_| {},
+            )
+            .expect("the session opens");
+        let (_first, first_seen) = watching(&sessions, id);
+        sessions.input(id, "\r").unwrap();
+        until_seen(&first_seen, "the program has ended");
+
+        let (_second, seen) = watching(&sessions, id);
+
+        until_seen(&seen, "the last thing it printed");
+        until_seen(&seen, "the program has ended");
+    }
+
+    #[test]
     fn ending_every_session_ends_their_programs_before_it_returns() {
         let sessions = Sessions::new();
         let programs: Vec<u32> = (0..5)

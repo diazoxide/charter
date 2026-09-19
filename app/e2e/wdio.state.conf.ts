@@ -1,5 +1,6 @@
 import { config as base } from "./wdio.conf.js";
 import { built, copyFixturePlane, declareAProfile, writeReportingShell } from "./harness.js";
+import { PANIC_LOG } from "./processes.js";
 
 /**
  * The scenario tests for what a chat is doing — a run of their own, because the harness is
@@ -33,7 +34,7 @@ export const config: WebdriverIO.Config = {
         appBinaryPath: built(process.platform === "win32" ? "charter-app.exe" : "charter-app"),
         captureBackendLogs: true,
         captureFrontendLogs: true,
-        env: { SHELL: harness, CHARTER_ROOT: plane },
+        env: { SHELL: harness, CHARTER_ROOT: plane, CHARTER_PANIC_LOG: PANIC_LOG },
       },
     ],
   ],

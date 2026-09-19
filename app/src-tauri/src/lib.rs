@@ -5,6 +5,7 @@ mod chats;
 mod hooks;
 mod lifecycle;
 mod panels;
+mod panics;
 mod sessions;
 mod worktrees;
 
@@ -777,6 +778,9 @@ pub fn run() {
     // Read first, so that what it holds is when the process started and not when the window
     // first asked.
     LazyLock::force(&STARTED);
+    // Before anything that can panic: a panic that ends the app is written down on its way
+    // out, where one that went to a standard error nobody reads was lost (charter-app#16).
+    panics::record();
     reached("run() entered");
     let commands = commands();
 
@@ -817,6 +821,11 @@ pub fn run() {
         })
         .setup(|app| {
             reached("setup");
+            // Where a panic is kept, now that the app can be told where its logs belong. An app
+            // with no log directory still has standard error, which is all it had before.
+            if let Ok(logs) = app.path().app_log_dir() {
+                panics::keep_in(&logs);
+            }
             app.manage(Quitting::default());
 
             let plane = std::env::current_dir()
