@@ -607,6 +607,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_network_call_asks_only_the_helper_it_was_given() {
+        // One credential: a helper the repo's (or the operator's) config names — a keychain,
+        // a store file, another forge's CLI — is never consulted. git passes `-c` settings on
+        // to a git it runs, so a `credential fill` run from inside the call sees exactly the
+        // helper list the call itself would use.
+        let dir = repo();
+        let theirs = dir.path().join("theirs-asked");
+        let mine = dir.path().join("mine-asked");
+        run(
+            dir.path(),
+            &[
+                "config",
+                "credential.helper",
+                &format!("!echo asked >> '{}'", theirs.display()),
+            ],
+            READ,
+        )
+        .unwrap();
+        let fill = "alias.fill=!printf 'protocol=https\\nhost=example.invalid\\n\\n' | git credential fill";
+
+        run_network(
+            dir.path(),
+            Some(&format!("!echo asked >> '{}'", mine.display())),
+            &["-c", fill, "fill"],
+        )
+        .unwrap();
+
+        assert!(mine.exists(), "the helper the call was given was asked");
+        assert!(!theirs.exists(), "the helper config named was never asked");
+    }
+
     /// The marker that tells a re-executed copy of this test binary it is the credential
     /// child.
     const CREDENTIAL_CHILD: &str = "CHARTER_TEST_CREDENTIAL_CHILD";
