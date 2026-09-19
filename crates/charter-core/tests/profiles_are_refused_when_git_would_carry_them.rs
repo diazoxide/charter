@@ -208,6 +208,65 @@ fn a_replacement_refused_by_the_git_check_does_not_let_its_built_in_stand_in() {
     );
 }
 
+/// A stand-in `git` in `dir` that runs `body` whatever it is asked.
+fn a_git_that(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
+    let git = dir.join(name);
+    fs::write(&git, format!("#!/bin/sh\n{body}\n")).unwrap();
+    fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
+    git
+}
+
+#[test]
+fn a_git_that_refuses_the_repository_is_not_taken_for_one_that_found_none() {
+    // Only git's own "not a git repository" at exit 128 is a plane with nothing to commit
+    // to. Exit 128 is also what git answers when it refuses to look — a repository owned by
+    // someone else, `safe.directory` unset — and that is an unknown, not a pass. Turning the
+    // `&&` into `||` (nightly run 35430920851) passed the suite and waved every declared
+    // profile through on a plane git would not read.
+    let dir = repo("");
+    let refusing = a_git_that(
+        dir.path(),
+        "git-that-refuses",
+        "echo \"fatal: detected dubious ownership in repository at '$PWD'\" >&2\nexit 128",
+    );
+
+    let check = profiles::ignore_check_with(dir.path(), &refusing);
+
+    assert!(!check.passes(), "a refusing git read as no repository");
+    assert!(
+        check.reason.starts_with(
+            "git could not say whether charter.local.toml is ignored (fatal: \
+                          detected dubious ownership"
+        ),
+        "{:?}",
+        check.reason
+    );
+}
+
+#[test]
+fn a_status_line_charter_cannot_read_is_an_unknown_and_not_a_tracked_file() {
+    // A status code outside the ones that mean "tracked" is git saying something charter has
+    // not measured. It refuses either way — but as an UNKNOWN, with git's own line quoted
+    // and the fix that goes with it, not as "git tracks charter.local.toml" and a
+    // `git rm --cached` that would not help. The `&&` beside the tracked codes survived
+    // being turned into `||` (the same run).
+    let dir = repo("");
+    let odd = a_git_that(
+        dir.path(),
+        "git-that-says-zz",
+        "echo 'ZZ charter.local.toml'",
+    );
+
+    let check = profiles::ignore_check_with(dir.path(), &odd);
+
+    assert_eq!(
+        check.reason,
+        "git could not say whether charter.local.toml is ignored (git status printed \"ZZ \
+         charter.local.toml\"), so the profiles in it are refused — an unknown is not a pass. \
+         Run git status --ignored -- charter.local.toml in the plane to see what git says."
+    );
+}
+
 #[test]
 fn a_git_that_never_answers_refuses_too_because_a_hang_is_not_a_pass() {
     // The unknown branch was only ever driven by a git that EXITS. A git that hangs is the
