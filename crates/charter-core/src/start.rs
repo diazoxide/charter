@@ -97,26 +97,7 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
     };
     let persona = match start.persona.as_deref() {
         None => None,
-        Some(who) => {
-            // The plane's own check, so a name that is not a persona is refused before it
-            // reaches a variable every hook reads.
-            crate::workspaces::Plane::open(root.to_path_buf())
-                .persona(who)
-                .map_err(|e| {
-                    format!("{e}, so nothing was started — pick a persona this plane has.")
-                })
-                .and_then(|p| {
-                    if p.dir().join("persona.md").is_file() {
-                        Ok(Some(who.to_owned()))
-                    } else {
-                        Err(format!(
-                            "no persona '{}', so nothing was started — pick a persona this \
-                             plane has.",
-                            crate::shown::short(who)
-                        ))
-                    }
-                })?
-        }
+        Some(who) => Some(startable_persona(who, root)?),
     };
 
     // The gate. Startable kind, ignored file, approved command, wired folder — one call, so
@@ -238,4 +219,51 @@ pub fn persona_for_a_new_chat(root: &Path) -> Option<String> {
         .ok()?
         .into_iter()
         .find(|have| *have == wanted)
+}
+
+/// `who`, if it is a persona a chat on this plane may adopt.
+///
+/// **One source of truth with the list the picker draws** ([`crate::workspaces::Plane::personas`]),
+/// and that is the whole point: offering a name the start then refuses is a dialog arguing
+/// with itself. Three ways they used to disagree, each found by a review probe:
+///
+/// - the picker lists a **legacy flat** persona (`personas/<name>.md`) and the start wanted
+///   `personas/<name>/persona.md`, so a plane on the old layout offered personas that could
+///   not start;
+/// - `_shared` is the store every persona READS rather than a persona anybody adopts. The
+///   list excludes it by name and the start admitted it, so a caller that is not the picker
+///   could point a chat's `CHARTER_PERSONA` at the shared store;
+/// - a persona directory that is a **symlink out of the plane** was listed and started, so a
+///   committed link decided what a chat adopts and where charter then read it from.
+///
+/// The containment check is on the entry that is opened, not on `personas/` above it.
+fn startable_persona(who: &str, root: &Path) -> Result<String, String> {
+    let plane = crate::workspaces::Plane::open(root.to_path_buf());
+    let shown = crate::shown::short(who);
+    let known = plane.personas().map_err(|e| {
+        format!("charter could not read this plane's personas ({e}), so nothing was started.")
+    })?;
+    if !known.iter().any(|have| have == who) {
+        return Err(format!(
+            "no persona '{shown}' on this plane, so nothing was started — pick one of: {}.",
+            if known.is_empty() {
+                "none declared".to_owned()
+            } else {
+                known.join(", ")
+            }
+        ));
+    }
+    // What the name RESOLVES to, both layouts, gated where it is opened.
+    let dir = plane
+        .persona(who)
+        .map_err(|e| format!("{e}, so nothing was started."))?;
+    let entry = if dir.dir().join("persona.md").is_file() {
+        dir.dir().join("persona.md")
+    } else {
+        root.join("personas").join(format!("{who}.md"))
+    };
+    crate::contain::readable(root, &entry).map_err(|why| {
+        format!("persona '{shown}' resolves outside this plane ({why}), so nothing was started.")
+    })?;
+    Ok(who.to_owned())
 }

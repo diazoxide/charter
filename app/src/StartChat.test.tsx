@@ -108,7 +108,11 @@ describe("the picker a chat starts from", () => {
     await user.click(screen.getByRole("button", { name: "Approve and start" }));
 
     // With the persona, not only the profile: the approve path used to drop the pick.
-    expect(onApprove).toHaveBeenCalledWith("work", "steward");
+    expect(onApprove).toHaveBeenCalledWith(
+      "work",
+      "steward",
+      "CLAUDE_CONFIG_DIR=~/.claude-work claude --model opus",
+    );
     expect(onStart).not.toHaveBeenCalled();
   });
 

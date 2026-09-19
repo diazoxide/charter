@@ -256,9 +256,9 @@ function App() {
   /** The approval IS this click. After it, the whole chain of checks runs again from the
    *  top before anything is exec'd, so a yes never walks past a refusal standing behind it. */
   const approveAndStart = useCallback(
-    async (profile: string, persona: string | null) => {
+    async (profile: string, persona: string | null, shown: string) => {
       const said = await commands
-        .approveProfile(profile)
+        .approveProfile(profile, shown)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
       if (said.status === "error") {
         setPickerTrouble(said.error);
@@ -427,7 +427,7 @@ function App() {
           options={picking.options}
           trouble={pickerTrouble}
           onStart={(profile, persona) => void startPicked(profile, persona)}
-          onApprove={(profile, persona) => void approveAndStart(profile, persona)}
+          onApprove={(profile, persona, shown) => void approveAndStart(profile, persona, shown)}
           onCancel={() => {
             setPicking(undefined);
             setPickerTrouble(undefined);

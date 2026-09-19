@@ -29,7 +29,9 @@ export function StartChat({
   /** Why the last attempt did not start, if it did not. */
   trouble?: string;
   onStart: (profile: string, persona: string | null) => void;
-  onApprove: (profile: string, persona: string | null) => void;
+  /** The profile, the persona, and the exact line the operator read — so the approval is
+   *  for what was on screen and not for whatever the file says by the time it is clicked. */
+  onApprove: (profile: string, persona: string | null, shown: string) => void;
   onCancel: () => void;
 }) {
   const [profile, setProfile] = useState<string | undefined>(
@@ -148,7 +150,7 @@ export function StartChat({
           {picked?.approval ? (
             <button
               className="ends-it"
-              onClick={() => onApprove(picked.name, persona)}
+              onClick={() => onApprove(picked.name, persona, picked.shown)}
               disabled={!picked}
             >
               Approve and start

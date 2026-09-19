@@ -354,13 +354,22 @@ fn start_options() -> Result<StartOptions, String> {
     })
 }
 
-/// Records that the operator approved running this profile's command, exactly as it stands.
+/// Records that the operator approved running this profile's command — **the one they were
+/// shown**.
+///
+/// `shown` is the exact line the dialog drew. It is checked against the file again here,
+/// and a mismatch refuses: between the picker reading the profile and the operator pressing
+/// the button, `charter.local.toml` can change — it is gitignored, so an edit to it leaves
+/// no diff for a reviewer to catch, and nothing stops a chat writing plane config. Without
+/// this check the approval recorded whatever was on disk at CLICK time, so the operator
+/// could approve, and charter could run, a command they never read. A review probe found
+/// it, and it defeats the one prompt ADR 0022 exists to put in front of a launch.
 ///
 /// Its own command, and a separate click from the one that starts the chat: this IS the
 /// approval, and a command that both asked and ran would be asking nothing.
 #[tauri::command]
 #[specta::specta]
-fn approve_profile(name: String) -> Result<(), String> {
+fn approve_profile(name: String, shown: String) -> Result<(), String> {
     let root = here()?;
     // Read through the LAUNCH read, so a profile in a file git would carry cannot be
     // approved into existence — the approval would be recorded and the launch would still
@@ -372,6 +381,14 @@ fn approve_profile(name: String) -> Result<(), String> {
             charter_core::shown::short(&name)
         )
     })?;
+    let now = charter_core::profiles::display(profile);
+    if now != shown {
+        return Err(format!(
+            "profile '{}' changed while you were reading it, so nothing was approved and \
+             nothing was started. It now runs: {now}",
+            charter_core::shown::short(&name)
+        ));
+    }
     charter_core::profiletrust::record_launched(
         &root,
         &profile.name,

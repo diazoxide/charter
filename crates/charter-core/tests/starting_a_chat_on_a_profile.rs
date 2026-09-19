@@ -389,3 +389,106 @@ fn a_plane_with_no_personas_at_all_offers_none_rather_than_failing() {
         Vec::<String>::new()
     );
 }
+
+// ---------------------------------------------------------------------------
+// From a review sweep's probes. Each was a way the picker's list and the start
+// could disagree, or a way the launch could stall.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_persona_on_the_legacy_flat_layout_starts_because_the_picker_offers_it() {
+    // `personas/<name>.md` is the old layout and `Plane::personas` lists it. The start used
+    // to require `personas/<name>/persona.md`, so a plane on that layout offered personas
+    // that could not start — a dialog arguing with itself.
+    let plane = Plane::new();
+    let bin = plane.wired();
+    plane.profile("claude", &bin, "");
+    fs::write(plane.root().join("personas/devops.md"), "# devops\n").unwrap();
+    let mut start = plane.start("work");
+    start.persona = Some("devops".to_owned());
+
+    let ready = start::ready(&start, plane.root()).expect("a listed persona starts");
+
+    assert_eq!(
+        ready.env.iter().find(|(n, _)| n == "CHARTER_PERSONA"),
+        Some(&("CHARTER_PERSONA".to_owned(), "devops".to_owned()))
+    );
+}
+
+#[test]
+fn the_shared_store_is_refused_as_a_persona_even_where_it_has_a_persona_md() {
+    // `_shared` is the store every persona READS. The picker never offers it, and a caller
+    // that is not the picker must not be able to point a chat's `CHARTER_PERSONA` at it.
+    let plane = Plane::new();
+    let bin = plane.wired();
+    plane.profile("claude", &bin, "");
+    fs::create_dir_all(plane.root().join("personas/_shared")).unwrap();
+    fs::write(
+        plane.root().join("personas/_shared/persona.md"),
+        "# shared\n",
+    )
+    .unwrap();
+    let mut start = plane.start("work");
+    start.persona = Some("_shared".to_owned());
+
+    let why = start::ready(&start, plane.root()).expect_err("it refuses");
+
+    assert!(why.contains("no persona '_shared' on this plane"), "{why}");
+}
+
+#[test]
+fn a_persona_whose_directory_leaves_the_plane_is_refused() {
+    // A committed `personas/<name> -> <outside>` travels with the plane to every machine
+    // that clones it. Gated on the entry that is OPENED, not on `personas/` above it.
+    let plane = Plane::new();
+    let bin = plane.wired();
+    plane.profile("claude", &bin, "");
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(outside.path().join("persona.md"), "# elsewhere\n").unwrap();
+    std::os::unix::fs::symlink(outside.path(), plane.root().join("personas/away")).unwrap();
+    let mut start = plane.start("work");
+    start.persona = Some("away".to_owned());
+
+    let why = start::ready(&start, plane.root()).expect_err("it refuses");
+
+    assert!(why.contains("resolves outside this plane"), "{why}");
+}
+
+#[test]
+fn a_probe_whose_harness_writes_more_than_a_pipe_holds_still_answers() {
+    // The launch used to poll for exit and read the pipes afterwards, so a harness that
+    // wrote more than a pipe holds blocked on its own write, never exited, and the launch
+    // sat on the whole timeout before refusing a chat that was fine. Well over any pipe
+    // buffer, and the answer has to arrive in seconds rather than in the timeout.
+    let plane = Plane::new();
+    let chatty = plane.root().join("chatty-claude");
+    fs::write(
+        &chatty,
+        "#!/bin/sh\n\
+         i=0\n\
+         while [ $i -lt 400 ]; do\n\
+         \x20 printf '%0.sx' $(seq 1 1000)\n\
+         \x20 i=$((i+1))\n\
+         done\n\
+         printf '\\n[{\"id\":\"charter@charter\",\"scope\":\"user\",\"enabled\":true}]\\n'\n",
+    )
+    .unwrap();
+    fs::set_permissions(&chatty, fs::Permissions::from_mode(0o755)).unwrap();
+    plane.profile("claude", &chatty, "");
+    let p = profiles::current(plane.root()).get("work").unwrap().clone();
+
+    let began = std::time::Instant::now();
+    let w = charter_core::wiring::detect(&p, plane.root(), plane.root());
+
+    assert!(
+        began.elapsed() < std::time::Duration::from_secs(20),
+        "the probe stalled for {:?}, which is the deadlock this test exists for",
+        began.elapsed()
+    );
+    // 400 KB of noise before the JSON, so this also pins that a probe reads it all.
+    assert_eq!(
+        w.state,
+        charter_core::wiring::State::Unknown,
+        "output that is not a list of rows is an unknown, not nothing installed: {w:?}"
+    );
+}

@@ -107,7 +107,7 @@ export const commands = {
 	 *  Its own command, and a separate click from the one that starts the chat: this IS the
 	 *  approval, and a command that both asked and ran would be asking nothing.
 	 */
-	approveProfile: (name: string) => typedError<null, string>(__TAURI_INVOKE("approve_profile", { name })),
+	approveProfile: (name: string, shown: string) => typedError<null, string>(__TAURI_INVOKE("approve_profile", { name, shown })),
 	/**
 	 *  Starts a chat on a harness profile, with a persona.
 	 * 

@@ -105,4 +105,25 @@ describe("approving a profile and starting on it", () => {
     });
     expect(started.args).toMatchObject({ profile: "work", persona: null });
   });
+  it("approves the line the operator read, not whatever the file says when they click", async () => {
+    // `charter.local.toml` is gitignored, so an edit to it leaves no diff for a reviewer to
+    // catch and nothing stops a chat writing plane config. The approval therefore carries
+    // the exact line the dialog DREW, and the core checks it against the file again — so an
+    // operator cannot approve, and charter cannot run, a command they never read.
+    const { asked } = core();
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "New tab" }));
+    await userEvent.click(screen.getByRole("button", { name: "Approve and start" }));
+
+    const approved = await vi.waitFor(() => {
+      const one = asked.find(({ cmd }) => cmd === "approve_profile");
+      if (one === undefined) throw new Error("nothing was approved");
+      return one;
+    });
+    expect(approved.args).toMatchObject({
+      name: "work",
+      shown: "CLAUDE_CONFIG_DIR=~/.claude-work claude",
+    });
+  });
 });
