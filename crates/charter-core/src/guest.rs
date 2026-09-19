@@ -56,6 +56,9 @@
 //! per-checkout and untracked, so a tracked one is content some cloned repository committed,
 //! and trusting its digests is how a repo names charter's files as its own to redirect.
 
+// PROBE ONLY: the mutations below leave guards unreferenced.
+#![allow(dead_code)]
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
