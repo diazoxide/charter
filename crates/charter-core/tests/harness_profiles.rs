@@ -591,6 +591,137 @@ fn a_default_that_stands_leaves_no_refused_default_beside_it() {
     assert_eq!(set.default_refused, None);
 }
 
+// ---------------------------------------------------------------------------
+// Four guards the nightly mutation run found with no test behind them (charter-app
+// run 35430920851): each mutation below survived the whole suite. Every sentence is
+// the one `charter/profiles.py` writes for the same declaration.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_default_the_committed_file_names_stands_when_this_machine_has_that_profile() {
+    // Every committed default tested so far was either overruled by the local file or named
+    // a profile nobody has — and both of those end with no default at all, so deleting the
+    // `!` that keeps a TEXT default (profiles.rs, `if !value.is_str()`) passed everything.
+    let dir = plane("[harness]\ndefault = \"codex\"\n", "");
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(set.default.as_deref(), Some("codex"));
+    assert_eq!(set.default_from.as_deref(), Some(profiles::COMMITTED_FILE));
+    assert_eq!(set.default_refused, None);
+}
+
+#[test]
+fn a_default_in_the_committed_file_that_is_not_text_is_refused_by_value() {
+    // The other half of the same guard. A `default = 7` names nothing, and a surface must be
+    // able to say what it named — `7`, quoted back the way the oracle quotes it.
+    let dir = plane("[harness]\ndefault = 7\n", "");
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(set.default, None);
+    assert_eq!(set.default_refused.as_deref(), Some("7"));
+}
+
+#[test]
+fn a_local_file_that_is_there_and_cannot_be_read_is_refused_rather_than_taken_as_absent() {
+    // Only an ABSENT file declares nothing. Anything else that stops the read is a refusal,
+    // because a file that is there and says nothing looks exactly like one nobody wrote —
+    // and the operator's `claude-work` profile would silently not exist. Widening the
+    // `NotFound` guard to every error passed the suite; a directory in the file's place is
+    // an error on every platform that is not `NotFound`.
+    let dir = plane("", "");
+    fs::create_dir(dir.path().join(profiles::LOCAL_FILE)).unwrap();
+
+    let set = profiles::derive(dir.path());
+
+    let refused = set
+        .refused
+        .iter()
+        .find(|r| r.name.is_empty())
+        .unwrap_or_else(|| panic!("an unreadable file was taken as absent: {:?}", set.refused));
+    assert_eq!(refused.source, profiles::LOCAL_FILE);
+    assert!(
+        refused
+            .reason
+            .starts_with("charter.local.toml could not be read ("),
+        "{:?}",
+        refused.reason
+    );
+    assert!(
+        refused.reason.ends_with(
+            "), so no declared profile was loaded — the built-in profiles still are. Fix the \
+             file and run charter harness list."
+        ),
+        "{:?}",
+        refused.reason
+    );
+    assert_eq!(names(&set), ["claude", "opencode", "codex"]);
+}
+
+#[test]
+fn a_table_named_default_is_refused_as_a_profile_and_is_not_read_as_the_default() {
+    // `default` is a key only while it is not a table. `[harness.default]` is a PROFILE
+    // declaration under the one name a profile cannot take, and it is refused as one —
+    // rather than swallowed as a default that names a table. Turning the guard's `&&` into
+    // `||` did exactly that swallowing and passed the suite.
+    let dir = plane(
+        "",
+        "[harness.default]\nkind = \"claude\"\ncommand = [\"claude\"]\n",
+    );
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(
+        why(&set, "default"),
+        "a profile cannot be named 'default' — `default` is the one key under [harness] that \
+         is not a profile. Rename the table."
+    );
+    assert_eq!(set.default, None);
+    assert_eq!(set.default_from, None);
+    assert_eq!(set.default_refused, None);
+}
+
+#[test]
+fn a_bare_value_under_harness_is_refused_as_not_a_table_and_never_becomes_the_default() {
+    // The same `&&`, from the other side: with `||`, ANY non-table key under [harness] was
+    // read as `default`, so `work = "claude"` — a half-written profile — silently made
+    // `claude` the row every new chat starts on, and the operator was told nothing.
+    let dir = plane("", "[harness]\nwork = \"claude\"\n");
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(
+        why(&set, "work"),
+        "[harness] work in charter.local.toml is not a table — a profile is [harness.work] \
+         with kind, command and optionally env."
+    );
+    assert_eq!(set.default, None);
+    assert_eq!(set.default_from, None);
+}
+
+#[test]
+fn a_profiles_own_env_table_is_not_mistaken_for_a_nested_profile() {
+    // `env` is the one key a profile has whose value IS a table, and the nested-table check
+    // must leave it alone. Every test declaring an `env` looked the profile up by name and
+    // never asked what else was refused — so an `||` that flagged `env` as a dotted name
+    // (`[harness.work] holds a table env, …`) passed, and every profile with an environment
+    // arrived with a refusal about itself beside it.
+    let dir = plane(
+        "",
+        "[harness.work]\nkind = \"claude\"\ncommand = [\"claude\"]\n\
+         env = { CLAUDE_CONFIG_DIR = \"~/.claude-work\" }\n",
+    );
+
+    let set = profiles::derive(dir.path());
+
+    assert_eq!(set.refused, []);
+    assert_eq!(
+        set.get("work").unwrap().env,
+        [("CLAUDE_CONFIG_DIR".to_owned(), "~/.claude-work".to_owned())]
+    );
+}
+
 #[test]
 fn the_launch_read_is_the_one_that_has_already_asked_git() {
     // `current` is the unchecked read; pairing it with the git check by hand is a pairing
