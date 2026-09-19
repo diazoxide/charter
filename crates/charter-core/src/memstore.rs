@@ -1234,3 +1234,97 @@ fn gate(root: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
     crate::contain::writable(root, path)
         .map_err(|r| std::io::Error::new(std::io::ErrorKind::PermissionDenied, r.to_string()))
 }
+
+#[cfg(test)]
+mod gate_tests {
+    use super::*;
+
+    fn stamp() -> chrono::NaiveDateTime {
+        "2026-03-02T09:14:00".parse().unwrap()
+    }
+
+    fn plane() -> (tempfile::TempDir, std::path::PathBuf, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("charter.toml"), "schema = 1\n").unwrap();
+        let store = dir.path().join("personas/devops/memory");
+        std::fs::create_dir_all(&store).unwrap();
+        (dir, store, tempfile::tempdir().unwrap())
+    }
+
+    #[test]
+    fn a_refused_index_leaves_no_memory_file_behind() {
+        // Both targets are gated before a byte is written, as charter's `write` gates them:
+        // a memory file on disk that nothing indexes is the half-write this prevents.
+        let (dir, store, outside) = plane();
+        std::fs::write(outside.path().join("idx"), "PRECIOUS\n").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("idx"), store.join(INDEX)).unwrap();
+
+        let refused = write(
+            dir.path(),
+            &store,
+            "A fact",
+            None,
+            false,
+            "persistent",
+            true,
+            stamp(),
+        );
+
+        assert_eq!(
+            refused.unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert!(!store.join("a-fact.md").exists(), "no memory file was left");
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("idx")).unwrap(),
+            "PRECIOUS\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_memory_under_the_state_directory_is_private() {
+        // The ephemeral quadrant is charter's own state: 0700 directories and a 0600 file,
+        // whatever the umask. A committed store is left to the operator's modes.
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, _store, _outside) = plane();
+        let scratch = dir
+            .path()
+            .join(".charter/persona-state/ephemeral/s1/devops");
+
+        let path = write(
+            dir.path(),
+            &scratch,
+            "Scratch",
+            None,
+            false,
+            "ephemeral",
+            false,
+            stamp(),
+        )
+        .unwrap();
+
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&path), 0o600);
+        assert_eq!(mode(&scratch), 0o700);
+        assert_eq!(mode(scratch.parent().unwrap()), 0o700);
+    }
+
+    #[test]
+    fn a_name_is_resolved_only_to_a_file_the_listing_would_read() {
+        // The direct hit asks the listing's whole question. `is_file()` alone let a link out
+        // of the plane, named, reach `forget`.
+        let (dir, store, outside) = plane();
+        std::fs::write(outside.path().join("secret.md"), "# Secret\n").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.md"), store.join("leak.md"))
+            .unwrap();
+        std::fs::write(store.join("real.md"), "# Real\n").unwrap();
+
+        assert_eq!(resolve(dir.path(), &store, "leak"), None);
+        assert_eq!(resolve(dir.path(), &store, "leak.md"), None);
+        assert_eq!(
+            resolve(dir.path(), &store, "real"),
+            Some(store.join("real.md"))
+        );
+    }
+}
