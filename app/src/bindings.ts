@@ -265,9 +265,11 @@ export type Piece = {
 	/**
 	 *  Whether charter's harness layer is in this tree.
 	 * 
-	 *  `false` is the ordinary state of a worktree charter cut, and the row says so: a chat
-	 *  there runs without the plane's ask/deny rules, without its persona's agents and
-	 *  without `$CHARTER_HARNESS` (ADR 0027).
+	 *  Since M1.x a worktree charter cuts is wired as it is cut, so `false` now means a tree
+	 *  cut by plain git, one whose wire did not land, or a plane with no layer to carry. The
+	 *  row still says so, because a chat in such a tree runs without the plane's ask/deny
+	 *  rules, without its persona's agents and without `$CHARTER_HARNESS` — and starting one
+	 *  there is what writes the layer or refuses.
 	 */
 	wired: boolean,
 	/**  Set when git still has a registration whose directory is gone. */

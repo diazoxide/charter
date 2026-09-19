@@ -11,9 +11,12 @@
 //! 1. the profile is one this machine declares — a chat whose profile is gone is skipped by
 //!    NAME and never given another (ADR 0022);
 //! 2. the persona is one this plane has;
-//! 3. [`crate::wiring::wired_or_refusal`] — the kind is startable, the file is not one git
+//! 3. the plane's guest layer reaches the directory the chat starts in, or gets written
+//!    there — a git root of its own cuts the walk-up off, and `enabledPlugins` in that
+//!    directory is what the next step's probe reads (ADR 0027, closed by M1.x);
+//! 4. [`crate::wiring::wired_or_refusal`] — the kind is startable, the file is not one git
 //!    would carry, the operator approved the command, and the folder is wired or gets wired;
-//! 4. only then are the arguments and the environment built.
+//! 5. only then are the arguments and the environment built.
 //!
 //! **The harness comes from the DECLARED kind**, never from the program's name.
 //! [`crate::harness::Harness::of_command`] cannot tell a shell from a harness charter has
@@ -100,9 +103,21 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
         Some(who) => Some(startable_persona(who, root)?),
     };
 
+    let here = start.cwd.clone().unwrap_or_else(|| root.to_path_buf());
+    // The plane's layer, and it is **before** the wiring probe rather than after it. Two
+    // halves of one question, asked in the order the answers depend on: `wiring` asks whether
+    // charter's guard is installed in the harness's CONFIG FOLDER, and Claude Code resolves
+    // `enabled` for that install at the probe's own working directory — out of the
+    // `enabledPlugins` in the settings the layer writes. Probing a worktree before its layer
+    // exists asks about a directory charter is one step from finishing, and answers "not
+    // wired" about a chat that would have been guarded.
+    //
+    // Nothing here runs a command out of a file a chat can write, which is what the consent
+    // gate below exists for: this writes charter's own documents into a tree charter owns,
+    // and it is idempotent, so doing it for a start that is then refused costs nothing.
+    layered_or_refusal(&here, root)?;
     // The gate. Startable kind, ignored file, approved command, wired folder — one call, so
     // no caller can start a chat past a check another caller makes.
-    let here = start.cwd.clone().unwrap_or_else(|| root.to_path_buf());
     let answer = crate::wiring::wired_or_refusal(profile, &here, root);
     if !answer.may_start() {
         return Err(answer.refusal);
@@ -129,6 +144,44 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
         how,
         wired: answer.wired,
     })
+}
+
+/// Make sure the plane's guest layer is in the tree this chat would start in — or say why a
+/// chat may not start there.
+///
+/// **Only a worktree of a workspace's clone**, named by path arithmetic
+/// ([`crate::worktree::locate`]) and then re-checked as a path this workspace may hold
+/// ([`crate::worktree::confine::within_workspace`]). Every other `cwd` is left alone: the
+/// plane root and a workspace directory read the plane's own copies by walking up, a clone is
+/// the Python's to wire until that port lands, and a directory that is none of those is
+/// somewhere charter was pointed at rather than somewhere it owns.
+///
+/// **Write, then refuse on what did not land.** A worktree charter cut is wired at cut time,
+/// so the usual answer here costs one `want` and a digest per file and changes nothing. What
+/// this is for is the tree charter did *not* cut — `git worktree add` run by hand, or by
+/// another tool — where the repair is this call, not a trip to another binary. A tree whose
+/// layer charter cannot finish is refused with the sentence naming what blocked it, because a
+/// chat that looks guarded and is not is the failure [`crate::wiring`] exists to prevent.
+pub fn layered_or_refusal(here: &Path, root: &Path) -> Result<(), String> {
+    let Some(found) = crate::worktree::locate(root, here) else {
+        return Ok(());
+    };
+    let piece = crate::worktree::path_for(root, &found.workspace, &found.repo, &found.piece)
+        .and_then(|path| {
+            crate::worktree::confine::within_workspace(root, &found.workspace, &path)
+                .map_err(Into::into)
+        })
+        .map_err(|refusal| {
+            format!(
+                "the worktree this chat would start in is not one charter may write \
+                 ({refusal}), so nothing was started."
+            )
+        })?;
+    let layered = crate::guest::wire(root, &piece);
+    if layered.complete() {
+        return Ok(());
+    }
+    Err(format!("{} Nothing was started.", layered.refusal(&piece)))
 }
 
 /// The arguments charter adds, the conversation the chat is now under, and which of the two

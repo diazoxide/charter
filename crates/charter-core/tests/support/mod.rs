@@ -71,6 +71,44 @@ pub fn plane_with_clone(repo: &str) -> Fixture {
 }
 
 impl Fixture {
+    /// Give the plane a layer worth carrying: the settings that hold `$CHARTER_HARNESS`, the
+    /// plugin and a shared ask rule; a machine-local deny; and one persona agent.
+    ///
+    /// Not part of `plane_with_clone`, because a plane with nothing to carry is its own case —
+    /// `want` is empty there, charter writes nothing, and no chat is refused over it.
+    pub fn give_the_plane_a_layer(&self) {
+        let claude = self.plane.join(".claude");
+        std::fs::create_dir_all(claude.join("agents")).unwrap();
+        std::fs::write(
+            claude.join("settings.json"),
+            concat!(
+                "{\n",
+                "  \"enabledPlugins\": {\"charter@charter\": true},\n",
+                "  \"env\": {\"CHARTER_HARNESS\": \"claude-code\"},\n",
+                "  \"permissions\": {\"allow\": [\"Bash(ls *)\"], ",
+                "\"ask\": [\"Bash(charter handoff *)\"]},\n",
+                "  \"hooks\": {\"PreToolUse\": []}\n",
+                "}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            claude.join("settings.local.json"),
+            "{\"permissions\": {\"deny\": [\"Bash(rm -rf /*)\"]}}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            claude.join("agents").join("steward.md"),
+            "# steward\n\nThe control plane steward.\n",
+        )
+        .unwrap();
+    }
+
+    /// What `git status` says in `tree` — empty when charter left nothing showing.
+    pub fn status(&self, tree: &Path) -> String {
+        String::from_utf8_lossy(&git(tree, &["status", "--porcelain"]).stdout).into_owned()
+    }
+
     /// A commit in any tree of this fixture.
     pub fn commit(&self, tree: &Path, message: &str) {
         std::fs::write(tree.join(message), message).unwrap();

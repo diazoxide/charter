@@ -3,6 +3,7 @@
 pub mod cistate;
 pub mod contain;
 pub mod engine;
+pub mod guest;
 pub mod harness;
 pub mod hookwire;
 pub mod manifest;
