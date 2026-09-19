@@ -81,70 +81,72 @@ reason the record, and not the whole core, gets a fix in this milestone.
 
 ## What was measured
 
-On the operator's machine (Apple M4 Pro, 48 GB, macOS 26.2), against `charter-core` at
-`origin/main` (`75d0d37`), 2026-09-19. Twenty thousand iterations per row, each row repeated
-three times; the spread between repeats is shown.
-
-The harness transcribes the gate functions from `crates/charter-core/src/contain.rs` component
-for component — `resolve_existing`'s `readlink` walk, `no_link_on_the_way`'s `lstat` walk, the
-prefix comparison against the data directories — and then makes the same second call the real
-caller makes. One thread runs the gate and the open in a loop; a second plants and removes a
-symlink at the path.
-
-**It is not the Rust harness, and that has to be said before the numbers are read.** This
-machine would not start a newly linked Mach-O: every freshly compiled binary and dylib stalled
-in `_dyld_start` at 0% CPU, held by the first-launch assessment, while binaries already
-assessed ran normally. The Rust harness compiled and never executed. The numbers below come
-from a transcription into Python, which makes each iteration slower than the shipped one and
-therefore each window *wider*. **Every count is an upper bound on the shipped rate, not the
-shipped rate.** What does not depend on the language is the direction of each row, and whether
-a variant reaches zero rather than merely fewer.
-
-| Gate, and what the caller does next | Escapes per 20,000 |
-| --- | --- |
-| `contain::readable`, then `File::open` — personas, workspaces, memory, `start` | **1,300 / 1,330 / 1,340** |
-| `contain::no_link_on_the_way`, then `File::open` — the record read at launch | **3 / 9 / 10** |
-| `contain::no_link_on_the_way`, then `fs::write` — the record written at quit | **4 / 5 / 9** |
-| the same write, with `O_NOFOLLOW` on the create | **0 / 0 / 0** |
-| the same read, with `O_NOFOLLOW` on the open | **0 / 0 / 0** |
-
-An "escape" on the read rows is a read that returned the planted file's contents from outside
-the plane — on the record row, a command line a launch would have run. On the write rows it is
-the whole serialised record, byte for byte, landing outside the plane.
-
-Three things in that table are worth more than the counts.
-
-**`contain::readable` is the widest window and the most-used gate**, at about 6.6% — two orders
-of magnitude worse than the record's gate. It resolves with a `readlink` per component and a
-prefix comparison before it answers, which costs 22 µs against `no_link_on_the_way`'s 5.6 µs,
-and the attacker gets all of it. Every persona read, every workspace read, every memory read
-and the persona a chat starts on go through it.
-
-**The escapes all came through the last component, and the reason is structural.** The attack
-that writes a whole record outside the plane plants a link at `reopen.json.writing`, the file
-charter is about to create. Swapping a *directory* component — `.charter/app` for a link out —
-was attempted for 20,000 iterations and never won once: a directory cannot be replaced by a
-symlink with a single `rename` (both macOS and Linux answer `ENOTDIR`), so the attacker has to
-`rmdir` and then `symlink`, and charter's own `create_dir_all` competes for the same gap. This
-is not a claim that directory components are safe. It is the measured reason the fix below is
-aimed where it is.
-
-**`O_NOFOLLOW` costs nothing.** With nobody racing, an open with it and an open without it
-measured 9.37 µs and 9.30 µs — the same number twice. It is a flag on a call that is already
-being made, so there is no throughput question to answer: ADR 0026's 13 MB burst is terminal
-output, and the record is written when a chat changes or the app quits.
-
-**The harness is committed**, so the next person to ask gets real numbers instead of these:
-`the_window_each_gate_leaves` in
-`crates/charter-core/tests/nothing_escapes_while_a_writer_races.rs`, run with
+**By the shipped gates themselves**, in
+`the_window_each_gate_leaves` (`crates/charter-core/tests/nothing_escapes_while_a_writer_races.rs`
+in charter-app), on CI's `ubuntu-24.04` runner. One thread runs a gate and then the caller's own
+open, 20,000 rounds; a second plants and removes a symlink at the path. It is committed and
+`#[ignore]`d, so it can be run again rather than believed:
 
 ```console
 cargo test -p charter-core --test nothing_escapes_while_a_writer_races -- \
     --ignored --nocapture the_window_each_gate_leaves
 ```
 
-It drives the shipped gates through their public names rather than a copy of them, because a
-script with its own copy of a containment gate is the drift `contain` is built to avoid.
+| Gate, and what the caller does next | Escapes per 20,000 |
+| --- | --- |
+| `contain::readable`, then `fs::read` — personas, workspaces, memory, `start` | **5025** |
+| `contain::no_link_on_the_way`, then `fs::read` — the record read at launch | **1881** |
+| `contain::no_link_on_the_way`, then `fs::write` — the record written at quit | **7600** |
+| `contain::open_no_link` — the same read | **0** |
+| `contain::create_no_link` — the same write | **0** |
+
+An "escape" on the read rows is a read that returned the planted file's contents from outside
+the plane — on the record row, a command line a launch would have run. On the write row it is
+the whole record, byte for byte, landing outside the plane.
+
+**A quarter to two fifths. The reviewer's 34 and 63 per 20,000 were not the ceiling, and neither
+was this ADR's first draft.** That draft measured a transcription of these functions into
+Python, because the machine the work was done on would not start a newly linked Mach-O — every
+freshly compiled binary and dylib stalled in `_dyld_start` at 0% CPU, and `cargo` stalled one
+level down, with `sample` putting rustc in `dyld4::APIs::dlopen` loading a proc-macro dylib. It
+reported 1300, 9 and 5 and called them an **upper** bound, on the reasoning that a slower victim
+leaves a wider window.
+
+That reasoning was wrong, and wrong in the unsafe direction. The transcription's *racer* was
+Python too, so it planted far less often per victim iteration, and the counts came out two
+orders of magnitude LOW. The correction is recorded rather than quietly applied, because a
+module that understates its own window by that much is exactly the thing this ADR exists to
+stop, and because the next person to reach for a transcription should know what it cost.
+
+Three things in that table are worth more than the counts.
+
+**`contain::readable` is the widest window and the most-used gate.** It resolves with a
+`readlink` per component and a prefix comparison before it answers — 22 µs against
+`no_link_on_the_way`'s 5.6 µs — and the attacker gets all of it. Every persona read, every
+workspace read, every memory read and the persona a chat starts on go through it. It is also the
+one row `O_NOFOLLOW` cannot help.
+
+**The escapes come through the last component, and the reason is structural.** The attack that
+writes a whole record outside the plane plants a link at `reopen.json.writing`, the file charter
+is about to create. Swapping a *directory* component — `.charter/app` for a link out — was
+attempted for 20,000 rounds and never won once: a directory cannot be replaced by a symlink with
+a single `rename` (both macOS and Linux answer `ENOTDIR`), so the attacker has to `rmdir` and
+then `symlink`, and charter's own `create_dir_all` competes for the same gap. This is not a
+claim that directory components are safe. It is the measured reason the fix below is aimed where
+it is.
+
+**`O_NOFOLLOW` costs nothing.** With nobody racing, an open with it and an open without it
+measured 9.37 µs and 9.30 µs — the same number twice. It is a flag on a call that is already
+being made, so there is no throughput question to answer: ADR 0026's 13 MB burst is terminal
+output, and the record is written when a chat changes or the app quits.
+
+**And the tests were watched failing before they were trusted.** Each guard was removed in turn,
+on a throwaway branch, and CI recorded which tests went red: `O_NOFOLLOW` removed took the two
+planted-link tests; `O_NONBLOCK` removed took the FIFO test with "opening a fifo must not
+block: Timeout"; the walk dropped from the pair took the directory-link test *and* three
+pre-existing `reopen` tests, which is how the wiring into the call sites is proved; and the call
+sites reverted to check-then-open took both end-to-end racing tests, 423 planted command lines
+taken in 4,000 rounds.
 
 ## What is closed, and it is the half charter owns alone
 
@@ -169,7 +171,8 @@ is the same information with nothing in between.
 Stated at full size, because a partial fix presented as a complete one is the failure mode this
 ADR is written against.
 
-- **`contain::readable` and `contain::writable` are unchanged**, and they are the 6.6% row.
+- **`contain::readable` and `contain::writable` are unchanged**, and they are the 5025 row —
+  a quarter of every read, with a racer on the machine.
   `O_NOFOLLOW` cannot be applied to them: those gates deliberately **follow** a link that lands
   back inside the plane, because refusing every symlink would break a plane that legitimately
   links a persona directory, and because Python's `os.path.realpath` follows them too. Refusing
