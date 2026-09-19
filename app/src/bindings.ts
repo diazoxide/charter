@@ -125,9 +125,52 @@ export const commands = {
 	 *  and that one opens the operator's shell.
 	 */
 	startChat: (profile: string, persona: string | null, cwd: string | null, name: string, columns: number, rows: number) => typedError<Started, string>(__TAURI_INVOKE("start_chat", { profile, persona, cwd, name, columns, rows })),
+	/**
+	 *  The piece a chat's working directory sits in, or `None`.
+	 * 
+	 *  Called for every chat the sidebar draws. `worktree::locate` is path arithmetic and spawns
+	 *  nothing; the one git call is the listing, made once per repo and only for chats that are
+	 *  in a piece at all.
+	 */
+	worktreeOfChat: (cwd: string) => typedError<{
+	workspace: string,
+	repo: string,
+	piece: string,
+	branch: string | null,
+	wired: boolean,
+	stale: boolean,
+} | null, string>(__TAURI_INVOKE("worktree_of_chat", { cwd })),
+	/**  This workspace's pieces for one repo. */
+	worktreeList: (plane: string, workspace: string, repo: string) => typedError<Piece[], string>(__TAURI_INVOKE("worktree_list", { plane, workspace, repo })),
+	/**
+	 *  Remove a piece. The refusal is the core's sentence, unchanged.
+	 * 
+	 *  `force` is the operator saying to discard work the guards found — it is never passed on
+	 *  their behalf, and the window asks for it only after showing them what the refusal said.
+	 */
+	worktreeRemove: (plane: string, workspace: string, repo: string, piece: string, force: boolean) => typedError<null, string>(__TAURI_INVOKE("worktree_remove", { plane, workspace, repo, piece, force })),
+	/**  Land a piece in its clone, fast-forward only. Never pushes. */
+	worktreeMerge: (plane: string, workspace: string, repo: string, piece: string) => typedError<Merged, string>(__TAURI_INVOKE("worktree_merge", { plane, workspace, repo, piece })),
 };
 
 /* Types */
+/**  Where a chat is working, when it is working in a piece. */
+export type ChatWorktree = {
+	workspace: string,
+	repo: string,
+	piece: string,
+	branch: string | null,
+	wired: boolean,
+	stale: boolean,
+};
+
+/**  What a merge did, for the window to report. */
+export type Merged = {
+	branch: string,
+	was: string,
+	now: string,
+};
+
 /**  The event the window listens for. One chat, its state, whether it is asking for you. */
 export type Moved = {
 	session: number,
@@ -157,6 +200,23 @@ export type OpenChat = {
 	profile: string | null,
 	/**  The persona it adopted. */
 	persona: string | null,
+};
+
+/**  One piece, as the window shows it. */
+export type Piece = {
+	piece: string,
+	path: string,
+	branch: string | null,
+	/**
+	 *  Whether charter's harness layer is in this tree.
+	 * 
+	 *  `false` is the ordinary state of a worktree charter cut, and the row says so: a chat
+	 *  there runs without the plane's ask/deny rules, without its persona's agents and
+	 *  without `$CHARTER_HARNESS` (ADR 0027).
+	 */
+	wired: boolean,
+	/**  Set when git still has a registration whose directory is gone. */
+	stale: boolean,
 };
 
 /**
