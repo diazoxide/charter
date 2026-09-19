@@ -3,6 +3,10 @@
 //! **Pinned author and dates**, so two runs of the same steps produce the same commit shas —
 //! the differential compares what two implementations did to one repository, and that is only
 //! meaningful if the repository itself is reproducible.
+//!
+//! Not every test binary that includes this needs every helper in it, and an unused one here
+//! is not a defect in the helper.
+#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

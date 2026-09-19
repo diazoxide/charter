@@ -93,6 +93,25 @@ export const commands = {
 	 */
 	planeSidebar: () => typedError<Sidebar, string>(__TAURI_INVOKE("plane_sidebar")),
 	/**
+	 *  The focused workspace's panels: its repos, its todos and the plane's personas.
+	 * 
+	 *  Its own command, separate from the repos below, because everything here is a directory
+	 *  listing and a few small files. The panels paint the moment a workspace is focused, and
+	 *  the part that has to run git arrives after — one command would make the todo list wait
+	 *  for a status read on every clone.
+	 */
+	workspacePanels: (workspace: string) => typedError<Panels, string>(__TAURI_INVOKE("workspace_panels", { workspace })),
+	/**
+	 *  What git says about each of the focused workspace's clones, and what the forge cache
+	 *  last recorded for the branch each is on.
+	 * 
+	 *  On a blocking thread and never the one that draws: a status read is bounded at five
+	 *  seconds per clone, and a window that waited on it would miss the 100 ms a workspace
+	 *  switch is allowed. **Nothing here crosses a network** — the forge state comes out of
+	 *  `.charter/cache/glstate.json`, which charter-app reads and never writes.
+	 */
+	workspaceRepos: (workspace: string) => typedError<RepoStates, string>(__TAURI_INVOKE("workspace_repos", { workspace })),
+	/**
 	 *  What the picker draws: every profile this machine has, every one charter will not use,
 	 *  and the plane's personas.
 	 * 
@@ -202,6 +221,42 @@ export type OpenChat = {
 	persona: string | null,
 };
 
+/**  One open todo. There is no state field: a closed todo is a deleted file (ADR 0004). */
+export type PanelTodo = {
+	/**  The file stem, which is what a todo is closed by. */
+	slug: string,
+	title: string,
+	/**  The date the todo was written, as the file records it. */
+	stamp: string,
+};
+
+/**  Everything the panels can draw without running git. */
+export type Panels = {
+	/**
+	 *  The workspace this is about, so a late answer can be matched to the ask and an answer
+	 *  for a workspace that is no longer focused can be thrown away.
+	 */
+	workspace: string,
+	/**  The clones on disk, by name, in the order the directory lists them. */
+	repos: string[],
+	/**  Repos `workspace.json` names that are not cloned here. Membership, not presence. */
+	absent: string[],
+	/**
+	 *  What charter would not look at, by name and reason. Shown, never dropped: a row that
+	 *  is missing is otherwise merely missing.
+	 */
+	refused: ([string, string])[],
+	todos: PanelTodo[],
+	/**
+	 *  Why the todos could not be read, where they could not. A store that is a link out of
+	 *  the plane is refused, and "no todos" would be the wrong thing to draw for it.
+	 */
+	todos_refused: string | null,
+	/**  The plane's personas, and the one a chat started here would adopt. */
+	personas: string[],
+	persona: string | null,
+};
+
 /**  One piece, as the window shows it. */
 export type Piece = {
 	piece: string,
@@ -240,6 +295,51 @@ export type ProfileRow = {
 	 *  runs; absent when charter has already recorded running exactly this.
 	 */
 	approval: string | null,
+};
+
+/**  One clone's git state, and what the forge cache last recorded for its branch. */
+export type RepoState = {
+	name: string,
+	/**  The branch the checkout is on, where it is on one. */
+	branch: string | null,
+	/**  Whether that branch holds no commit yet. */
+	unborn: boolean,
+	/**  The commit HEAD sits on when it is on no branch. */
+	detached: string | null,
+	upstream: string | null,
+	ahead: number,
+	behind: number,
+	/**  Changed files git is tracking. */
+	tracked: number,
+	/**  Files git is not tracking. */
+	untracked: number,
+	/**
+	 *  Why charter could not read the tree. Every count above is zero when this is set, and
+	 *  it means charter does not know — not that the tree is clean.
+	 */
+	unreadable: string | null,
+	/**  What the forge cache last recorded, one of the seven states charter knows. */
+	ci: string | null,
+	change: number | null,
+	sigil: string | null,
+	/**  How long ago the cache entry was written, which is how old this answer is. */
+	fetched_seconds_ago: number | null,
+	/**
+	 *  Why there is nothing from the forge to show. Absent when something was fetched, even
+	 *  when what was fetched named no pipeline.
+	 */
+	not_fetched: string | null,
+};
+
+/**  Every clone of one workspace, as the panels draw them. */
+export type RepoStates = {
+	workspace: string,
+	repos: RepoState[],
+	/**
+	 *  Why the forge cache was not read at all, where it was not. Reported once for the
+	 *  listing rather than repeated on every row.
+	 */
+	cache_refused: string | null,
 };
 
 /**

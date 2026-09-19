@@ -26,6 +26,7 @@ import {
   type Tabs,
 } from "./tabs";
 import { ChatState, NeedsYou } from "./NeedsYou";
+import { Panels } from "./Panels";
 import { stateOf, useChatStates } from "./chatState";
 
 type Plane =
@@ -420,6 +421,10 @@ function App() {
             <p className="empty">No sessions. Open one with New tab.</p>
           )}
         </div>
+        {/* The right-hand side, which reads the plane for whichever workspace is focused.
+            Its own component with its own state: it asks the core twice — once for what the
+            plane holds and once for what git says — and neither ask belongs up here. */}
+        <Panels workspace={focused} />
       </div>
 
       {picking && (
