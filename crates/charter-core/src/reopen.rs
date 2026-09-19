@@ -268,9 +268,9 @@ pub fn write(plane_root: &Path, record: &Record) -> std::io::Result<()> {
     //
     // `contain::create_no_link` and not `no_link_on_the_way` + `fs::write`: the walk answers
     // about a name and the write opens that name again, and a link planted in between put
-    // the whole record outside the plane 4, 5 and 9 times per 20,000 writes when it was
-    // measured (charter ADR 0028). The flag makes the kernel answer the last component at
-    // the instant of the create instead.
+    // the whole record outside the plane 7600 times per 20,000 writes when it was measured
+    // (charter ADR 0028). The flag makes the kernel answer the last component at the instant
+    // of the create instead.
     let beside = file.with_extension("json.writing");
     {
         use std::io::Write;
@@ -304,8 +304,8 @@ pub fn read_or_refusal(plane_root: &Path) -> Result<Record, std::io::Error> {
     // A record reached through a link is not this plane's record, and what it holds is a
     // command line this launch would run — so the walk AND the open both answer, and the
     // open's answer is the kernel's at the instant it happens (charter ADR 0028). Measured
-    // before that flag: 3, 9 and 10 launches per 20,000 took a planted command line from
-    // outside the plane.
+    // before that flag: 1881 launches per 20,000 took a planted command line from outside
+    // the plane.
     let mut open = match crate::contain::open_no_link(plane_root, &file) {
         Ok(open) => open,
         // No record is a first launch. A record that exists and cannot be read — no

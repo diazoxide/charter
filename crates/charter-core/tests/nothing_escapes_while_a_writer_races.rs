@@ -3,9 +3,10 @@
 //! `nothing_escapes.rs` asks whether a link that is **already there** is refused. This asks
 //! the other half, which charter ADR 0028 measured and decided: a link planted in the window
 //! between the gate answering and the caller opening. Before `contain::open_no_link` and
-//! `contain::create_no_link`, that window put the whole record outside the plane 4, 5 and 9
-//! times per 20,000 writes, and gave a launch a command line from outside the plane 3, 9 and
-//! 10 times per 20,000 reads.
+//! `contain::create_no_link`, that window put the whole record outside the plane 7600 times
+//! per 20,000 writes, and gave a launch a command line from outside the plane 1881 times per
+//! 20,000 reads. Both are zero now, and both were watched failing at 4,000 rounds before
+//! they were trusted: 423 planted command lines taken, and the record captured outside.
 //!
 //! **This is a net, not the bite.** The tests that go red the instant `O_NOFOLLOW` is dropped
 //! are in `contain`'s own module, driving the open half without the walk in front of it —
@@ -96,9 +97,11 @@ fn one_chat() -> Record {
 /// of the gate functions, and two copies of a containment gate drift: this drives the shipped
 /// ones through their public names.
 ///
-/// The ADR's own table was taken from a transcription into Python, because the machine it was
-/// written on would not start a newly linked binary. Those counts are an upper bound. This is
-/// how to replace them with real ones.
+/// The ADR's table came from this, run on CI. An earlier pass measured a Python transcription
+/// of the gates, because the machine the work was done on would not start a newly linked
+/// binary, and called those counts an upper bound — they were two orders of magnitude LOW,
+/// because the transcription's racer was Python too. Hence this, in the repository, driving
+/// the real thing.
 #[test]
 #[ignore = "a measurement, not a check: prints the window each gate leaves"]
 fn the_window_each_gate_leaves() {

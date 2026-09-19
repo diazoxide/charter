@@ -18,18 +18,23 @@
 //! that can change what the name points at, in the window between the answer and the open,
 //! gets the open it wants.
 //!
-//! **Measured, so the next reader does not have to guess at the size of it.** 20,000
-//! iterations per row on an M4 Pro, macOS 26.2, against a thread planting and removing a
-//! symlink at the path; three repeats, and the spread is shown. The counts come from a
-//! transcription of these functions into Python, because the machine would not start a newly
-//! linked binary, so each is an UPPER BOUND on the shipped rate rather than the rate:
+//! **Measured, so the next reader does not have to guess at the size of it.** These gates,
+//! against a thread planting and removing a symlink at the path, 20,000 rounds each. It is
+//! `the_window_each_gate_leaves` in `tests/nothing_escapes_while_a_writer_races.rs`, so it
+//! can be run again rather than believed:
 //!
 //! | gate, and what the caller does next | escapes per 20,000 |
 //! | --- | --- |
-//! | [`readable`], then `File::open` — personas, workspaces, memory, `start` | 1300 / 1330 / 1340 |
-//! | [`no_link_on_the_way`], then `File::open` — the record read at launch | 3 / 9 / 10 |
-//! | [`no_link_on_the_way`], then `fs::write` — the record written at quit | 4 / 5 / 9 |
-//! | the same two, through [`open_no_link`] / [`create_no_link`] | 0 / 0 / 0 |
+//! | [`readable`], then `fs::read` — personas, workspaces, memory, `start` | **5025** |
+//! | [`no_link_on_the_way`], then `fs::read` — the record read at launch | **1881** |
+//! | [`no_link_on_the_way`], then `fs::write` — the record written at quit | **7600** |
+//! | [`open_no_link`] / [`create_no_link`], the same two | **0** and **0** |
+//!
+//! A quarter to two fifths, not a hairline. An earlier pass measured a transcription of these
+//! functions into Python and called its counts an upper bound; that was wrong, and wrong in
+//! the unsafe direction — the transcription's racer was Python too, so it planted far less
+//! often per victim iteration and understated the window by two orders of magnitude. What
+//! does not change with the number is who the attacker is, which is the next paragraph.
 //!
 //! **This is accepted, and the reason is the adversary rather than the cost.** The attacker
 //! these gates exist for holds a **commit**, not a process: a committed
@@ -50,7 +55,7 @@
 //! atomically, with no Python behaviour to diverge from and no measurable cost (9.37 µs
 //! against 9.30 µs for the same open without the flag).
 //!
-//! **What is not closed, at full size.** [`readable`] and [`writable`] — the 6.6% row, and
+//! **What is not closed, at full size.** [`readable`] and [`writable`] — the 5025 row, and
 //! the most-used gates — cannot take `O_NOFOLLOW` at all: they deliberately FOLLOW a link
 //! that lands back inside the plane, which is Python's `realpath` behaviour and what a plane
 //! that links a persona directory depends on. Directory components above the last one are
@@ -268,9 +273,9 @@ pub fn no_link_on_the_way(root: &std::path::Path, path: &std::path::Path) -> std
 /// rather than by charter a moment earlier.
 ///
 /// **Why the pair and not the walk alone.** The walk answers about a path and does not hold
-/// it, so a link planted after it has passed is followed by the open (ADR 0028 measured 3, 9
-/// and 10 escapes per 20,000 reads of the record). `O_NOFOLLOW` moves the last component's
-/// answer to the instant of the open, where nothing can get between the two.
+/// it, so a link planted after it has passed is followed by the open — 1881 of 20,000 reads
+/// of the record, measured. `O_NOFOLLOW` moves the last component's answer to the instant of
+/// the open, where nothing can get between the two.
 ///
 /// **It is the predicate these callers already declare, so nothing changes without an
 /// attacker.** [`no_link_on_the_way`] refuses *every* link on the way, the last component
