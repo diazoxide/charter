@@ -256,7 +256,7 @@ function App() {
   /** The approval IS this click. After it, the whole chain of checks runs again from the
    *  top before anything is exec'd, so a yes never walks past a refusal standing behind it. */
   const approveAndStart = useCallback(
-    async (profile: string) => {
+    async (profile: string, persona: string | null) => {
       const said = await commands
         .approveProfile(profile)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
@@ -264,15 +264,12 @@ function App() {
         setPickerTrouble(said.error);
         return;
       }
-      const options = await commands
-        .startOptions()
-        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-      if (options.status === "ok" && picking)
-        setPicking({ options: options.data, where: picking.where });
-      const persona = picking?.options.persona ?? null;
+      // The persona the OPERATOR picked, carried up from the dialog with the profile. It
+      // used to take the plane's default out of the options instead, which silently threw
+      // away the choice on the one path where a profile is being used for the first time.
       await startPicked(profile, persona);
     },
-    [picking, startPicked],
+    [startPicked],
   );
 
   const quit = useCallback(() => {
@@ -430,7 +427,7 @@ function App() {
           options={picking.options}
           trouble={pickerTrouble}
           onStart={(profile, persona) => void startPicked(profile, persona)}
-          onApprove={(profile) => void approveAndStart(profile)}
+          onApprove={(profile, persona) => void approveAndStart(profile, persona)}
           onCancel={() => {
             setPicking(undefined);
             setPickerTrouble(undefined);

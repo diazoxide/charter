@@ -29,7 +29,7 @@ export function StartChat({
   /** Why the last attempt did not start, if it did not. */
   trouble?: string;
   onStart: (profile: string, persona: string | null) => void;
-  onApprove: (profile: string) => void;
+  onApprove: (profile: string, persona: string | null) => void;
   onCancel: () => void;
 }) {
   const [profile, setProfile] = useState<string | undefined>(
@@ -146,7 +146,11 @@ export function StartChat({
             Cancel
           </button>
           {picked?.approval ? (
-            <button className="ends-it" onClick={() => onApprove(picked.name)} disabled={!picked}>
+            <button
+              className="ends-it"
+              onClick={() => onApprove(picked.name, persona)}
+              disabled={!picked}
+            >
               Approve and start
             </button>
           ) : (
