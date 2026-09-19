@@ -163,20 +163,22 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
 /// layer charter cannot finish is refused with the sentence naming what blocked it, because a
 /// chat that looks guarded and is not is the failure [`crate::wiring`] exists to prevent.
 pub fn layered_or_refusal(here: &Path, root: &Path) -> Result<(), String> {
+    // MUTATION: wire every cwd, worktree or not.
     let Some(found) = crate::worktree::locate(root, here) else {
-        return Ok(());
+        let layered = crate::guest::wire(root, here);
+        return if layered.complete() {
+            Ok(())
+        } else {
+            Err(layered.refusal(here))
+        };
     };
-    let piece = crate::worktree::path_for(root, &found.workspace, &found.repo, &found.piece)
-        .and_then(|path| {
-            crate::worktree::confine::within_workspace(root, &found.workspace, &path)
-                .map_err(Into::into)
-        })
-        .map_err(|refusal| {
-            format!(
-                "the worktree this chat would start in is not one charter may write \
-                 ({refusal}), so nothing was started."
-            )
-        })?;
+    // MUTATION: the name and containment gate, dropped.
+    let piece = root
+        .join("workspaces")
+        .join(&found.workspace)
+        .join(".worktrees")
+        .join(&found.repo)
+        .join(&found.piece);
     let layered = crate::guest::wire(root, &piece);
     if layered.complete() {
         return Ok(());

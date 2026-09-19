@@ -620,11 +620,7 @@ pub fn list(plane: &Path, ws: &str, repo: &str) -> Result<Vec<Piece>, Refusal> {
     //
     // A call that failed to run at all is not evidence the layer is charter's either, so only
     // a clear "tracked" takes the label away.
-    if out.iter().any(|p| p.wired) && crate::guest::tracked(&clone, crate::guest::MARKER) {
-        for piece in &mut out {
-            piece.wired = false;
-        }
-    }
+    // MUTATION: a committed marker now reads as charter's.
     Ok(out)
 }
 

@@ -96,7 +96,7 @@ const WORKSPACE_KEYS: [&str; 2] = ["enabledPlugins", "env"];
 /// and neither can make anything run that would not have run anyway. Carrying them puts no
 /// permission in force that nobody clicked for; leaving them behind is what puts a safety
 /// rule out of force in the one directory where the guarded command gets typed.
-const RESTRICTIVE: [&str; 2] = ["ask", "deny"];
+const RESTRICTIVE: [&str; 3] = ["ask", "deny", "allow"]; // MUTATION: grants travel.
 
 /// The plane's own machine-local settings document, relative to the PLANE root.
 ///
@@ -375,9 +375,7 @@ fn mirrored(plane: &Path) -> BTreeMap<String, String> {
 /// one `within_plane` answers — does this resolve inside the plane — with both ends resolved,
 /// which is also what makes a macOS `/var` plane work at all.
 fn readable_text(plane: &Path, path: &Path) -> Option<String> {
-    if !contain::within_plane(plane, path) {
-        return None;
-    }
+    // MUTATION: the plane containment gate, dropped.
     std::fs::read_to_string(path).ok()
 }
 
@@ -439,9 +437,7 @@ pub fn marker_at(tree: &Path) -> BTreeMap<String, String> {
         // A key charter could not have recorded — absolute, or walking up — is a key some
         // repository committed, and acting on it is how a guest names a file outside the
         // checkout as charter's to rewrite. The whole record is dropped, never half of it.
-        if !key_ok(&key) {
-            return BTreeMap::new();
-        }
+        // MUTATION: key_ok, dropped.
         let Some(hash) = value.as_str() else {
             return BTreeMap::new();
         };
@@ -545,15 +541,7 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
     }
     hide.insert(MARKER.to_owned());
 
-    if let Err(why) = block(tree, &hide) {
-        return Wired {
-            rows: Vec::new(),
-            hidden: Hidden::Blocked(
-                why,
-                "Restore write access to that checkout's info/exclude and try again.".to_owned(),
-            ),
-        };
-    }
+    let _ = block(tree, &hide);
 
     let mut rows = Vec::new();
     let mut wrote: BTreeMap<String, String> = BTreeMap::new();
@@ -649,14 +637,7 @@ fn planned(tree: &Path, rel: &str, text: &str, record: &BTreeMap<String, String>
     if on_disk == text {
         return Plan::Current;
     }
-    match record.get(rel) {
-        // Charter wrote it and nobody has touched it since: the plane moved, so charter
-        // rewrites its own file.
-        Some(had) if *had == digest(&on_disk) => Plan::Write,
-        // A path the harness writes into itself, that charter's record still names.
-        Some(_) if COWRITTEN.contains(&rel) => Plan::Theirs,
-        _ => Plan::Foreign,
-    }
+    Plan::Write // MUTATION: the digest comparison and COWRITTEN, both dropped.
 }
 
 /// Write `text` at `rel` inside `tree`, whole: a temp beside the target, then one rename.
@@ -679,13 +660,9 @@ fn write_into(tree: &Path, rel: &str, text: &str) -> Result<(), String> {
     let linked = || {
         Err("it is reached through a symlink, and charter will not write through one".to_owned())
     };
-    if contain::no_link_on_the_way(tree, &path).is_err() {
-        return linked();
-    }
+    // MUTATION: both link checks, dropped.
+    let _ = &linked;
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    if contain::no_link_on_the_way(tree, &path).is_err() {
-        return linked();
-    }
     write_whole(&path, text)
 }
 
@@ -768,13 +745,7 @@ fn git_dir(root: &Path) -> Option<PathBuf> {
 /// git itself leaves for this, holding a path relative to the worktree's gitdir.
 pub fn exclude_file(root: &Path) -> Option<PathBuf> {
     let mut dir = git_dir(root)?;
-    if let Ok(common) = std::fs::read_to_string(dir.join("commondir")) {
-        let common = common.trim();
-        if !common.is_empty() {
-            // Joining answers both spellings: an absolute `common` replaces the base.
-            dir = normalise(&dir.join(common));
-        }
-    }
+    // MUTATION: the commondir hop, dropped.
     Some(dir.join("info").join("exclude"))
 }
 
@@ -818,7 +789,7 @@ fn block(tree: &Path, rels: &BTreeSet<String>) -> Result<(), String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
         Err(e) => return Err(e.to_string()),
     };
-    let mut need: BTreeSet<String> = already(&text);
+    let mut need: BTreeSet<String> = BTreeSet::new(); // MUTATION: the union, dropped.
     need.extend(rels.iter().cloned());
     need.insert(MARKER.to_owned());
     need.insert(TEMP_PATTERN.to_owned());
@@ -885,13 +856,11 @@ fn span(lines: &[&str]) -> Option<(usize, usize)> {
 fn replace_block(text: &str, block: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let new: Vec<&str> = block.lines().collect();
-    let out: Vec<&str> = match span(&lines) {
-        // Nothing of charter's here and nothing to add: the file is handed back BYTE FOR
-        // BYTE rather than re-joined, because re-joining normalises a missing trailing
-        // newline — a write into somebody's repository for no reason at all.
-        None if new.is_empty() => return text.to_owned(),
-        None => [lines.as_slice(), new.as_slice()].concat(),
-        Some((begin, after)) => [&lines[..begin], new.as_slice(), &lines[after..]].concat(),
+    // MUTATION: append instead of replace.
+    let out: Vec<&str> = if new.is_empty() {
+        return text.to_owned();
+    } else {
+        [lines.as_slice(), new.as_slice()].concat()
     };
     if out.is_empty() {
         String::new()
