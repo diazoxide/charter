@@ -444,12 +444,13 @@ fn a_dangling_directory_link_is_refused_by_the_check_and_not_by_luck() {
     let f = layered_plane("thing");
     let added = cut(&f, "piece");
     std::fs::remove_dir_all(added.path.join(".claude")).unwrap();
-    let nowhere = f.plane.parent().unwrap().join("nowhere-claude").join("deep");
+    let outside = f.plane.parent().unwrap().join("nowhere-claude");
+    let nowhere = outside.join("deep");
     std::os::unix::fs::symlink(&nowhere, added.path.join(".claude")).unwrap();
 
     let again = guest::wire(&f.plane, &added.path);
 
-    assert!(!nowhere.exists(), "nothing was created outside the plane");
+    assert!(!outside.exists(), "nothing was created outside the plane");
     assert!(
         !again.complete(),
         "and the chat would be refused: {again:?}"
