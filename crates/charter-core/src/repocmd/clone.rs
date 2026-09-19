@@ -591,9 +591,15 @@ mod tests {
         let (_dir, root) = plane();
         let outside = tempfile::tempdir().unwrap();
         let ws = root.join("workspaces/alpha");
-        std::os::unix::fs::symlink(outside.path(), ws.join("widget")).unwrap();
-        // The destination itself is a link: `within_workspace` refuses to pass through it.
+        // A link at the destination that lands INSIDE the plane — another workspace's clone —
+        // is the case only `within_workspace` sees: the data-directory gate is satisfied by
+        // where it lands, and a clone would be written into the other workspace.
+        std::fs::create_dir_all(root.join("workspaces/beta/stolen")).unwrap();
+        std::os::unix::fs::symlink(root.join("workspaces/beta/stolen"), ws.join("widget")).unwrap();
         assert!(destination(&root, "alpha", &ws, "widget").is_err());
+        // And one that leaves the plane.
+        std::os::unix::fs::symlink(outside.path(), ws.join("gadget")).unwrap();
+        assert!(destination(&root, "alpha", &ws, "gadget").is_err());
 
         std::fs::create_dir_all(root.join("workspaces")).unwrap();
         std::os::unix::fs::symlink(outside.path(), root.join("workspaces/evil")).unwrap();
