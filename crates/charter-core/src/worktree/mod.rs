@@ -244,13 +244,15 @@ pub struct Added {
 /// What a worktree charter cut does not have, said where the CLI operator will see it.
 ///
 /// Python's `charter wt add` wires the guest layer before it prints `enter: cd <path> &&
-/// claude` (charter #951). This one does not, and the verb is spelled the same, so it says so
-/// rather than letting the operator infer a guarantee from a command name.
-pub fn unwired_warning() -> String {
-    "this worktree has no charter layer: no persona agents, no ask/deny rules, no \
-     $CHARTER_HARNESS. A harness started here runs without them. Wire it with the Python \
-     charter: charter reinit"
-        .to_string()
+/// claude` (charter #951), and since M1.x so does this one — so this sentence is now what a
+/// cut says only when the wire did **not** land. The verb is spelled the same as Python's, so
+/// a tree that is missing the layer says so rather than letting the operator infer a
+/// guarantee from a command name.
+pub fn unwired_warning(why: &str) -> String {
+    format!(
+        "this worktree has no charter layer: no persona agents, no ask/deny rules, no \
+         $CHARTER_HARNESS. A harness started here runs without them. {why}"
+    )
 }
 
 pub fn add(
@@ -364,7 +366,14 @@ pub fn add(
         });
     }
 
-    warnings.push(unwired_warning());
+    // The layer, written into the tree that was just cut and hidden in the exclude the clone
+    // reads. A cut that could not be wired is still a cut — the tree and the branch exist and
+    // saying otherwise would be a lie — so this is a warning naming the repair rather than a
+    // refusal that would have to undo a checkout.
+    let layered = crate::guest::wire(plane, &path);
+    if !layered.complete() {
+        warnings.push(unwired_warning(&layered.refusal(&path)));
+    }
     Ok(Added {
         path,
         branch,
@@ -535,9 +544,14 @@ pub struct Piece {
     pub prunable: Option<String>,
     /// Whether charter's harness layer is in this tree.
     ///
-    /// `false` is the ordinary state of a worktree charter cut: the layer is not ported yet
-    /// (ADR 0027), so a chat started here runs without the plane's ask/deny rules, without
-    /// its persona's agents and without `$CHARTER_HARNESS`. The UI says so on the row.
+    /// Since M1.x a worktree charter cuts is wired as it is cut, so `false` is no longer the
+    /// ordinary state — it is a tree cut by plain git, or one whose wire did not land. A chat
+    /// started in such a tree runs without the plane's ask/deny rules, without its persona's
+    /// agents and without `$CHARTER_HARNESS`, so the UI says so on the row and
+    /// [`crate::start::ready`] writes the layer or refuses.
+    ///
+    /// Read from the tree rather than remembered, so a worktree the Python wired reads as
+    /// wired and one that becomes wired later stops showing the label with no code to delete.
     pub wired: bool,
 }
 
@@ -585,7 +599,8 @@ pub fn list(plane: &Path, ws: &str, repo: &str) -> Result<Vec<Piece>, Refusal> {
         else {
             continue;
         };
-        let wired = row.prunable.is_none() && layer_is_charters(&clone, &resolved);
+        let record = crate::guest::marker_at(&resolved);
+        let wired = row.prunable.is_none() && !record.is_empty();
         out.push(Piece {
             piece,
             path: row.path,
@@ -594,35 +609,23 @@ pub fn list(plane: &Path, ws: &str, repo: &str) -> Result<Vec<Piece>, Refusal> {
             wired,
         });
     }
-    Ok(out)
-}
-
-/// The marker charter's harness layer leaves in a tree it owns.
-const LAYER_MARKER: &str = ".charter-generated";
-
-/// Whether the layer in `tree` is charter's own — present, and **not tracked by git**.
-///
-/// Charter's marker is per-checkout and untracked. A marker git TRACKS is content some
-/// cloned repository committed, and says nothing about this tree
-/// (`charter/workspace.py:2176` treats it the same way). Without that rule, any repo
-/// carrying a committed `.charter-generated` would make every piece of it read as wired —
-/// silencing the `unwired` label and the persona refusal at once, on a repo the operator
-/// merely cloned.
-///
-/// Costs a git call only for a tree that HAS the marker, which a charter-cut worktree does
-/// not, so the usual answer is free.
-fn layer_is_charters(clone: &Path, tree: &Path) -> bool {
-    if !tree.join(LAYER_MARKER).exists() {
-        return false;
+    // One git call for the whole listing, and only where something claims a layer.
+    //
+    // A `.charter-generated` git TRACKS is content some cloned repository committed, and says
+    // nothing about this tree: without this, any repo carrying one would make every piece of
+    // it read as wired, silencing the `unwired` label on a repo the operator merely cloned.
+    // But it is a fact about the REPOSITORY, not about each piece — and `worktree_of_chat`
+    // runs on every sidebar render, so asking per piece is a subprocess per row. Asked once,
+    // here, and only when the answer could change something.
+    //
+    // A call that failed to run at all is not evidence the layer is charter's either, so only
+    // a clear "tracked" takes the label away.
+    if out.iter().any(|p| p.wired) && crate::guest::tracked(&clone, crate::guest::MARKER) {
+        for piece in &mut out {
+            piece.wired = false;
+        }
     }
-    let tracked = git::run(
-        clone,
-        &["ls-files", "--error-unmatch", "--", LAYER_MARKER],
-        git::READ,
-    );
-    // Tracked (exit 0) means it is not charter's. A call that failed to run at all is not
-    // evidence the layer is charter's either, so only a clear "not tracked" counts.
-    !matches!(tracked, Ok(run) if run.ok())
+    Ok(out)
 }
 
 /// A piece, landed.

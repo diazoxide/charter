@@ -34,6 +34,10 @@ describe("what a chat's row says about its worktree", () => {
     expect(label).toBeInTheDocument();
     expect(label.title).toMatch(/no persona agents/i);
     expect(label.title).toMatch(/ask\/deny/i);
+    // Since M1.x this state has a way out that does not involve another binary: starting a
+    // chat here writes the layer, or refuses with a sentence. A label that only names the
+    // hole leaves the operator with nowhere to go.
+    expect(label.title).toMatch(/starting a chat/i);
   });
 
   test("a wired worktree carries no label", () => {

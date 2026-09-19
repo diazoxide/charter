@@ -22,9 +22,11 @@ pub struct Piece {
     pub branch: Option<String>,
     /// Whether charter's harness layer is in this tree.
     ///
-    /// `false` is the ordinary state of a worktree charter cut, and the row says so: a chat
-    /// there runs without the plane's ask/deny rules, without its persona's agents and
-    /// without `$CHARTER_HARNESS` (ADR 0027).
+    /// Since M1.x a worktree charter cuts is wired as it is cut, so `false` now means a tree
+    /// cut by plain git, one whose wire did not land, or a plane with no layer to carry. The
+    /// row still says so, because a chat in such a tree runs without the plane's ask/deny
+    /// rules, without its persona's agents and without `$CHARTER_HARNESS` — and starting one
+    /// there is what writes the layer or refuses.
     pub wired: bool,
     /// Set when git still has a registration whose directory is gone.
     pub stale: bool,
@@ -192,8 +194,17 @@ mod tests {
     }
 
     #[test]
-    fn a_chat_in_a_piece_reports_its_branch_and_that_it_is_unwired() {
+    fn a_chat_in_a_piece_reports_its_branch_and_that_the_layer_is_there() {
         let (_dir, root, _clone) = plane();
+        // A plane with something to carry. Without it `want` is empty, charter writes
+        // nothing, and this would assert `wired` against a plane that has no layer at all —
+        // a test that passes whatever the wire does.
+        std::fs::create_dir_all(root.join(".claude")).unwrap();
+        std::fs::write(
+            root.join(".claude/settings.json"),
+            "{\"env\": {\"CHARTER_HARNESS\": \"claude-code\"}}\n",
+        )
+        .unwrap();
         let added = worktree::add(&root, "alpha", "thing", "piece", None).unwrap();
 
         let seen = worktree_of_chat(added.path.display().to_string())
@@ -203,10 +214,32 @@ mod tests {
         assert_eq!(seen.piece, "piece");
         assert_eq!(seen.branch.as_deref(), Some("piece"));
         assert!(
-            !seen.wired,
-            "a worktree charter cut carries no harness layer yet (ADR 0027)"
+            seen.wired,
+            "a worktree charter cut carries the plane's layer (M1.x, closing ADR 0027's gap)"
         );
         assert!(!seen.stale);
+    }
+
+    #[test]
+    fn a_worktree_cut_by_plain_git_still_reads_unwired() {
+        // The label is derived from the tree, not from what charter remembers doing, so it is
+        // still the honest answer for a tree charter did not wire.
+        let (_dir, root, clone) = plane();
+        let by_hand = root.join("workspaces/alpha/.worktrees/thing/hand");
+        std::fs::create_dir_all(by_hand.parent().unwrap()).unwrap();
+        std::process::Command::new("git")
+            .arg("-C")
+            .arg(&clone)
+            .args(["worktree", "add", "-q", "-b", "hand"])
+            .arg(&by_hand)
+            .output()
+            .unwrap();
+
+        let seen = worktree_of_chat(by_hand.display().to_string())
+            .unwrap()
+            .expect("a chat in a piece has one");
+
+        assert!(!seen.wired);
     }
 
     #[test]
