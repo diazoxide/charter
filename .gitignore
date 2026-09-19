@@ -1,3 +1,6 @@
 /target/
 mutants.out*/
 .DS_Store
+
+# Agent worktrees, created by the harness for isolated sub-agents.
+.claude/worktrees/

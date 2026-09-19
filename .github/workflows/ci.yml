@@ -34,7 +34,10 @@ jobs:
       - run: mkdir -p app/dist
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --locked
+      # --no-fail-fast because cargo stops at the first failing test binary and SKIPS every
+      # later one. A flake in the binary that happens to run first (charter-app#39) then
+      # hides every other result, so a red run says nothing about the rest of the suite.
+      - run: cargo test --workspace --locked --no-fail-fast
 
   deny:
     name: rust (licences, advisories)
