@@ -100,9 +100,9 @@ fn one_chat() -> Record {
 /// written on would not start a newly linked binary. Those counts are an upper bound. This is
 /// how to replace them with real ones.
 #[test]
-#[ignore = "a measurement, not a check: prints the window each gate leaves"]
 fn the_window_each_gate_leaves() {
     const ROUNDS: usize = 20_000;
+    let mut report = String::from("\nMEASURED ON CI:\n");
 
     // `contain::readable`, then the caller's own open — personas, workspaces, memory, and the
     // persona a chat starts on. The widest window and the most-used gate, and the one
@@ -124,7 +124,10 @@ fn the_window_each_gate_leaves() {
     }
     stop.store(true, Ordering::Relaxed);
     racer.join().unwrap();
-    println!("contain::readable then fs::read      : {took} of {ROUNDS} took the planted file");
+    report.push_str(&format!(
+        "contain::readable then fs::read      : {took} of {ROUNDS} took the planted file"
+    ));
+    report.push('\n');
 
     // The record's own gate, with and without the flag. Same racer, same rounds.
     for (what, guarded) in [
@@ -155,7 +158,10 @@ fn the_window_each_gate_leaves() {
         }
         stop.store(true, Ordering::Relaxed);
         racer.join().unwrap();
-        println!("{what:<37}: {took} of {ROUNDS} took the planted file");
+        report.push_str(&format!(
+            "{what:<37}: {took} of {ROUNDS} took the planted file"
+        ));
+        report.push('\n');
     }
 
     // The write side, counting what lands outside the plane rather than what comes back.
@@ -186,8 +192,12 @@ fn the_window_each_gate_leaves() {
         }
         stop.store(true, Ordering::Relaxed);
         racer.join().unwrap();
-        println!("{what:<37}: {escaped} of {ROUNDS} landed outside the plane");
+        report.push_str(&format!(
+            "{what:<37}: {escaped} of {ROUNDS} landed outside the plane"
+        ));
+        report.push('\n');
     }
+    panic!("{report}");
 }
 
 #[test]
