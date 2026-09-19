@@ -260,7 +260,10 @@ fn plane_settings(plane: &Path, rel: &str) -> Option<serde_json::Value> {
 /// be a crash in a launch.
 fn restrictive(doc: &serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
     let mut out = serde_json::Map::new();
-    let Some(block) = doc.get("permissions").and_then(serde_json::Value::as_object) else {
+    let Some(block) = doc
+        .get("permissions")
+        .and_then(serde_json::Value::as_object)
+    else {
         return out;
     };
     for bucket in RESTRICTIVE {
@@ -302,7 +305,9 @@ fn settings_document(plane: &Path) -> Option<String> {
     if doc.is_empty() {
         return None;
     }
-    Some(crate::pyjson::dumps_indent2(&serde_json::Value::Object(doc)))
+    Some(crate::pyjson::dumps_indent2(&serde_json::Value::Object(
+        doc,
+    )))
 }
 
 /// The checkout's `.claude/settings.local.json`: the plane's machine-local ask/deny rules and
@@ -320,7 +325,9 @@ fn local_settings_document(plane: &Path) -> Option<String> {
     }
     let mut doc = serde_json::Map::new();
     doc.insert("permissions".to_owned(), serde_json::Value::Object(rules));
-    Some(crate::pyjson::dumps_indent2(&serde_json::Value::Object(doc)))
+    Some(crate::pyjson::dumps_indent2(&serde_json::Value::Object(
+        doc,
+    )))
 }
 
 /// The plane's own `.claude/agents` and `.claude/skills`, as text, keyed by their path

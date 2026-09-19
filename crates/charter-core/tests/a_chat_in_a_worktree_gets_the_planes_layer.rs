@@ -62,7 +62,10 @@ fn a_worktree_charter_cuts_carries_the_planes_rules_its_agents_and_charter_harne
         "# steward\n\nThe control plane steward.\n",
         "the persona's agent, which the walk-up cannot carry across a git root"
     );
-    let warned = added.warnings.iter().any(|w| w.contains("no charter layer"));
+    let warned = added
+        .warnings
+        .iter()
+        .any(|w| w.contains("no charter layer"));
     assert!(
         !warned,
         "the cut does not warn about a layer that is there: {:?}",
@@ -222,7 +225,10 @@ fn wiring_the_same_tree_again_changes_not_one_byte() {
         std::fs::read_to_string(added.path.join(".charter-generated")).unwrap(),
         marker
     );
-    let all_current = again.rows.iter().all(|r| r.status == guest::Status::Current);
+    let all_current = again
+        .rows
+        .iter()
+        .all(|r| r.status == guest::Status::Current);
     assert!(
         all_current,
         "and every path reads as already current: {:?}",
@@ -254,7 +260,11 @@ fn a_file_charter_did_not_write_is_never_overwritten_and_the_chat_is_refused() {
     // writes over whatever is there.
     let f = layered_plane("thing");
     let added = cut(&f, "piece");
-    std::fs::write(added.path.join(".claude/settings.json"), "{\"mine\": true}\n").unwrap();
+    std::fs::write(
+        added.path.join(".claude/settings.json"),
+        "{\"mine\": true}\n",
+    )
+    .unwrap();
 
     let again = guest::wire(&f.plane, &added.path);
 
@@ -404,7 +414,10 @@ fn charter_does_not_write_through_a_committed_directory_symlink() {
     let again = guest::wire(&f.plane, &added.path);
 
     assert!(!elsewhere.exists(), "nothing was created outside the plane");
-    assert!(!again.complete(), "and the chat would be refused: {again:?}");
+    assert!(
+        !again.complete(),
+        "and the chat would be refused: {again:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------------------
