@@ -518,7 +518,8 @@ fn is_absent(e: &std::io::Error) -> bool {
 /// multi-line pattern can match. `None` for a file that cannot be read or is not UTF-8.
 ///
 /// charter crashes on a memory file that is not UTF-8 (its readers catch `OSError`, and
-/// `UnicodeDecodeError` is not one). This skips it, as it skips a file it cannot read.
+/// `UnicodeDecodeError` is not one — charter#1142). This skips it, as it skips a file it
+/// cannot read.
 pub fn read_text(path: &std::path::Path) -> Option<String> {
     let bytes = std::fs::read(path).ok()?;
     let text = String::from_utf8(bytes).ok()?;
