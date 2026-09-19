@@ -450,14 +450,27 @@ fn a_tree_with_no_git_directory_gets_no_files_at_all() {
 fn an_exclude_charter_cannot_write_stops_the_layer_rather_than_leaking_it() {
     // The same rule, reached the way an operator reaches it: a checkout whose git directory
     // is read-only.
+    //
+    // The piece is cut by PLAIN GIT, so no block exists yet and one has to be written. A
+    // charter-cut piece would leave its clone's block already current, `block` would find
+    // nothing to change, and the read-only directory would never be touched — a test that
+    // passed without reaching the guard at all.
     let f = layered_plane("thing");
-    let added = cut(&f, "piece");
-    for rel in [".claude", ".charter-generated"] {
-        let path = added.path.join(rel);
-        let _ = std::fs::remove_dir_all(&path);
-        let _ = std::fs::remove_file(&path);
-    }
+    let piece = f.workspace().join(".worktrees").join(&f.repo).join("hand");
+    std::fs::create_dir_all(piece.parent().unwrap()).unwrap();
+    support::git(
+        &f.clone,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "hand",
+            &piece.display().to_string(),
+        ],
+    );
     let info = f.clone.join(".git/info");
+    std::fs::create_dir_all(&info).unwrap();
     let was = std::fs::metadata(&info).unwrap().permissions();
     std::fs::set_permissions(
         &info,
@@ -474,7 +487,7 @@ fn an_exclude_charter_cannot_write_stops_the_layer_rather_than_leaking_it() {
         return;
     }
 
-    let wired = guest::wire(&f.plane, &added.path);
+    let wired = guest::wire(&f.plane, &piece);
 
     std::fs::set_permissions(&info, was).unwrap();
     assert!(
@@ -482,7 +495,7 @@ fn an_exclude_charter_cannot_write_stops_the_layer_rather_than_leaking_it() {
         "{wired:?}"
     );
     assert!(
-        !added.path.join(".claude/settings.json").exists(),
+        !piece.join(".claude/settings.json").exists(),
         "a file charter cannot hide is a file charter does not write"
     );
 }
