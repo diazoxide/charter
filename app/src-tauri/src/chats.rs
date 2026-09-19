@@ -706,13 +706,29 @@ mod tests {
     /// and then waits, so a test can see what the app actually put on its command line.
     fn a_claude(dir: &std::path::Path) -> String {
         let claude = dir.join("claude");
+        // Written beside itself and renamed over, never in place: the stand-in ends in
+        // `sleep 600`, so an earlier chat still has it open for execution, and writing a
+        // running program is ETXTBSY. A rename replaces the directory entry instead, which
+        // the running copy does not mind. Measured: the in-place write flaked 2 runs in 5,
+        // and because this binary runs first, `cargo test` stopped and every later test
+        // binary was SKIPPED — a green that had not run and a red that was not real
+        // (charter-app#39).
+        let beside = dir.join(format!(
+            "claude.{}.{}.writing",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("a clock after 1970")
+                .as_nanos()
+        ));
         std::fs::write(
-            &claude,
+            &beside,
             "#!/bin/sh\nprintf 'argv:'\nfor word in \"$@\"; do printf ' %s' \"$word\"; done\nprintf '\\n'\nsleep 600\n",
         )
         .expect("the stand-in claude is written");
-        std::fs::set_permissions(&claude, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        std::fs::set_permissions(&beside, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .expect("it is made runnable");
+        std::fs::rename(&beside, &claude).expect("the stand-in claude is put in place");
         claude.display().to_string()
     }
 
