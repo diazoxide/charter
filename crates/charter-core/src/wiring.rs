@@ -124,7 +124,7 @@ fn whole(value: &str) -> String {
 ///
 /// Its own clip rather than escaping again: the field is escaped already, and a second pass
 /// would double every backslash the first one wrote.
-fn said(text: &str) -> String {
+pub(crate) fn said(text: &str) -> String {
     if text.len() <= SAID_LIMIT {
         text.to_owned()
     } else {

@@ -132,6 +132,16 @@ class Scenario:
     #: the part charter wrote — so this hides a known quotation, never a difference of
     #: charter's own words.
     stderr_mask: list = field(default_factory=list)
+    #: `(regex, why)` pairs naming ITEMS Python lists in `init`'s inventory that the Rust
+    #: binary does not write, with the reason. Each matching item is taken out of Python's
+    #: stderr before the comparison — out of a `+ item` line (and the headline's count with
+    #: it) and out of a comma-separated `already present:` list — and everything else still
+    #: has to match byte for byte. A pattern Python no longer prints fails the scenario, so
+    #: the note cannot outlive the difference it records.
+    python_only_items: list = field(default_factory=list)
+    #: Paths beside the plane (relative to the side's directory) that PYTHON may write, with
+    #: the reason. Only Python's: the Rust side writing any of them is still an escape.
+    python_writes_outside: dict[str, str] = field(default_factory=dict)
 
     def rust_args(self) -> list[str]:
         return self.rust if self.rust is not None else self.python
@@ -373,7 +383,211 @@ TOML_DIAGNOSTIC = (
     "tomllib's diagnostic against toml_edit's; the sentence around it must still match",
 )
 
+def _python_only(stderr: str, items: list) -> tuple[str, list[str]]:
+    """Python's stderr with the items `python_only_items` names taken out, and each pattern
+    that matched nothing — the caller reports those, because the difference is gone."""
+    patterns = [re.compile(pattern) for pattern, _why in items]
+    hit = [False] * len(patterns)
+
+    def python_only(item: str) -> bool:
+        for i, pattern in enumerate(patterns):
+            if pattern.fullmatch(item):
+                hit[i] = True
+                return True
+        return False
+
+    out, dropped = [], 0
+    for line in stderr.splitlines(keepends=True):
+        body = line.rstrip("\n")
+        added = re.fullmatch(r"•   \+ (.*)", body)
+        if added and python_only(added.group(1)):
+            dropped += 1
+            continue
+        listed = re.fullmatch(r"(•   already present: )(.*)", body)
+        if listed:
+            kept = [i for i in listed.group(2).split(", ") if not python_only(i)]
+            if not kept:
+                continue
+            line = f"{listed.group(1)}{', '.join(kept)}\n"
+        out.append(line)
+    text = "".join(out)
+    if dropped:
+        text = re.sub(r"— (\d+) item\(s\) written\.",
+                      lambda m: f"— {int(m.group(1)) - dropped} item(s) written.", text,
+                      count=1)
+    return text, [items[i][0] for i, h in enumerate(hit) if not h]
+
+
+def _opencode_already_installed(root: Path) -> None:
+    """opencode's plugin, command and instructions in this side's `~/.config/opencode`, put
+    there by the ORACLE's own writer before the command runs.
+
+    Python's `init` writes them there on any machine that lacks them, and the Rust binary
+    writes nothing outside the plane: charter-app v1 does not start opencode, and a shim whose
+    hooks reach a binary that refuses opencode's tool hooks would block opencode everywhere.
+    Installing them first is how the comparison sees everything else: Python then finds its
+    shim current and says so in one `already present` item, which the scenario names in
+    `python_only_items`. Both homes get them, so the Rust side runs on the same machine.
+    """
+    home = root.parent / "home"
+    subprocess.run(
+        [sys.executable, "-c",
+         "from pathlib import Path; from charter.harness.opencode import OpenCodeHarness; "
+         "OpenCodeHarness().wire(Path('.'))"],
+        cwd=home, env={"HOME": str(home), "PATH": "/usr/bin:/bin"}, check=True,
+        capture_output=True,
+    )
+
+
+#: The one item Python's `init` lists that the Rust binary never writes.
+OPENCODE_SHIM = (
+    r"opencode plugin/charter\.ts",
+    "Python keeps opencode's global plugin current from `init`; charter-app writes nothing "
+    "outside the plane and does not start opencode in v1",
+)
+
+
+#: The session context Python regenerates into opencode's global folder on every `init` and
+#: `reinit` ("always overwrites": it is derived from the plane it was run in).
+OPENCODE_CONTEXT = "home/.config/opencode/charter-context.md"
+OPENCODE_CONTEXT_WHY = (
+    "Python rewrites opencode's global session context from every `init`/`reinit`; "
+    "charter-app writes nothing outside the plane"
+)
+
+
+def _in_a_directory_with_its_own_gitignore(root: Path) -> None:
+    """A repository's own `.gitignore`, holding one line `init` wants and not the rest, a
+    comment, a blank line, and no trailing newline."""
+    (root / ".gitignore").write_text("node_modules/\n\n# local\n/.charter/\n*.log")
+
+
+def _with_a_settings_file_of_its_own(root: Path) -> None:
+    """The operator's `.claude/settings.json`: four-space indented, holding keys `init` has
+    no business with — a float spelled as Python would not spell it, non-ASCII, a hook on
+    another event, an ask rule already there — and no trailing newline."""
+    (root / ".claude").mkdir(parents=True, exist_ok=True)
+    (root / ".claude" / "settings.json").write_text(
+        '{\n    "permissions": {\n        "allow": ["Bash(ls *)"],\n        "ask": '
+        '["Bash(git push *)"]\n    },\n    "model": "opus",\n    "cleanupPeriodDays": 1E1,\n'
+        '    "statusLine": {"type": "command", "command": "echo été"},\n'
+        '    "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "true"}]}]}\n}'
+    )
+
+
+def _with_compact_settings(root: Path) -> None:
+    """One line and no spaces, a trailing newline, an `env` whose harness value is blank, and
+    an empty `PreToolUse`."""
+    (root / ".claude").mkdir(parents=True, exist_ok=True)
+    (root / ".claude" / "settings.json").write_text(
+        '{"env":{"CHARTER_HARNESS":"","OTHER":"1"},"hooks":{"PreToolUse":[]}}\n'
+    )
+
+
+def _with_settings_claude_code_cannot_read(root: Path) -> None:
+    """`NaN` is JSON to Python and not to Claude Code, so charter must not write it back."""
+    (root / ".claude").mkdir(parents=True, exist_ok=True)
+    (root / ".claude" / "settings.json").write_text('{"cleanupPeriodDays": NaN}\n')
+
+
+def _with_an_opencode_json_that_allows_handoff(root: Path) -> None:
+    (root / "opencode.json").write_text(
+        '{"$schema": "https://opencode.ai/config.json", "permission": {"bash": '
+        '{"charter handoff *": "allow", "git *": "ask"}}}'
+    )
+
+
+def _with_a_file_where_inventory_goes(root: Path) -> None:
+    (root / "inventory").write_text("not a directory\n")
+
+
+def _with_a_persona_of_its_own(root: Path) -> None:
+    """A roster already: `init` scaffolds no front door over it."""
+    (root / "personas" / "ops").mkdir(parents=True, exist_ok=True)
+    (root / "personas" / "ops" / "persona.md").write_text("---\nname: ops\n---\n")
+
+
+def _from_a_newer_charter(root: Path) -> None:
+    (root / "charter.toml").write_text("schema = 2\n")
+
+
+def _without_inventory(root: Path) -> None:
+    shutil.rmtree(root / "inventory")
+
+
+def _without_the_profiles_ignore_line(root: Path) -> None:
+    ignore = root / ".gitignore"
+    ignore.write_text(ignore.read_text().replace("/charter.local.toml\n", ""))
+
+
+def _both(*steps):
+    def setup(root: Path) -> None:
+        for step in steps:
+            step(root)
+    return setup
+
+
+INIT = ["init", "--forge", "github", "--owner", "acme"]
+
+
+def _init(name: str, *, python=INIT, plane="", setup=None, refusal="") -> Scenario:
+    """An `init` or `reinit` scenario: no clock, opencode's global files installed first, and
+    the whole tree each side leaves compared."""
+    return Scenario(
+        name=name,
+        plane=plane,
+        python=python,
+        pins_the_clock=False,
+        setup=_both(_opencode_already_installed, *([setup] if setup else [])),
+        refusal=refusal,
+        python_only_items=[] if refusal or python[0] == "reinit" else [OPENCODE_SHIM],
+        python_writes_outside={OPENCODE_CONTEXT: OPENCODE_CONTEXT_WHY},
+    )
+
+
+#: `init` and `reinit`, against an empty directory (`plane=""`) or a fixture.
+INIT_SCENARIOS = [
+    _init("init-into-an-empty-directory"),
+    _init("init-with-no-owner-and-the-default-forge", python=["init"]),
+    _init("init-with-no-front-door", python=[*INIT, "--no-front-door"]),
+    _init("init-with-a-front-door-of-another-name",
+          python=[*INIT, "--front-door", "front-door.2x", "--host", "git.example.com"]),
+    _init("init-with-a-front-door-name-that-is-not-a-persona",
+          python=[*INIT, "--front-door", "Bad Name"]),
+    _init("init-twice-changes-nothing", plane="minimal"),
+    _init("init-on-a-plane-in-use-changes-nothing", plane="daily"),
+    _init("init-appends-only-what-a-gitignore-of-its-own-is-missing",
+          setup=_in_a_directory_with_its_own_gitignore),
+    _init("init-adds-to-a-settings-file-in-its-own-layout",
+          setup=_with_a_settings_file_of_its_own),
+    _init("init-adds-to-a-compact-settings-file", setup=_with_compact_settings),
+    _init("init-leaves-a-settings-file-claude-code-cannot-read",
+          setup=_with_settings_claude_code_cannot_read,
+          refusal="left it completely untouched"),
+    _init("init-turns-an-opencode-allow-for-handoff-into-ask",
+          setup=_with_an_opencode_json_that_allows_handoff),
+    _init("init-names-a-file-where-a-baseline-directory-goes-and-leaves-it",
+          setup=_with_a_file_where_inventory_goes, refusal="inventory/ can't be created"),
+    _init("init-scaffolds-no-front-door-over-a-roster", setup=_with_a_persona_of_its_own),
+    _init("init-on-a-plane-from-a-newer-charter-writes-nothing",
+          setup=_from_a_newer_charter,
+          refusal="declares schema 2, but this charter understands 1"),
+    _init("reinit-on-a-current-plane", python=["reinit"], plane="minimal"),
+    _init("reinit-on-a-plane-in-use", python=["reinit"], plane="daily"),
+    _init("reinit-heals-a-missing-baseline-directory", python=["reinit"], plane="minimal",
+          setup=_without_inventory),
+    _init("reinit-backfills-the-profiles-ignore-line", python=["reinit"], plane="minimal",
+          setup=_without_the_profiles_ignore_line),
+    _init("reinit-outside-a-plane-scaffolds-nothing", python=["reinit"],
+          refusal="no control plane found"),
+    _init("reinit-on-a-plane-from-a-newer-charter-writes-nothing", python=["reinit"],
+          plane="minimal", setup=_from_a_newer_charter,
+          refusal="declares schema 2, but this charter understands 1"),
+]
+
+
 SCENARIOS = [
+    *INIT_SCENARIOS,
     Scenario(
         name="harness-list-refuses-every-name-that-is-a-charter-command",
         plane="minimal",
@@ -690,6 +904,10 @@ def _lay_out(scratch: Path, plane: str, side: str) -> tuple[Path, Path, Path]:
     pins.mkdir(parents=True, exist_ok=True)
     (pins / "sitecustomize.py").write_text(SITECUSTOMIZE)
     _refuse_enclosing_plane(root)
+    if not plane:
+        # A directory that is not a plane yet: what `charter init` is pointed at.
+        root.mkdir()
+        return root, home, pins
     shutil.copytree(PLANES / plane, root)
     # The fixtures cannot carry an empty directory, so the generator records them beside the
     # plane. Restoring them matters: "no `todos/`" and "an empty `todos/`" are different
@@ -833,6 +1051,14 @@ def check(scenario: Scenario, binary: Path) -> bool:
         rs = _run(rust_argv, rs_root, rs_home, rs_pins)
 
         problems: list[str] = []
+        if scenario.python_only_items:
+            text, stale = _python_only(py.stderr, scenario.python_only_items)
+            for pattern in stale:
+                problems.append(
+                    f"    python no longer lists {pattern!r}, but the scenario still says it is "
+                    "python's alone — drop the note"
+                )
+            py = subprocess.CompletedProcess(py.args, py.returncode, py.stdout, text)
         if py.returncode != rs.returncode:
             problems.append(
                 f"    exit status differs: python {py.returncode} "
@@ -882,7 +1108,8 @@ def check(scenario: Scenario, binary: Path) -> bool:
                 problems.append(f"      rust   {rs.stderr!r}")
         problems.extend(_diff_trees(py_root, rs_root, scenario.ignore))
         problems.extend(
-            _escaped("python", py_before, _outside(scratch, "python", py_root))
+            line for line in _escaped("python", py_before, _outside(scratch, "python", py_root))
+            if not any(f": {path} (" in line for path in scenario.python_writes_outside)
         )
         problems.extend(_escaped("rust", rs_before, _outside(scratch, "rust", rs_root)))
         if scenario.stdout_differs:

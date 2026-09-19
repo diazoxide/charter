@@ -45,6 +45,15 @@ struct Cli {
 enum Command {
     /// Print the plane root the current directory sits in.
     Root,
+    /// Scaffold a fresh control plane here: charter.toml, baseline dirs, .gitignore.
+    ///
+    /// Additive and idempotent — never touches existing content. A path charter would write
+    /// that is occupied by something it cannot safely touch, or that leads out of the plane,
+    /// is named and left alone; everything else is still created, and the exit is 1.
+    Init(InitCommand),
+    /// Heal control-plane drift: create any missing baseline directory a newer charter
+    /// expects. Idempotent and additive — existing content is never touched.
+    Reinit,
     /// Workspaces: their vision, their memory, their todos.
     #[command(subcommand, alias = "ws")]
     Workspace(WorkspaceCommand),
@@ -72,6 +81,58 @@ enum Command {
         #[arg(long)]
         plugin_version: Option<String>,
     },
+}
+
+#[derive(Args)]
+struct InitCommand {
+    /// Forge this control plane tracks.
+    #[arg(long, default_value = "gitlab", value_parser = charter_core::scaffold::FORGES)]
+    forge: String,
+    /// Group/org/user that owns the repos.
+    #[arg(long)]
+    owner: Option<String>,
+    /// Self-hosted forge host (default: the forge's own public host).
+    #[arg(long)]
+    host: Option<String>,
+    /// Also clone the git repo you are standing in into the first workspace.
+    #[arg(long)]
+    clone_this_repo: bool,
+    /// Name of the generic front-door persona to scaffold and declare. Skipped if this
+    /// plane already has personas.
+    #[arg(long, value_name = "NAME", overrides_with = "no_front_door")]
+    front_door: Option<String>,
+    /// Scaffold no persona at all; the plane declares no front door.
+    #[arg(long, overrides_with = "front_door")]
+    no_front_door: bool,
+}
+
+/// What `charter init` and `reinit` said, each line with the glyph `charter/util.py` gives it,
+/// on stderr — coloured only when stderr is a terminal, which is Python's rule too.
+fn say(outcome: &charter_core::scaffold::Outcome) -> ExitCode {
+    use charter_core::scaffold::Say;
+    use std::io::IsTerminal;
+    let colour = std::io::stderr().is_terminal();
+    for line in &outcome.said {
+        let (code, glyph, text) = match line {
+            Say::Info(t) => ("36", "•", t),
+            Say::Ok(t) => ("32", "✓", t),
+            Say::Warn(t) => ("33", "!", t),
+            Say::Err(t) => ("31", "✗", t),
+        };
+        if colour {
+            eprintln!("\x1b[{code}m{glyph}\x1b[0m {text}");
+        } else {
+            eprintln!("{glyph} {text}");
+        }
+    }
+    ExitCode::from(outcome.code)
+}
+
+/// Where `init` and `reinit` act: `charter/root.py:find_root_or_cwd`.
+fn place() -> Result<charter_core::plane::Place, String> {
+    let cwd =
+        std::env::current_dir().map_err(|e| format!("cannot read the current directory: {e}"))?;
+    Ok(charter_core::plane::place(&cwd))
 }
 
 #[derive(Subcommand)]
@@ -291,7 +352,9 @@ fn run(command: Command) -> Result<(), String> {
     match command {
         // Answered in `main`, before this: it is the one command whose exit code is not a
         // plain success or failure, and clap must never be allowed to exit 2 in front of it.
-        Command::Hook { .. } => unreachable!("answered before run"),
+        Command::Hook { .. } | Command::Init(_) | Command::Reinit => {
+            unreachable!("answered before run")
+        }
         Command::Root => {
             println!("{}", plane()?.root().display());
         }
@@ -404,6 +467,43 @@ fn main() -> ExitCode {
     } = &cli.command
     {
         return hook(name, plugin_version.as_deref());
+    }
+    // `init` and `reinit` say several lines of their own and choose their own exit status.
+    match &cli.command {
+        Command::Init(init) => {
+            let args = charter_core::scaffold::InitArgs {
+                forge: init.forge.clone(),
+                owner: init.owner.clone().unwrap_or_default(),
+                host: init.host.clone(),
+                clone_this_repo: init.clone_this_repo,
+                front_door: if init.no_front_door {
+                    None
+                } else {
+                    Some(
+                        init.front_door
+                            .clone()
+                            .unwrap_or_else(|| "steward".to_owned()),
+                    )
+                },
+            };
+            return match place() {
+                Ok(place) => say(&charter_core::scaffold::init(&place, &args)),
+                Err(message) => {
+                    eprintln!("charter: {message}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        Command::Reinit => {
+            return match place() {
+                Ok(place) => say(&charter_core::scaffold::reinit(&place)),
+                Err(message) => {
+                    eprintln!("charter: {message}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        _ => {}
     }
     match run(cli.command) {
         Ok(()) => ExitCode::SUCCESS,
