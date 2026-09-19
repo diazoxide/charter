@@ -506,9 +506,7 @@ fn installed_plugins(folder: &Path) -> Option<Vec<(String, Vec<String>)>> {
     };
     let mut out = Vec::new();
     for (id, records) in plugins {
-        let Some(records) = records.as_array() else {
-            return None;
-        };
+        let records = records.as_array()?;
         if !plugin_id_ok(id) || !records.iter().all(install_ok) {
             return None;
         }
