@@ -85,6 +85,13 @@ pub enum NotRead {
 #[derive(Debug, Clone, Default)]
 pub struct Cache {
     entries: serde_json::Map<String, Value>,
+    /// Every key by where it LANDS, for the miss that is not really a miss.
+    ///
+    /// Built once and only after a key has already been missed on its spelling — which is
+    /// the ordinary case, because the refresher and the app usually walk the plane the same
+    /// way. Resolving every key costs a `readlink` per component per entry, and this file is
+    /// never pruned, so it is not paid unless it is needed.
+    resolved: std::cell::OnceCell<std::collections::HashMap<std::path::PathBuf, String>>,
     /// Seconds since the epoch when the file was read, so every row in one listing ages
     /// against the same instant.
     now: u64,
@@ -159,6 +166,7 @@ pub fn read(plane: &Path) -> Result<Cache, NotRead> {
         })?;
     Ok(Cache {
         entries,
+        resolved: std::cell::OnceCell::new(),
         now: now(),
     })
 }
@@ -182,17 +190,8 @@ impl Cache {
     }
 
     /// What the cache says about `tree`, given the branch it is actually on now.
-    ///
-    /// The key is the tree's path written out, which is how the refresher keys it
-    /// (`cache[str(d)]`). A plane reached by another name than the refresher walked — one
-    /// side through `/tmp` and the other through `/private/tmp` — simply has no entry, and
-    /// says "not fetched" rather than guessing.
     pub fn about(&self, tree: &Path, branch: &str) -> Reading {
-        let Some(entry) = self
-            .entries
-            .get(&tree.display().to_string())
-            .and_then(Value::as_object)
-        else {
+        let Some(entry) = self.entry_for(tree) else {
             return Reading::NotFetched("nothing has fetched this checkout".into());
         };
         // The entry names the branch it was fetched for, and a checkout that has moved since
@@ -236,6 +235,43 @@ impl Cache {
             sigil: sigil_of(entry.get("sigil")),
             seconds_ago,
         }
+    }
+
+    /// The entry for one checkout, by the path it is keyed under **or by where that path
+    /// lands**.
+    ///
+    /// The refresher keys by the path as IT walked the plane (`cache[str(d)]`), and two
+    /// programs reach the same checkout under two spellings all the time: `/tmp` is a link to
+    /// `/private/tmp` on macOS, `$CHARTER_ROOT` may be set to either, and a plane reached
+    /// through a link into `workspaces/` is a third. Comparing the strings alone reads every
+    /// one of those as "nobody has fetched this" — for ever, silently, and no fixture can
+    /// catch it, because a fixture writes the key the app is about to build.
+    ///
+    /// So the spelling is tried first, and a miss falls back to where both sides LAND, using
+    /// the plane's own resolver (`contain::resolved`) rather than a second idea of what a
+    /// resolved path is. A path charter cannot place resolves to `None` and stays a miss.
+    fn entry_for(&self, tree: &Path) -> Option<&serde_json::Map<String, Value>> {
+        let spelled = tree.display().to_string();
+        if let Some(found) = self
+            .entries
+            .get(spelled.as_str())
+            .and_then(Value::as_object)
+        {
+            return Some(found);
+        }
+        let lands = contain::resolved(tree)?;
+        let key = self.by_where_they_land().get(&lands)?;
+        self.entries.get(key.as_str()).and_then(Value::as_object)
+    }
+
+    /// Every key by where it lands, worked out once for the whole listing.
+    fn by_where_they_land(&self) -> &std::collections::HashMap<std::path::PathBuf, String> {
+        self.resolved.get_or_init(|| {
+            self.entries
+                .keys()
+                .filter_map(|key| Some((contain::resolved(Path::new(key))?, key.clone())))
+                .collect()
+        })
     }
 
     /// How long ago this entry was written. An entry with no `ts`, or one stamped in the

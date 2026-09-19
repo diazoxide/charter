@@ -304,18 +304,18 @@ fn contained(
         path: path.display().to_string(),
         verb,
     };
-    let resolved = resolve_existing(path).ok_or_else(too_many)?;
-    let base = resolve_existing(root).ok_or_else(too_many)?;
+    let lands = resolved(path).ok_or_else(too_many)?;
+    let base = resolved(root).ok_or_else(too_many)?;
     let inside = DATA_DIRS
         .iter()
         .map(|dir| base.join(dir))
-        .any(|allowed| resolved.starts_with(&allowed));
+        .any(|allowed| lands.starts_with(&allowed));
     if inside {
         Ok(())
     } else {
         Err(Refused::Outside {
             path: path.display().to_string(),
-            resolved: resolved.display().to_string(),
+            resolved: lands.display().to_string(),
             verb,
         })
     }
@@ -329,7 +329,7 @@ fn contained(
 pub fn within_plane(root: &std::path::Path, path: &std::path::Path) -> bool {
     // An exhausted link budget answers NO here too: "charter cannot say where this lands" is
     // not "this is fine".
-    match (resolve_existing(path), resolve_existing(root)) {
+    match (resolved(path), resolved(root)) {
         (Some(path), Some(root)) => path.starts_with(root),
         _ => false,
     }
@@ -359,7 +359,15 @@ pub fn within_plane(root: &std::path::Path, path: &std::path::Path) -> bool {
 ///
 /// A path that does not exist still resolves: a component with nothing at it is simply
 /// appended, so a file charter is about to CREATE is judged where it would land.
-fn resolve_existing(path: &std::path::Path) -> Option<std::path::PathBuf> {
+///
+/// **Public, so that nothing grows a second answer to "where does this path land".** The
+/// gates above are one caller; `cistate` is another, comparing a checkout against the key a
+/// different process wrote the same checkout under. A second resolver written for that would
+/// be a second set of rules about `..` after a link — which is the bug documented above.
+///
+/// `None` means charter cannot say where the path lands, and every caller treats that as a
+/// no rather than as a yes.
+pub fn resolved(path: &std::path::Path) -> Option<std::path::PathBuf> {
     use std::path::Component;
 
     /// One step of a path, owned so a symlink's target can be spliced in.

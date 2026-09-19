@@ -74,6 +74,8 @@ fn a_linked_worktree_is_not_a_clone_because_its_git_is_a_file() {
     let found = repos::clones(&f.plane, &f.ws).expect("the workspace reads");
 
     assert_eq!(named(&found), ["thing"]);
+    // And nothing is said about it: a worktree is an ordinary shape, not a refusal.
+    assert!(found.refused.is_empty(), "{:?}", found.refused);
 }
 
 #[test]
@@ -123,9 +125,13 @@ fn a_repo_reached_through_a_symlink_is_refused_and_said_rather_than_dropped() {
 }
 
 #[test]
-fn a_git_that_is_a_symlink_does_not_make_the_directory_holding_it_a_clone() {
+fn a_git_that_is_a_symlink_is_refused_and_said_rather_than_quietly_dropped() {
     // The directory itself is ordinary and passes every path check. What is redirected is
     // the repository git would act on, which is a component below the one that was gated.
+    //
+    // And it is SAID. A repo that vanishes from the panel reads as "this workspace has one
+    // fewer repo", which is the same class of lie as a blank CI cell — and the operator is
+    // the only one who can tell whether the link is theirs.
     let f = support::plane_with_clone("thing");
     let (_keep, elsewhere) = outside();
     let sneak = f.workspace().join("sneak");
@@ -135,6 +141,26 @@ fn a_git_that_is_a_symlink_does_not_make_the_directory_holding_it_a_clone() {
     let found = repos::clones(&f.plane, &f.ws).expect("the workspace reads");
 
     assert_eq!(named(&found), ["thing"]);
+    let (_, why) = found
+        .refused
+        .iter()
+        .find(|(name, _)| name == "sneak")
+        .expect("the link is reported, not silently skipped");
+    assert!(why.contains("symlink"), "{why}");
+}
+
+#[test]
+fn a_directory_with_no_git_at_all_is_not_a_repo_and_not_worth_saying() {
+    // The other half of the rule: a workspace's own stores are directories too, and a line
+    // about each of them on every render is noise that stops refusals being read.
+    let f = support::plane_with_clone("thing");
+    std::fs::create_dir_all(f.workspace().join("memory")).unwrap();
+    std::fs::create_dir_all(f.workspace().join("refs")).unwrap();
+
+    let found = repos::clones(&f.plane, &f.ws).expect("the workspace reads");
+
+    assert_eq!(named(&found), ["thing"]);
+    assert!(found.refused.is_empty(), "{:?}", found.refused);
 }
 
 #[test]

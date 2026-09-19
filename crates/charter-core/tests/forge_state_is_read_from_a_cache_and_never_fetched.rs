@@ -122,6 +122,68 @@ fn an_entry_that_names_no_pipeline_is_not_the_same_as_nobody_having_looked() {
     );
 }
 
+#[test]
+fn an_entry_keyed_under_another_spelling_of_the_same_checkout_is_still_found() {
+    // The refresher keys by the path as IT walked the plane, and two programs reach the same
+    // checkout under two spellings all the time — `/tmp` is a link to `/private/tmp`, and a
+    // plane reached through a link into `workspaces/` is another. On the string alone every
+    // one of those reads as "nobody has fetched this", for ever and silently. No fixture that
+    // writes the key the app is about to build can catch that, so this one writes a
+    // DIFFERENT one.
+    let (_keep, at) = plane();
+    std::fs::create_dir_all(at.join("workspaces/alpha/svc")).unwrap();
+    std::os::unix::fs::symlink("alpha", at.join("workspaces/alias")).unwrap();
+    let real = at.join("workspaces/alpha/svc");
+    let aliased = at.join("workspaces/alias/svc");
+
+    // Written under the aliased spelling, asked for under the real one …
+    cache_holding(
+        &at,
+        &aliased,
+        &format!(r#"{{"branch": "main", "ts": {}, "ci": "success"}}"#, now()),
+    );
+    let reading = cistate::read(&at)
+        .expect("the cache reads")
+        .about(&real, "main");
+    assert!(
+        matches!(reading, Reading::Fetched { .. }),
+        "the aliased key was not found: {reading:?}"
+    );
+
+    // … and the other way round, because neither side is the canonical one.
+    cache_holding(
+        &at,
+        &real,
+        &format!(r#"{{"branch": "main", "ts": {}, "ci": "success"}}"#, now()),
+    );
+    let reading = cistate::read(&at)
+        .expect("the cache reads")
+        .about(&aliased, "main");
+    assert!(
+        matches!(reading, Reading::Fetched { .. }),
+        "the real key was not found from the alias: {reading:?}"
+    );
+}
+
+#[test]
+fn an_entry_for_a_different_checkout_is_not_served_for_this_one() {
+    // The guard on the guard: resolving both sides must not turn every miss into a hit.
+    let (_keep, at) = plane();
+    std::fs::create_dir_all(at.join("workspaces/alpha/svc")).unwrap();
+    std::fs::create_dir_all(at.join("workspaces/alpha/tool")).unwrap();
+    cache_holding(
+        &at,
+        &at.join("workspaces/alpha/svc"),
+        &format!(r#"{{"branch": "main", "ts": {}, "ci": "success"}}"#, now()),
+    );
+
+    let reading = cistate::read(&at)
+        .expect("the cache reads")
+        .about(&at.join("workspaces/alpha/tool"), "main");
+
+    assert!(why(&reading).contains("nothing has fetched"), "{reading:?}");
+}
+
 // ---------------------------------------------------------------------------------------
 // What is not served, and why it says so                                                  #
 // ---------------------------------------------------------------------------------------

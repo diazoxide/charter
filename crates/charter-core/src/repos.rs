@@ -96,23 +96,52 @@ pub fn clones(plane: &Path, ws: &str) -> Result<Clones, Trouble> {
                 continue;
             }
         };
-        if !is_clone(&path) {
-            continue;
+        match git_at(&path) {
+            Git::Directory => found.repos.push(Repo { name, path }),
+            // A linked worktree, or a directory that is not a repository at all. Neither is a
+            // mistake and neither is a clone, so neither is worth a line in the panel.
+            Git::NotAClone => {}
+            // Said, not dropped. A repo that quietly disappears from the panel reads as "this
+            // workspace has one fewer repo", which is the same class of lie as a blank CI
+            // cell — and the operator is the only one who can tell whether the link is theirs.
+            Git::Link => found.refused.push((
+                name.clone(),
+                format!(
+                    "'{name}/.git' is a symlink, and charter will not run git through one: \
+                     the repository it acts on would not be the one inside this workspace. A \
+                     `.git` charter created is never a link"
+                ),
+            )),
         }
-        found.repos.push(Repo { name, path });
     }
     Ok(found)
 }
 
-/// A clone, the way git draws the line: a clone's `.git` is a **directory**, and a linked
-/// worktree's is a file holding `gitdir:`.
+/// What sits where a clone's `.git` would be.
 ///
+/// Three answers and not two, for the same reason `state_of` has three: "not a clone" and
+/// "a clone charter will not touch" are different facts, and only one of them is worth
+/// telling the operator about.
+enum Git {
+    /// A directory — which is how git draws the line. A linked worktree's `.git` is a FILE
+    /// holding `gitdir:`, so this admits clones and nothing else.
+    Directory,
+    /// A gitfile, or nothing at all. An ordinary shape, and not a clone.
+    NotAClone,
+    /// A link. Charter refuses it and says so.
+    Link,
+}
+
 /// Asked with `symlink_metadata`, so a `.git` that is a *link* to a directory elsewhere is
-/// not a clone this workspace holds. Python asks `is_dir()`, which follows the link — and
-/// the whole point of gating the repo path is not to run git against a repository outside
-/// the boundary that was just checked. A `.git` charter created is never a link.
-fn is_clone(path: &Path) -> bool {
-    std::fs::symlink_metadata(path.join(".git")).is_ok_and(|found| found.is_dir())
+/// seen as the link it is. Python asks `is_dir()`, which follows it — and the whole point of
+/// gating the repo path is not to then run git against a repository outside the boundary
+/// that was just checked. A `.git` charter created is never a link.
+fn git_at(path: &Path) -> Git {
+    match std::fs::symlink_metadata(path.join(".git")) {
+        Ok(found) if found.file_type().is_symlink() => Git::Link,
+        Ok(found) if found.is_dir() => Git::Directory,
+        _ => Git::NotAClone,
+    }
 }
 
 /// The repos `workspace.json` names, in the order it lists them.
