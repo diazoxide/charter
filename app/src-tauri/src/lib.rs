@@ -5,6 +5,7 @@ mod chats;
 mod hooks;
 mod lifecycle;
 mod sessions;
+mod worktrees;
 
 use std::path::PathBuf;
 use std::sync::LazyLock;
@@ -720,6 +721,10 @@ fn commands() -> Builder<tauri::Wry> {
         start_options,
         approve_profile,
         start_chat,
+        worktrees::worktree_of_chat,
+        worktrees::worktree_list,
+        worktrees::worktree_remove,
+        worktrees::worktree_merge,
     ])
 }
 

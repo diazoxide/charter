@@ -533,6 +533,12 @@ pub struct Piece {
     pub path: PathBuf,
     pub branch: Option<String>,
     pub prunable: Option<String>,
+    /// Whether charter's harness layer is in this tree.
+    ///
+    /// `false` is the ordinary state of a worktree charter cut: the layer is not ported yet
+    /// (ADR 0027), so a chat started here runs without the plane's ask/deny rules, without
+    /// its persona's agents and without `$CHARTER_HARNESS`. The UI says so on the row.
+    pub wired: bool,
 }
 
 /// This workspace's pieces for one repo.
@@ -579,14 +585,44 @@ pub fn list(plane: &Path, ws: &str, repo: &str) -> Result<Vec<Piece>, Refusal> {
         else {
             continue;
         };
+        let wired = row.prunable.is_none() && layer_is_charters(&clone, &resolved);
         out.push(Piece {
             piece,
             path: row.path,
             branch: row.branch,
             prunable: row.prunable,
+            wired,
         });
     }
     Ok(out)
+}
+
+/// The marker charter's harness layer leaves in a tree it owns.
+const LAYER_MARKER: &str = ".charter-generated";
+
+/// Whether the layer in `tree` is charter's own — present, and **not tracked by git**.
+///
+/// Charter's marker is per-checkout and untracked. A marker git TRACKS is content some
+/// cloned repository committed, and says nothing about this tree
+/// (`charter/workspace.py:2176` treats it the same way). Without that rule, any repo
+/// carrying a committed `.charter-generated` would make every piece of it read as wired —
+/// silencing the `unwired` label and the persona refusal at once, on a repo the operator
+/// merely cloned.
+///
+/// Costs a git call only for a tree that HAS the marker, which a charter-cut worktree does
+/// not, so the usual answer is free.
+fn layer_is_charters(clone: &Path, tree: &Path) -> bool {
+    if !tree.join(LAYER_MARKER).exists() {
+        return false;
+    }
+    let tracked = git::run(
+        clone,
+        &["ls-files", "--error-unmatch", "--", LAYER_MARKER],
+        git::READ,
+    );
+    // Tracked (exit 0) means it is not charter's. A call that failed to run at all is not
+    // evidence the layer is charter's either, so only a clear "not tracked" counts.
+    !matches!(tracked, Ok(run) if run.ok())
 }
 
 /// A piece, landed.
@@ -753,4 +789,118 @@ pub fn merge(plane: &Path, ws: &str, repo: &str, piece: &str) -> Result<Merged, 
         });
     }
     Ok(Merged { was, now, branch })
+}
+
+/// Which piece a path is standing in, or `None` for a path outside every worktree.
+///
+/// **Path arithmetic, and no subprocess.** This is asked for every chat on every sidebar
+/// render, and fifty rows times a `git` call is the kind of cost that shows up as the app
+/// feeling slow. Python's `worktree.locate` is filesystem-only for the same reason
+/// (`charter/worktree.py:37`), and the layout it reads is a contract `docs/plane-format.md`
+/// records as stable.
+///
+/// It answers where the path SITS, not whether charter cut it: naming the piece is enough to
+/// ask git the questions that need git.
+pub fn locate(plane: &Path, path: &Path) -> Option<Located> {
+    let here = std::fs::canonicalize(path).ok()?;
+    let workspaces = std::fs::canonicalize(plane.join("workspaces")).ok()?;
+    let rest = here.strip_prefix(&workspaces).ok()?;
+    let parts: Vec<&str> = rest
+        .components()
+        .map(|c| c.as_os_str().to_str().unwrap_or_default())
+        .collect();
+    // `<ws>/.worktrees/<repo>/<piece>`, and anything deeper is inside that piece.
+    match parts.as_slice() {
+        [ws, dir, repo, piece, ..] if *dir == DIR_NAME => Some(Located {
+            workspace: (*ws).to_string(),
+            repo: (*repo).to_string(),
+            piece: (*piece).to_string(),
+        }),
+        _ => None,
+    }
+}
+
+/// Where a path sits, when it sits in a piece.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Located {
+    pub workspace: String,
+    pub repo: String,
+    pub piece: String,
+}
+
+#[cfg(test)]
+mod locate_tests {
+    use super::*;
+
+    fn plane() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let here = std::fs::canonicalize(dir.path()).unwrap();
+        std::fs::create_dir_all(here.join("workspaces/alpha/.worktrees/thing/piece/deep/er"))
+            .unwrap();
+        std::fs::create_dir_all(here.join("workspaces/alpha/thing")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_path_in_a_piece_names_its_workspace_repo_and_piece() {
+        let dir = plane();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+
+        let found = locate(&root, &root.join("workspaces/alpha/.worktrees/thing/piece")).unwrap();
+
+        assert_eq!(found.workspace, "alpha");
+        assert_eq!(found.repo, "thing");
+        assert_eq!(found.piece, "piece");
+    }
+
+    #[test]
+    fn a_path_deep_inside_a_piece_still_names_it() {
+        // A chat's cwd is wherever the operator left it, not the piece's root.
+        let dir = plane();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+
+        let found = locate(
+            &root,
+            &root.join("workspaces/alpha/.worktrees/thing/piece/deep/er"),
+        )
+        .unwrap();
+
+        assert_eq!(found.piece, "piece");
+    }
+
+    #[test]
+    fn a_path_in_the_clone_itself_is_in_no_piece() {
+        // The shared checkout is exactly what a piece exists to keep a chat out of, so it
+        // must never read as one.
+        let dir = plane();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+
+        assert_eq!(locate(&root, &root.join("workspaces/alpha/thing")), None);
+        assert_eq!(locate(&root, &root.join("workspaces/alpha")), None);
+        assert_eq!(locate(&root, &root), None);
+    }
+
+    #[test]
+    fn a_path_outside_the_plane_is_in_no_piece() {
+        let dir = plane();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let outside = tempfile::tempdir().unwrap();
+
+        assert_eq!(locate(&root, outside.path()), None);
+    }
+
+    #[test]
+    fn a_worktrees_root_with_nothing_under_it_names_nothing() {
+        let dir = plane();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+
+        assert_eq!(
+            locate(&root, &root.join("workspaces/alpha/.worktrees")),
+            None
+        );
+        assert_eq!(
+            locate(&root, &root.join("workspaces/alpha/.worktrees/thing")),
+            None
+        );
+    }
 }
