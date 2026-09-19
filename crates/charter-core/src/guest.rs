@@ -856,11 +856,13 @@ fn span(lines: &[&str]) -> Option<(usize, usize)> {
 fn replace_block(text: &str, block: &str) -> String {
     let lines: Vec<&str> = text.lines().collect();
     let new: Vec<&str> = block.lines().collect();
-    // MUTATION: append instead of replace.
-    let out: Vec<&str> = if new.is_empty() {
-        return text.to_owned();
-    } else {
-        [lines.as_slice(), new.as_slice()].concat()
+    let out: Vec<&str> = match span(&lines) {
+        // Nothing of charter's here and nothing to add: the file is handed back BYTE FOR
+        // BYTE rather than re-joined, because re-joining normalises a missing trailing
+        // newline — a write into somebody's repository for no reason at all.
+        None if new.is_empty() => return text.to_owned(),
+        None => [lines.as_slice(), new.as_slice()].concat(),
+        Some((begin, after)) => [&lines[..begin], new.as_slice(), &lines[after..]].concat(),
     };
     if out.is_empty() {
         String::new()
