@@ -18,8 +18,10 @@ import { pickAndStart, pressAndStart, pressOnly } from "../opening.js";
  * WebDriver "element send keys" command — real keystrokes into the element that already has
  * the focus, and still no pointer anywhere near it.
  *
- * This spec runs before `panes.e2e.ts` (specs run in name order), which opens fifty
- * sessions, and it leaves behind only the tabs it opened.
+ * **It leaves the window as it found it.** That is not tidiness: specs run in name order and
+ * share one app process, and `panes.e2e.ts` — which runs after this one — reaches for "the
+ * first tab in the strip" and means its own. A tab left here becomes that one, and a spec
+ * that has nothing to do with the palette fails on a chat it never opened.
  */
 
 const PALETTE = '[role="dialog"][aria-label="Command palette"]';
@@ -87,6 +89,26 @@ async function answerThePicker() {
 }
 
 describe("the command palette", () => {
+  /** The tabs that were already there, so only this file's own are closed again. */
+  let wereAlreadyOpen: string[] = [];
+
+  before(async () => {
+    wereAlreadyOpen = await tabNames();
+  });
+
+  // **Every chat this file opened is closed again.** `panes.e2e.ts` runs after it and takes
+  // the first tab in the strip to be its own; a leftover here becomes that tab, and its
+  // assertion fails on a session it never typed into. A first run proved it.
+  after(async () => {
+    for (const name of (await tabNames()).filter((tab) => !wereAlreadyOpen.includes(tab))) {
+      await pressOnly(`Close tab ${name}`);
+    }
+    await browser.waitUntil(
+      async () => (await tabNames()).every((tab) => wereAlreadyOpen.includes(tab)),
+      { timeout: 20_000, timeoutMsg: "the palette spec left a chat open behind it" },
+    );
+  });
+
   // **Nothing below this file depends on it having run, and nothing it opens outlives it.**
   // `lifecycle.e2e.ts` states the same rule; this file learned it. One failed assertion left
   // the profile picker on screen, and because WebdriverIO's Tauri service keeps ONE app
