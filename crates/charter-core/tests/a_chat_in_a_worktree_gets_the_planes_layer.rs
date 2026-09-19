@@ -402,18 +402,54 @@ fn a_record_naming_a_path_outside_the_checkout_is_dropped_whole() {
 
 #[test]
 fn charter_does_not_write_through_a_committed_directory_symlink() {
-    // A committed `.claude -> ../../../elsewhere` would send every write in this layer
-    // wherever it points — creating the target and its parents out there. The red light for a
-    // mutation that drops either `no_link_on_the_way` call in `write_into`.
+    // A committed `.claude -> <somewhere else>` would send every write in this layer wherever
+    // it points. The red light for a mutation that drops either `no_link_on_the_way` call in
+    // `write_into`.
+    //
+    // **The target has to EXIST**, and a first draft of this test got that wrong: pointed at
+    // a directory that is not there, `create_dir_all` fails with EEXIST on the link and the
+    // write is refused by accident, so the test passed with the guard deleted. A mutation
+    // probe found it. Pointed at a real directory, `create_dir_all` succeeds and only the
+    // link check stands between charter and a write outside every checkout.
     let f = layered_plane("thing");
     let added = cut(&f, "piece");
     std::fs::remove_dir_all(added.path.join(".claude")).unwrap();
     let elsewhere = f.plane.parent().unwrap().join("elsewhere-claude");
+    std::fs::create_dir_all(&elsewhere).unwrap();
     std::os::unix::fs::symlink(&elsewhere, added.path.join(".claude")).unwrap();
 
     let again = guest::wire(&f.plane, &added.path);
 
-    assert!(!elsewhere.exists(), "nothing was created outside the plane");
+    assert!(
+        !elsewhere.join("settings.json").exists(),
+        "charter wrote the plane's rules outside every checkout"
+    );
+    assert!(
+        std::fs::read_dir(&elsewhere).unwrap().next().is_none(),
+        "and nothing else of charter's landed there either"
+    );
+    assert!(
+        !again.complete(),
+        "and the chat would be refused: {again:?}"
+    );
+}
+
+#[test]
+fn a_dangling_directory_link_is_refused_by_the_check_and_not_by_luck() {
+    // The same link, pointing at nothing. `create_dir_all` happens to fail here — so this
+    // case cannot tell whether the guard ran, and it is written down as such rather than
+    // counted as coverage. What it does pin is that charter never CREATES the target: without
+    // the first `no_link_on_the_way` call, `create_dir_all` on a link to a missing directory
+    // is one `mkdir -p` from making a directory tree outside the plane.
+    let f = layered_plane("thing");
+    let added = cut(&f, "piece");
+    std::fs::remove_dir_all(added.path.join(".claude")).unwrap();
+    let nowhere = f.plane.parent().unwrap().join("nowhere-claude").join("deep");
+    std::os::unix::fs::symlink(&nowhere, added.path.join(".claude")).unwrap();
+
+    let again = guest::wire(&f.plane, &added.path);
+
+    assert!(!nowhere.exists(), "nothing was created outside the plane");
     assert!(
         !again.complete(),
         "and the chat would be refused: {again:?}"
