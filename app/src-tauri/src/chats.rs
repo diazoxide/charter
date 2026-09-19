@@ -163,17 +163,8 @@ impl Chats {
         match harness.state_hooks(binary) {
             StateHooks::ThisSessionOnly { args, .. } => args,
             // Nothing is added to the command line, and nothing of the operator's is written
-            // behind their back. The chat shows `unknown` and the UI says why.
-            StateHooks::MachineWideOnly { .. } | StateHooks::None => Vec::new(),
-        }
-    }
-
-    /// Why this chat cannot report its state, where it cannot.
-    pub fn cannot_report(&self, harness: Option<Harness>) -> Option<&'static str> {
-        let binary = self.binary.as_ref()?;
-        match harness?.state_hooks(binary) {
-            StateHooks::MachineWideOnly { why } => Some(why),
-            StateHooks::ThisSessionOnly { .. } | StateHooks::None => None,
+            // behind their back. The chat shows `unknown`.
+            StateHooks::None => Vec::new(),
         }
     }
 

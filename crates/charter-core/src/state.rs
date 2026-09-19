@@ -53,7 +53,9 @@ impl Started {
     }
 
     /// What Claude Code's `source` means, measured on 2.1.276 (`startup` seen live; the
-    /// others are the harness's own documented values).
+    /// others are the harness's own documented values). Codex sends the same field with the
+    /// same words — `startup`, and `resume` on `codex resume <id>`, both seen on codex-cli
+    /// 0.147.0 (#27).
     pub fn of(source: Option<&str>) -> Self {
         match source {
             Some("startup" | "resume") => Self::Freshly,
@@ -676,7 +678,8 @@ mod tests {
 
     #[test]
     fn a_session_start_that_says_nothing_is_a_session_beginning() {
-        // A harness that names no `source` — Codex — means the plain thing.
+        // A harness that names no `source` means the plain thing. (Not Codex: it was believed
+        // to name none, and measured sending `startup` — #27.)
         let mut chat = Chat::new();
 
         assert!(chat.reported_from(Event::SessionStart, from(Started::Unsaid)));

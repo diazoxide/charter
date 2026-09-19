@@ -9,7 +9,7 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
-import { commands, type Moved } from "./bindings";
+import { commands, type Moved, type OpenChat } from "./bindings";
 
 /** The five states the spec names. `unknown` is a harness that carries no state hook. */
 export type State = "unknown" | "running" | "waiting" | "done" | "failed";
@@ -26,6 +26,22 @@ export const nothingKnown: ChatStates = { bySession: {}, needsYou: [] };
 /** The state of one chat, which is `unknown` until something says otherwise. */
 export function stateOf(states: ChatStates, session: number): State {
   return states.bySession[session] ?? "unknown";
+}
+
+/**
+ * The chats that can be waiting on the operator without saying so, by name.
+ *
+ * A chat whose harness cannot report everything — a Codex chat asking for approval mid-turn
+ * says nothing — is named beside the queue, so an empty queue is never the app claiming
+ * something it cannot see. Not one already in the queue, which is named there, and not one
+ * whose program has ended, which cannot be waiting on anybody.
+ */
+export function quietOnes(chats: readonly OpenChat[], states: ChatStates): string[] {
+  return chats
+    .filter((chat) => Boolean(chat.unreported))
+    .filter((chat) => !states.needsYou.includes(chat.session))
+    .filter((chat) => !["done", "failed"].includes(stateOf(states, chat.session)))
+    .map((chat) => chat.name);
 }
 
 /** Applies one move. Exported so a test can drive the reducer without a window. */

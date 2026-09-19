@@ -201,10 +201,6 @@ pub enum StateHooks {
         /// Events it cannot report, by the word `charter hook` takes. Empty is the whole set.
         cannot_report: Vec<&'static str>,
     },
-    /// The harness has state hooks, but they cannot be armed for one session: its
-    /// configuration is machine-wide. Says so, so the UI can offer to arm them rather than
-    /// showing a chat as `unknown` with no reason.
-    MachineWideOnly { why: &'static str },
     /// Charter has not measured how this program reports anything, or it is not a harness.
     None,
 }
@@ -221,22 +217,54 @@ impl Harness {
                 args: words(["--settings", &claude_code_settings(binary)]),
                 cannot_report: Vec::new(),
             },
-            // codex-cli 0.147.0's hook events, read from the draft-07 schema embedded in the
-            // binary (`charter/harness/codex.py`): PreToolUse, PermissionRequest, PostToolUse,
-            // PreCompact, PostCompact, SessionStart, SessionEnd, UserPromptSubmit,
-            // SubagentStart, SubagentStop, Stop. **There is no Notification**, so a Codex chat
-            // can say it is running and it is done, and can never say it is waiting on you.
+            // **Measured on codex-cli 0.147.0, and it refutes what this arm used to say** —
+            // that Codex could only be armed in `~/.codex/config.toml` and could never say it
+            // was waiting. Every fact here was taken from the real binary driving a real turn
+            // against a stand-in model server, the TUI in a pane as the app runs it (#27):
             //
-            // And there is nowhere to put them for one session: a `.codex/config.toml` beside
-            // a project is ignored, so `~/.codex/config.toml` is the only answer and it is
-            // machine-wide. A hook written there is inert until Codex trusts it by hash.
-            Self::Codex => StateHooks::MachineWideOnly {
-                why: "Codex reads no per-project configuration, so its hooks live in \
-                      ~/.codex/config.toml, which every workspace on this machine shares — \
-                      and a hook written there is inert until Codex trusts it. Codex also \
-                      fires no Notification event, so a Codex chat can never say it is \
-                      waiting on you.",
+            // * `-c hooks.<Event>=[…]` arms a hook for ONE session. Codex lists its source as
+            //   "Session flags", and it runs BESIDE the operator's own `[[hooks.<Event>]]` for
+            //   the same event rather than replacing it — both fired. Nothing is written.
+            // * `SessionStart`, `UserPromptSubmit`, `Stop` and `SessionEnd` each fire with
+            //   `session_id` in the payload. `SessionStart` names a `source` (`startup`, and
+            //   `resume` with the SAME id on `codex resume <id>`); `SessionEnd` names a
+            //   `reason` (`other`, on `/quit`). `Stop` is "right before Codex ends its turn",
+            //   which is the falling edge `Stop` means for Claude Code.
+            // * There is no `Notification`. Codex tells a hook it is asking for approval only
+            //   through `PermissionRequest` — which fired exactly when the prompt appeared,
+            //   and not for a command that needed none — but that is a hook that DECIDES a
+            //   permission, and the app arms no such hook (see the guard test below). So a
+            //   Codex chat that stops mid-turn for approval cannot say so.
+            // * `SessionStart` fires inside the FIRST TURN, not at launch (X1): an idle TUI
+            //   reported nothing at all until a prompt was typed.
+            // * A hook is inert until Codex trusts it. For these, the TUI itself asks at
+            //   startup — "Hooks need review … Trust all and continue / Continue without
+            //   trusting (hooks won't run)" — and Codex writes the answer into its own
+            //   `[hooks.state]`, keyed by event, position and a hash of the hook. The same
+            //   binary path arms the same hooks, so the operator is asked once and not once a
+            //   chat. Untrusted, they do not run and nothing says so (`codex exec`).
+            Self::Codex => StateHooks::ThisSessionOnly {
+                args: codex_session_flags(binary),
+                cannot_report: vec!["notification"],
             },
+        }
+    }
+
+    /// What a chat on this harness cannot tell charter, in a sentence the chat shows — or
+    /// none, where it can tell charter everything the board asks.
+    ///
+    /// Said ON the chat, not left for the operator to infer from a quiet sidebar: a Codex
+    /// chat waiting on an approval looks exactly like one that is working, and a chat that
+    /// reports nothing looks like charter is broken rather than like the harness is
+    /// different.
+    pub fn unreported(self) -> Option<&'static str> {
+        match self {
+            Self::ClaudeCode => None,
+            Self::Codex => Some(
+                "Codex says nothing until your first prompt, and nothing at all until you \
+                 trust charter's hooks when Codex asks; it never says when it stops mid-turn \
+                 for your approval.",
+            ),
         }
     }
 }
@@ -247,7 +275,6 @@ impl Harness {
 /// when the chat ends, and cleaned up again after an app that crashed. What is in it is a
 /// path and six event names — nothing secret, so `ps` showing it costs nothing.
 fn claude_code_settings(binary: &std::path::Path) -> String {
-    let command = serde_json::Value::String(binary.display().to_string());
     let hooks: serde_json::Map<String, serde_json::Value> = CLAUDE_CODE_STATE_EVENTS
         .iter()
         .map(|(event, word)| {
@@ -256,13 +283,10 @@ fn claude_code_settings(binary: &std::path::Path) -> String {
                 serde_json::json!([{
                     "hooks": [{
                         "type": "command",
-                        // Two arguments, no shell: the command is a path charter knows and a
-                        // word from the list below. Nothing here is composed from anything a
-                        // harness, a plane or an operator wrote.
-                        "command": format!("{} hook {word}", shell_quoted(&command)),
+                        "command": hook_command(binary, word),
                         // Far more than the 1.8 ms this call was measured at, and far less
                         // than a turn. A hook that somehow hung must not hold the turn open.
-                        "timeout": 5,
+                        "timeout": HOOK_TIMEOUT_SECONDS,
                     }],
                 }]),
             )
@@ -275,6 +299,71 @@ fn claude_code_settings(binary: &std::path::Path) -> String {
     )
     .to_string()
 }
+
+/// The `-c` pairs that arm Codex's state hooks on one session.
+///
+/// On the argument for the reason Claude Code's are: nothing is written, so nothing is left
+/// behind. Each value is TOML, because that is how Codex parses a `-c` value — and it is
+/// SERIALISED rather than formatted, since a value that fails to parse is not an error to
+/// Codex but a literal string, which it then rejects as the wrong type and refuses to start.
+fn codex_session_flags(binary: &std::path::Path) -> Vec<String> {
+    CODEX_STATE_EVENTS
+        .iter()
+        .flat_map(|(event, word)| {
+            let hook: toml::Table = [
+                ("type".to_owned(), toml::Value::from("command")),
+                (
+                    "command".to_owned(),
+                    toml::Value::from(hook_command(binary, word)),
+                ),
+                // Codex's own default is 600 seconds (its hook review screen says so).
+                (
+                    "timeout".to_owned(),
+                    toml::Value::from(HOOK_TIMEOUT_SECONDS),
+                ),
+            ]
+            .into_iter()
+            .collect();
+            let group: toml::Table = [(
+                "hooks".to_owned(),
+                toml::Value::Array(vec![toml::Value::Table(hook)]),
+            )]
+            .into_iter()
+            .collect();
+            let value = toml::Value::Array(vec![toml::Value::Table(group)]);
+            ["-c".to_owned(), format!("hooks.{event}={value}")]
+        })
+        .collect()
+}
+
+/// The command a hook runs: charter's own binary and one event word.
+///
+/// Two words, no composition: the command is a path charter knows and a word from one of
+/// the lists below. Nothing here is built from anything a harness, a plane or an operator
+/// wrote. Both harnesses run it through a shell — Claude Code through `/bin/sh -c` (ADR
+/// 0024), and Codex measured the same way, a single-quoted argument holding spaces arriving
+/// as one word.
+fn hook_command(binary: &std::path::Path, word: &str) -> String {
+    format!(
+        "{} hook {word}",
+        shell_quoted(&binary.display().to_string())
+    )
+}
+
+/// How long a state hook may take, in seconds, on every harness.
+const HOOK_TIMEOUT_SECONDS: i64 = 5;
+
+/// Codex's state-carrying events, and the word `charter hook` takes for each.
+///
+/// Each was seen to fire on codex-cli 0.147.0 (see [`Harness::state_hooks`]). Not
+/// `SubagentStop`, which Codex has and the board ignores: every hook armed here is one more
+/// the operator is asked to trust, and this one would change nothing they can see.
+const CODEX_STATE_EVENTS: &[(&str, &str)] = &[
+    ("SessionStart", "sessionstart"),
+    ("UserPromptSubmit", "userpromptsubmit"),
+    ("Stop", "stop"),
+    ("SessionEnd", "sessionend"),
+];
 
 /// Claude Code's state-carrying events, and the word `charter hook` takes for each.
 ///
@@ -294,12 +383,11 @@ const CLAUDE_CODE_STATE_EVENTS: &[(&str, &str)] = &[
 
 /// A path as one word a shell cannot take apart.
 ///
-/// Claude Code runs a hook's `command` through `/bin/sh -c` (ADR 0024 measured the shells in
-/// between), so the path to the binary goes in single quotes. It is charter's own executable
-/// path and not anything a plane wrote, but a person with a quote in their home directory
-/// name is not a security model.
-fn shell_quoted(path: &serde_json::Value) -> String {
-    let path = path.as_str().unwrap_or_default();
+/// Both harnesses run a hook's `command` through a shell (ADR 0024 measured the shells in
+/// between for Claude Code), so the path to the binary goes in single quotes. It is
+/// charter's own executable path and not anything a plane wrote, but a person with a quote
+/// in their home directory name is not a security model.
+fn shell_quoted(path: &str) -> String {
     format!("'{}'", path.replace('\'', r"'\''"))
 }
 
@@ -558,17 +646,106 @@ mod tests {
         );
     }
 
+    /// Codex's `-c` pairs as (dotted key, parsed TOML value), failing on anything else.
+    fn codex_flags(binary: &str) -> Vec<(String, toml::Value)> {
+        let StateHooks::ThisSessionOnly { args, .. } =
+            Harness::Codex.state_hooks(std::path::Path::new(binary))
+        else {
+            panic!("Codex's hooks are armed per session");
+        };
+        args.chunks(2)
+            .map(|pair| {
+                assert_eq!(pair[0], "-c", "not a -c pair: {pair:?}");
+                let (key, value) = pair[1].split_once('=').expect("key=value");
+                // How Codex reads it: the value is TOML. Parsed the same way here, so a value
+                // Codex would take as a literal string fails this test instead of the chat.
+                let parsed: toml::Table =
+                    toml::from_str(&format!("v = {value}")).expect("the value is TOML");
+                (key.to_owned(), parsed["v"].clone())
+            })
+            .collect()
+    }
+
     #[test]
-    fn codex_says_why_its_state_hooks_cannot_be_armed_here() {
-        // codex-cli 0.147.0: no project-level config exists at all, and no Notification
-        // event exists either. A Codex chat that showed `unknown` with no reason would look
-        // like charter was broken rather than like Codex is different.
+    fn codex_state_hooks_are_armed_on_this_session_by_its_own_flag() {
+        // Measured on codex-cli 0.147.0 (#27): `-c hooks.<Event>=[…]` arms a hook for one
+        // session, listed by Codex as "Session flags", and it runs BESIDE the operator's own
+        // hook for the same event rather than replacing it. Nothing is written anywhere.
+        let flags = codex_flags("/usr/local/bin/charter");
+
+        let keys: Vec<&str> = flags.iter().map(|(key, _)| key.as_str()).collect();
+        assert_eq!(
+            keys,
+            [
+                "hooks.SessionStart",
+                "hooks.UserPromptSubmit",
+                "hooks.Stop",
+                "hooks.SessionEnd"
+            ]
+        );
+        for (key, value) in &flags {
+            let word = key.trim_start_matches("hooks.").to_lowercase();
+            let hook = &value[0]["hooks"][0];
+            assert_eq!(hook["type"].as_str(), Some("command"), "{key}");
+            assert_eq!(
+                hook["command"].as_str(),
+                Some(format!("'/usr/local/bin/charter' hook {word}").as_str()),
+                "{key} does not run charter's own binary with its word"
+            );
+            // Codex's default is 600 seconds. A hook that somehow hung must not be able to
+            // hold a turn open behind it for ten minutes.
+            assert_eq!(hook["timeout"].as_integer(), Some(5), "{key}");
+        }
+    }
+
+    #[test]
+    fn a_codex_chat_says_it_cannot_report_a_question_asked_mid_turn() {
+        // Codex has no `Notification`. It fires `PermissionRequest` when it asks for an
+        // approval — measured — but that hook decides a permission, and the app arms none
+        // (the guard test below). So the one event missing is named, not hidden.
         let hooks = Harness::Codex.state_hooks(std::path::Path::new("/bin/charter"));
 
-        let StateHooks::MachineWideOnly { why } = hooks else {
-            panic!("Codex has no per-session answer");
+        let StateHooks::ThisSessionOnly { cannot_report, .. } = hooks else {
+            panic!("armed per session");
         };
-        assert!(why.contains("~/.codex/config.toml"));
-        assert!(why.contains("Notification"));
+        assert_eq!(cannot_report, ["notification"]);
+        let said = Harness::Codex
+            .unreported()
+            .expect("a Codex chat says what it cannot report");
+        assert!(said.contains("mid-turn"), "{said}");
+        // The two reasons a Codex chat reads `unknown`, both measured: `SessionStart` fires
+        // inside the first turn, and a hook is inert until Codex's own review trusts it.
+        assert!(said.contains("first prompt"), "{said}");
+        assert!(said.contains("trust"), "{said}");
+    }
+
+    #[test]
+    fn a_claude_code_chat_leaves_nothing_unsaid() {
+        assert_eq!(Harness::ClaudeCode.unreported(), None);
+    }
+
+    #[test]
+    fn no_guard_hook_is_ever_armed_on_codex_either() {
+        // `PermissionRequest` is where Codex would say it is asking for approval, and it
+        // is armed nowhere: a hook there can ALLOW or DENY. That is the guard's question,
+        // not a state board's, whatever the hook happens to answer.
+        for (key, _) in codex_flags("/bin/charter") {
+            for guarded in ["PreToolUse", "PostToolUse", "PermissionRequest"] {
+                assert!(!key.contains(guarded), "{key} is armed by the app");
+            }
+        }
+    }
+
+    #[test]
+    fn a_path_with_a_quote_in_it_cannot_break_out_of_a_codex_hook_either() {
+        // Codex runs a hook's command through a shell too — measured: a single-quoted
+        // argument holding spaces arrived as one word. And the TOML around it must survive
+        // the quote, which is why the value is serialised and not formatted.
+        let flags = codex_flags("/home/o'brien/char\"ter");
+
+        assert_eq!(
+            flags[2].1[0]["hooks"][0]["command"].as_str(),
+            Some(r#"'/home/o'\''brien/char"ter' hook stop"#)
+        );
     }
 }
