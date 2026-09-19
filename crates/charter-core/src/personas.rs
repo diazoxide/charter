@@ -87,10 +87,14 @@ impl Persona {
     }
 
     /// Record one durable fact. Slug-only filename, `persistent`, indexed.
+    ///
+    /// **No index header is scaffolded here**, because charter's `persona.remember` writes
+    /// straight through `memstore.write`: a persona whose `memory/` has no `MEMORY.md` yet
+    /// (`charter init` leaves a `.gitkeep`) gets the store's generic `# Memory Index`
+    /// header, not the persona's. [`Persona::scaffold_memory`] is the header's writer.
     pub fn remember(&self, text: &str, stamp: chrono::NaiveDateTime) -> io::Result<PathBuf> {
         self.writable(&self.dir.join("memory"))?;
         let dir = self.dir.join("memory");
-        memstore::ensure_index(&self.plane_root, &dir, &index_header(&self.who()))?;
         // `timestamped: false` — a persona memory is addressed by its slug, so the name
         // carries no `YYYYMMDD-HHMMSS-` prefix.
         memstore::write(
@@ -174,6 +178,340 @@ fn frontmatter_value(text: &str, key: &str) -> Option<String> {
         }
     }
     None
+}
+
+// ---------------------------------------------------------------------------------------
+// Which names a command may act on: `persona.name_refusal`, and the definition loader it
+// asks. One answer for every command that takes a persona name, so no two of them can
+// come to refuse the same name in different words (#1057, #1059).
+
+/// `^[a-z0-9][a-z0-9._-]*$` — a name charter could have minted. `_shared` is not one:
+/// charter reaches that store through a flag, never by name.
+pub fn valid_name(name: &str) -> bool {
+    name != SHARED && crate::contain::persona_name_ok(name)
+}
+
+/// The definition file: `personas/<name>/persona.md`, else the legacy flat
+/// `personas/<name>.md`, else the first — where a writer would create one.
+pub fn def_path(root: &Path, name: &str) -> PathBuf {
+    let dir_layout = root.join("personas").join(name).join("persona.md");
+    if dir_layout.exists() {
+        return dir_layout;
+    }
+    let flat = root.join("personas").join(format!("{name}.md"));
+    if flat.exists() {
+        return flat;
+    }
+    dir_layout
+}
+
+/// The frontmatter's `key: value` pairs, in file order — `persona._frontmatter`.
+///
+/// Line-based, no quote stripping and no nesting: the text between the first two `---`,
+/// stripped, each line holding a `:` split at the first one, both halves stripped, and a
+/// pair kept only when its key is not empty.
+pub fn frontmatter(text: &str) -> Vec<(String, String)> {
+    let Some(rest) = text.strip_prefix("---") else {
+        return Vec::new();
+    };
+    let Some(end) = rest.find("---") else {
+        return Vec::new();
+    };
+    let block = memstore::py_strip(&rest[..end]);
+    crate::mdsection::split_lines(block)
+        .into_iter()
+        .filter_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            let key = memstore::py_strip(key);
+            (!key.is_empty()).then(|| (key.to_string(), memstore::py_strip(value).to_string()))
+        })
+        .collect()
+}
+
+/// A persona's own definition, loaded — its frontmatter pairs — or `None` when it does
+/// not load: not a name, no file, a file charter will not read (out of the plane, not a
+/// regular file, past the bound), or one that is not UTF-8 text.
+pub fn load(root: &Path, name: &str) -> Option<Vec<(String, String)>> {
+    if !valid_name(name) {
+        return None;
+    }
+    let path = def_path(root, name);
+    if !path.exists() {
+        return None;
+    }
+    let parent = path.parent()?;
+    if crate::contain::readable(root, parent).is_err() || !memstore::readable_file(root, &path) {
+        return None;
+    }
+    memstore::read_text(&path).map(|text| frontmatter(&text))
+}
+
+/// The last value a definition gives `key` — `dict(pairs)`, where a later line wins.
+fn meta<'a>(pairs: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    pairs
+        .iter()
+        .rev()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v.as_str())
+}
+
+/// The inheritance chain, child first, stopping at the first persona that does not load
+/// or at a cycle — `persona.lineage`.
+pub fn lineage(root: &Path, name: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut current = Some(name.to_string());
+    while let Some(cur) = current.take() {
+        if cur.is_empty() || out.contains(&cur) {
+            break;
+        }
+        let Some(pairs) = load(root, &cur) else {
+            break;
+        };
+        out.push(cur);
+        current = meta(&pairs, "extends")
+            .map(|v| memstore::py_strip(v).to_string())
+            .filter(|v| !v.is_empty());
+    }
+    out
+}
+
+/// The persona up `name`'s `extends:` chain whose definition is there and does not load
+/// — `persona.ancestor_that_does_not_load`. An absent parent, a non-name and a cycle are
+/// not this: each has its own sentence in `lint`.
+pub fn ancestor_that_does_not_load(root: &Path, name: &str) -> Option<String> {
+    let chain = lineage(root, name);
+    let last = chain.last()?;
+    let pairs = load(root, last)?;
+    let parent = meta(&pairs, "extends").unwrap_or_default().to_string();
+    if chain.contains(&parent) || !valid_name(&parent) {
+        return None;
+    }
+    def_path(root, &parent).exists().then_some(parent)
+}
+
+/// A value as one line of a report — `contain.one_line`: every character with no glyph,
+/// and every whitespace but the space, as its escape, then clipped to 160 with `…`.
+///
+/// "No glyph" is the control, format, surrogate and line/paragraph-separator categories.
+/// The format characters are listed rather than looked up, from Unicode's own list.
+pub fn one_line(value: &str) -> String {
+    let mut out = String::new();
+    for c in value.chars() {
+        let cp = c as u32;
+        let invisible = c.is_control()
+            || is_format(cp)
+            || cp == 0x2028
+            || cp == 0x2029
+            || (memstore::is_python_space(c) && c != ' ');
+        if !invisible {
+            out.push(c);
+        } else if cp < 0x100 {
+            out.push_str(&format!("\\x{cp:02x}"));
+        } else {
+            out.push_str(&format!("\\u{cp:04x}"));
+        }
+    }
+    if out.chars().count() <= 160 {
+        out
+    } else {
+        let mut cut: String = out.chars().take(160).collect();
+        cut.push('…');
+        cut
+    }
+}
+
+/// Unicode's `Cf` — format characters: soft hyphen, bidi controls, zero-width joiners,
+/// the BOM, tag characters and the rest.
+///
+/// Not [`crate::pyrepr`]'s `printable`, which answers a different question: `repr()` escapes
+/// a private-use codepoint and `contain.one_line` does not, because `Co` is not one of the
+/// five categories that list names.
+fn is_format(cp: u32) -> bool {
+    matches!(
+        cp,
+        0xAD | 0x600..=0x605
+            | 0x61C
+            | 0x6DD
+            | 0x70F
+            | 0x890..=0x891
+            | 0x8E2
+            | 0x180E
+            | 0x200B..=0x200F
+            | 0x202A..=0x202E
+            | 0x2060..=0x2064
+            | 0x2066..=0x206F
+            | 0xFEFF
+            | 0xFFF9..=0xFFFB
+            | 0x110BD
+            | 0x110CD
+            | 0x13430..=0x1343F
+            | 0x1BCA0..=0x1BCA3
+            | 0x1D173..=0x1D17A
+            | 0xE0001
+            | 0xE0020..=0xE007F
+    )
+}
+
+/// Why a command must not act on the persona `name`, or `None` when this plane defines it
+/// — `persona.name_refusal`. Four sentences for four fixes: blank, outside the alphabet,
+/// defined nowhere (with the create hint), and a definition that is there and does not
+/// load — itself, or the parent it inherits from.
+pub fn name_refusal(root: &Path, name: &str) -> Option<String> {
+    if !name.is_empty() && memstore::py_strip(name).is_empty() {
+        return Some(format!(
+            "no persona '{}' (a persona name is never only whitespace)",
+            one_line(name)
+        ));
+    }
+    if !valid_name(name) {
+        return Some(format!(
+            "invalid persona name '{}' (lowercase letters, digits, '.', '_', '-')",
+            one_line(name)
+        ));
+    }
+    let relative = |path: PathBuf| {
+        path.strip_prefix(root)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| path.to_string_lossy().into_owned())
+    };
+    if load(root, name).is_none() {
+        let file = def_path(root, name);
+        if file.exists() {
+            return Some(format!(
+                "persona '{name}' does not load from {} (see why: charter persona lint {name})",
+                relative(file)
+            ));
+        }
+        return Some(format!(
+            "no persona '{name}' (create it: charter persona create {name})"
+        ));
+    }
+    let parent = ancestor_that_does_not_load(root, name)?;
+    Some(format!(
+        "persona '{name}' inherits from '{parent}', which does not load from {} (see why: charter persona lint {parent})",
+        relative(def_path(root, &parent))
+    ))
+}
+
+/// The title `persona remember` records — `(title or text.splitlines()[0]).strip()[:72]`.
+///
+/// A title given as `""` is no title; one given as spaces is a title of nothing, which the
+/// store then derives from the text. The trace records THIS string, so it is its own
+/// function rather than whatever the store happened to write.
+pub fn memory_title(text: &str, title: Option<&str>) -> String {
+    let chosen = match title.filter(|t| !t.is_empty()) {
+        Some(t) => t,
+        None => crate::mdsection::split_lines(text)
+            .into_iter()
+            .next()
+            .unwrap_or_default(),
+    };
+    memstore::py_strip(chosen)
+        .chars()
+        .take(memstore::TITLE_MAX)
+        .collect()
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    fn plane() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("charter.toml"), "").unwrap();
+        dir
+    }
+
+    fn persona(root: &Path, name: &str, text: &str) {
+        std::fs::create_dir_all(root.join("personas").join(name)).unwrap();
+        std::fs::write(root.join("personas").join(name).join("persona.md"), text).unwrap();
+    }
+
+    #[test]
+    fn a_persona_with_a_definition_is_one_a_command_may_act_on() {
+        let dir = plane();
+        persona(dir.path(), "devops", "---\nrole: ops\n---\nbody\n");
+
+        assert_eq!(name_refusal(dir.path(), "devops"), None);
+    }
+
+    #[test]
+    fn each_refusal_is_the_sentence_charter_gives() {
+        let dir = plane();
+        persona(dir.path(), "child", "---\nextends: broken\n---\n");
+        std::fs::create_dir_all(dir.path().join("personas/broken")).unwrap();
+        std::fs::write(dir.path().join("personas/broken/persona.md"), b"\xff\xfe").unwrap();
+
+        assert_eq!(
+            name_refusal(dir.path(), " ").unwrap(),
+            "no persona ' ' (a persona name is never only whitespace)"
+        );
+        assert_eq!(
+            name_refusal(dir.path(), "Bad").unwrap(),
+            "invalid persona name 'Bad' (lowercase letters, digits, '.', '_', '-')"
+        );
+        assert_eq!(
+            name_refusal(dir.path(), "_shared").unwrap(),
+            "invalid persona name '_shared' (lowercase letters, digits, '.', '_', '-')"
+        );
+        assert_eq!(
+            name_refusal(dir.path(), "a\nb").unwrap(),
+            "invalid persona name 'a\\x0ab' (lowercase letters, digits, '.', '_', '-')"
+        );
+        assert_eq!(
+            name_refusal(dir.path(), "nope").unwrap(),
+            "no persona 'nope' (create it: charter persona create nope)"
+        );
+        assert_eq!(
+            name_refusal(dir.path(), "broken").unwrap(),
+            "persona 'broken' does not load from personas/broken/persona.md (see why: charter persona lint broken)"
+        );
+        assert_eq!(
+            name_refusal(dir.path(), "child").unwrap(),
+            "persona 'child' inherits from 'broken', which does not load from personas/broken/persona.md (see why: charter persona lint broken)"
+        );
+    }
+
+    #[test]
+    fn a_definition_linked_out_of_the_plane_does_not_load() {
+        let dir = plane();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("persona.md"), "---\nrole: x\n---\n").unwrap();
+        std::fs::create_dir_all(dir.path().join("personas/evil")).unwrap();
+        std::os::unix::fs::symlink(
+            outside.path().join("persona.md"),
+            dir.path().join("personas/evil/persona.md"),
+        )
+        .unwrap();
+
+        assert!(load(dir.path(), "evil").is_none());
+    }
+
+    #[test]
+    fn a_cycle_ends_the_chain_rather_than_looping() {
+        let dir = plane();
+        persona(dir.path(), "a", "---\nextends: b\n---\n");
+        persona(dir.path(), "b", "---\nextends: a\n---\n");
+
+        assert_eq!(lineage(dir.path(), "a"), vec!["a", "b"]);
+        assert_eq!(name_refusal(dir.path(), "a"), None);
+    }
+
+    #[test]
+    fn the_recorded_title_is_the_first_line_unless_one_was_given() {
+        assert_eq!(memory_title("first\nsecond", None), "first");
+        assert_eq!(
+            memory_title("first", Some("")),
+            "first",
+            "empty is no title"
+        );
+        assert_eq!(memory_title("first", Some("  T  ")), "T");
+        assert_eq!(
+            memory_title("first", Some("   ")),
+            "",
+            "spaces are a title of nothing"
+        );
+    }
 }
 
 /// A containment refusal as an IO error.

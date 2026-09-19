@@ -134,7 +134,15 @@ pub fn write(
     // outside the plane, and a gate that runs after the side effect is no gate: this made
     // `memory/` and `todos/` appear beside an operator's files.
     gate(root, dir)?;
-    std::fs::create_dir_all(dir)?;
+    // charter's own state — the ephemeral quadrant under `.charter/` — is private whatever
+    // the umask: directories it makes at 0700 and the file at 0600 (`config.mkdir_for`,
+    // `config.write_for`). A committed store is the operator's to mode, and is left to it.
+    let private = under_state(root, dir);
+    if private {
+        crate::trace::private_mkdir(dir)?;
+    } else {
+        std::fs::create_dir_all(dir)?;
+    }
 
     let prefix = if timestamped {
         stamp.format("%Y%m%d-%H%M%S-").to_string()
@@ -157,7 +165,17 @@ pub fn write(
     // The chosen name too: the collision loop stops on the first name nothing occupies,
     // and a dangling link occupies nothing.
     gate(root, &path)?;
-    std::fs::write(&path, body)?;
+    // And the index, before a byte is written: charter checks both targets up front, so a
+    // refused index leaves the store exactly as it was rather than holding a memory file
+    // nothing indexes.
+    if index {
+        gate(root, &dir.join(INDEX))?;
+    }
+    if private {
+        write_private(&path, body.as_bytes())?;
+    } else {
+        std::fs::write(&path, body)?;
+    }
     if index {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
         index_append(root, &dir.join(INDEX), &name, &title)?;
@@ -165,8 +183,31 @@ pub fn write(
     Ok(path)
 }
 
+/// Is `path` in the plane's state directory, `.charter/` — charter's own, and private?
+fn under_state(root: &std::path::Path, path: &std::path::Path) -> bool {
+    path.starts_with(root.join(".charter"))
+}
+
+/// Write a whole file of charter's own state at 0600, an existing one tightened first.
+fn write_private(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut out = options.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = out.set_permissions(std::fs::Permissions::from_mode(0o600));
+    }
+    std::io::Write::write_all(&mut out, bytes)
+}
+
 /// Append one `- [title](file)` line. Order is write order: charter never sorts this file.
-fn index_append(
+pub fn index_append(
     root: &std::path::Path,
     index: &std::path::Path,
     filename: &str,
@@ -189,28 +230,39 @@ fn index_append(
 /// The direct name wins; otherwise any file whose name ends `-<ident>.md`, which is how a
 /// timestamped store is addressed by the slug alone (`ws todo done write-the-migration`).
 /// First match in sorted order, as charter's `files()` gives them.
-pub fn resolve(dir: &std::path::Path, ident: &str) -> Option<std::path::PathBuf> {
+///
+/// **Both halves go through the entry gate** (`memstore.resolve`, #336). The direct hit
+/// asks the filesystem rather than the listing, so it is asked the listing's question in
+/// full: contained, a regular file, within the bound. Without it `forget` reached a FIFO,
+/// a directory named `x.md` or a link out of the plane by naming it — the same read
+/// arriving by a shorter route. The suffix half IS the listing, so what it cannot see this
+/// cannot return.
+///
+/// **Stricter than charter in one place, on purpose.** charter trusts a non-link below a
+/// store it has checked, because a listed entry cannot have moved relative to its
+/// directory. A NAME is not a listed entry: `../../<elsewhere>` is not a link and walks
+/// out all the same. This asks containment of every path, so a traversing ident resolves
+/// to nothing here even where charter's resolver would hand it back.
+pub fn resolve(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    ident: &str,
+) -> Option<std::path::PathBuf> {
     let name = if ident.ends_with(".md") {
         ident.to_string()
     } else {
         format!("{ident}.md")
     };
     let direct = dir.join(&name);
-    if direct.is_file() {
+    if crate::contain::readable(root, dir).is_ok() && readable_file(root, &direct) {
         return Some(direct);
     }
     let suffix = format!("-{name}");
-    let mut hits: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
-        .ok()?
-        .filter_map(Result::ok)
-        .map(|e| e.path())
-        .filter(|p| {
-            let n = p.file_name().unwrap_or_default().to_string_lossy();
-            n != INDEX && (n == name || n.ends_with(&suffix))
-        })
-        .collect();
-    hits.sort();
-    hits.into_iter().next()
+    let (files, _unread) = read_files(root, dir);
+    files.into_iter().find(|p| {
+        let n = p.file_name().unwrap_or_default().to_string_lossy();
+        n == name || n.ends_with(&suffix)
+    })
 }
 
 /// The comparable words in `text` — `memstore.wordset`'s tokenizer.
@@ -309,6 +361,8 @@ fn title_of_stored(raw: &str) -> String {
 
 /// Delete one memory and its index line. The index is rewritten as the surviving lines
 /// joined with `\n` plus one trailing `\n` — and nothing at all when none survive.
+///
+/// `NotFound` when nothing matched, which a caller turns into its own sentence.
 pub fn forget(root: &std::path::Path, dir: &std::path::Path, ident: &str) -> std::io::Result<()> {
     // The slug is untrusted: `../../../victim` resolved out of the plane and `remove_file`
     // took it. charter refuses a slug that is not one path segment (#339).
@@ -320,26 +374,39 @@ pub fn forget(root: &std::path::Path, dir: &std::path::Path, ident: &str) -> std
             format!("'{ident}' is not the slug of one todo"),
         ));
     }
-    let Some(file) = resolve(dir, ident) else {
+    let Some(file) = resolve(root, dir, ident) else {
         return Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             format!("no such memory: {ident}"),
         ));
     };
-    let slug = file
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
     gate(root, &file)?;
     std::fs::remove_file(&file)?;
+    drop_index_line(
+        root,
+        dir,
+        &file.file_name().unwrap_or_default().to_string_lossy(),
+    );
+    Ok(())
+}
+
+/// Remove `filename`'s line from the store's index — the store's only TRUNCATING write.
+///
+/// Refuses by doing nothing, as charter's `_drop_index_line` does and for its reason: this
+/// runs after the memory file has already been removed or moved, so an error here would
+/// report a failure for work that succeeded. An index charter declines to touch keeps its
+/// stale line, which is drift the next `optimize` names. What it declines: an index that
+/// is not there, a store that resolves out of the plane, and an index that is not a plain,
+/// contained, bounded file — pointed at a credential store, a rewrite destroys it outright.
+fn drop_index_line(root: &std::path::Path, dir: &std::path::Path, filename: &str) {
     let index = dir.join(INDEX);
-    if !index.exists() {
-        return Ok(());
+    if !index.exists() || gate(root, dir).is_err() || !readable_file(root, &index) {
+        return;
     }
-    gate(root, &index)?;
-    let text = std::fs::read_to_string(&index)?;
-    let needle = format!("({slug}.md)");
+    let Some(text) = read_text(&index) else {
+        return;
+    };
+    let needle = format!("({filename})");
     let kept: Vec<&str> = crate::mdsection::split_lines(&text)
         .into_iter()
         .filter(|line| !line.contains(&needle))
@@ -349,7 +416,542 @@ pub fn forget(root: &std::path::Path, dir: &std::path::Path, ident: &str) -> std
     } else {
         format!("{}\n", kept.join("\n"))
     };
-    std::fs::write(&index, body)
+    let _ = std::fs::write(&index, body);
+}
+
+// ---------------------------------------------------------------------------------------
+// Reading a store the way `charter recall` reads it: `memstore.read_files`, `entries`,
+// `search`, `memory_date`, `body`, `duplicates` and the index-drift check. Every entry of
+// every store passes ONE gate, `readable_file`, which is `contain.file_refusal`'s question.
+
+/// A path charter could not look at, and the errno the look met. `(path, None)` when the
+/// filesystem gave no number.
+pub type Unread = Vec<(std::path::PathBuf, Option<i32>)>;
+
+/// The bound on one plane file charter reads whole (`contain.MAX_BYTES`). Set where
+/// nothing an editor produces can reach it, so it never fires on anything a person wrote.
+pub const MAX_BYTES: u64 = 1_048_576;
+
+/// May charter READ `path` as one plane file? `contain.file_refusal`, answered as a yes.
+///
+/// Three questions, each of which has let something through on its own before (#336):
+/// - it resolves inside the plane's data directories — a committed `leak.md ->
+///   /elsewhere/secret.md` is not a memory, and reading it is how `duplicate_of` leaked a
+///   heading and a similarity oracle for the rest of the file;
+/// - it is a regular file once any link is followed — a FIFO blocks the read for ever and
+///   a device never ends;
+/// - it is no larger than [`MAX_BYTES`].
+///
+/// Containment is asked of every path, link or not. charter asks it of links only,
+/// because an entry LISTED from a checked directory cannot have moved; a path built from a
+/// name can (`resolve`), and this is the one gate both reach.
+pub fn readable_file(root: &std::path::Path, path: &std::path::Path) -> bool {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return false;
+    };
+    meta.is_file() && meta.len() <= MAX_BYTES && crate::contain::readable(root, path).is_ok()
+}
+
+/// The memory files in `dir` charter may read, sorted, and beside them each it could not
+/// look at — `memstore.read_files` (#1084).
+///
+/// A store that is not there, or that resolves out of the plane, holds nothing and says
+/// nothing: the first is empty and the second is containment's refusal. A store that is
+/// there and cannot be LISTED is itself unread. An entry whose own `lstat` is refused is
+/// unread; an entry the gate refuses is simply not a memory.
+///
+/// **A directory it could not look at is not an empty one.** "No memories match" of a
+/// search that never looked reads as the fact not existing, which is why the caller names
+/// what is in the second list.
+pub fn read_files(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+) -> (Vec<std::path::PathBuf>, Unread) {
+    if crate::contain::readable(root, dir).is_err() {
+        return (Vec::new(), Vec::new());
+    }
+    let reader = match std::fs::read_dir(dir) {
+        Ok(reader) => reader,
+        Err(e) if is_absent(&e) => return (Vec::new(), Vec::new()),
+        Err(e) => return (Vec::new(), vec![(dir.to_path_buf(), e.raw_os_error())]),
+    };
+    let mut paths = Vec::new();
+    for entry in reader {
+        match entry {
+            Ok(entry) => paths.push(entry.path()),
+            Err(e) => return (Vec::new(), vec![(dir.to_path_buf(), e.raw_os_error())]),
+        }
+    }
+    paths.sort();
+    let mut found = Vec::new();
+    let mut unread = Vec::new();
+    for path in paths {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        if name == INDEX || !name.ends_with(".md") {
+            continue;
+        }
+        if readable_file(root, &path) {
+            found.push(path);
+            continue;
+        }
+        // Refused: asked why only here, so a readable store pays no second `lstat`. An entry
+        // whose `lstat` itself is refused is one charter could not look at, not one it refused.
+        if let Err(e) = std::fs::symlink_metadata(&path)
+            && !is_absent(&e)
+        {
+            unread.push((path, e.raw_os_error()));
+        }
+    }
+    (found, unread)
+}
+
+/// `FileNotFoundError` or `NotADirectoryError` — the two answers charter reads as "not there".
+fn is_absent(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+    )
+}
+
+/// A file's text as Python's `Path.read_text()` gives it: UTF-8, with every `\r\n` and lone
+/// `\r` read as `\n` — text mode's universal newlines, which decide where a `^` in a
+/// multi-line pattern can match. `None` for a file that cannot be read or is not UTF-8.
+///
+/// charter crashes on a memory file that is not UTF-8 (its readers catch `OSError`, and
+/// `UnicodeDecodeError` is not one). This skips it, as it skips a file it cannot read.
+pub fn read_text(path: &std::path::Path) -> Option<String> {
+    let bytes = std::fs::read(path).ok()?;
+    let text = String::from_utf8(bytes).ok()?;
+    if text.contains('\r') {
+        Some(text.replace("\r\n", "\n").replace('\r', "\n"))
+    } else {
+        Some(text)
+    }
+}
+
+/// One memory as a reader sees it: where it is, its title, and its whole text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Found {
+    pub path: std::path::PathBuf,
+    /// The first `# ` line with the two characters and the ends taken off, else the stem.
+    pub title: String,
+    pub text: String,
+}
+
+/// The title a reader gives a memory: the first line starting `# `, the rest of it
+/// stripped, else the file's stem — `memstore._entries_of`.
+pub fn title_in(path: &std::path::Path, text: &str) -> String {
+    crate::mdsection::split_lines(text)
+        .into_iter()
+        .find_map(|line| line.strip_prefix("# "))
+        .map(|rest| py_strip(rest).to_string())
+        .unwrap_or_else(|| {
+            path.file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        })
+}
+
+/// Every readable memory in `dir`, and what could not be looked at — `memstore.read_entries`.
+/// A file that fails to read after the listing is skipped, as charter skips it.
+pub fn read_entries(root: &std::path::Path, dir: &std::path::Path) -> (Vec<Found>, Unread) {
+    let (files, unread) = read_files(root, dir);
+    let found = files
+        .into_iter()
+        .filter_map(|path| {
+            let text = read_text(&path)?;
+            let title = title_in(&path, &text);
+            Some(Found { path, title, text })
+        })
+        .collect();
+    (found, unread)
+}
+
+/// The entries of every one of `dirs`, in order, with what could not be read added to
+/// `unread` — `memstore.gather` with a list to name them in.
+pub fn gather(
+    root: &std::path::Path,
+    dirs: &[std::path::PathBuf],
+    unread: &mut Unread,
+) -> Vec<Found> {
+    let mut out = Vec::new();
+    for dir in dirs {
+        let (found, missed) = read_entries(root, dir);
+        out.extend(found);
+        unread.extend(missed);
+    }
+    out
+}
+
+/// Words carrying no signal, dropped so they cannot outvote the term that mattered —
+/// `memstore._STOPWORDS`, word for word.
+const STOPWORDS: &[&str] = &[
+    "a", "an", "the", "and", "or", "but", "if", "then", "than", "that", "this", "these", "those",
+    "of", "in", "on", "at", "to", "for", "from", "by", "with", "without", "as", "is", "are", "was",
+    "were", "be", "been", "being", "it", "its", "it's", "do", "does", "did", "done", "have", "has",
+    "had", "you", "your", "we", "our", "i", "my", "me", "they", "them", "their", "he", "she",
+    "his", "her", "not", "no", "yes", "so", "such", "can", "could", "should", "would", "will",
+    "shall", "may", "might", "must", "about", "into", "over", "under", "again", "more", "most",
+    "some", "any",
+];
+
+/// Is `c` a word character to Python's `re` (`\w`): alphanumeric or `_`.
+///
+/// Rust's `is_alphanumeric` and Python's `str.isalnum` agree on every letter and digit a
+/// memory is written in; they part on the spacing marks of some Indic scripts, which Rust
+/// counts as alphabetic and Python does not. `wordset` has always carried the same residue.
+pub fn is_word(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// `re.split(r"\W+", text.lower())` without the empty strings at either end.
+fn tokens(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !is_word(c))
+        .filter(|t| !t.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// The query tokens worth scoring — `memstore._terms`. Two characters is the floor (`S3`,
+/// `CI`, `db` are real searches); a stopword is dropped. Order and repeats are kept, so a
+/// word typed twice counts twice, as it does in charter.
+pub fn terms(query: &str) -> Vec<String> {
+    tokens(query)
+        .into_iter()
+        .filter(|t| t.chars().count() >= 2 && !STOPWORDS.contains(&t.as_str()))
+        .collect()
+}
+
+/// The tokens [`terms`] discarded, so a caller can tell "nothing matched" from "nothing
+/// was searched for".
+pub fn dropped_terms(query: &str) -> Vec<String> {
+    tokens(query)
+        .into_iter()
+        .filter(|t| t.chars().count() < 2 || STOPWORDS.contains(&t.as_str()))
+        .collect()
+}
+
+/// How many times `\b<term>\w*` matches in `hay` — a term found at the START of a word.
+///
+/// Every character of a term is a word character (it came out of a `\W+` split), so the
+/// boundary before it is exactly "the character before is not a word character, or there
+/// is none". A match then runs to the end of its word, so the next can only start in a
+/// later word: counting starts is counting matches.
+fn word_prefix_count(hay: &str, term: &str) -> usize {
+    let mut count = 0;
+    let mut prev: Option<char> = None;
+    for (i, c) in hay.char_indices() {
+        if prev.is_none_or(|p| !is_word(p)) && hay[i..].starts_with(term) {
+            count += 1;
+        }
+        prev = Some(c);
+    }
+    count
+}
+
+/// Keyword-rank the memories of `dirs` against `query` — `memstore.search`.
+///
+/// A title hit weighs three, a hit anywhere in the text one. Best first; ties by the path
+/// as a string, which is how charter breaks them. What could not be read goes to `unread`
+/// and the rest is still searched.
+pub fn search(
+    root: &std::path::Path,
+    dirs: &[std::path::PathBuf],
+    query: &str,
+    limit: usize,
+    unread: &mut Unread,
+) -> Vec<(Found, usize)> {
+    let terms = terms(query);
+    if terms.is_empty() {
+        return Vec::new();
+    }
+    let mut scored: Vec<(usize, String, Found)> = Vec::new();
+    for found in gather(root, dirs, unread) {
+        let low = found.text.to_lowercase();
+        let title = found.title.to_lowercase();
+        let score: usize = terms
+            .iter()
+            .map(|t| 3 * word_prefix_count(&title, t) + word_prefix_count(&low, t))
+            .sum();
+        if score > 0 {
+            let key = found.path.to_string_lossy().into_owned();
+            scored.push((score, key, found));
+        }
+    }
+    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    scored
+        .into_iter()
+        .take(limit)
+        .map(|(score, _, found)| (found, score))
+        .collect()
+}
+
+/// The date a memory was recorded — `memstore.memory_date`.
+///
+/// The in-body `_YYYY-MM-DD…_` stamp first: the FIRST line anywhere that starts `_` and a
+/// date followed by a space or a `T`. Only the first such line is asked — charter's
+/// `re.search` stops there, so a stamp that does not parse falls straight to the filename
+/// rather than to a later stamp. Then a `YYYYMMDD-` filename prefix. `None` for neither.
+pub fn memory_date(text: &str, filename: &str) -> Option<chrono::NaiveDate> {
+    let mut starts = vec![0];
+    starts.extend(text.match_indices('\n').map(|(i, _)| i + 1));
+    for start in starts {
+        let line = &text[start..];
+        let Some(date) = stamp_at(line) else {
+            continue;
+        };
+        if let Some(day) = iso_date(date) {
+            return Some(day);
+        }
+        break;
+    }
+    let digits: Vec<char> = filename.chars().take(9).collect();
+    if digits.len() == 9 && digits[..8].iter().all(char::is_ascii_digit) && digits[8] == '-' {
+        let n = |range: std::ops::Range<usize>| -> Option<u32> {
+            digits[range].iter().collect::<String>().parse().ok()
+        };
+        return chrono::NaiveDate::from_ymd_opt(n(0..4)? as i32, n(4..6)?, n(6..8)?)
+            .filter(|d| (1..=9999).contains(&chrono::Datelike::year(d)));
+    }
+    None
+}
+
+/// `_(\d{4}-\d{2}-\d{2})[ T]` at the start of `line`, giving the date part.
+///
+/// `\d` is any decimal digit to Python, not only ASCII, and a stamp spelled in other
+/// digits still MATCHES there and then fails to parse. So a numeral outside ASCII is
+/// accepted here as a digit and refused by [`iso_date`], which puts the date on the same
+/// path charter's does: the stamp is found, it does not parse, and the filename decides.
+fn stamp_at(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix('_')?;
+    let mut end = 0;
+    for (n, c) in rest.chars().enumerate() {
+        let ok = if n == 4 || n == 7 {
+            c == '-'
+        } else {
+            c.is_ascii_digit() || (!c.is_ascii() && c.is_numeric())
+        };
+        if !ok {
+            return None;
+        }
+        end += c.len_utf8();
+        if n == 9 {
+            break;
+        }
+    }
+    let date = &rest[..end];
+    if date.chars().count() != 10 {
+        return None;
+    }
+    matches!(rest[end..].chars().next(), Some(' ' | 'T')).then_some(date)
+}
+
+/// `date.fromisoformat` for `YYYY-MM-DD` in ASCII digits, year 1 to 9999.
+fn iso_date(text: &str) -> Option<chrono::NaiveDate> {
+    let b = text.as_bytes();
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return None;
+    }
+    let y: i32 = text.get(0..4)?.parse().ok()?;
+    let m: u32 = text.get(5..7)?.parse().ok()?;
+    let d: u32 = text.get(8..10)?.parse().ok()?;
+    if !text.get(0..4)?.bytes().all(|c| c.is_ascii_digit())
+        || !text.get(5..7)?.bytes().all(|c| c.is_ascii_digit())
+        || !text.get(8..10)?.bytes().all(|c| c.is_ascii_digit())
+        || y < 1
+    {
+        return None;
+    }
+    chrono::NaiveDate::from_ymd_opt(y, m, d)
+}
+
+/// A memory's content with its `# title` and `_stamp_` lines dropped and every run of
+/// whitespace one space, stripped and lowercased — `memstore.body`, the key two memories
+/// are EXACT duplicates by.
+///
+/// Whitespace is Python's (`\s`, `str.strip`), which includes U+001C–U+001F; Rust's does
+/// not, and a body differing only in those would be two facts to one and one to the other.
+pub fn body(text: &str) -> String {
+    let kept: Vec<&str> = crate::mdsection::split_lines(text)
+        .into_iter()
+        .filter(|line| !line.starts_with("# ") && !is_stamp_line(py_strip(line)))
+        .collect();
+    let joined = kept.join(" ");
+    let mut out = String::with_capacity(joined.len());
+    let mut in_space = false;
+    for c in joined.chars() {
+        if is_python_space(c) {
+            if !in_space {
+                out.push(' ');
+            }
+            in_space = true;
+        } else {
+            out.push(c);
+            in_space = false;
+        }
+    }
+    py_strip(&out).to_lowercase()
+}
+
+/// `^_.*·.*_\s*$` on a stripped line: starts and ends with `_`, a `·` between.
+fn is_stamp_line(line: &str) -> bool {
+    let Some(inner) = line.strip_prefix('_') else {
+        return false;
+    };
+    inner.ends_with('_') && inner[..inner.len() - 1].contains('·')
+}
+
+/// Near-duplicate pairs among the memories of `dirs`, by Jaccard word overlap at or above
+/// `threshold` — `memstore.duplicates`. Strongest first; pairs in listing order within a
+/// score. Each pair is `(score, first, second)` as indexes into the returned entries.
+pub fn duplicates(entries: &[Found], threshold: f64) -> Vec<(f64, usize, usize)> {
+    let sets: Vec<std::collections::BTreeSet<String>> =
+        entries.iter().map(|e| wordset(&e.text)).collect();
+    let mut out = Vec::new();
+    for (i, a) in sets.iter().enumerate() {
+        for (j, b) in sets.iter().enumerate().skip(i + 1) {
+            if a.is_empty() || b.is_empty() {
+                continue;
+            }
+            let shared = a.intersection(b).count() as f64;
+            let union = a.union(b).count() as f64;
+            let jaccard = shared / union;
+            if jaccard >= threshold {
+                out.push((jaccard, i, j));
+            }
+        }
+    }
+    // Stable, as Python's sort is: equal scores keep their listing order.
+    out.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    out
+}
+
+/// The filenames the index links to — `memstore._listed`. Empty when charter may not
+/// read the index, which makes every file read as unindexed: true, since nothing charter
+/// is willing to read indexes them.
+///
+/// Asked with the WRITE rule (`index_refusal`), as charter asks it: an absent index is no
+/// defect — a fresh persona has none — while a dangling link out of the plane is absent
+/// and hostile at once.
+pub fn listed(root: &std::path::Path, dir: &std::path::Path) -> std::collections::BTreeSet<String> {
+    let index = dir.join(INDEX);
+    let mut out = std::collections::BTreeSet::new();
+    if gate(root, dir).is_err() || gate(root, &index).is_err() {
+        return out;
+    }
+    if std::fs::symlink_metadata(&index).is_ok() && !readable_file(root, &index) {
+        return out;
+    }
+    let Some(text) = read_text(&index) else {
+        return out;
+    };
+    out.extend(index_links(&text));
+    out
+}
+
+/// `\(([A-Za-z0-9][\w.-]*\.md)\)`, every non-overlapping match, left to right.
+///
+/// `)` is outside the class, so a match's closing `)` is the first character after the
+/// run of class characters that follows `(` — the run has to end in `.md` and hold more
+/// than just that. Reading it that way needs no backtracking and gives what `findall` does.
+fn index_links(text: &str) -> Vec<String> {
+    let chars: Vec<char> = text.chars().collect();
+    let in_class = |c: char| is_word(c) || c == '.' || c == '-';
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '(' {
+            i += 1;
+            continue;
+        }
+        let start = i + 1;
+        if !chars.get(start).is_some_and(char::is_ascii_alphanumeric) {
+            i += 1;
+            continue;
+        }
+        let mut end = start + 1;
+        while end < chars.len() && in_class(chars[end]) {
+            end += 1;
+        }
+        let run: String = chars[start..end].iter().collect();
+        if chars.get(end) == Some(&')') && run.chars().count() > 3 && run.ends_with(".md") {
+            out.push(run);
+            i = end + 1;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// What the index and the directory disagree about — `memstore.index_drift`: links to a
+/// file that is not there (`dangling`) and files no link names (`unindexed`), each sorted.
+///
+/// `Err` with what could not be looked at when the store itself could not be listed, which
+/// charter raises as `CannotCheck` rather than reporting drift it did not measure.
+pub fn index_drift(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+) -> Result<(Vec<String>, Vec<String>), Unread> {
+    let (files, unread) = read_files(root, dir);
+    if !unread.is_empty() {
+        return Err(unread);
+    }
+    let actual: std::collections::BTreeSet<String> = files
+        .iter()
+        .map(|p| {
+            p.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    let listed = listed(root, dir);
+    Ok((
+        listed.difference(&actual).cloned().collect(),
+        actual.difference(&listed).cloned().collect(),
+    ))
+}
+
+/// Move one memory into `<dir>/archive/` and drop its index line — `memstore.archive`, a
+/// reversible retire that keeps the file. The path it landed at, or `None` when nothing
+/// was archived.
+///
+/// `archive` is the fifth fixed name in the store: `rename` follows a link on the
+/// destination DIRECTORY exactly as `open` follows one on a file, so a committed
+/// `archive -> elsewhere` would turn a retire into a move out of the plane. Refused by
+/// doing nothing, like every other "nothing was archived", rather than raised out of a
+/// half-finished batch.
+///
+/// A name that is taken gets `-2`, then `-2-3`, then `-2-3-4`: charter numbers the stem
+/// of the name it just tried, not the original, and the files it leaves are named that way.
+pub fn archive(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    ident: &str,
+) -> Option<std::path::PathBuf> {
+    let file = resolve(root, dir, ident)?;
+    let dest_dir = dir.join("archive");
+    gate(root, &dest_dir).ok()?;
+    std::fs::create_dir_all(&dest_dir).ok()?;
+    let name = file.file_name()?.to_string_lossy().into_owned();
+    let mut dest = dest_dir.join(&name);
+    let mut n = 2;
+    while dest.exists() {
+        let stem = dest.file_stem()?.to_string_lossy().into_owned();
+        let suffix = dest
+            .extension()
+            .map(|e| format!(".{}", e.to_string_lossy()))
+            .unwrap_or_default();
+        dest = dest_dir.join(format!("{stem}-{n}{suffix}"));
+        n += 1;
+    }
+    gate(root, &file).ok()?;
+    std::fs::rename(&file, &dest).ok()?;
+    drop_index_line(root, dir, &name);
+    Some(dest)
 }
 
 #[cfg(test)]

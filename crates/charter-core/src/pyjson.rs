@@ -171,6 +171,21 @@ mod tests {
     }
 
     #[test]
+    fn a_trace_record_is_one_line_in_the_documents_own_key_order() {
+        // `contain.json_line`: json.dumps(rec) with Python's default separators. Verified
+        // against CPython for this record.
+        let doc: serde_json::Value = serde_json::from_str(
+            r#"{"ts": "2026-05-04T11:32:17", "event": "memory", "title": "é"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            dumps(&doc, None, ", ", ": "),
+            r#"{"ts": "2026-05-04T11:32:17", "event": "memory", "title": "\u00e9"}"#
+        );
+    }
+
+    #[test]
     fn a_character_outside_the_basic_plane_is_written_as_a_surrogate_pair() {
         // Verified against CPython: json.dumps({"k": "ship \U0001F680"}, sort_keys=True)
         let doc = json!({"k": "ship 🚀"});

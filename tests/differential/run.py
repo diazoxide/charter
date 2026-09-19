@@ -151,6 +151,10 @@ class Scenario:
     #: is what stands in for it rather than nothing.
     facts: "Callable[[Path], str] | None" = None
 
+    #: A refusal whose WORDS are ported too: stderr is then compared byte for byte, as it
+    #: is for a success, rather than only searched for `refusal`.
+    same_stderr: bool = False
+
     def rust_args(self) -> list[str]:
         return self.rust if self.rust is not None else self.python
 
@@ -933,6 +937,156 @@ REPO_SCENARIOS = [
     ),
 ]
 
+# ---------------------------------------------------------------------------------------
+# M2.2: the memory commands. `charter recall`'s output is read by agents at session start,
+# so these compare stdout AND stderr byte for byte, and the setups below plant the states a
+# fixture cannot carry — a link out of the plane, a FIFO, an unreadable store.
+
+#: The flags a Rust `recall` needs that Python's does not: this binary resolves neither the
+#: active workspace nor the active persona, so both are named. Python is given the same
+#: flags, so the two search the same bases.
+RECALL_OWNERS = ["--persona", "devops", "-w", "alpha"]
+
+
+def _ephemeral_scratch(root: Path) -> None:
+    """One ephemeral memory for `devops` in this session's bucket."""
+    d = root / ".charter" / "persona-state" / "ephemeral" / SESSION / "devops"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "scratch-one.md").write_text(
+        "# Scratch one\n\n_2026-05-01 10:00 · ephemeral_\n\nhello\n", encoding="utf-8"
+    )
+
+
+def _entries_the_gate_refuses(root: Path) -> None:
+    """Every kind of entry `memstore.files` refuses, beside the journal's real memories.
+
+    A link out of the plane whose heading and body match the query — the shape that made
+    `duplicate_of` leak a heading and a similarity oracle in M1.1 — a FIFO, which would
+    block a reader for ever, a file past the 1 MiB bound, and a directory named like a
+    memory. Plus a link that lands INSIDE the plane, which is a memory, and which a search
+    labels by where it lands.
+    """
+    m = root / "workspaces" / "alpha" / "memory"
+    outside = root.parent / "outside"
+    outside.mkdir(parents=True, exist_ok=True)
+    (outside / "secret.md").write_text(
+        "# Board minutes Mondays\n\nCONFIDENTIAL Mondays\n", encoding="utf-8"
+    )
+    (m / "leak.md").symlink_to(outside / "secret.md")
+    os.mkfifo(m / "fifo.md")
+    (m / "big.md").write_text("# Big Mondays\n" + "x" * 1_048_577, encoding="utf-8")
+    (m / "dir.md").mkdir()
+    (m / "inside.md").symlink_to(
+        root / "personas" / "_shared" / "memory" / "the-plane-is-the-unit-of-work.md"
+    )
+
+
+def _nested_refs(root: Path) -> None:
+    """Refs that nest, one subdirectory linked inside the plane and one linked out of it."""
+    r = root / "personas" / "devops" / "refs"
+    (r / "sub" / "deep").mkdir(parents=True, exist_ok=True)
+    (r / "sub" / "runbook.md").write_text("# Runbook\nrestart the thing\n", encoding="utf-8")
+    (r / "sub" / "deep" / "x.md").write_text("no heading here\n", encoding="utf-8")
+    (r / "linked").symlink_to(root / "workspaces" / "alpha" / "memory")
+    out = root.parent / "out-refs"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "s.md").write_text("# Outside ref\nleaked\n", encoding="utf-8")
+    (r / "escape").symlink_to(out)
+
+
+def _dates_every_way(root: Path) -> None:
+    """A memory dated by each rule `memory_date` has, and one it cannot date.
+
+    CRLF line ends (text mode reads them as `\\n`, which decides where `^` matches), a stamp
+    on a later line, a date only in the filename, a stamp that does not parse — which falls
+    to the filename rather than to a later stamp — and no date at all.
+    """
+    m = root / "workspaces" / "alpha" / "memory"
+    (m / "crlf.md").write_bytes(
+        b"# CRLF title\r\n\r\n_2026-04-01 10:00 \xc2\xb7 persistent_\r\n\r\nbody line mondays\r\n"
+    )
+    (m / "nohead.md").write_text("plain text mondays mondays\n", encoding="utf-8")
+    (m / "20260401-x.md").write_text("# Dated by name\nmondays\n", encoding="utf-8")
+    (m / "late.md").write_text("# Late stamp\ntext\n_2026-04-02 x_\nmondays\n", encoding="utf-8")
+    (m / "bad.md").write_text("# Bad stamp\n_2026-13-02 x_\n", encoding="utf-8")
+
+
+def _journal_unreadable(root: Path) -> None:
+    """`alpha`'s journal at mode 000: a store charter cannot list is not an empty one."""
+    os.chmod(root / "workspaces" / "alpha" / "memory", 0)
+
+
+def _a_fifo_in_the_journal(root: Path) -> None:
+    os.mkfifo(root / "workspaces" / "alpha" / "memory" / "pipe.md")
+
+
+def _a_journal_entry_linked_out(root: Path) -> None:
+    outside = root.parent / "outside"
+    outside.mkdir(parents=True, exist_ok=True)
+    (outside / "secret.md").write_text("# Secret\n\nSECRET\n", encoding="utf-8")
+    (root / "workspaces" / "alpha" / "memory" / "leak.md").symlink_to(outside / "secret.md")
+
+
+def _duplicates_to_curate(root: Path) -> None:
+    """Two exact duplicates of a journal entry (one retitled), a near duplicate, and a
+    rule-shaped memory — none of them indexed."""
+    m = root / "workspaces" / "alpha" / "memory"
+    t = ("# The API returns 418 on Mondays\n\n_2026-03-05 10:00 · persistent_\n\n"
+         "The API returns 418 on Mondays\n")
+    (m / "20260305-100000-the-api-returns-418-on-mondays.md").write_text(t, encoding="utf-8")
+    (m / "20260306-100000-dup-again.md").write_text(
+        t.replace("# The API", "# Another title"), encoding="utf-8")
+    (m / "20260307-100000-near.md").write_text(
+        "# Near\nThe API returns 418 on Tuesdays and Mondays\n", encoding="utf-8")
+    (m / "20260308-100000-rule.md").write_text(
+        "# Standing rule: never deploy on Fridays\nThis is a standing rule. You must not "
+        "deploy; never ever. Always check. The rule is simple.\n", encoding="utf-8")
+
+
+def _archive_names_taken(root: Path) -> None:
+    """Two copies of an entry, and the name the first would be archived under already taken."""
+    m = root / "workspaces" / "alpha" / "memory"
+    (m / "archive").mkdir(exist_ok=True)
+    t = (m / "20260302-091200-the-api-returns-418-on-mondays.md").read_text(encoding="utf-8")
+    (m / "20260309-000000-copy.md").write_text(t, encoding="utf-8")
+    (m / "20260310-000000-copy2.md").write_text(t, encoding="utf-8")
+    (m / "archive" / "20260309-000000-copy.md").write_text("taken\n", encoding="utf-8")
+    (m / "archive" / "20260309-000000-copy-2.md").write_text("taken too\n", encoding="utf-8")
+
+
+def _journal_index_linked_out(root: Path) -> None:
+    """`alpha`'s MEMORY.md a link to an operator's file, and an unindexed entry to repair."""
+    m = root / "workspaces" / "alpha" / "memory"
+    outside = root.parent / "outside"
+    outside.mkdir(parents=True, exist_ok=True)
+    (outside / "idx").write_text("PRECIOUS\n", encoding="utf-8")
+    (m / "MEMORY.md").unlink()
+    (m / "MEMORY.md").symlink_to(outside / "idx")
+
+
+def _journal_archive_linked_out(root: Path) -> None:
+    """`archive/` a link out of the plane, and an exact duplicate that would be moved there."""
+    m = root / "workspaces" / "alpha" / "memory"
+    outside = root.parent / "outside"
+    outside.mkdir(parents=True, exist_ok=True)
+    (m / "archive").symlink_to(outside)
+    t = (m / "20260302-091200-the-api-returns-418-on-mondays.md").read_text(encoding="utf-8")
+    (m / "20260309-000000-copy.md").write_text(t, encoding="utf-8")
+
+
+def _persona_index_linked_out(root: Path) -> None:
+    m = root / "personas" / "devops" / "memory"
+    outside = root.parent / "outside"
+    outside.mkdir(parents=True, exist_ok=True)
+    (outside / "idx").write_text("PRECIOUS\n", encoding="utf-8")
+    (m / "MEMORY.md").unlink()
+    (m / "MEMORY.md").symlink_to(outside / "idx")
+
+
+#: A refusal naming two absolute paths, which differ between the two plane copies.
+ABSOLUTE_PATHS = (r"'/[^']*'", "each side's plane copy lives at its own absolute path")
+
+
 SCENARIOS = [
     *INIT_SCENARIOS,
     Scenario(
@@ -997,28 +1151,21 @@ SCENARIOS = [
         python=["workspace", "vision", "Ship it — properly · no shortcuts", "-w", "alpha"],
     ),
     Scenario(
-        stderr_differs=CONFIRMS_ON_STDERR,
         name="remember",
         plane="daily",
         python=["workspace", "remember", "The importer drops rows over 4 MB", "-w", "alpha",
                 "--no-sync"],
-        rust=["workspace", "remember", "The importer drops rows over 4 MB", "-w", "alpha"],
     ),
     Scenario(
-        stderr_differs=CONFIRMS_ON_STDERR,
         name="remember-a-multi-line-fact",
         plane="daily",
         python=["workspace", "remember", "Retries are capped at 3\nand the 4th is dropped",
                 "-w", "alpha", "--no-sync"],
-        rust=["workspace", "remember", "Retries are capped at 3\nand the 4th is dropped",
-              "-w", "alpha"],
     ),
     Scenario(
-        stderr_differs=CONFIRMS_ON_STDERR,
         name="remember-into-an-empty-journal",
         plane="daily",
         python=["workspace", "remember", "Nothing was here before", "-w", "beta", "--no-sync"],
-        rust=["workspace", "remember", "Nothing was here before", "-w", "beta"],
     ),
     Scenario(
         stderr_differs=CONFIRMS_ON_STDERR,
@@ -1080,7 +1227,6 @@ SCENARIOS = [
         # U+001F is whitespace to `str.strip()` and not to Rust's `trim`, so this wrote a
         # memory file where charter refuses one.
         python=["workspace", "remember", "\x1f", "-w", "alpha", "--no-sync"],
-        rust=["workspace", "remember", "\x1f", "-w", "alpha"],
         ignore={
             ".charter/reports": "Python charter does not CATCH its own `ValueError: empty "
             "memory` here — it exits 1 through the crash handler, which drafts a bug report "
@@ -1089,11 +1235,9 @@ SCENARIOS = [
         },
     ),
     Scenario(
-        stderr_differs=CONFIRMS_ON_STDERR,
         name="remember-a-body-padded-with-separator-controls",
         plane="daily",
         python=["workspace", "remember", "\x1fPadded fact\x1f", "-w", "alpha", "--no-sync"],
-        rust=["workspace", "remember", "\x1fPadded fact\x1f", "-w", "alpha"],
     ),
     Scenario(
         name="vision-through-a-workspace-symlinked-out-of-the-plane",
@@ -1159,7 +1303,6 @@ SCENARIOS = [
         plane="daily",
         setup=_symlink_a_memory_index_out_of_the_plane,
         python=["workspace", "remember", "A durable fact", "-w", "alpha", "--no-sync"],
-        rust=["workspace", "remember", "A durable fact", "-w", "alpha"],
         refusal="outside the directories",
     ),
     Scenario(
@@ -1168,7 +1311,6 @@ SCENARIOS = [
         setup=_two_hop_out_of_the_plane,
         python=["workspace", "remember", "ssh-rsa AAAA attacker@example.com", "-w", "alpha",
                 "--no-sync"],
-        rust=["workspace", "remember", "ssh-rsa AAAA attacker@example.com", "-w", "alpha"],
         refusal="outside the directories",
     ),
     Scenario(
@@ -1176,7 +1318,6 @@ SCENARIOS = [
         plane="daily",
         setup=_dangle_a_memory_index_out_of_the_plane,
         python=["workspace", "remember", "A durable fact", "-w", "alpha", "--no-sync"],
-        rust=["workspace", "remember", "A durable fact", "-w", "alpha"],
         refusal="outside the directories",
     ),
     Scenario(
@@ -1198,6 +1339,404 @@ SCENARIOS = [
         refusal="already on the list",
     ),
     *REPO_SCENARIOS,
+
+    # --- M2.2: `charter recall`. What an agent reads at session start; byte for byte.
+    Scenario(
+        name="recall-lists-every-base-newest-first",
+        plane="daily",
+        python=["recall", *RECALL_OWNERS],
+    ),
+    Scenario(
+        name="recall-a-query-ranks-and-labels-each-hit",
+        plane="daily",
+        python=["recall", "plane", *RECALL_OWNERS, "--full"],
+    ),
+    Scenario(
+        name="recall-every-workspace-with-a-limit-says-what-it-cut",
+        plane="daily",
+        python=["recall", "--all-workspaces", "--persona", "devops", "--limit", "2"],
+    ),
+    Scenario(
+        name="recall-a-query-of-only-stopwords-searched-nothing",
+        plane="daily",
+        python=["recall", "in the", *RECALL_OWNERS],
+    ),
+    Scenario(
+        name="recall-a-query-that-matches-nothing",
+        plane="daily",
+        python=["recall", "zzz", "-w", "beta", "--persona", "devops"],
+    ),
+    Scenario(
+        name="recall-since-a-date-that-excludes-everything",
+        plane="daily",
+        python=["recall", "--since", "2026-04-01", *RECALL_OWNERS],
+    ),
+    Scenario(
+        name="recall-since-an-age-counts-the-refs-it-could-not-date",
+        plane="daily",
+        python=["recall", "--since", "90d", *RECALL_OWNERS, "--scope", "workspace,refs"],
+    ),
+    Scenario(
+        name="recall-refuses-a-scope-it-does-not-have",
+        plane="daily",
+        python=["recall", "--scope", "bogus", "-w", "alpha"],
+        refusal="invalid --scope",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="recall-refuses-a-persona-name-outside-the-alphabet",
+        plane="daily",
+        python=["recall", "--persona", "Nope", "-w", "alpha"],
+        refusal="invalid persona name",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="recall-refuses-a-persona-the-plane-does-not-define",
+        plane="daily",
+        python=["recall", "--persona", "nope", "-w", "alpha"],
+        refusal="no persona 'nope'",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="recall-refuses-a-since-it-cannot-read",
+        plane="daily",
+        python=["recall", "--since", "yesterday", *RECALL_OWNERS],
+        refusal="unrecognised --since",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="recall-the-sessions-ephemeral-scratch",
+        plane="daily",
+        setup=_ephemeral_scratch,
+        python=["recall", "--persona", "devops", "--scope", "ephemeral"],
+    ),
+    Scenario(
+        name="recall-searches-no-entry-the-gate-refuses",
+        plane="daily",
+        # `leak.md` links out of the plane and matches the query in its heading and body:
+        # read, it would rank first. Refused, the search finds only the journal's own entry,
+        # and the link that lands INSIDE the plane — labelled by where it lands.
+        setup=_entries_the_gate_refuses,
+        python=["recall", "mondays", "-w", "alpha", "--scope", "workspace"],
+    ),
+    Scenario(
+        name="recall-lists-no-entry-the-gate-refuses",
+        plane="daily",
+        setup=_entries_the_gate_refuses,
+        python=["recall", "-w", "alpha", "--scope", "workspace", "--limit", "0", "--full"],
+    ),
+    Scenario(
+        name="recall-a-query-only-a-refused-entry-matches-finds-nothing",
+        plane="daily",
+        setup=_entries_the_gate_refuses,
+        python=["recall", "board", "-w", "alpha", "--scope", "workspace"],
+    ),
+    Scenario(
+        name="recall-walks-nested-refs-and-not-a-link-out-of-the-plane",
+        plane="daily",
+        setup=_nested_refs,
+        python=["recall", "--persona", "devops", "--scope", "refs", "--full", "--limit", "0"],
+    ),
+    Scenario(
+        name="recall-dates-by-stamp-then-filename",
+        plane="daily",
+        setup=_dates_every_way,
+        python=["recall", "-w", "alpha", "--scope", "workspace", "--limit", "0", "--full"],
+    ),
+    Scenario(
+        name="recall-since-narrows-a-query-without-reranking-it",
+        plane="daily",
+        setup=_dates_every_way,
+        python=["recall", "mondays", "-w", "alpha", "--scope", "workspace",
+                "--since", "2026-03-15"],
+    ),
+    Scenario(
+        name="recall-names-a-base-it-could-not-read",
+        plane="daily",
+        setup=_journal_unreadable,
+        python=["recall", *RECALL_OWNERS],
+        refusal="cannot be checked",
+        same_stderr=True,
+    ),
+    # --- `charter workspace recall | remember | note | forget`.
+    Scenario(
+        name="workspace-recall-lists-the-journal",
+        plane="daily",
+        python=["workspace", "recall", "-w", "alpha"],
+    ),
+    Scenario(
+        name="workspace-recall-a-query",
+        plane="daily",
+        python=["workspace", "recall", "-w", "alpha", "-q", "mondays"],
+    ),
+    Scenario(
+        name="workspace-recall-a-query-that-matches-nothing",
+        plane="daily",
+        python=["workspace", "recall", "-w", "alpha", "-q", "zzz"],
+    ),
+    Scenario(
+        name="workspace-recall-an-empty-journal",
+        plane="daily",
+        python=["workspace", "recall", "-w", "beta"],
+    ),
+    Scenario(
+        name="workspace-remember-with-no-text-lists-the-journal",
+        plane="daily",
+        python=["workspace", "remember", "-w", "alpha"],
+    ),
+    Scenario(
+        name="workspace-note-with-no-text-lists-the-journal",
+        plane="daily",
+        python=["workspace", "note", "-w", "alpha"],
+    ),
+    Scenario(
+        name="workspace-remember-under-a-title-of-its-own",
+        plane="daily",
+        python=["workspace", "remember", "Fact with title", "--title", "  Custom T  ",
+                "-w", "alpha", "--no-sync"],
+    ),
+    Scenario(
+        name="workspace-note-records-like-remember",
+        plane="daily",
+        python=["workspace", "note", "A note", "-w", "alpha", "--no-sync"],
+    ),
+    Scenario(
+        name="workspace-remember-on-a-local-workspace-says-it-stays-on-disk",
+        plane="daily",
+        python=["workspace", "remember", "Fact", "-w", "beta"],
+    ),
+    Scenario(
+        name="workspace-remember-on-a-live-workspace-with-memory-kept-local",
+        plane="daily",
+        python=["workspace", "remember", "Fact", "-w", "alpha"],
+    ),
+    Scenario(
+        name="workspace-forget-by-slug",
+        plane="daily",
+        python=["workspace", "forget", "the-api-returns-418-on-mondays", "-w", "alpha"],
+    ),
+    Scenario(
+        name="workspace-forget-by-filename",
+        plane="daily",
+        python=["workspace", "forget", "20260302-091500-closed-todo-write-the-migration.md",
+                "-w", "alpha"],
+    ),
+    Scenario(
+        name="workspace-forget-a-slug-nothing-matches",
+        plane="daily",
+        python=["workspace", "forget", "nothing-here", "-w", "alpha"],
+        refusal="no memory 'nothing-here'",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-forget-a-fifo-is-not-a-memory",
+        plane="daily",
+        setup=_a_fifo_in_the_journal,
+        python=["workspace", "forget", "pipe", "-w", "alpha"],
+        refusal="no memory 'pipe'",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-forget-a-link-out-of-the-plane-deletes-nothing",
+        plane="daily",
+        setup=_a_journal_entry_linked_out,
+        python=["workspace", "forget", "leak", "-w", "alpha"],
+        refusal="no memory 'leak'",
+        same_stderr=True,
+    ),
+    # --- `charter workspace optimize`: read-only unless --apply, and --apply only reversible.
+    Scenario(
+        name="optimize-reads-every-journal-and-changes-nothing",
+        plane="daily",
+        python=["workspace", "optimize"],
+    ),
+    Scenario(
+        name="optimize-apply-on-a-tidy-journal-does-nothing",
+        plane="daily",
+        python=["workspace", "optimize", "alpha", "--apply"],
+    ),
+    Scenario(
+        name="optimize-names-what-apply-would-do-and-does-none-of-it",
+        plane="daily",
+        setup=_duplicates_to_curate,
+        python=["workspace", "optimize", "alpha"],
+    ),
+    Scenario(
+        name="optimize-apply-archives-exact-duplicates-and-repairs-the-index",
+        plane="daily",
+        setup=_duplicates_to_curate,
+        python=["workspace", "optimize", "alpha", "--apply"],
+    ),
+    Scenario(
+        name="optimize-apply-numbers-an-archive-name-that-is-taken",
+        plane="daily",
+        setup=_archive_names_taken,
+        python=["workspace", "optimize", "alpha", "--apply"],
+    ),
+    Scenario(
+        name="optimize-apply-does-not-append-through-an-index-linked-out",
+        plane="daily",
+        setup=_journal_index_linked_out,
+        python=["workspace", "optimize", "alpha", "--apply"],
+        stderr_mask=[ABSOLUTE_PATHS],
+    ),
+    Scenario(
+        name="optimize-apply-does-not-move-into-an-archive-linked-out",
+        plane="daily",
+        setup=_journal_archive_linked_out,
+        python=["workspace", "optimize", "alpha", "--apply"],
+    ),
+    Scenario(
+        name="optimize-proposes-what-is-older-than-stale-days",
+        plane="daily",
+        python=["workspace", "optimize", "--stale-days", "10"],
+    ),
+    Scenario(
+        name="optimize-a-workspace-that-is-not-there",
+        plane="daily",
+        python=["workspace", "optimize", "nope"],
+        refusal="no workspace 'nope'",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="optimize-names-a-journal-it-could-not-read",
+        plane="daily",
+        setup=_journal_unreadable,
+        python=["workspace", "optimize", "alpha"],
+        refusal="cannot be checked",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="optimize-on-a-plane-with-no-workspaces",
+        plane="minimal",
+        python=["workspace", "optimize"],
+    ),
+    # --- `charter persona recall | remember`.
+    Scenario(
+        name="persona-recall-lists-its-memory-the-shared-store-and-this-sessions-activity",
+        plane="daily",
+        python=["persona", "recall", "devops"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        name="persona-recall-a-persona-with-no-memory-of-its-own",
+        plane="daily",
+        python=["persona", "recall", "steward"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        name="persona-recall-a-query",
+        plane="daily",
+        python=["persona", "recall", "devops", "-q", "cluster"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        name="persona-recall-a-query-capped-by-log",
+        plane="daily",
+        python=["persona", "recall", "devops", "-q", "plane", "--log", "1"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        name="persona-recall-a-query-that-matches-nothing",
+        plane="daily",
+        python=["persona", "recall", "devops", "-q", "zzz"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        name="persona-recall-with-ephemeral-scratch",
+        plane="daily",
+        setup=_ephemeral_scratch,
+        python=["persona", "recall", "devops"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        name="persona-recall-refuses-a-persona-the-plane-does-not-define",
+        plane="daily",
+        python=["persona", "recall", "nope"],
+        pins_the_clock=False,
+        refusal="no persona 'nope'",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="persona-recall-refuses-a-name-outside-the-alphabet",
+        plane="daily",
+        python=["persona", "recall", "Bad"],
+        pins_the_clock=False,
+        refusal="invalid persona name",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="persona-remember-its-own",
+        plane="daily",
+        python=["persona", "remember", "devops", "A fact about devops", "--no-sync"],
+    ),
+    Scenario(
+        name="persona-remember-into-the-shared-store",
+        plane="daily",
+        python=["persona", "remember", "devops", "Second fact", "--shared", "--no-sync"],
+    ),
+    Scenario(
+        name="persona-remember-into-a-store-with-no-index-yet",
+        plane="daily",
+        # `steward/memory` holds a `.gitkeep` and no MEMORY.md: charter writes the store's
+        # generic `# Memory Index` header, not the persona's.
+        python=["persona", "remember", "steward", "A steward fact", "--no-sync"],
+    ),
+    Scenario(
+        name="persona-remember-ephemeral-scratch-is-private",
+        plane="daily",
+        python=["persona", "remember", "devops", "Scratch fact", "--ephemeral"],
+    ),
+    Scenario(
+        name="persona-remember-under-a-title",
+        plane="daily",
+        python=["persona", "remember", "devops", "Body text", "--title", "  Short  ",
+                "--no-sync"],
+    ),
+    Scenario(
+        name="persona-remember-under-a-title-of-spaces",
+        plane="daily",
+        python=["persona", "remember", "devops", "Body text", "--title", "   ", "--no-sync"],
+    ),
+    Scenario(
+        name="persona-remember-a-title-already-taken-is-numbered",
+        plane="daily",
+        python=["persona", "remember", "devops", "Cluster prod-1 lives in eu-west-1",
+                "--no-sync"],
+    ),
+    Scenario(
+        name="persona-remember-non-ascii-is-escaped-in-the-trace",
+        plane="daily",
+        python=["persona", "remember", "devops", "unicode — fact é", "--no-sync"],
+    ),
+    Scenario(
+        name="persona-remember-with-memory-kept-local",
+        plane="daily",
+        python=["persona", "remember", "devops", "Plain fact"],
+    ),
+    Scenario(
+        name="persona-remember-refuses-an-empty-memory",
+        plane="daily",
+        python=["persona", "remember", "devops", "  ", "--no-sync"],
+        refusal="empty memory",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="persona-remember-refuses-a-persona-the-plane-does-not-define",
+        plane="daily",
+        python=["persona", "remember", "nope", "x", "--no-sync"],
+        refusal="no persona 'nope'",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="persona-remember-writes-nothing-through-an-index-linked-out",
+        plane="daily",
+        setup=_persona_index_linked_out,
+        python=["persona", "remember", "devops", "A fact", "--no-sync"],
+        refusal="outside the directories",
+        same_stderr=True,
+        stderr_mask=[ABSOLUTE_PATHS],
+    ),
 ]
 
 
@@ -1383,6 +1922,13 @@ def _diff_file(left: Path, right: Path) -> list[str]:
     return [f"      {line}" for line in lines[:24]]
 
 
+def _masked(text: str, scenario: Scenario) -> str:
+    """*text* with each of the scenario's masks blanked — what neither side's words decide."""
+    for pattern, _why in scenario.stderr_mask:
+        text = re.sub(pattern, "<masked>", text)
+    return text
+
+
 def check(scenario: Scenario, binary: Path) -> bool:
     with tempfile.TemporaryDirectory() as tmp:
         scratch = Path(tmp)
@@ -1422,6 +1968,12 @@ def check(scenario: Scenario, binary: Path) -> bool:
                     f"    rust did not refuse with {scenario.refusal!r}; it said "
                     f"{rs.stderr.strip()!r}"
                 )
+            if scenario.same_stderr:
+                want, got = _masked(py.stderr, scenario), _masked(rs.stderr, scenario)
+                if want != got:
+                    problems.append("    stderr differs:")
+                    problems.append(f"      python {want!r}")
+                    problems.append(f"      rust   {got!r}")
         else:
             if py.returncode != 0:
                 problems.append(
@@ -1452,7 +2004,7 @@ def check(scenario: Scenario, binary: Path) -> bool:
                         )
                         problems.append(f"      python {want!r}")
                         problems.append(f"      rust   {got!r}")
-            elif py.stderr != rs.stderr:
+            elif _masked(py.stderr, scenario) != _masked(rs.stderr, scenario):
                 problems.append("    stderr differs:")
                 problems.append(f"      python {py.stderr!r}")
                 problems.append(f"      rust   {rs.stderr!r}")

@@ -2,6 +2,7 @@
 
 pub mod cistate;
 pub mod contain;
+pub mod curate;
 pub mod engine;
 pub mod forge;
 pub mod gitpolicy;
@@ -18,6 +19,7 @@ pub mod profiles;
 pub mod profiletrust;
 pub mod pyjson;
 pub mod pyrepr;
+pub mod recall;
 pub mod reopen;
 pub mod repocmd;
 pub mod repos;
@@ -26,6 +28,7 @@ pub mod session;
 pub mod shown;
 pub mod start;
 pub mod state;
+pub mod trace;
 pub mod wiring;
 pub mod workspaces;
 pub mod worktree;

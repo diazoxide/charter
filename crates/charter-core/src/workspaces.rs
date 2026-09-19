@@ -130,6 +130,57 @@ impl Plane {
             .map(str::to_string)
     }
 
+    /// How far a memory travels once written — `[memory] share` in `charter.toml`, clamped
+    /// to `local`, `commit` or `push`, and `local` for anything else (`instance.share_of`).
+    ///
+    /// A typo fails SAFE: the other side of that failure is publishing an agent's notes.
+    pub fn memory_share(&self) -> &'static str {
+        let declared = std::fs::read_to_string(self.root.join(crate::plane::MANIFEST))
+            .ok()
+            .and_then(|text| text.parse::<toml::Table>().ok())
+            .and_then(|doc| {
+                doc.get("memory")?
+                    .as_table()?
+                    .get("share")?
+                    .as_str()
+                    .map(str::to_string)
+            });
+        match declared.as_deref() {
+            Some("commit") => "commit",
+            Some("push") => "push",
+            _ => "local",
+        }
+    }
+
+    /// Whether `name` is LIVE — un-ignored in the plane's `.gitignore` managed block, so its
+    /// memory is committed and shared (`workspace.live_workspaces`).
+    pub fn is_live(&self, name: &str) -> bool {
+        const BEGIN: &str =
+            "# >>> charter live workspaces (managed by `charter workspace live`) >>>";
+        const END: &str = "# <<< charter live workspaces <<<";
+        let Ok(text) = std::fs::read_to_string(self.root.join(".gitignore")) else {
+            return false;
+        };
+        let mut inside = false;
+        for line in crate::mdsection::split_lines(&text) {
+            let line = memstore::py_strip(line);
+            if line == BEGIN {
+                inside = true;
+            } else if line == END {
+                inside = false;
+            } else if inside
+                && let Some(rest) = line.strip_prefix("!/workspaces/")
+                && let Some((live, tail)) = rest.split_once('/')
+                && !live.is_empty()
+                && tail.starts_with("workspace.json")
+                && live == name
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     /// One workspace of this plane, by name.
     ///
     /// The name is checked BEFORE it is joined onto a path. `Path::join` throws the prefix
@@ -299,7 +350,7 @@ impl Workspace {
     pub fn close_todo(&self, slug: &str, stamp: chrono::NaiveDateTime) -> io::Result<()> {
         self.writable(&self.dir.join("todos"))?;
         let dir = self.dir.join("todos");
-        let path = memstore::resolve(&dir, slug).ok_or_else(|| {
+        let path = memstore::resolve(&self.plane_root, &dir, slug).ok_or_else(|| {
             io::Error::new(io::ErrorKind::NotFound, format!("no such todo: {slug}"))
         })?;
         let stem = path
@@ -322,18 +373,39 @@ impl Workspace {
 
     /// Record one durable fact in the workspace's journal.
     pub fn remember(&self, text: &str, stamp: chrono::NaiveDateTime) -> io::Result<PathBuf> {
+        self.remember_titled(text, None, stamp)
+    }
+
+    /// Record one durable fact under a title of the caller's, or the text's first line.
+    ///
+    /// A title of `""` is no title, as charter reads `if title`; one of only spaces is a
+    /// title, and strips to nothing — charter's own reading of `--title "  "`.
+    pub fn remember_titled(
+        &self,
+        text: &str,
+        title: Option<&str>,
+        stamp: chrono::NaiveDateTime,
+    ) -> io::Result<PathBuf> {
         self.writable(&self.dir.join("memory"))?;
         let dir = self.dir.join("memory");
-        memstore::ensure_index(
+        let index = memstore::ensure_index(
             &self.plane_root,
             &dir,
             &WS_MEMORY_HEADER.replace("{name}", &self.name),
         )?;
+        // A legacy `notes.md` is grandfathered into the index, so a pre-v2 workspace's memo
+        // stays discoverable (`workspace.scaffold_memory`).
+        if dir.join("notes.md").exists()
+            && memstore::readable_file(&self.plane_root, &index)
+            && !memstore::read_text(&index).is_some_and(|t| t.contains("(notes.md)"))
+        {
+            memstore::index_append(&self.plane_root, &index, "notes.md", "Task memo (legacy)")?;
+        }
         memstore::write(
             &self.plane_root,
             &dir,
             text,
-            None,
+            title.filter(|t| !t.is_empty()),
             true,
             "persistent",
             true,

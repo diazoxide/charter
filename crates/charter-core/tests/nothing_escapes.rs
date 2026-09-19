@@ -114,6 +114,9 @@ fn exercise_everything(plane: &charter_core::workspaces::Plane) {
         let _ = ws.manifest();
         let _ = ws.write_manifest(&serde_json::from_str(r#"{"name":"alpha"}"#).unwrap());
         let _ = ws.remember("a durable fact", stamp());
+        // Twice: an exact duplicate is what `optimize --apply` moves into `archive/`, the one
+        // write it makes that is a `rename` rather than an open.
+        let _ = ws.remember_titled("a durable fact", Some("a durable fact"), stamp());
         let _ = ws.add_todo("a todo", stamp());
         let _ = ws.memories();
         let _ = ws.todos();
@@ -124,6 +127,26 @@ fn exercise_everything(plane: &charter_core::workspaces::Plane) {
         }
         let _ =
             charter_core::memstore::duplicate_of(plane.root(), &ws.dir().join("todos"), "a todo");
+        // M2.2: every write `workspace optimize --apply` makes, on both stores, and the reads
+        // `recall` and `forget` make of them.
+        let today = stamp().date();
+        for store in ["memory", "todos"] {
+            let dir = ws.dir().join(store);
+            let _ = charter_core::curate::report(plane.root(), &dir, 90, 0.5, today);
+            let _ = charter_core::curate::apply_safe(plane.root(), &dir, today);
+            let _ = charter_core::memstore::archive(plane.root(), &dir, "a-durable-fact");
+            let _ = charter_core::memstore::index_drift(plane.root(), &dir);
+        }
+        let ask = charter_core::recall::Ask {
+            scopes: charter_core::recall::SCOPES.map(str::to_string).to_vec(),
+            workspaces: Some(charter_core::recall::Workspaces::All),
+            persona: Some("devops".into()),
+            session: "s1".into(),
+            query: None,
+            limit: 0,
+            since: None,
+        };
+        let _ = charter_core::recall::recall(plane.root(), &ask);
         // `write` straight into a store, WITHOUT `ensure_index` first. It is public and the
         // index gate is the only one on this path — reaching it only through the workspace
         // made that gate look redundant when it is not.
@@ -143,6 +166,31 @@ fn exercise_everything(plane: &charter_core::workspaces::Plane) {
     if let Ok(persona) = plane.persona("devops") {
         let _ = persona.scaffold_memory();
         let _ = persona.remember("a persona fact", stamp());
+        // `persona remember`'s other two quadrants: the shared store, and the session's
+        // ephemeral scratch under `.charter/` — charter's own state, written private.
+        for dir in [
+            plane.root().join("personas/_shared/memory"),
+            charter_core::recall::ephemeral_dir(plane.root(), "s1", "devops"),
+        ] {
+            let _ = charter_core::memstore::write(
+                plane.root(),
+                &dir,
+                "a quadrant fact",
+                None,
+                false,
+                "ephemeral",
+                !dir.starts_with(plane.root().join(".charter")),
+                stamp(),
+            );
+        }
+        charter_core::trace::record(
+            plane.root(),
+            "s1",
+            "memory",
+            &[("persona", "devops")],
+            stamp(),
+        );
+        let _ = charter_core::personas::name_refusal(plane.root(), "devops");
         let _ = persona.role();
         let _ = persona.memories();
     }
@@ -183,7 +231,7 @@ fn with_link_out(link: &str, target_is_file: bool) -> Vec<String> {
 fn nothing_outside_the_plane_is_touched_however_the_link_is_placed() {
     // One case per path a public entry point opens. Each was a hole at some point, or is one
     // level away from one that was.
-    let places: [(&str, bool); 12] = [
+    let places: [(&str, bool); 18] = [
         ("workspaces/alpha", false),
         ("workspaces/alpha/workspace.md", true),
         ("workspaces/alpha/workspace.json", true),
@@ -196,6 +244,14 @@ fn nothing_outside_the_plane_is_touched_however_the_link_is_placed() {
         ("personas/devops/persona.md", true),
         ("personas/devops/memory", false),
         (".charter", false),
+        // M2.2: the archive `optimize --apply` moves into, the shared store, and the state
+        // `persona remember --ephemeral` and the trace write into.
+        ("workspaces/alpha/memory/archive", false),
+        ("workspaces/alpha/todos/archive", false),
+        ("personas/_shared/memory", false),
+        (".charter/persona-state", false),
+        (".charter/persona-state/trace", false),
+        (".charter/persona-state/trace/s1.jsonl", true),
     ];
 
     let mut broken = Vec::new();
@@ -222,6 +278,10 @@ fn a_dangling_link_creates_nothing_outside_the_plane() {
         "workspaces/alpha/workspace.md",
         "workspaces/alpha/workspace.json",
         "personas/devops/memory/MEMORY.md",
+        // M2.2: a directory `create_dir_all` would make through the link, and the trace.
+        "workspaces/alpha/memory/archive",
+        ".charter/persona-state/trace/s1.jsonl",
+        "personas/_shared/memory/MEMORY.md",
     ] {
         let (dir, plane) = plane();
         let outside = tempfile::tempdir().unwrap();
