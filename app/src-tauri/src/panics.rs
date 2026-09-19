@@ -61,7 +61,7 @@ fn install(log: impl Fn() -> Option<&'static PathBuf> + Send + Sync + 'static) {
         // Nothing here may panic: a panic inside the hook aborts at once and says less.
         let _ = std::io::stderr().write_all(said.as_bytes());
         if let Some(file) = log() {
-            write_down(file, "");
+            write_down(file, &said);
         }
         before(info);
     }));
