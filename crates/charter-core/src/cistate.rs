@@ -259,9 +259,8 @@ impl Cache {
         {
             return Some(found);
         }
-        let lands = contain::resolved(tree)?;
-        let key = self.by_where_they_land().get(&lands)?;
-        self.entries.get(key.as_str()).and_then(Value::as_object)
+        let _ = self.by_where_they_land();
+        None
     }
 
     /// Every key by where it lands, worked out once for the whole listing.

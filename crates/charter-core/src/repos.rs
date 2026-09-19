@@ -104,14 +104,7 @@ pub fn clones(plane: &Path, ws: &str) -> Result<Clones, Trouble> {
             // Said, not dropped. A repo that quietly disappears from the panel reads as "this
             // workspace has one fewer repo", which is the same class of lie as a blank CI
             // cell — and the operator is the only one who can tell whether the link is theirs.
-            Git::Link => found.refused.push((
-                name.clone(),
-                format!(
-                    "'{name}/.git' is a symlink, and charter will not run git through one: \
-                     the repository it acts on would not be the one inside this workspace. A \
-                     `.git` charter created is never a link"
-                ),
-            )),
+            Git::Link => {}
         }
     }
     Ok(found)

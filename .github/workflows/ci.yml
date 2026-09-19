@@ -34,7 +34,7 @@ jobs:
       - run: mkdir -p app/dist
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --locked
+      - run: cargo test --workspace --locked --no-fail-fast
 
   deny:
     name: rust (licences, advisories)
