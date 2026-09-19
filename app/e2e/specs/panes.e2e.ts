@@ -1,7 +1,7 @@
-import { execFileSync } from "node:child_process";
 import { pressAndStart } from "../opening.js";
 import { browser, expect, $, $$ } from "@wdio/globals";
 import { READY } from "../harness.js";
+import { harnessesRunning } from "../processes.js";
 
 /**
  * The skeleton, driven the way a person drives it: buttons, tabs and typing, against the real
@@ -75,16 +75,6 @@ async function tabNames(): Promise<string[]> {
       (tab) => tab.textContent ?? "",
     ),
   );
-}
-
-/** How many fake harnesses this machine is running, asked of the operating system. */
-function harnessesRunning(): number {
-  const ps = execFileSync("ps", ["-A", "-o", "command="], { encoding: "utf8" });
-  // The program a line RUNS, not any line that mentions the name, and one line is not one
-  // process: a command line containing newlines is several lines of `ps` output. Both
-  // mattered — a Claude Code session whose prompt discussed `fake-harness` was counted three
-  // times, and this test failed at 53 of an expected 50 with nothing wrong.
-  return ps.split("\n").filter((line) => /^\S*\/fake-harness(\s|$)/.test(line)).length;
 }
 
 describe("the window", () => {

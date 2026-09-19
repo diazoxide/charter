@@ -7,6 +7,7 @@ import {
   writeForgeCache,
   writeShell,
 } from "./harness.js";
+import { PANIC_LOG, collectEvidence } from "./processes.js";
 
 /**
  * The scenario tests: WebdriverIO driving the real app, with the fake harness standing in for
@@ -60,8 +61,23 @@ export const config: WebdriverIO.Config = {
         captureBackendLogs: true,
         captureFrontendLogs: true,
         // Every session the app opens is the fake harness, because that is the shell it finds.
-        env: { SHELL: writeShell(built("fake-harness")), CHARTER_ROOT: plane },
+        // A panic that ends the app is written where a failed run keeps it (charter-app#16).
+        env: {
+          SHELL: writeShell(built("fake-harness")),
+          CHARTER_ROOT: plane,
+          CHARTER_PANIC_LOG: PANIC_LOG,
+        },
       },
     ],
   ],
+
+  // A test that fails because the app died looks, from the test, like any other: an element
+  // that never came. So every failure writes down whether the app is alive, its size, and
+  // what the operating system and the app's panic hook recorded (charter-app#16).
+  afterTest(test, _context, { passed }) {
+    if (!passed) {
+      const where = collectEvidence(app, `${test.parent} ${test.title}`);
+      console.error(`charter-e2e: what was left to look at is in ${where}`);
+    }
+  },
 };
