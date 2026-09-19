@@ -10,23 +10,61 @@
 //! the filesystem would make a traversal succeed exactly when the attacker's target happens
 //! to exist, which is the one case where the answer must not change.
 //!
-//! # What this does not defend against, on purpose
+//! # What this does not defend against, on purpose (charter ADR 0028)
 //!
-//! **The gate is a `stat`; the write is a path open.** Nothing holds a file descriptor
-//! across the two, and no call uses `openat` or `O_NOFOLLOW`. So a writer racing inside the
-//! plane — a `git checkout`, another agent, an editor saving — can replace a checked path
-//! with a link between the check and the open, and win. Measured: under 10 ms in a loop.
+//! **A gate here answers about a path, and it does not hold it.** Every check below is a
+//! `stat` walk; the caller then hands the same path, by name, to `fs::write`, `File::open`,
+//! `remove_file` or a `git` subprocess. Nothing holds a descriptor across the two. A writer
+//! that can change what the name points at, in the window between the answer and the open,
+//! gets the open it wants.
 //!
-//! That is accepted here rather than overlooked, for two reasons. Python charter has the
-//! same shape (`contain.file_refusal` stats, then the caller opens), so closing it in Rust
-//! alone would be a divergence in the half of the pair that is supposed to match. And the
-//! attacker it would stop already has write access inside the plane, where they can simply
-//! commit the link instead — which is the attack the gate DOES stop, because a committed
-//! link travels to every machine that clones the plane.
+//! **Measured, so the next reader does not have to guess at the size of it.** These gates,
+//! against a thread planting and removing a symlink at the path, 20,000 rounds each. It is
+//! `the_window_each_gate_leaves` in `tests/nothing_escapes_while_a_writer_races.rs`, so it
+//! can be run again rather than believed:
 //!
-//! Closing it properly means `openat` with `O_NOFOLLOW` on each component, held as a
-//! descriptor, for every read and write on both sides. That belongs with the security
-//! tranche (spec decision 16) and its external review, not bolted on here.
+//! | gate, and what the caller does next | escapes per 20,000 |
+//! | --- | --- |
+//! | [`readable`], then `fs::read` — personas, workspaces, memory, `start` | **5025** |
+//! | [`no_link_on_the_way`], then `fs::read` — the record read at launch | **1881** |
+//! | [`no_link_on_the_way`], then `fs::write` — the record written at quit | **7600** |
+//! | [`open_no_link`] / [`create_no_link`], the same two | **0** and **0** |
+//!
+//! A quarter to two fifths, not a hairline. An earlier pass measured a transcription of these
+//! functions into Python and called its counts an upper bound; that was wrong, and wrong in
+//! the unsafe direction — the transcription's racer was Python too, so it planted far less
+//! often per victim iteration and understated the window by two orders of magnitude. What
+//! does not change with the number is who the attacker is, which is the next paragraph.
+//!
+//! **This is accepted, and the reason is the adversary rather than the cost.** The attacker
+//! these gates exist for holds a **commit**, not a process: a committed
+//! `workspaces/evil -> ../../elsewhere` travels to every machine that clones the plane
+//! (charter #442, #336), and that attack needs no race and is refused whenever the gate
+//! looks. A process racing charter on the operator's own machine is a different principal,
+//! and charter does not defend against one — `SECURITY.md` says so in those words about the
+//! vault guard, which has far more to lose: *"a guard against mistakes, not an attacker with
+//! shell access as your user."* Whoever can race `fs::write` can run `cp`. The day something
+//! confines an agent below charter's own privilege, ADR 0028 says this is the first decision
+//! to re-open.
+//!
+//! **What is closed is the half charter owns alone.** [`no_link_on_the_way`] refuses *every*
+//! link on the way, last component included, and its only callers are the record and the
+//! socket under `.charter/app/` — the paths no Python charter writes. For those,
+//! [`open_no_link`] and [`create_no_link`] make the kernel answer the link question at the
+//! instant of the open. It is the predicate those callers already declare, enforced
+//! atomically, with no Python behaviour to diverge from and no measurable cost (9.37 µs
+//! against 9.30 µs for the same open without the flag).
+//!
+//! **What is not closed, at full size.** [`readable`] and [`writable`] — the 5025 row, and
+//! the most-used gates — cannot take `O_NOFOLLOW` at all: they deliberately FOLLOW a link
+//! that lands back inside the plane, which is Python's `realpath` behaviour and what a plane
+//! that links a persona directory depends on. Directory components above the last one are
+//! still a check and not a handle, in every gate including the fixed one. Every path handed
+//! to `git` is a path, and a descriptor cannot be handed to a subprocess. Doing it properly
+//! is a different containment model — "what is beneath this descriptor" rather than "where
+//! does this name land" — across the whole core at once, and spec decision 16 puts a
+//! security-critical part behind an external review at M3. Deciding its shape here and
+//! reviewing it there would be those two steps in the wrong order.
 
 /// The separators no single name may contain, on any platform charter runs on.
 ///
@@ -229,6 +267,242 @@ pub fn no_link_on_the_way(root: &std::path::Path, path: &std::path::Path) -> std
         }
     }
     Ok(())
+}
+
+/// [`no_link_on_the_way`], and then the open, with the last component refused by the kernel
+/// rather than by charter a moment earlier.
+///
+/// **Why the pair and not the walk alone.** The walk answers about a path and does not hold
+/// it, so a link planted after it has passed is followed by the open — 1881 of 20,000 reads
+/// of the record, measured. `O_NOFOLLOW` moves the last component's answer to the instant of
+/// the open, where nothing can get between the two.
+///
+/// **It is the predicate these callers already declare, so nothing changes without an
+/// attacker.** [`no_link_on_the_way`] refuses *every* link on the way, the last component
+/// included, so an honest path opens exactly as it did. That is why the flag belongs here and
+/// **not** on [`readable`] or [`writable`], which deliberately follow a link that lands back
+/// inside the plane — Python's `realpath` follows it too, and a plane that links a persona
+/// directory depends on it.
+///
+/// What it does not do: the components ABOVE the last one are still a `stat` and not a
+/// handle. ADR 0028 says why the rest waits for M3, and why a directory swap is the harder
+/// half (a directory cannot be replaced by a symlink with one `rename`).
+pub fn open_no_link(
+    root: &std::path::Path,
+    path: &std::path::Path,
+) -> std::io::Result<std::fs::File> {
+    no_link_on_the_way(root, path)?;
+    leaf_open(path)
+}
+
+/// [`open_no_link`]'s twin for a file charter is creating or overwriting.
+///
+/// `create`/`truncate` and not `create_new`: this replaces `fs::write`, which truncates an
+/// existing file, and a temp file left behind by a killed process must not stop the next
+/// write.
+pub fn create_no_link(
+    root: &std::path::Path,
+    path: &std::path::Path,
+) -> std::io::Result<std::fs::File> {
+    no_link_on_the_way(root, path)?;
+    leaf_create(path)
+}
+
+/// The open half of [`open_no_link`], alone.
+///
+/// Private, and deliberately reachable only from this module's own tests: on its own it is
+/// **not** containment — it says nothing about any component but the last. It is a function
+/// rather than two inline `OpenOptions` because a test has to be able to drive the flag
+/// without the walk in front of it. Through the pair the walk answers first, so a test that
+/// plants a link and calls [`open_no_link`] passes whether or not the flag is there, and
+/// would not notice it being dropped.
+fn leaf_open(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    nofollow(std::fs::OpenOptions::new().read(true)).open(path)
+}
+
+/// [`leaf_open`]'s twin, for a create.
+fn leaf_create(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    nofollow(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true),
+    )
+    .open(path)
+}
+
+/// `O_NOFOLLOW | O_NONBLOCK` on the open, through `rustix` so the constants are not a
+/// hand-written table.
+///
+/// `rustix` is already this crate's dependency under `cfg(unix)`, and `custom_flags` is a
+/// safe `std` method, so this needs no new crate and no `unsafe` — which the workspace
+/// forbids.
+///
+/// **`O_NONBLOCK` is here because `O_NOFOLLOW` is not enough on its own.** A FIFO is not a
+/// link, so the flag waves it through, and `open`ing one for reading **blocks until a writer
+/// appears** — at launch, before there is a window or a tray, leaving an app that can only be
+/// killed. Charter's callers answer that by asking the descriptor what it is; they can only
+/// ask once the open has returned, which for a FIFO it never does. `O_NONBLOCK` makes it
+/// return, and on a regular file — which is all charter's own paths ever are — POSIX gives it
+/// no effect at all.
+#[cfg(unix)]
+fn nofollow(options: &mut std::fs::OpenOptions) -> &mut std::fs::OpenOptions {
+    use std::os::unix::fs::OpenOptionsExt;
+    let flags = rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK;
+    options.custom_flags(flags.bits() as i32)
+}
+
+/// Windows has no `O_NOFOLLOW`; `FILE_FLAG_OPEN_REPARSE_POINT` is the near equivalent and
+/// answers differently about a directory junction.
+///
+/// **Not exercised by any test, deliberately**, for the reason [`resolve_existing`] gives
+/// about its `Prefix` arm: the platforms M1 targets cannot drive it. The walk still refuses
+/// a link at the last component here, so this is the shipped behaviour minus the atomicity —
+/// and it needs its own decision at M4, not a guess now.
+#[cfg(not(unix))]
+fn nofollow(options: &mut std::fs::OpenOptions) -> &mut std::fs::OpenOptions {
+    options
+}
+
+#[cfg(test)]
+mod nofollow_tests {
+    use super::*;
+
+    fn plane() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".charter/app")).unwrap();
+        dir
+    }
+
+    #[test]
+    fn an_honest_file_opens_and_reads_back_what_was_written() {
+        // The guard against a flag so blunt that ordinary use stops working.
+        let dir = plane();
+        let file = dir.path().join(".charter/app/reopen.json");
+
+        {
+            use std::io::Write;
+            let mut out = create_no_link(dir.path(), &file).unwrap();
+            out.write_all(b"{}\n").unwrap();
+        }
+        let mut back = String::new();
+        {
+            use std::io::Read;
+            open_no_link(dir.path(), &file)
+                .unwrap()
+                .read_to_string(&mut back)
+                .unwrap();
+        }
+
+        assert_eq!(back, "{}\n");
+    }
+
+    #[test]
+    fn a_link_planted_after_the_walk_has_passed_is_still_refused_by_the_open() {
+        // The property the pair exists for, and the only way to test it: through
+        // `open_no_link` the WALK answers first, so planting a link and calling the pair
+        // would pass with or without the flag. This drives the open half alone, so it goes
+        // red the moment `O_NOFOLLOW` is dropped.
+        let dir = plane();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("planted"), b"evil\n").unwrap();
+        let file = dir.path().join(".charter/app/reopen.json");
+
+        // The walk passes: nothing is there yet, which it treats as "charter is about to
+        // make it".
+        no_link_on_the_way(dir.path(), &file).expect("the walk passes before the plant");
+        // The attacker gets in between.
+        std::os::unix::fs::symlink(outside.path().join("planted"), &file).unwrap();
+
+        let refused = leaf_open(&file).expect_err("the open refuses what the walk could not see");
+
+        // By `ELOOP` and not by something else. `io::ErrorKind::FilesystemLoop` would say it
+        // better and is still unstable (`io_error_more`, rust#86442), so the errno is asked
+        // for directly — through `rustix`, which already names it, rather than a table of
+        // numbers that differ per platform (62 on macOS, 40 on Linux).
+        assert_eq!(
+            refused.raw_os_error(),
+            Some(rustix::io::Errno::LOOP.raw_os_error()),
+            "refused by O_NOFOLLOW and not by something else: {refused}"
+        );
+    }
+
+    #[test]
+    fn a_link_planted_after_the_walk_has_passed_is_not_written_through() {
+        // The write side of the same property: without the flag this creates the file
+        // OUTSIDE the plane and puts the whole record in it.
+        let dir = plane();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("planted");
+        let file = dir.path().join(".charter/app/reopen.json.writing");
+
+        no_link_on_the_way(dir.path(), &file).expect("the walk passes before the plant");
+        std::os::unix::fs::symlink(&target, &file).unwrap();
+
+        leaf_create(&file).expect_err("the create refuses what the walk could not see");
+
+        assert!(
+            !target.exists(),
+            "nothing was created outside the plane at {}",
+            target.display()
+        );
+    }
+
+    #[test]
+    fn a_fifo_swapped_in_after_the_walk_refuses_instead_of_blocking_for_ever() {
+        // `O_NOFOLLOW` does not see a FIFO — it is not a link — and opening one for reading
+        // blocks until a writer appears, which at launch is an app that can only be killed.
+        // `O_NONBLOCK` is what makes the open RETURN so the caller can refuse the
+        // descriptor. This test hangs, rather than fails, if that flag is dropped.
+        let dir = plane();
+        let file = dir.path().join(".charter/app/reopen.json");
+        no_link_on_the_way(dir.path(), &file).expect("the walk passes before the plant");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&file)
+            .status()
+            .expect("mkfifo runs");
+        assert!(made.success(), "the test needs a fifo to plant");
+
+        // In a thread, because without `O_NONBLOCK` the open never returns at all, and a
+        // test that hangs says less than one that fails.
+        let (say, heard) = std::sync::mpsc::channel();
+        let asked = file.clone();
+        std::thread::spawn(move || {
+            say.send(
+                leaf_open(&asked)
+                    .and_then(|open| open.metadata())
+                    .map(|found| found.file_type().is_file()),
+            )
+        });
+        let answered = heard
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("opening a fifo must not block");
+
+        assert!(
+            !answered.expect("the open returns"),
+            "the descriptor says it is not a plain file, which is what the caller refuses on"
+        );
+    }
+
+    #[test]
+    fn the_walk_still_refuses_a_link_at_a_directory_on_the_way() {
+        // The half `O_NOFOLLOW` does not cover, kept honest: the pair must still refuse it,
+        // through the walk, and this goes red if the walk is dropped for the flag.
+        let dir = plane();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::remove_dir_all(dir.path().join(".charter/app")).unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join(".charter/app")).unwrap();
+        let file = dir.path().join(".charter/app/reopen.json");
+
+        let refused = create_no_link(dir.path(), &file)
+            .expect_err("a link at a directory on the way is refused");
+
+        assert_eq!(refused.kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(
+            !outside.path().join("reopen.json").exists(),
+            "and nothing was created out there"
+        );
+    }
 }
 
 /// Where a plane keeps data charter writes. A path that resolves outside all of them is

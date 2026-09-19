@@ -191,10 +191,13 @@ pub fn path(plane_root: &Path) -> PathBuf {
 /// It does not stop a **hard** link, which no symlink check can see and git cannot carry;
 /// whoever can make one can already write this file.
 ///
-/// The last component is also held to being a plain file no bigger than [`MAX_BYTES`]. One
-/// `symlink_metadata` answers all three questions, which is how charter's Python side words
-/// it (`contain.py`: "whether this is a link (containment), whether it is a regular file (a
-/// FIFO blocks the read for ever, a device never ends) and how big it is (the bound)").
+/// The last component is also held to being a plain file no bigger than [`MAX_BYTES`], and
+/// **those two questions are now asked of the open descriptor** rather than of the name
+/// (charter ADR 0028). A `symlink_metadata` on the path and a `read_to_string` of the path
+/// are two different objects with a window between them: a FIFO swapped in after the check
+/// blocked the launch for ever, which is the very failure the check exists to stop.
+/// `contain::open_no_link` returns the descriptor the read will use, and [`refuse_unusable`]
+/// asks *it*.
 ///
 /// A FIFO is not a link, so a link check waves it through, and reading one **blocks for
 /// ever** — at launch, before the window and the tray exist, leaving an app that can only be
@@ -206,27 +209,41 @@ fn no_link_on_the_way(plane_root: &Path, file: &Path) -> std::io::Result<()> {
     // copies of a containment gate drift. What is left here is what is specific to a RECORD.
     crate::contain::no_link_on_the_way(plane_root, file)?;
     match std::fs::symlink_metadata(file) {
-        // A record that is not a plain file: a FIFO would block the read for ever, a device
-        // never ends. Directories above it are fine, the record itself is not.
-        Ok(found) if !found.file_type().is_file() => Err(std::io::Error::new(
+        Ok(found) => refuse_unusable(file, &found),
+        // Not there yet is fine: the app creates `.charter/app/` and the file itself.
+        Err(_) => Ok(()),
+    }
+}
+
+/// What a record may be, asked of whatever `found` describes.
+///
+/// Taken as `Metadata` rather than a path so the caller chooses the object: the read side
+/// hands it an `fstat` of the descriptor it is about to read, which no swap can get between,
+/// and the write side hands it an `lstat` of a file that is not open yet.
+fn refuse_unusable(file: &Path, found: &std::fs::Metadata) -> std::io::Result<()> {
+    // A record that is not a plain file: a FIFO would block the read for ever, a device
+    // never ends. Directories above it are fine, the record itself is not.
+    if !found.file_type().is_file() {
+        return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!(
                 "{} is not a plain file, and charter reads its record from nothing else",
                 file.display()
             ),
-        )),
-        // Read whole at launch, so a planted giant is a hang with nothing to click on.
-        Ok(found) if found.len() > MAX_BYTES => Err(std::io::Error::new(
+        ));
+    }
+    // Read whole at launch, so a planted giant is a hang with nothing to click on.
+    if found.len() > MAX_BYTES {
+        return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             format!(
                 "{} is {} bytes, and charter's record is never larger than {MAX_BYTES}",
                 file.display(),
                 found.len()
             ),
-        )),
-        // Not there yet is fine: the app creates `.charter/app/` and the file itself.
-        _ => Ok(()),
+        ));
     }
+    Ok(())
 }
 
 /// Writes the record, creating `.charter/app/` if it is not there.
@@ -248,9 +265,18 @@ pub fn write(plane_root: &Path, record: &Record) -> std::io::Result<()> {
     // file renamed onto left a committed `reopen.json.writing -> outside` writing the whole
     // record out of the plane, with no race at all — the same "gate one level shallower than
     // the write" this guard exists to stop.
+    //
+    // `contain::create_no_link` and not `no_link_on_the_way` + `fs::write`: the walk answers
+    // about a name and the write opens that name again, and a link planted in between put
+    // the whole record outside the plane 7600 times per 20,000 writes when it was measured
+    // (charter ADR 0028). The flag makes the kernel answer the last component at the instant
+    // of the create instead.
     let beside = file.with_extension("json.writing");
-    no_link_on_the_way(plane_root, &beside)?;
-    std::fs::write(&beside, text + "\n")?;
+    {
+        use std::io::Write;
+        let mut out = crate::contain::create_no_link(plane_root, &beside)?;
+        out.write_all((text + "\n").as_bytes())?;
+    }
     std::fs::rename(&beside, &file)
 }
 
@@ -276,15 +302,26 @@ fn read(plane_root: &Path) -> Record {
 pub fn read_or_refusal(plane_root: &Path) -> Result<Record, std::io::Error> {
     let file = path(plane_root);
     // A record reached through a link is not this plane's record, and what it holds is a
-    // command line this launch would run.
-    no_link_on_the_way(plane_root, &file)?;
-    let text = match std::fs::read_to_string(&file) {
-        Ok(text) => text,
+    // command line this launch would run — so the walk AND the open both answer, and the
+    // open's answer is the kernel's at the instant it happens (charter ADR 0028). Measured
+    // before that flag: 1881 launches per 20,000 took a planted command line from outside
+    // the plane.
+    let mut open = match crate::contain::open_no_link(plane_root, &file) {
+        Ok(open) => open,
         // No record is a first launch. A record that exists and cannot be read — no
         // permission, a failing disk — is a defect with a repair, and saying "nothing to
         // reopen" would send the operator looking in the wrong place.
         Err(gone) if gone.kind() == std::io::ErrorKind::NotFound => return Ok(Record::default()),
         Err(unreadable) => return Err(unreadable),
+    };
+    // Asked of the descriptor the read will use, not of the name: `fstat` and the read
+    // cannot be handed two different files.
+    refuse_unusable(&file, &open.metadata()?)?;
+    let text = {
+        use std::io::Read;
+        let mut text = String::new();
+        open.read_to_string(&mut text)?;
+        text
     };
     let Ok(on_disk) = serde_json::from_str::<OnDisk>(&text) else {
         return Ok(Record::default());

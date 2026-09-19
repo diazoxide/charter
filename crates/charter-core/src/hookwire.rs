@@ -231,6 +231,16 @@ impl Listener {
     /// the same directory). It is named by the caller and never worked out here — a walk from
     /// the root of the filesystem would refuse every path on macOS, where `/tmp` and `/var`
     /// are themselves links.
+    ///
+    /// **This is the one caller of that walk that cannot close the window after it** (charter
+    /// ADR 0028). `reopen` opens the record through `contain::open_no_link`, which puts
+    /// `O_NOFOLLOW` on the open so the kernel answers the last component at the instant it is
+    /// opened; `bind` takes a path and there is no portable `bindat`, so the walk here, the
+    /// `remove_file` of a stale socket below, the `bind` itself and the `set_permissions`
+    /// after it are four path calls with three windows between them. The socket carries
+    /// nothing secret and executes nothing it is handed, which is why that is accepted and
+    /// written down rather than worked around; the fix is the same `openat`-beneath-a-
+    /// descriptor rewrite ADR 0028 puts at M3.
     pub fn bind(within: &std::path::Path, socket: &std::path::Path) -> io::Result<Self> {
         // The same walk `reopen` uses for the record in this very directory
         // (charter-app#28), and the same one, not a second copy of it: two containment gates
