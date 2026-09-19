@@ -1,13 +1,16 @@
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import "./App.css";
 import {
   commands,
+  type ChatWorktree,
   type OpenChat,
   type Sidebar as SidebarModel,
   type StartOptions,
 } from "./bindings";
+import { catalogue, perform, type Doing, type Offer, type Ran } from "./actions";
+import { Palette } from "./Palette";
 import { StartChat } from "./StartChat";
 import { QuitWarning } from "./QuitWarning";
 import { SessionPane } from "./SessionPane";
@@ -61,6 +64,16 @@ function App() {
   const [wired, setWired] = useState<string>();
   /** Chats this launch could not start, by name and why. They are still recorded. */
   const [wouldNotStart, setWouldNotStart] = useState<[string, string][]>([]);
+  /** What the core last said about where a chat is working, and which directory it was
+   *  asked about — so an answer about the chat that WAS in front is never drawn under the
+   *  one that is now. `Panels` keys its answers the same way, for the same reason. */
+  const [located, setLocated] = useState<{ cwd: string; piece?: ChatWorktree }>();
+  /** Bumped when something changed the answer, so it is asked again rather than guessed. */
+  const [relocate, setRelocate] = useState(0);
+  /** What the last action answered: one line, or a refusal in the words it came in. */
+  const [report, setReport] = useState<{ from: string; refused: boolean; words: string }>();
+  /** Whether the palette is up, so the report is said in one place rather than two. */
+  const [paletteOpen, setPaletteOpen] = useState(false);
   /** Whether the core has answered what it already has open. Until it has, "no tabs" is
    *  "not yet", which is not the same thing as "nothing is running". */
   const settled = useRef(false);
@@ -303,7 +316,179 @@ function App() {
     [change],
   );
 
+  /** Brings the tab holding a chat to the front. The queue and the palette both use it. */
+  const showChat = useCallback(
+    (session: number) => {
+      const tab = now.current.order.find((id) =>
+        panesOf(now.current, id).some((pane) => pane.session === session),
+      );
+      if (tab !== undefined) change((tabs) => selectTab(tabs, tab));
+    },
+    [change],
+  );
+
+  /** What a chat is called here: the tab holding it, or its session number. */
+  const nameOf = useCallback(
+    (session: number) =>
+      tabs.order
+        .filter((id) => panesOf(tabs, id).some((pane) => pane.session === session))
+        .map((id) => tabs.byId[id].name)[0] ?? String(session),
+    [tabs],
+  );
+
+  const bringToFront = useCallback((id: number) => change((tabs) => selectTab(tabs, id)), [change]);
+
   const inFront = tabs.inFront === undefined ? undefined : tabs.byId[tabs.inFront];
+  // The session the next worktree question is about: the chat in the pane that has the
+  // keyboard, which is the one "this chat's worktree" means.
+  const frontSession = inFront
+    ? panesOf(tabs, inFront.id).find((pane) => pane.pane === inFront.focused)?.session
+    : undefined;
+  // Where that chat is working. The sidebar's chats carry it, and so does the record the
+  // core put back at this launch; a chat the operator just opened is in the first.
+  const frontCwd =
+    frontSession === undefined
+      ? null
+      : ([...(sidebar?.workspaces.flatMap((ws) => ws.chats) ?? []), ...(sidebar?.unfiled ?? [])]
+          .concat(reopened)
+          .find((chat) => chat.session === frontSession)?.cwd ?? null);
+
+  // Which piece the chat in front sits in. `worktree_of_chat` is path arithmetic plus one
+  // git listing, asked only when the directory in front changes — never per keystroke, and
+  // never for a palette that is not open.
+  useEffect(() => {
+    if (frontCwd === null) return;
+    let gone = false;
+    void commands
+      .worktreeOfChat(frontCwd)
+      .then((answer) => {
+        if (gone) return;
+        setLocated({
+          cwd: frontCwd,
+          piece: answer.status === "ok" ? (answer.data ?? undefined) : undefined,
+        });
+      })
+      // A window that cannot ask simply offers no worktree row — which the catalogue then
+      // lists with its reason rather than dropping.
+      .catch(() => {
+        if (!gone) setLocated({ cwd: frontCwd });
+      });
+    return () => {
+      gone = true;
+    };
+  }, [frontCwd, relocate]);
+
+  // Only an answer about the directory in front. Nothing is cleared when the focus moves —
+  // clearing state from inside an effect is a render the window does not need, and a stale
+  // answer is simply not this chat's.
+  const worktree = located?.cwd === frontCwd ? located.piece : undefined;
+  const planeRoot = plane.state === "found" ? plane.root : undefined;
+
+  /** Removes the piece the chat in front works in. The core's refusal travels back whole. */
+  const removeWorktree = useCallback(
+    async (force: boolean): Promise<Ran> => {
+      if (!worktree || planeRoot === undefined)
+        return { ok: false, refused: "There is no worktree in front to remove." };
+      const answer = await commands
+        .worktreeRemove(planeRoot, worktree.workspace, worktree.repo, worktree.piece, force)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      // Verbatim. The sentence names the repair, and an operator shown a reworded version of
+      // it can neither follow that repair nor search for it.
+      if (answer.status === "error") return { ok: false, refused: answer.error };
+      // The core is asked again rather than the window assuming what it now says.
+      setRelocate((asked) => asked + 1);
+      return {
+        ok: true,
+        said: `The worktree ${worktree.piece} is gone. The branch ${worktree.branch ?? worktree.piece} stays.`,
+      };
+    },
+    [planeRoot, worktree],
+  );
+
+  /** Lands the piece in its clone, fast-forward only. The core never pushes. */
+  const mergeWorktree = useCallback(async (): Promise<Ran> => {
+    if (!worktree || planeRoot === undefined)
+      return { ok: false, refused: "There is no worktree in front to merge." };
+    const answer = await commands
+      .worktreeMerge(planeRoot, worktree.workspace, worktree.repo, worktree.piece)
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    if (answer.status === "error") return { ok: false, refused: answer.error };
+    return {
+      ok: true,
+      said: `${answer.data.branch} landed: ${answer.data.was} → ${answer.data.now}`,
+    };
+  }, [planeRoot, worktree]);
+
+  const doing = useMemo<Doing>(
+    () => ({
+      newChat: newTab,
+      split,
+      closePane,
+      closeTab: close,
+      selectTab: bringToFront,
+      focusWorkspace: setFocused,
+      showChat,
+      removeWorktree,
+      mergeWorktree,
+      quit: () => void commands.askToQuit().catch(() => undefined),
+    }),
+    [bringToFront, close, closePane, mergeWorktree, newTab, removeWorktree, showChat, split],
+  );
+
+  /**
+   * Every action the window can do, in one list.
+   *
+   * **The bar's buttons are rows of THIS list, not a second one.** The tmux frame kept a
+   * menu beside its palette once and the two drifted; here `New tab`, the splits, `Close
+   * pane` and every tab's `×` are looked up by id out of the same catalogue the palette
+   * draws, so a row that goes away takes its button with it.
+   */
+  const offers = useMemo(
+    () =>
+      catalogue({
+        tabs,
+        workspaces: sidebar?.workspaces.map((ws) => ws.name) ?? [],
+        focused,
+        worktree,
+        plane: planeRoot,
+        // Only a refusal the REMOVAL gave, and only while it is still on screen: the
+        // discard row is the operator's answer to a sentence they have read.
+        refusal: report?.refused && report.from === "worktree.remove" ? report.words : undefined,
+        needsYou: states.needsYou,
+        nameOf,
+      }),
+    [focused, nameOf, planeRoot, report, sidebar, states.needsYou, tabs, worktree],
+  );
+
+  const by = useCallback((id: string) => offers.find((offer) => offer.id === id), [offers]);
+
+  /** What every surface does with a row: carry it out, and keep what it answered.
+   *
+   *  One function for the bar and for the palette. It is called from an event handler and
+   *  never while rendering, which is what lets the verbs it dispatches to reach the window's
+   *  live arrangement rather than a copy taken when the row was built. */
+  const run = useCallback(
+    async (offer: Offer): Promise<Ran> => {
+      const answer = await perform(offer, doing);
+      setReport(
+        answer.ok
+          ? answer.said
+            ? { from: offer.id, refused: false, words: answer.said }
+            : undefined
+          : { from: offer.id, refused: true, words: answer.refused },
+      );
+      return answer;
+    },
+    [doing],
+  );
+
+  const press = useCallback(
+    (offer: Offer) => {
+      void run(offer);
+    },
+    [run],
+  );
+
   // The chats still open, in the order the tab bar shows them: what a quit would end.
   const open = tabs.order.flatMap((id) =>
     panesOf(tabs, id).map(({ session }) => chatOf(reopened, session, tabs.byId[id].name)),
@@ -322,7 +507,13 @@ function App() {
               <button
                 role="tab"
                 aria-selected={id === tabs.inFront}
-                onClick={() => change((tabs) => selectTab(tabs, id))}
+                // The catalogue's row, not a second copy of it. The tab already in front
+                // has a row that says so and cannot run — a tab is never disabled, because
+                // the selected tab is the one a keyboard has to be able to land on.
+                onClick={() => {
+                  const offer = by(`tab.select:${id}`);
+                  if (offer?.available) press(offer);
+                }}
               >
                 <span className="tab-name">{tabs.byId[id].name}</span>
                 {/* The first pane's session is the tab's own chat. Its own element, so what
@@ -330,38 +521,17 @@ function App() {
                     every time a turn began would be unreadable, and untestable. */}
                 <ChatState state={stateOf(states, panesOf(tabs, id)[0]?.session ?? -1)} />
               </button>
-              <button aria-label={`Close tab ${tabs.byId[id].name}`} onClick={() => close(id)}>
-                ×
-              </button>
+              <Closer offer={by(`tab.close:${id}`)} onPress={press} />
             </span>
           ))}
-          <button onClick={() => void newTab()}>New tab</button>
+          <Doer offer={by("chat.new")} onPress={press} />
         </div>
         <div className="doing">
-          <button disabled={!inFront} onClick={() => split("row")}>
-            Split right
-          </button>
-          <button disabled={!inFront} onClick={() => split("column")}>
-            Split down
-          </button>
-          <button disabled={!inFront} onClick={closePane}>
-            Close pane
-          </button>
+          <Doer offer={by("pane.split.right")} onPress={press} />
+          <Doer offer={by("pane.split.down")} onPress={press} />
+          <Doer offer={by("pane.close")} onPress={press} />
         </div>
-        <NeedsYou
-          queue={states.needsYou}
-          nameOf={(session: number) =>
-            tabs.order
-              .filter((id) => panesOf(tabs, id).some((pane) => pane.session === session))
-              .map((id) => tabs.byId[id].name)[0] ?? String(session)
-          }
-          show={(session: number) => {
-            const tab = tabs.order.find((id) =>
-              panesOf(tabs, id).some((pane) => pane.session === session),
-            );
-            if (tab !== undefined) change((tabs) => selectTab(tabs, tab));
-          }}
-        />
+        <NeedsYou queue={states.needsYou} nameOf={nameOf} show={showChat} />
         <span className="plane">
           {plane.state === "found" && <code>{plane.root}</code>}
           {plane.state === "missing" && <span role="alert">No plane: {plane.reason}</span>}
@@ -371,6 +541,19 @@ function App() {
       {trouble && (
         <p className="trouble" role="alert">
           {trouble}
+        </p>
+      )}
+
+      {/* What the last action answered. Said HERE only while the palette is down: the
+          palette is modal and draws over this line, so it shows the same words itself
+          rather than leaving the operator to guess at a sentence behind the overlay. One
+          state, two places it can be drawn — never two states. */}
+      {report && !paletteOpen && (
+        <p
+          className={report.refused ? "trouble" : "came-back"}
+          role={report.refused ? "alert" : "status"}
+        >
+          {report.words}
         </p>
       )}
 
@@ -440,8 +623,42 @@ function App() {
         />
       )}
 
+      {/* The primary input (spec decision 1). Always mounted, because what opens it is a
+          keystroke it listens for itself — a palette the window had to decide to render
+          would be one the operator could not reach from inside a pane's terminal. */}
+      <Palette offers={offers} said={report} onRun={run} onOpened={setPaletteOpen} />
+
       {asking && <QuitWarning chats={open} states={states} onQuit={quit} onCancel={dontQuit} />}
     </main>
+  );
+}
+
+/** A button that IS a row of the catalogue: its words, its availability and its reason.
+ *
+ *  Nothing is drawn for an id the catalogue no longer has. That is the point: the bar cannot
+ *  keep offering something the one list has stopped offering, because there is no second
+ *  place for the words to live. */
+function Doer({ offer, onPress }: { offer?: Offer; onPress: (offer: Offer) => void }) {
+  if (!offer) return null;
+  return (
+    <button
+      disabled={!offer.available}
+      title={offer.reason || undefined}
+      onClick={() => onPress(offer)}
+    >
+      {offer.title}
+    </button>
+  );
+}
+
+/** A tab's close button. The same row the palette lists, drawn as the `×` a pointer wants —
+ *  so the accessible name is the catalogue's words and the glyph is only the glyph. */
+function Closer({ offer, onPress }: { offer?: Offer; onPress: (offer: Offer) => void }) {
+  if (!offer) return null;
+  return (
+    <button aria-label={offer.title} onClick={() => onPress(offer)}>
+      ×
+    </button>
   );
 }
 

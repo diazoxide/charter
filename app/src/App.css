@@ -390,3 +390,93 @@ body {
   color: #f85149;
   margin: 0.25rem 0;
 }
+
+/* The command palette: the primary input (spec decision 1). It sits over everything on the
+   same overlay the quit warning and the picker use, because it is modal for the same
+   reason — one surface, one question, one key that always leaves. */
+.palette-over {
+  align-items: start;
+  padding-top: 8vh;
+}
+
+.palette {
+  width: min(42rem, 92vw);
+  max-width: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* The box is labelled, and the label is read rather than only implied by a placeholder — a
+   placeholder disappears the moment somebody types. */
+.palette-ask {
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+.palette-query {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  font: inherit;
+  font-size: 1rem;
+  color: var(--ink);
+  background: #101010;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+}
+
+.palette-query:focus {
+  outline: 2px solid var(--lit);
+  outline-offset: 1px;
+}
+
+.palette-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 55vh;
+  overflow: auto;
+}
+
+.palette-row {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  padding: 0.35rem 0.6rem;
+  border-radius: 4px;
+  cursor: default;
+}
+
+/* The row Enter is aimed at. An inset edge as well as a background, so the aim survives a
+   display that renders neither colour nor translucency. */
+.palette-row.aimed {
+  background: #232323;
+  box-shadow: inset 2px 0 0 var(--lit);
+}
+
+/* Dimming is decoration. The reason beside it is the meaning, and it is always drawn. */
+.palette-row.refused .palette-title {
+  opacity: 0.55;
+}
+
+.palette-why {
+  margin-left: auto;
+  font-size: 0.8rem;
+  opacity: 0.7;
+  text-align: right;
+}
+
+.palette .refusal {
+  margin: 0;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--stop);
+  border-radius: 6px;
+  color: #f85149;
+}
+
+.palette .said,
+.palette .held,
+.palette .none {
+  margin: 0;
+  opacity: 0.8;
+}
