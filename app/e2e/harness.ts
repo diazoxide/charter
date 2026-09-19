@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   cpSync,
@@ -234,4 +235,73 @@ function writeCodexHome(plane: string): string {
     ].join("\n"),
   );
   return home;
+}
+
+/**
+ * Make the fixture plane's repo directories into real clones.
+ *
+ * The committed fixture cannot carry them: git will not track a `.git` directory inside a
+ * repository, so `tests/fixtures/planes/daily` holds `svc` and `tool` as ordinary
+ * directories. The panels are about what git says, so the copy the run works on gets the
+ * real thing — built here, from the files the fixture already has.
+ *
+ * `tool` is left with something uncommitted, because "clean" and "dirty" are two different
+ * rows and a fixture where every repo is clean cannot tell them apart.
+ */
+export function cloneTheFixtureRepos(plane: string, workspace = "alpha"): void {
+  for (const name of ["svc", "tool"]) {
+    const repo = join(plane, "workspaces", workspace, name);
+    if (!existsSync(repo)) continue;
+    git(repo, ["init", "-q", "-b", "main", "."]);
+    git(repo, ["add", "-A"]);
+    git(repo, ["commit", "-q", "-m", "the fixture as it was committed"]);
+  }
+  writeFileSync(join(plane, "workspaces", workspace, "tool", "scratch.txt"), "not committed\n");
+}
+
+/**
+ * The forge cache a refresher would have left behind, keyed the way it keys it: by the
+ * checkout's path, written out.
+ *
+ * Only `svc` gets an entry. `tool` having none is half the point — the panel has to say that
+ * nobody has fetched it rather than leaving the cell blank, which reads as green.
+ */
+export function writeForgeCache(plane: string, workspace = "alpha"): void {
+  const cache = join(plane, ".charter", "cache");
+  mkdirSync(cache, { recursive: true });
+  writeFileSync(
+    join(cache, "glstate.json"),
+    JSON.stringify({
+      [join(plane, "workspaces", workspace, "svc")]: {
+        branch: "main",
+        ts: Math.floor(Date.now() / 1000) - 120,
+        ci: "failed",
+        change: 41,
+        sigil: "#",
+      },
+    }),
+  );
+}
+
+/**
+ * git, for the test's own setup. Never the code under test, and never the operator's own
+ * configuration: a developer's `init.defaultBranch`, hooks or commit template must not reach
+ * a fixture, and a CI runner has no identity configured at all.
+ */
+function git(cwd: string, args: string[]): void {
+  execFileSync(
+    "git",
+    ["-c", "user.name=charter scenario", "-c", "user.email=scenario@example.invalid", ...args],
+    {
+      cwd,
+      stdio: "pipe",
+      env: {
+        ...process.env,
+        GIT_CONFIG_GLOBAL: "/dev/null",
+        GIT_CONFIG_SYSTEM: "/dev/null",
+        GIT_AUTHOR_DATE: "2026-01-01T00:00:00+00:00",
+        GIT_COMMITTER_DATE: "2026-01-01T00:00:00+00:00",
+      },
+    },
+  );
 }

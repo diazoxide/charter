@@ -1,0 +1,229 @@
+//! The right-hand panels for the focused workspace: its repos, their branches, CI, its
+//! todos and the plane's personas (spec decision 1). Read-only, as M1 says panels are.
+//!
+//! # Two answers, and that is the design
+//!
+//! `of` is a directory listing and a handful of small files. It comes back at once, so the
+//! todos and the persona row are on screen the moment a workspace is focused.
+//!
+//! `repo_states` runs `git status` once per clone, which is bounded at five seconds each and
+//! is the only slow thing a panel does. It is its own command so that nothing else waits for
+//! it, and the window draws "reading…" in the meantime.
+//!
+//! **Nothing here crosses a network, at all.** The CI cell is read out of
+//! `.charter/cache/glstate.json`, which some other process writes; `charter_core::cistate`
+//! says why in full. A panel that fetched would put a forge token in the process that draws
+//! the window and hold that window for as long as `gh` takes.
+
+use std::path::PathBuf;
+
+use charter_core::cistate::{self, Reading};
+use charter_core::repos::{self, Head};
+use charter_core::workspaces::Plane;
+
+/// The plane this window is running in.
+///
+/// Resolved per call rather than held, for the reason the sidebar resolves it per call: the
+/// plane is a directory the operator also edits and another charter process writes.
+pub(crate) fn root() -> Result<PathBuf, String> {
+    let cwd = std::env::current_dir()
+        .map_err(|why| format!("cannot read the current directory: {why}"))?;
+    charter_core::plane::resolve(&cwd).map_err(|why| why.to_string())
+}
+
+/// One open todo. There is no state field: a closed todo is a deleted file (ADR 0004).
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub(crate) struct PanelTodo {
+    /// The file stem, which is what a todo is closed by.
+    slug: String,
+    title: String,
+    /// The date the todo was written, as the file records it.
+    stamp: String,
+}
+
+/// Everything the panels can draw without running git.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub(crate) struct Panels {
+    /// The workspace this is about, so a late answer can be matched to the ask and an answer
+    /// for a workspace that is no longer focused can be thrown away.
+    workspace: String,
+    /// The clones on disk, by name, in the order the directory lists them.
+    repos: Vec<String>,
+    /// Repos `workspace.json` names that are not cloned here. Membership, not presence.
+    absent: Vec<String>,
+    /// What charter would not look at, by name and reason. Shown, never dropped: a row that
+    /// is missing is otherwise merely missing.
+    refused: Vec<(String, String)>,
+    todos: Vec<PanelTodo>,
+    /// Why the todos could not be read, where they could not. A store that is a link out of
+    /// the plane is refused, and "no todos" would be the wrong thing to draw for it.
+    todos_refused: Option<String>,
+    /// The plane's personas, and the one a chat started here would adopt.
+    personas: Vec<String>,
+    persona: Option<String>,
+}
+
+/// One clone's git state, and what the forge cache last recorded for its branch.
+#[derive(Debug, Clone, Default, serde::Serialize, specta::Type)]
+pub(crate) struct RepoState {
+    name: String,
+    /// The branch the checkout is on, where it is on one.
+    branch: Option<String>,
+    /// Whether that branch holds no commit yet.
+    unborn: bool,
+    /// The commit HEAD sits on when it is on no branch.
+    detached: Option<String>,
+    upstream: Option<String>,
+    ahead: u32,
+    behind: u32,
+    /// Changed files git is tracking.
+    tracked: u32,
+    /// Files git is not tracking.
+    untracked: u32,
+    /// Why charter could not read the tree. Every count above is zero when this is set, and
+    /// it means charter does not know — not that the tree is clean.
+    unreadable: Option<String>,
+    /// What the forge cache last recorded, one of the seven states charter knows.
+    ci: Option<String>,
+    change: Option<u32>,
+    sigil: Option<String>,
+    /// How long ago the cache entry was written, which is how old this answer is.
+    fetched_seconds_ago: Option<u32>,
+    /// Why there is nothing from the forge to show. Absent when something was fetched, even
+    /// when what was fetched named no pipeline.
+    not_fetched: Option<String>,
+}
+
+/// Every clone of one workspace, as the panels draw them.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub(crate) struct RepoStates {
+    workspace: String,
+    repos: Vec<RepoState>,
+    /// Why the forge cache was not read at all, where it was not. Reported once for the
+    /// listing rather than repeated on every row.
+    cache_refused: Option<String>,
+}
+
+/// The panels that need no git.
+pub(crate) fn of(workspace: &str) -> Result<Panels, String> {
+    let root = root()?;
+    let plane = Plane::open(&root);
+    let found = repos::clones(&root, workspace).map_err(|why| why.to_string())?;
+    let here: Vec<String> = found.repos.iter().map(|repo| repo.name.clone()).collect();
+    let absent = repos::declared(&plane, workspace)
+        .into_iter()
+        .filter(|name| !here.contains(name))
+        .collect();
+    let ws = plane.workspace(workspace).map_err(|why| why.to_string())?;
+    let (todos, todos_refused): (Vec<PanelTodo>, Option<String>) = match ws.todos() {
+        Ok(open) => (
+            open.into_iter()
+                .map(|todo| PanelTodo {
+                    slug: todo.slug,
+                    title: todo.title,
+                    stamp: todo.stamp,
+                })
+                .collect(),
+            None,
+        ),
+        Err(why) => (Vec::new(), Some(why.to_string())),
+    };
+    Ok(Panels {
+        workspace: workspace.to_string(),
+        repos: here,
+        absent,
+        refused: found.refused,
+        todos,
+        todos_refused,
+        personas: plane.personas().map_err(|why| why.to_string())?,
+        persona: plane.default_persona(),
+    })
+}
+
+/// The panel that needs git. Call it off the thread that draws.
+pub(crate) fn repo_states(workspace: &str) -> Result<RepoStates, String> {
+    let root = root()?;
+    let found = repos::clones(&root, workspace).map_err(|why| why.to_string())?;
+    // Read once for the whole listing, so every row ages against the same instant and a
+    // refusal is reported once rather than on every row.
+    let (cache, cache_refused) = match cistate::read(&root) {
+        Ok(cache) => (Some(cache), None),
+        Err(why) => (None, Some(why.to_string())),
+    };
+    Ok(RepoStates {
+        workspace: workspace.to_string(),
+        repos: found
+            .repos
+            .iter()
+            .map(|repo| one(repo, cache.as_ref()))
+            .collect(),
+        cache_refused,
+    })
+}
+
+/// One row: what git said, and then what the cache says about the branch git named.
+fn one(repo: &repos::Repo, cache: Option<&cistate::Cache>) -> RepoState {
+    let mut row = RepoState {
+        name: repo.name.clone(),
+        ..RepoState::default()
+    };
+    let state = match repos::state_of(&repo.path) {
+        Ok(state) => state,
+        Err(why) => {
+            row.unreadable = Some(why.to_string());
+            // The cache is keyed by branch, and charter does not know which branch this is.
+            row.not_fetched = Some(
+                "charter could not read the checkout, so it cannot say which branch to ask \
+                 about"
+                    .into(),
+            );
+            return row;
+        }
+    };
+    let branch = match &state.head {
+        Head::Branch(name) => {
+            row.branch = Some(name.clone());
+            Some(name.clone())
+        }
+        Head::Unborn(name) => {
+            row.branch = Some(name.clone());
+            row.unborn = true;
+            Some(name.clone())
+        }
+        Head::Detached(at) => {
+            row.detached = Some(at.clone());
+            None
+        }
+    };
+    row.upstream = state.upstream;
+    row.ahead = state.ahead;
+    row.behind = state.behind;
+    row.tracked = state.tracked;
+    row.untracked = state.untracked;
+
+    let Some(branch) = branch else {
+        row.not_fetched =
+            Some("this checkout is on no branch, and forge state is recorded per branch".into());
+        return row;
+    };
+    // A cache charter refused is reported once for the listing; leaving the row's own reason
+    // empty is what keeps the window from saying the same sentence on every line.
+    let Some(cache) = cache else {
+        return row;
+    };
+    match cache.about(&repo.path, &branch) {
+        Reading::Fetched {
+            state,
+            change,
+            sigil,
+            seconds_ago,
+        } => {
+            row.ci = state;
+            row.change = u32::try_from(change.unwrap_or(0)).ok().filter(|n| *n > 0);
+            row.sigil = sigil.map(String::from);
+            row.fetched_seconds_ago = Some(u32::try_from(seconds_ago).unwrap_or(u32::MAX));
+        }
+        Reading::NotFetched(why) => row.not_fetched = Some(why),
+    }
+    row
+}

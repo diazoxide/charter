@@ -333,3 +333,60 @@ body {
 .mid-turn {
   font-weight: 600;
 }
+
+/* The right-hand panels: what the focused workspace holds. Read-only, so there is nothing
+   in here to press — every row is text. */
+.panels {
+  flex: 0 0 19rem;
+  overflow-y: auto;
+  padding: 0.5rem;
+  border-left: 1px solid var(--edge, #3a3a3a);
+  font-size: 0.85rem;
+}
+.panels h2 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+  margin: 0.75rem 0 0.25rem;
+}
+.panels ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.panels li {
+  padding: 0.1rem 0;
+  overflow-wrap: anywhere;
+}
+.panels .repo {
+  font-weight: 600;
+}
+.panels .none,
+.panels .pending,
+.panels .note,
+.panels .stamp {
+  opacity: 0.6;
+  margin: 0.1rem 0;
+}
+.panels .note {
+  font-size: 0.75rem;
+}
+.panels .unreadable {
+  color: #f0883e;
+}
+/* Never colour alone: the state's own word is the text of the cell. */
+.panels .ci-success {
+  color: #3fb950;
+}
+.panels .ci-failed {
+  color: #f85149;
+}
+.panels .ci-running,
+.panels .ci-pending {
+  color: #d29922;
+}
+.panels .trouble {
+  color: #f85149;
+  margin: 0.25rem 0;
+}

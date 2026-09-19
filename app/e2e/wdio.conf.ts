@@ -1,5 +1,12 @@
 import process from "node:process";
-import { built, copyFixturePlane, declareAProfile, writeShell } from "./harness.js";
+import {
+  built,
+  cloneTheFixtureRepos,
+  copyFixturePlane,
+  declareAProfile,
+  writeForgeCache,
+  writeShell,
+} from "./harness.js";
 
 /**
  * The scenario tests: WebdriverIO driving the real app, with the fake harness standing in for
@@ -22,6 +29,11 @@ const plane = copyFixturePlane();
 // The plane declares one harness profile, which is what the picker picks from. It is
 // deliberately NOT approved: approving it is the operator's click, and the scenario makes it.
 declareAProfile(plane, writeShell(built("fake-harness")));
+// The repos panel is about what git says, and the committed fixture cannot carry a `.git`
+// directory — so the copy this run works on gets real clones, and the forge cache a
+// refresher would have left. Neither is the app's doing: the app only reads them.
+cloneTheFixtureRepos(plane);
+writeForgeCache(plane);
 
 export const config: WebdriverIO.Config = {
   runner: "local",

@@ -301,6 +301,9 @@ describe("App", () => {
       if (cmd === "chat_states") return [];
       if (cmd === "chats_that_would_not_start") return [];
       if (cmd === "start_options") return START_OPTIONS;
+      // The panels ask the core too, and this test is about the picker: a refusal from them
+      // is a second alert, which is not the one being asserted on.
+      if (cmd === "workspace_panels" || cmd === "workspace_repos") return null;
       throw new Error("profile 'claude' is not wired — charter@charter is not installed");
     });
     render(<App />);

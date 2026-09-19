@@ -4,6 +4,7 @@
 mod chats;
 mod hooks;
 mod lifecycle;
+mod panels;
 mod sessions;
 mod worktrees;
 
@@ -263,6 +264,33 @@ fn plane_sidebar(chats: tauri::State<'_, Chats>) -> Result<Sidebar, String> {
         persona: plane.default_persona(),
         unfiled,
     })
+}
+
+/// The focused workspace's panels: its repos, its todos and the plane's personas.
+///
+/// Its own command, separate from the repos below, because everything here is a directory
+/// listing and a few small files. The panels paint the moment a workspace is focused, and
+/// the part that has to run git arrives after — one command would make the todo list wait
+/// for a status read on every clone.
+#[tauri::command]
+#[specta::specta]
+fn workspace_panels(workspace: String) -> Result<panels::Panels, String> {
+    panels::of(&workspace)
+}
+
+/// What git says about each of the focused workspace's clones, and what the forge cache
+/// last recorded for the branch each is on.
+///
+/// On a blocking thread and never the one that draws: a status read is bounded at five
+/// seconds per clone, and a window that waited on it would miss the 100 ms a workspace
+/// switch is allowed. **Nothing here crosses a network** — the forge state comes out of
+/// `.charter/cache/glstate.json`, which charter-app reads and never writes.
+#[tauri::command]
+#[specta::specta]
+async fn workspace_repos(workspace: String) -> Result<panels::RepoStates, String> {
+    tauri::async_runtime::spawn_blocking(move || panels::repo_states(&workspace))
+        .await
+        .map_err(|err| format!("reading the workspace's repos did not finish: {err}"))?
 }
 
 /// One row of the profile picker: what it runs, where charter read it, and what pressing
@@ -718,6 +746,8 @@ fn commands() -> Builder<tauri::Wry> {
         hide_window,
         window_showing,
         plane_sidebar,
+        workspace_panels,
+        workspace_repos,
         start_options,
         approve_profile,
         start_chat,
