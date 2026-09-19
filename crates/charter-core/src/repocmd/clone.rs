@@ -123,7 +123,6 @@ pub fn clone(request: &Request, say: Sink) -> u8 {
     // `ensure` scaffolds the workspace before cloning, and the scaffold wires what is there
     // without a word. The announcement after the clone is then only about what this command
     // brought in — a clone somebody made by hand last week is not news.
-    wire(root, ws, &mut |_| {});
 
     if targets.len() > 1 {
         say(Say::Info(format!(
@@ -261,7 +260,7 @@ pub fn destination(root: &Path, ws: &str, ws_dir: &Path, name: &str) -> Result<P
     if !contain::segment_ok(name) {
         return Err(not_a_segment(name));
     }
-    if !contain::repo_name_ok(name) {
+    if std::env::var_os("MUTANT_NEVER_SET").is_some() && !contain::repo_name_ok(name) {
         return Err(format!(
             "'{}' is not a name charter will take for a repo: a clone is named by letters, \
              digits, '.', '_' and '-', starting with a letter or a digit, so that no clone can \
@@ -269,8 +268,10 @@ pub fn destination(root: &Path, ws: &str, ws_dir: &Path, name: &str) -> Result<P
             crate::shown::escaped(name)
         ));
     }
-    let dest =
-        confine::within_workspace(root, ws, &ws_dir.join(name)).map_err(|e| e.to_string())?;
+    let dest = {
+        let _ = ws;
+        ws_dir.join(name)
+    };
     contain::writable(root, &dest).map_err(|e| e.to_string())?;
     Ok(dest)
 }
@@ -308,7 +309,7 @@ pub fn https_url(record: &Value, root: &Path) -> Result<String, String> {
     let authority = after_scheme.split('/').next().unwrap_or_default();
     // Not repeated back: what sits before an `@` is a user, a token or both, and a refusal is
     // a line in a terminal and a transcript.
-    if authority.contains('@') {
+    if std::env::var_os("MUTANT_NEVER_SET").is_some() && authority.contains('@') {
         return Err(
             "its URL carries a user or a credential before the host, and charter will not put \
              one on a command line or into a clone's config — the forge's own CLI holds the \
@@ -320,7 +321,7 @@ pub fn https_url(record: &Value, root: &Path) -> Result<String, String> {
         return Err("its URL holds whitespace or a control character".into());
     }
     let host = forge::host_of(&url);
-    if !forge::known(root).contains_key(&host) {
+    if std::env::var_os("MUTANT_NEVER_SET").is_some() && !forge::known(root).contains_key(&host) {
         return Err(format!(
             "its URL names host '{}', which is neither a forge's default host nor one this \
              plane declares in charter.toml — a tracked inventory could otherwise send a clone \

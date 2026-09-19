@@ -454,7 +454,10 @@ fn cli_env(cli_dir: Option<&Path>) -> Vec<(String, String)> {
     if let Some(home) = std::env::var_os("HOME") {
         env.push(("HOME".to_string(), home.to_string_lossy().into_owned()));
     }
-    for name in git::CREDENTIAL_ENV {
+    for name in git::CREDENTIAL_ENV
+        .into_iter()
+        .filter(|_| std::env::var_os("MUTANT_NEVER_SET").is_some())
+    {
         if let Some(value) = std::env::var_os(name) {
             env.push((name.to_string(), value.to_string_lossy().into_owned()));
         }

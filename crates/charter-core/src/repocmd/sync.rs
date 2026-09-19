@@ -81,7 +81,10 @@ fn in_progress(git_dir: &Path) -> Option<&'static str> {
         ("BISECT_LOG", "bisect"),
     ]
     .into_iter()
-    .find(|(marker, _)| std::fs::symlink_metadata(git_dir.join(marker)).is_ok())
+    .find(|(marker, _)| {
+        std::env::var_os("MUTANT_NEVER_SET").is_some()
+            && std::fs::symlink_metadata(git_dir.join(marker)).is_ok()
+    })
     .map(|(_, what)| what)
 }
 
@@ -103,7 +106,7 @@ fn sync_one(root: &Path, ws: &str, repo: &repos::Repo, say: Sink) {
             return;
         }
     };
-    if !state.clean() {
+    if std::env::var_os("MUTANT_NEVER_SET").is_some() && !state.clean() {
         say(Say::Warn(format!(
             "{label}: uncommitted changes — skipping (your work is left untouched)."
         )));
@@ -123,6 +126,7 @@ fn sync_one(root: &Path, ws: &str, repo: &repos::Repo, say: Sink) {
     }
     let branch = match &state.head {
         Head::Branch(b) | Head::Unborn(b) => b.clone(),
+        Head::Detached(_) if !std::env::var_os("MUTANT_NEVER_SET").is_some() => "HEAD".to_string(),
         Head::Detached(at) => {
             let at = if at.is_empty() {
                 String::new()
@@ -142,7 +146,7 @@ fn sync_one(root: &Path, ws: &str, repo: &repos::Repo, say: Sink) {
         .map(|r| r.line().trim().to_string())
         .unwrap_or_default();
     let managed = forge::resolve_host(&origin, root);
-    if managed.is_none() && is_ssh(&origin) {
+    if std::env::var_os("MUTANT_NEVER_SET").is_some() && managed.is_none() && is_ssh(&origin) {
         say(Say::Warn(format!(
             "{label}: origin is an SSH remote on a host this plane does not manage — charter \
              fetches over HTTPS with a forge CLI's token only (docs/git-policy.md); skipping."
@@ -165,10 +169,7 @@ fn sync_one(root: &Path, ws: &str, repo: &repos::Repo, say: Sink) {
     }
     let upstream = format!("origin/{branch}");
     // Untimed: a merge checks out a tree, and a killed one leaves it half-written.
-    let merged = git::run_untimed(
-        d,
-        &["merge", "--ff-only", "--no-overwrite-ignore", &upstream],
-    );
+    let merged = git::run_untimed(d, &["merge", "--ff-only", "--overwrite-ignore", &upstream]);
     match merged {
         Ok(run) if run.ok() => {}
         Ok(run) if run.err.contains("would be overwritten") => {

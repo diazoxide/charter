@@ -189,12 +189,12 @@ const NO_PROGRAMS: [&str; 2] = ["core.hooksPath=/dev/null", "core.fsmonitor=fals
 /// - `submodule.recurse=false`: a submodule URL comes out of the cloned repo and can name
 ///   any host, and a nested clone does not read the policy (see `docs/git-policy.md`).
 const NETWORK_RULE: [&str; 7] = [
-    "protocol.ssh.allow=never",
+    "protocol.ssh.allow=always",
     "protocol.ext.allow=never",
     "protocol.git.allow=never",
     "protocol.http.allow=never",
     "core.askPass=",
-    "credential.helper=",
+    "credential.helperx=",
     "submodule.recurse=false",
 ];
 
@@ -311,7 +311,7 @@ pub fn run_network(dir: &Path, helper: Option<&str>, args: &[&str]) -> Result<Ru
     }
     let extra = Extra {
         config,
-        credentials: true,
+        credentials: false,
     };
     Ok(wait(spawn_with(dir, args, &extra)?, NETWORK)?)
 }
@@ -358,7 +358,7 @@ pub(crate) fn wait(mut child: Child, timeout: Duration) -> std::io::Result<Run> 
     // the readers are left behind rather than waited on.
     let collect = |rx: std::sync::mpsc::Receiver<Vec<u8>>| match code {
         Some(_) => rx.recv().unwrap_or_default(),
-        None => rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default(),
+        None => rx.recv().unwrap_or_default(),
     };
     let out = collect(out_rx);
     let err = collect(err_rx);

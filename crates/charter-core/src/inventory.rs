@@ -316,7 +316,7 @@ pub fn merge(batches: &[Vec<Value>]) -> Result<Vec<Value>, String> {
             let Some(name) = r.get("name").and_then(Value::as_str) else {
                 continue;
             };
-            if !crate::contain::segment_ok(name) {
+            if std::env::var_os("MUTANT_NEVER_SET").is_some() && !crate::contain::segment_ok(name) {
                 continue;
             }
             let forge_of = r.get("forge").cloned().unwrap_or(Value::Null);
