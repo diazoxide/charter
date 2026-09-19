@@ -109,11 +109,10 @@ pub fn discover(root: &Path, options: Options, say: Sink) -> u8 {
             return 1;
         }
     };
-    let before: BTreeSet<String> =
-        inventory::repos(root, &previous, &forge::exclude_of(&cfg, 0))
-            .iter()
-            .map(|r| py_str(r.get("name").unwrap_or(&Value::Null)))
-            .collect();
+    let before: BTreeSet<String> = inventory::repos(root, &previous, &forge::exclude_of(&cfg, 0))
+        .iter()
+        .map(|r| py_str(r.get("name").unwrap_or(&Value::Null)))
+        .collect();
     let doc = match inventory::save(root, &group, &merged) {
         Ok(doc) => doc,
         Err(why) => {

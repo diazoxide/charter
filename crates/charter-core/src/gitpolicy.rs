@@ -68,7 +68,9 @@ pub fn apply(repo: &Path, root: &Path) -> Vec<String> {
     let url_key = format!("url.{https_base}.insteadOf");
     let mut changed = Vec::new();
     for (key, want) in &policy {
-        let got = local_config(repo).remove(&key.to_lowercase()).unwrap_or_default();
+        let got = local_config(repo)
+            .remove(&key.to_lowercase())
+            .unwrap_or_default();
         if got.last() != Some(want) {
             let _ = git::run(repo, &["config", "--local", key, want], git::READ);
             changed.push(format!("{key}={want}"));
@@ -79,7 +81,11 @@ pub fn apply(repo: &Path, root: &Path) -> Vec<String> {
         .unwrap_or_default();
     for ssh in &ssh_forms {
         if !have.contains(ssh) {
-            let _ = git::run(repo, &["config", "--local", "--add", &url_key, ssh], git::READ);
+            let _ = git::run(
+                repo,
+                &["config", "--local", "--add", &url_key, ssh],
+                git::READ,
+            );
             changed.push(format!("rewrite {ssh} → {https_base}"));
         }
     }
@@ -93,7 +99,11 @@ mod tests {
     fn repo(origin: Option<&str>) -> (tempfile::TempDir, std::path::PathBuf) {
         let dir = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(dir.path()).unwrap();
-        std::fs::write(root.join("charter.toml"), "[[forge]]\nkind = \"gitlab\"\nhost = \"git.internal\"\n").unwrap();
+        std::fs::write(
+            root.join("charter.toml"),
+            "[[forge]]\nkind = \"gitlab\"\nhost = \"git.internal\"\n",
+        )
+        .unwrap();
         let clone = root.join("workspaces/alpha/widget");
         std::fs::create_dir_all(&clone).unwrap();
         git::run(&clone, &["init", "-q", "."], git::READ).unwrap();
@@ -116,7 +126,10 @@ mod tests {
 
         assert_eq!(changed.len(), 5, "{changed:?}");
         let written = config(&clone);
-        assert!(written.contains("helper = !gh auth git-credential"), "{written}");
+        assert!(
+            written.contains("helper = !gh auth git-credential"),
+            "{written}"
+        );
         assert!(written.contains("[commit]\n\tgpgsign = false"), "{written}");
         assert!(written.contains("[tag]\n\tgpgsign = false"), "{written}");
         assert!(
@@ -125,7 +138,10 @@ mod tests {
             ),
             "{written}"
         );
-        assert!(apply(&clone, &root).is_empty(), "a second apply changes nothing");
+        assert!(
+            apply(&clone, &root).is_empty(),
+            "a second apply changes nothing"
+        );
     }
 
     #[test]
@@ -137,7 +153,10 @@ mod tests {
 
         let written = config(&clone);
         assert!(written.contains("!glab auth git-credential"), "{written}");
-        assert!(written.contains("[url \"https://git.internal/\"]"), "{written}");
+        assert!(
+            written.contains("[url \"https://git.internal/\"]"),
+            "{written}"
+        );
         assert!(!written.contains("gitlab.com"), "{written}");
     }
 

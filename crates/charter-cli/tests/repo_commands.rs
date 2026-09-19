@@ -100,7 +100,13 @@ impl World {
         let bare = self.forge.join("acme").join(format!("{name}.git"));
         self.git(
             &self.forge,
-            &["clone", "-q", "--bare", &src.display().to_string(), &bare.display().to_string()],
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                &src.display().to_string(),
+                &bare.display().to_string(),
+            ],
         );
         src
     }
@@ -118,7 +124,8 @@ impl World {
 
     fn inventory(&self, repos: Value) {
         std::fs::create_dir_all(self.root.join("inventory")).unwrap();
-        let doc = json!({"group": "acme", "count": repos.as_array().map_or(0, Vec::len), "repos": repos});
+        let doc =
+            json!({"group": "acme", "count": repos.as_array().map_or(0, Vec::len), "repos": repos});
         std::fs::write(
             self.root.join("inventory/repos.json"),
             serde_json::to_string_pretty(&doc).unwrap(),
@@ -213,7 +220,14 @@ fn a_clone_is_recorded_as_a_member_of_its_workspace_without_a_branch() {
     w.remote("widget", "trunk");
     w.inventory(json!([World::record("widget", "trunk")]));
 
-    let out = w.charter(&["clone", "widget", "-w", "alpha", "--now", "2026-05-04T11:32:17"]);
+    let out = w.charter(&[
+        "clone",
+        "widget",
+        "-w",
+        "alpha",
+        "--now",
+        "2026-05-04T11:32:17",
+    ]);
 
     assert!(out.status.success(), "{}", stderr(&out));
     let manifest: Value = serde_json::from_str(
@@ -258,7 +272,10 @@ fn a_name_that_is_a_path_an_option_or_hidden_is_refused_and_nothing_lands_outsid
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
     let said = stderr(&out);
     for quoted in ["'..'", "'-rf'", "'.github'", "'a/b'", "'../../escaped'"] {
-        assert!(said.contains(&format!("✗ {quoted}: not cloned — ")), "{quoted}: {said}");
+        assert!(
+            said.contains(&format!("✗ {quoted}: not cloned — ")),
+            "{quoted}: {said}"
+        );
     }
     let after: Vec<_> = std::fs::read_dir(w.root.parent().unwrap())
         .unwrap()
@@ -287,7 +304,11 @@ fn a_clone_never_falls_back_to_ssh_when_git_config_rewrites_the_url() {
     let out = w.charter(&["clone", "widget", "-w", "alpha"]);
 
     assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
-    assert!(stderr(&out).contains("transport 'ssh' not allowed"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("transport 'ssh' not allowed"),
+        "{}",
+        stderr(&out)
+    );
     assert!(
         stderr(&out).contains("charter clones over HTTPS with the forge CLI's token only"),
         "{}",
@@ -306,8 +327,14 @@ fn a_url_with_a_credential_in_it_is_refused_and_the_credential_is_never_printed(
     let out = w.charter(&["clone", "widget", "-w", "alpha"]);
 
     assert_eq!(out.status.code(), Some(1));
-    assert!(!stderr(&out).contains("ghp_NEVERPRINTED"), "{}", stderr(&out));
-    assert!(stderr(&out).contains("✗ 'widget': not cloned — its URL carries a user or a credential"));
+    assert!(
+        !stderr(&out).contains("ghp_NEVERPRINTED"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(
+        stderr(&out).contains("✗ 'widget': not cloned — its URL carries a user or a credential")
+    );
     assert!(!w.clone_dir("widget").exists());
 }
 
@@ -321,7 +348,11 @@ fn a_url_on_a_host_the_plane_does_not_manage_is_refused() {
     let out = w.charter(&["clone", "widget", "-w", "alpha"]);
 
     assert_eq!(out.status.code(), Some(1));
-    assert!(stderr(&out).contains("names host 'evil.example'"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("names host 'evil.example'"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 #[test]
@@ -333,7 +364,11 @@ fn a_workspace_that_does_not_exist_is_not_invented() {
     let out = w.charter(&["clone", "widget", "-w", "nope"]);
 
     assert_eq!(out.status.code(), Some(1));
-    assert!(stderr(&out).contains("no workspace 'nope'"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("no workspace 'nope'"),
+        "{}",
+        stderr(&out)
+    );
     assert!(!w.root.join("workspaces/nope").exists());
 }
 
@@ -356,7 +391,11 @@ fn a_clean_clone_is_fast_forwarded() {
 
     assert!(out.status.success(), "{}", stderr(&out));
     assert_eq!(head(&w, &dest), tip);
-    assert!(stderr(&out).contains("✓ alpha/widget: up to date on trunk"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("✓ alpha/widget: up to date on trunk"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 #[test]
@@ -371,7 +410,11 @@ fn a_clone_with_uncommitted_work_is_skipped_and_the_work_is_untouched() {
     let out = w.charter(&["sync", "-w", "alpha"]);
 
     assert!(out.status.success());
-    assert!(stderr(&out).contains("uncommitted changes — skipping"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("uncommitted changes — skipping"),
+        "{}",
+        stderr(&out)
+    );
     assert_eq!(head(&w, &dest), was);
     assert_eq!(
         std::fs::read_to_string(dest.join("README.md")).unwrap(),
@@ -392,7 +435,11 @@ fn a_diverged_clone_is_left_as_it_is() {
 
     let out = w.charter(&["sync", "-w", "alpha"]);
 
-    assert!(stderr(&out).contains("main won't fast-forward"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("main won't fast-forward"),
+        "{}",
+        stderr(&out)
+    );
     assert_eq!(head(&w, &dest), mine);
 }
 
@@ -408,7 +455,11 @@ fn a_detached_head_is_not_moved() {
 
     let out = w.charter(&["sync", "-w", "alpha"]);
 
-    assert!(stderr(&out).contains("HEAD is detached"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("HEAD is detached"),
+        "{}",
+        stderr(&out)
+    );
     assert_eq!(head(&w, &dest), was);
 }
 
@@ -420,22 +471,39 @@ fn a_clone_in_the_middle_of_a_rebase_is_not_touched() {
     let dest = w.cloned("widget");
     // A rebase that stops on a CLEAN tree: the exec fails after the one commit is replayed.
     let stopped = Command::new("git")
-        .args(["rebase", "-q", "--force-rebase", "--exec", "false", "HEAD~1"])
+        .args([
+            "rebase",
+            "-q",
+            "--force-rebase",
+            "--exec",
+            "false",
+            "HEAD~1",
+        ])
         .current_dir(&dest)
         .env("HOME", &w.home)
         .envs(IDENTITY)
         .output()
         .unwrap();
     assert!(!stopped.status.success(), "the rebase stopped");
-    assert!(dest.join(".git/rebase-merge").exists(), "a rebase is in progress");
+    assert!(
+        dest.join(".git/rebase-merge").exists(),
+        "a rebase is in progress"
+    );
     let was = head(&w, &dest);
     w.advance(&src, "widget", "THREE.md", "three\n");
 
     let out = w.charter(&["sync", "-w", "alpha"]);
 
-    assert!(stderr(&out).contains("a rebase is in progress"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("a rebase is in progress"),
+        "{}",
+        stderr(&out)
+    );
     assert_eq!(head(&w, &dest), was);
-    assert!(dest.join(".git/rebase-merge").exists(), "and it is still in progress");
+    assert!(
+        dest.join(".git/rebase-merge").exists(),
+        "and it is still in progress"
+    );
 }
 
 #[test]
@@ -459,7 +527,11 @@ fn an_ignored_file_the_upstream_starts_tracking_is_not_overwritten() {
         stderr(&out)
     );
     assert_eq!(head(&w, &dest), was);
-    assert!(stderr(&out).contains("was not fast-forwarded"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("was not fast-forwarded"),
+        "{}",
+        stderr(&out)
+    );
 }
 
 #[test]
@@ -467,7 +539,15 @@ fn an_ssh_origin_on_a_host_charter_does_not_manage_is_not_fetched() {
     let w = World::new();
     w.remote("widget", "main");
     let dest = w.cloned("widget");
-    w.git(&dest, &["remote", "set-url", "origin", "git@evil.example:acme/widget.git"]);
+    w.git(
+        &dest,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "git@evil.example:acme/widget.git",
+        ],
+    );
 
     let out = w.charter(&["sync", "-w", "alpha"]);
 
@@ -560,12 +640,24 @@ fn discover_writes_the_inventory_and_the_topology_from_what_the_forge_answered()
         .iter()
         .map(|r| r["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["legacy", "widget"], "a name that is a path never enters it");
+    assert_eq!(
+        names,
+        ["legacy", "widget"],
+        "a name that is a path never enters it"
+    );
     assert_eq!(doc["repos"][1]["stack"], json!("rust"));
-    assert_eq!(doc["repos"][0]["stack"], json!("unknown"), "its probe failed");
+    assert_eq!(
+        doc["repos"][0]["stack"],
+        json!("unknown"),
+        "its probe failed"
+    );
     // `legacy`'s probe and `../evil`'s both failed: a probe is counted before the name that
     // cannot be one is dropped, as Python counts it.
-    assert!(stderr(&out).contains("stack probe FAILED for 2 repo(s)"), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("stack probe FAILED for 2 repo(s)"),
+        "{}",
+        stderr(&out)
+    );
     assert!(w.root.join("docs/topology.md").is_file());
 }
 
@@ -578,8 +670,14 @@ fn the_token_reaches_the_forge_cli_through_its_environment_and_never_its_argv() 
 
     assert!(out.status.success(), "{}", stderr(&out));
     let log = std::fs::read_to_string(w.bin.join("calls.log")).unwrap();
-    assert!(log.contains("token:present"), "the CLI got its credential: {log}");
-    assert!(!log.contains(TOKEN), "no call carried it on the command line: {log}");
+    assert!(
+        log.contains("token:present"),
+        "the CLI got its credential: {log}"
+    );
+    assert!(
+        !log.contains(TOKEN),
+        "no call carried it on the command line: {log}"
+    );
     assert!(!stderr(&out).contains(TOKEN));
 }
 

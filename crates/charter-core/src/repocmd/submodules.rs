@@ -42,7 +42,12 @@ pub fn drift(d: &Path) -> (Vec<String>, Vec<String>) {
         // off by the MARK and from the right: a path may hold spaces and parentheses.
         let path = rest.split_once(' ').map(|(_, p)| p).unwrap_or_default();
         if mark == Some('+') {
-            moved.push(path.rsplit_once(" (").map(|(p, _)| p).unwrap_or_default().to_string());
+            moved.push(
+                path.rsplit_once(" (")
+                    .map(|(p, _)| p)
+                    .unwrap_or_default()
+                    .to_string(),
+            );
         } else {
             absent.push(path.to_string());
         }

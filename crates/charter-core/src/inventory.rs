@@ -413,7 +413,8 @@ pub fn save(root: &Path, group: &str, records: &[Value]) -> Result<Value, String
     let at = path(root);
     in_plane(root, &at)?;
     if let Some(dir) = at.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
+        std::fs::create_dir_all(dir)
+            .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
     }
     std::fs::write(&at, crate::pyjson::dumps_indent2_unicode(&doc))
         .map_err(|e| format!("could not write {}: {e}", at.display()))?;
@@ -478,7 +479,10 @@ mod tests {
 
     #[test]
     fn find_takes_a_bare_name_a_full_path_or_a_forge_qualified_name() {
-        let repos = vec![rec("api", "gitlab", "acme/api"), rec("web", "github", "o/web")];
+        let repos = vec![
+            rec("api", "gitlab", "acme/api"),
+            rec("web", "github", "o/web"),
+        ];
         assert_eq!(text(find(&repos, "api").unwrap(), "forge"), "gitlab");
         assert_eq!(text(find(&repos, "o/web").unwrap(), "name"), "web");
         assert_eq!(text(find(&repos, "github:web").unwrap(), "name"), "web");
@@ -489,7 +493,10 @@ mod tests {
     #[test]
     fn stacks_and_kinds_are_read_the_way_python_reads_them() {
         let files = |names: &[&str]| names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(classify_stack(&files(&["Cargo.toml", "package.json"])), "rust");
+        assert_eq!(
+            classify_stack(&files(&["Cargo.toml", "package.json"])),
+            "rust"
+        );
         assert_eq!(classify_stack(&files(&["main.tf"])), "terraform");
         assert_eq!(classify_stack(&files(&[])), "unknown");
         assert_eq!(classify_kind("api-gateway"), "api");
@@ -525,7 +532,11 @@ mod tests {
         let doc = save(
             &root,
             "acme",
-            &[json!({"name": "b", "description": "ü — x"}), own, json!({"name": "a"})],
+            &[
+                json!({"name": "b", "description": "ü — x"}),
+                own,
+                json!({"name": "a"}),
+            ],
         )
         .unwrap();
         assert_eq!(doc["count"], json!(2));

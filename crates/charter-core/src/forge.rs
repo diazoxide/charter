@@ -194,7 +194,9 @@ pub fn host_ok(host: &str) -> bool {
             !bytes.is_empty()
                 && bytes[0].is_ascii_alphanumeric()
                 && bytes[bytes.len() - 1].is_ascii_alphanumeric()
-                && bytes.iter().all(|b| b.is_ascii_alphanumeric() || *b == b'-')
+                && bytes
+                    .iter()
+                    .all(|b| b.is_ascii_alphanumeric() || *b == b'-')
         })
 }
 
@@ -250,8 +252,8 @@ pub fn load_config(root: &Path) -> Result<toml::Table, String> {
     let Ok(raw) = std::fs::read(&path) else {
         return Ok(toml::Table::new());
     };
-    let text = String::from_utf8(raw)
-        .map_err(|e| format!("{} is not valid TOML: {e}", path.display()))?;
+    let text =
+        String::from_utf8(raw).map_err(|e| format!("{} is not valid TOML: {e}", path.display()))?;
     let cfg: toml::Table = text
         .parse()
         .map_err(|e| format!("{} is not valid TOML: {e}", path.display()))?;
@@ -675,11 +677,11 @@ impl Forge {
             let path = format!(
                 "groups/{enc}/projects?per_page=100&page={page}&include_subgroups=true&archived=false"
             );
-            let batch = self
-                .api_strict(&path, "GitLab API call")
-                .map_err(|e| {
-                    ForgeError(format!("listing repos for GitLab group '{owner}' failed: {e}"))
-                })?;
+            let batch = self.api_strict(&path, "GitLab API call").map_err(|e| {
+                ForgeError(format!(
+                    "listing repos for GitLab group '{owner}' failed: {e}"
+                ))
+            })?;
             let items = batch.as_array().cloned().unwrap_or_default();
             if items.is_empty() {
                 break;
@@ -735,7 +737,11 @@ impl Forge {
 
     /// The top-level file names of a repo, raising on any failure so a failed probe never
     /// reads as "no recognised stack". Python's `repo_tree_strict`.
-    pub fn repo_tree_strict(&self, repo: &Value, git_ref: Option<&str>) -> Result<Vec<String>, ForgeError> {
+    pub fn repo_tree_strict(
+        &self,
+        repo: &Value,
+        git_ref: Option<&str>,
+    ) -> Result<Vec<String>, ForgeError> {
         match self.kind {
             Kind::GitHub => {
                 let path = repo
@@ -745,7 +751,11 @@ impl Forge {
                 let (owner, name) = path.split_once('/').unwrap_or((path, ""));
                 let git_ref = git_ref
                     .filter(|r| !r.is_empty())
-                    .or_else(|| repo.get("default_branch").and_then(Value::as_str).filter(|r| !r.is_empty()))
+                    .or_else(|| {
+                        repo.get("default_branch")
+                            .and_then(Value::as_str)
+                            .filter(|r| !r.is_empty())
+                    })
                     .unwrap_or("HEAD");
                 let api = format!(
                     "repos/{}/{}/git/trees/{}",
@@ -756,7 +766,9 @@ impl Forge {
                 let answer = match call(self.kind, &self.api_args(&api), LIST_TIMEOUT) {
                     Ok(answer) => answer,
                     Err(NoAnswer::Timeout(why)) => {
-                        return Err(ForgeError(format!("listing tree for {path}@{git_ref} {why}")));
+                        return Err(ForgeError(format!(
+                            "listing tree for {path}@{git_ref} {why}"
+                        )));
                     }
                     Err(NoAnswer::Missing(why)) => return Err(ForgeError(why)),
                 };
@@ -868,7 +880,12 @@ mod tests {
 
     #[test]
     fn a_host_is_a_hostname_and_nothing_that_merely_fits_in_the_slot() {
-        for good in ["github.com", "git.internal", "gitlab.example.com:8443", "a-b.c1"] {
+        for good in [
+            "github.com",
+            "git.internal",
+            "gitlab.example.com:8443",
+            "a-b.c1",
+        ] {
             assert!(host_ok(good), "{good}");
         }
         for bad in [
@@ -914,14 +931,21 @@ mod tests {
 
     #[test]
     fn a_block_with_an_unknown_kind_or_a_host_that_is_not_one_refuses_discover() {
-        let cfg: toml::Table = "[[forge]]\nkind = \"gitea\"\nowner = \"acme\"\n".parse().unwrap();
+        let cfg: toml::Table = "[[forge]]\nkind = \"gitea\"\nowner = \"acme\"\n"
+            .parse()
+            .unwrap();
         assert_eq!(
             to_query(&cfg).unwrap_err(),
             "unknown forge kind 'gitea' — known kinds: github, gitlab"
         );
-        let cfg: toml::Table =
-            "[[forge]]\nkind = \"github\"\nhost = \"https://evil\"\n".parse().unwrap();
-        assert!(to_query(&cfg).unwrap_err().starts_with("host 'https://evil' is not a hostname"));
+        let cfg: toml::Table = "[[forge]]\nkind = \"github\"\nhost = \"https://evil\"\n"
+            .parse()
+            .unwrap();
+        assert!(
+            to_query(&cfg)
+                .unwrap_err()
+                .starts_with("host 'https://evil' is not a hostname")
+        );
     }
 
     #[test]
