@@ -69,7 +69,7 @@ with a reason rather than reporting zeros.
 | **Keystroke to screen ≤ 50 ms while 49 others stream** | worst 26 ms with 49 streaming at ~1 MB/s each, worst 26 ms with 49 flat out (30 samples each) | met |
 | **Tab or pane switch ≤ 100 ms** | back to a light tab worst 39 ms; to a tab whose session holds all 5000 lines of history worst 48 ms; back to the typed tab under the 49-session load worst 41 ms (10 samples each) | met |
 | **Hook call ≤ 50 ms** | `charter hook pretooluse` through Python charter: **p50 107.6 ms**, worst 114 ms (30 samples) | **missed here; met in M1.3** |
-| **Cold start ≤ 2 s** | p50 370 ms to the first frame on screen; worst 510 ms, the first launch after the build and the only one cold on disk | met |
+| **Cold start ≤ 2 s** | p50 370 ms to the first frame on screen; worst 510 ms, the first launch after the build and the only one cold on disk | met on macOS; **missed on a Linux whose desktop portal cannot start** (26–31 s) — see the amendment below |
 | **Idle hidden session ≤ 50 MB at the shipped scrollback cap** | **20.2 MB** each: fifty sessions holding 5000 lines at 150 columns took the app's process from 118.9 MB to 1129.7 MB | met |
 | **`?2026` animation ≥ 30 fps** | **52.4 draws/s** for a 3 KB repaint written whole, **52.0** for a 10 KB full-screen repaint written whole, both against a 60 fps display; **1.0 draws/s** when the writer pauses inside an open update | met, with a hazard recorded below |
 | tmux, as a reference | 26.0 MB/s at 2 MB, 26.1 MB/s at 13 MB, in a 150×42 window with a client attached through a pseudo-terminal | the app is above it |
@@ -190,3 +190,75 @@ WebdriverIO run per spec file so no spec measures what the one before it left ru
 writes `target/bench/<time>/results.json`, with the commit, the machine and the tool versions
 beside the numbers. Every number here can be taken again with one command, which is the point
 of it.
+
+## Amendment, 2026-09-19: cold start is met on macOS and missed on a Linux whose portal cannot start
+
+The cold-start row above was measured on macOS only. On Linux the same app took 25 s to reach
+its own `setup` (charter-app#24), twelve times the limit, and nothing recorded it. This
+amendment records the miss on Linux, names its cause, and says which milestone owns it.
+
+**How it was measured.** On GitHub's `ubuntu-24.04` runner, charter-app at `f93129b`, a debug
+build (`npx tauri build --debug --no-bundle`) under `xvfb-run`, in an empty plane. The runner
+was used because it is exactly the kind of machine the issue is about. Each condition was
+launched three times, timing to the window's first frame (`CHARTER_BENCH_LOG`) and to the
+startup markers (`CHARTER_LAUNCH_LOG`). To name the wait, the app was also attached with `gdb`
+during it and the session bus was watched with `dbus-monitor` while it started. A debug build
+on a shared runner is not comparable with the release build on the operator's machine, so the
+fast rows below show the order of magnitude, not a Linux figure to hold the limit against. The
+slow row is two timeouts and does not depend on the build.
+
+| The session bus | First frame, 3 launches | |
+| --- | --- | --- |
+| A working one (`dbus-run-session`) | 706 ms, 702 ms; 2898 ms for the first launch, the only one cold on disk | met |
+| **The runner's own: present, with an activatable desktop portal that cannot start** | **30.5 s, 30.5 s, 26.4 s** | **missed** |
+| None reachable (`DBUS_SESSION_BUS_ADDRESS` pointing at nothing) | 482 ms, 463 ms, 526 ms | met |
+
+**The cause is two waits, and charter makes neither call.**
+
+1. **25.0 s inside `tauri::Builder::build()`.** Tauri's event loop (tao 0.35) creates a
+   `GtkApplication` and registers it. At startup GTK 3 looks for a session manager
+   (`org.gnome.SessionManager`, then `org.xfce.SessionManager`, both with auto-start off, and
+   both answered at once with "no such name"). With neither found, it creates a proxy for
+   `org.freedesktop.portal.Desktop` **with auto-start on**. On the runner that name is
+   activatable, so the bus starts `xdg-desktop-portal`. The portal then waits for its GTK
+   backend, `xdg-desktop-portal-gtk`, which cannot start without a desktop session. The app's
+   `StartServiceByName` got no reply until D-Bus's default 25-second timeout ran out: sent at
+   `…455.4427`, next traffic at `…480.4486` on the bus monitor. The backtrace during the wait
+   is `g_dbus_proxy_new_sync` ← GTK ← `g_application_register` ←
+   `tao::…::EventLoop::new_gtk` ← `tauri::Builder::build` ← `charter_app_lib::run`.
+2. **5.0 s while the window is created**, before the app's `setup` runs. WebKitGTK asks the
+   same portal for `org.freedesktop.appearance` / `color-scheme` and gives up on its own
+   5-second timeout. Run 3 above skipped most of this wait, and its first frame was sooner by
+   the same amount.
+
+**The issue's suspect, `tauri-plugin-single-instance`, is cleared.** Its
+`RequestName("dev.charter.app.SingleInstance")` is on the bus at `…480.4545`, after the wait
+and answered at once. **"Without a session D-Bus" is the wrong description:** a machine with
+no session bus at all starts in under 0.6 s, because every bus call fails immediately. The miss
+needs a session bus that is up **and** a desktop portal that is installed and activatable but
+cannot come up. CI runners, containers with desktop packages, and a remote X session without a
+desktop all fit that description. A full Linux desktop, where the portal is already running,
+would answer straight away. That follows from the trace and was not measured on a desktop.
+
+**Why it is not fixed now.** The wait belongs to GTK and xdg-desktop-portal, reached through
+tao, and charter cannot switch the proxy's auto-start off. The only lever inside the app is
+process-wide: give the app no session bus when the portal looks dead. That would also remove
+the three things charter uses the bus for, and one of them is a guarantee the core depends on.
+The single-instance name is what makes it safe for `hookwire` to remove a stale hook socket at
+startup (charter-app `crates/charter-core/src/hookwire.rs`: "there is no second live app whose
+socket this could be"). Notifications and the tray would go as well. Trading a startup delay
+for two live apps on one plane makes the product worse, not faster.
+
+**The decision.** The 2 s cold-start limit is **met on macOS** (p50 370 ms, above) and
+**missed on a Linux whose session bus has a desktop portal that cannot start** (26–31 s), with
+the cause named above and tracked in
+[charter-app#24](https://github.com/diazoxide/charter-app/issues/24). It belongs to **M4**,
+where Linux becomes a platform charter ships for, alongside the rest of the Linux desktop
+integration. At that point either tao or GTK can register without the portal proxy's
+auto-start, or charter finds a narrower lever than removing the whole bus. The limit itself
+stays at 2 s: an operator waiting half a minute for a window is noticing, and the number is
+right. M1 is macOS, and nothing in M1 depends on this.
+
+The scenario job keeps running the Linux relaunch test under `dbus-run-session` (charter-app
+#23). That is a Linux desktop with a working bus, and passing it proves nothing about this
+miss.
