@@ -5,8 +5,7 @@ mutants.out*/
 # Agent worktrees, created by the harness for isolated sub-agents.
 .claude/worktrees/
 
-# Bytecode from `tests/differential/run.py`, which is imported by name when its scenario
-# list is checked by hand.
+# Python bytecode, which the differential run leaves behind when it is imported.
 __pycache__/
 
 # The charter binary the release workflow stages as a Tauri sidecar before bundling.

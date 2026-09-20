@@ -19,8 +19,10 @@ copy; the Rust `charter` binary runs the same command against the second. Then:
 - so is the set of directories, so a directory one side creates and the other does not is seen;
 - on POSIX, so is each file's mode, because charter writes 0600 where it means private;
 - so is the exit status;
-- and so is stdout — unless the scenario says `stdout=DIFFERS` with the reason, which is how a
-  known gap is recorded rather than quietly skipped. A scenario that says nothing must match.
+- and so is stdout — unless the scenario says `stdout_differs` with the reason, which is how a
+  known gap is recorded rather than quietly skipped, or `stdout_cut_at`, which is how a render
+  that is ported as far as a declared boundary is compared up to it and no further. A scenario
+  that says nothing must match.
 
 Neither side may write OUTSIDE its plane copy. Each copy is laid out under its own directory
 with a sentinel tree beside it, and both are checked afterwards: a containment bug writes where
@@ -58,7 +60,7 @@ import sys
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -104,6 +106,22 @@ class Scenario:
     ignore: dict[str, str] = field(default_factory=dict)
     #: Why the two stdouts are not expected to match yet. Empty means they must.
     stdout_differs: str = ""
+    #: The literal BOTH stdouts are cut at, when only the first part of a render is ported.
+    #: Everything before that marker must match byte for byte; the marker and everything after
+    #: it is each side's own.
+    #:
+    #: `stderr_cut_at`'s sibling, and NOT quite its twin, which is the difference to read
+    #: carefully: there the Rust side stops early and its WHOLE stderr is compared against
+    #: charter's prefix. Here both sides go on past the boundary and say different things below
+    #: it — charter draws the rest of the plane, the Rust build names what it does not draw — so
+    #: both are cut. That makes it weaker, so it is fenced twice: the marker must appear in
+    #: BOTH outputs, and what is above it on charter's side must not be empty. Without the
+    #: first, a Rust side that printed nothing at all would pass with an empty prefix on each
+    #: side; without the second, a marker that turned out to be the first thing charter prints
+    #: would compare nothing against nothing and report `ok` for any implementation at all.
+    stdout_cut_at: str = ""
+    #: Why that cut is where it is.
+    stdout_cut_why: str = ""
     #: Whether the Rust side takes `--now`. A read command does not.
     pins_the_clock: bool = True
     #: Run against each plane copy before the command, for a starting state the fixtures
@@ -962,6 +980,28 @@ REFRESH_INFLIGHT = {
     "refresh and emptied when it ends; the app watches the plane and draws its own progress",
 }
 
+#: The boundary both stdouts are cut at: charter's own **zone rule**, which `_boxed` draws as
+#: `├───┤` under the workspace line.
+#:
+#: Above it is the whole of what M2.18 ports — the frame's top border and the identity row —
+#: and it is compared byte for byte: the box's width, the workspace the nine-rung ladder
+#: chose, its pin, its reinit tip, its open todos, its pieces, the count of other workspaces,
+#: the separators between them, the truncation when the pane is too narrow and the padding out
+#: to the right border.
+#:
+#: Not a marker invented for the comparison. It is the divider charter itself splices in
+#: (`statusline._zone_rules`), which is why cutting here is a statement about the render rather
+#: than about the test: everything in zone 1 is above it by construction.
+IDENTITY_ROW = "\x1b[2m├"
+
+#: What is below the cut, and why the two sides differ there.
+BELOW_THE_RULE = (
+    "below its zone rule charter draws the rest of the plane — a `git status` per clone, the "
+    "worktree rows, the persona chips with vault health and memory counts, the alert list, the "
+    "session strip and the right-aligned brand — and this build draws a line naming them as "
+    "not drawn instead. Zone 1 and the frame ARE compared, byte for byte, above the rule."
+)
+
 #: One turn's payload, in the shape Claude Code hands the `statusLine` command.
 A_TURN = json.dumps({
     "session_id": "s-1",
@@ -975,27 +1015,113 @@ A_TURN = json.dumps({
     },
 })
 
-#: Why the two status lines do not print the same thing. The RECORD is what this scenario is
-#: for, and the record is a file — so the tree comparison is the assertion, not stdout.
-DOES_NOT_DRAW_YET = (
-    "charter draws the whole plane in the footer — repos, personas, vaults, alerts, the "
-    "session strip — and the Rust binary draws none of it yet (M2.7 ports the command edge "
-    "and the token-usage record, which is what ADR 0019 keeps the command running for). The "
-    "usage file each side leaves is what this scenario compares."
-)
+
+#: The same turn, from the session the fixture plane has a pointer for.
+#:
+#: The difference is the whole workspace ladder in one line: `A_TURN`'s `s-1` is an id no
+#: pointer names, so it SHADOWS `$CHARTER_SESSION_ID` (`session.current(explicit)` takes the
+#: payload first) and the ladder falls all the way to the built-in `default` — which is what a
+#: real Claude Code turn looks like on a plane nobody has chosen a workspace in. This one lands
+#: on `alpha`, where the fixture keeps the todos, the pieces and the structure marker.
+A_TURN_IN_ALPHA = json.dumps({
+    "session_id": SESSION,
+    "cwd": "/nowhere",
+    "context_window": {
+        "used_percentage": 42,
+        "current_usage": {
+            "cache_read_input_tokens": 90,
+            "cache_creation_input_tokens": 10,
+        },
+    },
+})
+
+
+def _pane(cols: int) -> dict[str, str]:
+    """A pane width, pinned per scenario.
+
+    Unpinned, both sides fall back to 80 because stdout is a pipe — the same answer twice, and
+    therefore no test of the width at all. Pinning it is what lets one scenario render wide and
+    another render into a pane too narrow for its own row.
+    """
+    return {"COLUMNS": str(cols)}
+
+
+def _stale_the_workspaces_structure(root: Path) -> None:
+    """Stamp `alpha` with an older layout version, which is what puts the reinit tip on the
+    row — the one item there that reports something BROKEN, and the one that must therefore
+    survive truncation ahead of every count beside it."""
+    (root / "workspaces" / "alpha" / ".charter-structure").write_text("4\n")
+
+
+#: A workspace directory named in a script charter does not validate the name of. Ten CJK
+#: characters: twenty terminal COLUMNS and ten `len`. The row is rendered into a pane too
+#: narrow for it on purpose, so the cut lands inside the name — which is the one place a port
+#: that counted characters instead of columns cannot agree with charter.
+CJK_WORKSPACE = "日本語の作業スペース"
+
+
+def _a_workspace_whose_name_is_not_ascii(root: Path) -> None:
+    ws = root / "workspaces" / CJK_WORKSPACE
+    (ws / "memory").mkdir(parents=True, exist_ok=True)
+    (ws / "refs").mkdir(parents=True, exist_ok=True)
+    (ws / "todos").mkdir(parents=True, exist_ok=True)
+    (ws / "workspace.md").write_text("# ws\n")
+    (ws / "workspace.json").write_text("{}\n")
+    (ws / "memory" / "MEMORY.md").write_text("# Memory\n")
+    (ws / "refs" / "README.md").write_text("# Refs\n")
+    # Current, so the row carries the name and the counts and no repair tip.
+    (ws / ".charter-structure").write_text("5\n")
+
+
+def _pieces_that_have_and_have_not_reported(root: Path) -> None:
+    """Four worktrees under `alpha`: one done, one abandoned, and two that have said nothing
+    since they were claimed — three days ago and two hours ago.
+
+    The cell reports the OLDEST silence, and `3d` against `2h` is exactly the pair that does
+    not sort lexically. Both sides measure it from the same instant: charter's clock is pinned
+    by `time_machine` and the Rust binary is handed `--now`.
+    """
+    base = root / "workspaces" / "alpha" / ".worktrees" / "svc"
+    for piece in ("shipped", "dropped", "quiet-for-days", "quiet-for-hours"):
+        (base / piece).mkdir(parents=True, exist_ok=True)
+
+    def when(hours: float) -> str:
+        return (NOW - timedelta(hours=hours)).isoformat(timespec="seconds")
+
+    lines = [
+        {"ts": when(10), "event": "claimed", "repo": "svc", "piece": "shipped"},
+        {"ts": when(9), "event": "done", "repo": "svc", "piece": "shipped"},
+        {"ts": when(10), "event": "claimed", "repo": "svc", "piece": "dropped"},
+        {"ts": when(8), "event": "abandoned", "repo": "svc", "piece": "dropped",
+         "reason": "the branch was already merged"},
+        {"ts": when(72), "event": "claimed", "repo": "svc", "piece": "quiet-for-days"},
+        {"ts": when(2), "event": "claimed", "repo": "svc", "piece": "quiet-for-hours"},
+        # A line no parser can read: it is skipped and the rest of the log still counts. An
+        # append-only log collects these from workers that were killed mid-write.
+        None,
+    ]
+    log = root / "workspaces" / "alpha" / "pieces" / f"{HOSTNAME}.jsonl"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("".join(
+        "not json at all\n" if line is None else json.dumps(line, sort_keys=True) + "\n"
+        for line in lines
+    ))
+
 
 STATUSLINE_SCENARIOS = [
     Scenario(
         # ADR 0019's own sentence, as a test: "a `cleanup` that removes it deletes the record
         # silently". Both charters must leave the same `.charter/sessions/<sid>.usage`, byte
         # for byte and mode for mode, or one of them has stopped writing the only copy of this
-        # session's token history that exists anywhere.
+        # session's token history that exists anywhere. The ROW is compared too, now there is
+        # one.
         name="statusline-records-the-turns-tokens",
         plane="daily",
         python=["statusline"],
         stdin=A_TURN,
-        pins_the_clock=False,
-        stdout_differs=DOES_NOT_DRAW_YET,
+        env=_pane(120),
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
     ),
     Scenario(
         # Early in a session and right after `/compact` there is no usage at all. Recording a
@@ -1005,18 +1131,106 @@ STATUSLINE_SCENARIOS = [
         plane="daily",
         python=["statusline"],
         stdin=json.dumps({"session_id": "s-1", "cwd": "/nowhere"}),
-        pins_the_clock=False,
-        stdout_differs=DOES_NOT_DRAW_YET,
+        env=_pane(120),
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
     ),
     Scenario(
         # The outermost boundary of the whole subprocess: a payload that will not parse must
-        # still leave a plane nobody has to repair.
+        # still leave a plane nobody has to repair — and must still draw the row, because the
+        # row is read off the plane and not off the payload.
         name="statusline-survives-a-payload-that-is-not-json",
         plane="daily",
         python=["statusline"],
         stdin="not json {{{",
-        pins_the_clock=False,
-        stdout_differs=DOES_NOT_DRAW_YET,
+        env=_pane(120),
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
+    ),
+    Scenario(
+        # A plane with no `workspaces/` at all: the ladder ends on the built-in `default`, and
+        # the row says so with `ws 0` rather than inventing a workspace or leaving the count
+        # out. The frame is still drawn, because the frame is what makes the row a row.
+        name="statusline-identity-row-on-a-plane-with-nothing-in-it",
+        plane="minimal",
+        python=["statusline"],
+        stdin=A_TURN,
+        env=_pane(120),
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
+    ),
+    Scenario(
+        # `$CHARTER_WORKSPACE` is the one rung that earns a pin: that session cannot be moved
+        # with `charter ws use`, and the `*` beside the name is where a reader finds that out.
+        # The workspace it names is NOT the one the session pointer holds, so a port that read
+        # the wrong rung would draw the wrong name and no pin at once.
+        name="statusline-identity-row-when-the-environment-pins-the-workspace",
+        plane="daily",
+        python=["statusline"],
+        stdin=A_TURN,
+        env={**_pane(120), "CHARTER_WORKSPACE": "beta"},
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
+    ),
+    Scenario(
+        # The active workspace's open todos, beside the name whose todos they are. `alpha` has
+        # one; `MEMORY.md` in the same store is not a todo, and a store that answered "two"
+        # would be counting the index.
+        name="statusline-identity-row-counts-the-active-workspaces-todos",
+        plane="daily",
+        python=["statusline"],
+        stdin=A_TURN_IN_ALPHA,
+        env=_pane(120),
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
+    ),
+    Scenario(
+        # A stale layout puts the repair tip on the row, ahead of every count beside it.
+        name="statusline-identity-row-flags-a-stale-workspace-before-its-counts",
+        plane="daily",
+        python=["statusline"],
+        stdin=A_TURN_IN_ALPHA,
+        env=_pane(120),
+        setup=_stale_the_workspaces_structure,
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
+    ),
+    Scenario(
+        # …and the same plane in a pane too narrow to hold it, which is where the order of the
+        # row becomes its truncation order.
+        name="statusline-identity-row-gives-up-counts-before-the-repair-tip",
+        plane="daily",
+        python=["statusline"],
+        stdin=A_TURN_IN_ALPHA,
+        env=_pane(46),
+        setup=_stale_the_workspaces_structure,
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
+    ),
+    Scenario(
+        # The piece cell: counts, and the oldest silence among the ones that have said nothing.
+        name="statusline-identity-row-counts-the-workspaces-pieces",
+        plane="daily",
+        python=["statusline"],
+        stdin=A_TURN_IN_ALPHA,
+        env=_pane(120),
+        setup=_pieces_that_have_and_have_not_reported,
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
+    ),
+    Scenario(
+        # **The width test.** A workspace directory named in CJK, rendered into a pane too
+        # narrow for it, so the cut lands inside the name. charter measures a column with
+        # `unicodedata.east_asian_width`; a port that counted characters draws this row one
+        # cell short per glyph and its right border stops lining up with every other row's.
+        name="statusline-identity-row-measures-columns-and-not-characters",
+        plane="daily",
+        python=["statusline"],
+        stdin=A_TURN,
+        env={**_pane(30), "CHARTER_WORKSPACE": CJK_WORKSPACE},
+        setup=_a_workspace_whose_name_is_not_ascii,
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
     ),
 ]
 
@@ -3135,6 +3349,30 @@ def check(scenario: Scenario, binary: Path) -> bool:
                     "    stdout now MATCHES, but the scenario still says it differs "
                     f"({scenario.stdout_differs}) — drop the note"
                 )
+        elif scenario.stdout_cut_at:
+            cut = scenario.stdout_cut_at
+            missing = [side for side, out in (("python", py.stdout), ("rust", rs.stdout))
+                       if cut not in out]
+            if missing:
+                problems.append(
+                    f"    {' and '.join(missing)} never reach {cut!r} on stdout, so this "
+                    "scenario is cutting at a boundary that is not in both renders"
+                )
+            else:
+                want, got = py.stdout.split(cut, 1)[0], rs.stdout.split(cut, 1)[0]
+                if not want:
+                    # The second half of the fence. Reaching the boundary is not enough on its
+                    # own: a marker that turned out to be the first thing charter prints would
+                    # leave two empty prefixes, and a comparison of nothing against nothing
+                    # reports `ok` for every implementation there could be.
+                    problems.append(
+                        f"    python prints nothing before {cut!r}, so this scenario compares "
+                        "two empty strings and asserts nothing"
+                    )
+                elif want != got:
+                    problems.append(f"    stdout differs before {cut!r}:")
+                    problems.append(f"      python {want!r}")
+                    problems.append(f"      rust   {got!r}")
         elif py.stdout != rs.stdout:
             problems.append("    stdout differs:")
             problems.append(f"      python {py.stdout!r}")
