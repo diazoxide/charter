@@ -23,6 +23,46 @@ const ROUNDS = 3;
 const TABS = 50;
 
 /**
+ * How long the whole spec may take — declared on the SUITE, and that is not a style choice.
+ *
+ * WebdriverIO does not leave the deadline to mocha. `executeAsync` in `@wdio/utils` reads
+ * `this._runnable._timeout` ONCE, before the test body starts, and races the body against a
+ * timer of its own that rejects with a bare `Error: Timeout`. A `this.timeout()` call in the
+ * first line of the body moves mocha's runnable and arrives too late for that race, so the
+ * spec ran under `mochaOpts.timeout` — 180 s — while its own first line asked for 900.
+ *
+ * Measured on `main` on 2026-09-20, the whole body end to end: macOS 170 s in the one run of
+ * six that passed and Linux 128 s in the same run. The five macOS runs that did not finish
+ * would have taken 176, 181, 200, 212 and 218 s — extrapolations, each at its own run's
+ * measured round cost, because the timeout cut the trace short. The 180 s budget sat inside
+ * that spread, so it decided the result and the app never did.
+ *
+ * The first run of this spec with the budget where WebdriverIO reads it settles it: 225 s on
+ * macOS, past the old budget, with the app healthy throughout — 219/217/217 threads with
+ * fifty open and 14/13/14 once they were closed, one process, 194–213 MB. Under the old
+ * spelling that run is a sixth red X and nothing to show for it.
+ *
+ * 900 s is the backstop of last resort, not a limit anything is expected to approach: it is
+ * four times the slowest macOS run measured, and every wait inside the body has a deadline
+ * and a message of its own that fires long before it. `ROUND_BUDGET` bounds the one loop
+ * that had none.
+ *
+ * `budget.test.ts` keeps this on the suite, because the mistake is invisible from the spec.
+ */
+const BUDGET = 15 * 60_000;
+
+/**
+ * How long one round of fifty may take. The slowest round measured on a macOS runner on
+ * 2026-09-20 was 74 s (run 35533226573, round 2); this is over three times that. It exists
+ * so that fifty opens that stop making progress are reported as the tab they stopped on
+ * rather than as `Error: Timeout` with nothing after it.
+ */
+const ROUND_BUDGET = 4 * 60_000;
+
+/** How often the round writes down how far it has got, in tabs. */
+const PROGRESS_EVERY = 10;
+
+/**
  * Threads the app may gain between the first round's close and the last's with nothing
  * leaking: its runtime's pools grow as they are used. A session runs at least three threads
  * of its own, so one leaked per tab is 150 across a round — far past this.
@@ -127,10 +167,12 @@ async function answers(said: string): Promise<void> {
   });
 }
 
-describe("fifty tabs, over and over", () => {
-  it("opens fifty tabs with no pause, closes them all, three times, alive and usable throughout", async function () {
-    // Three rounds of fifty is minutes, not the seconds a scenario usually takes.
-    this.timeout(15 * 60_000);
+describe("fifty tabs, over and over", function () {
+  // Three rounds of fifty is minutes, not the seconds a scenario usually takes. On the suite
+  // rather than in the test body: see BUDGET.
+  this.timeout(BUDGET);
+
+  it("opens fifty tabs with no pause, closes them all, three times, alive and usable throughout", async () => {
     const pid = theApp();
     await closeEveryTab();
     const began = Date.now();
@@ -138,9 +180,23 @@ describe("fifty tabs, over and over", () => {
 
     const afterClosing: Sample[] = [];
     for (let round = 1; round <= ROUNDS; round++) {
-      // No pause: the next tab is asked for as soon as the last one's picker has gone.
+      const roundBegan = Date.now();
+      // No pause: the next tab is asked for as soon as the last one's picker has gone. Every
+      // tenth tab is written down, because a round that runs out of time has to say how far
+      // it got: the five timeouts of 2026-09-20 all landed inside this loop, and the trace
+      // they left stopped at the previous round's "all closed" — 50 tabs earlier.
       for (let opened = 0; opened < TABS; opened++) {
         await pressAndStart("New tab");
+        if ((opened + 1) % PROGRESS_EVERY === 0) {
+          look(pid, round, `${opened + 1} of ${TABS} open`, began);
+        }
+        const spent = Date.now() - roundBegan;
+        if (spent > ROUND_BUDGET) {
+          throw new Error(
+            `round ${round}: ${opened + 1} of ${TABS} tabs took ${spent / 1000}s, past the ` +
+              `${ROUND_BUDGET / 1000}s a round is given (see logs/stress.jsonl)`,
+          );
+        }
       }
       await browser.waitUntil(async () => harnessesRunning() === TABS, {
         timeout: 120_000,
