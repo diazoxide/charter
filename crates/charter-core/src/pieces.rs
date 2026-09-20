@@ -94,7 +94,7 @@ pub fn events(plane: &Path, ws: &str) -> Vec<Value> {
     }
     // `sorted(out, key=lambda e: e.get("ts") or "")` — a STABLE sort by the timestamp string,
     // so lines with no `ts` keep the order they were read in rather than being dropped.
-    out.sort_by(|a, b| ts_key(a).cmp(&ts_key(b)));
+    out.sort_by_key(ts_key);
     out
 }
 
@@ -304,7 +304,14 @@ pub fn outcome(entry: Option<&Value>) -> String {
 /// point. An age charter did not write (`?`, or a unit nobody knows) ranks zero, as Python's
 /// `int(age[:-1])` failing does.
 pub fn silence_rank(age: &str) -> i64 {
-    let (digits, unit) = age.split_at(age.len().saturating_sub(1));
+    // Split at the LAST CHARACTER, not at the last byte: `str::split_at` panics on a byte that
+    // is not a boundary, and a panic on the render path is the blank footer this module
+    // promises never to show. Every age charter writes is ASCII; this is about the one that
+    // charter did not write.
+    let Some((at, _)) = age.char_indices().next_back() else {
+        return 0;
+    };
+    let (digits, unit) = age.split_at(at);
     let scale = match unit {
         "m" => 60,
         "h" => 3600,
@@ -406,7 +413,7 @@ fn piece_dirs(base: &Path) -> Vec<String> {
             (mtime, e.file_name().to_string_lossy().into_owned())
         })
         .collect();
-    entries.sort_by(|a, b| b.0.cmp(&a.0));
+    entries.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     entries.into_iter().map(|(_, name)| name).collect()
 }
 

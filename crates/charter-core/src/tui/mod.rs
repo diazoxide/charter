@@ -496,10 +496,11 @@ fn render_columns(columns: &[(Block, Option<usize>)], gap: &str, width: usize) -
         .saturating_sub(gap_w * (columns.len() - 1));
     // Python's `divmod`, and `extra` is an int that goes NEGATIVE once it has been spent —
     // every flex column decrements it, not only the ones that took a spare column.
-    let (share, mut extra) = if flexible > 0 {
-        ((spare / flexible) as i64, (spare % flexible) as i64)
-    } else {
-        (0, 0)
+    let (share, mut extra) = match (spare.checked_div(flexible), spare.checked_rem(flexible)) {
+        (Some(share), Some(extra)) => (share as i64, extra as i64),
+        // No flexible column at all: there is nothing to share and nothing left over, which
+        // is Python's `(0, 0)` and not a division by zero.
+        _ => (0, 0),
     };
     let widths: Vec<usize> = columns
         .iter()
