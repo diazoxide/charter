@@ -133,13 +133,62 @@ fn named(items: &[&str]) -> String {
 }
 
 /// The Claude Code config folder in use: `$CLAUDE_CONFIG_DIR`, kept even when empty (Claude
-/// Code reads `??`, not `||`), else `~/.claude`.
+/// Code reads `??`, not `||`), else `~/.claude` — **NFC-normalised**.
+///
+/// # The normalisation is Claude Code's rule, not charter's
+///
+/// Read off the 2.1.268 binary and pinned in `charter/harness/claude_code.py:config_home`:
+///
+/// ```text
+/// (CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude")).normalize("NFC")
+/// ```
+///
+/// So on a filesystem that keeps the normalisation forms apart — which is every Linux one —
+/// a decomposed `$CLAUDE_CONFIG_DIR` names a directory Claude Code never opens, and the
+/// composed one is the folder the rows below actually read. A row that printed the
+/// environment's own spelling would send the operator to look at the wrong directory, and
+/// `$CLAUDE_CONFIG_DIR` is exactly the variable an operator sets by hand.
+///
+/// This port did not normalise, and a differential scenario caught it:
+/// `doctor-with-a-claude-config-dir-that-is-not-nfc-normalised` had charter print
+/// `~/.claude-café/` and this binary print `~/.claude-cafe` + U+0301.
+///
+/// **Why a crate here and generated tables next door.** `crate::tui::tables` is generated
+/// from CPython because `unicode-width` *deliberately* deviates from `east_asian_width`, and a
+/// deliberate deviation cannot be carried by a byte-exact differential. NFC has no such
+/// latitude: UAX #15 fixes one answer, `unicode-normalization` implements it and CPython's
+/// `unicodedata.normalize` implements it, and Unicode's stability policy forbids adding a
+/// canonical decomposition to a character that lacked one. What is left is a version skew on
+/// characters added since either side's tables were cut, and the scenarios above are what
+/// would report it.
 fn claude_config_home() -> PathBuf {
-    match std::env::var_os("CLAUDE_CONFIG_DIR") {
-        Some(dir) if dir.is_empty() => PathBuf::from("."),
+    let raw = match std::env::var_os("CLAUDE_CONFIG_DIR") {
+        // Empty is kept: Claude Code spells it `??`, not `||`, so an empty value makes it use
+        // its own working directory — which charter cannot see, and must not silently rename
+        // to the default folder.
+        Some(dir) if dir.is_empty() => return PathBuf::from("."),
         Some(dir) => PathBuf::from(dir),
         None => crate::profiles::home().unwrap_or_default().join(".claude"),
+    };
+    // `to_str` and not `to_string_lossy`: a path that is not UTF-8 has no NFC of its own, and
+    // replacing its bad bytes with U+FFFD would rename a folder charter was asked about.
+    // Python reaches such a value through `surrogateescape` and normalises the surrogates
+    // unchanged, which is the same answer — the path, as it was.
+    match raw.to_str() {
+        Some(text) => PathBuf::from(nfc(text)),
+        None => raw,
     }
+}
+
+/// `unicodedata.normalize("NFC", text)`.
+///
+/// Private, and the only caller is [`claude_config_home`] — the one value in this binary that
+/// Claude Code itself normalises. It moves somewhere shared the moment a second caller needs
+/// it; one copy of a Unicode rule with one caller is not yet a rule with two homes.
+fn nfc(text: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+
+    text.nfc().collect()
 }
 
 /// The directory this session is rooted in — the process's working directory, which the
@@ -334,4 +383,33 @@ pub(super) fn session_layer(d: &Doctor) -> Row {
         ));
     }
     Row::ok(NAME, lines.join(MORE))
+}
+
+#[cfg(test)]
+mod nfc_tests {
+    use super::nfc;
+
+    /// Every expectation is CPython 3.14's `unicodedata.normalize("NFC", …)`, because that is
+    /// the function `charter/harness/claude_code.py` calls and therefore the one this has to
+    /// match byte for byte. The cases are the four shapes NFC actually has, not four spellings
+    /// of the first one — a crate that got any of them wrong would still pass a test made only
+    /// of accented Latin.
+    #[test]
+    fn a_config_folder_is_composed_the_way_python_composes_it() {
+        // Nothing to do.
+        assert_eq!(nfc("plain"), "plain");
+        // The ordinary case: a base letter and a combining mark become one character.
+        assert_eq!(nfc("cafe\u{301}"), "café");
+        // A singleton: U+212B ANGSTROM SIGN is never in NFC output at all.
+        assert_eq!(nfc("\u{212b}"), "\u{c5}");
+        // Canonical ORDERING, not just composition: two marks given out of order.
+        assert_eq!(nfc("s\u{323}\u{307}"), "\u{1e69}");
+        assert_eq!(nfc("\u{1e69}"), "\u{1e69}", "already composed, left alone");
+        // A character that DECOMPOSES under NFC and does not come back: U+0344 is two marks.
+        assert_eq!(nfc("\u{344}"), "\u{308}\u{301}");
+        // A composition EXCLUSION: U+0958 decomposes and must NOT recompose.
+        assert_eq!(nfc("\u{958}"), "\u{915}\u{93c}");
+        // Hangul, which composes by arithmetic rather than by table.
+        assert_eq!(nfc("\u{1100}\u{1161}"), "\u{ac00}");
+    }
 }

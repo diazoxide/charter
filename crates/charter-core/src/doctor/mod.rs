@@ -229,14 +229,16 @@ pub(crate) const PATH_DISPLAY_LIMIT: usize = 1024;
 /// differential oracle runs), which is the only arrangement in which "one glyph rule" is a
 /// fact rather than a convention.
 ///
-/// **`doctor` does not NFC-normalise anything, and that is a port decision, not an
-/// omission.** `$CLAUDE_CONFIG_DIR` reaches [`self::session::session_root`] and is printed as
-/// the bytes the environment held. charter's Python has no `unicodedata.normalize` in it at
-/// all, so normalising here would make the two implementations print different folders for
-/// the same environment — and the folder a row names has to be the one an operator can go
-/// and look at, which is the one the bytes name. Two differential scenarios hold it:
-/// `doctor-with-a-claude-config-dir-that-is-not-nfc-normalised` and
-/// `doctor-with-format-characters-in-the-claude-config-dir`.
+/// **Escaping is not normalising, and `doctor` needs both.** This function escapes and does
+/// not normalise, which is right: `contain.one_line` is a line-structure rule and a value it
+/// normalised would no longer be the value. The one place `doctor` DOES normalise is
+/// `$CLAUDE_CONFIG_DIR` ([`self::session`]), because Claude Code's own binary normalises it
+/// and the folder a row names has to be the folder the binary opens. Four differential
+/// scenarios hold the pair apart — `doctor-with-a-non-ascii-claude-config-dir`,
+/// `doctor-with-a-claude-config-dir-that-is-not-nfc-normalised`,
+/// `doctor-with-format-characters-in-the-claude-config-dir`, and
+/// `doctor-a-memory-index-linked-to-a-name-with-no-glyph`, which is the one where a row
+/// escapes rather than prints.
 pub(crate) fn one_line(value: &str, limit: usize) -> String {
     crate::shown::one_line(value, limit)
 }

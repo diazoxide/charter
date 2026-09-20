@@ -257,15 +257,20 @@ def _no_plane(root: Path) -> None:
 #: filesystem, and the question here is what each implementation does with the bytes.
 _CCD_NON_ASCII = "{home}/.claude-\u65e5\u672c\u8a9e"
 
-#: The same, with the accent DECOMPOSED — `cafe` + U+0301, not U+00E9.
+#: The same, spelled so that **NFC changes it** — because Claude Code's own binary spells the
+#: folder `(CLAUDE_CONFIG_DIR ?? …).normalize("NFC")`, and `charter/harness/claude_code.py`
+#: reproduces that. A row naming the folder has to name the one the binary opens.
 #:
-#: **Neither implementation normalises it, and this scenario is what says so.** The ticket
-#: that asked for it assumed charter's Python NFC-normalises `$CLAUDE_CONFIG_DIR` and the Rust
-#: port does not; it does not — there is no `unicodedata.normalize` anywhere in charter — and
-#: adding one to the port would have been the divergence. What matters is that the two agree,
-#: and a scenario is the only thing that can keep them agreeing: a `normalize()` added to
-#: either side from here on fails this.
-_CCD_DECOMPOSED = "{home}/.claude-cafe\u0301"
+#: This is the scenario that caught the port: it printed the environment's own bytes, and
+#: charter printed the composed folder. Four shapes, not four spellings of one, so a
+#: normaliser that got any of them wrong is seen here rather than believed:
+#:
+#: * `cafe` + U+0301 — the ordinary base-plus-mark composition;
+#: * U+212B ANGSTROM SIGN — a singleton, which NFC replaces with U+00C5 outright;
+#: * U+0958 DEVANAGARI QA — a composition EXCLUSION, which NFC DECOMPOSES and must not put
+#:   back together;
+#: * U+1100 + U+1161 — Hangul jamo, which compose by arithmetic rather than by table.
+_CCD_DECOMPOSED = "{home}/.claude-cafe\u0301-\u212b-\u0958-\u1100\u1161"
 
 #: The same, holding a `Cf` character with no glyph of its own (U+200B ZERO WIDTH SPACE) and
 #: one assigned after the hand-written tables in this repo were pasted (U+0890).
