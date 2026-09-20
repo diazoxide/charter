@@ -1421,25 +1421,28 @@ def _clones_of_every_shape(root: Path) -> None:
 
     `widget`'s stack is `node-monorepo` on purpose: thirteen characters, which is what
     charter#592 measured pushing every monorepo row one column right of every other.
+
+    Neither clone may be called `svc` or `tool`: `alpha` already holds directories of both
+    names (and `tool` is a nested plane of its own), and `git clone` into one refuses.
     """
     _forge_repo(root, "widget", "trunk")
-    _forge_repo(root, "tool", "main")
+    _forge_repo(root, "gadget", "main")
     _inventory(root,
                _record("widget", stack="node-monorepo", kind="service"),
-               _record("tool", stack="rust", default_branch="main"),
+               _record("gadget", stack="rust", default_branch="main"),
                _record("absent", stack="go"),
                _record("never-cloned", stack="python"))
     alpha = root / "workspaces" / "alpha"
     side = root.parent
     _git(side, "clone", "-q", "https://github.com/acme/widget.git", str(alpha / "widget"))
-    _git(side, "clone", "-q", "https://github.com/acme/tool.git", str(alpha / "tool"))
-    _git(side, "checkout", "-q", "-b", "feature/x", cwd=alpha / "tool")
-    (alpha / "tool" / "README.md").write_text("mine, uncommitted\n")
+    _git(side, "clone", "-q", "https://github.com/acme/gadget.git", str(alpha / "gadget"))
+    _git(side, "checkout", "-q", "-b", "feature/x", cwd=alpha / "gadget")
+    (alpha / "gadget" / "README.md").write_text("mine, uncommitted\n")
     (alpha / "plaindir").mkdir()
     (alpha / "plaindir" / "README.md").write_text("# not a repo\n")
     manifest = json.loads((alpha / "workspace.json").read_text())
     manifest["repos"] = [{"name": "widget", "branch": "trunk"},
-                         {"name": "tool", "branch": "main"},
+                         {"name": "gadget", "branch": "main"},
                          {"name": "absent", "branch": "main"}]
     (alpha / "workspace.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
@@ -1450,7 +1453,7 @@ def _clones_of_every_shape(root: Path) -> None:
 STATUS_CLONE_GIT = {
     f"workspaces/alpha/{name}/.git": "read by `status`, never written; the index and the "
     "reflogs carry timestamps and inodes no two runs share"
-    for name in ("widget", "tool")
+    for name in ("widget", "gadget")
 }
 
 #: An inventory with one repo in it, so `docs generate` has something to render.
