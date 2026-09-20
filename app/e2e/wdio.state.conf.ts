@@ -1,5 +1,6 @@
 import { config as base } from "./wdio.conf.js";
 import {
+  aConfigHomeOfItsOwn,
   anEmptyRecord,
   built,
   copyFixturePlane,
@@ -44,7 +45,15 @@ export const config: WebdriverIO.Config = {
         appBinaryPath: built(process.platform === "win32" ? "charter-app.exe" : "charter-app"),
         captureBackendLogs: true,
         captureFrontendLogs: true,
-        env: { SHELL: harness, CHARTER_ROOT: plane, CHARTER_PANIC_LOG: PANIC_LOG },
+        // Its own machine store as well as its own plane: this run writes to both, and
+        // sharing either with the base run or with the runner's home is a test that passes
+        // once (see `aConfigHomeOfItsOwn`).
+        env: {
+          SHELL: harness,
+          CHARTER_ROOT: plane,
+          CHARTER_PANIC_LOG: PANIC_LOG,
+          CHARTER_CONFIG_HOME: aConfigHomeOfItsOwn(),
+        },
       },
     ],
   ],

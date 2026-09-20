@@ -518,3 +518,136 @@ body {
   font-size: 0.8rem;
   opacity: 0.7;
 }
+
+/* The screen a window with no project draws. It is the first thing a new operator sees, so
+   it is a page and not a message tucked into a corner of the pane area. */
+.opener {
+  max-width: 40rem;
+  margin: 2rem auto;
+  padding: 0 1.5rem;
+  overflow: auto;
+}
+
+.opener h1 {
+  margin: 0 0 0.5rem;
+  font-size: 1.3rem;
+}
+
+.opener h2 {
+  margin: 1.5rem 0 0.5rem;
+  font-size: 0.9rem;
+  opacity: 0.7;
+}
+
+.opener .doing {
+  margin: 1rem 0;
+}
+
+.opener button {
+  padding: 0.35rem 0.75rem;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.opener button:hover:not(:disabled) {
+  background: var(--edge);
+}
+
+.opener button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.by-path {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.by-path label {
+  font-size: 0.85rem;
+  opacity: 0.7;
+}
+
+.by-path input {
+  flex: 1;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.recents {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.recents li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  border-top: 1px solid var(--edge);
+}
+
+.recents li button {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
+  flex: 1;
+  border: 0;
+  border-radius: 0;
+  text-align: left;
+}
+
+.recents .where {
+  font-size: 0.8rem;
+  opacity: 0.55;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What opening a project puts in force. Read before it is answered, so it is a list and not
+   a paragraph — and every entry is `code`, because these are names and values and not prose. */
+.warning h3 {
+  margin: 1rem 0 0.35rem;
+  font-size: 0.9rem;
+}
+
+.warning h4 {
+  margin: 0.75rem 0 0.25rem;
+  font-size: 0.8rem;
+  font-weight: normal;
+  opacity: 0.7;
+}
+
+.changes,
+.contributes {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.changes li,
+.contributes li {
+  padding: 0.15rem 0;
+  overflow-wrap: anywhere;
+}
+
+.warning .where {
+  margin: 0;
+  font-size: 0.8rem;
+  opacity: 0.7;
+  overflow-wrap: anywhere;
+}
+
+.warning .value {
+  opacity: 0.6;
+}

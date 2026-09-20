@@ -41,11 +41,62 @@ export const commands = {
 	 *  a plane closed here can be opened again — by this process or another — with everything
 	 *  still in it.
 	 * 
-	 *  There is no `open_plane` beside this one, deliberately. Opening a plane the operator has
-	 *  not approved would run what its record names, and the gate for that is a separate piece of
-	 *  work; until it exists the only plane this process opens is the one its launch resolved.
+	 *  Its opposite is `opener::open_plane`, which is gated: opening a plane runs what its record
+	 *  names, so it happens behind the operator's yes (ADR 0035). Closing one needs no gate — it
+	 *  only ever does less.
 	 */
 	closePlane: (plane: PlaneId) => typedError<null, string>(__TAURI_INVOKE("close_plane", { plane })),
+	/**
+	 *  The planes this machine remembers, each checked against the disk, with what was dropped.
+	 * 
+	 *  **On a blocking thread, and this is not a micro-optimisation.** Every row costs a
+	 *  `symlink_metadata` and a second `stat` for the manifest, and a remembered plane can be on a
+	 *  network mount, an unplugged external disk or an automounted share. `machine::read` is
+	 *  deliberately lexical for exactly this reason, and the disk question it leaves out is asked
+	 *  here — off the thread that draws, so an opener waiting on a share that is not coming back
+	 *  is an opener that is still on screen.
+	 */
+	recentPlanes: () => typedError<Recents, string>(__TAURI_INVOKE("recent_planes")),
+	/**
+	 *  Asks the operating system for a folder, and answers with the one the operator chose.
+	 * 
+	 *  Null is a cancelled dialog, which is not a failure and says nothing. The path is not
+	 *  resolved here and not checked here: [`open_plane`] does both, because it is also what a
+	 *  recents row and a second launch go through, and three callers resolving a path three times
+	 *  is three answers to one question — the defect `plane.rs` records twice in its own
+	 *  docstrings.
+	 */
+	pickProject: () => typedError<string | null, string>(__TAURI_INVOKE("pick_project")),
+	/**
+	 *  Opens a plane, **or answers with the question that has to be asked first**.
+	 * 
+	 *  The one way in for every caller that is not the launch: a recents row, a picked folder, a
+	 *  typed path, and a second launch handing its directory to this process. All four go through
+	 *  the same resolution and the same consent read, in `Planes::open_if_approved`.
+	 * 
+	 *  A plane that is already open is answered with the id it already has, and nothing is bound
+	 *  or started a second time — which is `Planes::open`'s rule and the reason it exists.
+	 */
+	openPlane: (path: string) => typedError<Opened, string>(__TAURI_INVOKE("open_plane", { path })),
+	/**
+	 *  The operator's answer to [`Ask`]: yes, open it.
+	 * 
+	 *  `contributes` is the value the dialog drew, handed straight back. It is checked against the
+	 *  plane again before anything is approved or opened — see `Planes::approve_and_open`, where
+	 *  the check and the reason for it live.
+	 * 
+	 *  **This is a separate click from the one that opened the dialog, and it has to be.** A
+	 *  command that both asked and opened would be asking nothing.
+	 */
+	approvePlane: (path: string, contributes: PlaneContribution) => typedError<PlaneId, string>(__TAURI_INVOKE("approve_plane", { path, contributes })),
+	/**
+	 *  A window says which plane it now has in front, or that it has none.
+	 * 
+	 *  What it buys is one thing: a notification about a chat in a plane the operator is NOT
+	 *  looking at is sent rather than suppressed. See [`Showing`], where the gap this closes is
+	 *  written down.
+	 */
+	windowShowsPlane: (plane: PlaneId | null) => __TAURI_INVOKE<void>("window_shows_plane", { plane }),
 	/**
 	 *  Starts a session, and remembers it as a chat so a quit can write it down. No program is
 	 *  the operator's shell.
@@ -203,6 +254,37 @@ export const commands = {
 };
 
 /* Types */
+/**
+ *  The trust ask: what this plane will put in force, in the words the operator reads.
+ * 
+ *  **In the app the prompt IS the prompt** (ADR 0035). charter's CLI asks by printing a second
+ *  command to type, because `util.py` has nothing that reads stdin and a hook blocked on stdin
+ *  hangs a turn — a constraint about the CLI and about nothing else. Here there is a window
+ *  and a person looking at it, so the question is asked where the answer is given.
+ */
+export type Ask = {
+	/**
+	 *  The plane charter resolved, which is what the approval is recorded against.
+	 * 
+	 *  Shown, and not merely carried: a picker pointed at a subdirectory opens the plane above
+	 *  it, and an operator approving a directory they did not choose is the whole failure this
+	 *  dialog exists to prevent, arrived at from the friendly end.
+	 */
+	path: string,
+	/**
+	 *  What it contributes. It goes back to [`approve_plane`] untouched, and that is what
+	 *  makes the approval an answer to the question that was asked.
+	 */
+	contributes: PlaneContribution,
+	/**
+	 *  Empty when nothing has approved this plane. Otherwise every way it now differs from
+	 *  what WAS approved, in charter's own words (`machine::Change`'s own `Display`).
+	 */
+	changes: string[],
+	/**  Whether this is a first approval rather than a re-ask, so the dialog can say which. */
+	first: boolean,
+};
+
 /**  Where a chat is working, when it is working in a piece. */
 export type ChatWorktree = {
 	workspace: string,
@@ -285,6 +367,20 @@ export type OpenChat = {
 	unreported: string | null,
 };
 
+/**
+ *  What came of asking to open a plane: it is open, or there is a question to answer first.
+ * 
+ *  Two nullable fields rather than a tagged union, and told apart by shape the way
+ *  `plane_at_launch` is: exactly one of them is ever set, and a window that reads `plane`
+ *  first cannot accidentally treat an ask as an open.
+ */
+export type Opened = {
+	/**  The plane, once it is open. Null when the operator has to be asked first. */
+	plane: PlaneId | null,
+	/**  What to ask them. Null when the plane is open. */
+	ask: Ask | null,
+};
+
 /**  One open todo. There is no state field: a closed todo is a deleted file (ADR 0004). */
 export type PanelTodo = {
 	/**  The file stem, which is what a todo is closed by. */
@@ -341,6 +437,40 @@ export type Piece = {
 };
 
 /**
+ *  What a plane would contribute, as the trust prompt draws it — **and the exact value the
+ *  operator's approval is checked against.**
+ * 
+ *  A mirror of [`machine::Contribution`] rather than the thing itself, because `charter-core`
+ *  never depends on the app and the app's wire types are generated into TypeScript. Each of
+ *  the four maps travels as pairs in the map's own order, which is `BTreeMap`'s and therefore
+ *  sorted, so a value that comes back from the window compares against one taken from disk
+ *  without either side having to sort anything.
+ */
+export type PlaneContribution = {
+	/**
+	 *  Each plugin the plane's committed settings enable, and what they enable it as. These
+	 *  run inside the operator's harness.
+	 */
+	plugins: ([string, string])[],
+	/**
+	 *  Each environment variable those settings set, and its value. ADR 0022 measured where
+	 *  these land: a variable set on the harness process reaches the shell the model runs.
+	 */
+	env: ([string, string])[],
+	/**
+	 *  One line per chat the plane's reopen record would start on a program of its own — the
+	 *  program, its arguments and its directory, as the record names them.
+	 */
+	starts: ([string, string])[],
+	/**
+	 *  One line per chat that record would start on one of THIS machine's harness profiles.
+	 *  Drawn beside the rest and weighed differently: the record chooses which of the
+	 *  operator's own profiles runs, and `profiletrust` gates what any of them runs.
+	 */
+	profiles: ([string, string])[],
+};
+
+/**
  *  Which plane something is acting for.
  * 
  *  It is the plane's root as the registry resolved it, and it is minted by [`Planes::open`]
@@ -371,6 +501,52 @@ export type ProfileRow = {
 	 *  runs; absent when charter has already recorded running exactly this.
 	 */
 	approval: string | null,
+};
+
+/**  One plane this machine remembers, as the opener draws it. */
+export type RecentPlane = {
+	/**  The plane's root: the path it was approved under and the path it will be opened by. */
+	path: string,
+	/**
+	 *  What to call it in a list — the directory's own name. Two projects can share one, so
+	 *  the path is shown beside it and is what identifies the row.
+	 */
+	name: string,
+	/**  When it was last opened, in seconds since the epoch. */
+	opened: number,
+	/**
+	 *  Whether the operator has approved this plane before.
+	 * 
+	 *  **Not a promise that opening it will not ask.** Whether it still contributes what they
+	 *  approved is a question about the plane's own files, and it is asked when the plane is
+	 *  opened. This is only what the store holds, which costs no disk at all — sixty-four
+	 *  rows each reading a settings file and a reopen record, to label a list, is a launch
+	 *  spent answering a question the next click answers properly.
+	 */
+	approved: boolean,
+};
+
+/**  What the opener has to offer, and everything it had to leave out to offer it. */
+export type Recents = {
+	/**  Most recently opened first. */
+	planes: RecentPlane[],
+	/**
+	 *  One line per row charter would not offer: a plane that has moved or gone, and an entry
+	 *  the store itself would not take back.
+	 * 
+	 *  **Never an error, and never a dialog.** ADR 0034: the file is a convenience and the
+	 *  plane is the truth, so a launch that showed a modal about a memory stick that is not
+	 *  plugged in would be worse than the thing it was reporting.
+	 */
+	dropped: string[],
+	/**
+	 *  Why this machine remembers nothing at all, in charter's own words — a platform charter
+	 *  keeps no store on (ADR 0031: `0600` has no expression on Windows, so the guard refuses
+	 *  rather than degrades), or a store charter would not read. Null when it does remember.
+	 * 
+	 *  The app is a working app either way. It just opens every project by picking it.
+	 */
+	forgetful: string | null,
 };
 
 /**  One clone's git state, and what the forge cache last recorded for its branch. */

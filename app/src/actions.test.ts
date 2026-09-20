@@ -40,6 +40,10 @@ function doing(): Doing & { calls: string[] } {
       calls.push(`sendKey:${key}`);
       return { ok: true as const };
     }),
+    closeProject: vi.fn(async () => {
+      calls.push("closeProject");
+      return { ok: true as const };
+    }),
     quit: note("quit"),
   };
 }
@@ -411,6 +415,7 @@ describe("carrying out a row", () => {
         "removeWorktree:true",
         "mergeWorktree",
         "sendKey:F2",
+        "closeProject",
         "quit",
       ]),
     );
@@ -521,8 +526,8 @@ describe("the palette at fifty chats", () => {
     expect(offers.filter((row) => row.id.startsWith("tab.select:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("tab.close:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("workspace.focus:"))).toHaveLength(6);
-    // 117 rows: 50 chats twice over, 6 workspaces, 2 in the queue, and the nine verbs.
-    expect(offers).toHaveLength(117);
+    // 118 rows: 50 chats twice over, 6 workspaces, 2 in the queue, and the ten verbs.
+    expect(offers).toHaveLength(118);
   });
 });
 

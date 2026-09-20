@@ -4,6 +4,7 @@ import { Group, Panel, Separator } from "react-resizable-panels";
 import "./App.css";
 import {
   commands,
+  type Ask,
   type ChatWorktree,
   type OpenChat,
   type PlaneId,
@@ -19,6 +20,8 @@ import {
   type Offer,
   type Ran,
 } from "./actions";
+import { ApprovePlane } from "./ApprovePlane";
+import { Opener } from "./Opener";
 import { Palette } from "./Palette";
 import { StartChat } from "./StartChat";
 import { QuitWarning } from "./QuitWarning";
@@ -48,7 +51,9 @@ import { quietOnes, stateOf, useChatStates } from "./chatState";
  * launch had no plane to resolve, and the two ways that happens are different things to tell
  * an operator: `here` is a directory that is in no plane, and not-`here` is a launch that had
  * nothing to go on at all — an app started from the dock, whose working directory is `/`.
- * The opener attaches to both; until it lands the header says which.
+ * The `Opener` draws both, and it draws them differently: one is an answer to a question the
+ * operator asked, and the other is a newcomer's first screen, which must not be an error about
+ * a concept they do not have yet.
  */
 type Plane =
   | { state: "loading" }
@@ -73,6 +78,12 @@ function App() {
   const [reopened, setReopened] = useState<OpenChat[]>([]);
   /** Whether the operator is being asked about quitting. */
   const [asking, setAsking] = useState(false);
+  /** What opening a project will put in force, while the operator is being asked about it.
+   *  Nothing is attached and nothing is started until they answer (charter ADR 0035). */
+  const [approving, setApproving] = useState<Ask>();
+  /** Why the last attempt to open a project opened nothing. Shown on the opener, which is
+   *  where the operator is standing when it happens. */
+  const [openTrouble, setOpenTrouble] = useState<string>();
   /** The picker, when a new chat has been asked for, and what to do with the session it
    *  starts. A harness starts only once a row in it is picked: nothing is opened until then,
    *  so cancelling leaves nothing to tear down. Both a new tab and a split come through
@@ -131,20 +142,23 @@ function App() {
   // was a window. The window draws them; it never ends them — a reload during development,
   // or a crash in the window, would otherwise take the day's sessions with it.
   //
-  // Once only: React runs an effect twice in development, and a second pass would draw
-  // every chat again.
-  const adopted = useRef(false);
+  // Once per plane, and not once per window: a plane can arrive long after the launch now
+  // that there is an opener, so this is keyed on WHICH plane was adopted rather than on
+  // whether anything was. React also runs an effect twice in development, and the same ref
+  // answers that — a second pass for the same plane would draw every chat again.
+  const adopted = useRef<PlaneId | undefined>(undefined);
   useEffect(() => {
     // Nothing is asked until the core has said which plane this launch opened, if any:
     // there is no plane to ask about before that, and no default one to fall back on.
-    if (plane.state === "loading" || adopted.current) return;
-    adopted.current = true;
+    if (plane.state === "loading") return;
     if (planeId === undefined) {
       // No plane, so nothing was put back and nothing is running. That is settled, and a
       // quit from here has nothing to warn about.
       settled.current = true;
       return;
     }
+    if (adopted.current === planeId) return;
+    adopted.current = planeId;
     void commands
       .openedChats(planeId)
       .then((answer) => {
@@ -265,6 +279,104 @@ function App() {
       // A command can also fail outright, with no answer of its own to give.
       .catch((err: unknown) => setPlane({ state: "none", here: true, reason: String(err) }));
   }, []);
+
+  /**
+   * Asks the core to open a project, and draws whatever it answers with.
+   *
+   * **It never decides whether to ask.** The core reads this machine's record of what the
+   * operator approved, against the project as it is on disk at that instant, and answers with
+   * either the plane or the question. A window that formed its own opinion about trust would
+   * be a second gate beside the one that bites.
+   *
+   * The one path for all four ways in: a recents row, a picked folder, a typed path, and a
+   * second launch handing its directory to this process.
+   */
+  const openProject = useCallback(async (path: string) => {
+    setOpenTrouble(undefined);
+    const answer = await commands
+      .openPlane(path)
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    // Verbatim: the sentence names the path and what was wrong with it, and an operator shown
+    // a reworded version of it can neither act on it nor search for it.
+    if (answer.status === "error") {
+      setOpenTrouble(answer.error);
+      return;
+    }
+    if (answer.data.plane !== null) {
+      setApproving(undefined);
+      setPlane({ state: "open", plane: answer.data.plane });
+      return;
+    }
+    setApproving(answer.data.ask ?? undefined);
+  }, []);
+
+  /**
+   * The operator said yes. The approval carries back the contribution they were shown, so it
+   * is an answer to the question that was asked and not to whatever the project says by the
+   * time the button is pressed.
+   *
+   * A refusal closes the dialog rather than keeping it up with a message: the one refusal
+   * this command gives is "it changed while you were reading it", and the only honest repair
+   * is to ask again about what it says now — which is what opening it again does.
+   */
+  const approveProject = useCallback(async (ask: Ask) => {
+    const answer = await commands
+      .approvePlane(ask.path, ask.contributes)
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    setApproving(undefined);
+    if (answer.status === "error") {
+      setOpenTrouble(answer.error);
+      return;
+    }
+    setOpenTrouble(undefined);
+    setPlane({ state: "open", plane: answer.data });
+  }, []);
+
+  /** Lets go of the project this window is showing. Its chats end, its record is written into
+   *  it, and the opener comes back. Nothing of the project on disk goes. */
+  const closeProject = useCallback(async (): Promise<Ran> => {
+    if (planeId === undefined)
+      return { ok: false, refused: "No project is open, so there is none to close." };
+    const answer = await commands
+      .closePlane(planeId)
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    if (answer.status === "error") return { ok: false, refused: answer.error };
+    // The window forgets what it was drawing for that plane. Its tabs named sessions in it,
+    // and a session number means nothing without its plane.
+    change(() => noTabs());
+    setReopened([]);
+    setWouldNotStart([]);
+    setSidebar(undefined);
+    setPlane({ state: "none", here: false, reason: "You closed the last project." });
+    return { ok: true, said: `charter let go of ${planeId}. Nothing in it was changed.` };
+  }, [change, planeId]);
+
+  // Which plane this window has in front, told to the core so a notification about a chat in
+  // a plane the operator is NOT looking at is sent rather than suppressed. The window is the
+  // only thing that knows, which is why it says rather than being asked.
+  useEffect(() => {
+    void commands.windowShowsPlane(planeId ?? null).catch(() => undefined);
+  }, [planeId]);
+
+  // A second launch handed its directory over (ADR 0033). It goes through the same opener
+  // every other path uses, so the trust ask is the same ask.
+  useEffect(() => {
+    const listening = listen<string>("open-plane", (event) => {
+      // With one plane per window, a second launch naming the plane already open is
+      // answered by the core with the id it already has and nothing is bound twice. Naming
+      // a DIFFERENT one is what project tabs are for, and they are not here yet — so it is
+      // said rather than silently thrown away, which is what used to happen to it.
+      if (planeId !== undefined) {
+        setTrouble(
+          `charter is showing ${planeId}. Close this project to open ${event.payload}, or ` +
+            `wait for project tabs to hold both.`,
+        );
+        return;
+      }
+      void openProject(event.payload);
+    }).catch(() => undefined);
+    return () => void listening.then((stop) => stop?.()).catch(() => undefined);
+  }, [openProject, planeId]);
 
   // Where a chat starts: the focused workspace's directory, so the sidebar can file it under
   // that workspace. Nothing on the plane records a chat, so where it works is the only thing
@@ -537,12 +649,14 @@ function App() {
       removeWorktree,
       mergeWorktree,
       sendKey,
+      closeProject,
       quit: () => void commands.askToQuit().catch(() => undefined),
     }),
     [
       bringToFront,
       close,
       closePane,
+      closeProject,
       mergeWorktree,
       newTab,
       removeWorktree,
@@ -667,12 +781,10 @@ function App() {
         <NeedsYou queue={states.needsYou} quiet={quiet} nameOf={nameOf} show={showChat} />
         <span className="plane">
           {plane.state === "open" && <code>{plane.plane}</code>}
-          {/* Two different things to say, and the difference is what an opener will act on:
-              a directory that is in no plane, and a launch that had nothing to go on. */}
-          {plane.state === "none" && plane.here && (
-            <span role="alert">No plane: {plane.reason}</span>
-          )}
-          {plane.state === "none" && !plane.here && <span role="status">No plane open yet.</span>}
+          {/* Nothing is said here about a window with no project. The `Opener` below is what
+              that window draws, and it says which of the two states it is in — the difference
+              between a directory that is in no project and a launch that had nothing to go on
+              is a difference an operator reads once, in the place they act on it. */}
         </span>
       </header>
 
@@ -746,7 +858,17 @@ function App() {
           <Sidebar sidebar={sidebar} states={states} focused={focused} onFocus={setFocused} />
         )}
         <div className="panes">
-          {inFront ? (
+          {/* A window with no project draws the opener and nothing else. "No sessions" would
+              be true and useless: there is nowhere to open one, and the thing the operator
+              needs is the way to give the window a project. */}
+          {plane.state === "none" ? (
+            <Opener
+              here={plane.here}
+              reason={plane.reason}
+              onOpen={(path) => void openProject(path)}
+              trouble={openTrouble}
+            />
+          ) : inFront ? (
             <LayoutPanes
               plane={planeId}
               layout={inFront.layout}
@@ -762,6 +884,17 @@ function App() {
             plane holds and once for what git says — and neither ask belongs up here. */}
         <Panels workspace={focused} />
       </div>
+
+      {/* What opening a project puts in force, and the question about it (charter ADR 0035).
+          Nothing has been attached and nothing has been started while this is up: cancelling
+          leaves the window exactly as it was. */}
+      {approving && (
+        <ApprovePlane
+          ask={approving}
+          onApprove={(ask) => void approveProject(ask)}
+          onCancel={() => setApproving(undefined)}
+        />
+      )}
 
       {picking && (
         <StartChat
