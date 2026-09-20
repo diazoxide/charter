@@ -333,6 +333,17 @@ impl Planes {
     /// read what it would contribute.
     pub fn open_if_approved(&self, root: &Path) -> Result<Opening, String> {
         let root = plane_at(root)?;
+        // **A plane this process is already holding is answered, not asked about.** "Open it"
+        // then means "show me that project", which is what a recents row and a second launch
+        // both mean when they name a plane already on screen. Asking again would put a dialog
+        // in front of chats that are already running, about a grant that is already in force,
+        // and answering it would reach [`Self::minted`] — see the guard there for what that
+        // would have cost.
+        let id = PlaneId::of(&root);
+        if self.held(&id).is_ok() {
+            self.remember(&root);
+            return Ok(Opening::Open(id));
+        }
         let contributes = machine::Contribution::of(&root);
         let consent = self.consent_to(&root, &contributes);
         if consent.must_ask() {
@@ -389,9 +400,18 @@ impl Planes {
     /// `Store::vouch` refreshes an entry rather than creating one — so a plane not yet in the
     /// list would be written and then not vouched for, and the very next launch would ask
     /// about a record charter itself had written.
+    /// **And the record is put back once per open, never once per yes.** `Planes::open` hands
+    /// back the id a plane already has and binds nothing a second time; `reopen` has no such
+    /// rule, because at the launch there is nothing to have put back yet. Reaching it for a
+    /// plane this process is already holding would start a second copy of every chat the
+    /// record names, beside the copies already running — so the question is asked here, where
+    /// both callers pass, rather than at each of them.
     fn minted(&self, root: &Path) -> PlaneId {
+        let already = self.held(&PlaneId::of(root)).is_ok();
         let id = self.open(root);
-        self.reopen(&id, &Approved(()));
+        if !already {
+            self.reopen(&id, &Approved(()));
+        }
         id
     }
 
@@ -1298,6 +1318,35 @@ mod tests {
         let again = opened(planes.open_if_approved(&root).expect("it is a plane"));
 
         assert_eq!(first, again);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opening_a_plane_that_is_already_open_does_not_put_its_record_back_a_second_time() {
+        // `Planes::open` hands back the id a plane already has and binds nothing twice;
+        // `reopen` has no such rule, because at a launch there is nothing to have put back
+        // yet. So a recents row clicked twice — or a second launch naming the project already
+        // on screen — would start a second copy of every chat the record names, beside the
+        // copies already running, and the operator would have no way to tell which was which.
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        a_record_naming(&root, "/bin/echo");
+        let planes = planes_keeping(&config);
+        let shown = asking(planes.open_if_approved(&root).expect("it is a plane")).contributes;
+        let plane = planes.approve_and_open(&root, &shown).expect("yes");
+        let held = planes.held(&plane).expect("it is held");
+        let once = held.chats().open_now().len() + held.chats().would_not_start().len();
+        assert_eq!(once, 1, "the yes did not put the record back at all");
+
+        let again = opened(planes.open_if_approved(&root).expect("it is a plane"));
+
+        assert_eq!(plane, again);
+        assert_eq!(
+            held.chats().open_now().len() + held.chats().would_not_start().len(),
+            once,
+            "opening a plane that was already open started its chats again"
+        );
     }
 
     #[cfg(unix)]

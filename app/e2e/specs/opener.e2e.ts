@@ -183,7 +183,19 @@ describe("opening a project", () => {
     expect(await ask<string[]>("open_planes")).toContain(opened);
     // The yes is remembered in this machine's store, so the same project opens straight
     // through the next time — and that is what stops the ask becoming a reflex.
-    const again = await ask<Opened>("open_plane", { path: stranger });
+    //
+    // **Waited for rather than asked once.** Putting the record back starts the chat it
+    // names, and charter rewrites the record — and re-fingerprints it — as that chat opens
+    // and then ends. Asking in the middle of that is asking about a record charter is in the
+    // act of writing, which is a real answer and a flaky test.
+    let again: Opened = { plane: null, ask: null };
+    await browser.waitUntil(
+      async () => {
+        again = await ask<Opened>("open_plane", { path: stranger });
+        return again.plane !== null;
+      },
+      { timeoutMsg: "charter kept asking about a project the operator had just approved" },
+    );
     expect(again.plane).toBe(opened);
     expect(again.ask).toBe(null);
 
