@@ -1,0 +1,18 @@
+# Its own workspace on purpose: this is evidence, not a rung of the ladder. It is built only
+# by the non-gating `windows` job, it must not be in anybody's `cargo check --workspace`, and
+# the day it has answered its questions it is deleted rather than maintained.
+[workspace]
+
+[package]
+name = "windows-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "windows-probe"
+path = "src/main.rs"
+
+[dependencies]
+# The same version the core pins, because the questions are about THAT code.
+portable-pty = "0.9"
