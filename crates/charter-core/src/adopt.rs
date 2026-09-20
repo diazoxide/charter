@@ -15,7 +15,7 @@
 //!
 //! **That question — what a version means for a binary that is not a Python package — is
 //! answered here too, and it is why `charter version` shares this file.** M2.12 settled it
-//! (ADR 0029): the binary reports the charter release its news corpus comes up to, the build
+//! (ADR 0030): the binary reports the charter release its news corpus comes up to, the build
 //! carrying it, and the pin, and says so in the same sentence as `update` when the plane pins
 //! something the corpus does not reach. The two commands live together because they turn on one
 //! fact — [`THE_APP_MOVES_IT`] — and a fact stated twice is a fact that drifts.
@@ -173,7 +173,7 @@ pub fn locked_version(root: &Path) -> Option<String> {
 
 /// `charter version`: which charter this is, what the plane asks for, and whether they agree.
 ///
-/// **This is a decision, not a port — ADR 0029, and it is the question `adopt`'s own module
+/// **This is a decision, not a port — ADR 0030, and it is the question `adopt`'s own module
 /// note parks beside `charter update`'s.** Python's three rows are three facts about a PYTHON
 /// PACKAGE: the `charter-cp` wheel installed on this machine, the release the plane pins, and
 /// the newest release on PyPI. Two of the three have no subject here. This binary is not
@@ -369,7 +369,7 @@ mod tests {
         assert!(text.contains("--bump moves this plane's `[charter] version` pin"));
     }
 
-    // `charter version` (M2.12, ADR 0029)
+    // `charter version` (M2.12, ADR 0030)
 
     /// A plane whose manifest is `manifest`.
     fn pinned(manifest: &str) -> tempfile::TempDir {

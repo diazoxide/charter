@@ -3342,7 +3342,7 @@ DOCS_SCENARIOS = [
 # M2.12: what `charter version` means when the CLI is not a Python package
 # --------------------------------------------------------------------------------------------
 #
-# ADR 0029. charter's three rows are three facts about a `charter-cp` wheel; two of them have no
+# ADR 0030. charter's three rows are three facts about a `charter-cp` wheel; two of them have no
 # subject for a binary that ships inside the app, and the one number this binary carries of its
 # own (`charter-app 0.1.0`) counts a different thing from a pin. So the words differ by
 # decision, and what these scenarios compare is the half that must NOT: the **exit status**, in
@@ -3371,13 +3371,13 @@ PIN_NEITHER_SIDE_MEETS = "0.44.0"
 VERSION_ROWS_DIFFER = (
     "charter prints `installed`, `locked` and `latest` — three facts about a charter-cp wheel. "
     "Two have no subject for a binary that ships inside the app, so charter-app prints the "
-    "charter release its news corpus reaches, the build carrying it, and the pin (ADR 0029)."
+    "charter release its news corpus reaches, the build carrying it, and the pin (ADR 0030)."
 )
 VERSION_VERDICT_DIFFERS = (
     "charter's verdict names a wheel and points at `charter version sync`, which cannot reach a "
     "binary inside an app bundle; charter-app says what it brought and how to conform the PLANE. "
     "It deliberately does NOT reuse `in sync with the lock`, which would claim a parity a "
-    "partial port does not have (ADR 0029)."
+    "partial port does not have (ADR 0030)."
 )
 
 

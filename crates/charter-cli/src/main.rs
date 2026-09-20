@@ -272,7 +272,7 @@ enum Command {
 
     /// Which charter this is, what this control plane pins, and whether they agree.
     ///
-    /// Not charter's three rows, and ADR 0029 is why: two of them — the installed wheel and
+    /// Not charter's three rows, and ADR 0030 is why: two of them — the installed wheel and
     /// the newest one on PyPI — have no subject for a binary that ships inside the app. What
     /// this prints instead is the release this build's news corpus comes up to (the only
     /// number on the same scale as the pin), the build carrying it, and the pin itself. The
@@ -1744,7 +1744,7 @@ fn main() -> ExitCode {
         }
         // `charter version`, and it needs no plane: Python builds `config.ROOT` from
         // `find_root_or_cwd`, so the command answers outside one and simply has no pin to
-        // report. What it answers, and why it is not Python's three rows, is ADR 0029.
+        // report. What it answers, and why it is not Python's three rows, is ADR 0030.
         Command::Version { what } => {
             use charter_core::adopt;
             return emit(&match what {
