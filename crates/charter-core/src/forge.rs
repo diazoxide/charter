@@ -112,12 +112,18 @@ pub struct Forge {
 
 /// The sentence a host that is not a hostname is refused with. Python's `NOT_A_HOST`.
 fn not_a_host(host: &str) -> String {
+    not_a_host_repr(&crate::pyrepr::repr_str(host))
+}
+
+/// The same sentence about a value that is not text at all, already quoted as Python `repr`s
+/// it — `doctor`'s `charter.toml` row, where a hand-edited `host = 7` still has to be read
+/// back to the operator, and in charter's one wording for it.
+pub(crate) fn not_a_host_repr(shown: &str) -> String {
     format!(
-        "host {} is not a hostname. It is read from a committed charter.toml and reaches both \
-         the SSH guard's deny set and the `url.https://<host>/.insteadOf` that `charter \
+        "host {shown} is not a hostname. It is read from a committed charter.toml and reaches \
+         both the SSH guard's deny set and the `url.https://<host>/.insteadOf` that `charter \
          git-policy --apply` writes into a clone's git config, so it takes a bare host \
-         (optionally :port) — no scheme, no path, no '@'",
-        crate::pyrepr::repr_str(host)
+         (optionally :port) — no scheme, no path, no '@'"
     )
 }
 

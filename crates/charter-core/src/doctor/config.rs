@@ -1,0 +1,384 @@
+//! The rows about `charter.toml` itself: `charter.toml`, `schema`, `version lock`, and which
+//! forges the plane declares (which names two rows further up).
+
+use std::path::Path;
+
+use super::{Config, Doctor, NOT_CHECKED_HINT, Row, SCHEMA, deferred, first_line};
+
+/// The words `[harness] default` may name, in registration order — Python's
+/// `instance.launchable_harnesses`.
+const LAUNCHABLE: [&str; 3] = ["claude", "opencode", "codex"];
+
+/// The directories a plane is expected to have — `instance.BASELINE_DIRS`.
+const BASELINE_DIRS: [&str; 3] = ["personas", "inventory", "workspaces"];
+
+/// Python's truthiness of a TOML value — the `x or default` every reader of the file uses.
+pub(super) fn truthy(v: &toml::Value) -> bool {
+    match v {
+        toml::Value::String(s) => !s.is_empty(),
+        toml::Value::Integer(i) => *i != 0,
+        toml::Value::Float(f) => *f != 0.0,
+        toml::Value::Boolean(b) => *b,
+        toml::Value::Datetime(_) => true,
+        toml::Value::Array(a) => !a.is_empty(),
+        toml::Value::Table(t) => !t.is_empty(),
+    }
+}
+
+/// The Python type name of a TOML value, for the sentences Python's own errors are made of.
+pub(super) fn py_type(v: &toml::Value) -> &'static str {
+    match v {
+        toml::Value::String(_) => "str",
+        toml::Value::Integer(_) => "int",
+        toml::Value::Float(_) => "float",
+        toml::Value::Boolean(_) => "bool",
+        toml::Value::Datetime(_) => "datetime.datetime",
+        toml::Value::Array(_) => "list",
+        toml::Value::Table(_) => "dict",
+    }
+}
+
+/// The forge a `[[forge]]` block declares, or Python's error text for it.
+///
+/// [`crate::forge::Forge::build`] decides it — the same resolution `discover` and the
+/// one-credential policy use, with the same two sentences. What this adds is the shapes a
+/// hand-edited TOML file can put where a word goes: Python reaches `KINDS.get(kind)` with
+/// whatever the file held, so a list or a table is an unhashable type before it is an unknown
+/// kind, and a host that is not a string is refused by value.
+fn block_forge(block: &toml::Table) -> Result<crate::forge::Forge, String> {
+    let kind = match block.get("kind").filter(|v| truthy(v)) {
+        None => crate::forge::DEFAULT_KIND.word().to_owned(),
+        Some(toml::Value::String(k)) => k.clone(),
+        // `KINDS.get(kind)` hashes the value first, and a list or a table cannot be hashed.
+        Some(v @ (toml::Value::Array(_) | toml::Value::Table(_))) => {
+            return Err(format!("unhashable type: '{}'", py_type(v)));
+        }
+        Some(v) => {
+            return Err(format!(
+                "unknown forge kind {} — known kinds: github, gitlab",
+                toml_repr(v)
+            ));
+        }
+    };
+    match block.get("host").filter(|v| truthy(v)) {
+        None => crate::forge::Forge::build(&kind, None),
+        Some(toml::Value::String(host)) => crate::forge::Forge::build(&kind, Some(host)),
+        // A host that is not text cannot be a hostname. The kind is still resolved first, as
+        // Python's `_build` does, and the refusal is charter's one sentence for it with the
+        // value quoted the way Python quotes it.
+        Some(other) => crate::forge::Forge::build(&kind, None)
+            .and(Err(crate::forge::not_a_host_repr(&toml_repr(other)))),
+    }
+}
+
+/// A TOML value as Python `repr`s it: [`crate::pyrepr::repr_str`] for text, and
+/// `profiles::py_repr` for the containers and scalars it already renders Python's way.
+pub(super) fn toml_repr(value: &toml::Value) -> String {
+    crate::profiles::py_repr(value)
+}
+
+/// `registry.declared_forges`' errors — one per block that did not resolve, or one for the
+/// whole key when it is not something a loop can walk.
+fn forge_errors(cfg: &toml::Table) -> Vec<String> {
+    let Some(value) = cfg.get("forge").filter(|v| truthy(v)) else {
+        return Vec::new();
+    };
+    // What Python's `for block in value` walks: an array's items, a table's KEYS, a string's
+    // characters. Each of the last two is a block that is not a table.
+    let blocks: Vec<Option<&toml::Table>> = match value {
+        toml::Value::Array(items) => items.iter().map(toml::Value::as_table).collect(),
+        toml::Value::Table(keys) => keys.iter().map(|_| None).collect(),
+        toml::Value::String(s) => s.chars().map(|_| None).collect(),
+        other => {
+            return vec![format!(
+                "charter.toml: '{}' object is not iterable",
+                py_type(other)
+            )];
+        }
+    };
+    blocks
+        .iter()
+        .enumerate()
+        .filter_map(|(i, block)| match block {
+            None => Some(format!(
+                "[[forge]] block {i}: [[forge]] block {i} is not a table"
+            )),
+            Some(table) => block_forge(table)
+                .err()
+                .map(|e| format!("[[forge]] block {i}: {e}")),
+        })
+        .collect()
+}
+
+/// The CLI of every forge the plane declares, de-duplicated by kind and host — or GitLab's
+/// alone when it declares none, or when any block does not resolve (`declared_or_default`).
+///
+/// The `gh`/`glab` rows are named from this, so a GitHub-only plane is not told to install
+/// `glab` (FINDING I3).
+pub(super) fn forge_clis(d: &Doctor) -> Vec<String> {
+    let fallback = vec!["glab".to_owned()];
+    let Some(cfg) = d.config.table() else {
+        return fallback;
+    };
+    let Some(value) = cfg.get("forge").filter(|v| truthy(v)) else {
+        return fallback;
+    };
+    let toml::Value::Array(items) = value else {
+        return fallback;
+    };
+    let mut seen: Vec<crate::forge::Forge> = Vec::new();
+    for item in items {
+        let Some(Ok(forge)) = item.as_table().map(block_forge) else {
+            return fallback;
+        };
+        if !seen.contains(&forge) {
+            seen.push(forge);
+        }
+    }
+    if seen.is_empty() {
+        return fallback;
+    }
+    seen.into_iter()
+        .map(|forge| forge.kind.cli().to_owned())
+        .collect()
+}
+
+/// `contain.plane_adjacent`: at or under the plane, or ONE sibling of it.
+fn plane_adjacent(root: &Path, path: &Path) -> bool {
+    let (Some(target), Some(base)) = (
+        crate::contain::resolved(path),
+        crate::contain::resolved(root),
+    ) else {
+        return false;
+    };
+    if target.starts_with(&base) {
+        return true;
+    }
+    target.parent() == base.parent() && Some(target.as_path()) != base.parent()
+}
+
+/// Why a declared `[plane] worktrees` may not be used, or `None` — `contain.
+/// plane_adjacent_refusal`.
+fn worktrees_refusal(root: &Path, declared: &str) -> Option<String> {
+    // The same `~` rule `plane::place` reads out of `$CHARTER_ROOT`: one spelling, because a
+    // committed value means one thing wherever charter reads it.
+    let p = crate::plane::expand_user(Path::new(declared));
+    let p = if p.is_absolute() { p } else { root.join(p) };
+    if plane_adjacent(root, &p) {
+        return None;
+    }
+    let target = crate::contain::resolved(&p).unwrap_or(p);
+    let field = |s: &str| super::one_line(s, super::PATH_DISPLAY_LIMIT);
+    Some(format!(
+        "'{}' resolves to '{}', which is neither inside the control plane ({}) nor beside it. \
+         This is read from a committed file and directories get created there, so it may \
+         name a place under the plane or a single sibling of it — '../charter.worktrees', \
+         the documented shape — and nothing further afield",
+        field(declared),
+        field(&target.display().to_string()),
+        field(&root.display().to_string()),
+    ))
+}
+
+/// `charter.toml`: whether the plane's own file parsed, and the settings in it that are
+/// silently ignored — each of which renders exactly as the key being absent, so this row is
+/// the only place any of them is said.
+pub(super) fn charter_toml(d: &Doctor) -> Row {
+    const NAME: &str = "charter.toml";
+    let cfg = match &d.config {
+        Config::Malformed(why) => {
+            return Row::fail(
+                NAME,
+                first_line(why),
+                "Fix or remove charter.toml, then re-run. Falling back to empty \
+                 group/exclude/workspace defaults until it does.",
+            );
+        }
+        Config::Refused(why) => {
+            return Row::fail(
+                NAME,
+                first_line(why),
+                "charter refuses to operate on this plane at all — see the `schema` row. \
+                 `charter update`, then re-run.",
+            );
+        }
+        Config::Read(cfg) => cfg,
+    };
+    let worktrees = cfg
+        .get("plane")
+        .and_then(toml::Value::as_table)
+        .and_then(|plane| plane.get("worktrees"))
+        .and_then(toml::Value::as_str)
+        .map(crate::memstore::py_strip)
+        .filter(|v| !v.is_empty());
+    if let Some(why) = worktrees.and_then(|w| worktrees_refusal(&d.root, w)) {
+        return Row::warn(
+            NAME,
+            "[plane] worktrees points outside the plane and is being ignored",
+            format!(
+                "{why}. Worktrees are in the default layout (workspaces/<ws>/.worktrees/) \
+                 until the key is fixed or removed; $CHARTER_WORKTREES sets a per-machine \
+                 root without editing the file."
+            ),
+        );
+    }
+    let errors = forge_errors(cfg);
+    if !errors.is_empty() {
+        let mut shown = errors
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("; ");
+        if errors.len() > 3 {
+            shown.push_str(" …");
+        }
+        return Row::warn(
+            NAME,
+            format!("{} [[forge]] block(s) failed to resolve", errors.len()),
+            format!(
+                "{shown} — those hosts are NOT covered by the one-credential guard or \
+                 git-policy until fixed (other declared/default hosts still are)."
+            ),
+        );
+    }
+    if let Some(refused) = refused_default(cfg)
+        && crate::profiles::current(&d.root).get(&refused).is_none()
+    {
+        return Row::warn(
+            NAME,
+            format!("[harness] default = \"{refused}\" is not a harness charter can launch"),
+            format!(
+                "Bare `charter`'s profile selector marks no row for it and opens on the first \
+                 one that can run — which is also what a plane that declares no default gets, \
+                 so the key currently reads as absent. Name one of: {}, or any profile \
+                 charter.local.toml declares. `charter <profile>` is unaffected.",
+                LAUNCHABLE.join(", ")
+            ),
+        );
+    }
+    // `[[frame.component]]` is refused WHOLE when charter cannot draw it, and nothing but
+    // this row says so. Whether an arrangement can be drawn is the tmux frame's question,
+    // which this charter does not answer — so a plane that writes one is told this row did
+    // not look at it, rather than told it parsed cleanly.
+    let arranges = cfg
+        .get("frame")
+        .and_then(toml::Value::as_table)
+        .is_some_and(|frame| frame.contains_key("component"));
+    if arranges {
+        return deferred::row(
+            NAME,
+            "whether charter can draw this plane's [[frame.component]] arrangement is the \
+             tmux frame's question, which this charter does not check",
+        );
+    }
+    if !d.has_plane {
+        return Row::warn(
+            NAME,
+            format!("no control plane found (cwd: {})", d.root.display()),
+            "`charter init` here, or cd into a plane, or set $CHARTER_ROOT. Every check below \
+             is reporting on a plane that does not exist.",
+        );
+    }
+    Row::ok(NAME, format!("parsed cleanly ({})", d.root.display()))
+}
+
+/// A `[harness] default` naming no launchable harness, as the sentence will quote it —
+/// `instance.harness_of`'s `refused`.
+fn refused_default(cfg: &toml::Table) -> Option<String> {
+    let value = cfg.get("harness")?.as_table()?.get("default")?;
+    if let toml::Value::String(s) = value
+        && LAUNCHABLE.contains(&s.as_str())
+    {
+        return None;
+    }
+    Some(crate::shown::short(&crate::profiles::py_str(value)))
+}
+
+/// `schema`: the plane format this charter can place, and the baseline directories it
+/// expects. FAIL when the format is refused: every other command stops outright, and a row
+/// scoring a hard stop as a warning would disagree with the tool it reports on.
+pub(super) fn schema(d: &Doctor) -> Row {
+    const NAME: &str = "schema";
+    if !d.has_plane {
+        return Row::ok(NAME, "no control plane found");
+    }
+    if let Config::Refused(why) = &d.config {
+        return Row::fail(
+            NAME,
+            first_line(why),
+            "charter refuses to operate on a plane whose format version it cannot place, \
+             rather than guess at a layout it has been told it does not understand. `charter \
+             update` is the way out; every other command declines until it runs.",
+        );
+    }
+    let found: Vec<String> = BASELINE_DIRS
+        .iter()
+        .filter_map(|dir| {
+            let p = d.root.join(dir);
+            if p.is_dir() {
+                None
+            } else if p.exists() {
+                Some(format!(
+                    "{dir}/ is occupied by a file, not a directory — reinit will refuse to \
+                     touch it"
+                ))
+            } else {
+                Some(format!("missing directory: {dir}/"))
+            }
+        })
+        .collect();
+    if found.is_empty() {
+        return Row::ok(NAME, format!("up to date (schema {SCHEMA})"));
+    }
+    Row::warn(
+        NAME,
+        format!("{} issue(s): {}", found.len(), found.join("; ")),
+        "Run: charter reinit  (creates what's missing; never touches existing content).",
+    )
+}
+
+/// `version lock`: `[charter] version`, opt-in. A plane that pins nothing reports OK.
+///
+/// **Ported up to the pin, and no further.** Python measures a pin against the Claude Code
+/// plugin serving this project, or failing that against its own version — and neither is
+/// this binary's: its version is charter-app's, not the Python charter's a pin names. So a
+/// plane that DOES pin gets a row that says it did not compare, rather than a comparison
+/// against the wrong number.
+pub(super) fn version_lock(d: &Doctor) -> Row {
+    const NAME: &str = "version lock";
+    let cfg = match &d.config {
+        Config::Read(cfg) => cfg,
+        Config::Malformed(why) | Config::Refused(why) => return Row::not_checked(NAME, why),
+    };
+    let locked = match cfg.get("charter").filter(|v| truthy(v)) {
+        None => None,
+        Some(toml::Value::Table(section)) => section
+            .get("version")
+            .and_then(toml::Value::as_str)
+            .map(crate::memstore::py_strip)
+            .filter(|v| !v.is_empty()),
+        // `(cfg.get("charter") or {}).get(...)` on a value that is not a table.
+        Some(other) => {
+            return Row::warn(
+                NAME,
+                format!(
+                    "not checked ('{}' object has no attribute 'get')",
+                    py_type(other)
+                ),
+                NOT_CHECKED_HINT,
+            );
+        }
+    };
+    match locked {
+        None => Row::ok(NAME, "not pinned"),
+        Some(pin) => deferred::row(
+            NAME,
+            &format!(
+                "pinned {}; whether the charter serving this plane matches the pin is not \
+                 ported to this charter yet",
+                super::one_line(pin, super::DISPLAY_LIMIT)
+            ),
+        ),
+    }
+}

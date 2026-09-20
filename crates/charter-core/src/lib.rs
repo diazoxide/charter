@@ -3,6 +3,7 @@
 pub mod cistate;
 pub mod contain;
 pub mod curate;
+pub mod doctor;
 pub mod engine;
 pub mod forge;
 pub mod gitpolicy;

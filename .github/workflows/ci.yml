@@ -114,7 +114,9 @@ jobs:
       # Spec decision 14: every module that moves to Rust passes a differential test. Python
       # charter is a dev dependency of THIS JOB and nothing else (decision 15) — the run
       # installs it, pinned to the commit that generated the fixture planes.
-      - run: tests/differential/run.py
+      # `--time-preflight`: `charter doctor --preflight` runs at every session start, so what it
+      # costs is printed here on every run, for both implementations, on the same plane.
+      - run: tests/differential/run.py --time-preflight 20
   stress:
     # Evidence for charter-app#16, not a gate: fifty tabs on a shared runner is timing-bound,
     # and a flaky REQUIRED check blocks every merge — including the fix for the bug it watches.

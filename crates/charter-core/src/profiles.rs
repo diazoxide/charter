@@ -714,7 +714,7 @@ fn name_ok(name: &str) -> bool {
 /// disagree about — `true`/`True`, `["claude"]`/`['claude']`, `{ a = 1 }`/`{'a': 1}` — and
 /// a refusal that quotes a value back differently is the second answer this port exists to
 /// prevent, however wrong the value being quoted.
-fn py_str(value: &toml::Value) -> String {
+pub(crate) fn py_str(value: &toml::Value) -> String {
     match value {
         toml::Value::String(text) => text.clone(),
         toml::Value::Boolean(yes) => (if *yes { "True" } else { "False" }).to_owned(),
@@ -735,20 +735,18 @@ fn py_str(value: &toml::Value) -> String {
 }
 
 /// A value as Python `repr`s it INSIDE a container, where a string gains quotes.
-fn py_repr(value: &toml::Value) -> String {
+pub(crate) fn py_repr(value: &toml::Value) -> String {
     match value {
         toml::Value::String(text) => py_repr_str(text),
         other => py_str(other),
     }
 }
 
-/// Python's `repr` of a string: single quotes, unless it holds one and no double quote.
+/// Python's `repr` of a string — [`crate::pyrepr::repr_str`], which is the one this repo
+/// keeps: this had its own two-rule version, and a value holding a tab or a newline was
+/// quoted back differently by the two of them.
 fn py_repr_str(text: &str) -> String {
-    if text.contains('\'') && !text.contains('"') {
-        format!("\"{text}\"")
-    } else {
-        format!("'{}'", text.replace('\\', "\\\\").replace('\'', "\\'"))
-    }
+    crate::pyrepr::repr_str(text)
 }
 
 fn read_toml(path: &Path) -> Result<toml::Table, ()> {
