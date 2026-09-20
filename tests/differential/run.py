@@ -1979,9 +1979,333 @@ LADDER_SCENARIOS = [
     ),
 ]
 
+# --------------------------------------------------------------------------------------- #
+# M2.8: handoff, and the workspace verbs that act on a workspace as a whole                 #
+# --------------------------------------------------------------------------------------- #
+#: A session id with no frame record under it, so Python's `workspace.launch_lock` — the rung
+#: this charter deliberately has no record for (`charter_core::active`) — answers nothing. The
+#: fixture's own `fixture-session-1` HAS a frame directory, and every scenario about a lock or
+#: a pointer would otherwise be comparing that divergence instead of the verb it names.
+FRESH_SESSION = "fresh-session-2"
+
+#: Why `charter handoff`'s last refusal differs. Everything in front of it is ported word for
+#: word (`same_stderr`); this one is the frame check, and the two implementations have
+#: different frames to report on — charter has a tmux frame and this binary has none at all,
+#: so it says so and prints the same command to run in a new terminal.
+HANDOFF_HAS_NO_FRAME = (
+    "charter opens the chat in a background window of its own tmux; this binary has no frame "
+    "and no channel into the app that opens one, so it always reaches the frame refusal. Both "
+    "print the command to run in a new terminal, and neither writes anything."
+)
+
+#: Why `remove`'s unreadable-clone refusal differs. Both refuse, both exit 2 and both name the
+#: clone; what follows `could not be read` is git's own sentence, and the two runners quote a
+#: different part of it.
+REMOVE_QUOTES_GIT = (
+    "both refuse and both name the clone; the words after `could not be read` are git's own, "
+    "and the two runners quote a different part of them."
+)
+
+#: The brief a handoff scenario approves. Two lines, so the first message is never a single
+#: word and the size bound is nowhere near.
+A_BRIEF = "# Retry the failed webhook deliveries\n\nThe queue is in workspaces/alpha/svc.\n"
+
+#: A credential-shaped brief, in the one spelling both classifiers read as a VALUE rather than
+#: a reference. The KIND is what the refusal names; the value never appears in it.
+A_BRIEF_WITH_A_SECRET = (
+    "# Rotate the key\n\nAWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"
+)
+
+
+def _a_live_workspace(root: Path) -> None:
+    """`alpha` marked LIVE — the managed `.gitignore` block, which no fixture carries.
+
+    Written as literal lines rather than through either implementation, so the scenario is not
+    asking one of them to set up the state the other is judged on.
+    """
+    lines = ["# >>> charter live workspaces (managed by `charter workspace live`) >>>"]
+    for path in ("workspace.json", "workspace.md", "memory", "memory/**", "todos",
+                 "todos/**", "changes", "changes/**"):
+        lines.append(f"!/workspaces/alpha/{path}")
+    lines.append("/workspaces/alpha/changes/log/")
+    lines.append("# <<< charter live workspaces <<<")
+    block = "\n".join(lines)
+    gitignore = root / ".gitignore"
+    marker = "!/workspaces/.gitkeep\n"
+    gitignore.write_text(gitignore.read_text().replace(marker, marker + block + "\n", 1))
+
+
+def _a_session_lock(root: Path) -> None:
+    """A lock file for :data:`FRESH_SESSION`, so `unlock` has one to release."""
+    sessions = root / ".charter" / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    lock = sessions / f"{FRESH_SESSION}.lock"
+    lock.write_text("alpha\n")
+    lock.chmod(0o600)
+
+
+def _a_clone_charter_cannot_read(root: Path) -> None:
+    """A directory under `alpha` that looks like a clone and is not one.
+
+    A `.git` DIRECTORY is what both implementations read as a clone, and an empty one makes
+    `git status` fail — which is charter#917's whole case: a status that failed is not a clean
+    tree, and what the at-risk list is empty of is what `remove` deletes.
+    """
+    (root / "workspaces" / "alpha" / "broken" / ".git").mkdir(parents=True)
+
+
+M28_SCENARIOS = [
+    # ---- charter handoff: every refusal in front of the open ----------------------------
+    Scenario(
+        name="handoff-refuses-a-name-that-cannot-be-a-workspace",
+        plane="daily",
+        python=["handoff", "../../esc"],
+        pins_the_clock=False,
+        stdin=A_BRIEF,
+        refusal="cannot name a workspace",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="handoff-refuses-vision-without-create",
+        plane="daily",
+        python=["handoff", "alpha", "--vision", "ship it"],
+        pins_the_clock=False,
+        stdin=A_BRIEF,
+        refusal="--vision describes a workspace this call creates",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="handoff-refuses-create-without-vision",
+        plane="daily",
+        python=["handoff", "brand-new", "--create"],
+        pins_the_clock=False,
+        stdin=A_BRIEF,
+        refusal="--create needs --vision",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="handoff-refuses-create-over-a-workspace-that-is-already-there",
+        plane="daily",
+        python=["handoff", "alpha", "--create", "--vision", "ship it"],
+        pins_the_clock=False,
+        stdin=A_BRIEF,
+        refusal="already exists, and --create only makes a new one",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="handoff-refuses-a-workspace-this-plane-does-not-have",
+        plane="daily",
+        python=["handoff", "nowhere"],
+        pins_the_clock=False,
+        stdin=A_BRIEF,
+        refusal="no workspace 'nowhere' on this plane",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="handoff-refuses-a-persona-this-plane-does-not-define",
+        plane="daily",
+        python=["handoff", "alpha", "--persona", "ghost"],
+        pins_the_clock=False,
+        stdin=A_BRIEF,
+        refusal="no persona 'ghost'",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="handoff-refuses-an-empty-brief",
+        plane="daily",
+        python=["handoff", "alpha"],
+        pins_the_clock=False,
+        stdin="   \n\t\n",
+        refusal="the brief on stdin is empty",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="handoff-refuses-a-credential-shaped-brief-by-kind",
+        plane="daily",
+        python=["handoff", "alpha"],
+        pins_the_clock=False,
+        stdin=A_BRIEF_WITH_A_SECRET,
+        refusal="the brief looks like it carries a secret",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="handoff-with-nothing-to-open-a-chat-in-prints-the-command-and-writes-nothing",
+        plane="daily",
+        python=["handoff", "alpha"],
+        pins_the_clock=False,
+        stdin=A_BRIEF,
+        refusal="Run this in a new terminal instead:",
+        stderr_differs=HANDOFF_HAS_NO_FRAME,
+    ),
+    # ---- charter workspace live ---------------------------------------------------------
+    Scenario(
+        name="workspace-live-shares-a-workspaces-manifest-and-memory",
+        plane="daily",
+        python=["workspace", "live", "beta"],
+        pins_the_clock=False,
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-live-off-makes-it-private-again",
+        plane="daily",
+        setup=_a_live_workspace,
+        python=["workspace", "live", "alpha", "--off"],
+        pins_the_clock=False,
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-live-on-a-workspace-that-is-already-live-changes-nothing",
+        plane="daily",
+        setup=_a_live_workspace,
+        python=["workspace", "live", "alpha"],
+        pins_the_clock=False,
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-live-refuses-a-workspace-this-plane-does-not-have",
+        plane="daily",
+        python=["workspace", "live", "nowhere"],
+        pins_the_clock=False,
+        refusal="no workspace 'nowhere'",
+        same_stderr=True,
+    ),
+    # ---- charter workspace remove -------------------------------------------------------
+    Scenario(
+        name="workspace-remove-takes-the-workspace-and-its-clones",
+        plane="daily",
+        python=["workspace", "remove", "beta"],
+        pins_the_clock=False,
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-remove-reports-the-open-todos-it-discards-and-removes-anyway",
+        plane="daily",
+        python=["workspace", "remove", "alpha"],
+        pins_the_clock=False,
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-remove-refuses-a-clone-it-could-not-read",
+        plane="daily",
+        setup=_a_clone_charter_cannot_read,
+        python=["workspace", "remove", "alpha"],
+        pins_the_clock=False,
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        refusal="Refusing to remove 'alpha' — this would discard work:",
+        stderr_differs=REMOVE_QUOTES_GIT,
+    ),
+    Scenario(
+        name="workspace-remove-refuses-a-workspace-this-plane-does-not-have",
+        plane="daily",
+        python=["workspace", "remove", "nowhere"],
+        pins_the_clock=False,
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        refusal="no workspace 'nowhere'",
+        same_stderr=True,
+    ),
+    # ---- charter workspace use / unlock / default ----------------------------------------
+    Scenario(
+        name="workspace-use-writes-the-session-pointer-and-takes-the-lock",
+        plane="daily",
+        python=["workspace", "use", "beta"],
+        pins_the_clock=False,
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-use-refuses-a-name-no-workspace-has",
+        plane="daily",
+        python=["workspace", "use", "nowhere"],
+        pins_the_clock=False,
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        refusal="no workspace named 'nowhere'",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-unlock-releases-this-sessions-lock",
+        plane="daily",
+        setup=_a_session_lock,
+        python=["workspace", "unlock"],
+        pins_the_clock=False,
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-unlock-with-no-lock-says-there-was-nothing-to-unlock",
+        plane="daily",
+        python=["workspace", "unlock"],
+        pins_the_clock=False,
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-default-nominates-a-workspace",
+        plane="daily",
+        python=["workspace", "default", "beta"],
+        pins_the_clock=False,
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-default-with-no-name-says-none-is-declared",
+        plane="daily",
+        python=["workspace", "default"],
+        pins_the_clock=False,
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-default-clear-with-nothing-declared-removes-nothing",
+        plane="daily",
+        python=["workspace", "default", "--clear"],
+        pins_the_clock=False,
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-default-refuses-a-value-that-is-not-a-workspace-name",
+        plane="daily",
+        python=["workspace", "default", "../../esc"],
+        pins_the_clock=False,
+        refusal="is not a workspace name",
+        same_stderr=True,
+    ),
+    # ---- charter persona default ---------------------------------------------------------
+    Scenario(
+        name="persona-default-declares-the-front-door-in-charter-toml",
+        plane="daily",
+        python=["persona", "default", "devops"],
+        pins_the_clock=False,
+        same_stderr=True,
+    ),
+    Scenario(
+        name="persona-default-with-no-name-says-none-is-declared",
+        plane="daily",
+        python=["persona", "default"],
+        pins_the_clock=False,
+        same_stderr=True,
+    ),
+    Scenario(
+        name="persona-default-clear-with-nothing-declared-rewrites-nothing",
+        plane="daily",
+        python=["persona", "default", "--clear"],
+        pins_the_clock=False,
+        same_stderr=True,
+    ),
+    Scenario(
+        name="persona-default-refuses-a-persona-this-plane-does-not-define",
+        plane="daily",
+        python=["persona", "default", "ghost"],
+        pins_the_clock=False,
+        refusal="no persona 'ghost'",
+        same_stderr=True,
+    ),
+]
+
+
 SCENARIOS = [
     *INIT_SCENARIOS,
     *LADDER_SCENARIOS,
+    *M28_SCENARIOS,
     Scenario(
         name="harness-list-refuses-every-name-that-is-a-charter-command",
         plane="minimal",

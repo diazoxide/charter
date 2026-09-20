@@ -282,6 +282,73 @@ mod place_tests {
     }
 }
 
+
+// --------------------------------------------------------------------------------------- //
+// writing charter's own state                                                               //
+// --------------------------------------------------------------------------------------- //
+
+/// Create a directory under charter's own state at 0700 — `charter/config.py:private_mkdir`.
+///
+/// **The umask must not decide the mode of the plane's state directory.** A plain
+/// `create_dir_all` makes each level at `0o777 & ~umask`, which on the default `umask 022` is
+/// 0755 — and `.charter/` is the directory the vault registry lives in. Rust's `DirBuilder`
+/// applies its mode to every level it creates, which is the part CPython's `pathlib` does not.
+///
+/// A directory that already exists is left exactly as it is, which is Python's rule too:
+/// charter tightens what it creates and reports what it did not, because `$CHARTER_HOME` can
+/// point the state directory at a home or a shared team directory.
+pub fn private_dir(plane: &Path, dir: &Path) -> std::io::Result<()> {
+    crate::contain::no_link_on_the_way(plane, dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(dir)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir_all(dir)
+    }
+}
+
+/// Write charter's own state at 0600, settling the mode on the **inode** before any content
+/// reaches it — `charter/config.py:_private_fd`, including its ordering.
+///
+/// `OpenOptions::mode` applies **only when the call creates the inode**, so a file written by
+/// an older charter, restored from a tarball or made by hand keeps whatever mode it had and
+/// every byte written after it sits at that mode. The permission is therefore set on the
+/// descriptor this call holds.
+///
+/// **`O_TRUNC` is deliberately not in the flags.** Truncating first would empty the file while
+/// it is still at its old mode; the truncate happens after, so there is no window in which new
+/// content is readable by an account the finished file is not.
+///
+/// A failed chmod is swallowed rather than raised, as Python's is: filesystems with fixed
+/// permissions (exFAT, many network mounts) cannot hold a mode, and refusing to write state to
+/// protect a mode the filesystem was never going to keep helps nobody.
+pub fn write_private(plane: &Path, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+
+    crate::contain::no_link_on_the_way(plane, path)?;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = crate::contain::nofollow(&mut options).open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+    }
+    file.set_len(0)?;
+    file.write_all(bytes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

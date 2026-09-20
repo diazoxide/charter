@@ -32,9 +32,31 @@ use charter_core::state::Event;
 use charter_core::workspaces::Plane;
 use clap::{Args, Parser, Subcommand};
 
+mod handoff;
 mod memory;
 mod statusline;
 mod voice;
+
+/// One line of a ported command, in the voice charter says it in.
+///
+/// [`charter_core::repocmd::Say`] carries the mark and the message as a value so a test can
+/// read them back; this is the one place they become the coloured line `charter/util.py`
+/// prints. `eprintln!("{line}")` would print the mark uncoloured, which is right in a pipe
+/// and wrong in a terminal.
+fn speak(line: charter_core::repocmd::Say) {
+    use charter_core::repocmd::Say;
+    match line {
+        Say::Info(text) => voice::info(&text),
+        Say::Done(text) => voice::ok(&text),
+        Say::Warn(text) => voice::warn(&text),
+        Say::Fail(text) => voice::err(&text),
+        // `raise SystemExit(message)`, which prints the message as it is — on stderr, where
+        // every other mark goes.
+        Say::Plain(text) => eprintln!("{text}"),
+        // The command's ANSWER, on stdout, for the script reading it.
+        Say::Out(text) => println!("{text}"),
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -198,6 +220,31 @@ enum Command {
         interval: f64,
     },
 
+    /// Open a chat in a workspace you name, already working on a brief you pass as a quoted
+    /// heredoc on stdin. Your harness asks before it runs.
+    ///
+    /// **This charter cannot open a chat** — it has no frame and no channel into the app —
+    /// so every call reaches the frame refusal and is told the command to run in a new
+    /// terminal. Every refusal in front of that one is ported and is the point: charter
+    /// refuses every shape the permission prompt in front of this command cannot stand in
+    /// front of (`charter_core::handoff`).
+    Handoff {
+        /// Where the chat opens — an existing workspace, or a new one with --create. Always
+        /// named, this workspace included.
+        workspace: String,
+        /// Make the workspace first (LOCAL, never LIVE). Needs --vision.
+        #[arg(long)]
+        create: bool,
+        /// What the new workspace is for, one line. A workspace with no vision is never
+        /// proposed as a handoff target.
+        #[arg(long)]
+        vision: Option<String>,
+        /// Pin the new chat's persona. Without it the chat gets whatever a new chat in that
+        /// workspace gets.
+        #[arg(long)]
+        persona: Option<String>,
+    },
+
     /// Tell the app what a harness just did. Run by a harness's hooks, never by a person.
     ///
     /// It reads the harness's payload on stdin, says one thing on a socket the app owns, and
@@ -346,6 +393,57 @@ enum WorkspaceCommand {
         )]
         stale_days: i64,
         /// Pin the clock, for tests only.
+        #[arg(long, hide = true)]
+        now: Option<String>,
+    },
+    /// Delete a workspace and its clones. Guards work that removing it would discard.
+    ///
+    /// Exit 2 is the guard: a refusal that protected work is not the same failure as a name
+    /// that is not a workspace, and a script can tell them apart.
+    #[command(alias = "rm")]
+    Remove {
+        name: String,
+        /// Remove it even though a clone or a worktree holds work nothing else does.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Share a workspace's manifest + memory (LIVE), or make it private again (`--off`).
+    Live {
+        name: String,
+        /// Make it LOCAL: untrack what is committed, then re-ignore it.
+        #[arg(long)]
+        off: bool,
+    },
+    /// Select a workspace for this terminal and session, and lock the session to it.
+    Use {
+        name: String,
+        /// Create it first. Refused by this charter — see the command's own refusal.
+        #[arg(long)]
+        create: bool,
+        /// Switch even though this session is locked to another workspace.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Release this session's workspace lock so a different one can be selected.
+    Unlock,
+    /// Show, set or clear the workspace a session lands on when nothing else has decided.
+    Default {
+        name: Option<String>,
+        /// Remove the nomination.
+        #[arg(long)]
+        clear: bool,
+    },
+    /// Capture this workspace's repos and branches into its committed manifest.
+    Snapshot {
+        /// The workspace (default: the active one).
+        name: Option<String>,
+        /// What this workspace is for, recorded in the manifest.
+        #[arg(long)]
+        description: Option<String>,
+        /// Record the branches as they stand, even though some would not restore.
+        #[arg(long)]
+        force: bool,
+        /// Pin the clock `updated_at` is stamped with, for tests only.
         #[arg(long, hide = true)]
         now: Option<String>,
     },
@@ -893,6 +991,131 @@ fn repo_command(command: &Command) -> Option<ExitCode> {
     Some(ExitCode::from(code))
 }
 
+/// The workspace verbs that act on a workspace as a whole, or `None` for any other command.
+///
+/// Answered here rather than in [`run`] for the reason the repo commands are: each says
+/// several lines as it goes and chooses its own exit status — `remove`'s guard is exit **2**,
+/// which is neither a success nor the failure a bad name gets.
+fn workspace_command(command: &Command) -> Option<ExitCode> {
+    use charter_core::wscmd;
+
+    let verb = match command {
+        Command::Workspace(verb) => verb,
+        _ => return None,
+    };
+    // Only the verbs below; everything else stays with `run`.
+    if !matches!(
+        verb,
+        WorkspaceCommand::Remove { .. }
+            | WorkspaceCommand::Live { .. }
+            | WorkspaceCommand::Use { .. }
+            | WorkspaceCommand::Unlock
+            | WorkspaceCommand::Default { .. }
+            | WorkspaceCommand::Snapshot { .. }
+    ) {
+        return None;
+    }
+    let here = match Here::read() {
+        Ok(here) => here,
+        Err(why) => {
+            eprintln!("charter: {why}");
+            return Some(ExitCode::FAILURE);
+        }
+    };
+    let root = here.plane.root().to_path_buf();
+    let mut sink = speak;
+    let say: &mut dyn FnMut(charter_core::repocmd::Say) = &mut sink;
+    let code = match verb {
+        WorkspaceCommand::Remove { name, force } => {
+            let code = wscmd::remove::remove(&root, name, *force, say);
+            // The active workspace followed the removal: a pointer naming a workspace that is
+            // gone resolves to it on every later command, and `workspaces/<gone>` is then
+            // created again by the first write. Python resets it the same way and for the
+            // same reason; the rung it tests for is spelled here as the two pointer rungs,
+            // which are `session`/`active-file` in charter's own vocabulary.
+            if code == 0 {
+                reset_active_after_removal(&here, name, say);
+            }
+            code
+        }
+        WorkspaceCommand::Live { name, off } => wscmd::live::live(&root, name, *off, say),
+        WorkspaceCommand::Use {
+            name,
+            create,
+            force,
+        } => wscmd::select::use_workspace(&root, name, &here.ids, *create, *force, say),
+        WorkspaceCommand::Unlock => wscmd::select::unlock_command(&root, &here.ids, say),
+        WorkspaceCommand::Default { name, clear } => {
+            wscmd::select::default_command(&root, name.as_deref(), *clear, say)
+        }
+        WorkspaceCommand::Snapshot {
+            name,
+            description,
+            force,
+            now,
+        } => {
+            let now = match now {
+                Some(text) => match text.parse::<chrono::NaiveDateTime>() {
+                    Ok(naive) => {
+                        match chrono::TimeZone::from_local_datetime(&chrono::Local, &naive).single()
+                        {
+                            Some(local) => local.with_timezone(&chrono::Utc),
+                            None => {
+                                eprintln!("charter: --now names no single local instant");
+                                return Some(ExitCode::FAILURE);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("charter: --now is not a local naive timestamp: {e}");
+                        return Some(ExitCode::FAILURE);
+                    }
+                },
+                None => chrono::Utc::now(),
+            };
+            wscmd::snapshot::snapshot(
+                &wscmd::snapshot::Request {
+                    root: &root,
+                    ws: &here.active_workspace(name.as_deref()),
+                    description: description.as_deref(),
+                    force: *force,
+                    now,
+                },
+                say,
+            )
+        }
+        _ => unreachable!("filtered above"),
+    };
+    Some(ExitCode::from(code))
+}
+
+/// Point this session back at the always-present workspace after the one it was on was
+/// removed — `cmd_workspace_remove`'s closing branch.
+///
+/// Only when a POINTER is what named it. A `-w`, a `$CHARTER_WORKSPACE` or the tree the
+/// caller is standing in are the operator's own and are not charter's to rewrite; a pointer
+/// charter wrote is, and one naming a directory that no longer exists is how the next write
+/// re-creates the workspace that was just deleted.
+fn reset_active_after_removal(here: &Here, removed: &str, say: &mut dyn FnMut(charter_core::repocmd::Say)) {
+    use charter_core::active::WorkspaceRung;
+    use charter_core::repocmd::Say;
+
+    let active = charter_core::active::workspace(&here.asking(None, here.workspace_env.as_deref()));
+    if active.name != removed
+        || !matches!(
+            active.rung,
+            WorkspaceRung::SessionPointer | WorkspaceRung::TerminalPointer
+        )
+    {
+        return;
+    }
+    let fallback = charter_core::active::plane_default_workspace(here.plane.root());
+    // `force`, because the session is locked to the workspace that just went away and that
+    // lock can refuse nothing useful now.
+    charter_core::wscmd::select::set_active(here.plane.root(), &fallback, &here.ids, true);
+    say(Say::Info(format!("Active workspace reset to '{fallback}'.")));
+}
+
 fn run(command: Command) -> Result<u8, String> {
     let here = Here::read()?;
     match command {
@@ -908,6 +1131,13 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::GlRefresh { .. }
         | Command::Statusline { .. }
         | Command::Save { .. }
+        | Command::Handoff { .. }
+        | Command::Workspace(WorkspaceCommand::Remove { .. })
+        | Command::Workspace(WorkspaceCommand::Live { .. })
+        | Command::Workspace(WorkspaceCommand::Use { .. })
+        | Command::Workspace(WorkspaceCommand::Unlock)
+        | Command::Workspace(WorkspaceCommand::Default { .. })
+        | Command::Workspace(WorkspaceCommand::Snapshot { .. })
         | Command::GitPolicy { .. } => {
             unreachable!("answered before run")
         }
@@ -1179,6 +1409,35 @@ fn main() -> ExitCode {
     // `save` and `git-policy` likewise: several lines each, and an exit status of their own.
     if let Some(code) = plane_command(&cli.command) {
         return code;
+    }
+    // The workspace verbs that act on a workspace as a whole — `remove`'s guard exits 2.
+    if let Some(code) = workspace_command(&cli.command) {
+        return code;
+    }
+    // `handoff` says one refusal and exits 1; it never returns 0 in this charter.
+    if let Command::Handoff {
+        workspace,
+        create,
+        vision,
+        persona,
+    } = &cli.command
+    {
+        let here = match Here::read() {
+            Ok(here) => here,
+            Err(why) => {
+                eprintln!("charter: {why}");
+                return ExitCode::FAILURE;
+            }
+        };
+        return handoff::handoff(
+            &here,
+            &handoff::Args {
+                workspace: workspace.clone(),
+                create: *create,
+                vision: vision.clone(),
+                persona: persona.clone(),
+            },
+        );
     }
     match run(cli.command) {
         Ok(code) => ExitCode::from(code),

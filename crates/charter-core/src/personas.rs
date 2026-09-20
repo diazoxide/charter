@@ -295,6 +295,16 @@ pub fn ancestor_that_does_not_load(root: &Path, name: &str) -> Option<String> {
 /// "No glyph" is the control, format, surrogate and line/paragraph-separator categories.
 /// The format characters are listed rather than looked up, from Unicode's own list.
 pub fn one_line(value: &str) -> String {
+    one_line_limit(value, 160)
+}
+
+/// [`one_line`] with the report clip spelled out — `contain.one_line(value, limit=…)`.
+///
+/// The one caller that wants a different budget is `charter handoff`, whose printed command
+/// carries the whole brief and must not arrive ending in `…`
+/// ([`crate::handoff::NO_CLIP`]). The escape rule is shared rather than copied, so the two
+/// budgets cannot come to disagree about what an invisible character is.
+pub fn one_line_limit(value: &str, limit: usize) -> String {
     let mut out = String::new();
     for c in value.chars() {
         let cp = c as u32;
@@ -311,10 +321,10 @@ pub fn one_line(value: &str) -> String {
             out.push_str(&format!("\\u{cp:04x}"));
         }
     }
-    if out.chars().count() <= 160 {
+    if out.chars().count() <= limit {
         out
     } else {
-        let mut cut: String = out.chars().take(160).collect();
+        let mut cut: String = out.chars().take(limit).collect();
         cut.push('…');
         cut
     }
