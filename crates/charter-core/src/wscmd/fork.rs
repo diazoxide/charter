@@ -39,14 +39,19 @@
 //! operator's that no plane declares. The direction is the refusing one — charter copies less,
 //! never more — and a parent behind such a link reads as a parent with nothing to carry.
 //!
-//! # What is NOT here
+//! # `--restore`
 //!
-//! `--restore`. Python's ends by calling `cmd_workspace_restore`, which needs a `charter
-//! clone` per missing repo AND a credentialed `git pull` per restored branch; the pull half
-//! has no port and is named in [`crate::wscmd`]'s gap list. The flag is accepted rather than
-//! refused by the parser — a command line that works against one charter and not the other is
-//! worse than a sentence — the fork itself is performed in full, and the one line that would
-//! have been the restore says so.
+//! Performed, since M2.26. Python ends by calling `cmd_workspace_restore`, and so does this
+//! ([`crate::wscmd::restore`]): a `charter clone` per missing repo, then the recorded branch
+//! checked out and a credentialed `git pull --ff-only` per row. The exit is charter's —
+//! `restore(...) or int(bool(missed))` — so a fork that inherited everything and could not
+//! clone one repo exits on the restore's failure, and a fork that could not read a piece
+//! still exits 1 with the clones in place.
+//!
+//! A `--restore` returns at that call, which is charter's shape too: the "Clone its N
+//! inherited repo(s)" hint and the LIVE workspace's "Share the fork" line are what a fork
+//! that did NOT restore says, and printing them after a restore would tell the operator to
+//! do what has just been done.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -273,18 +278,22 @@ pub fn fork(request: &Request, say: Sink) -> u8 {
         )));
     }
     if restore && !repos.is_empty() {
-        // Where charter runs `workspace restore`. The gap is named at the moment it costs
-        // something rather than in a refusal that would have stopped the fork: everything
-        // above this line happened, and this says what did not.
+        // Where charter runs `workspace restore`, and now so does this. The fork's exit is
+        // still charter's — `restore`'s status OR'd with whether a piece went unread — so a
+        // fork that inherited everything and could not clone one repo is not reported as a
+        // fork that lost context.
         say(Say::Info(format!(
             "Cloning {} inherited repo(s)…",
             repos.len()
         )));
-        say(Say::Warn(format!(
-            "'{new}': this charter does not restore a workspace from its manifest — that needs a \
-             credentialed pull per recorded branch, which has no port. Clone them: charter clone \
-             <repo> -w {new}"
-        )));
+        // Python's `restore(...) or int(bool(missed))`: the restore's own failure first, and
+        // the unread-context exit only where the restore itself went fine.
+        let rc = wscmd::restore::after_fork(root, new, now, say);
+        return if rc != 0 {
+            rc
+        } else {
+            u8::from(!missed.is_empty())
+        };
     } else if !repos.is_empty() {
         say(Say::Info(format!(
             "Clone its {} inherited repo(s): charter workspace restore {new}  (or re-run fork \

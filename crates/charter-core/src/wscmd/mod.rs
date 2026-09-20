@@ -19,15 +19,10 @@
 //! | `workspace create` | [`create`] |
 //! | `workspace reinit` | [`reinit`] |
 //! | `workspace fork` / `duplicate` | [`fork`] |
+//! | `workspace restore` (and `fork --restore`) | [`restore`] |
 //!
 //! # What is NOT here, and what it would take
 //!
-//! - **`workspace fork --restore`.** The fork itself is ported ([`fork`]); what ends
-//!   charter's own is a call into `workspace restore`, which needs a `charter clone` per
-//!   missing repo AND a credentialed `git pull` per recorded branch. The clone half is
-//!   [`crate::repocmd::clone`] and the pull half is not ported, so the flag is accepted, the
-//!   fork is performed in full, and the line that would have been the restore says what did
-//!   not happen.
 //! - **The row vocabulary a guest CHECKOUT can reach that a clone cannot.** [`reinit`] and
 //!   [`create`] now wire the checkouts inside a workspace through [`crate::guest::wire`], so
 //!   the ordinary states — written, refreshed, present, somebody else's, refused — are
@@ -43,9 +38,6 @@
 //!   (charter#963 — git calls a live worktree prunable after the move, and `gc` then deletes
 //!   its admin directory while it holds uncommitted work) and the LIVE commit of the tracked
 //!   move. Neither has a port.
-//! - **`workspace restore`.** Needs `charter clone` per missing repo plus a credentialed
-//!   `git pull` per restored branch; the clone half is [`crate::repocmd::clone`] and the pull
-//!   half is not ported.
 //!
 //! # Where this is stricter than Python, on purpose
 //!
@@ -67,6 +59,7 @@ pub mod fork;
 pub mod live;
 pub mod reinit;
 pub mod remove;
+pub mod restore;
 pub mod select;
 pub mod snapshot;
 
