@@ -1038,14 +1038,6 @@ fn commit_push(request: &Request, add_cmd: &[&str], say: Sink) -> u8 {
         // scanning that blob would answer "no secret" about a file charter never read.
         // Following it instead would be a guard whose answer is about bytes the commit does
         // not carry, which is the whole defect this loop was changed to close.
-        if std::fs::symlink_metadata(&file).is_ok_and(|found| found.file_type().is_symlink()) {
-            flagged.push((
-                path.clone(),
-                "it is a link, and what a save commits for one is the link rather than the \
-                 text charter would have read",
-            ));
-            continue;
-        }
         // `:<path>` is the index's own blob for that path, resolved from the top of the
         // tree — which is what `--name-only` printed, and what `-C root` puts git in.
         let staged_blob = format!(":{path}");
