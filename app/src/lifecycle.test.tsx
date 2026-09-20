@@ -92,6 +92,8 @@ function core(
   asked: Asked[];
   /** Fires the event the app is sent when something asks it to quit. */
   askToQuit: () => Promise<void>;
+  /** Fires one `chat-moved`, the way the core pushes one. */
+  move: (moved: Moved) => void;
 } {
   const asked: Asked[] = [];
   const listeners = new Map<string, number>();
@@ -115,6 +117,15 @@ function core(
   });
   return {
     asked,
+    move: (moved: Moved) => {
+      const handler = listeners.get("chat-moved");
+      if (handler === undefined) throw new Error("the window is not listening for moves");
+      window.__TAURI_INTERNALS__.runCallback(handler, {
+        event: "chat-moved",
+        id: 1,
+        payload: moved,
+      });
+    },
     askToQuit: async () => {
       const handler = listeners.get("quit-asked");
       if (handler === undefined) throw new Error("the window is not listening for a quit");
@@ -242,6 +253,52 @@ describe("what the window does with the chats the core already has", () => {
         session: 8,
       }),
     );
+  });
+});
+
+/** What the tab for `name` says its chat is doing. */
+function stateShown(name: string): string | null | undefined {
+  const tab = within(screen.getByRole("tablist", { name: "Tabs" }))
+    .getAllByRole("tab")
+    .find((one) => one.querySelector(".tab-name")?.textContent === name);
+  return tab?.querySelector("[data-state]")?.getAttribute("data-state");
+}
+
+describe("what the window is told about the chats", () => {
+  /** A move, as the core pushes it: one chat, in one plane. */
+  function moving(plane: string, session: number, state: string, queue: number[] = []): Moved {
+    return { plane, session, state, needs_you: queue.includes(session), queue };
+  }
+
+  it("takes a move in the plane it is showing", async () => {
+    const { move } = core([chat({ session: 7, name: "ide.7" })]);
+    render(<App />);
+    await vi.waitFor(() => expect(tabs()).toEqual(["ide.7"]));
+
+    move(moving("/home/dev/plane", 7, "waiting", [7]));
+
+    await vi.waitFor(() => expect(stateShown("ide.7")).toBe("waiting"));
+  });
+
+  it("leaves a chat alone when the move belongs to another plane", async () => {
+    // Every plane numbers its chats from one, so "session 7 is waiting" is half a name. A
+    // process holding two projects would otherwise paint one project's state onto the
+    // other's chat 7 — and a chat that is waiting for you has no next event to correct it.
+    //
+    // The second move is what makes this a test rather than a hope: it is for THIS plane and
+    // a different chat, so waiting for it proves the window had finished with the foreign one.
+    const { move } = core([
+      chat({ session: 7, name: "ide.7" }),
+      chat({ session: 8, name: "ide.8" }),
+    ]);
+    render(<App />);
+    await vi.waitFor(() => expect(tabs()).toEqual(["ide.7", "ide.8"]));
+
+    move(moving("/home/dev/another-plane", 7, "waiting", [7]));
+    move(moving("/home/dev/plane", 8, "running"));
+
+    await vi.waitFor(() => expect(stateShown("ide.8")).toBe("running"));
+    expect(stateShown("ide.7")).toBe("unknown");
   });
 });
 
