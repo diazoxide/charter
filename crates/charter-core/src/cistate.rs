@@ -44,8 +44,11 @@ pub const CACHE: &str = ".charter/cache/glstate.json";
 /// How long an entry is served for: `charter/glstate.py:21` `DISPLAY_TTL`.
 pub const DISPLAY: Duration = Duration::from_secs(7200);
 
-/// Past this an entry is old enough that a refresh is due: `REFRESH_TTL`. charter-app does
-/// not refresh anything, so this is only what the panel says about the answer's age.
+/// Past this an entry is old enough that a refresh is due: `REFRESH_TTL`.
+///
+/// It is what the panel says about an answer's age AND what [`crate::glstate`] spawns a
+/// refresh over — one number, because a panel saying "a refresh is due" beside a policy that
+/// would not start one tells the operator two stories about one file.
 pub const REFRESH: Duration = Duration::from_secs(300);
 
 /// The only words a CI cell may hold: `charter/forge/base.py:CI_STATES`. Both forges map
