@@ -261,3 +261,30 @@ fn a_worktree_is_refreshed_beside_the_clone_it_was_cut_from() {
         "the worktree was not refreshed: {refreshed:?}"
     );
 }
+
+#[test]
+fn a_worktree_that_leaves_the_workspace_is_named_and_never_run_git_in() {
+    // A committed `workspaces/<ws>/.worktrees/<repo>/<piece> -> elsewhere` travels to every
+    // machine that clones the plane. `git -C` through it reads ANOTHER repository's `origin`,
+    // and the refresh then asks that forge about this branch — charter #964's shape, reached
+    // by a link instead of by an environment variable.
+    let (_keep, at) = plane();
+    let outside = at.parent().unwrap().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    let pieces = at.join("workspaces/alpha/.worktrees/svc");
+    std::fs::create_dir_all(&pieces).unwrap();
+    std::os::unix::fs::symlink(&outside, pieces.join("escape")).unwrap();
+
+    let found = glrefresh::trees(&at, "alpha").unwrap();
+
+    assert!(
+        !found.trees.iter().any(|tree| tree.ends_with("escape")),
+        "git would have been run outside the workspace: {:?}",
+        found.trees
+    );
+    assert!(
+        found.refused.iter().any(|(name, _)| name == "escape"),
+        "the refusal was dropped: {:?}",
+        found.refused
+    );
+}

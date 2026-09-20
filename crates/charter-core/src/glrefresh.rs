@@ -204,21 +204,42 @@ pub fn trees(plane: &Path, ws: &str) -> Result<Targets, String> {
     // (`dirs = clones(ws)`, then `dirs += [w for d in dirs for w in dirs_for(…)]`), which is
     // also the order the entries are written to the cache in and therefore the file's own.
     let mut trees: Vec<PathBuf> = found.repos.iter().map(|repo| repo.path.clone()).collect();
+    let mut refused = found.refused;
     for repo in &found.repos {
-        trees.extend(worktrees_of(plane, ws, &repo.name));
+        for piece in worktrees_of(plane, ws, &repo.name) {
+            // **The path git is about to be pointed at, gated as ITSELF.** A worktree
+            // directory is one `read_dir` away from the plane and nothing above it says where
+            // it lands: a committed `workspaces/<ws>/.worktrees/<repo>/<piece> -> elsewhere`
+            // travels to every machine that clones the plane, and `git -C` through it would
+            // read another repository's `origin` and then ask THAT forge about this branch.
+            // `within_workspace` returns the path it checked, and that is the one kept, so
+            // the string checked and the string used cannot be two different strings.
+            match crate::worktree::confine::within_workspace(plane, ws, &piece) {
+                Ok(checked) => trees.push(checked),
+                // Named rather than dropped, for the reason `repos::clones` names its own: a
+                // worktree that quietly disappears is a row whose CI cell stays empty with
+                // nothing anywhere to say why. Python has no such refusal — `dirs_for` lists
+                // whatever is there — so this is the Rust charter refreshing LESS, out loud.
+                Err(why) => refused.push((
+                    piece
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                    why.to_string(),
+                )),
+            }
+        }
     }
-    Ok(Targets {
-        trees,
-        refused: found.refused,
-    })
+    Ok(Targets { trees, refused })
 }
 
 /// What a workspace offered a refresh, and what it would not.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Targets {
     pub trees: Vec<PathBuf>,
-    /// Directories `repos::clones` refused, with the reason — a name charter will not take
-    /// for a repo, or a `.git` that is a symlink.
+    /// Directories charter refused, with the reason — a name it will not take for a repo, a
+    /// `.git` that is a symlink, or a worktree that leaves the workspace.
     ///
     /// **Carried so the command can say them.** A repo that quietly disappears reads as "this
     /// workspace has one fewer repo", and the operator is the only one who can tell whether
