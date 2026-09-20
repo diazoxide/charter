@@ -16,18 +16,21 @@
 //! | `workspace use`, `workspace unlock` | [`select`] |
 //! | `workspace default` | [`select`] |
 //! | `workspace snapshot` | [`snapshot`] |
+//! | `workspace create` | [`create`] |
+//! | `workspace reinit` | [`reinit`] |
 //!
 //! # What is NOT here, and what it would take
 //!
-//! - **`workspace create`, `workspace reinit`, `workspace fork`.** All three end in
-//!   `workspace.scaffold`, whose last step is the **harness layer**: the plane's
-//!   `.claude/settings.json` keys mirrored into `workspaces/<ws>/.claude/settings.json`, with
-//!   a `.charter-generated` sidecar recording the sha256 of what charter wrote, and the
-//!   staleness/foreign/blocked classification `reinit` reports row by row. [`crate::guest`]
-//!   is that machinery for a **checkout**; a workspace directory is the other target and has
-//!   no port. A `create` that skipped it would leave every chat started in that directory
-//!   without the plane's ask/deny rules and without `$CHARTER_HARNESS` — the exact defect
-//!   charter#850 is about — and a `reinit` that skipped it would print "up to date" over it.
+//! - **`workspace fork`.** The scaffold it shares with `create` is ported
+//!   ([`crate::wslayer`]); what is not is `_carry` — copying a parent workspace's charter,
+//!   memory and manifest into the fork, and cutting each recorded repo's clone onto a branch
+//!   of its own. That is a git verb per repo, not a scaffold.
+//! - **A guest CHECKOUT inside a workspace.** [`reinit`] and [`create`] wire the workspace
+//!   DIRECTORY; a clone or a linked worktree under it is a git root of its own and needs
+//!   [`crate::guest`]'s half — the `.git/info/exclude` block and the four row states that
+//!   report on it (`unhidden`, `unlisted`, `unrecorded`, `withheld`), none of which has a
+//!   port. [`reinit`] names each such checkout rather than letting "up to date" stand over
+//!   one.
 //! - **`workspace rename`/`mv`.** The move itself is three lines; what it cannot skip is
 //!   `git worktree repair` for every linked worktree of every clone that moved
 //!   (charter#963 — git calls a live worktree prunable after the move, and `gc` then deletes
@@ -51,10 +54,31 @@ use std::path::{Path, PathBuf};
 
 use crate::repocmd::{Say, Sink};
 
+pub mod create;
+pub mod ensure;
 pub mod live;
+pub mod reinit;
 pub mod remove;
 pub mod select;
 pub mod snapshot;
+
+/// One sentence for a workspace directory charter could not look at.
+///
+/// `workspace.cannot_check_workspace` — the sentence `reinit` and every command that shows
+/// the plane's workspaces share, so no two of them send a reader to different repairs for one
+/// directory.
+///
+/// The name is printed as it stands, which is what Python prints. It is a directory entry, so
+/// it can hold anything; making it readable here would be this port answering a question
+/// charter has not answered.
+pub fn cannot_check_workspace(at: &Path, code: Option<i32>) -> String {
+    let name = at.file_name().unwrap_or_default().to_string_lossy();
+    let dir = at.display().to_string();
+    format!(
+        "workspace '{name}' cannot be checked — charter changes nothing it cannot see; {}.",
+        crate::memstore::uncheckable_fix(code, &dir, &dir)
+    )
+}
 
 /// The delimiters of the managed `.gitignore` block that records which workspaces are LIVE.
 ///

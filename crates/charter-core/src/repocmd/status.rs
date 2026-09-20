@@ -126,7 +126,7 @@ pub fn status(req: &Request, out: Out, say: Sink) -> u8 {
     // header's `N workspace(s)` is a count of the workspaces charter could read, and a
     // reader who is about to be handed that number is owed the ones it could not.
     for (path, code) in &unread {
-        say(Say::Fail(cannot_check_workspace(path, *code)));
+        say(Say::Fail(crate::wscmd::cannot_check_workspace(path, *code)));
     }
 
     out(format!(
@@ -372,23 +372,6 @@ fn legacy_flat_clones(root: &Path) -> Vec<String> {
         .collect();
     names.sort();
     names
-}
-
-/// One sentence for a workspace directory charter could not look at.
-/// Python's `workspace.cannot_check_workspace`, which is the sentence `reinit` and every
-/// command that shows the plane's workspaces share — so no two of them send a reader to
-/// different repairs for one directory.
-///
-/// The name is printed as it stands, which is what Python prints. It is a directory entry,
-/// so it can hold anything; making it readable here would be this port answering a question
-/// charter has not answered, and the two would then disagree about one unreadable path.
-fn cannot_check_workspace(at: &Path, code: Option<i32>) -> String {
-    let name = at.file_name().unwrap_or_default().to_string_lossy();
-    let dir = at.display().to_string();
-    format!(
-        "workspace '{name}' cannot be checked — charter changes nothing it cannot see; {}.",
-        crate::memstore::uncheckable_fix(code, &dir, &dir)
-    )
 }
 
 /// One sentence when the caller is standing in a plane charter did **not** act on, else

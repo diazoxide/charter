@@ -660,15 +660,54 @@ enum WorkspaceCommand {
         #[arg(long)]
         off: bool,
     },
+    /// Create a workspace: its directory, its baseline files and charter's harness layer.
+    Create {
+        name: String,
+        /// Repos to clone into it immediately, by inventory name. POSITIONAL, as charter's
+        /// own `workspace create <name> [repos...]` takes them — a `--repos` of this port's
+        /// own would be a command line that works against one charter and not the other.
+        repos: Vec<String>,
+        /// What this workspace is for, recorded in its `workspace.md` charter.
+        #[arg(long, alias = "about")]
+        vision: Option<String>,
+        /// Share its charter, manifest and memory from birth.
+        #[arg(long)]
+        live: bool,
+        /// Select it for this session once it exists.
+        #[arg(long = "use")]
+        use_it: bool,
+        /// Select it even though this session is locked to another workspace.
+        #[arg(long)]
+        force: bool,
+        /// Pin the clock the manifest's `updated_at` is stamped with, for tests only.
+        #[arg(long, hide = true)]
+        now: Option<String>,
+    },
+    /// Bring a workspace's structure and charter's layer up to what this version writes.
+    Reinit {
+        /// The workspace (default: the active one).
+        name: Option<String>,
+        /// Every workspace this plane has. Given with a name, this wins and the name is
+        /// ignored — charter's own parser refuses neither, and a port that refused one would
+        /// be a command line that works against one charter and not the other.
+        #[arg(long)]
+        all: bool,
+        /// Pin the clock a backfilled manifest is stamped with, for tests only.
+        #[arg(long, hide = true)]
+        now: Option<String>,
+    },
     /// Select a workspace for this terminal and session, and lock the session to it.
     Use {
         name: String,
-        /// Create it first. Refused by this charter — see the command's own refusal.
+        /// Create it first, scaffolded exactly as `workspace create` scaffolds.
         #[arg(long)]
         create: bool,
         /// Switch even though this session is locked to another workspace.
         #[arg(long)]
         force: bool,
+        /// Pin the clock a scaffolded manifest is stamped with, for tests only.
+        #[arg(long, hide = true)]
+        now: Option<String>,
     },
     /// Release this session's workspace lock so a different one can be selected.
     Unlock,
@@ -1337,6 +1376,8 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
             | WorkspaceCommand::Unlock
             | WorkspaceCommand::Default { .. }
             | WorkspaceCommand::Snapshot { .. }
+            | WorkspaceCommand::Create { .. }
+            | WorkspaceCommand::Reinit { .. }
     ) {
         return None;
     }
@@ -1368,7 +1409,53 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
             name,
             create,
             force,
-        } => wscmd::select::use_workspace(&root, name, &here.ids, *create, *force, say),
+            now,
+        } => {
+            let Some(now) = pinned(now) else {
+                return Some(ExitCode::FAILURE);
+            };
+            wscmd::select::use_workspace(&root, name, &here.ids, *create, *force, now, say)
+        }
+        WorkspaceCommand::Create {
+            name,
+            vision,
+            live,
+            use_it,
+            force,
+            repos,
+            now,
+        } => {
+            let Some(now) = pinned(now) else {
+                return Some(ExitCode::FAILURE);
+            };
+            wscmd::create::create(
+                &wscmd::create::Request {
+                    root: &root,
+                    name,
+                    vision: vision.as_deref(),
+                    live: *live,
+                    use_it: *use_it,
+                    force: *force,
+                    repos,
+                    now,
+                    ids: &here.ids,
+                },
+                say,
+            )
+        }
+        WorkspaceCommand::Reinit { name, all, now } => {
+            let Some(now) = pinned(now) else {
+                return Some(ExitCode::FAILURE);
+            };
+            // With no `--all` and no name, the ladder: "default: the active one", which is
+            // what charter's own `reinit` resolves.
+            let one = (!*all).then(|| here.active_workspace(name.as_deref()));
+            let scope = match &one {
+                Some(ws) => wscmd::reinit::Scope::One(ws),
+                None => wscmd::reinit::Scope::All,
+            };
+            wscmd::reinit::reinit(&root, scope, now, say)
+        }
         WorkspaceCommand::Unlock => wscmd::select::unlock_command(&root, &here.ids, say),
         WorkspaceCommand::Default { name, clear } => {
             wscmd::select::default_command(&root, name.as_deref(), *clear, say)
@@ -1412,6 +1499,30 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
         _ => unreachable!("filtered above"),
     };
     Some(ExitCode::from(code))
+}
+
+/// `--now` as an instant, or the wall clock when it was not given.
+///
+/// A naive stamp is LOCAL time, as `--now` is everywhere in this binary. `None` back means the
+/// value was not an instant and the caller has already had the reason printed.
+fn pinned(now: &Option<String>) -> Option<chrono::DateTime<chrono::Utc>> {
+    let Some(text) = now else {
+        return Some(chrono::Utc::now());
+    };
+    let naive: chrono::NaiveDateTime = match text.parse() {
+        Ok(naive) => naive,
+        Err(e) => {
+            eprintln!("charter: --now is not a local naive timestamp: {e}");
+            return None;
+        }
+    };
+    match chrono::TimeZone::from_local_datetime(&chrono::Local, &naive).single() {
+        Some(local) => Some(local.with_timezone(&chrono::Utc)),
+        None => {
+            eprintln!("charter: --now names no single local instant");
+            None
+        }
+    }
 }
 
 /// Point this session back at the always-present workspace after the one it was on was
@@ -1474,6 +1585,8 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Workspace(WorkspaceCommand::Unlock)
         | Command::Workspace(WorkspaceCommand::Default { .. })
         | Command::Workspace(WorkspaceCommand::Snapshot { .. })
+        | Command::Workspace(WorkspaceCommand::Create { .. })
+        | Command::Workspace(WorkspaceCommand::Reinit { .. })
         | Command::GitPolicy { .. } => {
             unreachable!("answered before run")
         }

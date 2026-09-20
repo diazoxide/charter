@@ -59,15 +59,18 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use crate::contain;
+use crate::layer::{self, digest, write_into, write_whole};
 
 /// The sidecar recording what charter last generated in a checkout, as
 /// `{relative path: sha256 of the text charter wrote}`.
-pub const MARKER: &str = ".charter-generated";
+///
+/// [`crate::layer`]'s, because a checkout and a workspace directory must not be able to
+/// disagree about where charter's record lives.
+pub const MARKER: &str = layer::MARKER;
 
 /// The generated document carrying the plane's `env` (and so `$CHARTER_HARNESS`), its
 /// `enabledPlugins`, and its shared ask/deny rules.
-pub const SETTINGS: &str = ".claude/settings.json";
+pub const SETTINGS: &str = layer::SETTINGS;
 
 /// The generated document carrying the plane's **machine-local** ask/deny rules.
 ///
@@ -86,24 +89,6 @@ const COWRITTEN: [&str; 1] = [LOCAL_SETTINGS];
 /// own copy already reaches here, and a mirror would put the plane's instructions inside
 /// somebody else's repository to be read as that repository's.
 const WALKUP_DIRS: [&str; 2] = [".claude/agents", ".claude/skills"];
-
-/// The plane settings keys that travel into a generated document, in this order.
-const WORKSPACE_KEYS: [&str; 2] = ["enabledPlugins", "env"];
-
-/// The `permissions` buckets that travel — never `allow`.
-///
-/// A restrictive rule is the opposite of a grant: `ask` adds a prompt, `deny` adds a refusal,
-/// and neither can make anything run that would not have run anyway. Carrying them puts no
-/// permission in force that nobody clicked for; leaving them behind is what puts a safety
-/// rule out of force in the one directory where the guarded command gets typed.
-const RESTRICTIVE: [&str; 2] = ["ask", "deny"];
-
-/// The plane's own machine-local settings document, relative to the PLANE root.
-///
-/// The same spelling as [`LOCAL_SETTINGS`] and a separate constant on purpose: one names
-/// where charter reads the plane's rules from, the other where it writes a checkout's copy,
-/// and the day either moves the other must be able to stay put.
-const PLANE_LOCAL_SETTINGS: &str = ".claude/settings.local.json";
 
 /// The delimiters of charter's managed block in a checkout's `info/exclude`.
 ///
@@ -229,105 +214,14 @@ impl Wired {
 /// empty `{}` would look like a layer.
 pub fn want(plane: &Path) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
-    if let Some(text) = settings_document(plane) {
+    if let Some(text) = layer::settings_document(plane) {
         out.insert(SETTINGS.to_owned(), text);
     }
-    if let Some(text) = local_settings_document(plane) {
+    if let Some(text) = layer::local_settings_document(plane) {
         out.insert(LOCAL_SETTINGS.to_owned(), text);
     }
     out.extend(mirrored(plane));
     out
-}
-
-/// The plane's `.claude/settings.json`, read as a document — `None` when there is none or it
-/// will not parse.
-///
-/// **Read from the plane's committed file rather than composed from charter's constants**,
-/// and that is what makes this a sync rather than a second generator. A plane whose operator
-/// edited one of these keys by hand would otherwise get charter's default mirrored into every
-/// checkout, silently reverting a deliberate choice in a new place.
-fn plane_settings(plane: &Path, rel: &str) -> Option<serde_json::Value> {
-    let path = plane.join(rel);
-    let text = readable_text(plane, &path)?;
-    let doc: serde_json::Value = serde_json::from_str(&text).ok()?;
-    doc.is_object().then_some(doc)
-}
-
-/// `{ask, deny}` out of a settings document, empty buckets dropped.
-///
-/// Every level is checked for its shape before it is read: `permissions` can be a string and
-/// `ask` can be a number in a file a chat could have written, and a reader that assumed would
-/// be a crash in a launch.
-fn restrictive(doc: &serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
-    let mut out = serde_json::Map::new();
-    let Some(block) = doc
-        .get("permissions")
-        .and_then(serde_json::Value::as_object)
-    else {
-        return out;
-    };
-    for bucket in RESTRICTIVE {
-        let rules: Vec<serde_json::Value> = block
-            .get(bucket)
-            .and_then(serde_json::Value::as_array)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter(|rule| rule.is_string())
-                    .cloned()
-                    .collect()
-            })
-            .unwrap_or_default();
-        if !rules.is_empty() {
-            out.insert(bucket.to_owned(), serde_json::Value::Array(rules));
-        }
-    }
-    out
-}
-
-/// The checkout's `.claude/settings.json`: the plane's `enabledPlugins` and `env`, and its
-/// shared ask/deny rules.
-///
-/// The key order is the Python's, because the file is compared byte for byte against it:
-/// `enabledPlugins`, `env`, then `permissions` last.
-fn settings_document(plane: &Path) -> Option<String> {
-    let settings = plane_settings(plane, SETTINGS)?;
-    let mut doc = serde_json::Map::new();
-    for key in WORKSPACE_KEYS {
-        if let Some(value) = settings.get(key) {
-            doc.insert(key.to_owned(), value.clone());
-        }
-    }
-    let rules = restrictive(&settings);
-    if !rules.is_empty() {
-        doc.insert("permissions".to_owned(), serde_json::Value::Object(rules));
-    }
-    if doc.is_empty() {
-        return None;
-    }
-    Some(crate::pyjson::dumps_indent2(&serde_json::Value::Object(
-        doc,
-    )))
-}
-
-/// The checkout's `.claude/settings.local.json`: the plane's machine-local ask/deny rules and
-/// nothing else.
-///
-/// A separate file from the shared one because the plane keeps two and they differ in blast
-/// radius: `charter guard ask --local` writes a rule that is one person's on one machine, and
-/// folding it into the shared generated file would publish it to every reader of a file that
-/// sits inside somebody else's repository.
-fn local_settings_document(plane: &Path) -> Option<String> {
-    let local = plane_settings(plane, PLANE_LOCAL_SETTINGS)?;
-    let rules = restrictive(&local);
-    if rules.is_empty() {
-        return None;
-    }
-    let mut doc = serde_json::Map::new();
-    doc.insert("permissions".to_owned(), serde_json::Value::Object(rules));
-    Some(crate::pyjson::dumps_indent2(&serde_json::Value::Object(
-        doc,
-    )))
 }
 
 /// The plane's own `.claude/agents` and `.claude/skills`, as text, keyed by their path
@@ -343,7 +237,7 @@ fn mirrored(plane: &Path) -> BTreeMap<String, String> {
         let dir = plane.join(sub);
         // The path ITSELF as well as everything under it: a surface spelled as one FILE at a
         // repository root would otherwise mirror as nothing at all.
-        if let Some(text) = readable_text(plane, &dir) {
+        if let Some(text) = layer::readable_text(plane, &dir) {
             out.insert(sub.to_owned(), text);
             continue;
         }
@@ -354,7 +248,7 @@ fn mirrored(plane: &Path) -> BTreeMap<String, String> {
             let Some(rel) = rel.to_str() else {
                 continue;
             };
-            if let Some(text) = readable_text(plane, &found) {
+            if let Some(text) = layer::readable_text(plane, &found) {
                 out.insert(format!("{sub}/{rel}"), text);
             }
         }
@@ -362,31 +256,12 @@ fn mirrored(plane: &Path) -> BTreeMap<String, String> {
     out
 }
 
-/// A plane file read as text, gated where it is opened.
-///
-/// The containment check is on the entry, not on the directory above it: a persona agent that
-/// is a symlink out of the plane is content charter would otherwise copy into somebody else's
-/// repository on the plane's authority.
-///
-/// [`contain::within_plane`] and **not** `contain::readable`: the latter asks whether a path
-/// lands in one of the plane's DATA directories (`personas/`, `workspaces/`), which none of
-/// `.claude/settings.json`, `.claude/agents/` or `.claude/skills/` is. Asking it here would
-/// refuse the whole layer and mirror nothing at all. The question that belongs here is the
-/// one `within_plane` answers — does this resolve inside the plane — with both ends resolved,
-/// which is also what makes a macOS `/var` plane work at all.
-fn readable_text(plane: &Path, path: &Path) -> Option<String> {
-    if !contain::within_plane(plane, path) {
-        return None;
-    }
-    std::fs::read_to_string(path).ok()
-}
-
 /// Every entry under `dir` that is not itself a real directory, depth first.
 ///
 /// **The walk never descends through a link**, which is what makes it terminate: a
 /// `.claude/agents/loop -> ..` would otherwise walk for ever. A link to a FILE is handed back
 /// as a candidate rather than dropped, because the Python mirrors one — `personas/` generators
-/// legitimately link an agent into place — and [`readable_text`] is where it is decided,
+/// legitimately link an agent into place — and [`layer::readable_text`] is where it is decided,
 /// against the plane it must resolve inside. Dropping it here instead would be a persona's
 /// agent silently missing from every worktree, with nothing saying so.
 fn walk(dir: &Path) -> Vec<PathBuf> {
@@ -410,16 +285,16 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// The digest a marker records for one generated file.
-fn digest(text: &str) -> String {
-    use sha2::Digest;
-    let mut hasher = sha2::Sha256::new();
-    hasher.update(text.as_bytes());
-    format!("{:x}", hasher.finalize())
-}
-
-/// Charter's record in `tree`: `{}` for one that is absent, unreadable, not an object, or
-/// holding a key charter could not have written.
+/// Charter's record in `tree`, narrowed to the entries that are SETTLED: `{}` for one that
+/// is absent, unreadable, not an object, or holding a key charter could not have written.
+///
+/// Read through [`layer::read_record`], so a checkout and a workspace directory parse one
+/// file the same way. What is narrowed here is only which entries this module ACTS on: a
+/// pending entry lists what a path may hold while a write is under way, and this module never
+/// publishes one, so an entry in that shape came from the Python's own writer being killed
+/// mid-write. Acting on it as if it were settled would rewrite a file whose content charter
+/// cannot yet vouch for; dropping that one entry leaves the path reading as somebody else's,
+/// which is the direction this module is deliberately wrong in.
 ///
 /// **A pure read, with no subprocess in it.** Whether the repository *commits* a
 /// `.charter-generated` — which would make it somebody's content rather than charter's record
@@ -427,37 +302,15 @@ fn digest(text: &str) -> String {
 /// tree. Asking it here would put a `git ls-files` behind every sidebar row, and this is
 /// called once per piece on every render.
 pub fn marker_at(tree: &Path) -> BTreeMap<String, String> {
-    let Ok(text) = std::fs::read_to_string(tree.join(MARKER)) else {
-        return BTreeMap::new();
-    };
-    let Ok(serde_json::Value::Object(doc)) = serde_json::from_str::<serde_json::Value>(&text)
-    else {
-        return BTreeMap::new();
-    };
-    let mut out = BTreeMap::new();
-    for (key, value) in doc {
-        // A key charter could not have recorded — absolute, or walking up — is a key some
-        // repository committed, and acting on it is how a guest names a file outside the
-        // checkout as charter's to rewrite. The whole record is dropped, never half of it.
-        if !key_ok(&key) {
-            return BTreeMap::new();
-        }
-        let Some(hash) = value.as_str() else {
-            return BTreeMap::new();
-        };
-        out.insert(key, hash.to_owned());
-    }
-    out
-}
-
-/// Whether `key` is a name charter could have recorded: a relative path naming a file inside
-/// the checkout, and nothing else.
-fn key_ok(key: &str) -> bool {
-    let path = Path::new(key);
-    !key.is_empty()
-        && path
-            .components()
-            .all(|c| matches!(c, std::path::Component::Normal(_)))
+    let record = layer::read_record(tree);
+    record
+        .paths()
+        .filter_map(|rel| {
+            record
+                .settled(rel)
+                .map(|hash| (rel.clone(), hash.to_owned()))
+        })
+        .collect()
 }
 
 /// Whether git TRACKS `rel` in the checkout at `tree`.
@@ -609,6 +462,19 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
     }
 }
 
+/// Publish charter's record at `tree`, or remove it when it names nothing.
+///
+/// Every entry this module writes is SETTLED: a checkout's write is not made at all unless
+/// its exclude line is in place first, so there is no window here for the pending shape
+/// [`layer::Record`] carries for the other target.
+fn publish(tree: &Path, wrote: &BTreeMap<String, String>) -> Result<(), String> {
+    let mut record = layer::Record::new();
+    for (rel, hash) in wrote {
+        record.settle(rel, hash.clone());
+    }
+    layer::publish(tree, &record)
+}
+
 /// A row for `rel`, starting at the state no write changes: somebody else's file.
 ///
 /// Foreign is the default on purpose. A `Row` built as `Current` and then left unset by a
@@ -657,85 +523,6 @@ fn planned(tree: &Path, rel: &str, text: &str, record: &BTreeMap<String, String>
         Some(_) if COWRITTEN.contains(&rel) => Plan::Theirs,
         _ => Plan::Foreign,
     }
-}
-
-/// Write `text` at `rel` inside `tree`, whole: a temp beside the target, then one rename.
-///
-/// Written whole and not in place because a kill mid-write leaves a truncated
-/// `settings.local.json`, which reads as the harness's own edit — the plane's new `deny`
-/// never arrives, and nothing says so.
-///
-/// The containment check is on the exact path being opened. A `.claude` that is a directory
-/// symlink out of the checkout is refused here rather than followed.
-fn write_into(tree: &Path, rel: &str, text: &str) -> Result<(), String> {
-    let path = tree.join(rel);
-    let parent = path.parent().ok_or_else(|| "no parent".to_owned())?;
-    // BEFORE the directories are made, and again after. The first call is the one that
-    // matters for a committed `.claude` that is a DANGLING link out of the tree: without it,
-    // `create_dir_all` follows the link and creates the target — a directory charter made
-    // outside every checkout, before any containment check ever ran. The second is for the
-    // component swapped for a link between the two, which narrows the window `contain`
-    // documents as structural.
-    let linked = || {
-        Err("it is reached through a symlink, and charter will not write through one".to_owned())
-    };
-    if contain::no_link_on_the_way(tree, &path).is_err() {
-        return linked();
-    }
-    std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    if contain::no_link_on_the_way(tree, &path).is_err() {
-        return linked();
-    }
-    write_whole(&path, text)
-}
-
-/// Replace the file at `path` with `text` whole, or leave it exactly as it was.
-fn write_whole(path: &Path, text: &str) -> Result<(), String> {
-    let parent = path.parent().ok_or_else(|| "no parent".to_owned())?;
-    let tmp = parent.join(format!(
-        "{MARKER}.{}.{}.tmp",
-        std::process::id(),
-        uuid::Uuid::new_v4().simple()
-    ));
-    let write = || -> std::io::Result<()> {
-        use std::io::Write;
-        let mut file = std::fs::File::create_new(&tmp)?;
-        file.write_all(text.as_bytes())?;
-        file.sync_all()?;
-        std::fs::rename(&tmp, path)
-    };
-    match write() {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            let _ = std::fs::remove_file(&tmp);
-            Err(e.to_string())
-        }
-    }
-}
-
-/// Publish charter's record at `tree`, or remove it when it names nothing.
-fn publish(tree: &Path, record: &BTreeMap<String, String>) -> Result<(), String> {
-    let path = tree.join(MARKER);
-    if record.is_empty() {
-        // `remove_file` never follows a symlink, so a hostile marker link goes at the link
-        // node rather than through it.
-        return match std::fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e.to_string()),
-        };
-    }
-    if contain::no_link_on_the_way(tree, &path).is_err() {
-        return Err("the record is reached through a symlink".to_owned());
-    }
-    let mut doc = serde_json::Map::new();
-    for (rel, hash) in record {
-        doc.insert(rel.clone(), serde_json::Value::String(hash.clone()));
-    }
-    write_whole(
-        &path,
-        &crate::pyjson::dumps_indent2(&serde_json::Value::Object(doc)),
-    )
 }
 
 /// The real git directory of the checkout at `root`, or `None` when there is none.
@@ -963,6 +750,8 @@ mod tests {
 
     #[test]
     fn a_marker_key_that_leaves_the_checkout_is_not_one_charter_could_have_written() {
+        use crate::layer::key_ok;
+
         assert!(key_ok(".claude/settings.json"));
         assert!(key_ok(MARKER));
         for bad in [
