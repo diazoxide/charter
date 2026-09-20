@@ -23,6 +23,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use charter_core::engine::Size;
+use charter_core::machine;
 use charter_core::reopen;
 
 use crate::chats::Chats;
@@ -71,19 +72,100 @@ impl PlaneId {
 /// deliberate edit to this file rather than an argument somebody forgot to pass.
 pub struct Approved(());
 
-/// What the app holds for one open plane: its board, its chats, and where it is.
-pub struct Held {
-    id: PlaneId,
+/// The one way this app writes a plane's record — **and `reopen::write` is named here and
+/// nowhere else in it**, because writing that file and vouching for it are one act.
+///
+/// charter rewrites `.charter/app/reopen.json` every time a chat opens or closes, and the
+/// machine store's trust fingerprint covers the programs that record would start. A
+/// fingerprint taken only when the operator approved the plane therefore goes stale on their
+/// very next click, and the next launch asks them about a chat they started themselves. An
+/// operator trained to dismiss that question is worse off than one who was never asked, so
+/// the two writes are not two things a caller has to remember to pair: there is one method,
+/// and no path to the first without the second.
+///
+/// `Store::vouch` never creates an approval, only refreshes one, so a plane nobody has
+/// approved stays unapproved however many times charter writes its record.
+struct Records {
     root: PathBuf,
-    hooks: Hooks,
-    chats: Chats,
+    /// Where this machine's store lives, resolved once at startup like the plane itself —
+    /// it is an environment ladder, and a second reader of it is a second answer.
+    config: Option<PathBuf>,
     /// Whether this plane's record is the app's to read and write.
     ///
     /// Set when the record is put back, which only an approved plane reaches. An attached
     /// plane nobody has approved is not recorded EITHER WAY: reading it would run what it
     /// names, and writing it would replace the operator's own record — of a plane they never
     /// said yes to — with whatever this process happens to have open, which is nothing.
-    records: Arc<AtomicBool>,
+    allowed: AtomicBool,
+}
+
+impl Records {
+    /// Writes what is open into the plane, then vouches for it.
+    ///
+    /// **Record first, vouch second, and the order is not a preference.**
+    /// `machine::Contribution::of` reads the record back off disk, so a vouch taken before
+    /// the write would fingerprint what was there a moment ago — which is the stale
+    /// fingerprint this exists to prevent, arrived at from the other side.
+    ///
+    /// Neither half is worth interrupting the operator over. A record that cannot be written
+    /// means the next launch of this plane comes back empty; a vouch that cannot be taken
+    /// means one spurious question at that launch. Both are said and neither refuses.
+    fn write(&self, record: &reopen::Record) {
+        if !self.allowed.load(Ordering::SeqCst) {
+            return;
+        }
+        if let Err(why) = reopen::write(&self.root, record) {
+            eprintln!(
+                "charter: what is open in {} was not recorded ({why})",
+                self.root.display()
+            );
+            // Not vouched for: the fingerprint would then describe a record charter did not
+            // manage to write, and the point of it is that it describes what is there.
+            return;
+        }
+        self.vouch();
+    }
+
+    /// Re-fingerprints the plane, because charter itself just changed what opening it would
+    /// do.
+    ///
+    /// A machine with no store — Windows, where `0600` has no expression and the store
+    /// refuses outright (ADR 0031, charter-app#98) — simply has nothing to refresh. The app
+    /// runs there; it just cannot remember planes between launches.
+    fn vouch(&self) {
+        let Some(config) = self.config.as_deref() else {
+            return;
+        };
+        let contributed = machine::Contribution::of(&self.root);
+        let when = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_secs());
+        let root = self.root.clone();
+        if let Err(why) = machine::update(config, move |store| {
+            store.vouch(&root, contributed, when);
+        }) && why.kind() != std::io::ErrorKind::Unsupported
+        {
+            eprintln!(
+                "charter: the record of {} was written but not vouched for ({why}); charter                  may ask about this plane again at the next launch",
+                self.root.display()
+            );
+        }
+    }
+
+    /// From here on this plane's record is charter's to write. Nothing before this point
+    /// wrote one, so nothing before it vouched for one either.
+    fn allow(&self) {
+        self.allowed.store(true, Ordering::SeqCst);
+    }
+}
+
+/// What the app holds for one open plane: its board, its chats, and where it is.
+pub struct Held {
+    id: PlaneId,
+    root: PathBuf,
+    hooks: Hooks,
+    chats: Chats,
+    records: Arc<Records>,
 }
 
 impl Held {
@@ -105,15 +187,7 @@ impl Held {
     /// record and starts empty, which is worse than a line on standard error and better than
     /// an app that will not close a project.
     fn record(&self) {
-        if !self.records.load(Ordering::SeqCst) {
-            return;
-        }
-        if let Err(why) = reopen::write(&self.root, &self.chats.record()) {
-            eprintln!(
-                "charter: what was open in {} was not recorded ({why})",
-                self.root.display()
-            );
-        }
+        self.records.write(&self.chats.record());
     }
 
     /// Puts back the chats this plane had open when it was last closed, which STARTS the
@@ -127,7 +201,7 @@ impl Held {
     /// operator's. It is set before the record is read, so a chat that starts during the
     /// reopen is recorded like any other.
     fn reopen(&self, size: Size) {
-        self.records.store(true, Ordering::SeqCst);
+        self.records.allow();
         let record = match reopen::read_or_refusal(&self.root) {
             Ok(record) => record,
             Err(why) => {
@@ -178,16 +252,19 @@ pub struct Planes {
     /// The `charter` binary a hook runs, where the app found one. Every plane arms with the
     /// same one: it is a property of this build, not of a project.
     binary: Option<PathBuf>,
+    /// Where this machine's store lives, or none on a machine with no config home at all.
+    config: Option<PathBuf>,
     open: Mutex<HashMap<PlaneId, Arc<Held>>>,
 }
 
 impl Planes {
     /// A registry holding nothing, which is what the app comes up as before a plane is
     /// opened — and stays as, perfectly happily, when there is no plane to open.
-    pub fn telling(tell: Teller, binary: Option<PathBuf>) -> Self {
+    pub fn telling(tell: Teller, binary: Option<PathBuf>, config: Option<PathBuf>) -> Self {
         Self {
             tell,
             binary,
+            config,
             open: Mutex::new(HashMap::new()),
         }
     }
@@ -254,24 +331,14 @@ impl Planes {
             socket: socket.to_path_buf(),
         });
 
-        let records = Arc::new(AtomicBool::new(false));
-        let writing_to = root.clone();
-        let may_record = Arc::clone(&records);
+        let records = Arc::new(Records {
+            root: root.clone(),
+            config: self.config.clone(),
+            allowed: AtomicBool::new(false),
+        });
+        let writes = Arc::clone(&records);
         let mut chats = Chats::recorded_by_reporting_to(
-            Box::new(move |record| {
-                // An attached plane nobody approved writes nothing: its record is the
-                // operator's, and this process has not read it.
-                if !may_record.load(Ordering::SeqCst) {
-                    return;
-                }
-                // A record that cannot be written is not worth interrupting the operator
-                // over, but it is worth saying: a refused record means every later launch of
-                // this plane comes back empty, and silence makes that look like a plane that
-                // never had chats in it.
-                if let Err(why) = reopen::write(&writing_to, record) {
-                    eprintln!("charter: what is open was not recorded ({why})");
-                }
-            }),
+            Box::new(move |record| writes.write(record)),
             reporting,
         );
         chats.arming_with(self.binary.clone());
@@ -479,7 +546,7 @@ mod tests {
     use super::*;
 
     fn planes() -> Planes {
-        Planes::telling(Arc::new(|_: Moved| {}), None)
+        Planes::telling(Arc::new(|_: Moved| {}), None, None)
     }
 
     /// A plane on disk, with nothing in it but the marker that makes it one.
@@ -591,9 +658,9 @@ mod tests {
         );
     }
 
-    /// A record in `root` naming one chat on `program`, and the bytes it left on disk.
-    fn a_record_naming(root: &Path, program: &str) -> Vec<u8> {
-        let record = reopen::Record {
+    /// A record of one chat running `program` and nothing else.
+    fn one_chat_on(program: &str) -> reopen::Record {
+        reopen::Record {
             chats: vec![charter_core::reopen::Chat {
                 program: program.to_owned(),
                 args: Vec::new(),
@@ -605,9 +672,80 @@ mod tests {
                 persona: None,
                 show_footer: false,
             }],
-        };
-        reopen::write(root, &record).expect("the record is written");
+        }
+    }
+
+    /// A record in `root` naming one chat on `program`, and the bytes it left on disk.
+    fn a_record_naming(root: &Path, program: &str) -> Vec<u8> {
+        reopen::write(root, &one_chat_on(program)).expect("the record is written");
         std::fs::read(record_of(root)).expect("the record reads back")
+    }
+
+    /// Whether the store would stop to ask about this plane, as it stands right now.
+    #[cfg(unix)]
+    fn would_ask(config: &Path, root: &Path) -> bool {
+        machine::read(config)
+            .store
+            .consent(root, &machine::Contribution::of(root))
+            .must_ask()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writing_a_plane_s_record_vouches_for_it_in_the_same_breath() {
+        // charter rewrites `.charter/app/reopen.json` every time a chat opens or closes, and
+        // the store's fingerprint covers the programs that record would start. A fingerprint
+        // refreshed only when the operator approved the plane goes stale on their very next
+        // click — and the next launch asks them about a chat they started themselves. An
+        // operator trained to dismiss that question is worse off than one never asked.
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        machine::update(&config, |store| {
+            store.remember(&root, 1);
+            store.approve(&root, 1, machine::Contribution::of(&root));
+        })
+        .expect("the plane is approved");
+        let records = Records {
+            root: root.clone(),
+            config: Some(config.clone()),
+            allowed: AtomicBool::new(true),
+        };
+
+        // A record that appeared behind charter's back is exactly what the question is for.
+        reopen::write(&root, &one_chat_on("/bin/echo")).expect("the record is written");
+        let behind_its_back = would_ask(&config, &root);
+        // And one charter itself wrote is not.
+        records.write(&one_chat_on("/bin/true"));
+        let charter_s_own = would_ask(&config, &root);
+
+        assert!(
+            behind_its_back,
+            "a record charter did not write must still be asked about"
+        );
+        assert!(
+            !charter_s_own,
+            "charter would ask the operator about a chat charter itself recorded"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_plane_nobody_approved_is_not_vouched_into_consent_by_its_record_being_written() {
+        // `vouch` never creates an approval, and this is the wiring mistake that would matter
+        // if it did: charter's own bookkeeping would become the operator's yes.
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        let records = Records {
+            root: root.clone(),
+            config: Some(config.clone()),
+            allowed: AtomicBool::new(true),
+        };
+
+        records.write(&one_chat_on("/bin/true"));
+
+        assert!(would_ask(&config, &root), "a write became an approval");
     }
 
     /// Where the record lives, which is beside the socket in `.charter/app/`.

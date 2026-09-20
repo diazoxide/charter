@@ -962,6 +962,9 @@ pub fn run() {
                     std::sync::Arc::new(move |moved: Moved| told(&window, moved))
                 },
                 binary,
+                // Resolved once, here, like the plane: it is an environment ladder, and a
+                // second reader of it is a second answer to where this machine's store is.
+                charter_core::machine::config_root(),
             ));
 
             // The working directory, resolved ONCE, to decide which plane the first window
