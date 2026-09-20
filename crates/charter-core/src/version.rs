@@ -126,7 +126,9 @@ fn parse(v: &str) -> Option<Key> {
                     if end != b.len() {
                         continue;
                     }
-                    return Some(build(epoch, release, pre, post, dev));
+                    // Cloned rather than moved: this is inside three loops that may still
+                    // iterate, and the release is the one part of the answer built before them.
+                    return Some(build(epoch, release.clone(), pre, post, dev));
                 }
             }
         }

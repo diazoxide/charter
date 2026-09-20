@@ -50,7 +50,11 @@ fn a_probe_this_charter_cannot_run_is_unchecked_and_never_ticked() {
     let dir = plane();
     let said = charter(dir.path(), &["news", "--pending"]);
     assert!(said.status.success(), "{said:?}");
-    assert_eq!(out(&said), "", "nothing can be pending when nothing was checked");
+    assert_eq!(
+        out(&said),
+        "",
+        "nothing can be pending when nothing was checked"
+    );
     assert!(
         !err(&said).contains("nothing pending — every entry with a probe reports adopted"),
         "the green tick was printed over unchecked probes:\n{}",
@@ -62,8 +66,16 @@ fn a_probe_this_charter_cannot_run_is_unchecked_and_never_ticked() {
         err(&said)
     );
     // And each one says which command it was, so the reader can see it is this CLI's gap.
-    assert!(err(&said).contains("`charter persona lint` did not run here"), "{}", err(&said));
-    assert!(err(&said).contains("`charter frame-probe` did not run here"), "{}", err(&said));
+    assert!(
+        err(&said).contains("`charter persona lint` did not run here"),
+        "{}",
+        err(&said)
+    );
+    assert!(
+        err(&said).contains("`charter frame-probe` did not run here"),
+        "{}",
+        err(&said)
+    );
 }
 
 #[test]
@@ -103,9 +115,16 @@ fn a_release_body_goes_to_stdout_so_a_workflow_can_redirect_it() {
     let dir = plane();
     let body = charter(dir.path(), &["news", "--for", "0.44.1"]);
     assert!(body.status.success(), "{body:?}");
-    assert_eq!(err(&body), "", "the body is stdout's and nothing else is said");
+    assert_eq!(
+        err(&body),
+        "",
+        "the body is stdout's and nothing else is said"
+    );
     assert!(out(&body).starts_with("### "));
-    assert!(out(&body).ends_with('\n'), "`print` ends the body with a newline");
+    assert!(
+        out(&body).ends_with('\n'),
+        "`print` ends the body with a newline"
+    );
 }
 
 #[test]
@@ -123,8 +142,16 @@ fn update_says_which_half_it_does_and_installs_nothing() {
     let dir = plane();
     let said = charter(dir.path(), &["update"]);
     assert!(said.status.success(), "{said:?}");
-    assert!(err(&said).contains("does not install anything here"), "{}", err(&said));
-    assert!(err(&said).contains("no update baseline recorded"), "{}", err(&said));
+    assert!(
+        err(&said).contains("does not install anything here"),
+        "{}",
+        err(&said)
+    );
+    assert!(
+        err(&said).contains("no update baseline recorded"),
+        "{}",
+        err(&said)
+    );
     // Nothing was created: this command reads.
     assert!(!dir.path().join(".charter").exists(), "update wrote state");
 
@@ -144,6 +171,14 @@ fn the_flags_that_move_a_python_package_are_answered_rather_than_rejected() {
     let dir = plane();
     let said = charter(dir.path(), &["update", "--to", "0.63.0", "--bump"]);
     assert!(said.status.success(), "{said:?}");
-    assert!(err(&said).contains("--to names a published version"), "{}", err(&said));
-    assert!(err(&said).contains("the pin was left alone"), "{}", err(&said));
+    assert!(
+        err(&said).contains("--to names a published version"),
+        "{}",
+        err(&said)
+    );
+    assert!(
+        err(&said).contains("the pin was left alone"),
+        "{}",
+        err(&said)
+    );
 }
