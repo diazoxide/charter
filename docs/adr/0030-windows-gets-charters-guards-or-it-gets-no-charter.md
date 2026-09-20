@@ -1,11 +1,17 @@
 # Windows gets charter's guards, or it gets no charter
 
 **DRAFT — this needs the operator's sign-off before anything is built on it.** Two things
-about it are not settled and should be settled by whoever accepts it. The number: charter's
-ADRs live in the charter repo, `docs/adr/0001`–`0026`, and this is the first one written in
-charter-app; `0027` and `0028` are referred to by name throughout `crates/charter-core` but
-have no file there yet, so `0029` is the first number that certainly collides with nothing.
-And the place: if ADRs stay in the charter repo, this file moves beside 0025 and 0026 and
+about it are not settled and should be settled by whoever accepts it.
+
+**The number, which is not safe to assume.** charter's ADRs live in the charter repo,
+`docs/adr/0001`–`0026`, and this is the first one written in charter-app. `0027` and `0028`
+are referred to by name throughout `crates/charter-core` but have no file there. `0029` was
+free when this was started and was taken while it was being written — charter-app#91 merged
+with *"ADR 0029 (diazoxide/charter#1153)"*, the footer decision. So this is `0030`, and the
+number should be checked once more at sign-off rather than trusted: several agents allocate
+from this sequence at once, and nothing in either repo reserves one.
+
+**The place.** If ADRs stay in the charter repo, this file moves beside 0025 and 0026 and
 loses nothing but its path.
 
 ADR 0025 rebuilt charter as a desktop app on a Rust core and named three platforms: macOS,
@@ -202,6 +208,36 @@ is what makes the test targets a wall rather than the lib.
 **It is a floor, not the list.** `cargo check --workspace --all-targets` stops at the crate
 that fails, so `charter-cli`, `app/src-tauri` and *every test target* were never reached. The
 next layer's errors only become visible once these six are gone.
+
+**So they were removed, and the next layer is run 35522081785, commit `4cef5d9`.**
+`charter-core`'s **library compiles on Windows.** The error list has moved one rung up, to
+`charter-cli`, and it is six sites in three files:
+
+```
+crates\charter-cli\src\main.rs:1011       error[E0433] cannot find `unix` in `os`
+crates\charter-cli\src\main.rs:1024       error[E0599] no method `process_group` on `Command`
+crates\charter-cli\src\statusline.rs:171  error[E0433] cannot find `unix` in `os`
+crates\charter-cli\src\statusline.rs:270  error[E0433] cannot find `unix` in `os`   (test)
+crates\charter-cli\src\statusline.rs:272  error[E0433] cannot find `unix` in `os`   (test)
+crates\charter-cli\tests\memory.rs:145    error[E0433] cannot find `unix` in `os`   (test)
+```
+
+Two of them are the hook channel again under another name — `statusline.rs` reaches for
+`std::os::unix::net::UnixStream` directly rather than through `hookwire`, which is the second
+copy charter-app#95 asks to remove. One is `detach_self`'s `process_group(0)`. Three are
+tests.
+
+These are fixed here too, and the same way: the surface check answers "no app is listening",
+which the module's own doc already says means **render**; `detach_self` gets
+`CREATE_NEW_PROCESS_GROUP`, with a comment saying plainly that it is the nearest thing and
+not the same guarantee; and the two unix-only tests are marked as *missing on Windows*, not
+as not applying.
+
+**What is still not known.** `app/src-tauri` had begun compiling when the run aborted, and
+`charter-core`'s own test targets were scheduled but not proven either way — cargo stops
+handing out new units once one fails. The stand-in wall (charter-app#101) is therefore still
+un-counted. Each of these runs moves the frontier by one rung, and that is the shape of the
+remaining work rather than a surprise.
 
 **The `-c core.hooksPath=/dev/null` guard still bites.** Measured rather than assumed, and
 this is a refutation of a worry rather than a finding: without the flag the planted

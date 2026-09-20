@@ -133,6 +133,11 @@ fn forget_still_takes_a_real_slug() {
 }
 
 #[test]
+// Unix-only because it plants a symlink, and a symlink is what it is about. Windows has
+// reparse points instead, and `contain`'s walk cannot see most of them — so this test does
+// not "not apply" there, it is MISSING there, and charter-app#97 is where it comes back with
+// a reparse point in place of the link.
+#[cfg(unix)]
 fn persona_recall_does_not_print_an_index_linked_out_of_the_plane() {
     // charter reads the index by name and prints it; a committed `MEMORY.md -> /elsewhere`
     // printed whatever it pointed at. The store's own gate is asked here.

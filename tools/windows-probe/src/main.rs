@@ -193,7 +193,7 @@ fn eof_when_the_program_exits(dir: &Path) {
     // Dropping the master closes the pseudo console, which is what DOES end the reader here.
     close(pair.master, "q1");
     match heard.recv_timeout(PATIENCE) {
-        Ok((took, _)) => println!("eof-after-master-drop: YES, after {took:?}"),
+        Ok(took) => println!("eof-after-master-drop: YES, after {took:?}"),
         Err(_) => println!("eof-after-master-drop: NO, not even then"),
     }
 }

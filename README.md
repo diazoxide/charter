@@ -68,7 +68,7 @@ CI runs a `windows` job too, and it is **evidence, not a gate**: `continue-on-er
 of the nine required checks, and it reports the whole `cargo check` error list rather than
 stopping at the first line. Nothing has been ported to Windows, so it is expected to be red —
 what it is for is making "what is true on Windows" a measurement instead of a guess. What it
-has found so far is `docs/adr/0029`, and charter-app#95 to #102.
+has found so far is `docs/adr/0030`, and charter-app#95 to #103.
 
 Every plane write is also checked against the Python charter itself: the same command is run by
 both implementations against copies of one fixture plane, and the trees they leave are compared
