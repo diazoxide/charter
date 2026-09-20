@@ -153,6 +153,13 @@ checkout instead of the code, silently and on one platform only. charter-app#93 
 `* -text`; it marks nothing in the tree as changed, because everything here is already LF, and
 it is the precondition for trusting any Windows measurement at all.
 
+**And when a chat does start, it never says anything.** `harness::hook_command` builds each
+armed state hook as `shell_quoted(binary) + " hook <word>"`, POSIX single-quoting, and on
+Windows a hook command runs through `cmd.exe`, where `'` quotes nothing: the program is
+literally named `'C:\…\charter.exe'` and there is none. A session's state comes from hooks
+only (ADR 0018), so a Windows charter's board would never move and would have no way to say
+why. #103.
+
 **And a chat has no program to run.** `app/src-tauri/src/sessions.rs:296` is
 `std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned())`. On Windows `SHELL` is
 unset and `/bin/sh` is not there, so every chat fails to start before any of the above is
@@ -191,6 +198,7 @@ detail:
 | #100 | charter cannot find or run git, and two more lookups share the bugs | fix, sized |
 | #101 | `crates/stand-in` is `cfg(unix)` end to end, so the tests cannot compile | rewrite |
 | #102 | `glstate::alive` and `news::alive` disagree off unix | decide once |
+| #103 | the armed state hooks are POSIX shell commands, so no chat ever reports | design |
 
 ## The options, and the one this takes
 
@@ -235,7 +243,7 @@ as trustworthy as the macOS and Linux ones — not a Windows charter that starts
 **6–10 weeks** for A–D, of which roughly half is test infrastructure that buys no shipped
 behaviour — plus E.
 
-**Taking option C below moves the number.** The reparse-tag work in B is the same work as the
+**Taking option C above moves the number.** The reparse-tag work in B is the same work as the
 `openat`-beneath-a-descriptor rewrite ADR 0028 already puts at M3, so doing Windows after that
 rewrite rather than before it takes B down to the ACLs and the pipe. A–D then lands nearer
 **4–6 weeks**. That is the strongest argument for the order this ADR recommends, and it is an
