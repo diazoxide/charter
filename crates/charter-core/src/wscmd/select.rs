@@ -275,20 +275,21 @@ pub fn use_workspace(
     let existing = plane.workspaces().unwrap_or_default();
     let always = crate::active::plane_default_workspace(root);
     let there = existing.iter().any(|n| n == name) || name == always;
-    if !there {
-        if !create {
-            say(Say::Fail(format!("no workspace named '{name}'.")));
-            let close = near(name, &existing);
-            if !close.is_empty() {
-                say(Say::Info(format!("  Did you mean: {}?", close.join(", "))));
-            } else if !existing.is_empty() {
-                say(Say::Info(format!("  Existing: {}", existing.join(", "))));
-            }
-            say(Say::Info(format!(
-                "  Create it: charter workspace use {name} --create"
-            )));
-            return 1;
+    // An unknown name is a QUESTION rather than an action, and `--create` is what turns it
+    // into one. The two conditions are one decision — "charter was not asked to make this" —
+    // so they read as one.
+    if !there && !create {
+        say(Say::Fail(format!("no workspace named '{name}'.")));
+        let close = near(name, &existing);
+        if !close.is_empty() {
+            say(Say::Info(format!("  Did you mean: {}?", close.join(", "))));
+        } else if !existing.is_empty() {
+            say(Say::Info(format!("  Existing: {}", existing.join(", "))));
         }
+        say(Say::Info(format!(
+            "  Create it: charter workspace use {name} --create"
+        )));
+        return 1;
     }
 
     // Python's `workspace.ensure`, and it runs on BOTH paths: for a name `--create` is

@@ -3178,7 +3178,16 @@ M28_SCENARIOS = [
         name="workspace-create-use-in-a-locked-session-creates-it-and-refuses-the-selection",
         plane="daily",
         python=["workspace", "create", "gamma", "--use"],
+        # Exit 2: the workspace WAS created and only the selection was refused, which a script
+        # has to be able to tell from a name that is not a workspace.
+        refusal="locked to 'alpha' for this session",
         same_stderr=True,
+        ignore={
+            ".charter/persona-state/trace/fixture-session-1.jsonl": (
+                "charter records the refused selection in its trace store; this binary writes "
+                "no trace at all, which is a whole store and not this command's to port"
+            )
+        },
     ),
     Scenario(
         name="workspace-create-use-selects-the-workspace-it-just-made",

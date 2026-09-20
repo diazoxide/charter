@@ -1069,18 +1069,77 @@ mod tests {
     #[test]
     fn a_settings_path_reached_through_a_link_is_foreign_and_never_written_through() {
         let (plane, ws) = plane();
+        // Charter's own layer first, so there IS a record — then the file is replaced by a
+        // link out of the plane pointing at content that record still vouches for, while the
+        // plane moves on. Without the containment check the row reads `stale`, which is
+        // charter's own file to rewrite, and the write lands wherever the link points.
+        //
+        // The weaker shape of this test — a link to content nothing vouches for — passes with
+        // the check DELETED, because unrecorded content reads `foreign` on its own. This one
+        // does not: it is the digest, not the path, that would let the write through.
+        wire(plane.path(), &ws);
+        let mine = std::fs::read_to_string(ws.join(layer::SETTINGS)).unwrap();
         let outside = plane.path().parent().unwrap().join("victim-settings.json");
-        std::fs::write(&outside, "PRECIOUS\n").unwrap();
-        std::fs::create_dir_all(ws.join(".claude")).unwrap();
-        // The link is planted at the EXACT path the write opens, which is the only place a
-        // test of this proves anything: a link one directory up would be caught by a gate on
-        // the parent, and a gate on the parent is the bug this repository keeps shipping.
+        std::fs::write(&outside, &mine).unwrap();
+        std::fs::remove_file(ws.join(layer::SETTINGS)).unwrap();
+        // Planted at the EXACT path the write opens, which is the only place a test of this
+        // proves anything: a link one directory up is caught by a gate on the parent, and a
+        // gate on the parent is the mistake this repository keeps shipping.
         std::os::unix::fs::symlink(&outside, ws.join(layer::SETTINGS)).unwrap();
+        std::fs::write(
+            plane.path().join(layer::SETTINGS),
+            r#"{"permissions":{"deny":["Bash(rm -rf *)"]}}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            status(plane.path(), &ws, &want(plane.path())),
+            [(layer::SETTINGS.to_string(), Found::Foreign)],
+            "a path charter reaches through a link is not one its record can vouch for"
+        );
         assert_eq!(
             rows(&wire(plane.path(), &ws)),
             [(layer::SETTINGS, Did::Foreign)]
         );
-        assert_eq!(std::fs::read_to_string(&outside).unwrap(), "PRECIOUS\n");
+        assert_eq!(
+            std::fs::read_to_string(&outside).unwrap(),
+            mine,
+            "charter wrote the plane's new rules through a link out of the plane"
+        );
+        let _ = std::fs::remove_file(&outside);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_withdrawal_is_never_performed_through_a_link_out_of_the_workspace() {
+        let (plane, ws) = plane();
+        wire(plane.path(), &ws);
+        let mine = std::fs::read_to_string(ws.join(layer::SETTINGS)).unwrap();
+        // The same shape one verb further on: the record vouches for what the link POINTS at,
+        // so without the check the withdraw finds a digest it trusts and unlinks a path of the
+        // operator's. `remove_file` goes at the link node, so what is lost is their link.
+        let outside = plane.path().parent().unwrap().join("victim-withdrawn.json");
+        std::fs::write(&outside, &mine).unwrap();
+        std::fs::remove_file(ws.join(layer::SETTINGS)).unwrap();
+        std::os::unix::fs::symlink(&outside, ws.join(layer::SETTINGS)).unwrap();
+        // And the plane stops declaring anything, so this path is now unwanted.
+        std::fs::write(plane.path().join(layer::SETTINGS), r#"{"hooks":{}}"#).unwrap();
+
+        assert!(
+            !status(plane.path(), &ws, &want(plane.path()))
+                .iter()
+                .any(|(_, found)| *found == Found::Unwanted),
+            "a path reached through a link is not charter's to withdraw"
+        );
+        assert!(
+            !wire(plane.path(), &ws)
+                .iter()
+                .any(|row| row.did == Did::Removed)
+        );
+        assert!(
+            ws.join(layer::SETTINGS).symlink_metadata().is_ok(),
+            "charter removed a link the operator put there"
+        );
         let _ = std::fs::remove_file(&outside);
     }
 
