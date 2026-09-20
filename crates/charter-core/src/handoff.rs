@@ -51,14 +51,6 @@
 
 use std::fmt::Write as _;
 
-/// What [`brief_shown`] passes as the display limit to mean **do not clip**
-/// (`charter/contain.py:NO_CLIP`).
-///
-/// `one_line`'s own budget is 160 characters, which is right for a report row and wrong for
-/// a line whose whole point is that it can be pasted and run: a 12 KB brief would arrive
-/// ending in `…`.
-pub const NO_CLIP: usize = usize::MAX;
-
 /// The first line of every handoff's first message. Facts charter can observe and no
 /// instruction: where it came from, which workspace that was, and when.
 ///
@@ -202,7 +194,8 @@ pub fn first_message(stamp_line: &str, brief: &str) -> String {
 /// was titled by a PREFIX of the line the operator wrote — charter's "first line" and theirs
 /// meaning different things, silently. A shell heredoc ends a line at `\n`, which is what the
 /// operator typed into. What a control character then does on screen is a rendering question,
-/// answered where the rendering is ([`one_line`]), not by cutting the text short here.
+/// answered where the rendering is ([`crate::shown::one_line`]), not by cutting the text short
+/// here.
 pub fn title(brief: &str) -> String {
     for line in brief.split('\n') {
         let stripped = crate::memstore::py_strip(line);
@@ -244,8 +237,8 @@ pub enum BadMessage {
     Flag,
     /// A CLI with subcommands may match it against them (`codex login`). A handoff's stamp
     /// makes a real first message several words, so only a direct caller of the seam gets
-    /// here. The word is already through [`one_line`]: it is printed into a refusal, and a
-    /// value crossing into a line with structure forges one.
+    /// here. The word is already through [`crate::personas::one_line`]: it is printed into a
+    /// refusal, and a value crossing into a line with structure forges one.
     OneWord(String),
     /// No command-line argument can carry a NUL byte.
     Nul,
@@ -425,21 +418,12 @@ pub fn quote(word: &str) -> String {
 /// That is the right way round — a brief has nothing to say in ESC — and the operator can see
 /// on screen exactly what the command would send.
 ///
-/// The escape is asked for without the report clip ([`NO_CLIP`]), because a command cut off
-/// after 160 characters is not a command.
+/// The escape is asked for without the report clip ([`crate::shown::NO_CLIP`]), because a
+/// command cut off after 160 characters is not a command. That constant and the escape rule
+/// are both [`crate::shown`]'s: `charter/handoff.py:_shown` is `contain.one_line` at
+/// `contain.NO_CLIP`, and this is the same two names on this side.
 fn brief_shown(command: &str) -> String {
-    one_line(command, NO_CLIP)
-}
-
-/// `contain.one_line` with the limit spelled out — every character with no glyph, and every
-/// whitespace but the space, as its escape, then clipped.
-///
-/// [`crate::personas::one_line`] is this at the report budget; this is the same function with
-/// the budget as a parameter, because "do not clip" is a real caller
-/// (`charter/handoff.py:_shown`) and two spellings of the escape rule is two places to change
-/// it.
-pub fn one_line(value: &str, limit: usize) -> String {
-    crate::personas::one_line_limit(value, limit)
+    crate::shown::one_line(command, crate::shown::NO_CLIP)
 }
 
 #[cfg(test)]

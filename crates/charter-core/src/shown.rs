@@ -89,3 +89,306 @@ pub fn readable(value: &str, limit: usize) -> String {
 pub fn short(value: &str) -> String {
     readable(value, DISPLAY_LIMIT)
 }
+
+// ------------------------------------------------------------------------------------------
+// One LINE of a report, and the sentence it is assembled into
+// ------------------------------------------------------------------------------------------
+//
+// `charter/contain.py`'s `one_line` and `sentence`, which answer a different question from
+// [`readable`] above and are a different port for it.
+//
+// `readable` asks *can a reader read this value back off the line* — the identifier question,
+// answered by a complement rule (printable ASCII, everything else escaped). `one_line` asks
+// only *can this value forge a second LINE*, and it is deliberately narrower: its ninety
+// Python callers print workspace names, persona roles and forge text into a TUI, where an
+// em-dash is content and has to reach the screen as itself. Folding one into the other would
+// escape every one of those.
+
+/// Unicode general category `Cf`, as ranges.
+///
+/// **The one part of Python's `_INVISIBLE` that Rust's own `char` predicates cannot answer.**
+/// `Cc` is `char::is_control`, `Zl`/`Zp`/`Zs` are all `char::is_whitespace`, and `Cs` — a lone
+/// surrogate — is not a `char` at all. `Cf` is what is left, and it is a table.
+///
+/// Generated from `unicodedata` 16.0.0, the version CPython 3.13 carries:
+///
+/// ```text
+/// python3 -c "import unicodedata as u; print([hex(c) for c in range(0x110000) \
+///     if u.category(chr(c)) == 'Cf'])"
+/// ```
+///
+/// A table goes stale as Unicode grows, which is the objection this module's complement rule
+/// exists to dodge — and it is accepted HERE rather than dodged, because the property being
+/// ported is Python's and Python's is category-based. A `Cf` codepoint assigned after 16.0.0
+/// escapes in charter and not here until this table moves: one line the two implementations
+/// would render differently, named rather than left to be found. U+180E is why the table
+/// cannot be skipped altogether — it is `Cf`, and `char::is_whitespace` is false for it.
+const FORMAT_CHARS: [(char, char); 21] = [
+    ('\u{ad}', '\u{ad}'),
+    ('\u{600}', '\u{605}'),
+    ('\u{61c}', '\u{61c}'),
+    ('\u{6dd}', '\u{6dd}'),
+    ('\u{70f}', '\u{70f}'),
+    ('\u{890}', '\u{891}'),
+    ('\u{8e2}', '\u{8e2}'),
+    ('\u{180e}', '\u{180e}'),
+    ('\u{200b}', '\u{200f}'),
+    ('\u{202a}', '\u{202e}'),
+    ('\u{2060}', '\u{2064}'),
+    ('\u{2066}', '\u{206f}'),
+    ('\u{feff}', '\u{feff}'),
+    ('\u{fff9}', '\u{fffb}'),
+    ('\u{110bd}', '\u{110bd}'),
+    ('\u{110cd}', '\u{110cd}'),
+    ('\u{13430}', '\u{1343f}'),
+    ('\u{1bca0}', '\u{1bca3}'),
+    ('\u{1d173}', '\u{1d17a}'),
+    ('\u{e0001}', '\u{e0001}'),
+    ('\u{e0020}', '\u{e007f}'),
+];
+
+/// Has `c` no glyph of its own — `charter/contain.py`'s `_INVISIBLE`, plus the whitespace
+/// clause beside it?
+///
+/// Python asks `category(ch) in {Cc, Cf, Cs, Zl, Zp} or (ch.isspace() and ch != ' ')`. These
+/// three clauses are that set, exactly:
+///
+/// * `is_control` is `Cc` and nothing else;
+/// * `is_whitespace` is Rust's `White_Space`, which covers `Zl` (U+2028), `Zp` (U+2029) and
+///   every `Zs` but the space — the whole of Python's `isspace()` clause except the four
+///   separator controls U+001C–U+001F, which are `Cc` and are caught above;
+/// * [`FORMAT_CHARS`] is `Cf`, and `Cs` cannot be a `char`.
+fn invisible(c: char) -> bool {
+    c.is_control()
+        || (c.is_whitespace() && c != ' ')
+        || FORMAT_CHARS.iter().any(|&(lo, hi)| (lo..=hi).contains(&c))
+}
+
+/// `value` as one line of a report, with nothing in it that can forge another
+/// (`charter/contain.py:195`).
+///
+/// **The property is line structure, not trustworthiness.** charter's reports are lines of
+/// the form `  <name> → <command>`, and every field in one comes out of a committed file. A
+/// newline in one of those fields writes a second line that looks exactly as much like
+/// charter's own output as the first. So every character with no glyph is replaced by its own
+/// escape, and the result is clipped.
+///
+/// What this does NOT do is make the value trustworthy to READ: `I` and `l`, a Cyrillic `а`
+/// and a Latin `a`, come back unchanged and a reader cannot tell them apart. Those cannot
+/// forge a line, which is the whole of what is claimed. A caller whose sentence has to NAME
+/// something wants [`readable`] instead.
+///
+/// The escape is Python's, spelling for spelling: `\xNN` below U+0100 and `\uXXXX` above it,
+/// where the four is a MINIMUM width — so an astral codepoint renders as five hex digits, not
+/// four. Deliberately not [`escape_char`]'s fixed-width injective form; the two answer
+/// different questions and charter writes both.
+pub fn one_line(value: &str, limit: usize) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        if invisible(c) {
+            let cp = c as u32;
+            if cp < 0x100 {
+                out.push_str(&format!("\\x{cp:02x}"));
+            } else {
+                out.push_str(&format!("\\u{cp:04x}"));
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    // Python clips on CHARACTERS, and what survives `invisible` is arbitrary Unicode, so this
+    // counts codepoints rather than bytes.
+    if out.chars().count() <= limit {
+        return out;
+    }
+    let mut clipped: String = out.chars().take(limit).collect();
+    clipped.push('…');
+    clipped
+}
+
+/// [`one_line`] at the ordinary budget.
+pub fn line(value: &str) -> String {
+    one_line(value, DISPLAY_LIMIT)
+}
+
+/// What a caller passes as [`one_line`]'s `limit` to mean **do not clip**
+/// (`charter/contain.py:184`) — for a field whose whole point is that the reader gets all of
+/// it. Those want the escaping and not the budget above it.
+pub const NO_CLIP: usize = usize::MAX;
+
+/// charter's own separator, for a sentence naming several things (`charter/contain.py:385`).
+///
+/// charter's own, for the same reason the template is charter's own text: a line naming
+/// several committed things is a line with structure, and a separator taken from one of the
+/// things would let that thing restructure the line.
+pub const SEQUENCE_SEPARATOR: &str = ", ";
+
+/// One field of a [`sentence`]: one value, or several.
+pub enum Slot {
+    /// One value, contained whole.
+    One(String),
+    /// Several, contained **element by element** and then joined.
+    ///
+    /// Containing the elements and not the join, because the join IS the sentence: a sentence
+    /// that names a list exists to name every entry in it, and clipping the joined string
+    /// drops the last entries and leaves a line reading as though they were never there.
+    Many(Vec<String>),
+}
+
+impl From<&str> for Slot {
+    fn from(value: &str) -> Self {
+        Slot::One(value.to_owned())
+    }
+}
+
+impl From<String> for Slot {
+    fn from(value: String) -> Self {
+        Slot::One(value)
+    }
+}
+
+impl From<usize> for Slot {
+    fn from(value: usize) -> Self {
+        Slot::One(value.to_string())
+    }
+}
+
+/// One line of charter's own report, with **every** field in it bounded to one line
+/// (`charter/contain.py:420`).
+///
+/// `template` is a literal in charter's own source — charter's sentence, with `{}` slots.
+/// Everything substituted into it is treated as a value out of a committed file, and goes
+/// through [`one_line`].
+///
+/// **The containment is at the assembly, not at the slots.** `news.entry_errors` contained
+/// the ordering *value* and interpolated the committed *filename* three inches away raw, so
+/// an entry named `0.60.0-a\nEVIL: charter says nothing is wrong.md` printed two lines where
+/// charter emitted one — the second being the author's sentence in charter's voice (#502).
+/// The value was contained because the value was what that commit was about, not because the
+/// filename had been judged safe. A field added to a template tomorrow is contained by having
+/// been passed here, which is a property a reviewer checks by reading the call site.
+///
+/// Python spells the fields as keyword arguments and this spells them as pairs, which is the
+/// one thing that could not be carried across. What IS carried across is that there is no way
+/// to reach a template's slots without passing through here.
+pub fn sentence(template: &str, fields: &[(&str, Slot)]) -> String {
+    sentence_at(template, fields, DISPLAY_LIMIT)
+}
+
+/// [`sentence`] at a caller's own budget — `charter/contain.py`'s `path_sentence` is this
+/// function with a longer one, for a refusal naming a path the reader has to act on.
+pub fn sentence_at(template: &str, fields: &[(&str, Slot)], limit: usize) -> String {
+    let shown: Vec<(&str, String)> = fields
+        .iter()
+        .map(|(key, slot)| {
+            let value = match slot {
+                Slot::One(v) => one_line(v, limit),
+                Slot::Many(items) => items
+                    .iter()
+                    .map(|v| one_line(v, limit))
+                    .collect::<Vec<_>>()
+                    .join(SEQUENCE_SEPARATOR),
+            };
+            (*key, value)
+        })
+        .collect();
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        let Some(offset) = rest[open..].find('}') else {
+            break;
+        };
+        let close = open + offset;
+        let name = &rest[open + 1..close];
+        out.push_str(&rest[..open]);
+        match shown.iter().find(|(key, _)| *key == name) {
+            Some((_, value)) => out.push_str(value),
+            // A slot no caller filled is left standing as it was written. Python raises
+            // `KeyError` here, and raising is what `contain.py`'s own rule forbids; a visible
+            // `{version}` in a report is the loudest thing that is still safe.
+            None => out.push_str(&rest[open..=close]),
+        }
+        rest = &rest[close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+#[cfg(test)]
+mod report_line_tests {
+    use super::*;
+
+    #[test]
+    fn a_newline_cannot_forge_a_second_line() {
+        assert_eq!(line("a\nEVIL: fine"), "a\\x0aEVIL: fine");
+        assert_eq!(line("a\r\nb"), "a\\x0d\\x0ab");
+    }
+
+    #[test]
+    fn a_glyph_is_left_alone_and_a_format_character_is_not() {
+        // The characters charter's own entries carry: content, not structure.
+        assert_eq!(
+            line("Ship it — properly · no shortcuts ✗"),
+            "Ship it — properly · no shortcuts ✗"
+        );
+        // U+200B ZERO WIDTH SPACE is `Cf`; U+180E is `Cf` and NOT `White_Space`.
+        assert_eq!(line("a\u{200b}b"), "a\\u200bb");
+        assert_eq!(line("a\u{180e}b"), "a\\u180eb");
+        // U+00A0 is `Zs`: Python's `isspace()` clause, not the category set.
+        assert_eq!(line("a\u{a0}b"), "a\\xa0b");
+        // An astral escape is FIVE hex digits, because Python's width is a minimum.
+        assert_eq!(line("a\u{e0020}b"), "a\\ue0020b");
+    }
+
+    #[test]
+    fn the_four_separator_controls_are_escaped_where_rust_calls_them_printable() {
+        assert_eq!(line("a\u{1f}b"), "a\\x1fb");
+    }
+
+    #[test]
+    fn a_long_value_is_clipped_with_an_ellipsis() {
+        let long = "x".repeat(DISPLAY_LIMIT + 5);
+        let shown = line(&long);
+        assert_eq!(shown.chars().count(), DISPLAY_LIMIT + 1);
+        assert!(shown.ends_with('…'));
+        assert_eq!(
+            line(&"x".repeat(DISPLAY_LIMIT)).chars().count(),
+            DISPLAY_LIMIT
+        );
+    }
+
+    #[test]
+    fn every_field_of_a_sentence_is_contained() {
+        let said = sentence(
+            "{name}: `{field}: {raw}` is not a value charter reads.",
+            &[
+                ("name", "0.60.0-a\nEVIL: nothing is wrong.md".into()),
+                ("field", "security".into()),
+                ("raw", "yes".into()),
+            ],
+        );
+        assert_eq!(said.lines().count(), 1);
+        assert!(said.contains("0.60.0-a\\x0aEVIL: nothing is wrong.md"));
+    }
+
+    #[test]
+    fn a_list_is_contained_element_by_element_and_then_joined() {
+        let said = sentence(
+            "{version}: {count} entries ({names})",
+            &[
+                ("version", "0.52.0".into()),
+                ("count", 2usize.into()),
+                (
+                    "names",
+                    Slot::Many(vec!["a\nb.md".to_owned(), "c.md".to_owned()]),
+                ),
+            ],
+        );
+        assert_eq!(said, "0.52.0: 2 entries (a\\x0ab.md, c.md)");
+    }
+
+    #[test]
+    fn an_unfilled_slot_is_left_standing_rather_than_raising() {
+        assert_eq!(sentence("a {nope} b", &[]), "a {nope} b");
+    }
+}

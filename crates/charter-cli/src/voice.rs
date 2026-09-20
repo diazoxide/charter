@@ -42,118 +42,25 @@ pub fn py_rstrip(text: &str) -> &str {
     text.trim_end_matches(charter_core::memstore::is_python_space)
 }
 
-/// `tui.sanitize`: everything that is not charter's own colour markup removed.
-///
-/// SGR (`ESC [ … m`) is kept; every other escape goes whole — a string sequence (OSC, DCS,
-/// APC, PM, SOS) to its terminator or the end, any other CSI, any other two-character
-/// escape, a lone ESC. Tab, newline, CR, VT and FF become one space each, so the columns
-/// below do not shear; every other C0 control, DEL and C1 is dropped.
-pub fn sanitize(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = String::with_capacity(text.len());
-    let mut i = 0;
-    while i < chars.len() {
-        let c = chars[i];
-        if c == '\x1b' {
-            i = escape(&chars, i, &mut out);
-            continue;
-        }
-        match c {
-            '\t' | '\n' | '\r' | '\x0b' | '\x0c' => out.push(' '),
-            '\0'..='\x1f' | '\x7f'..='\u{9f}' => {}
-            _ => out.push(c),
-        }
-        i += 1;
-    }
-    out
-}
-
-/// One escape starting at `chars[at]`, kept when it is SGR; the index after it.
-fn escape(chars: &[char], at: usize, out: &mut String) -> usize {
-    let next = chars.get(at + 1).copied();
-    if next == Some('[') {
-        // SGR: `[0-9;]*m`, kept whole.
-        let mut j = at + 2;
-        while j < chars.len() && (chars[j].is_ascii_digit() || chars[j] == ';') {
-            j += 1;
-        }
-        if chars.get(j) == Some(&'m') {
-            out.extend(&chars[at..=j]);
-            return j + 1;
-        }
-        // Any other CSI: `[0-?]*[ -/]*[@-~]`.
-        let mut j = at + 2;
-        while j < chars.len() && ('0'..='?').contains(&chars[j]) {
-            j += 1;
-        }
-        while j < chars.len() && (' '..='/').contains(&chars[j]) {
-            j += 1;
-        }
-        if chars.get(j).is_some_and(|c| ('@'..='~').contains(c)) {
-            return j + 1;
-        }
-        // Not a complete CSI: the two-character escape it starts with.
-        return at + 2;
-    }
-    if let Some(kind) = next
-        && matches!(kind, ']' | 'P' | '^' | '_' | 'X')
-    {
-        // A string sequence runs to BEL, to ESC \, or to the end.
-        let mut j = at + 2;
-        while j < chars.len() && chars[j] != '\x1b' && chars[j] != '\x07' {
-            j += 1;
-        }
-        if j == chars.len() {
-            return j;
-        }
-        if chars[j] == '\x07' {
-            return j + 1;
-        }
-        if chars.get(j + 1) == Some(&'\\') {
-            return j + 2;
-        }
-        // Unterminated before another escape: only the two-character escape goes.
-        return at + 2;
-    }
-    match next {
-        Some(c) if c != '\x1b' => at + 2,
-        _ => at + 1,
-    }
-}
-
-/// The columns `text` takes once sanitized, SGR costing none. One column a character: a
-/// cell here is a date, a base's label or a heading, and charter's own labels are ASCII.
-pub fn width(text: &str) -> usize {
-    let clean = sanitize(text);
-    let mut n = 0;
-    let chars: Vec<char> = clean.chars().collect();
-    let mut i = 0;
-    while i < chars.len() {
-        if chars[i] == '\x1b' {
-            // Only SGR survives sanitizing.
-            while i < chars.len() && chars[i] != 'm' {
-                i += 1;
-            }
-            i += 1;
-            continue;
-        }
-        n += 1;
-        i += 1;
-    }
-    n
-}
-
 /// `tui.column("", cells)`: the widest cell, plus the two-space gap to the next column.
+///
+/// **Measured in COLUMNS, by [`charter_core::tui`], and no longer in characters.** This
+/// module used to carry its own `sanitize`/`width`/`pad` — a hand-rolled second copy of
+/// `charter/tui.py` that counted one column per character, with the precondition written
+/// beside it that "charter's own labels are ASCII". Half the cells here are not charter's: a
+/// recall hit's label is a memory's heading, which is whatever an operator wrote. A CJK
+/// heading declares two columns per glyph and a combining mark declares none, so the count
+/// under-padded one and over-padded the other and the row stopped lining up with its
+/// neighbours — against a Python that has measured east-asian width since it was written.
+///
+/// So there is one width in this repo now, and this is a call into it.
 pub fn column<'a>(cells: impl IntoIterator<Item = &'a str>) -> usize {
-    cells.into_iter().map(width).max().unwrap_or(0) + 2
+    charter_core::tui::column("", cells, 2, None)
 }
 
-/// `tui.pad(text, w)` for a column [`column`] sized: sanitized, then padded to `w`. The
-/// column is never narrower than its widest cell, so nothing is ever cut.
+/// `tui.pad(text, w)` for a column [`column`] sized: sanitized, then fitted to `w`.
 pub fn pad(text: &str, w: usize) -> String {
-    let clean = sanitize(text);
-    let fill = w.saturating_sub(width(&clean));
-    format!("{clean}{}", " ".repeat(fill))
+    charter_core::tui::pad(text, w, charter_core::tui::Align::Left)
 }
 
 /// A path as charter prints it: relative to the plane where it is inside, else as is.
@@ -197,26 +104,6 @@ pub fn uncheckable_fix(code: Option<i32>, path: &str, place: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn colour_markup_is_kept_and_every_other_control_goes() {
-        assert_eq!(sanitize("a\x1b[32mb\x1b[0m"), "a\x1b[32mb\x1b[0m");
-        assert_eq!(sanitize("a\x1b[2Jb"), "ab", "a CSI that is not SGR");
-        assert_eq!(
-            sanitize("a\x1b]0;pwned\x07b"),
-            "ab",
-            "an OSC, payload and all"
-        );
-        assert_eq!(sanitize("a\x1b]0;pwned"), "a", "unterminated, to the end");
-        assert_eq!(sanitize("a\x1bcb"), "ab", "a two-character escape");
-        assert_eq!(
-            sanitize("a\tb\nc"),
-            "a b c",
-            "whitespace controls keep a space"
-        );
-        assert_eq!(sanitize("a\x07b\x7fc\u{85}d"), "abcd");
-        assert_eq!(sanitize("a\x1b"), "a", "a trailing ESC");
-    }
 
     #[test]
     fn a_column_is_its_widest_cell_and_a_gap() {

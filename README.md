@@ -83,6 +83,29 @@ screen unlocked — a locked or sleeping display is not drawn, so nothing would 
 node tools/bench.mjs          # builds release, then prints and writes target/bench/<time>/results.json
 ```
 
+## A build you can run
+
+CI builds the app but never bundles it, so nothing in a PR is installable. The `release`
+workflow is: run it from the Actions tab (**release → Run workflow**, any branch) and it
+produces a macOS `.app` and `.dmg` and a Linux `.deb` and AppImage, release profile, as
+workflow artifacts kept for 90 days. The run's job summary prints exactly what to type to
+install and launch each one.
+
+Everything it produces is **unsigned and not notarized**. On macOS that means Gatekeeper
+refuses it until the quarantine flag is stripped:
+
+```bash
+xattr -dr com.apple.quarantine charter.app
+```
+
+Signed installers and the updater are M4 (spec decisions 19 and 21); the seams for them are
+commented in `.github/workflows/release.yml`.
+
+The bundles carry the `charter` binary beside the app's own executable, because the app runs
+that one for hooks and deliberately does not look at `PATH`. It is staged as a Tauri sidecar by
+the workflow and declared in `app/src-tauri/tauri.release.conf.json`, which exists only so that
+a plain checkout — where the sidecar has not been built — still builds in CI.
+
 ## Licence
 
 MIT
