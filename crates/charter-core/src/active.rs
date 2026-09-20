@@ -76,6 +76,24 @@ use crate::contain;
 /// `$CHARTER_WORKSPACE` — the per-session pin a launcher hands a chat.
 pub const WORKSPACE_ENV: &str = "CHARTER_WORKSPACE";
 
+/// `$CHARTER_SESSION_ID` — what the pointer rungs are keyed on, and the variable a LAUNCHER
+/// sets so that every process it starts answers [`session_id`] identically.
+///
+/// Named here rather than spelled out at each side, because the reader is this module and the
+/// writer is whatever launched the chat — the tmux frame in Python (`-e
+/// CHARTER_SESSION_ID=<chat id>`), and `app/src-tauri/src/sessions.rs` here. Two string
+/// literals in two crates is how the app came to set `CHARTER_CHAT` and nothing charter reads
+/// (charter-app#63).
+pub const SESSION_ID_ENV: &str = "CHARTER_SESSION_ID";
+
+/// `$CLAUDE_CODE_SESSION_ID` — the harness's own id for the CONVERSATION, one rung under
+/// [`SESSION_ID_ENV`].
+///
+/// A conversation is not a chat: `/clear` ends one and starts another inside the same chat,
+/// in the same terminal, under the same program. Anything keyed on this is therefore keyed on
+/// something that changes under a chat that did not move, which is charter-app#63 exactly.
+pub const CONVERSATION_ENV: &str = "CLAUDE_CODE_SESSION_ID";
+
 /// `$CHARTER_PERSONA` — the same, for the identity a chat adopts.
 pub const PERSONA_ENV: &str = "CHARTER_PERSONA";
 
@@ -150,9 +168,9 @@ pub fn session_id(env: &dyn Fn(&str) -> Option<String>) -> Option<String> {
     // whitespace is truthy, so it is taken and then sanitised to nothing — it does NOT fall
     // through to Claude Code's id. Stripping before the choice would change which variable
     // decides.
-    let raw = env("CHARTER_SESSION_ID")
+    let raw = env(SESSION_ID_ENV)
         .filter(|v| !v.is_empty())
-        .or_else(|| env("CLAUDE_CODE_SESSION_ID").filter(|v| !v.is_empty()))?;
+        .or_else(|| env(CONVERSATION_ENV).filter(|v| !v.is_empty()))?;
     let id: String = py_strip(&raw)
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))

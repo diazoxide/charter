@@ -35,7 +35,7 @@ use lifecycle::Quitting;
 ///
 /// It must EXIST: arming a hook at a path that is not there would put an error in the
 /// harness's log on every single event, which is worse than the chats reading `unknown`.
-fn charter_binary() -> Option<PathBuf> {
+pub(crate) fn charter_binary() -> Option<PathBuf> {
     let named = std::env::var_os("CHARTER_BINARY").map(PathBuf::from);
     let beside = std::env::current_exe()
         .ok()

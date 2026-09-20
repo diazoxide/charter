@@ -143,13 +143,32 @@ pub(crate) fn of(workspace: &str) -> Result<Panels, String> {
 /// The panel that needs git. Call it off the thread that draws.
 pub(crate) fn repo_states(workspace: &str) -> Result<RepoStates, String> {
     let root = root()?;
-    let found = repos::clones(&root, workspace).map_err(|why| why.to_string())?;
+    let binary = crate::charter_binary();
+    states_of(&root, workspace, binary.as_deref())
+}
+
+/// [`repo_states`] against a plane and a `charter` said out loud rather than discovered.
+///
+/// Split so the refresh trigger below is a test's to drive: `root()` walks up from the
+/// process's working directory and `charter_binary` looks beside the running executable, and
+/// neither can be pointed anywhere by a test that may not touch the environment
+/// (`std::env::set_var` is `unsafe`, and this workspace forbids that).
+fn states_of(
+    root: &std::path::Path,
+    workspace: &str,
+    binary: Option<&std::path::Path>,
+) -> Result<RepoStates, String> {
+    let found = repos::clones(root, workspace).map_err(|why| why.to_string())?;
     // Read once for the whole listing, so every row ages against the same instant and a
     // refusal is reported once rather than on every row.
-    let (cache, cache_refused) = match cistate::read(&root) {
+    let (cache, cache_refused) = match cistate::read(root) {
         Ok(cache) => (Some(cache), None),
         Err(why) => (None, Some(why.to_string())),
     };
+    // Read FIRST, then decide whether to refresh: this listing draws what the cache holds now,
+    // and the refresh is for the next one. Python's render path does the two in this order for
+    // the same reason (`glstate.read_for`, then `glstate.maybe_spawn`).
+    refresh_if_it_is_due(root, workspace, binary);
     Ok(RepoStates {
         workspace: workspace.to_string(),
         repos: found
@@ -159,6 +178,44 @@ pub(crate) fn repo_states(workspace: &str) -> Result<RepoStates, String> {
             .collect(),
         cache_refused,
     })
+}
+
+/// Kick off a background forge refresh for this workspace, if the policy says one is due —
+/// charter-app#69.
+///
+/// **This is the trigger, and it is a user action rather than a timer.** Focusing a workspace
+/// is what runs this panel, and no daemon runs anywhere in charter-app: an app nobody touches
+/// makes no forge call, ever. `charter_core::glstate` holds the decision — the refresh window,
+/// the cooldown, the stuck window, and the lock that names the refresh in flight — so that two
+/// panels in quick succession are one refresh and a wedged one is not replaced every two
+/// minutes, each replacement holding the forge credential.
+///
+/// It **spawns**, never waits: the spec's budget for a workspace switch is 100 ms, and the
+/// slow thing in this command is already the one `git status` per clone above.
+///
+/// Silent where a refusal is routine — cooling down, already running, nothing stale — and out
+/// loud where it is not, because a CI column that never fills over a `charter` binary that
+/// went missing would otherwise look exactly like one nobody has refreshed.
+fn refresh_if_it_is_due(root: &std::path::Path, workspace: &str, binary: Option<&std::path::Path>) {
+    use charter_core::glstate::Refreshing;
+
+    let Some(binary) = binary else {
+        // Already said once, at startup, by the launch that could not find it. Saying it again
+        // on every workspace focus would be the same sentence fifty times an hour.
+        return;
+    };
+    // The same list the refresher itself walks, and the same one the panel draws.
+    let Ok(targets) = charter_core::glrefresh::trees(root, workspace) else {
+        return;
+    };
+    match charter_core::glstate::maybe_spawn(root, workspace, &targets.trees, binary) {
+        // Cooling down, one already in flight, nothing stale, or the operator's own brake:
+        // every one of these is the policy working, and none of them is news.
+        Refreshing::Started { .. } | Refreshing::Declined(_) => {}
+        Refreshing::NotStarted { why } => {
+            eprintln!("charter: a forge refresh for '{workspace}' would not start ({why})");
+        }
+    }
 }
 
 /// One row: what git said, and then what the cache says about the branch git named.
@@ -226,4 +283,110 @@ fn one(repo: &repos::Repo, cache: Option<&cistate::Cache>) -> RepoState {
         Reading::NotFetched(why) => row.not_fetched = Some(why),
     }
     row
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    /// A plane with one workspace holding one clone, and nothing fetched for it.
+    fn plane_with_a_clone() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("a plane");
+        let root = std::fs::canonicalize(dir.path()).expect("a resolved plane");
+        std::fs::write(root.join("charter.toml"), "").expect("a manifest");
+        std::fs::create_dir_all(root.join("workspaces/alpha/svc/.git")).expect("a clone");
+        std::fs::write(
+            root.join("workspaces/alpha/svc/.git/HEAD"),
+            "ref: refs/heads/main\n",
+        )
+        .expect("a HEAD");
+        (dir, root)
+    }
+
+    /// A stand-in `charter` that records how it was called and then ends at once.
+    fn stand_in(at: &Path) -> PathBuf {
+        let binary = at.join("charter-stand-in");
+        std::fs::write(
+            &binary,
+            "#!/bin/sh\nprintf '%s %s\\n' \"$1\" \"$3\" >> \"$(dirname \"$0\")/ran\"\n",
+        )
+        .expect("the stand-in is written");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755))
+            .expect("it is runnable");
+        binary
+    }
+
+    /// Everything the stand-in has recorded so far, once it has recorded anything.
+    fn ran(at: &Path) -> String {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            if let Ok(text) = std::fs::read_to_string(at.join("ran"))
+                && !text.is_empty()
+            {
+                // Give a second line the chance to arrive, so "exactly one" is not merely
+                // "the first one got there first".
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                return std::fs::read_to_string(at.join("ran")).unwrap_or(text);
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the refresh never ran"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn focusing_a_workspace_is_what_kicks_a_forge_refresh() {
+        // **The wiring, and the whole of charter-app#69's visible half.** Until this, nothing
+        // anywhere called the refresher: the CI column showed whatever the last
+        // `charter gl-refresh` typed by hand had left. `glstate` holds the policy, and this is
+        // the only thing that asks it — a user action, never a timer.
+        let (_plane, root) = plane_with_a_clone();
+        let beside = tempfile::tempdir().expect("somewhere for the stand-in");
+        let binary = stand_in(beside.path());
+
+        let drawn = states_of(&root, "alpha", Some(&binary)).expect("the panel draws");
+
+        assert_eq!(drawn.workspace, "alpha");
+        assert_eq!(
+            ran(beside.path()).trim(),
+            "gl-refresh alpha",
+            "the refresh was not asked for the workspace that was focused"
+        );
+    }
+
+    #[test]
+    fn focusing_it_again_does_not_start_a_second_refresh() {
+        // The cooldown reaching all the way out to the trigger: an operator clicking between
+        // two workspaces, or a panel asked twice, is one forge process and not two.
+        let (_plane, root) = plane_with_a_clone();
+        let beside = tempfile::tempdir().expect("somewhere for the stand-in");
+        let binary = stand_in(beside.path());
+
+        states_of(&root, "alpha", Some(&binary)).expect("the panel draws");
+        let once = ran(beside.path());
+        states_of(&root, "alpha", Some(&binary)).expect("the panel draws again");
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        assert_eq!(once.lines().count(), 1, "the first focus ran {once:?}");
+        assert_eq!(
+            std::fs::read_to_string(beside.path().join("ran")).unwrap_or_default(),
+            once,
+            "the second focus started another refresh"
+        );
+    }
+
+    #[test]
+    fn a_panel_drawn_with_no_charter_beside_the_app_still_draws() {
+        // Without a binary there is nothing to spawn, and a panel is not the place to say so:
+        // the launch already said it once, and repeating it per focus is fifty lines an hour.
+        let (_plane, root) = plane_with_a_clone();
+
+        let drawn = states_of(&root, "alpha", None).expect("the panel draws");
+
+        assert_eq!(drawn.repos.len(), 1);
+    }
 }
