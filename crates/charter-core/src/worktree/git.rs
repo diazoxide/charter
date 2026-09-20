@@ -47,8 +47,9 @@
 //! **What that leaves.** A repository's own hooks are disabled for charter's calls too, which
 //! is deliberate — charter never commits, and a `post-checkout` charter triggers is not one
 //! the operator asked for. And `HOME` remains the residual surface for anything git grows
-//! that names a program through config; `publish`, when it lands, has to decide about
-//! `credential.helper` and `core.sshCommand`, which it needs and cannot blanket-disable.
+//! that names a program through config. A call that crosses a network ([`run_network`]) takes
+//! `credential.helper` out of config's hands too — it resets every configured helper and names
+//! the forge CLI's own — and refuses SSH outright, so `core.sshCommand` is never reached.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -73,7 +74,9 @@ use std::time::{Duration, Instant};
 /// while no longer calling a slow answer a broken repository.
 pub const READ: Duration = Duration::from_secs(30);
 
-/// The deadline for a call that crosses a network. `publish` is the only one.
+/// The deadline for a call that crosses a network: `clone`, `fetch`, and `publish` when it
+/// lands. Only ever through [`run_network`], which is what holds such a call to the
+/// one-credential rule.
 pub const NETWORK: Duration = Duration::from_secs(120);
 
 /// Where to look for git when the inherited `PATH` is not to be trusted.
@@ -82,7 +85,7 @@ pub const NETWORK: Duration = Duration::from_secs(120);
 /// let it choose the binary. These are searched first, in order; the inherited `PATH` is the
 /// fallback so that a machine keeping git somewhere else still works, and that fallback is
 /// the one part of this an attacker with the environment can still reach.
-const GIT_DIRS: [&str; 4] = ["/usr/bin", "/usr/local/bin", "/opt/homebrew/bin", "/bin"];
+pub(crate) const GIT_DIRS: [&str; 4] = ["/usr/bin", "/usr/local/bin", "/opt/homebrew/bin", "/bin"];
 
 /// What the child is given, and nothing else.
 fn child_env(git_dirs: &str) -> Vec<(&'static str, String)> {
@@ -167,16 +170,157 @@ fn git_binary() -> (PathBuf, String) {
 /// `merge`; `core.fsmonitor` covers `status`, which `dirt` runs on every guard.
 const NO_PROGRAMS: [&str; 2] = ["core.hooksPath=/dev/null", "core.fsmonitor=false"];
 
+/// The one-credential rule (charter `docs/git-policy.md`), put where no config file can
+/// relax it: every call that crosses a network goes over HTTPS with ONE forge CLI's token,
+/// never SSH, never a prompt, never a helper the operator's config happens to name.
+///
+/// - `protocol.ssh.allow=never` is the load-bearing one. A `url.git@github.com:.insteadOf
+///   https://github.com/` in the operator's global config — a common way to force SSH —
+///   rewrites the HTTPS URL charter built, and Python charter's clone then went over SSH
+///   without a word. Here git refuses the transport instead, and the caller says why.
+/// - `ext`, `git` and plain `http` are refused for the same reason: `ext::` runs a command,
+///   `git://` and `http://` carry no token or carry it in the clear. `file` is left alone:
+///   it reaches no network and asks for no credential.
+/// - `credential.helper=` EMPTY resets every helper configured before it — the keychain, a
+///   store file — so the only helper left is the forge's own, added after it. That is what
+///   "one credential" means; a union of helpers is several.
+/// - `core.askPass=` empty is git's own spelling of "no askpass program"; the variable is
+///   already never passed.
+/// - `submodule.recurse=false`: a submodule URL comes out of the cloned repo and can name
+///   any host, and a nested clone does not read the policy (see `docs/git-policy.md`).
+const NETWORK_RULE: [&str; 7] = [
+    "protocol.ssh.allow=never",
+    "protocol.ext.allow=never",
+    "protocol.git.allow=never",
+    "protocol.http.allow=never",
+    "core.askPass=",
+    "credential.helper=",
+    "submodule.recurse=false",
+];
+
+/// The variables a forge CLI reads its credential, its config or its route from.
+///
+/// Passed through to a NETWORK call only, because git runs the forge's credential helper with
+/// git's own environment — and an operator whose `gh` holds its token in `GH_TOKEN`, in a
+/// keyring reached over D-Bus, or behind a corporate proxy would otherwise be refused by a
+/// clone Python charter performed. Each is read out of this process's environment, never put
+/// on a command line and never logged: a token in `argv` is readable by every process on the
+/// machine, one in the environment only by the same user.
+///
+/// # What an attacker who can set each one gains
+///
+/// The premise throughout is an attacker who already controls this process's environment.
+/// They cannot read the operator's token through any of these — every one of them flows
+/// INTO the CLI — so what they buy is a credential or a route of their own, and the question
+/// for each entry is whether that reaches further than the environment control they started
+/// with.
+///
+/// - **The token names** (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`,
+///   `GITHUB_ENTERPRISE_TOKEN`, `GITLAB_TOKEN`, `GITLAB_ACCESS_TOKEN`, `OAUTH_TOKEN`): the
+///   call authenticates as the attacker's account instead of the operator's. The host is
+///   still the one charter's URL names, and the fetched bytes still land on the operator's
+///   disk, so this ends in a failed or an under-privileged read — not in a disclosure.
+/// - **The config locations** (`GH_CONFIG_DIR`, `GLAB_CONFIG_DIR`, `XDG_CONFIG_HOME`,
+///   `XDG_DATA_HOME`, `XDG_STATE_HOME`): the same thing by another road — a config file the
+///   attacker wrote, holding their token. It is **not** code execution: `gh` expands an alias
+///   only for a word that is not one of its own commands, and every call here is a built-in
+///   (`api`, `auth`). Measured on gh 2.83.2 with a hand-written config holding
+///   `aliases: {api: '!echo ALIAS_RAN', notacmd: '!echo …'}` — `gh api` ran the built-in,
+///   `gh notacmd` ran the alias.
+/// - **The keyring route** (`XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`): the CLI asks a
+///   secret service the attacker owns, which answers with their credential and learns that a
+///   lookup happened. The operator's real keyring is on their own session bus and is not
+///   reachable this way. Without these, a Linux desktop that keeps the token in the keyring
+///   fails every call with "not logged in".
+/// - **The proxies** (`HTTPS_PROXY`/`https_proxy`, `HTTP_PROXY`/`http_proxy`, `ALL_PROXY`,
+///   `NO_PROXY`/`no_proxy`): the connection is routed through the attacker's proxy, which
+///   sees the host and the timing. TLS is still end to end through the `CONNECT` tunnel, so
+///   the token and the contents are not theirs. Without these, a network whose only route out
+///   is a proxy cannot reach the forge at all.
+/// - **The CA bundle** (`SSL_CERT_FILE`, `SSL_CERT_DIR`): **the sharp one.** An attacker who
+///   sets it adds a certificate authority the CLI trusts, and with a proxy they also set that
+///   is a full interception of the CLI's HTTPS, token included. It is here because a
+///   corporate CA bundle is how many operators reach their own forge at all, and because the
+///   attacker needs control of charter's own environment to use it — at which point they can
+///   also choose which `charter` runs. If that trade ever stops holding, this is the first
+///   entry to drop.
+///
+/// # Why what is left out does not break an ordinary `gh`
+///
+/// - `GH_HOST`, `GITLAB_HOST`: every call passes `--hostname` explicitly, so the variable
+///   decides nothing — and passing it would let an environment silently move which host is
+///   asked and authenticated against.
+/// - `GH_EDITOR`, `EDITOR`, `PAGER`, `GH_PAGER`, `BROWSER`: each names a program. Nothing
+///   here is interactive, and the output is captured rather than paged.
+/// - `GH_PROMPT_DISABLED`, `NO_PROMPT`, `NO_COLOR`, `GH_NO_UPDATE_NOTIFIER`,
+///   `GLAB_CHECK_UPDATE`: charter SETS these itself rather than inheriting them, so an
+///   environment cannot switch a prompt back on in a process with no terminal.
+/// - `GH_DEBUG`, `GIT_CURL_VERBOSE` and the trace family: they write diagnostics — headers
+///   included — into output charter captures and repeats in an error. That is a token leak
+///   with extra steps.
+/// - Every `GIT_*`, `SSH_AUTH_SOCK`, `SSH_ASKPASS`, `GIT_ASKPASS`, `LD_PRELOAD`, `DYLD_*`:
+///   the execution surface the module docs list, plus SSH, which the policy does not use.
+/// - `HOME` is not in this list because it is given to every call already; `gh`'s config and
+///   the keyring live under it.
+pub const CREDENTIAL_ENV: [&str; 23] = [
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
+    "GITHUB_ENTERPRISE_TOKEN",
+    "GH_CONFIG_DIR",
+    "GITLAB_TOKEN",
+    "GITLAB_ACCESS_TOKEN",
+    "OAUTH_TOKEN",
+    "GLAB_CONFIG_DIR",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_STATE_HOME",
+    "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "NO_PROXY",
+    "no_proxy",
+    "ALL_PROXY",
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+];
+
+/// What one spawn adds to the fixed hardening.
+#[derive(Default)]
+struct Extra {
+    /// `-c` settings after [`NO_PROGRAMS`].
+    config: Vec<String>,
+    /// Whether [`CREDENTIAL_ENV`] reaches the child.
+    credentials: bool,
+}
+
 fn spawn(dir: &Path, args: &[&str]) -> Result<Child, GitUnavailable> {
+    spawn_with(dir, args, &Extra::default())
+}
+
+fn spawn_with(dir: &Path, args: &[&str], extra: &Extra) -> Result<Child, GitUnavailable> {
     let (binary, dirs) = git_binary();
     let mut cmd = Command::new(binary);
     for setting in NO_PROGRAMS {
+        cmd.arg("-c").arg(setting);
+    }
+    for setting in &extra.config {
         cmd.arg("-c").arg(setting);
     }
     cmd.arg("-C").arg(dir).args(args);
     cmd.env_clear();
     for (k, v) in child_env(&dirs) {
         cmd.env(k, v);
+    }
+    if extra.credentials {
+        for name in CREDENTIAL_ENV {
+            if let Some(value) = std::env::var_os(name) {
+                cmd.env(name, value);
+            }
+        }
     }
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -198,23 +342,53 @@ pub fn run_untimed(dir: &Path, args: &[&str]) -> Result<Run, GitUnavailable> {
 
 /// Run `git -C <dir> <args>` with a deadline.
 ///
-/// **The pipes are drained on their own threads.** Waiting on the child while its output sits
-/// in an undrained pipe deadlocks the moment git writes past the buffer — about 64 KiB, which
-/// `status --porcelain` in a large dirty clone passes easily — and the symptom is a timeout
-/// that looks like a slow machine.
+/// **The pipes are drained on their own threads** ([`wait`]). Waiting on the child while its
+/// output sits in an undrained pipe deadlocks the moment git writes past the buffer — about
+/// 64 KiB, which `status --porcelain` in a large dirty clone passes easily — and the symptom
+/// is a timeout that looks like a slow machine.
 pub fn run(dir: &Path, args: &[&str], timeout: Duration) -> Result<Run, GitUnavailable> {
-    let mut child = spawn(dir, args)?;
+    Ok(wait(spawn(dir, args)?, timeout)?)
+}
+
+/// Run `git -C <dir> <args>` across a network, under the one-credential rule.
+///
+/// `helper` is the credential helper the forge's own CLI provides — `!'/abs/gh' auth
+/// git-credential` — and is the ONLY helper git will consult: [`NETWORK_RULE`] resets every
+/// other one first. `None` gives git no credential at all, which is what a host charter does
+/// not manage gets: a token for one forge is never offered to another.
+///
+/// The deadline is [`NETWORK`]. A `clone` killed at the deadline leaves a partial directory,
+/// which the caller reports rather than retrying into.
+pub fn run_network(dir: &Path, helper: Option<&str>, args: &[&str]) -> Result<Run, GitUnavailable> {
+    let mut config: Vec<String> = NETWORK_RULE.iter().map(|s| (*s).to_string()).collect();
+    if let Some(helper) = helper {
+        config.push(format!("credential.helper={helper}"));
+    }
+    let extra = Extra {
+        config,
+        credentials: true,
+    };
+    Ok(wait(spawn_with(dir, args, &extra)?, NETWORK)?)
+}
+
+/// Wait for `child` with a deadline, draining both pipes as it runs.
+///
+/// Shared with the forge CLI runner (`crate::forge`), which has the same two hazards: an
+/// undrained pipe that deadlocks the wait, and a child that never answers.
+pub(crate) fn wait(mut child: Child, timeout: Duration) -> std::io::Result<Run> {
     let mut stdout = child.stdout.take().expect("stdout is piped");
     let mut stderr = child.stderr.take().expect("stderr is piped");
-    let out_thread = std::thread::spawn(move || {
+    let (out_tx, out_rx) = std::sync::mpsc::channel();
+    let (err_tx, err_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = stdout.read_to_end(&mut buf);
-        buf
+        let _ = out_tx.send(buf);
     });
-    let err_thread = std::thread::spawn(move || {
+    std::thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = stderr.read_to_end(&mut buf);
-        buf
+        let _ = err_tx.send(buf);
     });
 
     let deadline = Instant::now() + timeout;
@@ -232,8 +406,17 @@ pub fn run(dir: &Path, args: &[&str], timeout: Duration) -> Result<Run, GitUnava
         }
     };
 
-    let out = out_thread.join().unwrap_or_default();
-    let err = err_thread.join().unwrap_or_default();
+    // A child that exited is waited for in full. One that was KILLED may have left its own
+    // children holding the pipes — `clone` runs `git-remote-https`, which runs the credential
+    // helper — and a read that waits for every writer would then outlive the deadline it
+    // was killed for. So a killed call gets a short grace for what was already written, and
+    // the readers are left behind rather than waited on.
+    let collect = |rx: std::sync::mpsc::Receiver<Vec<u8>>| match code {
+        Some(_) => rx.recv().unwrap_or_default(),
+        None => rx.recv_timeout(Duration::from_secs(2)).unwrap_or_default(),
+    };
+    let out = collect(out_rx);
+    let err = collect(err_rx);
     Ok(Run {
         code,
         out: String::from_utf8_lossy(&out).into_owned(),
@@ -445,5 +628,139 @@ mod tests {
         let answer = run(dir.path(), &["rev-parse", "--git-dir"], READ).unwrap();
         assert_eq!(answer.code, Some(128));
         assert!(!answer.err.is_empty());
+    }
+
+    #[test]
+    fn a_network_call_refuses_ssh_even_when_config_rewrites_https_to_it() {
+        // The operator's own `url.<ssh>.insteadOf <https>` is the everyday way a clone of an
+        // HTTPS URL ends up on SSH. Local config stands in for the global file here: `-c`
+        // on the command line beats both.
+        let dir = repo();
+        run(
+            dir.path(),
+            &[
+                "config",
+                "url.ssh://git@127.0.0.1:9/.insteadOf",
+                "https://example.invalid/",
+            ],
+            READ,
+        )
+        .unwrap();
+
+        let fetched = run_network(
+            dir.path(),
+            None,
+            &["fetch", "https://example.invalid/acme/x.git"],
+        )
+        .unwrap();
+
+        assert!(!fetched.ok(), "{fetched:?}");
+        assert!(
+            fetched.err.contains("transport 'ssh' not allowed"),
+            "git refused the transport, and said so: {:?}",
+            fetched.err
+        );
+    }
+
+    #[test]
+    fn a_network_call_asks_only_the_helper_it_was_given() {
+        // One credential: a helper the repo's (or the operator's) config names — a keychain,
+        // a store file, another forge's CLI — is never consulted. git passes `-c` settings on
+        // to a git it runs, so a `credential fill` run from inside the call sees exactly the
+        // helper list the call itself would use.
+        let dir = repo();
+        let theirs = dir.path().join("theirs-asked");
+        let mine = dir.path().join("mine-asked");
+        run(
+            dir.path(),
+            &[
+                "config",
+                "credential.helper",
+                &format!("!echo asked >> '{}'", theirs.display()),
+            ],
+            READ,
+        )
+        .unwrap();
+        let fill = "alias.fill=!printf 'protocol=https\\nhost=example.invalid\\n\\n' | git credential fill";
+
+        run_network(
+            dir.path(),
+            Some(&format!("!echo asked >> '{}'", mine.display())),
+            &["-c", fill, "fill"],
+        )
+        .unwrap();
+
+        assert!(mine.exists(), "the helper the call was given was asked");
+        assert!(!theirs.exists(), "the helper config named was never asked");
+    }
+
+    /// The marker that tells a re-executed copy of this test binary it is the credential
+    /// child.
+    const CREDENTIAL_CHILD: &str = "CHARTER_TEST_CREDENTIAL_CHILD";
+
+    #[test]
+    fn a_network_call_hands_the_forge_cli_its_credential_and_no_other_call_does() {
+        // git runs the credential helper with git's own environment, so a `gh` that keeps its
+        // token in `GH_TOKEN` gets nothing unless the NETWORK call passes it. Every other call
+        // must not: a read has no use for a token. Re-executed, because setting a variable in
+        // this process is `unsafe` and would leak into every other test.
+        if std::env::var_os(CREDENTIAL_CHILD).is_some() {
+            let dir = repo();
+            let seen = |name: &str| dir.path().join(name);
+            let dump = |file: &std::path::Path| format!("alias.dump=!env > '{}'", file.display());
+            let network = seen("network.env");
+            let read = seen("read.env");
+            run_network(dir.path(), None, &["-c", &dump(&network), "dump"]).unwrap();
+            run(dir.path(), &["-c", &dump(&read), "dump"], READ).unwrap();
+
+            let network = std::fs::read_to_string(network).expect("the alias ran");
+            let read = std::fs::read_to_string(read).expect("the alias ran");
+            assert!(network.contains("GH_TOKEN=tok-under-test"), "{network}");
+            assert!(!read.contains("tok-under-test"), "{read}");
+            assert!(
+                !network.contains("CHARTER_TEST_NOT_A_CREDENTIAL"),
+                "{network}"
+            );
+            return;
+        }
+        let me = std::env::current_exe().expect("the test binary");
+        let out = Command::new(me)
+            .args([
+                "--exact",
+                "worktree::git::tests::a_network_call_hands_the_forge_cli_its_credential_and_no_other_call_does",
+                "--nocapture",
+            ])
+            .env(CREDENTIAL_CHILD, "1")
+            .env("GH_TOKEN", "tok-under-test")
+            .env("CHARTER_TEST_NOT_A_CREDENTIAL", "1")
+            .output()
+            .expect("the test binary re-runs");
+        assert!(
+            out.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    #[test]
+    fn a_killed_call_returns_at_its_deadline_even_when_a_grandchild_holds_the_pipes() {
+        // `clone` runs `git-remote-https`, which runs the credential helper: killing git does
+        // not kill them, and a reader that waits for every writer would outlive the deadline.
+        let dir = repo();
+        let started = Instant::now();
+        let answer = run(
+            dir.path(),
+            &["-c", "alias.hang=!sleep 30 & sleep 30", "hang"],
+            Duration::from_millis(300),
+        )
+        .unwrap();
+
+        assert_eq!(answer.code, None, "the deadline passed");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "it returned near its deadline, not when the grandchild let go: {:?}",
+            started.elapsed()
+        );
     }
 }

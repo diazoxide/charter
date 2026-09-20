@@ -51,6 +51,12 @@ fn write_sorted(value: &serde_json::Value, out: &mut String) {
 /// One JSON string, escaped as `ensure_ascii=True` escapes it: nothing above US-ASCII
 /// survives as itself.
 fn escape_into(s: &str, out: &mut String) {
+    escape_with(s, true, out);
+}
+
+/// One JSON string. `ascii` is `ensure_ascii`: with it off, Python escapes only the quote,
+/// the backslash and what is below U+0020, and writes everything else as itself.
+fn escape_with(s: &str, ascii: bool, out: &mut String) {
     out.push('"');
     for ch in s.chars() {
         match ch {
@@ -64,6 +70,7 @@ fn escape_into(s: &str, out: &mut String) {
             '\u{8}' => out.push_str("\\b"),
             '\u{c}' => out.push_str("\\f"),
             c if (c as u32) < 0x7f && (c as u32) >= 0x20 => out.push(c),
+            c if !ascii && (c as u32) >= 0x20 => out.push(c),
             c => {
                 for unit in c.encode_utf16(&mut [0u16; 2]) {
                     out.push_str(&format!("\\u{:04x}", unit));
@@ -78,15 +85,24 @@ fn escape_into(s: &str, out: &mut String) {
 /// order the document already has.
 pub fn dumps_indent2(value: &serde_json::Value) -> String {
     let mut out = String::new();
-    write_indented(value, 0, &mut out);
+    write_indented(value, 0, true, &mut out);
     out.push('\n');
     out
 }
 
-fn write_indented(value: &serde_json::Value, depth: usize, out: &mut String) {
+/// `json.dumps(value, indent=2, ensure_ascii=False) + "\n"` — how `inventory/repos.json` is
+/// written: a repo's description keeps its own characters.
+pub fn dumps_indent2_unicode(value: &serde_json::Value) -> String {
+    let mut out = String::new();
+    write_indented(value, 0, false, &mut out);
+    out.push('\n');
+    out
+}
+
+fn write_indented(value: &serde_json::Value, depth: usize, ascii: bool, out: &mut String) {
     let pad = |n: usize, out: &mut String| out.push_str(&"  ".repeat(n));
     match value {
-        serde_json::Value::String(s) => escape_into(s, out),
+        serde_json::Value::String(s) => escape_with(s, ascii, out),
         // An empty container stays on one line: Python writes no newline it would then
         // have to strip.
         serde_json::Value::Array(items) if items.is_empty() => out.push_str("[]"),
@@ -98,7 +114,7 @@ fn write_indented(value: &serde_json::Value, depth: usize, out: &mut String) {
                     out.push_str(",\n");
                 }
                 pad(depth + 1, out);
-                write_indented(item, depth + 1, out);
+                write_indented(item, depth + 1, ascii, out);
             }
             out.push('\n');
             pad(depth, out);
@@ -113,9 +129,9 @@ fn write_indented(value: &serde_json::Value, depth: usize, out: &mut String) {
                     out.push_str(",\n");
                 }
                 pad(depth + 1, out);
-                escape_into(key, out);
+                escape_with(key, ascii, out);
                 out.push_str(": ");
-                write_indented(item, depth + 1, out);
+                write_indented(item, depth + 1, ascii, out);
             }
             out.push('\n');
             pad(depth, out);

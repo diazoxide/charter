@@ -62,6 +62,38 @@ enum Command {
     #[command(subcommand)]
     Harness(HarnessCommand),
 
+    /// Refresh inventory/repos.json from the plane's forges, then regenerate docs.
+    Discover {
+        /// Skip per-repo stack detection (faster).
+        #[arg(long)]
+        no_probe: bool,
+        /// Do not regenerate docs afterward.
+        #[arg(long)]
+        no_docs: bool,
+    },
+
+    /// Clone repos on demand into a workspace, each on its own default branch.
+    Clone {
+        /// Repo name(s) or full path(s) from the inventory.
+        repos: Vec<String>,
+        /// The workspace to clone into.
+        #[arg(short = 'w', long = "workspace")]
+        workspace: String,
+        /// Pin the clock the manifest's `updated_at` is stamped with, for tests only.
+        #[arg(long, hide = true)]
+        now: Option<String>,
+    },
+
+    /// Fetch and fast-forward the clones in a workspace, skipping any that hold work.
+    Sync {
+        /// The workspace to sync.
+        #[arg(short = 'w', long = "workspace", required_unless_present = "all")]
+        workspace: Option<String>,
+        /// Sync every workspace.
+        #[arg(long, conflicts_with = "workspace")]
+        all: bool,
+    },
+
     /// Tell the app what a harness just did. Run by a harness's hooks, never by a person.
     ///
     /// It reads the harness's payload on stdin, says one thing on a socket the app owns, and
@@ -348,11 +380,95 @@ fn hook(name: &str, plugin_version: Option<&str>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// `discover`, `clone` and `sync`, or `None` for any other command.
+fn repo_command(command: &Command) -> Option<ExitCode> {
+    use charter_core::repocmd::{self, Say};
+
+    let mut say = |line: Say| eprintln!("{line}");
+    let root = match command {
+        Command::Discover { .. } | Command::Clone { .. } | Command::Sync { .. } => match plane() {
+            Ok(plane) => plane.root().to_path_buf(),
+            Err(why) => {
+                eprintln!("charter: {why}");
+                return Some(ExitCode::FAILURE);
+            }
+        },
+        _ => return None,
+    };
+    let code = match command {
+        Command::Discover { no_probe, no_docs } => repocmd::discover::discover(
+            &root,
+            repocmd::discover::Options {
+                no_probe: *no_probe,
+                no_docs: *no_docs,
+            },
+            &mut say,
+        ),
+        Command::Clone {
+            repos,
+            workspace,
+            now,
+        } => {
+            let now = match now {
+                Some(text) => match text.parse::<chrono::NaiveDateTime>() {
+                    // A naive stamp is LOCAL time, as `--now` is everywhere in this binary.
+                    Ok(naive) => {
+                        match chrono::TimeZone::from_local_datetime(&chrono::Local, &naive).single()
+                        {
+                            Some(local) => local.with_timezone(&chrono::Utc),
+                            None => {
+                                eprintln!("charter: --now names no single local instant");
+                                return Some(ExitCode::FAILURE);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("charter: --now is not a local naive timestamp: {e}");
+                        return Some(ExitCode::FAILURE);
+                    }
+                },
+                None => chrono::Utc::now(),
+            };
+            // Who a manifest says last touched it. Python's `_author`: `$USER`, and a word
+            // that says nobody knows rather than an empty field.
+            let author = std::env::var("USER")
+                .ok()
+                .filter(|u| !u.is_empty())
+                .unwrap_or_else(|| "unknown".to_string());
+            repocmd::clone::clone(
+                &repocmd::clone::Request {
+                    root: &root,
+                    ws: workspace,
+                    repos,
+                    now,
+                    author: &author,
+                },
+                &mut say,
+            )
+        }
+        Command::Sync { workspace, all } => {
+            let scope = match (workspace, all) {
+                (_, true) => repocmd::sync::Scope::All,
+                (Some(ws), false) => repocmd::sync::Scope::One(ws),
+                (None, false) => unreachable!("clap requires one of the two"),
+            };
+            repocmd::sync::sync(&root, scope, &mut say)
+        }
+        _ => return None,
+    };
+    Some(ExitCode::from(code))
+}
+
 fn run(command: Command) -> Result<(), String> {
     match command {
         // Answered in `main`, before this: it is the one command whose exit code is not a
         // plain success or failure, and clap must never be allowed to exit 2 in front of it.
-        Command::Hook { .. } | Command::Init(_) | Command::Reinit => {
+        Command::Hook { .. }
+        | Command::Init(_)
+        | Command::Reinit
+        | Command::Discover { .. }
+        | Command::Clone { .. }
+        | Command::Sync { .. } => {
             unreachable!("answered before run")
         }
         Command::Root => {
@@ -504,6 +620,12 @@ fn main() -> ExitCode {
             };
         }
         _ => {}
+    }
+    // The repo commands speak line by line as they go — a clone is slow, and the line that
+    // says which repo is being fetched is worth nothing once it has been — and choose their
+    // own exit status, as their Python counterparts do.
+    if let Some(code) = repo_command(&cli.command) {
+        return code;
     }
     match run(cli.command) {
         Ok(()) => ExitCode::SUCCESS,

@@ -960,9 +960,11 @@ fn first_clone_step(run: &mut Run, root: &Path, accepted: bool) -> u8 {
         return 1;
     }
     run.err(
-        "--clone-this-repo: this charter does not clone yet. A clone is given charter's git \
-         policy, which is not ported (spec decision 16). The control plane itself was still \
-         created; clone the repo into a workspace with git, then run `charter reinit`.",
+        "--clone-this-repo: this charter does not clone the repo you are standing in yet. \
+         `charter clone` does exist, and it applies the git policy — but it clones INTO a \
+         workspace that already exists, and `init` has just made a plane with none. The \
+         control plane itself was still created; clone the repo into a workspace with git, \
+         then run `charter reinit`.",
     );
     1
 }
