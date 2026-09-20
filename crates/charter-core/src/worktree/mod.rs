@@ -10,6 +10,7 @@
 
 pub mod confine;
 pub mod git;
+pub mod listing;
 pub mod name;
 pub mod porcelain;
 

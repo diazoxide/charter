@@ -161,7 +161,7 @@ pub fn reinit(root: &Path, scope: Scope, now: chrono::DateTime<chrono::Utc>, say
                 // stays exactly as it is, and one command may not advise what the other
                 // rules out.
                 Did::Foreign => match wslayer::checkout_row(&dir, rel) {
-                    Some(inside) => say(Say::Warn(format!(
+                    Some((_, inside)) => say(Say::Warn(format!(
                         "'{name}': {rel} holds content charter did not write — left completely \
                          untouched, and hidden in that checkout while it is there; if this is \
                          your own file and you mean to commit it: git add -f {inside}"
@@ -188,6 +188,61 @@ pub fn reinit(root: &Path, scope: Scope, now: chrono::DateTime<chrono::Utc>, say
                      there again only if that file turns out to be exactly what charter last \
                      wrote."
                 ))),
+                // A sentence of its own: nothing is in the way at that path, so `blocked`'s
+                // wording would send the operator looking for an obstruction that is not
+                // there. What stopped the write is that the file could not be hidden.
+                Did::Withheld => say(Say::Fail(format!(
+                    "'{name}': {rel} was not written — charter could not hide it in that \
+                     checkout's .git/info/exclude, and a machine-local file it cannot hide \
+                     would be committable there."
+                ))),
+                // charter#1072: every worktree of that clone went unchecked, and "nothing to
+                // do" printed over them. Not a repair either, and not one `reinit` can make.
+                Did::Unlisted => {
+                    let tree = wslayer::checkout_row(&dir, rel).map(|(tree, _)| tree);
+                    let (label, fix) = match &tree {
+                        Some(tree) => (
+                            wslayer::checkout_label(&dir, tree),
+                            wslayer::unlisted_fix(tree),
+                        ),
+                        None => (rel.clone(), String::new()),
+                    };
+                    say(Say::Warn(format!(
+                        "'{name}': git could not list the worktrees of {label}, so none of them \
+                         was checked or given charter's layer; {fix}."
+                    )));
+                }
+                // charter#1072: a line left out of a shared exclude because it would hide a
+                // file of yours in another checkout reading it. Not a repair — the
+                // `wrote`/`refreshed` pair below would call it "wrote .git/info/exclude" —
+                // and not one `reinit` can make: the file is yours to commit or move.
+                Did::Unhidden => {
+                    let why = wslayer::checkout_row(&dir, rel)
+                        .map(|(tree, _)| crate::guest::unhidden(root, &tree))
+                        .unwrap_or_default();
+                    say(Say::Warn(format!(
+                        "'{name}': {rel} does not hide all of charter's files in that checkout \
+                         — {}.",
+                        why.join("; ")
+                    )));
+                }
+                // charter's ruling H: a write charter could not record first is not made, and
+                // the lines stay. Not `blocked`: nothing is in the way at that path. With the
+                // errno the publish failed with.
+                Did::Unrecorded => {
+                    let refused = wslayer::checkout_row(&dir, rel)
+                        .map(|(tree, _)| crate::guest::unrecorded_fix(root, &tree, "that checkout"))
+                        .unwrap_or_default();
+                    let tail = if refused.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; {refused}")
+                    };
+                    say(Say::Warn(format!(
+                        "'{name}': {rel} — charter could not publish its record there first, so \
+                         it wrote nothing and kept every exclude line it had{tail}."
+                    )));
+                }
                 Did::Removed => {
                     // Its own sentence rather than the `wrote`/`refreshed` pair below, which
                     // would call a deletion "refreshed". A removal is the one repair here
