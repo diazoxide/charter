@@ -172,6 +172,25 @@ enum Command {
         interval: f64,
     },
 
+    /// What a version brought, and what this plane has not adopted.
+    News(NewsCommand),
+
+    /// Adopt what a newer charter brought. This command does NOT install one.
+    ///
+    /// charter's own `update` moves a Python package with `uv tool install`; this charter is a
+    /// binary inside the app, and the app is what moves it. So `update` here is the half that
+    /// is about this plane's content: what the versions it skipped brought, and what it has not
+    /// taken up. `--to` and `--bump` are taken and refused by name rather than rejected as
+    /// unknown flags, because an agent that typed one is owed the reason.
+    Update {
+        /// Install exactly this version. Refused: nothing here installs.
+        #[arg(long)]
+        to: Option<String>,
+        /// Also move this plane's pin. Refused: the pin names a published charter-cp release.
+        #[arg(long)]
+        bump: bool,
+    },
+
     /// Tell the app what a harness just did. Run by a harness's hooks, never by a person.
     ///
     /// It reads the harness's payload on stdin, says one thing on a socket the app owns, and
@@ -191,6 +210,22 @@ enum Command {
         #[arg(long)]
         plugin_version: Option<String>,
     },
+}
+
+#[derive(Args, Clone)]
+struct NewsCommand {
+    /// Every entry, any version, whose probe says you have not adopted it yet.
+    #[arg(long)]
+    pending: bool,
+    /// Report entries newer than this version.
+    #[arg(long)]
+    since: Option<String>,
+    /// Stop at this version (default: the newest one this build ships an entry for).
+    #[arg(long)]
+    until: Option<String>,
+    /// One version's entries, as the body of its release notes.
+    #[arg(long = "for", value_name = "VERSION")]
+    for_version: Option<String>,
 }
 
 #[derive(Args)]
@@ -216,11 +251,11 @@ struct InitCommand {
     no_front_door: bool,
 }
 
-/// What `charter init` and `reinit` said, each line with the glyph `charter/util.py` gives it,
-/// on stderr — coloured only when stderr is a terminal, which is Python's rule too.
-fn say(outcome: &charter_core::scaffold::Outcome) -> ExitCode {
+/// Each line in the voice `charter/util.py` gives it, through the one module that owns those
+/// four glyphs — so `news` and `init` cannot come out looking like two different programs.
+fn say_lines(said: &[charter_core::scaffold::Say]) {
     use charter_core::scaffold::Say;
-    for line in &outcome.said {
+    for line in said {
         match line {
             Say::Info(text) => voice::info(text),
             Say::Ok(text) => voice::ok(text),
@@ -228,7 +263,116 @@ fn say(outcome: &charter_core::scaffold::Outcome) -> ExitCode {
             Say::Err(text) => voice::err(text),
         }
     }
+}
+
+/// What `charter init` and `reinit` said, and the status they chose.
+fn say(outcome: &charter_core::scaffold::Outcome) -> ExitCode {
+    say_lines(&outcome.said);
     ExitCode::from(outcome.code)
+}
+
+/// stdout first, then stderr, then the status — the order the two streams are written in
+/// matters only for a terminal, and this is the one charter writes in.
+fn emit(report: &charter_core::news::Report) -> ExitCode {
+    use std::io::Write;
+    print!("{}", report.out);
+    let _ = std::io::stdout().flush();
+    say_lines(&report.said);
+    ExitCode::from(report.code)
+}
+
+/// This charter's subcommands, as `news` needs them to decide what a `check:` may name.
+///
+/// Read off clap rather than written down, which is what `cli._subcommand_names` does with
+/// argparse — and a list written down is a list the next command added to the CLI is missing
+/// from. **Aliases are children too**: argparse's `choices` holds one key per alias, so `ws` is
+/// a subcommand name there, and a tree without it would read `ws …` as a command this charter
+/// does not have.
+fn command_tree() -> charter_core::news::CommandTree {
+    use charter_core::news::CommandTree;
+    use clap::CommandFactory;
+
+    fn walk(cmd: &clap::Command) -> Vec<CommandTree> {
+        let mut out = Vec::new();
+        for sub in cmd.get_subcommands() {
+            let children = walk(sub);
+            out.push(CommandTree {
+                name: sub.get_name().to_owned(),
+                children: children.clone(),
+            });
+            for alias in sub.get_all_aliases() {
+                out.push(CommandTree {
+                    name: alias.to_owned(),
+                    children: children.clone(),
+                });
+            }
+        }
+        out
+    }
+
+    let root = Cli::command();
+    CommandTree {
+        name: root.get_name().to_owned(),
+        children: walk(&root),
+    }
+}
+
+/// The charter a news probe dispatches into: this process, running this binary's commands.
+///
+/// **In-process is what makes a dozen probes cheap enough to run on demand; it was never what
+/// made them safe.** What makes a probe safe is `news::PROBEABLE` — a list of command paths a
+/// human has confirmed read rather than act — and the only one of the four this binary has is
+/// `news` itself, whose probe is refused for probing.
+struct Probes {
+    tree: charter_core::news::CommandTree,
+}
+
+impl charter_core::news::Dispatch for Probes {
+    fn tree(&self) -> &charter_core::news::CommandTree {
+        &self.tree
+    }
+
+    fn run(&self, tokens: &[String]) -> Option<i32> {
+        // Only a path in `news::PROBEABLE` reaches here, and `charter` is implied rather than
+        // written — so it is put back to parse the line as a command line.
+        let argv: Vec<String> = std::iter::once("charter".to_owned())
+            .chain(tokens.iter().cloned())
+            .collect();
+        // Python catches `SystemExit` around `parse_args` and reports no exit code; a parse
+        // this binary refuses is the same nothing.
+        let parsed = Cli::try_parse_from(&argv).ok()?;
+        match parsed.command {
+            Command::News(ref news) => Some(i32::from(news_report(news, self).code)),
+            // A listed command this binary does not have never gets this far; a listed one it
+            // grows later and does not wire in here would, and `None` is the honest answer for
+            // it — "no exit code worth reading" rather than a guess.
+            _ => None,
+        }
+    }
+}
+
+/// `charter news`, in the order `commands.cmd_news` asks its questions: the release gate first,
+/// then the pending view, then the range.
+fn news_report(
+    cmd: &NewsCommand,
+    d: &dyn charter_core::news::Dispatch,
+) -> charter_core::news::Report {
+    use charter_core::news;
+
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let place = charter_core::plane::place(&cwd);
+    if let Some(version) = cmd.for_version.as_deref().filter(|v| !v.is_empty()) {
+        return news::for_release(version);
+    }
+    if cmd.pending {
+        return news::pending_report(d, place.is_plane);
+    }
+    news::range_report(
+        cmd.since.as_deref().unwrap_or_default(),
+        cmd.until.as_deref().unwrap_or_default(),
+        d,
+        place.is_plane,
+    )
 }
 
 /// Where `init` and `reinit` act: `charter/root.py:find_root_or_cwd`.
@@ -743,6 +887,8 @@ fn run(command: Command) -> Result<u8, String> {
         Command::Hook { .. }
         | Command::Init(_)
         | Command::Reinit
+        | Command::News(_)
+        | Command::Update { .. }
         | Command::Discover { .. }
         | Command::Clone { .. }
         | Command::Sync { .. }
@@ -977,6 +1123,27 @@ fn main() -> ExitCode {
                 &statusline::Ambient::here(),
             );
             return ExitCode::SUCCESS;
+        }
+        // `news` and `update` say several lines of their own on both streams and choose their
+        // own exit status, exactly as `init` does.
+        Command::News(news) => {
+            let probes = Probes {
+                tree: command_tree(),
+            };
+            return emit(&news_report(news, &probes));
+        }
+        Command::Update { to, bump } => {
+            let probes = Probes {
+                tree: command_tree(),
+            };
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let place = charter_core::plane::place(&cwd);
+            let args = charter_core::adopt::UpdateArgs {
+                to: to.clone().unwrap_or_default(),
+                bump: *bump,
+            };
+            let root = place.is_plane.then_some(place.root.as_path());
+            return emit(&charter_core::adopt::update_report(root, &args, &probes));
         }
         _ => {}
     }

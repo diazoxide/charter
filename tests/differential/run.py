@@ -1293,8 +1293,119 @@ def _persona_index_linked_out(root: Path) -> None:
 ABSOLUTE_PATHS = (r"'/[^']*'", "each side's plane copy lives at its own absolute path")
 
 
+# --------------------------------------------------------------------------------------------
+# `charter news`: the entries themselves, rendered
+# --------------------------------------------------------------------------------------------
+#
+# **These scenarios are the tie between two copies of one corpus.** charter ships `docs/news/`
+# in its wheel; charter-app compiles `crates/charter-core/news/` into its binary. Until news is
+# authored in one place there are two copies, and `charter/news.py`'s own docstring says what a
+# second copy does: *it drifts from the binary, invisibly and in both directions.*
+#
+# Nothing inside either implementation can see that drift. This can: the oracle is pinned to the
+# charter commit the corpus was taken from, and `news --for <version>` renders every entry of a
+# version through every rule there is — the order, the `security:` label, the elision and its
+# arithmetic, the percent-encoded filename, the tag a link points at. One scenario per version,
+# generated from the vendored directory rather than listed, so a version added to the corpus is
+# compared from the day it lands and a version that quietly vanishes from it is not silently
+# uncompared.
+#
+# The version list is read from the DIRECTORY and not from the oracle, because this file has to
+# keep working whether or not charter is importable in its own process (`_declare_a_profile_per_
+# command_word` says the same thing about the other direction). A version only the ORACLE has is
+# still caught: `news --for` on it is one of these scenarios only if the corpus has it, and the
+# range scenario below lists every entry between two versions on both sides.
+
+NEWS_DIR = REPO / "crates" / "charter-core" / "news"
+
+#: `charter news --for` REFUSES this version: six of its entries quote a headline, and the
+#: release gate reports that rather than publishing the quotes inside the heading (charter #902).
+#: Its own scenario below, because the generated ones expect an exit 0 — and if a future version
+#: joins it, that version's generated scenario goes red, which is exactly what a release gate
+#: catching a new offender should look like.
+NEWS_QUOTED_VERSION = "0.56.0"
+
+
+def _news_versions() -> list[str]:
+    """Every version the vendored corpus names, oldest first, with `unreleased` last.
+
+    From the FILENAME rather than the frontmatter: this list only decides which commands to run,
+    and both sides then answer from the frontmatter — so a file whose name and `version:` field
+    disagree shows up as a scenario that renders nothing on either side, which is a finding.
+    """
+    seen: dict[str, None] = {}
+    for path in sorted(NEWS_DIR.glob("*.md")):
+        seen.setdefault(path.name.split("-", 1)[0], None)
+    versions = [v for v in seen if v != "unreleased"]
+    versions.sort(key=lambda v: [int(part) for part in v.split(".")])
+    if "unreleased" in seen:
+        versions.append("unreleased")
+    return versions
+
+
+NEWS_SCENARIOS = [
+    Scenario(
+        name=f"news-for-{version}-renders-the-same-notes",
+        plane="minimal",
+        python=["news", "--for", version],
+        pins_the_clock=False,
+    )
+    for version in _news_versions()
+    if version != NEWS_QUOTED_VERSION
+] + [
+    Scenario(
+        name="news-for-a-version-that-quotes-a-headline-is-refused-before-it-publishes",
+        plane="minimal",
+        python=["news", "--for", NEWS_QUOTED_VERSION],
+        pins_the_clock=False,
+        refusal=f"the news for {NEWS_QUOTED_VERSION} quotes a value charter does not unquote:",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="news-for-a-version-nothing-shipped",
+        plane="minimal",
+        python=["news", "--for", "9.9.9"],
+        pins_the_clock=False,
+        refusal="no news entry for 9.9.9.",
+        same_stderr=True,
+    ),
+    Scenario(
+        # 62 entries across three versions, two of them carrying `security:` notes and one a
+        # `lead:` — so this compares the ORDER and the label, which `--for` compares inside one
+        # version and this compares across three.
+        #
+        # `--until` is given rather than defaulted on purpose: charter's default is
+        # `charter.__version__`, a Python package version, and the Rust binary's default is the
+        # newest version its corpus names (`news::shipped_version`). Those are different
+        # questions with different answers, and this scenario is about the entries rather than
+        # about which of the two is right — the PR argues that.
+        #
+        # None of these three versions carries a `check:`, which is what makes the two sides'
+        # stdout comparable at all: every entry is informational on both, so neither prints an
+        # adopt line. A range that did carry one would compare charter's real probe against a
+        # Rust CLI that has no `persona lint` to run.
+        name="news-range-lists-the-same-entries-in-the-same-order",
+        plane="daily",
+        python=["news", "--since", "0.60.0", "--until", "0.62.1"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        # The view that is honest about having no baseline. charter never READS the baseline
+        # `charter update` stamps (`commands_update.read_baseline` has no caller), so this
+        # sentence is what a plane gets whether or not one is recorded — reported upstream, and
+        # ported as it stands rather than quietly improved, because an improvement here is a
+        # divergence nothing else would catch.
+        name="news-with-no-baseline-reports-no-range",
+        plane="daily",
+        python=["news"],
+        pins_the_clock=False,
+    ),
+]
+
+
 SCENARIOS = [
     *INIT_SCENARIOS,
+    *NEWS_SCENARIOS,
     Scenario(
         name="harness-list-refuses-every-name-that-is-a-charter-command",
         plane="minimal",

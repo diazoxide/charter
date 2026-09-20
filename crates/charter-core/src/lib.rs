@@ -1,5 +1,6 @@
 //! charter's core, shared by the desktop app and the `charter` binary.
 
+pub mod adopt;
 pub mod cistate;
 pub mod contain;
 pub mod curate;
@@ -15,6 +16,7 @@ pub mod inventory;
 pub mod manifest;
 pub mod mdsection;
 pub mod memstore;
+pub mod news;
 pub mod personas;
 pub mod plane;
 pub mod profiles;
@@ -32,6 +34,7 @@ pub mod start;
 pub mod state;
 pub mod trace;
 pub mod usage;
+pub mod version;
 pub mod wiring;
 pub mod workspaces;
 pub mod worktree;
