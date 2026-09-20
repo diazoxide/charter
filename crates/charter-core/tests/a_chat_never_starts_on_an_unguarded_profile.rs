@@ -12,11 +12,13 @@
 //! measured by hand and recorded in `wiring.rs`.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use charter_core::profiles::{self, Profile};
 use charter_core::wiring::{self, State};
+
+/// The program the declared profile points at.
+const STAND_IN: &str = "claude-stand-in";
 
 /// A plane declaring one profile whose command is a stand-in `claude`.
 ///
@@ -48,10 +50,11 @@ impl Stand {
         ))
     }
 
+    /// Through `stand_in::program`: the stand-in is run the moment it is written, and a
+    /// program this process wrote through its own descriptor can lose to `ETXTBSY`
+    /// (charter-app#81).
     fn script(&self, body: &str) -> &Self {
-        let bin = self.bin();
-        fs::write(&bin, body).unwrap();
-        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
+        stand_in::program(self.root(), STAND_IN, body);
         self
     }
 
@@ -71,7 +74,7 @@ impl Stand {
     }
 
     fn bin(&self) -> PathBuf {
-        self.root().join("claude-stand-in")
+        self.root().join(STAND_IN)
     }
 
     fn asked(&self) -> PathBuf {
