@@ -106,26 +106,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn colour_markup_is_kept_and_every_other_control_goes() {
-        assert_eq!(sanitize("a\x1b[32mb\x1b[0m"), "a\x1b[32mb\x1b[0m");
-        assert_eq!(sanitize("a\x1b[2Jb"), "ab", "a CSI that is not SGR");
-        assert_eq!(
-            sanitize("a\x1b]0;pwned\x07b"),
-            "ab",
-            "an OSC, payload and all"
-        );
-        assert_eq!(sanitize("a\x1b]0;pwned"), "a", "unterminated, to the end");
-        assert_eq!(sanitize("a\x1bcb"), "ab", "a two-character escape");
-        assert_eq!(
-            sanitize("a\tb\nc"),
-            "a b c",
-            "whitespace controls keep a space"
-        );
-        assert_eq!(sanitize("a\x07b\x7fc\u{85}d"), "abcd");
-        assert_eq!(sanitize("a\x1b"), "a", "a trailing ESC");
-    }
-
-    #[test]
     fn a_column_is_its_widest_cell_and_a_gap() {
         assert_eq!(column(["2026-03-02", "—"]), 12);
         assert_eq!(pad("—", 12), "—           ");

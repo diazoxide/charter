@@ -47,8 +47,12 @@ fn sgr_is_the_only_escape_that_survives_and_the_rest_go_whole() {
     // A tab and a newline shear the columns below, so they keep their separation as a space
     // rather than vanishing: `a\tb` stays two words.
     assert_eq!(sanitize("a\tb\nc"), "a b c");
-    // Other C0, DEL and C1 are removed outright.
+    // Other C0, DEL and C1 are removed outright. `\u{85}` is NEL, which a terminal reads as
+    // a line ending — these two cases came from `charter-cli`'s own `sanitize`, which this
+    // module replaced.
     assert_eq!(sanitize("a\x00b\x07c\x7fd\u{9b}e"), "abcde");
+    assert_eq!(sanitize("a\x07b\x7fc\u{85}d"), "abcd");
+    assert_eq!(sanitize("a\x1b"), "a");
     // Nothing to do is nothing done.
     assert_eq!(sanitize("plain ünïcode"), "plain ünïcode");
 }
