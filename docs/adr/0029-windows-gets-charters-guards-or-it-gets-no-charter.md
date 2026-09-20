@@ -180,8 +180,65 @@ repo including the ports that would make it green. It reports the whole `cargo c
 list rather than its first line, and it runs `tools/windows-probe`, which asks a real ConPTY
 the three things `session.rs` takes from a unix pty.
 
-> The numbers from the first run belong here. Until they are filled in, this section is the
-> method and not the evidence.
+Run 35521489314, `windows-latest`, commit `0358f0d`. What it found, including the parts that
+went the other way from the reading above.
+
+**`charter-core`'s library is six errors from compiling, in two files.** That is the whole
+list, and it is far better news than the reading predicted:
+
+```
+crates\charter-core\src\forge.rs:503  error[E0433] cannot find `unix` in `os`
+crates\charter-core\src\forge.rs:504  error[E0599] no method named `mode` for `Permissions`
+crates\charter-core\src\wiring.rs:770 error[E0433] unresolved module `rustix`   (×2)
+crates\charter-core\src\wiring.rs:780 error[E0433] unresolved module `rustix`   (×2)
+error: could not compile `charter-core` (lib) due to 6 previous errors
+```
+
+`forge::is_executable` reaches for `PermissionsExt` with no `cfg`; `wiring::Lock` calls
+`rustix::fs::flock`, and `rustix` is a `cfg(unix)` dependency. Everything else in 63,000 lines
+compiles. `stand-in` builds too — to an empty library, with one unused-import warning, which
+is what makes the test targets a wall rather than the lib.
+
+**It is a floor, not the list.** `cargo check --workspace --all-targets` stops at the crate
+that fails, so `charter-cli`, `app/src-tauri` and *every test target* were never reached. The
+next layer's errors only become visible once these six are gone.
+
+**The `-c core.hooksPath=/dev/null` guard still bites.** Measured rather than assumed, and
+this is a refutation of a worry rather than a finding: without the flag the planted
+`pre-commit` ran and refused the commit (`THE-HOOK-RAN`, exit 1); with it the commit went
+through (exit 0). Git for Windows maps `/dev/null`, and charter's hook guard survives the
+platform unchanged.
+
+**None of the four directories `worktree::git` searches exists**, as Windows resolves them —
+`\usr\bin\git.exe`, `\usr\local\bin\git.exe`, `\opt\homebrew\bin\git.exe`, `\bin\git.exe`, all
+absent. Git is at `C:\Program Files\Git\bin\git.exe`, which the `PATH` fallback also misses
+because it joins `git` and not `git.exe`.
+
+**The differential cannot run here, and now there is a measurement rather than a reading.**
+`os.symlink` works (the runner is privileged), but `fcntl`, `termios`, `pwd` and `grp` are all
+absent, `/bin/sh` does not exist, and `chmod 0o755` leaves a file at `0o666` — so the mode
+comparison at the heart of the harness compares a number Windows does not keep.
+
+**ConPTY: one property confirmed, one worry refuted, and two questions the probe's own control
+invalidated.**
+
+- *Confirmed.* `drop(pair.slave)` does not end the output: the reader was still open ten
+  seconds later, and reached EOF `20.01s` in — at the instant the **master** was dropped, and
+  not before. `Session::when_it_ends` is built on the opposite.
+- *Refuted.* Dropping a master did **not** block. `ClosePseudoConsole` returned at once in all
+  three cases, which the reading had flagged as a hazard for the UI thread.
+- *Unanswered, and the probe says so.* The control — `cmd.exe /c exit7.bat`, which should end
+  at once with `7` — never read as ended either, so the `259` result ("still running after
+  ten seconds") is the same failure and not a second one. Question 3's grandchild wrote
+  nothing at all (`0 bytes` throughout), so whether a kill reaches descendants is not
+  answered. **The first hypothesis was wrong and is recorded as wrong:** an almost-empty
+  environment block would have explained it, but `CommandBuilder::new` calls `get_base_env()`
+  and inherits, so that is not it. What the run cannot distinguish is "the program never
+  started", "the program started and never ended" and "`WinChild::try_wait` cannot tell" —
+  `is_complete` returns `Ok(None)` both for a live process and for a failed
+  `GetExitCodeProcess`. The probe now prints the bytes the pty actually produced and runs the
+  same `.bat` through a plain `std::process::Command` as a baseline, which separates the
+  three. Until that run lands, the honest state of question 3 is *not answered*.
 
 ## The work, as issues
 

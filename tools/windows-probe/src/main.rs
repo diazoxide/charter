@@ -43,6 +43,7 @@ fn main() {
     let dir = std::env::temp_dir().join(format!("windows-probe-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("a directory to work in");
 
+    the_same_program_without_a_pty(&dir);
     eof_when_the_program_exits(&dir);
     an_exit_code_of_259(&dir);
     what_the_program_started(&dir);
@@ -116,6 +117,29 @@ fn ended(child: &mut Box<dyn portable_pty::Child + Send + Sync>) -> Option<u32> 
     }
 }
 
+/// Question 0, and it is the CONTROL the first run did not have.
+///
+/// The same `.bat`, the same working directory, through `std::process::Command` and no pty at
+/// all. If this ends with `7` and the pty run does not, the difference is ConPTY. If neither
+/// does, the probe is measuring its own `.bat` and nothing else — which the first run could
+/// not tell apart, and reported as "unanswered" for that reason.
+fn the_same_program_without_a_pty(dir: &Path) {
+    let bat = script(dir, "exit7.bat", "@echo off\necho hello\nexit 7\n");
+    let run = std::process::Command::new("cmd.exe")
+        .args(["/c", bat.as_str()])
+        .current_dir(dir)
+        .output();
+    match run {
+        Ok(out) => println!(
+            "no-pty-baseline: {:?}, stdout {:?}, stderr {:?}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).trim(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ),
+        Err(err) => println!("no-pty-baseline: the program would not even start: {err}"),
+    }
+}
+
 /// Question 1. Spawns something that prints and exits, drops the slave exactly as
 /// `Session::start` does, and reports whether the reader ever reaches EOF.
 fn eof_when_the_program_exits(dir: &Path) {
@@ -131,35 +155,41 @@ fn eof_when_the_program_exits(dir: &Path) {
     // Exactly what Session::start does, and the line whose comment this probe is checking.
     drop(pair.slave);
 
+    println!("pty-child-pid: {:?}", child.process_id());
+
+    // Shared, not only sent at EOF: the first run could not tell "the program never started"
+    // from "it started and never ended", because the only thing it reported about the output
+    // was a count it never got to print.
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
     let (say, heard) = mpsc::channel();
+    let writing = std::sync::Arc::clone(&seen);
     std::thread::spawn(move || {
         let started = Instant::now();
-        let mut read = 0usize;
         let mut chunk = [0u8; 4096];
         loop {
             match reader.read(&mut chunk) {
                 Ok(0) => break,
-                Ok(n) => read += n,
+                Ok(n) => writing.lock().unwrap().extend_from_slice(&chunk[..n]),
                 Err(_) => break,
             }
         }
-        let _ = say.send((started.elapsed(), read));
+        let _ = say.send(started.elapsed());
     });
 
     match ended(&mut child) {
         Some(code) => println!("exit-code: the program exited 7, and portable-pty reports {code}"),
         None => println!("exit-code: UNANSWERED — {PATIENCE:?} and the program had not ended"),
     }
+    println!("pty-said-by-then: {}", so_far(&seen));
 
     match heard.recv_timeout(PATIENCE) {
-        Ok((took, bytes)) => println!(
-            "eof-after-exit: YES, the reader reached EOF after {took:?} ({bytes} bytes read)"
-        ),
+        Ok(took) => println!("eof-after-exit: YES, the reader reached EOF after {took:?}"),
         Err(_) => println!(
             "eof-after-exit: NO, the reader was still open {PATIENCE:?} after the program \
              exited — `drop(pair.slave)` does not end the output on this platform"
         ),
     }
+    println!("pty-said-in-all: {}", so_far(&seen));
     // Dropping the master closes the pseudo console, which is what DOES end the reader here.
     close(pair.master, "q1");
     match heard.recv_timeout(PATIENCE) {
@@ -273,4 +303,14 @@ fn what_the_program_started(dir: &Path) {
 /// How many bytes are at `path`, or 0 if it is not there.
 fn size_of(path: &Path) -> u64 {
     std::fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
+/// What the terminal has said so far, short enough to read and escaped enough to trust.
+fn so_far(seen: &std::sync::Mutex<Vec<u8>>) -> String {
+    let bytes = seen.lock().unwrap();
+    format!(
+        "{} bytes, {:?}",
+        bytes.len(),
+        String::from_utf8_lossy(&bytes[..bytes.len().min(160)])
+    )
 }

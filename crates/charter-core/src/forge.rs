@@ -499,9 +499,24 @@ pub fn find_cli(name: &str) -> Option<PathBuf> {
         .find(|candidate| is_executable(candidate))
 }
 
+#[cfg(unix)]
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+/// Off unix, nothing is executable yet — and that is a refusal, not a degradation.
+///
+/// **Deliberately `false` and not `metadata(path).is_file()`.** There is no executable bit on
+/// Windows: what makes a file runnable is its extension, against `PATHEXT`, and `find_cli`
+/// above joins the bare name (`gh`, `glab`) with no extension at all. Answering "it is a
+/// file" would make every file on `PATH` a forge CLI — which is the mistake
+/// `doctor::profiles::on_path` already makes, and charter-app#100 is where both are fixed
+/// together. Until then charter finds no forge CLI here and says so, which costs a feature
+/// rather than handing `git` a credential helper it picked by accident.
+#[cfg(not(unix))]
+fn is_executable(_path: &Path) -> bool {
+    false
 }
 
 /// The credential helper a NETWORK git call is given for `forge`: its CLI, pinned by
