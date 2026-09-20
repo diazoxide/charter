@@ -206,7 +206,14 @@ fn the_divider_goes_under_the_workspace_line_and_nowhere_else() {
 #[test]
 fn the_body_says_what_it_does_not_draw_rather_than_leaving_it_out() {
     let (_held, root) = a_plane("alpha");
-    let env = columns(80);
+    // Pinned, because standing in the plane ROOT is not standing in a workspace: with nothing
+    // else to go on the ladder ends on the built-in `default`, and a row naming a workspace
+    // that exists would be this test asserting something it had not arranged.
+    let env = |name: &str| match name {
+        "COLUMNS" => Some("80".to_string()),
+        "CHARTER_WORKSPACE" => Some("alpha".to_string()),
+        _ => None,
+    };
     let out = render(&root, &serde_json::Value::Null, &ambient(&env, &root));
     let lines: Vec<&str> = out.lines().collect();
     // Frame, identity row, rule, the declaration, frame.
