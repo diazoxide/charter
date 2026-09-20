@@ -4,17 +4,19 @@
 //! differential tests (`tests/differential/run.py`) prove that by running both
 //! implementations against copies of one fixture plane and comparing the trees they leave.
 //!
-//! Two things this binary deliberately does NOT do yet, both recorded in the harness rather
-//! than left to be discovered:
+//! One thing this binary deliberately does NOT do yet, recorded in the harness rather than
+//! left to be discovered:
 //!
-//! - **`-w` is required.** Python resolves a workspace through nine rungs — `-w`,
-//!   `$CHARTER_WORKSPACE`, the working directory, the session and terminal pointers, the
-//!   frame, `workspaces/.default`, `[workspace] default`, then the literal `default`
-//!   (`charter/workspace.py:589` `chosen`). None of that is ported, so omitting `-w` is a
-//!   usage error rather than a guess at the wrong workspace.
 //! - **Not every command prints its confirmation.** charter says `✓ Vision set for 'alpha' →
 //!   …` on stderr, and `vision` and `todo` here are still silent. The memory commands
-//!   (`memory.rs`) are ported whole, their output included.
+//!   (`memory.rs`) are ported whole, their output included, and so is the one line of stdout
+//!   `workspace current` and `persona current` print — the sentence explaining which rung
+//!   decided is not.
+//!
+//! **`-w` and `--persona` are optional, and M2.9 is what made them so.** Every rung of both
+//! resolution ladders lives in [`charter_core::active`]; this file only decides which flag
+//! feeds each one. Until then `charter recall` with no flags — how a harness calls it at
+//! session start — refused with exit **2**, and every `-w` was a clap usage error.
 //!
 //! `root` and the hidden `--now` have no Python counterpart at all: `--now` is the test seam
 //! charter itself has as `memstore.write(stamp=…)`.
@@ -80,9 +82,9 @@ enum Command {
     Clone {
         /// Repo name(s) or full path(s) from the inventory.
         repos: Vec<String>,
-        /// The workspace to clone into.
+        /// The workspace to clone into (default: the active one).
         #[arg(short = 'w', long = "workspace")]
-        workspace: String,
+        workspace: Option<String>,
         /// Pin the clock the manifest's `updated_at` is stamped with, for tests only.
         #[arg(long, hide = true)]
         now: Option<String>,
@@ -90,8 +92,8 @@ enum Command {
 
     /// Fetch and fast-forward the clones in a workspace, skipping any that hold work.
     Sync {
-        /// The workspace to sync.
-        #[arg(short = 'w', long = "workspace", required_unless_present = "all")]
+        /// The workspace to sync (default: the active one).
+        #[arg(short = 'w', long = "workspace")]
         workspace: Option<String>,
         /// Sync every workspace.
         #[arg(long, conflicts_with = "workspace")]
@@ -132,13 +134,14 @@ enum Command {
     /// render path puts a forge token in the process that draws the window.
     #[command(name = "gl-refresh")]
     GlRefresh {
-        /// The workspace to refresh.
+        /// The workspace to refresh (default: the active one).
         ///
-        /// Required, where charter resolves the active one. The nine-rung resolution is not
-        /// ported (see this file's own header), and a refresh keyed to the wrong workspace
-        /// writes another workspace's rows.
+        /// Resolved through [`charter_core::active`] since M2.9, and resolved BEFORE
+        /// `--detach` rather than after: the child is handed the name this process worked
+        /// out, so a refresh cannot end up keyed to a different workspace than the one the
+        /// operator was standing in.
         #[arg(short = 'w', long = "workspace")]
-        workspace: String,
+        workspace: Option<String>,
         /// Return at once and refresh in a process that outlives this one.
         ///
         /// What a hook's `async` used to buy, done by charter — one harness skips async hooks
@@ -248,6 +251,12 @@ enum HarnessCommand {
 enum WorkspaceCommand {
     /// List the plane's workspaces, one per line.
     List,
+    /// Print the active workspace — the name alone.
+    ///
+    /// It takes no `-w`, because charter's own `workspace current` takes none: the top rung
+    /// of the ladder is typed on the command it acts on, and a flag here would report a
+    /// resolution that nothing performed.
+    Current,
     /// Show or set a workspace's `## Vision`.
     ///
     /// With text, replace it; without, print it. Empty text is the SHOWING form, as it is
@@ -332,9 +341,9 @@ enum WorkspaceCommand {
 
 #[derive(Args)]
 struct Common {
-    /// The workspace to act on.
+    /// The workspace to act on (default: the active one).
     #[arg(short = 'w', long = "workspace")]
-    workspace: String,
+    workspace: Option<String>,
     /// Pin the clock a write stamps itself with, for tests only. charter's own
     /// `memstore.write` takes a `stamp=` for the same reason: ordering has to be testable
     /// across real time gaps, not just within one second.
@@ -353,9 +362,25 @@ impl Common {
     }
 }
 
-/// The workspace every plane starts on, whether or not its directory exists.
-const DEFAULT_WORKSPACE: &str = "default";
+/// Where this invocation is standing: the plane, the directory, and who is asking.
+///
+/// Built ONCE per command rather than per rung. Every piece of it is read from the process —
+/// the cwd, the environment, the session and pane ids — and a second read is a second answer:
+/// the cwd rung and the pointer rungs deciding from different snapshots is how a command
+/// comes to act on one workspace and report another.
+pub struct Here {
+    pub plane: Plane,
+    cwd: std::path::PathBuf,
+    ids: charter_core::active::Ids,
+    workspace_env: Option<String>,
+    persona_env: Option<String>,
+}
 
+/// The plane this invocation acts on, and nothing else about it.
+///
+/// Kept beside [`Here`] and called BY it, for the two commands that want the plane and never
+/// the ladder: `gl-refresh` is handed its workspace by `main`, and `statusline` runs on every
+/// paint, where building the two ids costs a syscall for an answer it does not read.
 fn plane() -> Result<Plane, String> {
     let cwd =
         std::env::current_dir().map_err(|e| format!("cannot read the current directory: {e}"))?;
@@ -364,11 +389,55 @@ fn plane() -> Result<Plane, String> {
         .map_err(|e| e.to_string())
 }
 
-/// The workspace a command names, refusing a name that cannot be one.
-fn workspace(common: &Common) -> Result<charter_core::workspaces::Workspace, String> {
-    plane()?
-        .workspace(&common.workspace)
-        .map_err(|e| e.to_string())
+impl Here {
+    fn read() -> Result<Self, String> {
+        let cwd = std::env::current_dir()
+            .map_err(|e| format!("cannot read the current directory: {e}"))?;
+        Ok(Self {
+            plane: plane()?,
+            cwd,
+            ids: charter_core::active::Ids::from_env(),
+            workspace_env: std::env::var(charter_core::active::WORKSPACE_ENV).ok(),
+            persona_env: std::env::var(charter_core::active::PERSONA_ENV).ok(),
+        })
+    }
+
+    /// The whole ladder, with `flag` on top of it.
+    fn asking<'a>(
+        &'a self,
+        flag: Option<&'a str>,
+        env: Option<&'a str>,
+    ) -> charter_core::active::Asking<'a> {
+        charter_core::active::Asking {
+            root: self.plane.root(),
+            cwd: &self.cwd,
+            flag,
+            ids: &self.ids,
+            env,
+        }
+    }
+
+    /// The workspace this invocation acts on. There is always one: the ladder ends on
+    /// `[workspace] default`, and under that on the literal `default`.
+    pub fn active_workspace(&self, flag: Option<&str>) -> String {
+        charter_core::active::workspace(&self.asking(flag, self.workspace_env.as_deref())).name
+    }
+
+    /// The persona this invocation acts as, or `None` — a plane may have no front door, and
+    /// charter inventing one would be it choosing an identity nobody asked for.
+    pub fn active_persona(&self, flag: Option<&str>) -> Option<String> {
+        charter_core::active::persona(&self.asking(flag, self.persona_env.as_deref())).name
+    }
+
+    /// The workspace this command acts on, refusing a name that cannot be one.
+    ///
+    /// The refusal names the workspace RESOLVED, not the flag: with `-w` absent the operator
+    /// never typed a name, and quoting an empty one would describe nothing.
+    fn workspace(&self, flag: Option<&str>) -> Result<charter_core::workspaces::Workspace, String> {
+        self.plane
+            .workspace(&self.active_workspace(flag))
+            .map_err(|e| e.to_string())
+    }
 }
 
 /// Whether a word this binary does not own is a TOOL hook, where refusing means blocking.
@@ -662,16 +731,19 @@ fn repo_command(command: &Command) -> Option<ExitCode> {
     use charter_core::repocmd::{self, Say};
 
     let mut say = |line: Say| eprintln!("{line}");
-    let root = match command {
-        Command::Discover { .. } | Command::Clone { .. } | Command::Sync { .. } => match plane() {
-            Ok(plane) => plane.root().to_path_buf(),
-            Err(why) => {
-                eprintln!("charter: {why}");
-                return Some(ExitCode::FAILURE);
+    let here = match command {
+        Command::Discover { .. } | Command::Clone { .. } | Command::Sync { .. } => {
+            match Here::read() {
+                Ok(here) => here,
+                Err(why) => {
+                    eprintln!("charter: {why}");
+                    return Some(ExitCode::FAILURE);
+                }
             }
-        },
+        }
         _ => return None,
     };
+    let root = here.plane.root().to_path_buf();
     let code = match command {
         Command::Discover { no_probe, no_docs } => repocmd::discover::discover(
             &root,
@@ -712,10 +784,13 @@ fn repo_command(command: &Command) -> Option<ExitCode> {
                 .ok()
                 .filter(|u| !u.is_empty())
                 .unwrap_or_else(|| "unknown".to_string());
+            // With no `-w`, the ladder: "default: the active one" is what charter's own
+            // `--workspace` help has always promised for this command.
+            let ws = here.active_workspace(workspace.as_deref());
             repocmd::clone::clone(
                 &repocmd::clone::Request {
                     root: &root,
-                    ws: workspace,
+                    ws: &ws,
                     repos,
                     now,
                     author: &author,
@@ -724,10 +799,12 @@ fn repo_command(command: &Command) -> Option<ExitCode> {
             )
         }
         Command::Sync { workspace, all } => {
-            let scope = match (workspace, all) {
-                (_, true) => repocmd::sync::Scope::All,
-                (Some(ws), false) => repocmd::sync::Scope::One(ws),
-                (None, false) => unreachable!("clap requires one of the two"),
+            // `--all` is the only thing that replaces the ladder here, and clap already
+            // refuses it beside `-w`.
+            let one = (!*all).then(|| here.active_workspace(workspace.as_deref()));
+            let scope = match &one {
+                Some(ws) => repocmd::sync::Scope::One(ws),
+                None => repocmd::sync::Scope::All,
             };
             repocmd::sync::sync(&root, scope, &mut say)
         }
@@ -737,6 +814,7 @@ fn repo_command(command: &Command) -> Option<ExitCode> {
 }
 
 fn run(command: Command) -> Result<u8, String> {
+    let here = Here::read()?;
     match command {
         // Answered in `main`, before this: it is the one command whose exit code is not a
         // plain success or failure, and clap must never be allowed to exit 2 in front of it.
@@ -752,10 +830,13 @@ fn run(command: Command) -> Result<u8, String> {
             unreachable!("answered before run")
         }
         Command::Root => {
-            println!("{}", plane()?.root().display());
+            println!("{}", here.plane.root().display());
+        }
+        Command::Workspace(WorkspaceCommand::Current) => {
+            println!("{}", here.active_workspace(None));
         }
         Command::Harness(HarnessCommand::List) => {
-            let root = plane()?.root().to_path_buf();
+            let root = here.plane.root().to_path_buf();
             // The git check runs HERE because a person typed this command; it never runs on
             // a config read, so no hook pays a git call per tool call.
             let check = profiles::ignore_check(&root);
@@ -763,11 +844,15 @@ fn run(command: Command) -> Result<u8, String> {
             eprint!("{}", harness_listing(&set, &check));
         }
         Command::Workspace(WorkspaceCommand::List) => {
-            let mut names = plane()?.workspaces().map_err(|e| e.to_string())?;
-            // `default` is always listable, whether or not the directory is there: it is the
-            // one every plane starts on, and charter adds it the same way.
-            if !names.iter().any(|n| n == DEFAULT_WORKSPACE) {
-                names.push(DEFAULT_WORKSPACE.to_string());
+            let mut names = here.plane.workspaces().map_err(|e| e.to_string())?;
+            // The workspace `resolve` TERMINATES on is always listable, whether or not its
+            // directory is there: a plane where nobody selected anything resolves to a name
+            // this listing did not contain, and the table then marked no row at all
+            // (charter#745). It is `config.DEFAULT_WORKSPACE` — `[workspace] default`, and
+            // only the literal `default` when the plane declares none.
+            let always = charter_core::active::plane_default_workspace(here.plane.root());
+            if !names.contains(&always) {
+                names.push(always);
                 names.sort();
             }
             for name in names {
@@ -775,11 +860,11 @@ fn run(command: Command) -> Result<u8, String> {
             }
         }
         Command::Workspace(WorkspaceCommand::Vision { text, common }) => {
-            let ws = workspace(&common)?;
+            let ws = here.workspace(common.workspace.as_deref())?;
             // A workspace charter does not have is not one this scaffolds: `vision` shows or
             // replaces, and inventing the directory is what made a bad `-w` silent.
             if !ws.dir().is_dir() {
-                return Err(format!("no workspace '{}'", common.workspace));
+                return Err(format!("no workspace '{}'", ws.name()));
             }
             match text.as_deref().filter(|t| !t.is_empty()) {
                 Some(text) => ws.set_vision(text).map_err(|e| e.to_string())?,
@@ -791,8 +876,8 @@ fn run(command: Command) -> Result<u8, String> {
                 }
             }
         }
-        Command::Recall(args) => return memory::recall(&plane()?, args),
-        Command::Persona(command) => return memory::persona(&plane()?, command),
+        Command::Recall(args) => return memory::recall(&here, args),
+        Command::Persona(command) => return memory::persona(&here, command),
         Command::Workspace(WorkspaceCommand::Remember {
             text,
             title,
@@ -800,8 +885,8 @@ fn run(command: Command) -> Result<u8, String> {
             common,
         }) => {
             return memory::workspace_remember(
-                &plane()?,
-                &common.workspace,
+                &here.plane,
+                &here.active_workspace(common.workspace.as_deref()),
                 text.as_deref(),
                 title.as_deref(),
                 no_sync,
@@ -814,8 +899,8 @@ fn run(command: Command) -> Result<u8, String> {
             common,
         }) => {
             return memory::workspace_remember(
-                &plane()?,
-                &common.workspace,
+                &here.plane,
+                &here.active_workspace(common.workspace.as_deref()),
                 message.as_deref(),
                 None,
                 no_sync,
@@ -823,10 +908,18 @@ fn run(command: Command) -> Result<u8, String> {
             );
         }
         Command::Workspace(WorkspaceCommand::Recall { query, common }) => {
-            return memory::workspace_recall(&plane()?, &common.workspace, query.as_deref());
+            return memory::workspace_recall(
+                &here.plane,
+                &here.active_workspace(common.workspace.as_deref()),
+                query.as_deref(),
+            );
         }
         Command::Workspace(WorkspaceCommand::Forget { slug, common }) => {
-            return memory::workspace_forget(&plane()?, &common.workspace, &slug);
+            return memory::workspace_forget(
+                &here.plane,
+                &here.active_workspace(common.workspace.as_deref()),
+                &slug,
+            );
         }
         Command::Workspace(WorkspaceCommand::Optimize {
             name,
@@ -838,7 +931,7 @@ fn run(command: Command) -> Result<u8, String> {
             now,
         }) => {
             return memory::workspace_optimize(
-                &plane()?,
+                &here.plane,
                 name.as_deref(),
                 apply,
                 stale_days,
@@ -846,7 +939,7 @@ fn run(command: Command) -> Result<u8, String> {
             );
         }
         Command::Workspace(WorkspaceCommand::Todo { words, common }) => {
-            let ws = workspace(&common)?;
+            let ws = here.workspace(common.workspace.as_deref())?;
             let stamp = common.stamp()?;
             match words.as_slice() {
                 [] => {
@@ -859,8 +952,12 @@ fn run(command: Command) -> Result<u8, String> {
                 }
                 // `forget` abandons a todo silently — no journal entry, unlike `done`.
                 [verb, slug] if verb == "forget" => {
-                    charter_core::memstore::forget(plane()?.root(), &ws.dir().join("todos"), slug)
-                        .map_err(|e| e.to_string())?;
+                    charter_core::memstore::forget(
+                        here.plane.root(),
+                        &ws.dir().join("todos"),
+                        slug,
+                    )
+                    .map_err(|e| e.to_string())?;
                 }
                 // A lone verb is NOT todo text. charter refuses it, and the reason is that
                 // `todo done` with a forgotten slug would otherwise record a todo called
@@ -875,7 +972,7 @@ fn run(command: Command) -> Result<u8, String> {
                     // near-identical pair leaves its twin looking outstanding, so the list
                     // starts lying about what is left. Warn and skip rather than merge.
                     if let Some(dup) = charter_core::memstore::duplicate_of(
-                        plane()?.root(),
+                        here.plane.root(),
                         &ws.dir().join("todos"),
                         text,
                     ) {
@@ -962,7 +1059,18 @@ fn main() -> ExitCode {
             detach,
             now,
         } => {
-            return gl_refresh(workspace, *detach, now.as_deref());
+            let here = match Here::read() {
+                Ok(here) => here,
+                Err(why) => {
+                    eprintln!("charter: {why}");
+                    return ExitCode::FAILURE;
+                }
+            };
+            return gl_refresh(
+                &here.active_workspace(workspace.as_deref()),
+                *detach,
+                now.as_deref(),
+            );
         }
         Command::Statusline { watch, .. } => {
             // Nothing writes a payload to a `--watch` render, and reading stdin there would

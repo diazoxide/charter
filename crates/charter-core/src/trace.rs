@@ -13,25 +13,14 @@ pub const NO_SESSION: &str = "nosession";
 
 /// This session's bucket name — `session.bucket`.
 ///
-/// `$CHARTER_SESSION_ID`, then `$CLAUDE_CODE_SESSION_ID`, the first that is set and not
-/// empty; stripped, and every character outside `[A-Za-z0-9._-]` dropped, because it
-/// becomes a filename. [`NO_SESSION`] when nothing is left.
+/// [`crate::active::session_id`] is the id, and [`NO_SESSION`] is what stands in when there
+/// is none. **One reader, asked twice**: the same two variables key the workspace and persona
+/// pointers, and M2.9 found this function and its own copy of the rule already written side
+/// by side. A sentinel here and `None` there is charter's own split (`session.bucket` versus
+/// `session.current`) and is the whole of the difference — the sentinel is a SHARED key, so
+/// everything that can represent absence does.
 pub fn bucket(env: &dyn Fn(&str) -> Option<String>) -> String {
-    let raw = ["CHARTER_SESSION_ID", "CLAUDE_CODE_SESSION_ID"]
-        .iter()
-        .find_map(|name| env(name).filter(|v| !v.is_empty()));
-    let Some(raw) = raw else {
-        return NO_SESSION.to_string();
-    };
-    let safe: String = crate::memstore::py_strip(&raw)
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
-        .collect();
-    if safe.is_empty() {
-        NO_SESSION.to_string()
-    } else {
-        safe
-    }
+    crate::active::session_id(env).unwrap_or_else(|| NO_SESSION.to_string())
 }
 
 /// The trace file of one session.
