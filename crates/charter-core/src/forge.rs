@@ -593,8 +593,7 @@ fn call(kind: Kind, args: &[String], timeout: Duration) -> Result<Answer, NoAnsw
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let child = cmd
-        .spawn()
+    let child = crate::forklock::spawn(&mut cmd)
         .map_err(|e| NoAnswer::Missing(format!("charter could not run {cli}: {e}")))?;
     let run = git::wait(child, timeout)
         .map_err(|e| NoAnswer::Missing(format!("charter could not run {cli}: {e}")))?;

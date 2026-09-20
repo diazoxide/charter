@@ -1,0 +1,10 @@
+# The app is the process that actually opens terminals, so the same rule as
+# `crates/charter-core/clippy.toml` holds here: every fork goes through
+# `charter_core::forklock`, or a child inherits a chat's terminal for as long as it lives
+# (charter-app#53). Repeated rather than inherited because clippy reads ONE configuration
+# file — the first it finds walking up from the crate — and never merges two.
+disallowed-methods = [
+  { path = "std::process::Command::spawn", reason = "use charter_core::forklock::spawn — charter-app#53" },
+  { path = "std::process::Command::output", reason = "use charter_core::forklock::output — charter-app#53" },
+  { path = "std::process::Command::status", reason = "use charter_core::forklock::status — charter-app#53" },
+]

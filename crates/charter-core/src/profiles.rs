@@ -924,24 +924,24 @@ enum GitState {
 /// language. `--untracked-files=all` overrides an operator's `status.showUntrackedFiles=no`,
 /// which would otherwise hide `??`.
 fn git_path_state(root: &Path, git: &Path) -> GitState {
-    let mut child = match std::process::Command::new(git)
-        .args([
-            "--no-optional-locks",
-            "-C",
-            &root.display().to_string(),
-            "status",
-            "--porcelain=v1",
-            "--ignored=matching",
-            "--untracked-files=all",
-            "--",
-            LOCAL_FILE,
-        ])
-        .env("LC_ALL", "C")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-    {
+    let mut child = match crate::forklock::spawn(
+        std::process::Command::new(git)
+            .args([
+                "--no-optional-locks",
+                "-C",
+                &root.display().to_string(),
+                "status",
+                "--porcelain=v1",
+                "--ignored=matching",
+                "--untracked-files=all",
+                "--",
+                LOCAL_FILE,
+            ])
+            .env("LC_ALL", "C")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+    ) {
         Ok(child) => child,
         Err(e) => return GitState::Unknown(e.to_string()),
     };

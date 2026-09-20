@@ -239,9 +239,15 @@ impl Session {
         };
         let size = spec.size.at_least_min();
 
-        let pair = native_pty_system()
-            .openpty(pty_size(size))
-            .map_err(pty_error)?;
+        // Under the fork lock, because `openpty` hands back two descriptors that are not
+        // close-on-exec yet and only makes them so afterwards: a program charter started in
+        // that window would inherit this terminal's slave and hold it open long after this
+        // chat's own program ended (charter-app#53). Nothing else goes inside the closure —
+        // every other thread's spawn waits for it.
+        let pair = crate::forklock::while_a_terminal_is_opened(|| {
+            native_pty_system().openpty(pty_size(size))
+        })
+        .map_err(pty_error)?;
         // Everything that can fail is done before the program starts, so a failure never
         // leaves a program running that no session owns.
         let reader = pair.master.try_clone_reader().map_err(pty_error)?;
@@ -2042,9 +2048,7 @@ mod tests {
 
     fn alive(pid: u32) -> bool {
         // `ps` exits non-zero once no such process exists; a zombie awaiting its parent counts as gone.
-        Command::new("ps")
-            .args(["-o", "stat=", "-p", &pid.to_string()])
-            .output()
+        crate::forklock::output(Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]))
             .map(|out| {
                 out.status.success()
                     && !String::from_utf8_lossy(&out.stdout)

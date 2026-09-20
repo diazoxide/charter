@@ -325,7 +325,7 @@ fn spawn_with(dir: &Path, args: &[&str], extra: &Extra) -> Result<Child, GitUnav
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    Ok(cmd.spawn()?)
+    Ok(crate::forklock::spawn(&mut cmd)?)
 }
 
 /// Run `git -C <dir> <args>` with no deadline — for a call that checks out a tree.
@@ -519,22 +519,23 @@ mod tests {
                 .unwrap_or_default()
         ));
         let me = std::env::current_exe().expect("the test binary");
-        let out = Command::new(me)
-            .args([
-                "--exact",
-                "worktree::git::tests::a_hostile_environment_does_not_reach_git_through_the_runner",
-                "--nocapture",
-            ])
-            .env(CHILD, "1")
-            .env("CHARTER_TEST_HOOK_MARKER", &marker)
-            .env("HOME", home.path())
-            .env("GIT_CONFIG_COUNT", "1")
-            .env("GIT_CONFIG_KEY_0", "core.hooksPath")
-            .env("GIT_CONFIG_VALUE_0", &hooks)
-            .env("GIT_EXEC_PATH", "/tmp/charter-test-evil-exec")
-            .env("GIT_TRACE", &trace)
-            .output()
-            .expect("the test binary re-runs");
+        let out = crate::forklock::output(
+            Command::new(me)
+                .args([
+                    "--exact",
+                    "worktree::git::tests::a_hostile_environment_does_not_reach_git_through_the_runner",
+                    "--nocapture",
+                ])
+                .env(CHILD, "1")
+                .env("CHARTER_TEST_HOOK_MARKER", &marker)
+                .env("HOME", home.path())
+                .env("GIT_CONFIG_COUNT", "1")
+                .env("GIT_CONFIG_KEY_0", "core.hooksPath")
+                .env("GIT_CONFIG_VALUE_0", &hooks)
+                .env("GIT_EXEC_PATH", "/tmp/charter-test-evil-exec")
+                .env("GIT_TRACE", &trace),
+        )
+        .expect("the test binary re-runs");
 
         assert!(
             out.status.success(),
@@ -721,17 +722,18 @@ mod tests {
             return;
         }
         let me = std::env::current_exe().expect("the test binary");
-        let out = Command::new(me)
-            .args([
-                "--exact",
-                "worktree::git::tests::a_network_call_hands_the_forge_cli_its_credential_and_no_other_call_does",
-                "--nocapture",
-            ])
-            .env(CREDENTIAL_CHILD, "1")
-            .env("GH_TOKEN", "tok-under-test")
-            .env("CHARTER_TEST_NOT_A_CREDENTIAL", "1")
-            .output()
-            .expect("the test binary re-runs");
+        let out = crate::forklock::output(
+            Command::new(me)
+                .args([
+                    "--exact",
+                    "worktree::git::tests::a_network_call_hands_the_forge_cli_its_credential_and_no_other_call_does",
+                    "--nocapture",
+                ])
+                .env(CREDENTIAL_CHILD, "1")
+                .env("GH_TOKEN", "tok-under-test")
+                .env("CHARTER_TEST_NOT_A_CREDENTIAL", "1"),
+        )
+        .expect("the test binary re-runs");
         assert!(
             out.status.success(),
             "{}\n{}",

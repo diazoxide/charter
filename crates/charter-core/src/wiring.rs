@@ -503,16 +503,17 @@ fn run(
     timeout: std::time::Duration,
 ) -> Option<String> {
     let (program, rest) = argv.split_first()?;
-    let mut child = std::process::Command::new(program)
-        .args(rest)
-        .current_dir(cwd)
-        .env_clear()
-        .envs(env)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .ok()?;
+    let mut child = crate::forklock::spawn(
+        std::process::Command::new(program)
+            .args(rest)
+            .current_dir(cwd)
+            .env_clear()
+            .envs(env)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+    )
+    .ok()?;
     // A reader per pipe, so neither can fill and stop the program. Both end when the
     // program closes its end, which a killed program also does.
     let drain = |pipe: Option<std::process::ChildStdout>| {

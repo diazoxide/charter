@@ -345,7 +345,7 @@ fn spawn(plane: &Path, workspace: &str, binary: &Path) -> Result<u32, String> {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    let child = command.spawn().map_err(|why| why.to_string())?;
+    let child = crate::forklock::spawn(&mut command).map_err(|why| why.to_string())?;
     let pid = child.id();
     reap(child);
     Ok(pid)
@@ -385,10 +385,9 @@ mod tests {
     fn this_process_is_alive_and_one_that_has_been_reaped_is_not() {
         assert!(alive(std::process::id()));
 
-        let mut gone = std::process::Command::new("/bin/sh")
-            .args(["-c", "exit 0"])
-            .spawn()
-            .expect("a program starts");
+        let mut gone =
+            crate::forklock::spawn(std::process::Command::new("/bin/sh").args(["-c", "exit 0"]))
+                .expect("a program starts");
         let pid = gone.id();
         gone.wait().expect("it ends");
 

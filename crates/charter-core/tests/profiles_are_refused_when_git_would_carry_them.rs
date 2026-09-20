@@ -14,21 +14,22 @@ use std::process::Command;
 use charter_core::profiles;
 
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        // Hermetic: the operator's own global config is not this test's business, and it
-        // broke the suite once — a `commit.gpgsign` pointing at a 1Password signer failed
-        // the commit with "failed to fill whole buffer" and reddened two tests that are
-        // about git's answer, not about signing.
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@e")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@e")
-        .output()
-        .expect("git runs");
+    let out = charter_core::forklock::output(
+        Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            // Hermetic: the operator's own global config is not this test's business, and it
+            // broke the suite once — a `commit.gpgsign` pointing at a 1Password signer failed
+            // the commit with "failed to fill whole buffer" and reddened two tests that are
+            // about git's answer, not about signing.
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@e")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@e"),
+    )
+    .expect("git runs");
     assert!(out.status.success(), "git {args:?}: {out:?}");
 }
 

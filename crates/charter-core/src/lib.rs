@@ -11,6 +11,7 @@ pub mod doctor;
 pub mod engine;
 pub mod footer;
 pub mod forge;
+pub mod forklock;
 pub mod gitpolicy;
 pub mod gitstate;
 pub mod glrefresh;

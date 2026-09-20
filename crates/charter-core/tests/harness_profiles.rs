@@ -769,12 +769,13 @@ fn the_launch_read_is_the_one_that_has_already_asked_git() {
         "",
         "[harness.work]\nkind = \"claude\"\ncommand = [\"claude\"]\n",
     );
-    std::process::Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(dir.path())
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .output()
-        .expect("git runs");
+    charter_core::forklock::output(
+        std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(dir.path())
+            .env("GIT_CONFIG_GLOBAL", "/dev/null"),
+    )
+    .expect("git runs");
 
     let (set, check) = profiles::for_launch(dir.path());
 

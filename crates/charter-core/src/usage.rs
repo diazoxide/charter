@@ -579,9 +579,7 @@ mod tests {
     fn a_trend_that_is_not_a_plain_file_is_refused_instead_of_read_for_ever() {
         let (_held, plane, _outside) = a_plane_and_an_outside();
         let path = file_for(&plane, "s1").expect("an ordinary id");
-        let made = std::process::Command::new("mkfifo")
-            .arg(&path)
-            .status()
+        let made = crate::forklock::status(std::process::Command::new("mkfifo").arg(&path))
             .expect("mkfifo runs");
         assert!(made.success(), "the test needs a fifo to plant");
 
