@@ -482,6 +482,11 @@ pub enum Reading {}
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    // Named here rather than at the top of the module: the module's own code needs neither
+    // of these off unix, and an import that is only right on one platform belongs with the
+    // code that is only compiled there.
+    use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
     use std::sync::Arc;
     use std::sync::mpsc;
 
