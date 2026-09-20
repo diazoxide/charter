@@ -567,7 +567,7 @@ pub fn wire(plane: &Path, dir: &Path) -> Vec<Row> {
     // The checkouts come AFTER the directory's own rows, which is charter's order too: its
     // `wire_harnesses` materialises the workspace directory, then extends with each guest
     // tree's rows.
-    for tree in checkouts(dir) {
+    for tree in checkouts(dir).into_iter().skip(1) {
         rows.extend(guest_rows(plane, &tree));
     }
     rows
