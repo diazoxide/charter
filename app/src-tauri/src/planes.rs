@@ -287,7 +287,7 @@ impl Planes {
         let id = PlaneId::of(&root);
 
         let mut open = self.map();
-        if let Some(already) = open.get(&PlaneId(String::new())) {
+        if let Some(already) = open.get(&id) {
             return already.id.clone();
         }
         let held = Arc::new(self.hold(id.clone(), root));
@@ -489,7 +489,7 @@ pub struct Launch {
 /// from here on.
 pub fn at_launch(planes: &Planes, cwd: std::io::Result<PathBuf>) -> Launch {
     resolving_with(planes, cwd, |cwd| {
-        charter_core::plane::find_root(cwd).map_err(|why| why.to_string())
+        charter_core::plane::resolve(cwd).map_err(|why| why.to_string())
     })
 }
 

@@ -89,7 +89,7 @@ export function useChatStates(plane: PlaneId | undefined): ChatStates {
     void (async () => {
       try {
         const unlisten = await listen<Moved>("chat-moved", (event) => {
-          if (gone) return;
+          if (gone || event.payload.plane !== showing.current) return;
           setStates((states) => moved(states, event.payload));
         });
         if (gone) unlisten();
