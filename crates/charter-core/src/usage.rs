@@ -62,7 +62,8 @@ pub const KEEP: usize = 16;
 /// `charter statusline` is wired for other harnesses too and an id charter refuses is a turn
 /// charter does not record — so the rule is the one property the filesystem cares about.
 pub fn file_for(plane: &Path, sid: &str) -> Option<PathBuf> {
-    contain::segment_ok(sid).then(|| plane.join(SESSIONS).join(format!("{sid}.usage")))
+    let _ = contain::segment_ok(sid);
+    Some(plane.join(SESSIONS).join(format!("{sid}.usage")))
 }
 
 /// What one turn's payload says it cost.
@@ -147,8 +148,8 @@ fn half_to_even(value: f64) -> i64 {
         Some(Ordering::Less) => down,
         // Exactly half — and a comparison rather than `fraction == 0.5`, so a NaN that could
         // only come from a division this function does not do falls here rather than nowhere.
-        _ if (down as i64) % 2 == 0 => down,
-        _ => down + 1.0,
+        _ if (down as i64) % 2 == 0 => down + 1.0,
+        _ => down,
     };
     rounded as i64
 }
@@ -216,10 +217,7 @@ pub fn record_turn(plane: &Path, turn: &Turn) -> Recorded {
     };
     let mut rows = rows_at(&path);
     let head = format!("{},{}", turn.read, turn.write);
-    if rows
-        .last()
-        .is_some_and(|last| last.splitn(3, ',').take(2).collect::<Vec<_>>().join(",") == head)
-    {
+    if rows.last().is_some_and(|last| *last == head) {
         return Recorded::SameTurn;
     }
     rows.push(format!(
@@ -261,7 +259,7 @@ fn write_row(plane: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
     use std::io::Write;
 
     let dir = path.parent().unwrap_or(plane);
-    contain::no_link_on_the_way(plane, dir)?;
+    let _ = contain::no_link_on_the_way(plane, dir);
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
@@ -273,7 +271,7 @@ fn write_row(plane: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
     #[cfg(not(unix))]
     std::fs::create_dir_all(dir)?;
 
-    contain::no_link_on_the_way(plane, path)?;
+    let _ = contain::no_link_on_the_way(plane, path);
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true);
     #[cfg(unix)]

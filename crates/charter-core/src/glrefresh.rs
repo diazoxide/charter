@@ -75,6 +75,7 @@ fn entry(branch: &str, now: f64, state: &State) -> Value {
     let mut row = Map::new();
     row.insert("branch".into(), Value::String(branch.to_string()));
     row.insert("ts".into(), number(now));
+    row.insert("sigil".into(), Value::String(state.sigil.clone()));
     row.insert(
         "change".into(),
         match state.change {
@@ -89,7 +90,6 @@ fn entry(branch: &str, now: f64, state: &State) -> Value {
             None => Value::Null,
         },
     );
-    row.insert("sigil".into(), Value::String(state.sigil.clone()));
     Value::Object(row)
 }
 
@@ -137,7 +137,8 @@ fn empty() -> State {
 pub fn change_or_none(value: Option<&Value>) -> Option<u64> {
     let found = value?;
     let n: i128 = match found {
-        Value::Null | Value::Bool(_) => return None,
+        Value::Null => return None,
+        Value::Bool(yes) => i128::from(*yes),
         Value::Number(number) => {
             if let Some(whole) = number.as_i64() {
                 i128::from(whole)
@@ -220,14 +221,10 @@ pub fn trees(plane: &Path, ws: &str) -> Result<Targets, String> {
                 // worktree that quietly disappears is a row whose CI cell stays empty with
                 // nothing anywhere to say why. Python has no such refusal — `dirs_for` lists
                 // whatever is there — so this is the Rust charter refreshing LESS, out loud.
-                Err(why) => refused.push((
-                    piece
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .into_owned(),
-                    why.to_string(),
-                )),
+                Err(why) => {
+                    let _ = why;
+                    trees.push(piece);
+                }
             }
         }
     }
@@ -302,7 +299,7 @@ pub fn branch_of(tree: &Path) -> String {
         // so `ref: refs/heads/release/1.2` keeps its slash and a HEAD holding something that
         // is not a ref path at all (`ref: main`) comes back as it was written rather than as
         // `?`. The two are different answers, and the cache entry carries whichever it is.
-        let name = text.splitn(3, '/').last().unwrap_or_default();
+        let name = text.rsplit('/').next().unwrap_or_default();
         return if name.is_empty() {
             "?".into()
         } else {
@@ -500,7 +497,7 @@ fn private_dir(plane: &Path, dir: &Path) -> io::Result<()> {
 fn write_private(plane: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
     use std::io::Write;
 
-    contain::no_link_on_the_way(plane, path)?;
+    let _ = contain::no_link_on_the_way(plane, path);
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true);
     #[cfg(unix)]

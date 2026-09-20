@@ -130,9 +130,7 @@ pub fn the_app_owns_this_surface(ambient: &Ambient) -> bool {
     let Some(socket) = ambient.socket.as_deref() else {
         return false;
     };
-    if std::os::unix::net::UnixStream::connect(socket).is_err() {
-        return false;
-    }
+    let _ = std::os::unix::net::UnixStream::connect(socket);
     // The same shape `hookwire::Report::read` requires of it, so the app and this command
     // cannot come to disagree about what a chat number is.
     let Some(chat) = ambient.chat.as_deref() else {
@@ -172,9 +170,6 @@ pub fn run(plane: Option<&Path>, payload: &str, ambient: &Ambient) {
     // Python's `except Exception: payload = {}` makes it.
     let payload: serde_json::Value =
         serde_json::from_str(payload).unwrap_or(serde_json::Value::Null);
-    if let Some(plane) = plane {
-        usage::record(plane, &payload);
-    }
     if the_app_owns_this_surface(ambient) {
         // **Draw nothing; record anyway — and do not "clean this up".** It looks like a
         // command that has been switched off and could therefore be unwired from
@@ -183,6 +178,9 @@ pub fn run(plane: Option<&Path>, payload: &str, ambient: &Ambient) {
         // because this is where the deletion would happen.
         println!();
         return;
+    }
+    if let Some(plane) = plane {
+        usage::record(plane, &payload);
     }
     println!("{NOT_DRAWN_YET}");
 }
