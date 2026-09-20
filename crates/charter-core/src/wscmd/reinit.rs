@@ -133,9 +133,6 @@ pub fn reinit(root: &Path, scope: Scope, now: chrono::DateTime<chrono::Utc>, say
             // Counted off the ROW's own predicates, never off the arm that happens to print:
             // "is this a repair" and "what does this row say" must not be able to disagree,
             // which is what a per-arm `repairs += 1` invites the next arm to get wrong.
-            if row.did.is_unresolved() {
-                unresolved.insert(name.clone());
-            }
             if row.did.is_repair() {
                 repairs += 1;
                 repaired.insert(name.clone());

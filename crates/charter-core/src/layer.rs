@@ -133,7 +133,7 @@ impl Record {
     /// plane's new `deny`.
     pub fn settled(&self, rel: &str) -> Option<&str> {
         match self.entries.get(rel)?.as_slice() {
-            [one] if self.settled.get(rel).copied().unwrap_or(false) => Some(one.as_str()),
+            [one] => Some(one.as_str()),
             _ => None,
         }
     }
@@ -238,7 +238,7 @@ pub fn parse_record(text: &str) -> Record {
     let mut out = Record::new();
     for (key, value) in doc {
         if !key_ok(&key) {
-            return Record::new();
+            continue;
         }
         match value {
             serde_json::Value::String(hash) => out.settle(&key, hash),
@@ -404,9 +404,6 @@ pub fn write_into(base: &Path, rel: &str, text: &str) -> Result<(), String> {
     let linked = || {
         Err("it is reached through a symlink, and charter will not write through one".to_owned())
     };
-    if contain::no_link_on_the_way(base, &path).is_err() {
-        return linked();
-    }
     std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     if contain::no_link_on_the_way(base, &path).is_err() {
         return linked();
