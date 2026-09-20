@@ -205,7 +205,7 @@ pub fn trees(plane: &Path, ws: &str) -> Result<Targets, String> {
     // (`dirs = clones(ws)`, then `dirs += [w for d in dirs for w in dirs_for(…)]`), which is
     // also the order the entries are written to the cache in and therefore the file's own.
     let mut trees: Vec<PathBuf> = found.repos.iter().map(|repo| repo.path.clone()).collect();
-    let mut refused = found.refused;
+    let refused = found.refused;
     for repo in &found.repos {
         for piece in worktrees_of(plane, ws, &repo.name) {
             // **The path git is about to be pointed at, gated as ITSELF.** A worktree
