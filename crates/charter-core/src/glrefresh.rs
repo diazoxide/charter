@@ -198,16 +198,34 @@ fn python_int(text: &str) -> Option<i128> {
 ///
 /// Worktrees carry their own branch, so they carry their own pipeline and their own open
 /// change, and Python refreshes them for that reason.
-pub fn trees(plane: &Path, ws: &str) -> Result<Vec<PathBuf>, String> {
+pub fn trees(plane: &Path, ws: &str) -> Result<Targets, String> {
     let found = crate::repos::clones(plane, ws).map_err(|why| why.to_string())?;
-    let mut out: Vec<PathBuf> = Vec::new();
+    // Every clone first, then every clone's worktrees — the order Python builds the list in
+    // (`dirs = clones(ws)`, then `dirs += [w for d in dirs for w in dirs_for(…)]`), which is
+    // also the order the entries are written to the cache in and therefore the file's own.
+    let mut trees: Vec<PathBuf> = found.repos.iter().map(|repo| repo.path.clone()).collect();
     for repo in &found.repos {
-        out.push(repo.path.clone());
+        trees.extend(worktrees_of(plane, ws, &repo.name));
     }
-    for repo in &found.repos {
-        out.extend(worktrees_of(plane, ws, &repo.name));
-    }
-    Ok(out)
+    Ok(Targets {
+        trees,
+        refused: found.refused,
+    })
+}
+
+/// What a workspace offered a refresh, and what it would not.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Targets {
+    pub trees: Vec<PathBuf>,
+    /// Directories `repos::clones` refused, with the reason — a name charter will not take
+    /// for a repo, or a `.git` that is a symlink.
+    ///
+    /// **Carried so the command can say them.** A repo that quietly disappears reads as "this
+    /// workspace has one fewer repo", and the operator is the only one who can tell whether
+    /// the link is theirs. Python has no such refusals (its `clones` admits any directory with
+    /// a `.git`), so this is a place where the Rust charter refreshes LESS — which is only
+    /// honest if it says so.
+    pub refused: Vec<(String, String)>,
 }
 
 /// A clone's worktree directories, most recently touched first —
@@ -257,12 +275,13 @@ pub fn branch_of(tree: &Path) -> String {
         return "?".into();
     };
     let text = text.trim();
-    if let Some(rest) = text.strip_prefix("ref:") {
-        // `refs/heads/<branch>`, keeping slashes: Python's `txt.split("/", 2)[-1]`, which
-        // drops the first two components and nothing else.
-        let mut parts = rest.trim().splitn(3, '/');
-        let (_, _, name) = (parts.next(), parts.next(), parts.next());
-        let name = name.unwrap_or_default();
+    if text.starts_with("ref:") {
+        // Python's `txt.split("/", 2)[-1]`, spelled the same way rather than tidied: it splits
+        // the WHOLE line — `ref:` and all — at the first two slashes and takes what is left,
+        // so `ref: refs/heads/release/1.2` keeps its slash and a HEAD holding something that
+        // is not a ref path at all (`ref: main`) comes back as it was written rather than as
+        // `?`. The two are different answers, and the cache entry carries whichever it is.
+        let name = text.splitn(3, '/').last().unwrap_or_default();
         return if name.is_empty() {
             "?".into()
         } else {
@@ -530,6 +549,15 @@ mod tests {
             "release/1.2",
             "only refs/heads/ is stripped"
         );
+
+        std::fs::write(tree.join(".git/HEAD"), "ref: refs/heads/\n").unwrap();
+        assert_eq!(branch_of(&tree), "?", "a ref pointing at no branch");
+
+        // Python splits the whole line at the first two slashes and takes the rest, so a HEAD
+        // that names no ref path comes back as it was written. Not a shape git produces — and
+        // the point is that the two charters answer a file neither of them wrote identically.
+        std::fs::write(tree.join(".git/HEAD"), "ref: main\n").unwrap();
+        assert_eq!(branch_of(&tree), "ref: main");
 
         std::fs::write(tree.join(".git/HEAD"), "0123456789abcdef\n").unwrap();
         assert_eq!(

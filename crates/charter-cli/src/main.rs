@@ -537,13 +537,25 @@ fn gl_refresh(ws: &str, detach: bool, now: Option<&str>) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let trees = match glrefresh::trees(&root, ws) {
-        Ok(trees) => trees,
+    // A workspace this plane does not have is REFUSED here, where charter answers "No repos in
+    // workspace '<name>'." and exits 0. That is a declared divergence: a `-w` nobody can act on
+    // reading as "there is nothing to do" is how a typo silently refreshes nothing for ever,
+    // and this binary already takes that position everywhere else (`vision` refuses a
+    // workspace it would otherwise have invented).
+    let found = match glrefresh::trees(&root, ws) {
+        Ok(found) => found,
         Err(why) => {
             eprintln!("charter: {why}");
             return ExitCode::FAILURE;
         }
     };
+    // Said, never dropped — `repos::clones`'s own rule. A refused directory is one this
+    // refresh will not fetch for, and the row it feeds will stay empty until somebody is told
+    // why.
+    for (name, why) in &found.refused {
+        voice::warn(&format!("{name} is not refreshed — {why}"));
+    }
+    let trees = found.trees;
     if trees.is_empty() {
         voice::info(&format!("No repos in workspace '{ws}'."));
         return ExitCode::SUCCESS;

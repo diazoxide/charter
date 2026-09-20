@@ -60,7 +60,7 @@ fn now() -> f64 {
 }
 
 fn refresh_alpha(at: &Path) {
-    glrefresh::refresh(at, &glrefresh::trees(at, "alpha").unwrap(), now());
+    glrefresh::refresh(at, &glrefresh::trees(at, "alpha").unwrap().trees, now());
 }
 
 #[test]
@@ -183,7 +183,7 @@ fn a_second_refresh_keeps_the_entries_the_first_one_wrote() {
     let (_keep, at) = plane();
     clone(&at.join("workspaces/beta/other"), "main");
 
-    glrefresh::refresh(&at, &glrefresh::trees(&at, "beta").unwrap(), now());
+    glrefresh::refresh(&at, &glrefresh::trees(&at, "beta").unwrap().trees, now());
     refresh_alpha(&at);
 
     let cache = cistate::read(&at).expect("the cache reads");
@@ -203,7 +203,7 @@ fn the_trees_refreshed_are_the_rows_the_panel_draws() {
     // drawn". This is that property, asked of the two functions the app actually calls.
     let (_keep, at) = plane();
 
-    let refreshed = glrefresh::trees(&at, "alpha").unwrap();
+    let refreshed = glrefresh::trees(&at, "alpha").unwrap().trees;
     let drawn: Vec<PathBuf> = rows(&at).into_iter().map(|repo| repo.path).collect();
 
     assert!(!drawn.is_empty(), "the fixture has no rows to compare");
@@ -217,6 +217,34 @@ fn the_trees_refreshed_are_the_rows_the_panel_draws() {
 }
 
 #[test]
+fn a_directory_charter_will_not_run_git_in_is_named_rather_than_skipped() {
+    // `repos::clones` refuses a `.git` that is a symlink, because the repository git would act
+    // on is not the one inside the workspace. The refresh inherits that — and has to CARRY the
+    // reason, because a tree that silently disappears from the refresh is a row whose CI cell
+    // stays empty with nothing anywhere to say why.
+    let (_keep, at) = plane();
+    let elsewhere = at.join("workspaces/alpha/svc/.git");
+    let planted = at.join("workspaces/alpha/planted");
+    std::fs::create_dir_all(&planted).unwrap();
+    std::os::unix::fs::symlink(&elsewhere, planted.join(".git")).unwrap();
+
+    let found = glrefresh::trees(&at, "alpha").unwrap();
+
+    assert!(
+        !found.trees.contains(&planted),
+        "git was run in a tree reached through a link"
+    );
+    assert!(
+        found
+            .refused
+            .iter()
+            .any(|(name, why)| name == "planted" && why.contains("symlink")),
+        "the refusal was dropped: {:?}",
+        found.refused
+    );
+}
+
+#[test]
 fn a_worktree_is_refreshed_beside_the_clone_it_was_cut_from() {
     // A worktree carries its own branch, so it carries its own pipeline and its own open
     // change. Python refreshes them for that reason, and a port that listed only the clones
@@ -226,7 +254,7 @@ fn a_worktree_is_refreshed_beside_the_clone_it_was_cut_from() {
     std::fs::create_dir_all(&piece).unwrap();
     std::fs::write(piece.join(".git"), "gitdir: /nowhere\n").unwrap();
 
-    let refreshed = glrefresh::trees(&at, "alpha").unwrap();
+    let refreshed = glrefresh::trees(&at, "alpha").unwrap().trees;
 
     assert!(
         refreshed.contains(&piece),
