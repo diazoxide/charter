@@ -1059,6 +1059,16 @@ fn commit_push(request: &Request, add_cmd: &[&str], say: Sink) -> u8 {
             // unexamined — the same rule as the link above, one source along. Before this,
             // an unreadable row fell through to no flag at all, which is the one direction
             // a guard may not fail in.
+            //
+            // **No test reaches this arm, and that is measured rather than assumed.** The
+            // obvious way to make one — `update-index --cacheinfo` with a sha that is not
+            // in the object store — does not survive the `add -A` this command runs first:
+            // git stages the DELETION of a path with no file on disk, so the row is not
+            // listed at all. What is left that reaches here is a `git show` that fails for
+            // a reason a fixture cannot manufacture: a corrupt object store, the deadline,
+            // git gone from PATH mid-command. Deleting this arm therefore turns nothing
+            // red, and the next person to mutate it should know that before they conclude
+            // it is dead code.
             _ => flagged.push((
                 path.clone(),
                 "charter could not read what is staged for it, so it will not commit it \
