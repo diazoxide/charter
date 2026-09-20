@@ -96,7 +96,7 @@ export const commands = {
 	 *  looking at is sent rather than suppressed. See [`Showing`], where the gap this closes is
 	 *  written down.
 	 */
-	windowShowsPlane: (plane: PlaneId | null) => __TAURI_INVOKE<void>("window_shows_plane", { plane }),
+	windowShowsPlane: (plane: string | null) => __TAURI_INVOKE<void>("window_shows_plane", { plane }),
 	/**
 	 *  Starts a session, and remembers it as a chat so a quit can write it down. No program is
 	 *  the operator's shell.
