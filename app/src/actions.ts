@@ -32,10 +32,40 @@ import { panesOf, type Direction, type Tabs } from "./tabs";
 /** What running an action answered: one line to say, or a refusal in the words it came in. */
 export type Ran = { ok: true; said?: string } | { ok: false; refused: string };
 
+/**
+ * The key the palette claims, and the key it can hand back.
+ *
+ * `F2` is the tmux frame's own key and it is claimed on the window, capture-phase, so the
+ * pane's terminal never sees it (`Palette.opensIt`). An operator whose harness binds `F2`
+ * therefore had no way to send it — no chord, no second press, no setting (charter-app#47).
+ *
+ * **The way out is the frame's own idiom, not a new one.** tmux answers the same question
+ * with `send-prefix`: press the prefix twice and the second one goes through. So the second
+ * `F2` closes the palette and delivers `F2` to the chat in front, and the row below is the
+ * same thing with a name, so it can be browsed and typed for rather than only known.
+ */
+export const PASS_THROUGH_KEY = "F2";
+
+/** The row that sends it, looked up by id wherever the keystroke is handled. */
+export const PASS_THROUGH_ID = "pane.sendkey";
+
+/**
+ * What a terminal sends for that key, so the second press delivers exactly what the first
+ * one swallowed.
+ *
+ * `ESC O Q` (SS3 Q) is what xterm.js itself sends for an unmodified `F2` — its
+ * `evaluateKeyboardEvent` maps key code 113 with no modifier to `C0.ESC + "OQ"`. Read out of
+ * the version this app depends on rather than off a table, because the claim is not "this is
+ * F2 in VT100" but "this is what the pane would have sent".
+ */
+export const PASS_THROUGH_BYTES = "\u001bOQ";
+
 /** What a row does, as a value the window can carry out. */
 export type Does =
   | { verb: "chat.new" }
   | { verb: "split"; direction: Direction }
+  /** Hands a key the palette claimed to the chat in front, rather than swallowing it. */
+  | { verb: "sendKey"; key: string }
   | { verb: "closePane" }
   | { verb: "closeTab"; tab: number }
   | { verb: "selectTab"; tab: number }
@@ -66,6 +96,17 @@ export type Offer = {
   /** Non-empty exactly when `available` is false. */
   reason: string;
   does: Does;
+  /**
+   * The NAME this row's title carries, when it carries one — a tab's name, a workspace's, a
+   * chat's — as the exact substring of `title` it appears as.
+   *
+   * It is a field rather than something read back out of the title, because what is a name
+   * and what is charter's own word is not recoverable from the finished sentence: `Switch to
+   * tab release.3` and `Remove this chat's worktree` both contain `re`. `narrow` uses it to
+   * put a row the operator's words FOUND ahead of a row that merely has those letters in
+   * somebody's name — which at fifty chats is the whole difference (charter-app#48).
+   */
+  name?: string;
 };
 
 /** The window as it now stands: everything an offer's availability is decided from. */
@@ -83,6 +124,10 @@ export type Now = {
   refusal?: string;
   /** The chats asking for you, oldest first. */
   needsYou: readonly number[];
+  /** The chats that can be waiting on you without saying so, by name — a Codex chat stopped
+   *  mid-turn for an approval says nothing (charter-app#52). The row for the queue reads it,
+   *  so a palette that says "Nothing needs you." is never saying more than charter knows. */
+  quiet?: readonly string[];
   /** What a chat is called, for a row that names one. */
   nameOf: (session: number) => string;
 };
@@ -98,6 +143,7 @@ export type Doing = {
   showChat: (session: number) => void;
   removeWorktree: (force: boolean) => Promise<Ran>;
   mergeWorktree: () => Promise<Ran>;
+  sendKey: (key: string) => Promise<Ran>;
   quit: () => void;
 };
 
@@ -105,13 +151,13 @@ export type Doing = {
 const DID: Ran = { ok: true };
 
 /** An offer that can run, spelled once so `reason` cannot drift from `available`. */
-function can(id: string, title: string, does: Does): Offer {
-  return { id, title, available: true, reason: "", does };
+function can(id: string, title: string, does: Does, name?: string): Offer {
+  return { id, title, available: true, reason: "", does, name };
 }
 
 /** An offer that cannot, which therefore has to say why. */
-function cannot(id: string, title: string, reason: string): Offer {
-  return { id, title, available: false, reason, does: { verb: "nothing" } };
+function cannot(id: string, title: string, reason: string, name?: string): Offer {
+  return { id, title, available: false, reason, does: { verb: "nothing" }, name };
 }
 
 /**
@@ -124,7 +170,10 @@ function cannot(id: string, title: string, reason: string): Offer {
  * **Names are rows too.** The tmux frame kept its forty workspaces out of the browsable list
  * because each was a whole `Action` that would have spawned a second charter process; a row
  * here is a value, so the objection does not carry — and a row an operator cannot see by
- * browsing is a row they have to be told about.
+ * browsing is a row they have to be told about. What the frame was actually protecting
+ * against is answered by `narrow` ranking a verb above a name, not by leaving the name out:
+ * at fifty chats it is the TABS that crowd a query, and no version of this list ever left
+ * those out.
  */
 export function catalogue(now: Now): Offer[] {
   const front = now.tabs.inFront === undefined ? undefined : now.tabs.byId[now.tabs.inFront];
@@ -145,29 +194,44 @@ export function catalogue(now: Now): Offer[] {
     );
   }
 
+  // The key the palette claimed, handed back. Not destructive and not below the line: it is
+  // how an operator whose harness binds `F2` types `F2` at all (charter-app#47).
+  const sendKey = `Send ${PASS_THROUGH_KEY} to the chat in front`;
+  offers.push(
+    front
+      ? can(PASS_THROUGH_ID, sendKey, { verb: "sendKey", key: PASS_THROUGH_KEY })
+      : cannot(PASS_THROUGH_ID, sendKey, "No chat is in front, so there is nowhere to send it."),
+  );
+
   // The needs-you queue, as rows. The first row is always here so it can be browsed to on a
   // quiet plane, and says so rather than going missing.
+  //
+  // **And it says only as much as charter knows.** A harness that cannot report everything —
+  // a Codex chat stopped mid-turn for an approval says nothing (charter-app#52) — makes
+  // "Nothing needs you." a claim charter cannot stand behind, so the reason hedges instead.
   const [oldest] = now.needsYou;
   offers.push(
     oldest === undefined
-      ? cannot("needs.next", "Show the chat that needs you", "Nothing needs you.")
+      ? cannot("needs.next", "Show the chat that needs you", nothingSaidSoFar(now.quiet ?? []))
       : can("needs.next", "Show the chat that needs you", { verb: "showChat", session: oldest }),
   );
   for (const session of now.needsYou) {
-    const title = `Show ${now.nameOf(session)}, which needs you`;
+    const name = now.nameOf(session);
+    const title = `Show ${name}, which needs you`;
     offers.push(
       tabHolding(now.tabs, session) === undefined
-        ? cannot(`needs.show:${session}`, title, "That chat has no tab in this window.")
-        : can(`needs.show:${session}`, title, { verb: "showChat", session }),
+        ? cannot(`needs.show:${session}`, title, "That chat has no tab in this window.", name)
+        : can(`needs.show:${session}`, title, { verb: "showChat", session }, name),
     );
   }
 
   for (const tab of now.tabs.order) {
-    const title = `Switch to tab ${now.tabs.byId[tab].name}`;
+    const name = now.tabs.byId[tab].name;
+    const title = `Switch to tab ${name}`;
     offers.push(
       tab === now.tabs.inFront
-        ? cannot(`tab.select:${tab}`, title, "It is already in front.")
-        : can(`tab.select:${tab}`, title, { verb: "selectTab", tab }),
+        ? cannot(`tab.select:${tab}`, title, "It is already in front.", name)
+        : can(`tab.select:${tab}`, title, { verb: "selectTab", tab }, name),
     );
   }
 
@@ -175,8 +239,13 @@ export function catalogue(now: Now): Offer[] {
     const title = `Focus workspace ${workspace}`;
     offers.push(
       workspace === now.focused
-        ? cannot(`workspace.focus:${workspace}`, title, "It is already focused.")
-        : can(`workspace.focus:${workspace}`, title, { verb: "focusWorkspace", workspace }),
+        ? cannot(`workspace.focus:${workspace}`, title, "It is already focused.", workspace)
+        : can(
+            `workspace.focus:${workspace}`,
+            title,
+            { verb: "focusWorkspace", workspace },
+            workspace,
+          ),
     );
   }
 
@@ -199,9 +268,8 @@ export function catalogue(now: Now): Offer[] {
   );
 
   for (const tab of now.tabs.order) {
-    offers.push(
-      can(`tab.close:${tab}`, `Close tab ${now.tabs.byId[tab].name}`, { verb: "closeTab", tab }),
-    );
+    const name = now.tabs.byId[tab].name;
+    offers.push(can(`tab.close:${tab}`, `Close tab ${name}`, { verb: "closeTab", tab }, name));
   }
 
   const remove = "Remove this chat's worktree";
@@ -272,12 +340,31 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return doing.removeWorktree(does.force);
     case "mergeWorktree":
       return doing.mergeWorktree();
+    case "sendKey":
+      return doing.sendKey(does.key);
     case "quit":
       doing.quit();
       return DID;
     case "nothing":
       return DID;
   }
+}
+
+/**
+ * What the queue's row says when nothing has asked for the operator.
+ *
+ * "Nothing needs you." is a claim about every chat on the plane, and a harness that cannot
+ * report a question asked mid-turn makes it one charter cannot stand behind (charter-app#52,
+ * measured on codex-cli 0.147.0). So it is said only when every open chat can say what it is
+ * doing; otherwise the row says what is actually known, which is less.
+ */
+function nothingSaidSoFar(quiet: readonly string[]): string {
+  if (quiet.length === 0) return "Nothing needs you.";
+  const who =
+    quiet.length === 1
+      ? `${quiet[0]} can be waiting on you without saying so`
+      : `${quiet.length} chats can be waiting on you without saying so`;
+  return `Nothing has said it needs you — and ${who}.`;
 }
 
 /** Why there is no worktree to act on, or nothing when there is one. */
@@ -317,11 +404,36 @@ export function matches(query: string, offer: Offer): boolean {
 }
 
 /**
+ * Whether the query found CHARTER'S OWN WORDS on this row, rather than only a name it
+ * happens to carry.
+ *
+ * The title with the row's `name` taken out of it, plus charter's part of the id. `Switch to
+ * tab release.3` answers no to `re` and yes to `switch`; `Remove this chat's worktree` has no
+ * name in it and answers yes to both. A row with no name is always its own words.
+ */
+function byItsWords(query: string, offer: Offer): boolean {
+  const want = query.toLowerCase();
+  if (offer.id.split(":")[0].toLowerCase().includes(want)) return true;
+  const words = offer.name ? offer.title.split(offer.name).join(" ") : offer.title;
+  return words.toLowerCase().includes(want);
+}
+
+/**
  * The rows left after what has been typed, in the order they are shown.
  *
- * **The name you typed in FULL is the row Enter runs.** Everything else keeps the place the
- * catalogue gave it — no score and no cap. A score would reorder rows under the operator's
- * fingers as they type, and a cap would hide rows the palette can simply scroll to.
+ * **The name you typed in FULL is the row Enter runs**, and after that **a row your words
+ * found comes before a row that merely has those letters in somebody's name.** Within each
+ * of those two groups everything keeps the place the catalogue gave it — still no score and
+ * still no cap. That matters at the scale ADR 0026 writes the limits for: with fifty chats
+ * open the catalogue is 119 rows, and `re` used to list `Switch to tab release.3` and forty
+ * other names above `Remove this chat's worktree` (measured, charter-app#48). Two stable
+ * groups is not a score — nothing is weighted, nothing moves relative to anything else
+ * inside its group, and the same query always gives the same order.
+ *
+ * **It is ranking rather than filtering, and the measurement is why.** The tmux frame's
+ * answer was to keep workspaces out of the browsable list; at fifty chats the rows burying
+ * the verb are the TABS, which the frame kept, so dropping the workspaces would not have
+ * moved the number it was meant to fix.
  */
 export function narrow(query: string, offers: readonly Offer[]): Offer[] {
   const want = query.trim();
@@ -329,7 +441,12 @@ export function narrow(query: string, offers: readonly Offer[]): Offer[] {
   const kept = offers.filter((offer) => matches(want, offer));
   const whole = want.toLowerCase();
   const exact = kept.filter((offer) => offer.title.toLowerCase() === whole);
-  return exact.length === 0 ? kept : [...exact, ...kept.filter((offer) => !exact.includes(offer))];
+  const rest = kept.filter((offer) => !exact.includes(offer));
+  return [
+    ...exact,
+    ...rest.filter((offer) => byItsWords(want, offer)),
+    ...rest.filter((offer) => !byItsWords(want, offer)),
+  ];
 }
 
 /**

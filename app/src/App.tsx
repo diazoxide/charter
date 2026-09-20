@@ -9,7 +9,15 @@ import {
   type Sidebar as SidebarModel,
   type StartOptions,
 } from "./bindings";
-import { catalogue, perform, type Doing, type Offer, type Ran } from "./actions";
+import {
+  catalogue,
+  perform,
+  PASS_THROUGH_BYTES,
+  PASS_THROUGH_KEY,
+  type Doing,
+  type Offer,
+  type Ran,
+} from "./actions";
 import { Palette } from "./Palette";
 import { StartChat } from "./StartChat";
 import { QuitWarning } from "./QuitWarning";
@@ -430,6 +438,33 @@ function App() {
     };
   }, [planeRoot, worktree]);
 
+  /**
+   * Hands a key the palette claimed to the chat in front.
+   *
+   * **It writes the bytes the pane's own terminal would have written.** The palette takes
+   * `F2` on the window, capture-phase, so xterm never gets the keystroke to translate — and
+   * re-dispatching the event is not a way out of that, because the focus is in the palette's
+   * box by then. So what the terminal would have sent is sent, through the one path a pane's
+   * input already takes (`send_input`). Nothing is read back: this is input, not a reading of
+   * anything the harness said.
+   */
+  const sendKey = useCallback(
+    async (key: string): Promise<Ran> => {
+      if (frontSession === undefined)
+        return { ok: false, refused: "No chat is in front, so there is nowhere to send it." };
+      if (key !== PASS_THROUGH_KEY) return { ok: false, refused: `charter cannot send ${key}.` };
+      const sent = await commands
+        .sendInput(frontSession, PASS_THROUGH_BYTES)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      // Verbatim: a session that has stopped reading its input says so in the core's words.
+      if (sent.status === "error") return { ok: false, refused: sent.error };
+      // Nothing is said. The chat's own answer to the key is the report, and a banner after
+      // every press of a key an operator means to press repeatedly is noise.
+      return { ok: true };
+    },
+    [frontSession],
+  );
+
   const doing = useMemo<Doing>(
     () => ({
       newChat: newTab,
@@ -441,9 +476,35 @@ function App() {
       showChat,
       removeWorktree,
       mergeWorktree,
+      sendKey,
       quit: () => void commands.askToQuit().catch(() => undefined),
     }),
-    [bringToFront, close, closePane, mergeWorktree, newTab, removeWorktree, showChat, split],
+    [
+      bringToFront,
+      close,
+      closePane,
+      mergeWorktree,
+      newTab,
+      removeWorktree,
+      sendKey,
+      showChat,
+      split,
+    ],
+  );
+
+  // The chats that can be waiting on the operator without saying so. Read from the sidebar,
+  // which is the core's own list of what is open and what each chat runs. It is needed up
+  // here as well as beside the queue: the palette's row for the queue must not claim
+  // "Nothing needs you." over the top of a chat that cannot say it does (charter-app#52).
+  //
+  // Held, because it is one of the catalogue's inputs: a fresh array on every render would
+  // rebuild all 117 rows of a fifty-chat catalogue for every keystroke in the palette.
+  const quiet = useMemo(
+    () =>
+      sidebar
+        ? quietOnes([...sidebar.workspaces.flatMap((ws) => ws.chats), ...sidebar.unfiled], states)
+        : [],
+    [sidebar, states],
   );
 
   /**
@@ -466,9 +527,10 @@ function App() {
         // discard row is the operator's answer to a sentence they have read.
         refusal: report?.refused && report.from === "worktree.remove" ? report.words : undefined,
         needsYou: states.needsYou,
+        quiet,
         nameOf,
       }),
-    [focused, nameOf, planeRoot, report, sidebar, states.needsYou, tabs, worktree],
+    [focused, nameOf, planeRoot, quiet, report, sidebar, states.needsYou, tabs, worktree],
   );
 
   const by = useCallback((id: string) => offers.find((offer) => offer.id === id), [offers]);
@@ -506,11 +568,6 @@ function App() {
   );
   const frontChat =
     inFront && reopened.find((chat) => chat.session === panesOf(tabs, inFront.id)[0]?.session);
-  // Read from the sidebar, which is the core's own list of what is open and what each chat
-  // runs — `open` above knows the harness only of the chats a relaunch put back.
-  const quiet = sidebar
-    ? quietOnes([...sidebar.workspaces.flatMap((ws) => ws.chats), ...sidebar.unfiled], states)
-    : [];
 
   return (
     <main className="window">

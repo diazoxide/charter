@@ -213,4 +213,27 @@ describe("the command palette", () => {
 
     expect(byPalette).toEqual(byButton);
   });
+
+  it("hands F2 back to the chat when F2 is pressed again, and says so while it is up", async () => {
+    // charter-app#47. The palette takes F2 on the window, capture-phase, so a harness that
+    // binds F2 never sees it. tmux answers this with `send-prefix` and so does this: the
+    // second press closes the palette and the key goes to the chat in front. What is tested
+    // here is what an operator can see — the palette said there was a way out, and pressing
+    // the key again took it.
+    await pressAndStart("New tab");
+    await openPalette();
+    await expect($(".palette-through")).toHaveText(
+      "Press F2 again to send F2 to the chat in front.",
+    );
+
+    await browser.keys(["F2"]);
+
+    await expect($(PALETTE)).not.toBeDisplayed();
+    // And it is the catalogue's own row that ran, which is what keeps the chord from being a
+    // second implementation of it: the row is there, browsable, under the key's own name.
+    await openPalette();
+    await typeIntoPalette("F2");
+    expect(await rows()).toEqual(["Send F2 to the chat in front"]);
+    await browser.keys(["Escape"]);
+  });
 });

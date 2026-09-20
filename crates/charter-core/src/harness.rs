@@ -235,6 +235,18 @@ impl Harness {
             //   and not for a command that needed none — but that is a hook that DECIDES a
             //   permission, and the app arms no such hook (see the guard test below). So a
             //   Codex chat that stops mid-turn for approval cannot say so.
+            // * **And there is no second way round it** (charter-app#52, read out of the same
+            //   0.147.0 binary the measurements above were taken on). The binary carries
+            //   eleven hook events and no more — `PreToolUse`, `PermissionRequest`,
+            //   `PostToolUse`, `PreCompact`, `PostCompact`, `SessionStart`, `SessionEnd`,
+            //   `UserPromptSubmit`, `SubagentStart`, `SubagentStop`, `Stop` — and the only
+            //   one that fires when the prompt appears is the one that decides it. The
+            //   `notify` program is not a second channel either: in 0.147.0 it is
+            //   `legacy_notify`, a shim over `Stop` whose one payload type is
+            //   `agent-turn-complete`, which is the falling edge `Stop` already gives. What
+            //   is left is `PreToolUse` without a matching `PostToolUse` for long enough —
+            //   which is a guess at timing over a harness's behaviour, and ADR 0018 admits
+            //   no state that did not come from a hook saying so.
             // * `SessionStart` fires inside the FIRST TURN, not at launch (X1): an idle TUI
             //   reported nothing at all until a prompt was typed.
             // * A hook is inert until Codex trusts it. For these, the TUI itself asks at
