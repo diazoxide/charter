@@ -79,6 +79,13 @@ pub fn create(request: &Request, say: Sink) -> u8 {
             wscmd::select::Scope::Locked => {
                 let held = before.unwrap_or_else(|| "?".to_string());
                 say(Say::Fail(wscmd::select::locked_msg(name, &held)));
+                // charter says a SHORTER sentence — "Workspace 'x' was created." — when the
+                // lock is a chat's own launch lock, because inside a chat the refusal above
+                // has already named how to work there and "start a new session, or --force"
+                // would contradict it with the two routes that lock exists to replace. The
+                // frame's launch record is not a rung this binary reads (the differential
+                // says so by name), so there is no launch lock to recognise and this is the
+                // one sentence. It is the right one everywhere a chat is not what asked.
                 say(Say::Info(format!(
                     "Workspace '{name}' was created; start a new session to use it, or re-run \
                      with --force."
