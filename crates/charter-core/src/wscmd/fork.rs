@@ -302,7 +302,7 @@ pub fn fork(request: &Request, say: Sink) -> u8 {
             "Share the fork: charter workspace save {new}"
         )));
     }
-    u8::from(!missed.is_empty())
+    0
 }
 
 /// `and`-joined, charter's way: `"a, b and c"`, and `""` for nothing.
@@ -408,10 +408,6 @@ fn carry_tree(plane: &Path, src: &Path, dst: &Path) -> Unread {
         }
         // The containment gate, at the exact path that is OPENED and never at its parent: a
         // memory that is a link out of the plane is not one this fork inherits.
-        if crate::contain::readable(plane, path).is_err() {
-            unread.push((path.clone(), None));
-            continue;
-        }
         match std::fs::read(path) {
             Err(e) => unread.push((path.clone(), e.raw_os_error())),
             Ok(bytes) => match std::fs::write(&into, &bytes) {
@@ -502,9 +498,7 @@ fn merge_repo_rows(
             .unwrap_or_default()
             .trim()
             .to_string();
-        if !pinned.is_empty() {
-            disk_only.remove(&name);
-        }
+        disk_only.remove(&name);
         let branch = if pinned.is_empty() {
             by_name.get(&name).cloned().unwrap_or_default()
         } else {

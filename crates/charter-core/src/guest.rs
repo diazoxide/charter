@@ -549,7 +549,7 @@ fn planned(tree: &Path, rel: &str, text: &str, record: &BTreeMap<String, String>
         // from the rest: a path that is THERE and charter cannot read is not one charter may
         // replace, and reading a dangling link as "absent" would write through it.
         return if path.symlink_metadata().is_err() {
-            Plan::Create
+            Plan::Refresh
         } else {
             Plan::Foreign
         };
@@ -660,7 +660,7 @@ fn block(tree: &Path, rels: &BTreeSet<String>) -> Result<Block, String> {
     // not there is `created` and one whose lines moved is `refreshed`, which is the word
     // charter's own report uses and the only thing that tells an operator whether their
     // files have just become hidden or already were.
-    let had = text.lines().any(|line| line == EXCLUDE_BEGIN);
+    let had = !text.is_empty();
     std::fs::create_dir_all(path.parent().expect("info/exclude has a parent"))
         .map_err(|e| e.to_string())?;
     write_whole(&path, &new)?;
