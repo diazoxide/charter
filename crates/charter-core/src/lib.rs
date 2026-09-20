@@ -14,6 +14,7 @@ pub mod forge;
 pub mod gitpolicy;
 pub mod gitstate;
 pub mod glrefresh;
+pub mod glstate;
 pub mod guest;
 pub mod handoff;
 pub mod harness;
