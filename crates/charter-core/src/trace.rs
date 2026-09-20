@@ -115,7 +115,7 @@ pub fn private_mkdir(dir: &Path) -> std::io::Result<()> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o777);
+            builder.mode(0o700);
         }
         match builder.create(&level) {
             Ok(()) => {}

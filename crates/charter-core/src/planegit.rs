@@ -988,10 +988,10 @@ fn commit_push(request: &Request, add_cmd: &[&str], say: Sink) -> u8 {
     // nothing, and lets the row through. A path with a `"`, a backslash, a newline or any
     // byte over 0x7f walks past the guard that way. `-z` turns the quoting off and NUL is
     // then the only separator, which is also the only one a filename cannot hold.
-    let staged: Vec<String> = git::run(root, &["diff", "--cached", "--name-only"], git::READ)
+    let staged: Vec<String> = git::run(root, &["diff", "--cached", "--name-only", "-z"], git::READ)
         .map(|r| {
             r.out
-                .lines()
+                .split('\0')
                 .filter(|l| !l.trim().is_empty())
                 .map(str::to_string)
                 .collect()
@@ -1038,11 +1038,20 @@ fn commit_push(request: &Request, add_cmd: &[&str], say: Sink) -> u8 {
         // scanning that blob would answer "no secret" about a file charter never read.
         // Following it instead would be a guard whose answer is about bytes the commit does
         // not carry, which is the whole defect this loop was changed to close.
+        if std::fs::symlink_metadata(&file).is_ok_and(|found| found.file_type().is_symlink()) {
+            flagged.push((
+                path.clone(),
+                "it is a link, and what a save commits for one is the link rather than the \
+                 text charter would have read",
+            ));
+            continue;
+        }
         // `:<path>` is the index's own blob for that path, resolved from the top of the
         // tree — which is what `--name-only` printed, and what `-C root` puts git in.
-        match std::fs::read_to_string(&file) {
-            Ok(text) => {
-                if let Some(kind) = secretshape::secret_kind(&text) {
+        let staged_blob = format!(":{path}");
+        match git::run(root, &["show", &staged_blob], git::READ) {
+            Ok(run) if run.ok() => {
+                if let Some(kind) = secretshape::secret_kind(&run.out) {
                     flagged.push((path.clone(), kind));
                 }
             }
@@ -1073,9 +1082,8 @@ fn commit_push(request: &Request, add_cmd: &[&str], say: Sink) -> u8 {
         ));
         for (path, kind) in &flagged {
             say(Say::Fail(format!(
-                "  {}  ({kind}) {}",
-                shown::readable(path, shown::DISPLAY_LIMIT),
-                std::fs::read_to_string(root.join(path)).unwrap_or_default()
+                "  {}  ({kind})",
+                shown::readable(path, shown::DISPLAY_LIMIT)
             )));
         }
         say(Say::Info(

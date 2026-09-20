@@ -262,6 +262,16 @@ pub fn no_link_on_the_way(root: &std::path::Path, path: &std::path::Path) -> std
     };
     let mut walked = root.to_path_buf();
     for step in below.components() {
+        if step == std::path::Component::ParentDir {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "{} walks up out of {}, and charter's own path never does",
+                    path.display(),
+                    root.display()
+                ),
+            ));
+        }
         walked.push(step);
         match std::fs::symlink_metadata(&walked) {
             Ok(found) if found.file_type().is_symlink() => {
