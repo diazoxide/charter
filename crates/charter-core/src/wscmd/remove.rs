@@ -170,7 +170,9 @@ mod tests {
 
     fn run(root: &Path, name: &str, force: bool) -> (u8, Vec<String>) {
         let mut said = Vec::new();
-        let code = remove(root, name, force, &mut |line: Say| said.push(line.to_string()));
+        let code = remove(root, name, force, &mut |line: Say| {
+            said.push(line.to_string())
+        });
         (code, said)
     }
 
@@ -353,7 +355,10 @@ mod tests {
 
         let (code, said) = run(dir.path(), "beta", false);
         assert_eq!(code, 2, "{said:?}");
-        assert!(said[0].contains("svc/task: uncommitted changes"), "{said:?}");
+        assert!(
+            said[0].contains("svc/task: uncommitted changes"),
+            "{said:?}"
+        );
     }
 
     #[test]
@@ -416,7 +421,10 @@ mod tests {
             .unwrap();
 
         let (code, said) = run(dir.path(), "beta", false);
-        assert_eq!(code, 0, "a todo is a note about the future, not work: {said:?}");
+        assert_eq!(
+            code, 0,
+            "a todo is a note about the future, not work: {said:?}"
+        );
         assert!(
             said.iter()
                 .any(|l| l.contains("Discarding 1 open todo(s) with 'beta'")),
@@ -440,7 +448,10 @@ mod tests {
 
         let (code, said) = run(dir.path(), "beta", false);
         assert_eq!(code, 1, "{said:?}");
-        assert!(said[0].contains("does not resolve to a directory inside this plane"), "{said:?}");
+        assert!(
+            said[0].contains("does not resolve to a directory inside this plane"),
+            "{said:?}"
+        );
         assert!(outside.path().join("treasure").join("keep.txt").exists());
     }
 
@@ -479,7 +490,8 @@ mod tests {
         let (code, said) = run(dir.path(), "beta", true);
         assert_eq!(code, 0, "{said:?}");
         assert!(
-            said.iter().any(|l| l.contains("leaves charter's generated-layer block")),
+            said.iter()
+                .any(|l| l.contains("leaves charter's generated-layer block")),
             "{said:?}"
         );
         assert!(

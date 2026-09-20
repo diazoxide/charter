@@ -1096,7 +1096,11 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
 /// caller is standing in are the operator's own and are not charter's to rewrite; a pointer
 /// charter wrote is, and one naming a directory that no longer exists is how the next write
 /// re-creates the workspace that was just deleted.
-fn reset_active_after_removal(here: &Here, removed: &str, say: &mut dyn FnMut(charter_core::repocmd::Say)) {
+fn reset_active_after_removal(
+    here: &Here,
+    removed: &str,
+    say: &mut dyn FnMut(charter_core::repocmd::Say),
+) {
     use charter_core::active::WorkspaceRung;
     use charter_core::repocmd::Say;
 
@@ -1113,7 +1117,9 @@ fn reset_active_after_removal(here: &Here, removed: &str, say: &mut dyn FnMut(ch
     // `force`, because the session is locked to the workspace that just went away and that
     // lock can refuse nothing useful now.
     charter_core::wscmd::select::set_active(here.plane.root(), &fallback, &here.ids, true);
-    say(Say::Info(format!("Active workspace reset to '{fallback}'.")));
+    say(Say::Info(format!(
+        "Active workspace reset to '{fallback}'."
+    )));
 }
 
 fn run(command: Command) -> Result<u8, String> {

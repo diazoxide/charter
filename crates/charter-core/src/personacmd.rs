@@ -191,7 +191,9 @@ pub fn set_key(path: &Path, section: &str, key: &str, value: Option<&str>) -> io
     // `$` allows: the terminator comes off first, then the horizontal whitespace.
     let header_text = format!("[{section}]");
     let is_header = |line: &str| {
-        line.trim_end_matches(['\r', '\n']).trim_matches([' ', '\t']) == header_text
+        line.trim_end_matches(['\r', '\n'])
+            .trim_matches([' ', '\t'])
+            == header_text
     };
     let any_header = |line: &str| line.trim_start_matches([' ', '\t']).starts_with('[');
     // `^([ \t]*<key>[ \t]*=[ \t]*).*$` — the prefix is kept so a hand-chosen indent and
@@ -310,7 +312,9 @@ mod tests {
 
     fn run(root: &Path, name: Option<&str>, clear: bool) -> (u8, Vec<String>) {
         let mut said = Vec::new();
-        let code = default_command(root, name, clear, &mut |line: Say| said.push(line.to_string()));
+        let code = default_command(root, name, clear, &mut |line: Say| {
+            said.push(line.to_string())
+        });
         (code, said)
     }
 
@@ -329,7 +333,10 @@ mod tests {
             manifest(dir.path()),
             "# the plane\n[workspace]\ndefault = \"alpha\"  # ours\n\n[persona]\ndefault = \"devops\"\n"
         );
-        assert!(said[0].contains("Default persona declared: 'devops'"), "{said:?}");
+        assert!(
+            said[0].contains("Default persona declared: 'devops'"),
+            "{said:?}"
+        );
     }
 
     #[test]
@@ -350,7 +357,10 @@ mod tests {
         let dir = plane("[persona]\n  default   =    \"old\"\n");
         persona_file(dir.path(), "devops");
         run(dir.path(), Some("devops"), false);
-        assert_eq!(manifest(dir.path()), "[persona]\n  default   =    \"devops\"\n");
+        assert_eq!(
+            manifest(dir.path()),
+            "[persona]\n  default   =    \"devops\"\n"
+        );
     }
 
     #[test]
@@ -361,7 +371,10 @@ mod tests {
         let (code, said) = run(dir.path(), None, true);
         assert_eq!(code, 0, "{said:?}");
         assert_eq!(manifest(dir.path()), "[persona]\nother = 1\n");
-        assert!(said[0].contains("Cleared the declared default persona"), "{said:?}");
+        assert!(
+            said[0].contains("Cleared the declared default persona"),
+            "{said:?}"
+        );
     }
 
     #[test]
@@ -382,7 +395,10 @@ mod tests {
         let dir = plane("# only a comment\n");
         let (code, said) = run(dir.path(), None, true);
         assert_eq!(code, 0);
-        assert!(said[0].contains("No default persona was declared."), "{said:?}");
+        assert!(
+            said[0].contains("No default persona was declared."),
+            "{said:?}"
+        );
         assert_eq!(manifest(dir.path()), "# only a comment\n");
     }
 
@@ -424,7 +440,10 @@ mod tests {
         run(dir.path(), Some("devops"), false);
         let (_code, said) = run(dir.path(), None, false);
         assert_eq!(said[0], "devops");
-        assert!(said[1].contains("charter.toml [persona] default"), "{said:?}");
+        assert!(
+            said[1].contains("charter.toml [persona] default"),
+            "{said:?}"
+        );
     }
 
     #[test]
@@ -446,7 +465,8 @@ mod tests {
         let (code, said) = run(dir.path(), Some("devops"), false);
         assert_eq!(code, 0);
         assert!(
-            said.iter().any(|l| l.contains("naming 'qa'") && l.contains("now IGNORED")),
+            said.iter()
+                .any(|l| l.contains("naming 'qa'") && l.contains("now IGNORED")),
             "{said:?}"
         );
     }

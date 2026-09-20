@@ -40,5 +40,5 @@ pub mod trace;
 pub mod usage;
 pub mod wiring;
 pub mod workspaces;
-pub mod wscmd;
 pub mod worktree;
+pub mod wscmd;

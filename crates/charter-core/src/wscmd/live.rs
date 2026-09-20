@@ -161,7 +161,9 @@ mod tests {
 
     fn run(root: &Path, name: &str, off: bool) -> (u8, Vec<String>) {
         let mut said = Vec::new();
-        let code = live(root, name, off, &mut |line: Say| said.push(line.to_string()));
+        let code = live(root, name, off, &mut |line: Say| {
+            said.push(line.to_string())
+        });
         (code, said)
     }
 
@@ -172,12 +174,18 @@ mod tests {
 
         let (code, said) = run(dir.path(), "beta", false);
         assert_eq!(code, 0);
-        assert!(crate::wscmd::live_workspaces(dir.path()).contains("beta"), "{said:?}");
+        assert!(
+            crate::wscmd::live_workspaces(dir.path()).contains("beta"),
+            "{said:?}"
+        );
         assert!(said.iter().any(|l| l.contains("is now LIVE")), "{said:?}");
 
         let (code, said) = run(dir.path(), "beta", true);
         assert_eq!(code, 0);
-        assert!(!crate::wscmd::live_workspaces(dir.path()).contains("beta"), "{said:?}");
+        assert!(
+            !crate::wscmd::live_workspaces(dir.path()).contains("beta"),
+            "{said:?}"
+        );
         assert!(said.iter().any(|l| l.contains("is now LOCAL")), "{said:?}");
     }
 
@@ -202,8 +210,14 @@ mod tests {
         let dir = plane();
         let (code, said) = run(dir.path(), "nope", false);
         assert_eq!(code, 1);
-        assert_eq!(said, vec!["✗ no workspace 'nope' (create it: charter workspace create nope)"]);
-        assert!(!dir.path().join(".gitignore").exists(), "nothing was written");
+        assert_eq!(
+            said,
+            vec!["✗ no workspace 'nope' (create it: charter workspace create nope)"]
+        );
+        assert!(
+            !dir.path().join(".gitignore").exists(),
+            "nothing was written"
+        );
     }
 
     #[test]
@@ -212,7 +226,10 @@ mod tests {
         for name in ["../../esc", ".hidden", "Bad Name"] {
             let (code, said) = run(dir.path(), name, false);
             assert_eq!(code, 1, "{name}");
-            assert!(said[0].contains("invalid workspace name"), "{name}: {said:?}");
+            assert!(
+                said[0].contains("invalid workspace name"),
+                "{name}: {said:?}"
+            );
         }
         assert!(!dir.path().join(".gitignore").exists());
     }

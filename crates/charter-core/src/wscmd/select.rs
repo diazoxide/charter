@@ -84,7 +84,10 @@ fn terminals_dir(root: &Path) -> PathBuf {
 /// The workspace this session is locked to, or `None` — `workspace.is_locked`, minus the
 /// launch lock this charter has no record for (see the module header).
 pub fn is_locked(root: &Path, ids: &Ids) -> Option<String> {
-    let sid = ids.session.as_deref().filter(|id| crate::contain::segment_ok(id))?;
+    let sid = ids
+        .session
+        .as_deref()
+        .filter(|id| crate::contain::segment_ok(id))?;
     let path = sessions_dir(root).join(format!("{sid}.lock"));
     crate::contain::no_link_on_the_way(root, &path).ok()?;
     let text = std::fs::read_to_string(&path).ok()?;
@@ -94,7 +97,11 @@ pub fn is_locked(root: &Path, ids: &Ids) -> Option<String> {
 
 /// Drop this session's lock file; `true` when one was cleared — `workspace.unlock`.
 pub fn unlock(root: &Path, ids: &Ids) -> bool {
-    let Some(sid) = ids.session.as_deref().filter(|id| crate::contain::segment_ok(id)) else {
+    let Some(sid) = ids
+        .session
+        .as_deref()
+        .filter(|id| crate::contain::segment_ok(id))
+    else {
         return false;
     };
     let path = sessions_dir(root).join(format!("{sid}.lock"));
@@ -476,7 +483,9 @@ pub fn default_command(root: &Path, name: Option<&str>, clear: bool, say: Sink) 
     if clear {
         return match std::fs::remove_file(default_file(root)) {
             Ok(()) => {
-                say(Say::Done("Cleared the declared default workspace.".to_string()));
+                say(Say::Done(
+                    "Cleared the declared default workspace.".to_string(),
+                ));
                 0
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -588,7 +597,11 @@ mod tests {
     #[cfg(unix)]
     fn mode(path: &Path) -> u32 {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::symlink_metadata(path).unwrap().permissions().mode() & 0o777
+        std::fs::symlink_metadata(path)
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
     }
 
     #[test]
@@ -599,7 +612,11 @@ mod tests {
 
         assert_eq!(set_active(dir.path(), "beta", &ids, false), Scope::Terminal);
         let state = state_dir(dir.path());
-        for rel in ["sessions/s1.workspace", "sessions/s1.lock", "terminals/t1.workspace"] {
+        for rel in [
+            "sessions/s1.workspace",
+            "sessions/s1.lock",
+            "terminals/t1.workspace",
+        ] {
             let path = state.join(rel);
             assert_eq!(std::fs::read_to_string(&path).unwrap(), "beta\n", "{rel}");
             #[cfg(unix)]
@@ -691,9 +708,13 @@ mod tests {
         workspace(dir.path(), "feature-x");
         let ids = ids(Some("s1"), None);
 
-        let (code, said) = lines(|say| use_workspace(dir.path(), "fature-x", &ids, false, false, say));
+        let (code, said) =
+            lines(|say| use_workspace(dir.path(), "fature-x", &ids, false, false, say));
         assert_eq!(code, 1);
-        assert!(said[0].contains("no workspace named 'fature-x'"), "{said:?}");
+        assert!(
+            said[0].contains("no workspace named 'fature-x'"),
+            "{said:?}"
+        );
         assert!(said[1].contains("Did you mean: feature-x?"), "{said:?}");
         assert!(
             is_locked(dir.path(), &ids).is_none(),
@@ -705,7 +726,8 @@ mod tests {
     fn the_always_present_workspace_is_selectable_before_its_directory_exists() {
         let dir = plane();
         let ids = ids(Some("s1"), None);
-        let (code, said) = lines(|say| use_workspace(dir.path(), "default", &ids, false, false, say));
+        let (code, said) =
+            lines(|say| use_workspace(dir.path(), "default", &ids, false, false, say));
         assert_eq!(code, 0, "{said:?}");
         assert_eq!(is_locked(dir.path(), &ids).as_deref(), Some("default"));
     }
@@ -714,7 +736,8 @@ mod tests {
     fn use_create_is_refused_rather_than_leaving_a_bare_directory() {
         let dir = plane();
         let ids = ids(Some("s1"), None);
-        let (code, said) = lines(|say| use_workspace(dir.path(), "brand-new", &ids, true, false, say));
+        let (code, said) =
+            lines(|say| use_workspace(dir.path(), "brand-new", &ids, true, false, say));
         assert_eq!(code, 1);
         assert!(said[0].contains("cannot scaffold one yet"), "{said:?}");
         assert!(!dir.path().join("workspaces/brand-new").exists());
@@ -724,7 +747,8 @@ mod tests {
     fn a_name_that_is_not_one_never_reaches_a_path() {
         let dir = plane();
         let ids = ids(Some("s1"), None);
-        let (code, said) = lines(|say| use_workspace(dir.path(), "../../esc", &ids, false, false, say));
+        let (code, said) =
+            lines(|say| use_workspace(dir.path(), "../../esc", &ids, false, false, say));
         assert_eq!(code, 1);
         assert!(said[0].contains("invalid workspace name"), "{said:?}");
     }
@@ -751,7 +775,10 @@ mod tests {
 
         let (code, said) = lines(|say| default_command(dir.path(), None, false, say));
         assert_eq!(code, 0);
-        assert!(said[0].contains("Declared default workspace: beta"), "{said:?}");
+        assert!(
+            said[0].contains("Declared default workspace: beta"),
+            "{said:?}"
+        );
 
         let (code, said) = lines(|say| default_command(dir.path(), None, true, say));
         assert_eq!(code, 0);
@@ -760,7 +787,10 @@ mod tests {
 
         let (code, said) = lines(|say| default_command(dir.path(), None, true, say));
         assert_eq!(code, 0);
-        assert!(said[0].contains("No default workspace was declared."), "{said:?}");
+        assert!(
+            said[0].contains("No default workspace was declared."),
+            "{said:?}"
+        );
     }
 
     #[test]
@@ -802,7 +832,8 @@ mod tests {
         std::fs::create_dir_all(&sessions).unwrap();
         let old = sessions.join("ancient.workspace");
         std::fs::write(&old, "gone\n").unwrap();
-        let long_ago = std::time::SystemTime::now() - SESSION_MAX_AGE - std::time::Duration::from_secs(60);
+        let long_ago =
+            std::time::SystemTime::now() - SESSION_MAX_AGE - std::time::Duration::from_secs(60);
         filetime_set(&old, long_ago);
 
         set_active(dir.path(), "beta", &ids(Some("s1"), None), false);
@@ -812,7 +843,9 @@ mod tests {
 
     /// `utimes` on one file, so the prune test does not have to wait a month.
     fn filetime_set(path: &Path, when: std::time::SystemTime) {
-        let times = std::fs::FileTimes::new().set_modified(when).set_accessed(when);
+        let times = std::fs::FileTimes::new()
+            .set_modified(when)
+            .set_accessed(when);
         std::fs::File::options()
             .write(true)
             .open(path)

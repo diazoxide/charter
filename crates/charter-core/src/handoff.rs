@@ -458,23 +458,42 @@ mod tests {
     fn the_first_message_keeps_the_stamp_off_the_briefs_first_line() {
         let msg = first_message("S", "# Goal\nbody");
         assert_eq!(msg, "S\n\n# Goal\nbody");
-        assert_eq!(title(&msg), "S", "the stamp is the message's own first line");
+        assert_eq!(
+            title(&msg),
+            "S",
+            "the stamp is the message's own first line"
+        );
     }
 
     #[test]
     fn the_title_is_the_first_non_blank_line_split_on_newline_alone() {
-        assert_eq!(title("\n\n  # Retry the webhooks  \nrest"), "# Retry the webhooks");
-        assert_eq!(title("   \n \t \n"), "", "a brief of whitespace titles nothing");
+        assert_eq!(
+            title("\n\n  # Retry the webhooks  \nrest"),
+            "# Retry the webhooks"
+        );
+        assert_eq!(
+            title("   \n \t \n"),
+            "",
+            "a brief of whitespace titles nothing"
+        );
         // `\x0b` is a line break to Python's `splitlines` and not to a shell heredoc. The
         // whole line the operator typed is the title.
         assert_eq!(title("a\x0bb\nnext"), "a\x0bb");
-        assert_eq!(title("a\rb\nnext"), "a\rb", "a bare CR does not end the line");
+        assert_eq!(
+            title("a\rb\nnext"),
+            "a\rb",
+            "a bare CR does not end the line"
+        );
     }
 
     #[test]
     fn a_closed_stdin_is_classified_and_never_a_crash() {
         assert_eq!(read_brief(None, false), Err(NoBrief::Closed));
-        assert!(NoBrief::Closed.say("beta").contains("charter handoff beta <<'BRIEF'"));
+        assert!(
+            NoBrief::Closed
+                .say("beta")
+                .contains("charter handoff beta <<'BRIEF'")
+        );
     }
 
     #[test]
@@ -486,7 +505,10 @@ mod tests {
 
     #[test]
     fn a_brief_that_is_not_utf8_is_refused_and_one_of_whitespace_is_empty() {
-        assert_eq!(read_brief(Some(&[0xff, 0xfe]), false), Err(NoBrief::NotUtf8));
+        assert_eq!(
+            read_brief(Some(&[0xff, 0xfe]), false),
+            Err(NoBrief::NotUtf8)
+        );
         assert_eq!(read_brief(Some(b"  \n\t\n "), false), Err(NoBrief::Empty));
     }
 
@@ -500,7 +522,10 @@ mod tests {
     fn the_todo_carries_the_title_and_the_provenance_and_never_the_brief() {
         let text = todo_text("# Retry the webhooks\n\nSECRET-BODY", "c1", "alpha");
         assert!(text.starts_with("# Retry the webhooks\n\n"));
-        assert!(!text.contains("SECRET-BODY"), "a LIVE workspace commits todos/**");
+        assert!(
+            !text.contains("SECRET-BODY"),
+            "a LIVE workspace commits todos/**"
+        );
         assert!(text.contains("Handed off from chat c1 · workspace alpha"));
     }
 
@@ -508,7 +533,10 @@ mod tests {
     fn every_reason_a_first_message_is_refused_is_reported_cheapest_first() {
         assert_eq!(bad_message("   "), Some(BadMessage::Empty));
         assert_eq!(bad_message("-p hello there"), Some(BadMessage::Flag));
-        assert_eq!(bad_message("login"), Some(BadMessage::OneWord("login".into())));
+        assert_eq!(
+            bad_message("login"),
+            Some(BadMessage::OneWord("login".into()))
+        );
         assert_eq!(bad_message("two words\0here"), Some(BadMessage::Nul));
         let long = "x ".repeat(FIRST_MESSAGE_MAX_BYTES);
         assert_eq!(bad_message(&long), Some(BadMessage::TooLong(long.len())));
@@ -535,8 +563,14 @@ mod tests {
 
     #[test]
     fn each_harnesss_first_message_argv_is_the_measured_one() {
-        assert_eq!(first_message_argv("claude", "hi"), Some(vec!["hi".to_string()]));
-        assert_eq!(first_message_argv("codex", "hi"), Some(vec!["hi".to_string()]));
+        assert_eq!(
+            first_message_argv("claude", "hi"),
+            Some(vec!["hi".to_string()])
+        );
+        assert_eq!(
+            first_message_argv("codex", "hi"),
+            Some(vec!["hi".to_string()])
+        );
         assert_eq!(
             first_message_argv("opencode", "hi"),
             Some(vec!["--prompt".to_string(), "hi".to_string()]),
@@ -593,7 +627,10 @@ mod tests {
     #[test]
     fn an_unmeasured_harness_is_named_by_the_placeholder_rather_than_guessed_at() {
         let line = terminal_command(UNKNOWN_HARNESS, "beta", &["hi there".into()], None, None);
-        assert!(line.starts_with("charter <harness> --workspace beta "), "{line}");
+        assert!(
+            line.starts_with("charter <harness> --workspace beta "),
+            "{line}"
+        );
     }
 
     #[test]

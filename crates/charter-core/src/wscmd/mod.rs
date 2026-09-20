@@ -60,7 +60,8 @@ pub mod snapshot;
 ///
 /// Liveness lives in `.gitignore` and nowhere else, so it is git-visible and travels with
 /// the control plane — there is no second file to disagree with it.
-pub const LIVE_BEGIN: &str = "# >>> charter live workspaces (managed by `charter workspace live`) >>>";
+pub const LIVE_BEGIN: &str =
+    "# >>> charter live workspaces (managed by `charter workspace live`) >>>";
 pub const LIVE_END: &str = "# <<< charter live workspaces <<<";
 
 /// The workspaces marked LIVE — `workspace.live_workspaces`.
@@ -79,9 +80,7 @@ pub fn live_workspaces(root: &Path) -> BTreeSet<String> {
             inside = true;
         } else if line == LIVE_END {
             inside = false;
-        } else if inside
-            && let Some(name) = live_line(line)
-        {
+        } else if inside && let Some(name) = live_line(line) {
             out.insert(name);
         }
     }
@@ -220,12 +219,9 @@ fn has_change_records(workspace_dir: &Path) -> bool {
     let Ok(reader) = std::fs::read_dir(workspace_dir.join("changes")) else {
         return false;
     };
-    reader.filter_map(Result::ok).any(|entry| {
-        entry
-            .file_name()
-            .to_string_lossy()
-            .ends_with(".json")
-    })
+    reader
+        .filter_map(Result::ok)
+        .any(|entry| entry.file_name().to_string_lossy().ends_with(".json"))
 }
 
 /// Whether the plane has a directory for `name`.
@@ -353,10 +349,7 @@ fn worktrees_at_risk(root: &Path, ws: &str, repos: &[crate::repos::Repo]) -> Vec
             Err(why) => {
                 out.push(AtRisk {
                     what: repo.name.clone(),
-                    said: format!(
-                        "{}: could not be checked for worktrees — {why}",
-                        repo.name
-                    ),
+                    said: format!("{}: could not be checked for worktrees — {why}", repo.name),
                 });
                 continue;
             }
@@ -448,7 +441,8 @@ pub fn branch_word(head: &crate::repos::Head) -> String {
 
 /// `git config user.name`, or `$USER`, or `unknown` — `_git_user`.
 pub fn git_user(root: &Path) -> String {
-    if let Ok(run) = crate::worktree::git::run(root, &["config", "user.name"], crate::worktree::git::READ)
+    if let Ok(run) =
+        crate::worktree::git::run(root, &["config", "user.name"], crate::worktree::git::READ)
         && run.ok()
         && !run.line().is_empty()
     {

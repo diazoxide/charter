@@ -197,9 +197,7 @@ fn read_brief() -> Result<String, NoBrief> {
     let mut bytes = Vec::new();
     match stdin.lock().read_to_end(&mut bytes) {
         Ok(_) => charter_core::handoff::read_brief(Some(&bytes), false),
-        Err(e) if e.raw_os_error() == Some(9) => {
-            charter_core::handoff::read_brief(None, false)
-        }
+        Err(e) if e.raw_os_error() == Some(9) => charter_core::handoff::read_brief(None, false),
         // Any other read failure is not a brief either, and "not UTF-8" is the wrong
         // sentence for it — but an I/O error on a pipe charter was handed is a brief that is
         // not there, which is what `Closed` says.

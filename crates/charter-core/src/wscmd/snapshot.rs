@@ -54,7 +54,9 @@ pub fn snapshot(request: &Request, say: Sink) -> u8 {
     let found = match crate::repos::clones(root, ws) {
         Ok(found) => found,
         Err(why) => {
-            say(Say::Fail(format!("could not read workspace '{ws}' — {why}")));
+            say(Say::Fail(format!(
+                "could not read workspace '{ws}' — {why}"
+            )));
             return 1;
         }
     };
@@ -178,7 +180,10 @@ mod tests {
         std::fs::write(seed.join("README.md"), "hi\n").unwrap();
         git(&seed, &["add", "-A"]);
         git(&seed, &["commit", "-qm", "first"]);
-        git(&seed, &["remote", "add", "origin", &origin.display().to_string()]);
+        git(
+            &seed,
+            &["remote", "add", "origin", &origin.display().to_string()],
+        );
         git(&seed, &["push", "-q", "-u", "origin", "main"]);
 
         let clone = plane.join("workspaces").join(ws).join(name);
@@ -226,7 +231,10 @@ mod tests {
         std::fs::create_dir_all(dir.path().join("workspaces/beta")).unwrap();
         let (code, said) = run(dir.path(), "beta", false);
         assert_eq!(code, 1);
-        assert_eq!(said, vec!["✗ workspace 'beta' has no repo clones to snapshot."]);
+        assert_eq!(
+            said,
+            vec!["✗ workspace 'beta' has no repo clones to snapshot."]
+        );
     }
 
     #[test]
@@ -327,7 +335,10 @@ mod tests {
             &mut |line: Say| said.push(line.to_string()),
         );
         assert_eq!(code, 0, "{said:?}");
-        assert_eq!(manifest(dir.path(), "beta")["description"], "the billing work");
+        assert_eq!(
+            manifest(dir.path(), "beta")["description"],
+            "the billing work"
+        );
 
         let (code, _said) = run(dir.path(), "beta", false);
         assert_eq!(code, 0);
