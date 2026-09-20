@@ -67,7 +67,22 @@ export function moved(states: ChatStates, move: Moved): ChatStates {
  * 3. The event carries its plane precisely so this can be a comparison rather than a hope.
  */
 export function useChatStates(plane: PlaneId | undefined): ChatStates {
-  const [states, setStates] = useState<ChatStates>(nothingKnown);
+  /**
+   * What is known, and WHICH project it is known about.
+   *
+   * **The pair, because a state without its project is a guess.** Every project numbers its
+   * chats from one, so a `waiting` left behind by the last project's chat 1 must not be drawn
+   * on this one's — and `underneath` below deliberately never writes over what it finds, which
+   * is right for a snapshot racing an event inside one project and exactly wrong across two.
+   * Carried rather than cleared on the way in: a window that answered "what is chat 1 doing"
+   * by forgetting, in an effect, would be answering it one render late.
+   *
+   * The opener is what made this reachable. Until a window could be given a second project,
+   * there was no switch to be wrong about.
+   */
+  const [known, setKnown] = useState<{ plane?: PlaneId; states: ChatStates }>({
+    states: nothingKnown,
+  });
   /** Which plane's moves count, read at the moment one arrives. */
   const showing = useRef(plane);
   // Kept current in an effect rather than during the render, which is where a ref may be
@@ -90,7 +105,13 @@ export function useChatStates(plane: PlaneId | undefined): ChatStates {
       try {
         const unlisten = await listen<Moved>("chat-moved", (event) => {
           if (gone || event.payload.plane !== showing.current) return;
-          setStates((states) => moved(states, event.payload));
+          setKnown((was) => ({
+            plane: event.payload.plane,
+            states: moved(
+              was.plane === event.payload.plane ? was.states : nothingKnown,
+              event.payload,
+            ),
+          }));
         });
         if (gone) unlisten();
         else stop = unlisten;
@@ -126,7 +147,11 @@ export function useChatStates(plane: PlaneId | undefined): ChatStates {
       // overwritten by the older answer — a chat that had just gone to `waiting` dropped back
       // to `running` and out of the needs-you queue, and a chat waiting for you has no next
       // event to correct it. A review reproduced it.
-      if (!gone && Array.isArray(known)) setStates((states) => underneath(states, known));
+      if (!gone && Array.isArray(known))
+        setKnown((was) => ({
+          plane,
+          states: underneath(was.plane === plane ? was.states : nothingKnown, known),
+        }));
     })();
 
     return () => {
@@ -134,7 +159,9 @@ export function useChatStates(plane: PlaneId | undefined): ChatStates {
     };
   }, [plane]);
 
-  return states;
+  // What is known about THIS project, and nothing at all about any other. Derived rather than
+  // cleared: the answer is right in the render the project changes in, not one after it.
+  return known.plane === plane ? known.states : nothingKnown;
 }
 
 /**

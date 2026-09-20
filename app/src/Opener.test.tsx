@@ -324,6 +324,101 @@ describe("the opener", () => {
     );
   });
 
+  it("draws nothing of the last project's chats before the next one has answered", async () => {
+    // The window between the switch and the new project's first answer. It is an `await`
+    // wide, and what fills it is whatever the last project said — so the fold that arrives
+    // afterwards cannot be the only guard, and this is the one that holds in the meantime.
+    core((cmd, args) => {
+      if (cmd === "plane_at_launch")
+        return { plane: "/home/dev/one", from: "/home/dev/one", why: null };
+      if (cmd === "open_plane") return { plane: "/home/dev/two", ask: null };
+      if (cmd === "chat_states")
+        return args.plane === "/home/dev/one"
+          ? [{ plane: args.plane, session: 1, state: "waiting", needs_you: true, queue: [1] }]
+          : // The second project never answers, so nothing can arrive to correct the screen.
+            new Promise(() => undefined);
+      // BOTH projects have a chat 1 — which is the whole point: a session number means
+      // nothing without its project, and a screen with no second chat 1 on it could not
+      // show the last project's state landing on this one's.
+      if (cmd === "opened_chats")
+        return [
+          {
+            session: 1,
+            name: args.plane === "/home/dev/one" ? "one" : "two",
+            cwd: null,
+            harness: null,
+            in_front: true,
+            resumed: null,
+            fresh: null,
+            profile: null,
+            persona: null,
+            unreported: null,
+          },
+        ];
+      if (cmd === "close_plane") return null;
+      return undefined;
+    });
+
+    render(<App />);
+    const person = userEvent.setup();
+    await vi.waitFor(() =>
+      expect(screen.getByRole("img", { name: "waiting on you" })).toBeInTheDocument(),
+    );
+    await person.click(await screen.findByRole("button", { name: "Close this project" }));
+    await openByPath("/home/dev/two");
+
+    await vi.waitFor(() => expect(screen.getByText("/home/dev/two")).toBeInTheDocument());
+    expect(screen.queryByRole("img", { name: "waiting on you" })).not.toBeInTheDocument();
+  });
+
+  it("draws nothing of the last project's chats once the next one has answered", async () => {
+    // Every project numbers its chats from one, so "session 1 is waiting" is a sentence about
+    // a pair and not about a number. The window used to keep what it had been told under the
+    // next project's first answer — `underneath` never writes over what it finds, which is
+    // right for a snapshot racing an event inside one project and wrong across two.
+    const one = {
+      session: 1,
+      name: "one",
+      cwd: null,
+      harness: null,
+      in_front: true,
+      resumed: null,
+      fresh: null,
+      profile: null,
+      persona: null,
+      unreported: null,
+    };
+    let showing = "/home/dev/one";
+    core((cmd) => {
+      if (cmd === "plane_at_launch")
+        return { plane: "/home/dev/one", from: "/home/dev/one", why: null };
+      if (cmd === "open_plane") return { plane: "/home/dev/two", ask: null };
+      if (cmd === "opened_chats") return [one];
+      // The first project's chat 1 is waiting for the operator; the second project's is not.
+      if (cmd === "chat_states")
+        return showing === "/home/dev/one"
+          ? [{ plane: showing, session: 1, state: "waiting", needs_you: true, queue: [1] }]
+          : [];
+      if (cmd === "close_plane") {
+        showing = "/home/dev/two";
+        return null;
+      }
+      return undefined;
+    });
+
+    render(<App />);
+    const person = userEvent.setup();
+    await vi.waitFor(() =>
+      expect(screen.getByRole("img", { name: "waiting on you" })).toBeInTheDocument(),
+    );
+    await person.click(await screen.findByRole("button", { name: "Close this project" }));
+    await openByPath("/home/dev/two");
+
+    await vi.waitFor(() =>
+      expect(screen.queryByRole("img", { name: "waiting on you" })).not.toBeInTheDocument(),
+    );
+  });
+
   it("tells the core which project this window has in front", async () => {
     // The half charter-app#111 named as missing: every project numbers its chats from one,
     // so a window showing B would otherwise suppress a notification for A's chat 3 on the
