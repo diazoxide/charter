@@ -179,8 +179,8 @@ enum Command {
     /// Claude Code's footer, from the per-turn JSON on stdin.
     ///
     /// Inside the app it prints an empty line and still records the turn's token usage, which
-    /// is the only place that record exists (ADR 0019). Everywhere else it says, in one line,
-    /// that this build does not draw the plane yet.
+    /// is the only place that record exists (ADR 0019). Everywhere else it draws the frame and
+    /// the workspace's identity row, and says in the body which surfaces it does not draw yet.
     Statusline {
         /// Repaint in place until Ctrl-C, on a harness with no status bar of its own.
         ///
@@ -196,6 +196,9 @@ enum Command {
         #[allow(dead_code)]
         #[arg(long, default_value = "10")]
         interval: f64,
+        /// Pin the instant the footer's ages are measured from, for tests only.
+        #[arg(long, hide = true)]
+        now: Option<String>,
     },
 
     /// Tell the app what a harness just did. Run by a harness's hooks, never by a person.
@@ -1154,10 +1157,22 @@ fn main() -> ExitCode {
                 now.as_deref(),
             );
         }
-        Command::Statusline { watch, .. } => {
+        Command::Statusline { watch, now, .. } => {
             // Nothing writes a payload to a `--watch` render, and reading stdin there would
             // sit on the deadline for no reason.
             let payload = if *watch { String::new() } else { payload() };
+            // Resolved BEFORE the render, and a bad value is refused rather than quietly
+            // replaced by the wall clock: the flag exists so a differential can pin the ages
+            // on the row, and a pin that silently did not take would make the comparison
+            // green for the wrong reason.
+            let when = match instant(now.as_deref()) {
+                Ok(secs) => chrono::DateTime::from_timestamp(secs as i64, 0)
+                    .unwrap_or_else(chrono::Utc::now),
+                Err(why) => {
+                    eprintln!("charter: {why}");
+                    return ExitCode::FAILURE;
+                }
+            };
             // No plane means nothing is recorded: see `statusline::run`, which declares that
             // divergence from Python and why it is the right way round.
             let here = plane().ok();
@@ -1165,6 +1180,7 @@ fn main() -> ExitCode {
                 here.as_ref().map(|plane| plane.root()),
                 &payload,
                 &statusline::Ambient::here(),
+                when,
             );
             return ExitCode::SUCCESS;
         }

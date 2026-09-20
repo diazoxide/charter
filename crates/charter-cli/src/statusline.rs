@@ -45,26 +45,31 @@
 //! Code reads a line from this command, and an empty one is how it is told there is nothing
 //! to show.
 //!
-//! # What this does NOT draw yet, and why that is a milestone and not an omission
+//! # What this draws, and where the seam is
 //!
 //! `charter/statusline.py:render` is not a renderer with some dependencies. It is charter's
 //! whole read surface: the nine-rung workspace resolution, a `git status` per clone, linked
 //! worktrees drawn as rows, persona chips with vault health and memory counts, the alert
 //! list, the session strip, the update-freshness cache, and `charter/tui.py`'s column
-//! algebra under all of it — 1,287 statements in that one module before anything it imports.
-//! None of it is here. Outside the app this command says so in one line rather than drawing a
-//! footer that is subtly not charter's; the differential scenario that covers it declares the
-//! difference rather than skipping the command.
+//! algebra under all of it.
 //!
-//! The record above is the half that had to land now, because it is the half the app's own
-//! path needs: inside the app the footer is blank either way, and what would otherwise be
-//! lost is the history.
+//! M2.7 drew none of it and said so in one sentence. **M2.18 draws the frame and the identity
+//! row** — the workspace, its reinit tip, its open todos, its pieces and how many other
+//! workspaces there are — and says, in the body, which surfaces it still does not draw. The
+//! seam is charter's own zone rule, and [`charter_core::footer`] is where the argument for it
+//! lives. What matters here is the rule it follows: a footer that silently omitted the alert
+//! row would be worse than a sentence, because an operator reads a footer to find out whether
+//! anything needs them.
+//!
+//! The record is still kept on both branches, because it is the half the app's own path
+//! needs: inside the app the footer is blank either way, and what would otherwise be lost is
+//! the history.
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use charter_core::hookwire::{CHAT_ENV, SOCKET_ENV};
-use charter_core::usage;
+use charter_core::{footer, tui, usage};
 
 /// The registry's name for Claude Code, as `$CHARTER_HARNESS` carries it.
 const CLAUDE_CODE: &str = "claude-code";
@@ -144,18 +149,19 @@ pub fn the_app_owns_this_surface(ambient: &Ambient) -> bool {
     ambient.harness.as_deref() == Some(CLAUDE_CODE)
 }
 
-/// The one line this command prints when it is NOT suppressed.
+/// What this prints when it is not suppressed and there is **no plane** to draw.
 ///
 /// Coloured unconditionally, as every line `charter/statusline.py` prints is: the surface is
 /// Claude Code's footer, which is a terminal, and the module's own fallback
 /// (`f"{_CYAN}⬢{_R} charter"`) does not consult `$NO_COLOR` either.
 ///
-/// It says what is true rather than approximating a footer. A near-copy of charter's status
-/// line that quietly omitted the alert row would be worse than a sentence: an operator reads
-/// a footer to find out whether anything needs them, and one that can only ever say "nothing"
-/// is a footer that lies once a week.
-pub const NOT_DRAWN_YET: &str = "\x1b[36m⬢\x1b[0m charter — this build keeps the session's record and does not draw the \
-     plane yet";
+/// **A declared divergence, and the same one [`run`] already declares about the record.**
+/// charter falls back to `<cwd>/.charter` outside a plane and renders a footer for whatever
+/// directory it happened to run in — a workspace called `default`, no repos, no personas.
+/// That footer describes nothing, and drawing it here would mean resolving a plane out of a
+/// directory that is not one. Saying so in a line is the honest half of the same decision.
+pub const NO_PLANE: &str =
+    "\x1b[36m⬢\x1b[0m charter — not standing in a control plane, so there is none to draw";
 
 /// `charter statusline`. Always succeeds; a footer is not worth a non-zero exit.
 ///
@@ -166,7 +172,12 @@ pub const NOT_DRAWN_YET: &str = "\x1b[36m⬢\x1b[0m charter — this build keeps
 /// `config.STATE_DIR` is `<cwd>/.charter`, so a spawn here would scatter charter's caches
 /// into whatever directory the render happened to run in"); this is the same rule applied to
 /// the write beside it.
-pub fn run(plane: Option<&Path>, payload: &str, ambient: &Ambient) {
+pub fn run(
+    plane: Option<&Path>,
+    payload: &str,
+    ambient: &Ambient,
+    now: chrono::DateTime<chrono::Utc>,
+) {
     // Parsed once and shared by both branches, so the drawn turn and the recorded turn can
     // never be two readings of one payload. An unparsable payload is an empty document, as
     // Python's `except Exception: payload = {}` makes it.
@@ -184,7 +195,26 @@ pub fn run(plane: Option<&Path>, payload: &str, ambient: &Ambient) {
         println!();
         return;
     }
-    println!("{NOT_DRAWN_YET}");
+    let Some(plane) = plane else {
+        println!("{NO_PLANE}");
+        return;
+    };
+    // `print(out)` where `out` already ends on a newline — so the footer is followed by a
+    // blank line, exactly as charter's is. Claude Code reads the block; the blank line is
+    // charter's and copying it is what makes the two outputs comparable at all.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    println!(
+        "{}",
+        footer::render(
+            plane,
+            &payload,
+            &footer::Ambient {
+                env: &tui::ambient,
+                cwd: &cwd,
+                now,
+            },
+        )
+    );
 }
 
 #[cfg(test)]
