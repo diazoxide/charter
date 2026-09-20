@@ -62,19 +62,50 @@ impl Plane {
     }
 
     /// The names under `workspaces/`, sorted. A plane with no `workspaces/` has none.
+    ///
+    /// The listing a caller wants when it is asking which workspaces it can OPEN — the tab
+    /// strip, a name lookup. A caller that REPORTS on the plane's workspaces asks
+    /// [`Plane::read_workspaces`] instead, because an entry the filesystem will not describe
+    /// is left out of this one and is not nothing.
     pub fn workspaces(&self) -> io::Result<Vec<String>> {
-        let mut names: Vec<String> = read_dir_sorted(&self.root.join("workspaces"))?
-            .into_iter()
-            .filter(|p| p.is_dir())
-            .filter(|p| !file_name(p).starts_with('.'))
-            // A real clone, not a worktree. Git draws the line: a clone's `.git` is a
-            // DIRECTORY, a linked worktree's `.git` is a FILE holding `gitdir:` — so a
-            // worktree under `workspaces/` is still a workspace.
-            .filter(|p| !p.join(".git").is_dir())
-            .map(|p| file_name(&p).to_string())
-            .collect();
+        self.read_workspaces().map(|(names, _)| names)
+    }
+
+    /// The workspace names AND every entry under `workspaces/` whose kind the filesystem
+    /// will not tell, with the errno — `charter/workspace.py:read_workspaces` (charter #1043).
+    ///
+    /// **One listing, two answers, because a command that counts what it read and names what
+    /// it did not must not take them from two reads that disagree.** `Path.is_dir` has no
+    /// third answer: for an entry charter may not `stat` it raised on Python 3.11–3.13 and
+    /// answered False on 3.14, so a workspace under a `workspaces/` at mode 666 cost a
+    /// `doctor` row on one interpreter and vanished from it on the other. Here the same
+    /// entry would simply not be a directory, which is the 3.14 half of that bug.
+    ///
+    /// A `workspaces/` that is not there holds nothing. One that is there and cannot be
+    /// LISTED raises, as `Path.iterdir` does: nothing under it can be counted, so the caller
+    /// names the directory itself rather than any entry.
+    pub fn read_workspaces(&self) -> io::Result<(Vec<String>, crate::memstore::Unread)> {
+        let mut names: Vec<String> = Vec::new();
+        let mut unread: crate::memstore::Unread = Vec::new();
+        for path in read_dir_sorted(&self.root.join("workspaces"))? {
+            // charter's own (`.worktrees/`), never a workspace — and asked before the
+            // filesystem is, exactly as Python asks it.
+            if file_name(&path).starts_with('.') {
+                continue;
+            }
+            match std::fs::metadata(&path) {
+                Ok(found) if !found.is_dir() => {}
+                // A real clone, not a worktree. Git draws the line: a clone's `.git` is a
+                // DIRECTORY, a linked worktree's `.git` is a FILE holding `gitdir:` — so a
+                // worktree under `workspaces/` is still a workspace.
+                Ok(_) if path.join(".git").is_dir() => {}
+                Ok(_) => names.push(file_name(&path).to_string()),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                Err(e) => unread.push((path, e.raw_os_error())),
+            }
+        }
         names.sort();
-        Ok(names)
+        Ok((names, unread))
     }
 
     /// One persona of this plane, by name. `_shared` names the store every persona reads.

@@ -38,9 +38,10 @@ pub fn err(msg: &str) {
 }
 
 /// `str.rstrip()`, with Python's idea of whitespace.
-pub fn py_rstrip(text: &str) -> &str {
-    text.trim_end_matches(charter_core::memstore::is_python_space)
-}
+///
+/// In the core, because `charter status` trims its own table rows there and two spellings of
+/// "what counts as trailing whitespace" is how one row keeps a space the other drops.
+pub use charter_core::memstore::py_rstrip;
 
 /// `tui.column("", cells)`: the widest cell, plus the two-space gap to the next column.
 ///
@@ -73,33 +74,19 @@ pub fn rel(root: &Path, path: &Path) -> String {
 
 /// `workspace.say_unread`: one sentence on stderr for each path charter could not look at.
 ///
-/// Named from the plane's root and made readable first — the path is often a filename a
-/// chat wrote, and a newline in one would otherwise write a line of its own into whatever
-/// reads this (#1084).
+/// The sentence itself is [`charter_core::memstore::cannot_check`], because `docs generate`
+/// says the same one about a persona's memory store from inside the core, and one unreadable
+/// path worded two ways is two different repairs for one directory.
 pub fn unread(root: &Path, unread: &charter_core::memstore::Unread) {
     for (path, code) in unread {
-        let shown = charter_core::shown::readable(&path.to_string_lossy(), PATH_LIMIT);
-        let named = charter_core::shown::readable(&rel(root, path), PATH_LIMIT);
-        err(&format!(
-            "{named} cannot be checked — {}.",
-            uncheckable_fix(*code, &shown, "it")
-        ));
+        err(&charter_core::memstore::cannot_check(root, path, *code));
     }
 }
 
-/// How much of a path a sentence repeats back — `contain.PATH_DISPLAY_LIMIT`. A clipped
-/// path is one a reader cannot go to.
-pub const PATH_LIMIT: usize = 1024;
-
-/// What clears a path charter could not check — `workspace.uncheckable_fix`: a symlink
-/// loop names the link; anything else is read as a refusal, which read access clears.
-pub fn uncheckable_fix(code: Option<i32>, path: &str, place: &str) -> String {
-    if charter_core::recall::is_loop(code) {
-        format!("fix the symlink loop at {path}")
-    } else {
-        format!("restoring read access to {place} clears this")
-    }
-}
+/// `charter/workspace.py`'s remedy clause, from the core for the same reason: the commands
+/// that run there and the commands that print here must not be able to word one unreadable
+/// path two ways.
+pub use charter_core::memstore::uncheckable_fix;
 
 #[cfg(test)]
 mod tests {
