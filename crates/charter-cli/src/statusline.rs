@@ -135,11 +135,10 @@ pub fn the_app_owns_this_surface(ambient: &Ambient) -> bool {
     }
     // The same shape `hookwire::Report::read` requires of it, so the app and this command
     // cannot come to disagree about what a chat number is.
-    if !ambient
-        .chat
-        .as_deref()
-        .is_some_and(|chat| chat.parse::<u32>().is_ok())
-    {
+    let Some(chat) = ambient.chat.as_deref() else {
+        return false;
+    };
+    if chat.parse::<u32>().is_err() {
         return false;
     }
     ambient.harness.as_deref() == Some(CLAUDE_CODE)

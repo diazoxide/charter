@@ -626,14 +626,16 @@ fn detach_self(ws: &str, now: Option<&str>) -> Result<(), String> {
     if let Some(now) = now {
         child.arg("--now").arg(now);
     }
-    child
+    match child
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .process_group(0)
         .spawn()
-        .map(|_| ())
-        .map_err(|e| format!("could not start a detached refresh: {e}"))
+    {
+        Ok(_) => Ok(()),
+        Err(why) => Err(format!("could not start a detached refresh: {why}")),
+    }
 }
 
 /// The instant a refresh stamps every entry with: `--now` as a local naive time, else the

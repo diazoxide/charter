@@ -138,18 +138,19 @@ fn whole(value: Option<&Value>) -> Option<i64> {
 /// `read == write` gives exactly 50.0, and one input token either side of it lands on `.5`
 /// often enough that a status line and a panel would disagree about the same turn.
 fn half_to_even(value: f64) -> i64 {
+    use std::cmp::Ordering;
+
     let down = value.floor();
     let fraction = value - down;
-    let n = if fraction > 0.5 {
-        down + 1.0
-    } else if fraction < 0.5 {
-        down
-    } else if (down as i64) % 2 == 0 {
-        down
-    } else {
-        down + 1.0
+    let rounded = match fraction.partial_cmp(&0.5) {
+        Some(Ordering::Greater) => down + 1.0,
+        Some(Ordering::Less) => down,
+        // Exactly half — and a comparison rather than `fraction == 0.5`, so a NaN that could
+        // only come from a division this function does not do falls here rather than nowhere.
+        _ if (down as i64) % 2 == 0 => down,
+        _ => down + 1.0,
     };
-    n as i64
+    rounded as i64
 }
 
 /// `context_window.used_percentage` as a whole number, or `None`. `_ctx_percentage`.

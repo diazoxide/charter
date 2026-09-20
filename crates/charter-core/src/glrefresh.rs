@@ -602,7 +602,7 @@ mod tests {
         //             "ci": "success", "sigil": "#"})
         assert_eq!(
             written,
-            r#"{"branch": "main", "ts": 1777980737.0, "change": 41, "ci": "success", "sigil": "#"}"#
+            r##"{"branch": "main", "ts": 1777980737.0, "change": 41, "ci": "success", "sigil": "#"}"##
         );
     }
 
