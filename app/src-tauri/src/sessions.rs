@@ -664,13 +664,13 @@ mod tests {
         (dir, root)
     }
 
-    /// The ladder, asked the way a `charter` inside that chat asks it: the chat's own
-    /// environment, plus the conversation the harness is under at this moment.
-    fn workspace_of(
-        root: &std::path::Path,
-        sid: &str,
-        conversation: &str,
-    ) -> charter_core::active::ActiveWorkspace {
+    /// Who a `charter` running inside that chat says it is: the chat's own environment, plus
+    /// the conversation the harness is under at THIS moment.
+    ///
+    /// `Ids::of` and not `Ids::from_env`, so the answer is the chat's and not the test
+    /// runner's — and it asks for no tty, which is the app's own case: a chat gets a pty of
+    /// its own and none of `$TERM_SESSION_ID`/`$TMUX_PANE`/`$STY`/`$SSH_TTY`.
+    fn who_it_is(sid: &str, conversation: &str) -> charter_core::active::Ids {
         use charter_core::active::{CONVERSATION_ENV, SESSION_ID_ENV};
         let held: HashMap<String, String> = [
             (SESSION_ID_ENV.to_owned(), sid.to_owned()),
@@ -679,13 +679,20 @@ mod tests {
         .into_iter()
         .filter(|(_, value)| !value.is_empty())
         .collect();
-        let ids = charter_core::active::Ids::of(&|name| held.get(name).cloned());
+        charter_core::active::Ids::of(&|name| held.get(name).cloned())
+    }
+
+    /// The ladder, asked with no flag and from nowhere in particular.
+    fn workspace_of(
+        root: &std::path::Path,
+        ids: &charter_core::active::Ids,
+    ) -> charter_core::active::ActiveWorkspace {
         charter_core::active::workspace(&charter_core::active::Asking {
             root,
             // Not inside any tree, so the cwd rung cannot answer and the pointers decide.
             cwd: root,
             flag: None,
-            ids: &ids,
+            ids,
             env: None,
         })
     }
@@ -735,25 +742,39 @@ mod tests {
         //
         // It asserts the RUNG and not only the name: landing on `finance` because some other
         // rung happens to name it would prove nothing about what the pointer is keyed on.
+        use charter_core::wscmd::select::{Scope, is_locked, set_active};
         let (_plane, root) = bare_plane();
         let sessions = Sessions::new();
         let (_id, sid) = session_id_of_a_chat(&sessions);
-        // What `charter ws use finance` inside that chat writes.
-        std::fs::write(
-            root.join(format!(".charter/sessions/{sid}.workspace")),
-            "finance\n",
-        )
-        .expect("the pointer is written");
+        let picked_in = who_it_is(&sid, "9f2c-the-conversation-it-was-picked-in");
+        let after_the_clear = who_it_is(&sid, "41ab-the-one-the-clear-started");
 
-        let before = workspace_of(&root, &sid, "9f2c-the-conversation-it-was-picked-in");
-        let after = workspace_of(&root, &sid, "41ab-the-one-the-clear-started");
+        // `charter ws use finance`, through the writer the command itself uses.
+        assert_eq!(
+            set_active(&root, "finance", &picked_in, false),
+            // Not `Terminal`: the app gives a chat a pty and none of the four pane variables,
+            // so there is no per-terminal pointer underneath to catch this by accident.
+            Scope::Session,
+            "the selection did not land on the session"
+        );
 
-        for (when, found) in [("before the clear", before), ("after it", after)] {
+        for (when, ids) in [
+            ("before the clear", &picked_in),
+            ("after it", &after_the_clear),
+        ] {
+            let found = workspace_of(&root, ids);
             assert_eq!(found.name, "finance", "{when}");
             assert_eq!(
                 found.rung,
                 charter_core::active::WorkspaceRung::SessionPointer,
                 "{when}: the pointer is not keyed on the chat"
+            );
+            // The same key carries the session LOCK, so a chat that lost its pointer also lost
+            // the lock that keeps `charter ws use` from moving it somewhere else by surprise.
+            assert_eq!(
+                is_locked(&root, ids).as_deref(),
+                Some("finance"),
+                "{when}: the session lock is not keyed on the chat either"
             );
         }
     }
@@ -761,19 +782,17 @@ mod tests {
     #[test]
     fn a_chat_with_no_session_id_of_its_own_is_what_the_clear_used_to_lose() {
         // The other half of the same test, and what makes the one above about the FIX rather
-        // than about the ladder: keyed on the conversation, the pointer written in one
+        // than about the ladder: keyed on the conversation, what was written in one
         // conversation is not read in the next. Written out here so that a chat which stops
         // being given a session id cannot pass the suite by looking like this.
+        use charter_core::wscmd::select::set_active;
         let (_plane, root) = bare_plane();
-        let first = "9f2c-the-conversation-it-was-picked-in";
-        std::fs::write(
-            root.join(format!(".charter/sessions/{first}.workspace")),
-            "finance\n",
-        )
-        .expect("the pointer is written");
+        let picked_in = who_it_is("", "9f2c-the-conversation-it-was-picked-in");
+        let after_the_clear = who_it_is("", "41ab-the-one-the-clear-started");
+        set_active(&root, "finance", &picked_in, false);
 
-        assert_eq!(workspace_of(&root, "", first).name, "finance");
-        let after = workspace_of(&root, "", "41ab-the-one-the-clear-started");
+        assert_eq!(workspace_of(&root, &picked_in).name, "finance");
+        let after = workspace_of(&root, &after_the_clear);
         assert_eq!(after.name, "default");
         assert_eq!(after.rung, charter_core::active::WorkspaceRung::BuiltIn);
     }
