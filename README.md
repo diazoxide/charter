@@ -64,6 +64,13 @@ npm run e2e:relaunch          # in app/, with the app already built
 CI also runs clippy on the app crate (`--workspace`), after creating an empty `app/dist` so it
 compiles without a frontend build.
 
+CI runs a `windows` job too, and it is **evidence, not a gate**: `continue-on-error`, not one
+of the nine required checks, and it reports the whole `cargo check` error list rather than
+stopping at the first line. Nothing has been ported to Windows, so it is expected to be red —
+what it is for is making "what is true on Windows" a measurement instead of a guess. What it
+has found so far is [ADR 0031](https://github.com/diazoxide/charter/blob/main/docs/adr/0031-windows-gets-charters-guards-or-it-gets-no-charter.md),
+and #95 to #103.
+
 Every plane write is also checked against the Python charter itself: the same command is run by
 both implementations against copies of one fixture plane, and the trees they leave are compared
 byte for byte (spec decision 14). Python is a dev dependency of that run and of nothing else —

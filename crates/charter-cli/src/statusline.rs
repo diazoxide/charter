@@ -168,7 +168,7 @@ pub fn the_app_owns_this_surface(ambient: &Ambient) -> bool {
     let Some(socket) = ambient.socket.as_deref() else {
         return false;
     };
-    if std::os::unix::net::UnixStream::connect(socket).is_err() {
+    if !an_app_is_listening(socket) {
         return false;
     }
     // The same shape `hookwire::Report::read` requires of it, so the app and this command
@@ -180,6 +180,25 @@ pub fn the_app_owns_this_surface(ambient: &Ambient) -> bool {
         return false;
     }
     ambient.harness.as_deref() == Some(CLAUDE_CODE)
+}
+
+/// Is something accepting on the app's hook socket right now?
+///
+/// A `connect` succeeds only while an app is accepting, and a socket file left behind by one
+/// that has gone refuses with `ECONNREFUSED`. Neither can hang, so no deadline is armed.
+#[cfg(unix)]
+fn an_app_is_listening(socket: &Path) -> bool {
+    std::os::unix::net::UnixStream::connect(socket).is_ok()
+}
+
+/// Off unix there is no channel to connect to at all (charter-app#95), so nothing is
+/// listening — and this command **renders**, which is the rule the doc comment above states
+/// for every failure here: *"every failure means 'not in the app', which renders — because a
+/// status line that vanished for a reason nobody can see is the worst outcome available"*.
+/// The day the channel is a named pipe this asks the same question of it.
+#[cfg(not(unix))]
+fn an_app_is_listening(_socket: &Path) -> bool {
+    false
 }
 
 /// What this prints when it is not suppressed and there is **no plane** to draw.
@@ -250,7 +269,11 @@ pub fn run(
     );
 }
 
-#[cfg(test)]
+// Unix-only, and that is a gap rather than a decision: every test below turns on a REAL
+// listener on a real socket, which is the only honest way to ask "is an app accepting right
+// now". There is no channel to stand up off unix yet (charter-app#95), so there is nothing
+// for these to bind. They come back with the named pipe.
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

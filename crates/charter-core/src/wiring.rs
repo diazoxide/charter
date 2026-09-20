@@ -767,9 +767,21 @@ impl Lock {
         let Ok(file) = std::fs::File::create(&path) else {
             return Self(None);
         };
+        #[cfg(unix)]
         match rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive) {
             Ok(()) => Self(Some(file)),
             Err(_) => Self(None),
+        }
+        // No `flock` off unix, and this takes the path the doc comment above already
+        // describes: an install that could not take the lock still installs, because the
+        // lock only makes two concurrent installs of one profile serialise and
+        // `claude plugin install` is itself safe to run twice. It is NOT a guard being
+        // dropped — nothing here decides whether anything may happen. Windows has
+        // `LockFileEx`, and charter-app#100 is where it goes.
+        #[cfg(not(unix))]
+        {
+            drop(file);
+            Self(None)
         }
     }
 }
@@ -777,7 +789,11 @@ impl Lock {
 impl Drop for Lock {
     fn drop(&mut self) {
         if let Some(file) = self.0.take() {
+            #[cfg(unix)]
             let _ = rustix::fs::flock(&file, rustix::fs::FlockOperation::Unlock);
+            // Nothing was locked off unix, so nothing is unlocked; the close is the whole
+            // of it, and dropping the file is what does that.
+            drop(file);
         }
     }
 }

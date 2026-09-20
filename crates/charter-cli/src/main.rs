@@ -1097,7 +1097,6 @@ fn gl_refresh(ws: &str, detach: bool, now: Option<&str>) -> ExitCode {
 /// workspace forbids `unsafe`. What it does not buy is detachment from the controlling
 /// terminal, which a background refresh writing to `/dev/null` never touches.
 fn detach_self(ws: &str, now: Option<&str>) -> Result<(), String> {
-    use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
 
     let me = std::env::current_exe().map_err(|e| format!("cannot find this binary: {e}"))?;
@@ -1106,17 +1105,45 @@ fn detach_self(ws: &str, now: Option<&str>) -> Result<(), String> {
     if let Some(now) = now {
         child.arg("--now").arg(now);
     }
-    match child
+    child
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0)
-        .spawn()
-    {
+        .stderr(Stdio::null());
+    in_a_group_of_its_own(&mut child);
+    match child.spawn() {
         Ok(_) => Ok(()),
         Err(why) => Err(format!("could not start a detached refresh: {why}")),
     }
 }
+
+/// Puts the child in a process group of its own, which is what a harness's teardown at the
+/// end of a turn does NOT reach.
+#[cfg(unix)]
+fn in_a_group_of_its_own(child: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    child.process_group(0);
+}
+
+/// Windows has no process group in this sense, and what a harness tears down there is not a
+/// group — so this is **not** the same guarantee under another name.
+///
+/// `CREATE_NEW_PROCESS_GROUP` is the nearest thing: it takes the child out of the parent's
+/// Ctrl+C/Ctrl+Break group. Whether that is enough to outlive a Claude Code turn on Windows
+/// is unmeasured, because no harness has ever run there — charter-app#100 is where that is
+/// asked, with a test. Left here rather than omitted because a refresh in the parent's group
+/// is strictly worse than one outside it, and neither is yet known to be right.
+#[cfg(windows)]
+fn in_a_group_of_its_own(child: &mut std::process::Command) {
+    use std::os::windows::process::CommandExt;
+    /// `CREATE_NEW_PROCESS_GROUP`, from `winbase.h`. Spelled out rather than pulled from a
+    /// crate for one constant that has not changed since Windows NT.
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    child.creation_flags(CREATE_NEW_PROCESS_GROUP);
+}
+
+/// Anywhere else, the refresh simply runs in this process's group.
+#[cfg(not(any(unix, windows)))]
+fn in_a_group_of_its_own(_child: &mut std::process::Command) {}
 
 /// The instant a refresh stamps every entry with: `--now` as a local naive time, else the
 /// wall clock. Seconds since the epoch, as Python's `time.time()` answers.
