@@ -7,10 +7,12 @@ mod lifecycle;
 mod panels;
 mod panics;
 mod sessions;
+mod slowstart;
 mod worktrees;
 
 use std::path::PathBuf;
 use std::sync::LazyLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use charter_core::engine::Size;
@@ -132,19 +134,29 @@ fn reached(step: &str) {
     }
 }
 
+/// Whether the first frame has been reported, so a webview reload is not a second launch.
+static FIRST_FRAME: AtomicBool = AtomicBool::new(false);
+
 /// The window says its first frame is on screen, which is where cold start ends.
 ///
-/// It is silent unless `CHARTER_BENCH_LOG` is set — only `tools/bench.mjs` sets it — so in
-/// an ordinary run this is one IPC call at startup that does nothing.
+/// It answers with the one line to put on screen when that took longer than the limit, and
+/// with nothing when it did not. An operator who launched charter from an icon has no
+/// standard error to read, and a start that took half a minute with no window has to say why
+/// somewhere they can see it (charter-app#24). Only the first call is answered: a webview
+/// that reloads has not started the process again.
+///
+/// `CHARTER_BENCH_LOG` — which only `tools/bench.mjs` sets — also prints the number here.
 #[tauri::command]
 #[specta::specta]
-fn first_frame() {
+fn first_frame() -> Option<String> {
+    let took = STARTED.elapsed();
     if std::env::var_os("CHARTER_BENCH_LOG").is_some() {
-        println!(
-            "charter-bench first-frame {}",
-            STARTED.elapsed().as_millis()
-        );
+        println!("charter-bench first-frame {}", took.as_millis());
     }
+    if FIRST_FRAME.swap(true, Ordering::SeqCst) {
+        return None;
+    }
+    slowstart::why(took, std::env::consts::OS)
 }
 
 /// The plane the app was started in, or why there is none.
@@ -796,6 +808,24 @@ pub fn run() {
     reached("the bindings are written");
 
     reached("building");
+    // Everything slow about a launch happens inside `build()`: the window is created there,
+    // and on a Linux session whose desktop portal cannot start, GTK waits out 25 s of D-Bus
+    // and WebKitGTK another 5 before any of it (charter-app#24). Nothing charter can say is
+    // on screen yet — there is no screen — so it is said on standard error, from a thread,
+    // while the wait is still going on. `built` below lets the thread go.
+    let (built, still_building) = std::sync::mpsc::channel::<()>();
+    // A machine with no thread to spare still starts; it just starts without the warning.
+    let _ = std::thread::Builder::new()
+        .name("charter-slow-start".into())
+        .spawn(move || {
+            slowstart::while_it_waits(
+                &still_building,
+                slowstart::LIMIT,
+                std::env::consts::OS,
+                &mut |line| eprintln!("{line}"),
+            );
+        });
+
     let app = tauri::Builder::default()
         // First, so a second launch is handed to the app already running rather than
         // starting a second one — which would be a second set of sessions on the same plane.
@@ -983,7 +1013,12 @@ pub fn run() {
             Ok(())
         })
         .build(tauri::generate_context!())
-        .inspect(|_| reached("built"))
+        .inspect(|_| {
+            reached("built");
+            // Past the part of a launch that has no window in it, so the thread watching for
+            // a slow one has nothing left to say.
+            let _ = built.send(());
+        })
         .expect("error while building tauri application")
         // Tauri ends the process itself, which runs no destructor and waits for no thread, so
         // the sessions are ended here — otherwise their programs are left to the operating

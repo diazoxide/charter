@@ -216,6 +216,21 @@ body {
   opacity: 0.7;
 }
 
+/* Puts away a line about something that has already finished — today, only the notice about
+   a launch that took longer than the limit (charter-app#24). Inline, in the line's own
+   colour, so it reads as part of the sentence rather than as an action. */
+.came-back .dismiss {
+  margin-left: 0.4rem;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  text-decoration: underline;
+  cursor: pointer;
+  opacity: 0.8;
+}
+
 /* Quitting asks first, over everything, because it ends every session. */
 .asking {
   position: fixed;

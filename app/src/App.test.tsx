@@ -143,6 +143,53 @@ describe("App", () => {
     await vi.waitFor(() => expect(asked.map((one) => one.cmd)).toContain("first_frame"));
   });
 
+  it("says why a launch took longer than the limit, because nothing else could have", async () => {
+    // charter-app#24: on a Linux session whose desktop portal cannot start, the app is not
+    // on screen for half a minute with no window and no icon to say why. The core writes a
+    // line to standard error while it waits; an operator who clicked an icon never sees it,
+    // so the first frame is where they are told.
+    mockIPC((cmd) => {
+      if (cmd === "first_frame") return "charter took 31 s to start, against a 2 s limit.";
+      if (cmd === "plane_root") return "/home/dev/plane";
+      if (cmd === "plane_sidebar") return SIDEBAR;
+      if (cmd === "chats_that_would_not_start") return [];
+      return null;
+    });
+
+    render(<App />);
+
+    const said = await screen.findByRole("status");
+    expect(said).toHaveTextContent("charter took 31 s to start, against a 2 s limit.");
+  });
+
+  it("says nothing about an ordinary launch", async () => {
+    // The core answers with nothing when the launch was inside the limit, and a window that
+    // drew an empty notice on every start would be noise on every start.
+    core();
+
+    render(<App />);
+
+    expect(await screen.findByText("/home/dev/plane")).toBeInTheDocument();
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
+  it("puts that notice away when it is dismissed", async () => {
+    // The launch is over by the time it is read, and the news does not improve.
+    mockIPC((cmd) => {
+      if (cmd === "first_frame") return "charter took 31 s to start, against a 2 s limit.";
+      if (cmd === "plane_root") return "/home/dev/plane";
+      if (cmd === "plane_sidebar") return SIDEBAR;
+      if (cmd === "chats_that_would_not_start") return [];
+      return null;
+    });
+    render(<App />);
+    await screen.findByRole("status");
+
+    await userEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
+  });
+
   it("does not send that marker once the window has gone", async () => {
     // It is sent a frame after the window paints, which can be after the window is gone —
     // and then it reaches whatever the next test, or the next window, has put there.

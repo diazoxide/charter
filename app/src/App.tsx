@@ -64,6 +64,9 @@ function App() {
   const [wired, setWired] = useState<string>();
   /** Chats this launch could not start, by name and why. They are still recorded. */
   const [wouldNotStart, setWouldNotStart] = useState<[string, string][]>([]);
+  /** Why this launch took longer than the limit, when it did — and nothing when it did not
+   *  (charter-app#24). The core decides that; the window only draws it. */
+  const [slowStart, setSlowStart] = useState<string>();
   /** What the core last said about where a chat is working, and which directory it was
    *  asked about — so an answer about the chat that WAS in front is never drawn under the
    *  one that is now. `Panels` keys its answers the same way, for the same reason. */
@@ -179,14 +182,21 @@ function App() {
   }, [tabs]);
 
   // Cold start ends when a person can see the window, which is the frame after the one this
-  // paints in. Nothing happens on the other side unless the app was started to be measured,
-  // and nothing about the window depends on the marker arriving: a window that cannot send it
-  // is still a window.
+  // paints in. The core answers with why that took as long as it did, when it took longer
+  // than the limit, and with nothing at all otherwise — so on an ordinary launch this is one
+  // IPC call that changes nothing. Nothing about the window depends on the marker arriving:
+  // a window that cannot send it is still a window.
   useEffect(() => {
     let gone = false;
     const frame = requestAnimationFrame(() =>
       requestAnimationFrame(() => {
-        if (!gone) void commands.firstFrame().catch(() => undefined);
+        if (!gone)
+          void commands
+            .firstFrame()
+            .then((why) => {
+              if (!gone && why) setSlowStart(why);
+            })
+            .catch(() => undefined);
       }),
     );
     return () => {
@@ -604,6 +614,20 @@ function App() {
           again at the next launch.
         </p>
       ))}
+
+      {/* A launch nobody could see. The core only answers here when the start passed the
+          spec's limit, so on an ordinary launch there is nothing to draw and nothing to
+          dismiss. It is the one place an operator who clicked an icon can be told — the
+          line charter writes while it waits goes to standard error, which they do not have.
+          Dismissible, because the launch is over and the news does not improve. */}
+      {slowStart && (
+        <p className="came-back trouble" role="status">
+          {slowStart}{" "}
+          <button type="button" className="dismiss" onClick={() => setSlowStart(undefined)}>
+            Dismiss
+          </button>
+        </p>
+      )}
 
       <div className="body">
         {sidebar && (
