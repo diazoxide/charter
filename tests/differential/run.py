@@ -2316,6 +2316,41 @@ def _a_plane_and_a_worktree_cut_from_it(root: Path) -> None:
     _git(side, "worktree", "add", "-q", "-b", "feature", "sandbox", cwd=root)
 
 
+#: The one `.git` inside the plane copy. The worktree is BESIDE the plane here, not under it,
+#: so its own `.git` is not part of the tree comparison at all — the containment check reads
+#: it before and after instead, which is what a file outside the plane gets.
+BARE_WORKTREE_GIT = {
+    ".git": WORKTREE_GIT[".git"],
+}
+
+
+def _a_plane_whose_marker_was_never_committed_and_a_worktree(root: Path) -> None:
+    """The plane committed WITHOUT its `charter.toml`, and `git worktree add ../sandbox`.
+
+    `charter init` writes the marker and never stages it, so this — not the committed marker
+    above — is what a worktree cut from `main` actually looks like. `git rm --cached` rather
+    than a `.gitignore` entry, because that is the state `init` leaves: the file is untracked
+    and still shows up in `git status`, which is how an operator meets it.
+
+    Only the plane's OWN marker is unstaged. The `daily` fixture carries a second one deep
+    under `workspaces/alpha/tool/`, which stays committed — it is below the caller, never
+    above, so no walk can reach it, and taking it out would change what the fixture is.
+    """
+    side = root.parent
+    _identity(side)
+    _git(side, "init", "-q", "-b", "main", ".", cwd=root)
+    (root / ".gitignore").write_text(".charter/\n")
+    _git(side, "add", "-A", cwd=root)
+    _git(side, "rm", "--cached", "-q", "charter.toml", cwd=root)
+    _git(side, "commit", "-q", "-m", "the plane, with its marker never staged", cwd=root)
+    _git(side, "worktree", "add", "-q", "-b", "feature", "../sandbox", cwd=root)
+    if (side / "sandbox" / "charter.toml").exists():
+        raise SystemExit(
+            "setup: the worktree carries a charter.toml, so this scenario would exercise the "
+            "first walk and say nothing about the second"
+        )
+
+
 WORKTREE_SCENARIOS = [
     Scenario(
         # The proof. Before M2.16 charter-app wrote the memory into `sandbox/workspaces/…`
@@ -2346,6 +2381,50 @@ WORKTREE_SCENARIOS = [
         same_stderr=True,
         stderr_mask=SAVE_MASKS,
         ignore=WORKTREE_GIT,
+    ),
+    # M2.23: the SECOND walk — a worktree that carries no `charter.toml` at all
+    # ----------------------------------------------------------------------------------------
+    #
+    # The two above are the case where the worktree HAS the marker, because the plane committed
+    # it. This is the other one, and it is the common shape rather than the exotic: `charter
+    # init` writes `charter.toml` and never stages it, so a worktree cut from `main` does not
+    # contain one. `plane_of` cannot fire here — the first walk found no marker to redirect —
+    # and before M2.23 the Rust resolver simply stopped, so following charter's own `enter:`
+    # line landed a session in a plane-less directory with no personas and no vault, writing
+    # memory where `git worktree remove --force` deletes it, while `doctor` reported green.
+    #
+    # **The worktree is `../sandbox`, BESIDE the plane copy rather than inside it.** A worktree
+    # under the plane is answered by the first walk — the marker above it — and a scenario
+    # placed there would say nothing about the second at all.
+    Scenario(
+        # The write proof, and the same shape as the M2.16 one above: before the fix the Rust
+        # side resolved no plane, exited non-zero and wrote nothing, so the memory is a file
+        # only python has.
+        name="remember-from-a-worktree-whose-plane-was-never-committed-writes-to-the-plane",
+        plane="daily",
+        setup=_a_plane_whose_marker_was_never_committed_and_a_worktree,
+        python=["workspace", "remember", "The importer drops rows over 4 MB", "-w", "alpha",
+                "--no-sync"],
+        cwd="../sandbox",
+        env={"CHARTER_ROOT": None},
+        ignore=BARE_WORKTREE_GIT,
+    ),
+    Scenario(
+        # `reinit` resolves through `place` — `find_root_or_cwd` — which is the SAME walk in
+        # Python and was a second one here. Its failure mode is the loudest of all: with no
+        # plane resolved, `place` falls back to the working directory, so `reinit` scaffolds a
+        # second plane into the worktree — a write outside this side's plane copy, which the
+        # containment check reports by name.
+        name="reinit-from-a-worktree-whose-plane-was-never-committed-heals-the-plane",
+        plane="daily",
+        setup=_both(_opencode_already_installed,
+                    _a_plane_whose_marker_was_never_committed_and_a_worktree),
+        python=["reinit"],
+        cwd="../sandbox",
+        env={"CHARTER_ROOT": None},
+        pins_the_clock=False,
+        python_writes_outside={OPENCODE_CONTEXT: OPENCODE_CONTEXT_WHY},
+        ignore=BARE_WORKTREE_GIT,
     ),
 ]
 
