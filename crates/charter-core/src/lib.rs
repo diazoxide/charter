@@ -22,6 +22,7 @@ pub mod harness;
 pub mod hookwire;
 pub mod inventory;
 pub mod layer;
+pub mod machine;
 pub mod manifest;
 pub mod mdsection;
 pub mod memstore;
