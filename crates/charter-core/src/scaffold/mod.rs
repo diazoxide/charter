@@ -24,6 +24,20 @@
 //! here (Python's universal newlines rewrite them), and a settings file Python would crash
 //! on is left alone and reported.
 //!
+//! # The one place this deliberately disagrees with the Python charter
+//!
+//! **`charter init` at the top of an existing git repository writes nothing and says how to
+//! ask** ([`repo_is_not_a_plane_yet`]). Python scaffolds the plane into that repository and
+//! then offers the first clone as a printed command; charter-app reverses which of those two
+//! is the default, because ADR 0033 made "which plane" a directory picked in a file dialog
+//! and a directory picked from a list has nobody standing in it. ADR 0035 decided it and
+//! charter-app spec decision 27 records it.
+//!
+//! It is the FIRST declared hole in spec decision 15's byte-for-byte guarantee, and Python is
+//! frozen (decision 17), so it does not follow. `tests/differential/run.py` carries it as a
+//! `Divergence` the run asserts by name — it fails if the two ever agree again, as well as if
+//! they disagree differently.
+//!
 //! # What `init` does not do here, on purpose
 //!
 //! - **It installs no software.** Python's `init` runs `claude plugin install` when `claude`
@@ -81,6 +95,10 @@ pub struct InitArgs {
     pub owner: String,
     pub host: Option<String>,
     pub clone_this_repo: bool,
+    /// Make the git repository this is run in BE the plane — the old default, now asked for
+    /// by name (ADR 0035, spec decision 27). It decides nothing outside a repository's top
+    /// level, where there is no repository to colonise.
+    pub plane_is_this_repo: bool,
     /// The front-door persona to scaffold, or `None` for `--no-front-door`.
     pub front_door: Option<String>,
 }
@@ -241,6 +259,10 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
             FORGES.join(", ")
         ));
         return run.outcome(1);
+    }
+
+    if let Some(refusal) = repo_is_not_a_plane_yet(root, args) {
+        return refusal;
     }
 
     // charter.toml
@@ -926,6 +948,117 @@ fn front_door(run: &mut Run, root: &Path, name: &str) {
     run.created.push(format!(
         "personas/{name}/ (front door, declared in charter.toml)"
     ));
+}
+
+/// The flags the operator typed, as a shell will read them back — so the two commands the
+/// refusal below prints can be pasted rather than reassembled by hand.
+///
+/// Only what `init` was actually given: `--forge` always, because it has a default that is
+/// not the one most people want; `--owner` and `--host` when they carry something; and the
+/// front-door flags only when they are not the default, which is the one `None` that means
+/// `--no-front-door` rather than "unset".
+fn typed_flags(args: &InitArgs) -> String {
+    use crate::handoff::quote;
+    let mut out = format!(" --forge {}", quote(&args.forge));
+    if !args.owner.is_empty() {
+        out.push_str(&format!(" --owner {}", quote(&args.owner)));
+    }
+    if let Some(host) = &args.host {
+        out.push_str(&format!(" --host {}", quote(host)));
+    }
+    match &args.front_door {
+        None => out.push_str(" --no-front-door"),
+        Some(name) if name != "steward" => {
+            out.push_str(&format!(" --front-door {}", quote(name)));
+        }
+        Some(_) => {}
+    }
+    out
+}
+
+/// **The declared divergence from the Python oracle** (ADR 0035, spec decision 27): `charter
+/// init` does not make an existing git repository into a control plane unless it is asked to.
+///
+/// The old default — Python's, still — wrote `charter.toml`, `personas/`, `inventory/`,
+/// `workspaces/` and a block of rules into that repository's own tracked `.gitignore`, and
+/// only then printed the offer to clone it into the plane's first workspace. ADR 0033 turned
+/// "which plane" into a directory picked in a file dialog, and `_is_repo_top_level`'s own
+/// docstring is what that breaks: the offer *"exists for one person standing in one project,
+/// which is the equality case"*. A directory picked from a list has nobody standing in it, so
+/// the scaffolding and the `.gitignore` edit are writes the operator never typed.
+///
+/// So the safe shape is the default and the old one is asked for by name. **Nothing is
+/// written**: this runs before the first `mkdir`, because the write that was never typed is
+/// the whole subject.
+///
+/// Three cases are exempt, one reason each:
+///
+/// - `--plane-is-this-repo` IS the operator saying so;
+/// - `--clone-this-repo` says it too — it asks for a clone INTO the plane this makes here,
+///   which is not a request anyone types by accident;
+/// - a directory that already holds a `charter.toml` is a plane, where the question was
+///   answered once and `init` is now a heal. charter's own plane is that case, and so is
+///   every re-run — `init` is idempotent and gets run again after a forge is added or a
+///   charter is upgraded, and a refusal there would break the one flow this repo is built in.
+///
+/// A repository this merely sits INSIDE is untouched by any of it, exactly as the offer was:
+/// a `$HOME` kept under git would otherwise refuse to hold a plane at all.
+fn repo_is_not_a_plane_yet(root: &Path, args: &InitArgs) -> Option<Outcome> {
+    if args.plane_is_this_repo || args.clone_this_repo {
+        return None;
+    }
+    if already_a_plane(root) {
+        return None;
+    }
+    if !is_repo_top_level(root) {
+        return None;
+    }
+    let name = first_clone_name(root);
+    let flags = typed_flags(args);
+    let mut run = Run::default();
+    run.err(format!(
+        "this is the git repo '{name}', and `charter init` does not make a repository into a \
+         control plane unless you ask it to. Nothing was written."
+    ));
+    run.info(format!(
+        "A plane is a directory of its own, and this repo is the first clone in it:\n      \
+         mkdir ../{name}-plane && cd ../{name}-plane\n      charter init{flags}\n      charter \
+         discover && charter clone {name}\n  Nothing in this repo is read or written by any \
+         of that."
+    ));
+    // Named in full rather than summarised: this is the line somebody decides on, and "plane
+    // scaffolding" is not a list anyone can picture. Built from the same constants the writes
+    // come from, so a path that moves cannot leave this sentence behind.
+    let written = [
+        crate::plane::MANIFEST,
+        settings::SETTINGS,
+        settings::OPENCODE,
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .chain(BASELINE_DIRS.iter().map(|d| format!("{d}/")))
+    .collect::<Vec<_>>();
+    run.info(format!(
+        "To make THIS repo the plane instead — charter's own plane is one, which is why the \
+         option is here — ask for it by name:\n      charter init \
+         --plane-is-this-repo{flags}\n  That writes {} into this repo, and charter's own \
+         rules into its tracked .gitignore.",
+        written.join(", ")
+    ));
+    run.info(
+        "Why the default changed: docs/adr/0035-a-plane-is-untrusted-until-the-operator-opens-\
+         it.md, and charter-app spec decision 27. `charter init` anywhere that is not the top \
+         of a git repo is unchanged.",
+    );
+    Some(run.outcome(1))
+}
+
+/// Whether `root` already holds a `charter.toml` charter would read — asked through the gate,
+/// so a manifest that is a link out of the plane does not count as one. It is not a plane
+/// charter can heal, and answering "no" here only costs that run its scaffolding, which is
+/// the side to be wrong on.
+fn already_a_plane(root: &Path) -> bool {
+    gate(root, crate::plane::MANIFEST).is_ok_and(|path| path.exists())
 }
 
 /// `commands._first_clone_step`: the one thing being inside a git repo changes about `init`

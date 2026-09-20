@@ -92,6 +92,57 @@ socket.gethostname = lambda: os.environ["FIXTURE_HOST"]
 '''
 
 
+@dataclass(frozen=True)
+class Divergence:
+    """A difference between the two implementations that has been DECIDED, not one outstanding.
+
+    Spec decision 15 requires every ported command to give the same result as the Python
+    charter on the same input, and decision 17 freezes Python. A decision that changes what
+    charter-app does therefore cannot be followed on the other side, and the difference is
+    permanent. `stdout_differs` and `stderr_differs` are the wrong shape for it: both say "not
+    yet", both pass the moment the two sides agree, and neither says what the other side does
+    instead — a gap that closes itself is exactly what a DECIDED difference must not be
+    allowed to look like.
+
+    So this is the opposite of a waiver. It states, and the run checks, all of:
+
+    - **`why`**, naming the record that decided it, because in six months the only thing
+      standing between this and a bug nobody can explain is a sentence with an ADR number in
+      it. A `why` that names no record is refused.
+    - **both exit statuses**, separately. Not "they differ": the two numbers, each asserted,
+      so a Rust side that started failing differently is as red as one that stopped failing.
+    - **the Rust side's whole stderr**, byte for byte after the scenario's masks — the same
+      bar `same_stderr` holds a ported refusal to. A divergence whose words are not pinned is
+      a divergence nothing reads.
+    - **a substring of the ORACLE's stderr**, so the run also fails when the Python side stops
+      doing the thing this difference is a difference FROM. That direction is the one a
+      reviewer forgets and the one that rots first.
+    - **which top-level paths each side writes that the other does not**, and — this is the
+      point — **every other path in the two planes is still compared byte for byte.** The
+      divergence is fenced to exactly what it claims, so a second difference that crept in
+      beside it is still a failure. Listed paths must be present on their own side and absent
+      on the other, which is what makes the declaration fail loudly in BOTH directions: if the
+      two sides ever agree again, the paths are no longer one-sided and this goes red.
+    """
+
+    #: Prose naming the record that decided it. Must cite an ADR and a spec decision.
+    why: str
+    python_exit: int
+    rust_exit: int
+    #: The Rust side's whole stderr, masks applied.
+    rust_stderr: str
+    #: A substring the ORACLE must still print, so the run sees Python changing too.
+    python_stderr_has: str
+    #: Top-level paths Python's plane has afterwards and the Rust side's does not.
+    python_writes: tuple[str, ...] = ()
+    #: The mirror: paths the Rust side leaves and Python does not.
+    rust_writes: tuple[str, ...] = ()
+
+    def one_sided(self) -> dict[str, str]:
+        """The paths the tree comparison must skip — and nothing else may differ."""
+        return {rel: self.why for rel in (*self.python_writes, *self.rust_writes)}
+
+
 @dataclass
 class Scenario:
     """One command, run by both implementations against the same starting plane."""
@@ -233,6 +284,12 @@ class Scenario:
     #: Why this scenario's plane `origin` is a local path rather than a URL on a forge charter
     #: knows — see `_forge_trap` below, which is where the rest of this is explained.
     local_origin_why: str = ""
+
+    #: A difference the two implementations are SUPPOSED to have, declared in full. See
+    #: `Divergence`. It replaces the exit-status and stderr comparisons with its own, stricter
+    #: ones; everything else about the scenario — stdout, the rest of the tree, and what may
+    #: be written outside the plane — is checked exactly as it is for any other.
+    diverges: "Divergence | None" = None
 
     def rust_args(self) -> list[str]:
         return self.rust if self.rust is not None else self.python
@@ -690,6 +747,33 @@ def _without_the_profiles_ignore_line(root: Path) -> None:
     ignore.write_text(ignore.read_text().replace("/charter.local.toml\n", ""))
 
 
+def _in_a_git_repository(root: Path) -> None:
+    """The directory `init` is pointed at is the TOP LEVEL of a git working tree, with an
+    `origin` on a forge charter knows.
+
+    The equality case `commands._is_repo_top_level` is about — one person standing in one
+    project — and the case ADR 0035 changed the default for. The origin is what names the
+    repo on both sides (`_first_clone_name` takes the basename of the URL, not of the
+    directory, and the directory here is called `plane` on purpose so a port that used the
+    wrong one would say `'plane'`).
+
+    No commit and no identity: `rev-parse --show-toplevel` and `remote get-url origin` are
+    the only two git calls either side makes here, and both answer on an empty repository.
+    `git init` plus `remote add` is byte-identical between two directories, so the `.git`
+    trees are compared like any other file — which is how "neither side wrote into the
+    repository's own internals" gets checked rather than assumed.
+    """
+    for args in (
+        ["init", "-q", "-b", "main", "."],
+        ["remote", "add", "origin", "https://github.com/acme/widget.git"],
+    ):
+        subprocess.run(
+            ["git", *args], cwd=root, check=True, capture_output=True,
+            env={"HOME": str(root.parent / "home"), "PATH": "/usr/bin:/bin",
+                 "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"},
+        )
+
+
 def _both(*steps):
     def setup(root: Path) -> None:
         for step in steps:
@@ -700,19 +784,68 @@ def _both(*steps):
 INIT = ["init", "--forge", "github", "--owner", "acme"]
 
 
-def _init(name: str, *, python=INIT, plane="", setup=None, refusal="") -> Scenario:
+def _init(name: str, *, python=INIT, rust=None, plane="", setup=None, refusal="",
+          diverges=None, local_origin_why="") -> Scenario:
     """An `init` or `reinit` scenario: no clock, opencode's global files installed first, and
     the whole tree each side leaves compared."""
     return Scenario(
         name=name,
         plane=plane,
         python=python,
+        rust=rust,
         pins_the_clock=False,
         setup=_both(_opencode_already_installed, *([setup] if setup else [])),
         refusal=refusal,
-        python_only_items=[] if refusal or python[0] == "reinit" else [OPENCODE_SHIM],
+        # Python's stderr is not compared word for word when a divergence is declared — the
+        # declaration pins what each side says instead — so deleting a line from it would
+        # only hide what the oracle did.
+        python_only_items=(
+            [] if refusal or diverges or python[0] == "reinit" else [OPENCODE_SHIM]
+        ),
         python_writes_outside={OPENCODE_CONTEXT: OPENCODE_CONTEXT_WHY},
+        diverges=diverges,
+        local_origin_why=local_origin_why,
     )
+
+
+#: Everything Python's `init` leaves in a repository it was pointed at, at the top level —
+#: the scaffolding ADR 0035 decided must not arrive unasked. `.charter/` is not among them:
+#: `init` writes the ignore rule for it and not the directory.
+COLONISED = ("charter.toml", ".claude", ".gitignore", "inventory", "opencode.json",
+             "personas", "workspaces")
+
+#: What charter-app says instead, byte for byte.
+NOT_COLONISED = """\
+✗ this is the git repo 'widget', and `charter init` does not make a repository into a control plane unless you ask it to. Nothing was written.
+• A plane is a directory of its own, and this repo is the first clone in it:
+      mkdir ../widget-plane && cd ../widget-plane
+      charter init --forge github --owner acme
+      charter discover && charter clone widget
+  Nothing in this repo is read or written by any of that.
+• To make THIS repo the plane instead — charter's own plane is one, which is why the option is here — ask for it by name:
+      charter init --plane-is-this-repo --forge github --owner acme
+  That writes charter.toml, .claude/settings.json, opencode.json, personas/, inventory/, workspaces/ into this repo, and charter's own rules into its tracked .gitignore.
+• Why the default changed: docs/adr/0035-a-plane-is-untrusted-until-the-operator-opens-it.md, and charter-app spec decision 27. `charter init` anywhere that is not the top of a git repo is unchanged.
+"""
+
+#: The FIRST declared hole in spec decision 15's byte-for-byte guarantee. Read `Divergence`
+#: before changing anything here, and ADR 0035 before deciding it should not exist.
+INIT_IN_A_REPO_DIVERGES = Divergence(
+    why=(
+        "ADR 0035 reversed `charter init`'s default inside an existing repository — the plane "
+        "goes in a directory of its own and the repo becomes its first clone, because ADR 0033 "
+        "made 'which plane' a directory picked in a file dialog and a directory picked from a "
+        "list has nobody standing in it. charter-app spec decision 27 carries it, and names it "
+        "as a deliberate divergence from spec decision 15's byte-for-byte guarantee; the Python "
+        "charter is frozen (decision 17) and keeps the old default. `--plane-is-this-repo` is "
+        "the old behaviour, and the scenario beside this one holds the two byte for byte on it."
+    ),
+    python_exit=0,
+    rust_exit=1,
+    rust_stderr=NOT_COLONISED,
+    python_stderr_has="✓ Initialized control plane (schema 1) — 8 item(s) written.",
+    python_writes=COLONISED,
+)
 
 
 #: `init` and `reinit`, against an empty directory (`plane=""`) or a fixture.
@@ -750,6 +883,14 @@ INIT_SCENARIOS = [
     _init("init-on-a-plane-from-a-newer-charter-writes-nothing",
           setup=_from_a_newer_charter,
           refusal="declares schema 2, but this charter understands 1"),
+    # ADR 0035 / spec decision 27, and the pair is the whole declaration: the first says the
+    # DEFAULT diverges and exactly how, the second says nothing else did. Delete either and
+    # the other stops meaning what it says.
+    _init("init-inside-a-repository-does-not-colonise-it", setup=_in_a_git_repository,
+          diverges=INIT_IN_A_REPO_DIVERGES),
+    _init("init-inside-a-repository-when-asked-is-the-python-charters-init-byte-for-byte",
+          setup=_in_a_git_repository,
+          rust=[*INIT, "--plane-is-this-repo"]),
     _init("reinit-on-a-current-plane", python=["reinit"], plane="minimal"),
     _init("reinit-on-a-plane-in-use", python=["reinit"], plane="daily"),
     _init("reinit-heals-a-missing-baseline-directory", python=["reinit"], plane="minimal",
@@ -4633,6 +4774,67 @@ def _never_said(scenario: Scenario, planted: set[str],
     return problems
 
 
+def _declared(scenario: Scenario, py: subprocess.CompletedProcess,
+              rs: subprocess.CompletedProcess, py_root: Path, rs_root: Path) -> list[str]:
+    """Check a `Divergence` in full — see its docstring for why each clause is here."""
+    d = scenario.diverges
+    assert d is not None
+    problems: list[str] = []
+    if not (re.search(r"\bADR \d{4}\b", d.why) and re.search(r"\bdecision \d+\b", d.why)):
+        problems.append(
+            "    this divergence's `why` names no record — it must cite the ADR that decided "
+            "it and the spec decision that carries it, or the next reader has a difference "
+            "with no author"
+        )
+    if d.python_exit == d.rust_exit and not d.python_writes and not d.rust_writes:
+        problems.append(
+            "    this divergence declares the same exit status on both sides and no path "
+            "either side writes alone, so it asserts no difference at all"
+        )
+    for side, got, want in (("python", py.returncode, d.python_exit),
+                            ("rust", rs.returncode, d.rust_exit)):
+        if got != want:
+            problems.append(
+                f"    {side} exited {got}, and this divergence says it exits {want} — the "
+                f"declared difference is not the one that happened ({d.why})"
+            )
+    said = _masked(rs.stderr, scenario)
+    if said != d.rust_stderr:
+        problems.append("    rust's stderr is not what this divergence declares:")
+        problems.extend(
+            f"      {line}" for line in difflib.unified_diff(
+                d.rust_stderr.splitlines(), said.splitlines(), "declared", "rust",
+                lineterm="", n=2)
+        )
+    if not d.python_stderr_has:
+        problems.append(
+            "    this divergence pins nothing the ORACLE says, so it cannot see charter "
+            "changing — set python_stderr_has to the line this difference is a difference from"
+        )
+    elif d.python_stderr_has not in py.stderr:
+        problems.append(
+            f"    python no longer says {d.python_stderr_has!r}, which is what this "
+            f"divergence is a divergence FROM — it says {py.stderr.strip()!r}"
+        )
+    for side, root, other, others_root in (
+        ("python", py_root, "rust", rs_root),
+        ("rust", rs_root, "python", py_root),
+    ):
+        for rel in (d.python_writes if side == "python" else d.rust_writes):
+            # `lexists`: a link is a thing one side wrote, whatever it points at.
+            if not os.path.lexists(root / rel):
+                problems.append(
+                    f"    {side} no longer writes {rel!r}, which this divergence says is "
+                    f"{side}'s alone — drop it, or find out what changed"
+                )
+            if os.path.lexists(others_root / rel):
+                problems.append(
+                    f"    {other} now writes {rel!r} too, so the declared divergence is "
+                    f"GONE for that path — the two implementations agree again ({d.why})"
+                )
+    return problems
+
+
 def _masked(text: str, scenario: Scenario) -> str:
     """*text* with each of the scenario's masks blanked — what neither side's words decide."""
     for pattern, _why in scenario.stderr_mask:
@@ -4708,60 +4910,68 @@ def check(scenario: Scenario, binary: Path) -> bool:
                 "    rust_only_block is set but no rust_only_lines pattern takes any line out, "
                 "so the block it declares is compared against nothing"
             )
-        if py.returncode != rs.returncode:
-            problems.append(
-                f"    exit status differs: python {py.returncode} "
-                f"({py.stderr.strip()}), rust {rs.returncode} ({rs.stderr.strip()})"
-            )
-        if scenario.refusal:
-            if py.returncode == 0:
-                problems.append("    this scenario expects a refusal and python SUCCEEDED")
-            if scenario.refusal not in rs.stderr:
-                problems.append(
-                    f"    rust did not refuse with {scenario.refusal!r}; it said "
-                    f"{rs.stderr.strip()!r}"
-                )
-            if scenario.same_stderr:
-                want, got = _masked(py.stderr, scenario), _masked(rs.stderr, scenario)
-                if want != got:
-                    problems.append("    stderr differs:")
-                    problems.append(f"      python {want!r}")
-                    problems.append(f"      rust   {got!r}")
+        if scenario.diverges is not None:
+            # A DECIDED difference states its own exit statuses and its own stderr, and they
+            # are checked INSTEAD of "the two must match" — never as well, because the two
+            # cannot match and that is the point. Everything else about the scenario, the
+            # tree comparison below included, still applies unchanged.
+            problems.extend(_declared(scenario, py, rs, py_root, rs_root))
         else:
-            if py.returncode != 0:
+            if py.returncode != rs.returncode:
                 problems.append(
-                    f"    python failed ({py.returncode}) and the scenario does not say so — "
-                    f"{py.stderr.strip()}"
+                    f"    exit status differs: python {py.returncode} "
+                    f"({py.stderr.strip()}), rust {rs.returncode} ({rs.stderr.strip()})"
                 )
-            if scenario.stderr_differs:
-                if py.stderr == rs.stderr:
+            if scenario.refusal:
+                if py.returncode == 0:
+                    problems.append("    this scenario expects a refusal and python SUCCEEDED")
+                if scenario.refusal not in rs.stderr:
                     problems.append(
-                        "    stderr now MATCHES, but the scenario still says it differs "
-                        f"({scenario.stderr_differs}) — drop the note"
+                        f"    rust did not refuse with {scenario.refusal!r}; it said "
+                        f"{rs.stderr.strip()!r}"
                     )
-            elif scenario.stderr_cut_at:
-                if scenario.stderr_cut_at not in py.stderr:
-                    problems.append(
-                        f"    python's stderr never reaches {scenario.stderr_cut_at!r}, so "
-                        "this scenario is cutting at a boundary that no longer exists"
-                    )
-                else:
-                    want = py.stderr.split(scenario.stderr_cut_at, 1)[0]
-                    got = rs.stderr
-                    for pattern, _why in scenario.stderr_mask:
-                        want = re.sub(pattern, "<masked>", want)
-                        got = re.sub(pattern, "<masked>", got)
+                if scenario.same_stderr:
+                    want, got = _masked(py.stderr, scenario), _masked(rs.stderr, scenario)
                     if want != got:
-                        problems.append(
-                            f"    stderr differs before {scenario.stderr_cut_at!r}:"
-                        )
+                        problems.append("    stderr differs:")
                         problems.append(f"      python {want!r}")
                         problems.append(f"      rust   {got!r}")
-            elif _masked(py.stderr, scenario) != _masked(rs.stderr, scenario):
-                problems.append("    stderr differs:")
-                problems.append(f"      python {py.stderr!r}")
-                problems.append(f"      rust   {rs.stderr!r}")
-        problems.extend(_diff_trees(py_root, rs_root, scenario.ignore))
+            else:
+                if py.returncode != 0:
+                    problems.append(
+                        f"    python failed ({py.returncode}) and the scenario does not say so — "
+                        f"{py.stderr.strip()}"
+                    )
+                if scenario.stderr_differs:
+                    if py.stderr == rs.stderr:
+                        problems.append(
+                            "    stderr now MATCHES, but the scenario still says it differs "
+                            f"({scenario.stderr_differs}) — drop the note"
+                        )
+                elif scenario.stderr_cut_at:
+                    if scenario.stderr_cut_at not in py.stderr:
+                        problems.append(
+                            f"    python's stderr never reaches {scenario.stderr_cut_at!r}, so "
+                            "this scenario is cutting at a boundary that no longer exists"
+                        )
+                    else:
+                        want = py.stderr.split(scenario.stderr_cut_at, 1)[0]
+                        got = rs.stderr
+                        for pattern, _why in scenario.stderr_mask:
+                            want = re.sub(pattern, "<masked>", want)
+                            got = re.sub(pattern, "<masked>", got)
+                        if want != got:
+                            problems.append(
+                                f"    stderr differs before {scenario.stderr_cut_at!r}:"
+                            )
+                            problems.append(f"      python {want!r}")
+                            problems.append(f"      rust   {got!r}")
+                elif _masked(py.stderr, scenario) != _masked(rs.stderr, scenario):
+                    problems.append("    stderr differs:")
+                    problems.append(f"      python {py.stderr!r}")
+                    problems.append(f"      rust   {rs.stderr!r}")
+        one_sided = scenario.diverges.one_sided() if scenario.diverges else {}
+        problems.extend(_diff_trees(py_root, rs_root, {**scenario.ignore, **one_sided}))
         if scenario.facts is not None:
             py_facts, rs_facts = scenario.facts(py_root), scenario.facts(rs_root)
             if py_facts != rs_facts:
