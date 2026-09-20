@@ -147,6 +147,20 @@ fn a_stand_in_holds_exactly_the_bytes_it_was_given() {
     assert_eq!(left, ["awkward"]);
 }
 
+/// A copy of a real binary under another name, for the tests that need a program which is not
+/// a shell script — charter reads the file NAME to decide which harness a chat is.
+#[test]
+fn a_copied_program_runs_under_its_new_name() {
+    let dir = tempfile::tempdir().expect("a temp dir");
+
+    let prog = stand_in::copy_of(std::path::Path::new("/bin/echo"), dir.path(), "claude");
+
+    assert_eq!(prog, dir.path().join("claude"));
+    let out = Command::new(&prog).arg("hello").output().expect("it runs");
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hello");
+}
+
 /// A name with a directory in it lands where it was asked for, with the temporary file beside
 /// it rather than in the caller's directory — `git` hooks are written as `hooks/pre-receive`.
 #[test]

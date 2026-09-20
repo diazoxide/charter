@@ -648,9 +648,11 @@ mod tests {
 
         // `/bin/echo` named `claude` is what `Harness::of_command` reads, and it is the file
         // name that decides — so this is a Claude Code chat as far as the app is concerned.
+        // Copied through `stand_in::copy_of`, not `fs::copy`: this chat runs it the moment it
+        // is written, and a program this process copied through its own descriptor can lose
+        // to `ETXTBSY` (charter-app#81).
         let dir = tempfile::tempdir().expect("a directory");
-        let claude = dir.path().join("claude");
-        std::fs::copy("/bin/echo", &claude).expect("a program named claude");
+        let claude = stand_in::copy_of(std::path::Path::new("/bin/echo"), dir.path(), "claude");
 
         chats
             .start(

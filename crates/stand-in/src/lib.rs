@@ -44,28 +44,7 @@ use std::path::{Path, PathBuf};
 /// not be written has nothing to say about the subject.
 #[cfg(unix)]
 pub fn program(dir: &Path, name: &str, contents: &str) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt as _;
-
-    let path = dir.join(name);
-    // Beside the program, never in a temp directory of its own: `rename` is only atomic —
-    // only a rename at all — within one filesystem, and `/tmp` need not be the one the
-    // caller's directory is on.
-    let parent = path
-        .parent()
-        .unwrap_or_else(|| panic!("{} has a parent directory", path.display()));
-    let stem = path
-        .file_name()
-        .unwrap_or_else(|| panic!("{} names a file", path.display()))
-        .to_string_lossy()
-        .into_owned();
-    let beside = parent.join(format!(
-        ".{stem}.{}.{}.writing",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .expect("a clock after 1970")
-            .as_nanos()
-    ));
+    let (path, beside) = places(dir, name);
 
     // The write happens in the CHILD, which is the whole point: this process opens no
     // descriptor on the inode it is about to hand to `execve`, so there is none for a fork on
@@ -89,10 +68,72 @@ pub fn program(dir: &Path, name: &str, contents: &str) -> PathBuf {
         path.display()
     );
 
+    put_in_place(&beside, path)
+}
+
+/// A copy of an existing program — a real binary, where a shell script would not do — under
+/// `dir/name`, runnable, at its own path.
+///
+/// Same reasoning as [`program`]: `/bin/cp` does the writing, so this process never opens the
+/// copy for writing and no fork of it can be holding the copy open when it is run.
+#[cfg(unix)]
+pub fn copy_of(source: &Path, dir: &Path, name: &str) -> PathBuf {
+    let (path, beside) = places(dir, name);
+
+    let copied = std::process::Command::new("/bin/cp")
+        .arg(source)
+        .arg(&beside)
+        .env_clear()
+        .status()
+        .expect("/bin/cp runs");
+    assert!(
+        copied.success(),
+        "{} was not copied to {}: {copied}",
+        source.display(),
+        path.display()
+    );
+
+    put_in_place(&beside, path)
+}
+
+/// Where the program goes, and where it is written first.
+///
+/// Beside the program, never in a temp directory of its own: `rename` is only atomic — only a
+/// rename at all — within one filesystem, and `/tmp` need not be the one the caller's
+/// directory is on.
+#[cfg(unix)]
+fn places(dir: &Path, name: &str) -> (PathBuf, PathBuf) {
+    let path = dir.join(name);
+    let parent = path
+        .parent()
+        .unwrap_or_else(|| panic!("{} has a parent directory", path.display()))
+        .to_path_buf();
+    let stem = path
+        .file_name()
+        .unwrap_or_else(|| panic!("{} names a file", path.display()))
+        .to_string_lossy()
+        .into_owned();
+    let beside = parent.join(format!(
+        ".{stem}.{}.{}.writing",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("a clock after 1970")
+            .as_nanos()
+    ));
+    (path, beside)
+}
+
+#[cfg(unix)]
+fn put_in_place(beside: &Path, path: PathBuf) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt as _;
+
     // `chmod` takes a path and opens nothing, so it is safe to do from here.
-    std::fs::set_permissions(&beside, std::fs::Permissions::from_mode(0o755))
+    std::fs::set_permissions(beside, std::fs::Permissions::from_mode(0o755))
         .unwrap_or_else(|e| panic!("{} is made runnable: {e}", beside.display()));
-    std::fs::rename(&beside, &path)
+    // And the rename is the OTHER half: it never truncates whatever is at `path` now, which
+    // may be a program another chat is still running (charter-app#39).
+    std::fs::rename(beside, &path)
         .unwrap_or_else(|e| panic!("{} is put in place: {e}", path.display()));
     path
 }
