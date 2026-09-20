@@ -190,6 +190,18 @@ class Scenario:
     #: still has to match byte for byte. `python_only_items`' mirror, and held to the same rule:
     #: a pattern that matches nothing fails the scenario, so the note cannot outlive the line.
     rust_only_lines: list = field(default_factory=list)
+    #: Exactly what those lines SAID, masks applied, as one block with a trailing newline.
+    #:
+    #: **Required whenever `rust_only_lines` is set**, and that requirement is the whole point.
+    #: `rust_only_lines` is a set of regexes that DELETE; on its own it says "charter does not
+    #: print this" and nothing at all about what charter-app printed instead. `save`'s
+    #: directory breakdown — the block the 2026-09-12 incident's write-up calls the whole
+    #: check, the one thing that would have shown a stray `uv.lock` going to `main` — was
+    #: matched by `^• +\d+ {2}` and thrown away, so the only thing that had ever read its
+    #: counts, its ordering or its directory names was a Rust unit test asserting that the
+    #: Rust code does what the Rust code does. The differential is what compares two
+    #: implementations; a line it deletes unread is outside it (M2.15).
+    rust_only_block: str = ""
     #: What each side's plane must agree on that is not a file the tree comparison can read
     #: byte for byte — a clone's branch, commit and config, which live under a `.git` whose
     #: index and reflogs carry timestamps and inode numbers. Run against each plane after the
@@ -200,6 +212,10 @@ class Scenario:
     #: A refusal whose WORDS are ported too: stderr is then compared byte for byte, as it
     #: is for a success, rather than only searched for `refusal`.
     same_stderr: bool = False
+
+    #: Why this scenario's plane `origin` is a local path rather than a URL on a forge charter
+    #: knows — see `_forge_trap` below, which is where the rest of this is explained.
+    local_origin_why: str = ""
 
     def rust_args(self) -> list[str]:
         return self.rust if self.rust is not None else self.python
@@ -476,24 +492,30 @@ def _python_only(stderr: str, items: list) -> tuple[str, list[str]]:
     return text, [items[i][0] for i, h in enumerate(hit) if not h]
 
 
-def _rust_only(stderr: str, rules: list) -> tuple[str, list[str]]:
-    """*stderr* without the lines the Rust side alone prints, and the patterns that matched
-    nothing.
+def _rust_only(stderr: str, rules: list) -> tuple[str, str, list[str]]:
+    """*stderr* without the lines the Rust side alone prints, THOSE LINES, and the patterns
+    that matched nothing.
 
     Whole LINES, not substrings: what the Rust `save` adds is a block of its own — the
     directory breakdown of what is about to be committed — and removing it has to leave every
     sentence charter also writes exactly as it was.
+
+    The removed lines are returned rather than dropped on the floor, because something has to
+    read them: see `Scenario.rust_only_block`. In their original order, so the block's
+    ordering — biggest directory first, ties by name — is part of what is compared.
     """
     kept: list[str] = []
+    taken: list[str] = []
     seen = {pattern: False for pattern, _why in rules}
     for line in stderr.splitlines(keepends=True):
         for pattern, _why in rules:
             if re.search(pattern, line):
                 seen[pattern] = True
+                taken.append(line)
                 break
         else:
             kept.append(line)
-    return "".join(kept), [p for p, hit in seen.items() if not hit]
+    return "".join(kept), "".join(taken), [p for p, hit in seen.items() if not hit]
 
 
 def _opencode_already_installed(root: Path) -> None:
@@ -1777,6 +1799,62 @@ def _plane_repo(root: Path, *, origin: "str | None" = PLANE_ORIGIN, rewrite: boo
     return bare
 
 
+#: A remote that is a path on this machine rather than a URL on a forge. `file://` is what the
+#: `insteadOf` rewrite produces; a bare path is what someone writes by hand.
+LOCAL_REMOTE = re.compile(r"^(file://|/|\.{1,2}/)")
+
+
+def _forge_trap(root: Path, side: str, scenario: Scenario) -> list[str]:
+    """Refuse a scenario whose plane `origin` resolved to a local path without saying so.
+
+    **The trap this closes, in full, because it is silent and it is easy to fall into.**
+
+    A differential scenario cannot push to a real forge, so it stands a bare repository up
+    beside the plane and rewrites the forge's URL onto it with `url.<local>.insteadOf`. But
+    `git remote get-url` — which is how `planegit.origin_https` reads the plane's remote —
+    **applies `insteadOf`**. So if the rewrite is keyed on the URL that is actually in
+    `.git/config`, charter reads back `file:///…`, cannot place it on any forge it knows, and
+    answers "there is no forge here" rather than pushing. Both implementations answer that
+    identically. The scenario is GREEN, the diff is empty, and neither side ever entered the
+    code the scenario was written for. Measured on this suite: keyed the other way — rewrite on
+    the HTTPS base, `origin` left in the SSH form — `get-url` hands back the SSH URL, charter
+    does the HTTPS rewrite itself, and git maps the result onto the bare repository.
+
+    `env_clear()` in the Rust git runner does not protect against it: the rewrite arrives
+    through CONFIG, not the environment, and `HOME` is passed to every git child on purpose
+    (`worktree::git`'s module docs say why), so `~/.gitconfig` reaches every call charter makes.
+
+    So the origin is measured here, with the side's own `$HOME`, exactly as charter will see
+    it — before the command runs, because the command may write git config of its own. A local
+    answer is a scenario that is probably not testing what it says; it passes only if it
+    declares `local_origin_why`. And a `local_origin_why` on a scenario whose origin is NOT
+    local fails too, so the note cannot outlive what it records.
+    """
+    if not (root / ".git").exists():
+        return []
+    done = subprocess.run(
+        ["git", "-C", str(root), "remote", "get-url", "origin"],
+        capture_output=True, text=True,
+        env={**FORGE_ENV, "HOME": str(root.parent / "home")},
+    )
+    origin = done.stdout.strip() if done.returncode == 0 else ""
+    local = bool(origin) and bool(LOCAL_REMOTE.match(origin))
+    if local and not scenario.local_origin_why:
+        return [
+            f"    {side}'s plane origin resolves to {origin!r} — a path on this machine, not a "
+            "forge charter can place. Every forge answer this scenario compares is 'there is "
+            "no forge here', on both sides, so it proves nothing. Key url.insteadOf on the "
+            "HTTPS base and leave origin in the SSH form (see _plane_repo), or set "
+            "local_origin_why if a local origin IS the case under test."
+        ]
+    if scenario.local_origin_why and not local:
+        return [
+            f"    {side}'s plane origin is {origin!r}, which is not local, but the scenario "
+            "says it is (local_origin_why) — drop the note"
+        ]
+    return []
+
+
 def _pending(root: Path) -> None:
     """Two memories and a file nobody meant to commit — the shape of the 2026-09-12 incident."""
     for rel, text in (
@@ -1795,7 +1873,38 @@ def _a_plane_with_work_pending(root: Path) -> None:
 
 
 def _a_plane_with_nothing_pending(root: Path) -> None:
+    """Nothing staged at all — and so, deliberately, NO breakdown.
+
+    The scenario this feeds declares no `rust_only_lines`, which is what holds charter-app to
+    printing nothing here: its stderr is compared to charter's byte for byte, so a breakdown
+    over an empty commit — "0 file(s) across 0 directories" — fails it. The absence is tested
+    by the ordinary comparison rather than by a rule of its own.
+    """
     _plane_repo(root)
+
+
+def _a_plane_with_one_file_pending(root: Path) -> None:
+    _plane_repo(root)
+    path = root / "personas" / "steward" / "memory" / "m.md"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("# a memory\n\nbody\n")
+
+
+def _a_plane_with_work_in_more_directories_than_the_breakdown_lists(root: Path) -> None:
+    """Eighteen files across fifteen directories, two of them holding more than one file.
+
+    More than `planegit::BREAKDOWN_ROWS`, so `save` lists twelve and says how many it did not
+    — a branch no scenario had ever entered. The uneven counts are what make the ordering
+    visible: sorted biggest-first, `notes/d01` and `notes/d02` come before a directory whose
+    name sorts ahead of both.
+    """
+    _plane_repo(root)
+    for i in range(1, 15):
+        directory = root / "notes" / f"d{i:02d}"
+        directory.mkdir(parents=True, exist_ok=True)
+        for j in range({1: 3, 2: 2}.get(i, 1)):
+            (directory / f"n{j}.md").write_text(f"# note {i}.{j}\n")
+    (root / "uv.lock").write_text("some agent's local uv run left this here\n")
 
 
 def _a_plane_that_is_not_a_repository(root: Path) -> None:
@@ -1925,11 +2034,64 @@ SAVE_MASKS = [
 #: The block the Rust `save` prints and charter does not: what is about to be committed, by
 #: directory. charter prints only the count, afterwards — and a count is not a description
 #: (`crates/charter-core/src/planegit.rs` carries the incident this comes from).
+#:
+#: These patterns only say WHICH lines are charter-app's alone. What they SAID is
+#: `rust_only_block` below, which every scenario setting these must declare — deleting the
+#: breakdown unread is how it stayed outside the differential for a whole milestone (M2.15).
 SAVE_BREAKDOWN = [
     (r"^! charter save commits everything pending in ",
      "the headline of the Rust save's pre-commit breakdown"),
     (r"^• +\d+ {2}", "one directory row of that breakdown"),
 ]
+
+#: The same, for a plane with more directories changed than the breakdown lists rows. The tail
+#: is a separate pattern because a pattern that matches nothing fails the scenario: only a
+#: plane with more than `BREAKDOWN_ROWS` directories prints it.
+SAVE_BREAKDOWN_TRUNCATED = [
+    *SAVE_BREAKDOWN,
+    (r"^• +… and \d+ more directories\. The whole list: ",
+     "the breakdown's tail, naming how many directories it did not list"),
+]
+
+#: What that block says for `_pending`'s three files — two memories and the stray `uv.lock`
+#: that is the 2026-09-12 incident's own shape. A file at the top of the plane is named rather
+#: than counted under a bare `.`, because that stray file is the whole reason this block
+#: exists; the rows are biggest-first and then by name, so with three ones it is by name.
+BREAKDOWN_OF_THE_PENDING_WORK = """\
+! charter save commits everything pending in <masked> — 3 file(s) across 3 directories, not only what you meant:
+•       1  (the plane root)
+•       1  personas/_shared/memory
+•       1  personas/steward/memory
+"""
+
+#: One file in one directory: the smallest breakdown there is, and the one that shows the
+#: headline's counts are counts rather than the length of a list that happens to agree.
+BREAKDOWN_OF_ONE_FILE = """\
+! charter save commits everything pending in <masked> — 1 file(s) across 1 directories, not only what you meant:
+•       1  personas/steward/memory
+"""
+
+#: Eighteen files across fifteen directories. Twelve rows and then the tail, which is the
+#: branch nothing had ever run: `BREAKDOWN_ROWS` is 12 and every scenario until now changed
+#: three directories. Ordering is load-bearing here — `notes/d01` (3 files) and `notes/d02`
+#: (2) come before `(the plane root)` although the name sorts first, and the twelve that ARE
+#: listed are the twelve biggest rather than the first twelve found.
+BREAKDOWN_OF_MORE_DIRECTORIES_THAN_IT_LISTS = """\
+! charter save commits everything pending in <masked> — 18 file(s) across 15 directories, not only what you meant:
+•       3  notes/d01
+•       2  notes/d02
+•       1  (the plane root)
+•       1  notes/d03
+•       1  notes/d04
+•       1  notes/d05
+•       1  notes/d06
+•       1  notes/d07
+•       1  notes/d08
+•       1  notes/d09
+•       1  notes/d10
+•       1  notes/d11
+•   … and 3 more directories. The whole list: git -C <masked> diff --cached --name-only
+"""
 
 #: The plane's own `.git`, whose index, reflogs and object timestamps no two runs share.
 #: `_plane_facts` compares what it SAYS instead.
@@ -1960,6 +2122,7 @@ SAVE_SCENARIOS = [
         pins_the_clock=False,
         stderr_mask=SAVE_MASKS,
         rust_only_lines=SAVE_BREAKDOWN,
+        rust_only_block=BREAKDOWN_OF_THE_PENDING_WORK,
         ignore=PLANE_GIT,
         facts=_plane_facts,
         writes_outside=PUSHED_TO,
@@ -1972,10 +2135,40 @@ SAVE_SCENARIOS = [
         pins_the_clock=False,
         stderr_mask=SAVE_MASKS,
         rust_only_lines=SAVE_BREAKDOWN,
+        rust_only_block=BREAKDOWN_OF_THE_PENDING_WORK,
         ignore=PLANE_GIT,
         facts=_plane_facts,
     ),
     Scenario(
+        name="save-with-one-file-pending-names-the-one-directory",
+        plane="daily",
+        setup=_a_plane_with_one_file_pending,
+        python=["save", "one save"],
+        pins_the_clock=False,
+        stderr_mask=SAVE_MASKS,
+        rust_only_lines=SAVE_BREAKDOWN,
+        rust_only_block=BREAKDOWN_OF_ONE_FILE,
+        ignore=PLANE_GIT,
+        facts=_plane_facts,
+        writes_outside=PUSHED_TO,
+    ),
+    Scenario(
+        name="save-with-more-directories-pending-than-the-breakdown-lists",
+        plane="daily",
+        setup=_a_plane_with_work_in_more_directories_than_the_breakdown_lists,
+        python=["save", "one save"],
+        pins_the_clock=False,
+        stderr_mask=SAVE_MASKS,
+        rust_only_lines=SAVE_BREAKDOWN_TRUNCATED,
+        rust_only_block=BREAKDOWN_OF_MORE_DIRECTORIES_THAN_IT_LISTS,
+        ignore=PLANE_GIT,
+        facts=_plane_facts,
+        writes_outside=PUSHED_TO,
+    ),
+    Scenario(
+        # No `rust_only_lines`, on purpose: charter-app prints no breakdown when there is
+        # nothing staged, and with nothing declared its stderr is compared to charter's byte
+        # for byte. A breakdown over an empty commit fails here.
         name="save-on-a-clean-tree-commits-nothing",
         plane="daily",
         setup=_a_plane_with_nothing_pending,
@@ -1992,6 +2185,7 @@ SAVE_SCENARIOS = [
         pins_the_clock=False,
         stderr_mask=SAVE_MASKS,
         rust_only_lines=SAVE_BREAKDOWN,
+        rust_only_block=BREAKDOWN_OF_THE_PENDING_WORK,
         ignore=PLANE_GIT,
         facts=_plane_facts,
         writes_outside=PUSHED_TO,
@@ -2002,8 +2196,14 @@ SAVE_SCENARIOS = [
         setup=_a_plane_whose_origin_is_on_no_forge_charter_knows,
         python=["save", "one save"],
         pins_the_clock=False,
+        local_origin_why="a local origin IS the case under test: charter cannot place it on "
+                         "any forge, so it commits and says it has nowhere to push. This is "
+                         "the ONE scenario allowed to read that way — in every other one it "
+                         "means the insteadOf rewrite swallowed the origin and both sides are "
+                         "agreeing about a code path neither entered (see _forge_trap)",
         stderr_mask=SAVE_MASKS,
         rust_only_lines=SAVE_BREAKDOWN,
+        rust_only_block=BREAKDOWN_OF_THE_PENDING_WORK,
         ignore=PLANE_GIT,
         facts=_plane_facts,
     ),
@@ -2033,6 +2233,7 @@ SAVE_SCENARIOS = [
         pins_the_clock=False,
         stderr_mask=SAVE_MASKS,
         rust_only_lines=SAVE_BREAKDOWN,
+        rust_only_block=BREAKDOWN_OF_THE_PENDING_WORK,
         ignore={**PLANE_GIT, ".charter/plane-push.json": PUSH_RECORD},
         facts=_plane_facts,
         writes_outside=PUSHED_TO,
@@ -2063,6 +2264,88 @@ SAVE_SCENARIOS = [
         pins_the_clock=False,
         ignore=PLANE_GIT,
         facts=_plane_facts,
+    ),
+]
+
+
+# M2.16: standing in a linked worktree of the plane, every command names the same plane
+# --------------------------------------------------------------------------------------------
+#
+# `charter.toml` is a TRACKED file, so a worktree cut from a committed plane gets its own copy
+# checked out and reads as a control plane of its own. Python has one resolver for this and
+# always has (`charter/root.py:find_root` → `_plane_of` → the MAIN working tree, which is what
+# `config.ROOT` is built from, for every command Python has). charter-app had two: `save` and
+# `git-policy` asked a `command_root` that took that step and everything else asked a `resolve`
+# that did not — so standing here, `charter save` named the plane and `charter ws remember`
+# wrote a memory into the worktree, which `git worktree remove` deletes. M2.16 made it one
+# walk; these two scenarios are what stops it becoming two again.
+#
+# **The worktree is at `<plane>/sandbox`, not under `workspaces/<ws>/.worktrees/`.** charter's
+# own layout puts worktrees inside a workspace, and `outermost` already hops out of an
+# enclosing plane's `workspaces/` — so in that layout both resolvers landed on the plane
+# anyway and the difference is invisible. A worktree anywhere else is the case that diverged,
+# and `git worktree add` will put one wherever it is told.
+#
+# **`$CHARTER_ROOT` is UNSET here, and these are the only scenarios in this suite that unset
+# it.** `_env` pins it for every other one, which pins the plane before either resolver walks
+# — so the walk this section is about had never been run by the differential at all.
+
+#: The two `.git`s that name absolute paths under the side's own directory: the plane's, which
+#: also carries the index and reflogs no two runs share, and the worktree's, which is a FILE
+#: reading `gitdir: <side>/plane/.git/worktrees/sandbox`.
+WORKTREE_GIT = {
+    ".git": "the index, the reflogs and the worktree registry carry timestamps, inodes and "
+            "absolute paths under the side's own directory",
+    "sandbox/.git": "a linked worktree's `.git` is a file naming the main tree by absolute "
+                    "path, which differs by side",
+}
+
+
+def _a_plane_and_a_worktree_cut_from_it(root: Path) -> None:
+    """The plane committed, and `git worktree add sandbox` standing beside it.
+
+    `charter.toml` is committed here — that is the whole shape: it is tracked in a real plane,
+    so the checkout into `sandbox/` carries it and the worktree looks like a plane.
+    """
+    side = root.parent
+    _identity(side)
+    _git(side, "init", "-q", "-b", "main", ".", cwd=root)
+    (root / ".gitignore").write_text(".charter/\n")
+    _git(side, "add", "-A", cwd=root)
+    _git(side, "commit", "-q", "-m", "the plane", cwd=root)
+    _git(side, "worktree", "add", "-q", "-b", "feature", "sandbox", cwd=root)
+
+
+WORKTREE_SCENARIOS = [
+    Scenario(
+        # The proof. Before M2.16 charter-app wrote the memory into `sandbox/workspaces/…`
+        # and charter wrote it into `workspaces/…`, so the tree comparison reports it twice:
+        # a file only python has, and a file only rust has.
+        name="remember-from-a-worktree-cut-from-the-plane-writes-to-the-plane",
+        plane="daily",
+        setup=_a_plane_and_a_worktree_cut_from_it,
+        python=["workspace", "remember", "The importer drops rows over 4 MB", "-w", "alpha",
+                "--no-sync"],
+        cwd="sandbox",
+        env={"CHARTER_ROOT": None},
+        ignore=WORKTREE_GIT,
+    ),
+    Scenario(
+        # The other half: `save`, from the same directory, resolving through the same walk.
+        # Its refusal is only reachable when the plane it resolved is the one the caller is
+        # NOT standing in, so a `save` that stopped taking the redirect would stop refusing —
+        # and the words are compared byte for byte, not just searched for.
+        name="save-from-a-worktree-cut-from-the-plane-refuses-and-names-both-trees",
+        plane="daily",
+        setup=_a_plane_and_a_worktree_cut_from_it,
+        python=["save", "one save"],
+        cwd="sandbox",
+        env={"CHARTER_ROOT": None},
+        pins_the_clock=False,
+        refusal="a linked worktree of it. Committing every change in a tree you are not in",
+        same_stderr=True,
+        stderr_mask=SAVE_MASKS,
+        ignore=WORKTREE_GIT,
     ),
 ]
 
@@ -2532,10 +2815,318 @@ NEWS_SCENARIOS = [
 ]
 
 
+# --------------------------------------------------------------------------------------- #
+# M2.8: handoff, and the workspace verbs that act on a workspace as a whole                 #
+# --------------------------------------------------------------------------------------- #
+#: A session id with no frame record under it, so Python's `workspace.launch_lock` — the rung
+#: this charter deliberately has no record for (`charter_core::active`) — answers nothing. The
+#: fixture's own `fixture-session-1` HAS a frame directory, and every scenario about a lock or
+#: a pointer would otherwise be comparing that divergence instead of the verb it names.
+FRESH_SESSION = "fresh-session-2"
+
+#: Why `charter handoff`'s last refusal differs. Everything in front of it is ported word for
+#: word (`same_stderr`); this one is the frame check, and the two implementations have
+#: different frames to report on — charter has a tmux frame and this binary has none at all,
+#: so it says so and prints the same command to run in a new terminal.
+HANDOFF_HAS_NO_FRAME = (
+    "charter opens the chat in a background window of its own tmux; this binary has no frame "
+    "and no channel into the app that opens one, so it always reaches the frame refusal. Both "
+    "print the command to run in a new terminal, and neither writes anything."
+)
+
+#: Why `remove`'s unreadable-clone refusal differs. Both refuse, both exit 2 and both name the
+#: clone; what follows `could not be read` is git's own sentence, and the two runners quote a
+#: different part of it.
+REMOVE_QUOTES_GIT = (
+    "both refuse and both name the clone; the words after `could not be read` are git's own, "
+    "and the two runners quote a different part of them."
+)
+
+#: The brief a handoff scenario approves. Two lines, so the first message is never a single
+#: word and the size bound is nowhere near.
+A_BRIEF = "# Retry the failed webhook deliveries\n\nThe queue is in workspaces/alpha/svc.\n"
+
+#: A credential-shaped brief, in the one spelling both classifiers read as a VALUE rather than
+#: a reference. The KIND is what the refusal names; the value never appears in it.
+A_BRIEF_WITH_A_SECRET = "# Rotate the key\n\nAPI_KEY=abcdefghij\n"
+
+
+def _a_session_lock(root: Path) -> None:
+    """A lock file for :data:`FRESH_SESSION`, so `unlock` has one to release."""
+    sessions = root / ".charter" / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    lock = sessions / f"{FRESH_SESSION}.lock"
+    lock.write_text("alpha\n")
+    lock.chmod(0o600)
+
+
+def _a_clone_charter_cannot_read(root: Path) -> None:
+    """A directory under `alpha` that looks like a clone and is not one.
+
+    A `.git` DIRECTORY is what both implementations read as a clone, and an empty one makes
+    `git status` fail — which is charter#917's whole case: a status that failed is not a clean
+    tree, and what the at-risk list is empty of is what `remove` deletes.
+    """
+    (root / "workspaces" / "alpha" / "broken" / ".git").mkdir(parents=True)
+
+
+M28_SCENARIOS = [
+    # ---- charter handoff: every refusal in front of the open ----------------------------
+    Scenario(
+        name="handoff-refuses-a-name-that-cannot-be-a-workspace",
+        plane="daily",
+        python=["handoff", "../../esc"],
+        pins_the_clock=False,
+        stdin=A_BRIEF,
+        refusal="cannot name a workspace",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="handoff-refuses-vision-without-create",
+        plane="daily",
+        python=["handoff", "alpha", "--vision", "ship it"],
+        pins_the_clock=False,
+        stdin=A_BRIEF,
+        refusal="--vision describes a workspace this call creates",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="handoff-refuses-create-without-vision",
+        plane="daily",
+        python=["handoff", "brand-new", "--create"],
+        pins_the_clock=False,
+        stdin=A_BRIEF,
+        refusal="--create needs --vision",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="handoff-refuses-create-over-a-workspace-that-is-already-there",
+        plane="daily",
+        python=["handoff", "alpha", "--create", "--vision", "ship it"],
+        pins_the_clock=False,
+        stdin=A_BRIEF,
+        refusal="already exists, and --create only makes a new one",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="handoff-refuses-a-workspace-this-plane-does-not-have",
+        plane="daily",
+        python=["handoff", "nowhere"],
+        pins_the_clock=False,
+        stdin=A_BRIEF,
+        refusal="no workspace 'nowhere' on this plane",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="handoff-refuses-a-persona-this-plane-does-not-define",
+        plane="daily",
+        python=["handoff", "alpha", "--persona", "ghost"],
+        pins_the_clock=False,
+        stdin=A_BRIEF,
+        refusal="no persona 'ghost'",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="handoff-refuses-an-empty-brief",
+        plane="daily",
+        python=["handoff", "alpha"],
+        pins_the_clock=False,
+        stdin="   \n\t\n",
+        refusal="the brief on stdin is empty",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="handoff-refuses-a-credential-shaped-brief-by-kind",
+        plane="daily",
+        python=["handoff", "alpha"],
+        pins_the_clock=False,
+        stdin=A_BRIEF_WITH_A_SECRET,
+        refusal="the brief looks like it carries a secret",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="handoff-with-nothing-to-open-a-chat-in-prints-the-command-and-writes-nothing",
+        plane="daily",
+        python=["handoff", "alpha"],
+        pins_the_clock=False,
+        stdin=A_BRIEF,
+        refusal="Run this in a new terminal instead:",
+        stderr_differs=HANDOFF_HAS_NO_FRAME,
+    ),
+    # ---- charter workspace live ---------------------------------------------------------
+    Scenario(
+        name="workspace-live-shares-a-workspaces-manifest-and-memory",
+        plane="daily",
+        python=["workspace", "live", "beta"],
+        pins_the_clock=False,
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-live-off-makes-it-private-again",
+        plane="daily",
+        python=["workspace", "live", "alpha", "--off"],
+        pins_the_clock=False,
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-live-on-a-workspace-that-is-already-live-changes-nothing",
+        plane="daily",
+        python=["workspace", "live", "alpha"],
+        pins_the_clock=False,
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-live-refuses-a-workspace-this-plane-does-not-have",
+        plane="daily",
+        python=["workspace", "live", "nowhere"],
+        pins_the_clock=False,
+        refusal="no workspace 'nowhere'",
+        same_stderr=True,
+    ),
+    # ---- charter workspace remove -------------------------------------------------------
+    Scenario(
+        name="workspace-remove-takes-the-workspace-and-its-clones",
+        plane="daily",
+        python=["workspace", "remove", "beta"],
+        pins_the_clock=False,
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-remove-reports-the-open-todos-it-discards-and-removes-anyway",
+        plane="daily",
+        python=["workspace", "remove", "alpha"],
+        pins_the_clock=False,
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-remove-refuses-a-clone-it-could-not-read",
+        plane="daily",
+        setup=_a_clone_charter_cannot_read,
+        python=["workspace", "remove", "alpha"],
+        pins_the_clock=False,
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        refusal="Refusing to remove 'alpha' — this would discard work:",
+        stderr_differs=REMOVE_QUOTES_GIT,
+    ),
+    Scenario(
+        name="workspace-remove-refuses-a-workspace-this-plane-does-not-have",
+        plane="daily",
+        python=["workspace", "remove", "nowhere"],
+        pins_the_clock=False,
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        refusal="no workspace 'nowhere'",
+        same_stderr=True,
+    ),
+    # ---- charter workspace use / unlock / default ----------------------------------------
+    Scenario(
+        name="workspace-use-writes-the-session-pointer-and-takes-the-lock",
+        plane="daily",
+        python=["workspace", "use", "beta"],
+        pins_the_clock=False,
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        ignore={
+            f".charter/persona-state/trace/{FRESH_SESSION}.jsonl": (
+                "charter records every selection in its trace store; this binary writes no "
+                "trace at all, which is a whole store and not this command's to port"
+            )
+        },
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-use-refuses-a-name-no-workspace-has",
+        plane="daily",
+        python=["workspace", "use", "nowhere"],
+        pins_the_clock=False,
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        refusal="no workspace named 'nowhere'",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-unlock-releases-this-sessions-lock",
+        plane="daily",
+        setup=_a_session_lock,
+        python=["workspace", "unlock"],
+        pins_the_clock=False,
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-unlock-with-no-lock-says-there-was-nothing-to-unlock",
+        plane="daily",
+        python=["workspace", "unlock"],
+        pins_the_clock=False,
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-default-nominates-a-workspace",
+        plane="daily",
+        python=["workspace", "default", "beta"],
+        pins_the_clock=False,
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-default-with-no-name-says-none-is-declared",
+        plane="daily",
+        python=["workspace", "default"],
+        pins_the_clock=False,
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-default-clear-with-nothing-declared-removes-nothing",
+        plane="daily",
+        python=["workspace", "default", "--clear"],
+        pins_the_clock=False,
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-default-refuses-a-value-that-is-not-a-workspace-name",
+        plane="daily",
+        python=["workspace", "default", "../../esc"],
+        pins_the_clock=False,
+        refusal="is not a workspace name",
+        same_stderr=True,
+    ),
+    # ---- charter persona default ---------------------------------------------------------
+    Scenario(
+        name="persona-default-declares-the-front-door-in-charter-toml",
+        plane="daily",
+        python=["persona", "default", "devops"],
+        pins_the_clock=False,
+        same_stderr=True,
+    ),
+    Scenario(
+        name="persona-default-with-no-name-says-none-is-declared",
+        plane="daily",
+        python=["persona", "default"],
+        pins_the_clock=False,
+        same_stderr=True,
+    ),
+    Scenario(
+        name="persona-default-clear-with-nothing-declared-rewrites-nothing",
+        plane="daily",
+        python=["persona", "default", "--clear"],
+        pins_the_clock=False,
+        same_stderr=True,
+    ),
+    Scenario(
+        name="persona-default-refuses-a-persona-this-plane-does-not-define",
+        plane="daily",
+        python=["persona", "default", "ghost"],
+        pins_the_clock=False,
+        refusal="no persona 'ghost'",
+        same_stderr=True,
+    ),
+]
+
+
 SCENARIOS = [
     *INIT_SCENARIOS,
     *LADDER_SCENARIOS,
     *NEWS_SCENARIOS,
+    *M28_SCENARIOS,
     Scenario(
         name="harness-list-refuses-every-name-that-is-a-charter-command",
         plane="minimal",
@@ -3188,6 +3779,7 @@ SCENARIOS = [
         stderr_mask=[ABSOLUTE_PATHS],
     ),
     *SAVE_SCENARIOS,
+    *WORKTREE_SCENARIOS,
 ]
 
 
@@ -3408,6 +4000,10 @@ def check(scenario: Scenario, binary: Path) -> bool:
             scenario.setup(rs_root)
         py_before = _outside(scratch, "python", py_root)
         rs_before = _outside(scratch, "rust", rs_root)
+        # BEFORE the command: `git-policy --apply` writes git config, and what is being asked
+        # is what charter is about to read, not what it left behind.
+        trap = (_forge_trap(py_root, "python", scenario)
+                + _forge_trap(rs_root, "rust", scenario))
 
         py = _run([sys.executable, "-m", "charter", *scenario.python], py_root, py_home, py_pins,
                   scenario.stdin, scenario.env, scenario.cwd)
@@ -3417,7 +4013,7 @@ def check(scenario: Scenario, binary: Path) -> bool:
         rs = _run(rust_argv, rs_root, rs_home, rs_pins, scenario.stdin, scenario.env,
                   scenario.cwd)
 
-        problems: list[str] = []
+        problems: list[str] = list(trap)
         if scenario.python_only_items:
             text, stale = _python_only(py.stderr, scenario.python_only_items)
             for pattern in stale:
@@ -3427,13 +4023,33 @@ def check(scenario: Scenario, binary: Path) -> bool:
                 )
             py = subprocess.CompletedProcess(py.args, py.returncode, py.stdout, text)
         if scenario.rust_only_lines:
-            text, stale = _rust_only(rs.stderr, scenario.rust_only_lines)
+            text, block, stale = _rust_only(rs.stderr, scenario.rust_only_lines)
             for pattern in stale:
                 problems.append(
                     f"    rust no longer prints {pattern!r}, but the scenario still says it is "
                     "rust's alone — drop the note"
                 )
+            if not scenario.rust_only_block:
+                problems.append(
+                    "    this scenario deletes lines from rust's stderr and says nothing about "
+                    "what they said — set rust_only_block to the block it takes out, or the "
+                    "differential is not looking at it at all"
+                )
+            else:
+                said = _masked(block, scenario)
+                if said != scenario.rust_only_block:
+                    problems.append("    the block rust prints and charter does not differs:")
+                    problems.extend(
+                        f"      {line}" for line in difflib.unified_diff(
+                            scenario.rust_only_block.splitlines(),
+                            said.splitlines(), "declared", "rust", lineterm="", n=2)
+                    )
             rs = subprocess.CompletedProcess(rs.args, rs.returncode, rs.stdout, text)
+        elif scenario.rust_only_block:
+            problems.append(
+                "    rust_only_block is set but no rust_only_lines pattern takes any line out, "
+                "so the block it declares is compared against nothing"
+            )
         if py.returncode != rs.returncode:
             problems.append(
                 f"    exit status differs: python {py.returncode} "
