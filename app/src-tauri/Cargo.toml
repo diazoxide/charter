@@ -44,4 +44,5 @@ workspace = true
 e2e = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver"]
 
 [dev-dependencies]
+stand-in.workspace = true
 tempfile.workspace = true

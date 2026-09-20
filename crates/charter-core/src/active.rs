@@ -255,6 +255,25 @@ impl WorkspaceRung {
     }
 }
 
+/// The sentence `charter status` prints for "where did this workspace come from" —
+/// `charter/workspace.py:source`, whose last two lines [`WorkspaceRung::label`] cannot
+/// reach on its own.
+///
+/// **The last rung says WHY nothing answered, not just that nothing did.** A shell with no
+/// pane id has no terminal pointer to fall back on, so every session in it starts on
+/// `default` however many times the operator picks — and the operator's own complaint was
+/// "why are you in default workspace again?", asked of a surface that asserted an answer
+/// with no reason (ADR 0013's second rule). The two spellings are told apart by the pane id
+/// and by nothing else, which is exactly what Python's `if not _terminal_id()` asks.
+pub fn workspace_source(ids: &Ids, rung: WorkspaceRung) -> String {
+    match rung {
+        WorkspaceRung::PlaneDefault | WorkspaceRung::BuiltIn if ids.terminal.is_none() => {
+            "default (no pane id — nothing persists between sessions)".to_string()
+        }
+        other => other.label().to_string(),
+    }
+}
+
 /// The workspace a command acts on, and which rung said so.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ActiveWorkspace {

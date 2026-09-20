@@ -19,6 +19,7 @@ clap.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+stand-in.workspace = true
 tempfile.workspace = true
 
 [lints]

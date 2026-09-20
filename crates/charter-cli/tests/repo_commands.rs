@@ -613,13 +613,10 @@ fn stub_gh(w: &World, authed: bool) {
         log = log.display(),
         bin = w.bin.display(),
     );
-    let gh = w.bin.join("gh");
-    std::fs::write(&gh, script).unwrap();
-    std::fs::set_permissions(
-        &gh,
-        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
-    )
-    .unwrap();
+    // Through `stand_in::program`: the command under test runs this the moment it is
+    // written, and a program this process wrote through its own descriptor can lose to
+    // `ETXTBSY` (charter-app#81).
+    stand_in::program(&w.bin, "gh", &script);
 }
 
 #[test]
