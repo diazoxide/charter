@@ -213,6 +213,23 @@ class Scenario:
     #: is for a success, rather than only searched for `refusal`.
     same_stderr: bool = False
 
+    #: Literal strings NEITHER side may print, on stdout or on stderr.
+    #:
+    #: charter's rule for a credential is that it is refused **by KIND and never by the
+    #: matched text** — `secretshape`'s module docstring, `handoff.rs`'s refusal and the
+    #: comment over `A_BRIEF_WITH_A_SECRET` all say so, and until this field existed nothing
+    #: checked it. A refusal that quoted the value would put the credential in the very
+    #: transcript the refusal exists to keep it out of, and both implementations would have
+    #: agreed about it, so `same_stderr` cannot see it either: two sides leaking the same
+    #: secret match byte for byte.
+    #:
+    #: **Every needle must actually be in the input**, or the scenario fails as vacuous. A
+    #: string that is not in the brief on stdin and not in a file of the plane the command
+    #: is about to read is one neither side could have printed, and asserting its absence
+    #: would be a test that passes against an implementation that prints nothing at all —
+    #: the shape `stderr_cut_at`'s docstring already records this suite getting wrong once.
+    never_says: tuple[str, ...] = ()
+
     #: Why this scenario's plane `origin` is a local path rather than a URL on a forge charter
     #: knows — see `_forge_trap` below, which is where the rest of this is explained.
     local_origin_why: str = ""
@@ -1917,13 +1934,16 @@ def _a_plane_whose_origin_is_on_no_forge_charter_knows(root: Path) -> None:
     _pending(root)
 
 
+#: The credential planted in a memory file below. Spelled once, so the scenario's
+#: `never_says` and the file it is written into cannot drift apart.
+THE_TOKEN_IN_THAT_MEMORY = "ghp_0123456789abcdefghijklmnopqrstuvwxyz"
+
+
 def _a_plane_with_a_secret_in_a_memory_file(root: Path) -> None:
     _plane_repo(root)
     store = root / "personas" / "steward" / "memory"
     store.mkdir(parents=True, exist_ok=True)
-    (store / "leak.md").write_text(
-        "# the deploy\n\ntoken: ghp_0123456789abcdefghijklmnopqrstuvwxyz\n"
-    )
+    (store / "leak.md").write_text(f"# the deploy\n\ntoken: {THE_TOKEN_IN_THAT_MEMORY}\n")
 
 
 def _a_plane_whose_operator_signs_every_commit(root: Path) -> None:
@@ -2214,6 +2234,9 @@ SAVE_SCENARIOS = [
         python=["save"],
         pins_the_clock=False,
         refusal="Refusing to save — a secret-shaped value in a memory/ref file:",
+        # The refusal names the FILE and the kind. It reads the file to decide, so the one
+        # thing it must not do is repeat what it found there.
+        never_says=(THE_TOKEN_IN_THAT_MEMORY,),
         ignore=PLANE_GIT,
         facts=_plane_facts,
     ),
@@ -2847,8 +2870,13 @@ REMOVE_QUOTES_GIT = (
 A_BRIEF = "# Retry the failed webhook deliveries\n\nThe queue is in workspaces/alpha/svc.\n"
 
 #: A credential-shaped brief, in the one spelling both classifiers read as a VALUE rather than
-#: a reference. The KIND is what the refusal names; the value never appears in it.
+#: a reference. The KIND is what the refusal names; the value never appears in it — which the
+#: scenario's `never_says` is what actually checks.
 A_BRIEF_WITH_A_SECRET = "# Rotate the key\n\nAPI_KEY=abcdefghij\n"
+
+#: The value inside it, which is the half a refusal may not repeat. Spelled apart from the
+#: brief so the assertion cannot silently stop naming the thing the brief carries.
+THE_VALUE_IN_THAT_BRIEF = "abcdefghij"
 
 
 def _a_session_lock(root: Path) -> None:
@@ -2943,6 +2971,9 @@ M28_SCENARIOS = [
         stdin=A_BRIEF_WITH_A_SECRET,
         refusal="the brief looks like it carries a secret",
         same_stderr=True,
+        # The whole point of naming a KIND. `same_stderr` cannot stand in for this: two
+        # implementations that both quoted the credential would match each other exactly.
+        never_says=(THE_VALUE_IN_THAT_BRIEF,),
     ),
     Scenario(
         name="handoff-with-nothing-to-open-a-chat-in-prints-the-command-and-writes-nothing",
@@ -3983,6 +4014,51 @@ def _diff_file(left: Path, right: Path) -> list[str]:
     return [f"      {line}" for line in lines[:24]]
 
 
+def _planted(scenario: Scenario, root: Path) -> set[str]:
+    """Which of `never_says`' needles this scenario actually puts in front of the command.
+
+    Looked for where a command can read it: the brief on stdin, and the bytes of the plane
+    copy as it stands after `setup` and before the command runs. A needle found in neither
+    is one no implementation could print, which is what makes asserting its absence
+    meaningless — so the caller reports it rather than passing.
+    """
+    found = {needle for needle in scenario.never_says if needle in scenario.stdin}
+    outstanding = [n for n in scenario.never_says if n not in found]
+    if not outstanding:
+        return found
+    for path in root.rglob("*"):
+        if not path.is_file() or path.is_symlink():
+            continue
+        try:
+            text = path.read_text()
+        except (OSError, UnicodeDecodeError):
+            continue
+        found |= {needle for needle in outstanding if needle in text}
+    return found
+
+
+def _never_said(scenario: Scenario, planted: set[str],
+                py: subprocess.CompletedProcess,
+                rs: subprocess.CompletedProcess) -> list[str]:
+    """Neither side printed a needle — and each needle was really there to print."""
+    problems = []
+    for needle in scenario.never_says:
+        if needle not in planted:
+            problems.append(
+                f"    never_says {needle!r} is not in this scenario's stdin and not in its "
+                "plane, so nothing could have printed it — the assertion is vacuous"
+            )
+            continue
+        for side, run in (("python", py), ("rust", rs)):
+            for stream, text in (("stdout", run.stdout), ("stderr", run.stderr)):
+                if needle in text:
+                    problems.append(
+                        f"    {side} PRINTED THE SECRET on {stream}: {needle!r} — a "
+                        "credential is refused by KIND, never by the matched text"
+                    )
+    return problems
+
+
 def _masked(text: str, scenario: Scenario) -> str:
     """*text* with each of the scenario's masks blanked — what neither side's words decide."""
     for pattern, _why in scenario.stderr_mask:
@@ -4000,6 +4076,9 @@ def check(scenario: Scenario, binary: Path) -> bool:
             scenario.setup(rs_root)
         py_before = _outside(scratch, "python", py_root)
         rs_before = _outside(scratch, "rust", rs_root)
+        # Before the command, because a needle may be in a file the command is about to
+        # refuse over and a later look would find the plane already changed.
+        planted = _planted(scenario, py_root) if scenario.never_says else set()
         # BEFORE the command: `git-policy --apply` writes git config, and what is being asked
         # is what charter is about to read, not what it left behind.
         trap = (_forge_trap(py_root, "python", scenario)
@@ -4014,6 +4093,11 @@ def check(scenario: Scenario, binary: Path) -> bool:
                   scenario.cwd)
 
         problems: list[str] = list(trap)
+        # First, and on the RAW output: every note below rewrites a stream — a mask, a
+        # `rust_only_lines` deletion, a cut — and a secret is not less printed for having
+        # been deleted from the copy this suite compares.
+        if scenario.never_says:
+            problems.extend(_never_said(scenario, planted, py, rs))
         if scenario.python_only_items:
             text, stale = _python_only(py.stderr, scenario.python_only_items)
             for pattern in stale:

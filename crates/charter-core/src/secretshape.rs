@@ -29,6 +29,37 @@
 //! as `finditer` does. `['"]?` is dropped with it because it never changed an answer: a
 //! leading quote is itself non-blank, so the run it starts is at least as long as the run
 //! after it, and `\S{6,}` was the whole test.
+//!
+//! # The three character classes `regex` and CPython disagree about, and what is done here
+//!
+//! "Character for character" was true of the *pattern text* and false of what it matched.
+//! `\s`, `\S`, `\b` and `(?i)` all mean something different in `regex` than in CPython's `re`
+//! on a `str`, and M3 found five live divergences across the three of them — **two of them
+//! misses**, where this module answered `None` for a line the Python charter refuses, and
+//! three false refusals. Each is closed below with a
+//! predicate that was swept over all 1,112,064 non-surrogate codepoints against CPython
+//! itself rather than argued from the documentation of either engine:
+//!
+//! - **`\s`**: CPython's is Unicode `White_Space` **plus U+001C–U+001F**, the four separator
+//!   controls (and it is exactly `str.isspace()`, so `rstrip` carries the same four).
+//!   `regex`'s is `White_Space` alone. [`crate::memstore::is_python_space`] already existed
+//!   for this, with a docstring saying the difference is not cosmetic; this module called
+//!   `\s` and `trim_end()` anyway. Closed by `SPACE`/`NOT_SPACE` and by `py_rstrip`.
+//! - **`\b`**: `regex`'s word character is UTS#18's, which counts a combining mark, a
+//!   variation selector and ZWJ as word characters; CPython's is `str.isalnum() or '_'`,
+//!   which counts none of them. So `⚠️token: hunter2is` — U+FE0F is `Mn` — had **no word
+//!   boundary** in front of `token` here and one in Python: charter refused the line and
+//!   charter-app did not. The leading `\b` is therefore gone from the pattern and asked in
+//!   code by `is_python_word`, whose class was measured equal to CPython's `\w`.
+//! - **`(?i)`**: CPython folds through the simple lowercase mapping plus `_casefix`'s extra
+//!   cases; `regex` uses Unicode simple case folding. Swept over every letter of the keyword
+//!   set, the two differ for exactly three characters — U+0130 `İ` and U+0131 `ı` (both fold
+//!   to `i` for CPython and neither for `regex`), and U+212A `K` and U+017F `ſ` (which both
+//!   engines fold). So only `i` needs help, and only where the keywords spell one.
+//!
+//! The trailing `\b` is kept and is inert either way: what follows the keyword in this
+//! pattern is `[\s\x1c-\x1f]*[:=]`, and every character either class can match is a non-word
+//! character to both engines, so the boundary is present in both or the match fails in both.
 
 use std::sync::OnceLock;
 
@@ -69,32 +100,101 @@ const CREDENTIAL_PREFIXES: [&str; 22] = [
     "ASIA",
 ];
 
+/// CPython's `\s`, spelled for `regex`: Unicode `White_Space` and the four separator
+/// controls it adds. Measured equal to `re`'s `\s` and to `str.isspace()` over every
+/// non-surrogate codepoint.
+const SPACE: &str = r"[\s\x1c-\x1f]";
+
+/// CPython's `\S`.
+const NOT_SPACE: &str = r"[^\s\x1c-\x1f]";
+
+/// `i` as CPython's `(?i)` reads it: the letter, and the two Turkic spellings `regex`'s
+/// simple case folding leaves out. Under `(?i)` this class is `{i, I, ı, İ}`, which is
+/// exactly what `re.IGNORECASE` matches for `i`.
+const I_CLASS: &str = "[iıİ]";
+
+/// Whether a check's pattern needs CPython's word boundary in front of its match, which
+/// [`secret_kind`] asks rather than the engine. Only the keyword rule has one.
+type Check = (&'static str, String, bool);
+
 /// The kinds, in the order they are asked. Python's `_SECRET_CHECKS`: the label of the FIRST
 /// rule that hits anywhere in the text wins, not the earliest hit in the text.
-const CHECKS: [(&str, &str); 5] = [
-    ("AgentMail key", r"am_us_[A-Za-z0-9]{4,}"),
-    ("JWT", r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}"),
-    ("private key (PEM)", r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
-    ("AWS access key", r"AKIA[0-9A-Z]{12,}"),
-    (
-        "credential assignment",
-        r"(?i)\b(?:password|passwd|api[_-]?key|apikey|secret|token)\b\s*[:=]\s*(?P<value>\S{6}[^\n]*)",
-    ),
-];
+fn checks() -> [Check; 5] {
+    [
+        ("AgentMail key", r"am_us_[A-Za-z0-9]{4,}".to_owned(), false),
+        (
+            "JWT",
+            r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}".to_owned(),
+            false,
+        ),
+        (
+            "private key (PEM)",
+            r"-----BEGIN [A-Z ]*PRIVATE KEY-----".to_owned(),
+            false,
+        ),
+        ("AWS access key", r"AKIA[0-9A-Z]{12,}".to_owned(), false),
+        (
+            "credential assignment",
+            // Built by concatenation, never with a line continuation: a raw string does not
+            // process `\` at end of line, so a "continued" pattern carries a literal
+            // backslash-newline into the regex. `reference()` below learned the same thing.
+            [
+                r"(?i)(?:password|passwd|ap".to_owned(),
+                format!("{I_CLASS}[_-]?key|ap{I_CLASS}key"),
+                r"|secret|token)\b".to_owned(),
+                format!("{SPACE}*[:=]{SPACE}*"),
+                format!(r"(?P<value>{NOT_SPACE}{{6}}[^\n]*)"),
+            ]
+            .concat(),
+            true,
+        ),
+    ]
+}
 
-fn compiled() -> &'static [(&'static str, Regex)] {
-    static ONCE: OnceLock<Vec<(&'static str, Regex)>> = OnceLock::new();
+fn compiled() -> &'static [(&'static str, Regex, bool)] {
+    static ONCE: OnceLock<Vec<(&'static str, Regex, bool)>> = OnceLock::new();
     ONCE.get_or_init(|| {
-        CHECKS
-            .iter()
-            .map(|(label, pattern)| {
+        checks()
+            .into_iter()
+            .map(|(label, pattern, boundary)| {
                 (
-                    *label,
-                    Regex::new(pattern).expect("a pattern this module wrote"),
+                    label,
+                    Regex::new(&pattern).expect("a pattern this module wrote"),
+                    boundary,
                 )
             })
             .collect()
     })
+}
+
+/// Is `c` a word character to CPython's `re` on a `str`?
+///
+/// `str.isalnum() or c == '_'`, which a sweep of all 1,112,064 non-surrogate codepoints
+/// found to be exactly `[\p{L}\p{N}_]` — zero disagreements in either direction. That is
+/// why this is a general-category test and not `char::is_alphanumeric`, whose `Alphabetic`
+/// half also holds `Other_Alphabetic` combining marks that CPython does not count.
+fn is_python_word(c: char) -> bool {
+    static ONCE: OnceLock<Regex> = OnceLock::new();
+    let word =
+        ONCE.get_or_init(|| Regex::new(r"^[\p{L}\p{N}_]$").expect("a pattern this module wrote"));
+    let mut buffer = [0u8; 4];
+    word.is_match(c.encode_utf8(&mut buffer))
+}
+
+/// CPython's `\b` immediately before `at`, where what follows is known to be a word
+/// character (every keyword starts with an ASCII letter).
+fn python_boundary_before(text: &str, at: usize) -> bool {
+    text[..at]
+        .chars()
+        .next_back()
+        .is_none_or(|c| !is_python_word(c))
+}
+
+/// The next character boundary after `at`, so a rejected position can be stepped over
+/// without splitting a codepoint — `regex`'s `captures_at` takes byte offsets and a search
+/// resumed inside one is not a search.
+fn after_one_char(text: &str, at: usize) -> usize {
+    at + text[at..].chars().next().map_or(1, char::len_utf8)
 }
 
 fn reference() -> &'static Regex {
@@ -152,13 +252,36 @@ fn names_where_a_credential_lives(value: &str) -> bool {
 /// Every match of a rule that carries a value is asked whether that value merely NAMES where a
 /// credential lives, so one exempt assignment does not excuse the next one on the line below.
 pub fn secret_kind(text: &str) -> Option<&'static str> {
-    for (label, rx) in compiled() {
-        for caps in rx.captures_iter(text) {
+    for (label, rx, boundary) in compiled() {
+        // `finditer`'s own walk, written out, because one position has to be REJECTED and
+        // resumed from: a match whose leading word boundary is `regex`'s and not CPython's
+        // is not a match at all, and Python's search carries on from the next character —
+        // not from the end of the text this engine happened to consume. Resuming at the end
+        // instead would step over a real assignment later on the same line, which is the
+        // same defect the folded lookahead above exists to avoid.
+        let mut at = 0;
+        while at <= text.len() {
+            let Some(caps) = rx.captures_at(text, at) else {
+                break;
+            };
+            let whole = caps.get(0).expect("group 0 is always set on a match");
+            if *boundary && !python_boundary_before(text, whole.start()) {
+                at = after_one_char(text, whole.start());
+                continue;
+            }
             match caps.name("value") {
                 // `rstrip` before the reference test, as Python does: the value runs to the
-                // end of the line and a reference does not include the spaces after it.
-                Some(value) if names_where_a_credential_lives(value.as_str().trim_end()) => {
-                    continue;
+                // end of the line and a reference does not include the spaces after it —
+                // and `rstrip` takes the four separator controls `trim_end` leaves behind,
+                // which used to make a plain `vault:forge/gh␜` read as a credential.
+                Some(value)
+                    if names_where_a_credential_lives(crate::memstore::py_rstrip(
+                        value.as_str(),
+                    )) =>
+                {
+                    // Every match here is at least six characters, so it can never be
+                    // empty and this can never fail to advance.
+                    at = whole.end();
                 }
                 _ => return Some(label),
             }
@@ -240,6 +363,103 @@ mod tests {
         // same line must still be found.
         assert_eq!(
             secret_kind("token: x  password: hunter2s"),
+            Some("credential assignment")
+        );
+    }
+
+    // ----------------------------------------------------------------------------------
+    // the four character classes CPython and `regex` disagree about
+    //
+    // Every expectation below is the PYTHON charter's answer, taken by running
+    // `charter.hooks._secret_kind` on the same literal. Two of them were misses here — a
+    // line the Python charter refuses and charter-app allowed into a memory file — and two
+    // were false refusals.
+    // ----------------------------------------------------------------------------------
+
+    #[test]
+    fn a_combining_mark_before_the_keyword_does_not_hide_it() {
+        // `regex`'s word character is UTS#18's and counts a mark, a variation selector and
+        // ZWJ; CPython's does not, so the boundary Python sees in front of `token` was
+        // missing here and the whole line passed. U+FE0F is the realistic one: it is the
+        // second half of every emoji presentation sequence an agent types into a heading.
+        for text in [
+            "\u{301}token: hunter2is",
+            "\u{200d}token: hunter2is",
+            "\u{200c}token: hunter2is",
+            "\u{26a0}\u{fe0f}token: hunter2is",
+        ] {
+            assert_eq!(
+                secret_kind(text),
+                Some("credential assignment"),
+                "{text:?} is a credential assignment to charter"
+            );
+        }
+    }
+
+    #[test]
+    fn the_turkic_spellings_of_i_are_the_letter_i_here_as_they_are_to_python() {
+        // CPython folds U+0130 and U+0131 to `i`; `regex`'s simple case folding does not,
+        // so `apıkey: …` was not an api key here and is one to charter.
+        for text in ["ap\u{131}key: hunter2is", "AP\u{130}KEY: hunter2is"] {
+            assert_eq!(secret_kind(text), Some("credential assignment"), "{text:?}");
+        }
+        // And the two `regex` DOES fold, which are not a divergence and are pinned so a
+        // narrower class cannot be substituted for `(?i)` without this going red.
+        for text in ["\u{17f}ecret: hunter2is", "to\u{212a}en: hunter2is"] {
+            assert_eq!(secret_kind(text), Some("credential assignment"), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn the_four_separator_controls_are_blank_here_as_they_are_to_python() {
+        // CPython's `\s` holds U+001C–U+001F and `regex`'s does not, so charter ate them as
+        // whitespace and this module counted them toward its six non-blank characters —
+        // refusing two lines charter allows.
+        for text in ["token:\u{1c}\u{1c}\u{1c}\u{1c}ab", "token: ab\u{1c}cdefgh"] {
+            assert_eq!(secret_kind(text), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_vault_reference_with_a_separator_control_after_it_is_still_a_reference() {
+        // `rstrip` takes the four; `trim_end` leaves them, so the value no longer matched
+        // the reference pattern end to end and charter's own documented remedy was refused.
+        assert_eq!(secret_kind("token: vault:forge/gh\u{1c}"), None);
+        // And one that is NOT trailing still ends the reference, in both.
+        assert_eq!(
+            secret_kind("token: vault:forge/gh\u{1d}x"),
+            Some("credential assignment")
+        );
+    }
+
+    #[test]
+    fn a_number_that_is_not_a_digit_is_a_word_character_here_as_it_is_to_python() {
+        // `²`, `½` and `①` are `No`. CPython counts them as word characters, so there is no
+        // boundary in front of `token` and no match; `char::is_alphanumeric` agrees with
+        // CPython here only because `is_numeric` covers `No` — which is why the predicate
+        // is a general-category test rather than an ad-hoc list.
+        for text in [
+            "\u{b2}token: hunter2is",
+            "\u{bd}token: hunter2is",
+            "\u{2460}token: hunter2is",
+        ] {
+            assert_eq!(secret_kind(text), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn rejecting_a_position_does_not_step_over_a_real_assignment_later_on_the_line() {
+        // The hazard the hand-written walk introduces, and the reason it resumes one
+        // CHARACTER on rather than at the end of what the engine consumed. `xtoken:` is
+        // rejected for its boundary; the `password:` after it is charter's answer.
+        assert_eq!(
+            secret_kind("xtoken: hunter2is  password: hunter2is"),
+            Some("credential assignment")
+        );
+        // And the same with a multi-byte character at the rejected position, which is
+        // where a byte-at-a-time resume would split a codepoint and panic.
+        assert_eq!(
+            secret_kind("\u{2460}token: hunter2is  password: hunter2is"),
             Some("credential assignment")
         );
     }
