@@ -4,3 +4,9 @@ mutants.out*/
 
 # Agent worktrees, created by the harness for isolated sub-agents.
 .claude/worktrees/
+
+# The charter binary the release workflow stages as a Tauri sidecar before bundling.
+/app/src-tauri/binaries/
+
+# Where the release workflow gathers the bundles it uploads.
+/dist/
