@@ -200,13 +200,68 @@ const NETWORK_RULE: [&str; 7] = [
 
 /// The variables a forge CLI reads its credential, its config or its route from.
 ///
-/// Passed through to a NETWORK call only, because git runs the forge's credential helper
-/// with git's own environment — and an operator whose `gh` holds its token in `GH_TOKEN`, in
-/// a keyring reached over D-Bus, or behind a proxy would otherwise be refused by a clone
-/// Python charter performed. None of these names a program git runs: the execution surface
-/// the module docs list stays closed. Each is read out of this process's environment, never
-/// put on a command line, and never logged — a token in `argv` is readable by every process
-/// on the machine, and one in the environment only by the same user.
+/// Passed through to a NETWORK call only, because git runs the forge's credential helper with
+/// git's own environment — and an operator whose `gh` holds its token in `GH_TOKEN`, in a
+/// keyring reached over D-Bus, or behind a corporate proxy would otherwise be refused by a
+/// clone Python charter performed. Each is read out of this process's environment, never put
+/// on a command line and never logged: a token in `argv` is readable by every process on the
+/// machine, one in the environment only by the same user.
+///
+/// # What an attacker who can set each one gains
+///
+/// The premise throughout is an attacker who already controls this process's environment.
+/// They cannot read the operator's token through any of these — every one of them flows
+/// INTO the CLI — so what they buy is a credential or a route of their own, and the question
+/// for each entry is whether that reaches further than the environment control they started
+/// with.
+///
+/// - **The token names** (`GH_TOKEN`, `GITHUB_TOKEN`, `GH_ENTERPRISE_TOKEN`,
+///   `GITHUB_ENTERPRISE_TOKEN`, `GITLAB_TOKEN`, `GITLAB_ACCESS_TOKEN`, `OAUTH_TOKEN`): the
+///   call authenticates as the attacker's account instead of the operator's. The host is
+///   still the one charter's URL names, and the fetched bytes still land on the operator's
+///   disk, so this ends in a failed or an under-privileged read — not in a disclosure.
+/// - **The config locations** (`GH_CONFIG_DIR`, `GLAB_CONFIG_DIR`, `XDG_CONFIG_HOME`,
+///   `XDG_DATA_HOME`, `XDG_STATE_HOME`): the same thing by another road — a config file the
+///   attacker wrote, holding their token. It is **not** code execution: `gh` expands an alias
+///   only for a word that is not one of its own commands, and every call here is a built-in
+///   (`api`, `auth`). Measured on gh 2.83.2 with a hand-written config holding
+///   `aliases: {api: '!echo ALIAS_RAN', notacmd: '!echo …'}` — `gh api` ran the built-in,
+///   `gh notacmd` ran the alias.
+/// - **The keyring route** (`XDG_RUNTIME_DIR`, `DBUS_SESSION_BUS_ADDRESS`): the CLI asks a
+///   secret service the attacker owns, which answers with their credential and learns that a
+///   lookup happened. The operator's real keyring is on their own session bus and is not
+///   reachable this way. Without these, a Linux desktop that keeps the token in the keyring
+///   fails every call with "not logged in".
+/// - **The proxies** (`HTTPS_PROXY`/`https_proxy`, `HTTP_PROXY`/`http_proxy`, `ALL_PROXY`,
+///   `NO_PROXY`/`no_proxy`): the connection is routed through the attacker's proxy, which
+///   sees the host and the timing. TLS is still end to end through the `CONNECT` tunnel, so
+///   the token and the contents are not theirs. Without these, a network whose only route out
+///   is a proxy cannot reach the forge at all.
+/// - **The CA bundle** (`SSL_CERT_FILE`, `SSL_CERT_DIR`): **the sharp one.** An attacker who
+///   sets it adds a certificate authority the CLI trusts, and with a proxy they also set that
+///   is a full interception of the CLI's HTTPS, token included. It is here because a
+///   corporate CA bundle is how many operators reach their own forge at all, and because the
+///   attacker needs control of charter's own environment to use it — at which point they can
+///   also choose which `charter` runs. If that trade ever stops holding, this is the first
+///   entry to drop.
+///
+/// # Why what is left out does not break an ordinary `gh`
+///
+/// - `GH_HOST`, `GITLAB_HOST`: every call passes `--hostname` explicitly, so the variable
+///   decides nothing — and passing it would let an environment silently move which host is
+///   asked and authenticated against.
+/// - `GH_EDITOR`, `EDITOR`, `PAGER`, `GH_PAGER`, `BROWSER`: each names a program. Nothing
+///   here is interactive, and the output is captured rather than paged.
+/// - `GH_PROMPT_DISABLED`, `NO_PROMPT`, `NO_COLOR`, `GH_NO_UPDATE_NOTIFIER`,
+///   `GLAB_CHECK_UPDATE`: charter SETS these itself rather than inheriting them, so an
+///   environment cannot switch a prompt back on in a process with no terminal.
+/// - `GH_DEBUG`, `GIT_CURL_VERBOSE` and the trace family: they write diagnostics — headers
+///   included — into output charter captures and repeats in an error. That is a token leak
+///   with extra steps.
+/// - Every `GIT_*`, `SSH_AUTH_SOCK`, `SSH_ASKPASS`, `GIT_ASKPASS`, `LD_PRELOAD`, `DYLD_*`:
+///   the execution surface the module docs list, plus SSH, which the policy does not use.
+/// - `HOME` is not in this list because it is given to every call already; `gh`'s config and
+///   the keyring live under it.
 pub const CREDENTIAL_ENV: [&str; 23] = [
     "GH_TOKEN",
     "GITHUB_TOKEN",
