@@ -1,0 +1,953 @@
+//! The memory commands: `charter recall`, `charter workspace remember|note|recall|forget|
+//! optimize` and `charter persona remember|recall` — `charter/commands.py:cmd_recall`,
+//! `commands_workspace.py` and `commands_persona.py`, with their output byte for byte.
+//!
+//! **What an agent reads is the contract.** `charter recall` runs at session start and on
+//! demand, and whatever consumes it parses these exact lines; the differential harness
+//! (`tests/differential/run.py`) compares them with Python's.
+//!
+//! Three things this binary does not do, and says so where a command meets them:
+//!
+//! - **Resolve the active workspace or persona.** charter walks a ladder of pointers and
+//!   settings for both; none of it is ported, so a command that needs one names it
+//!   (`-w`, `--persona`, a positional) or is refused rather than guessing.
+//! - **Commit memory reactively.** A plane whose `[memory] share` is `commit` or `push` has
+//!   charter commit each memory as it is written. That is the plane-git layer, not ported;
+//!   the memory is written and the operator is told it was not committed.
+//! - **Follow a slug out of the store.** `workspace forget` takes one path segment. charter's
+//!   own resolver accepts more than that; this does not, and that is deliberate.
+
+use std::path::{Path, PathBuf};
+
+use charter_core::memstore::{self, Unread};
+use charter_core::recall::{self, Ask, Workspaces};
+use charter_core::workspaces::Plane;
+use clap::{Args, Subcommand};
+
+use crate::voice;
+
+/// A command's own exit code, as charter's `cmd_*` functions return it.
+pub type Code = u8;
+
+#[derive(Args)]
+pub struct RecallArgs {
+    /// Keyword query; omit to list recent memories across bases.
+    query: Option<String>,
+    /// Comma list of scopes to search (workspace,persona,shared,refs,ephemeral); default
+    /// workspace,persona,shared,refs.
+    #[arg(long)]
+    scope: Option<String>,
+    /// Also include the persona's session scratch.
+    #[arg(long)]
+    ephemeral: bool,
+    /// Also print a line of each memory's body (the path is always shown).
+    #[arg(long)]
+    full: bool,
+    /// The persona whose memory and refs are searched. Required for those scopes: this
+    /// binary does not resolve the active persona.
+    #[arg(long)]
+    persona: Option<String>,
+    /// The workspace whose journal is searched. Required for that scope, or
+    /// --all-workspaces: this binary does not resolve the active workspace.
+    #[arg(short = 'w', long = "workspace", conflicts_with = "all_workspaces")]
+    workspace: Option<String>,
+    /// Search EVERY workspace's journal (persona + shared appear once).
+    #[arg(long)]
+    all_workspaces: bool,
+    /// Only memories recorded on/after this: an age (14d, 2w, 3m) or a date (2026-07-01).
+    #[arg(long, value_name = "WHEN")]
+    since: Option<String>,
+    /// Max results (0 = no cap).
+    #[arg(long, default_value_t = 8, allow_negative_numbers = true)]
+    limit: i64,
+    /// Pin today's date, for tests only.
+    #[arg(long, hide = true)]
+    now: Option<String>,
+}
+
+#[derive(Subcommand)]
+pub enum PersonaCommand {
+    /// Write a memory (persistent by default; --ephemeral for scratch).
+    Remember {
+        /// `[NAME] TEXT` — the persona, then the fact. The persona is required: this binary
+        /// does not resolve the active one.
+        #[arg(num_args = 1..=2, required = true)]
+        words: Vec<String>,
+        /// Short title (default: first line of the text).
+        #[arg(long)]
+        title: Option<String>,
+        /// Write to the cross-persona _shared namespace.
+        #[arg(long)]
+        shared: bool,
+        /// Session scratch, deleted after the session.
+        #[arg(long)]
+        ephemeral: bool,
+        /// Don't reactively commit+push it now (record locally; sync later).
+        #[arg(long)]
+        no_sync: bool,
+        /// Pin the clock, for tests only.
+        #[arg(long, hide = true)]
+        now: Option<String>,
+    },
+    /// Show a persona's memory, or --query to search it.
+    Recall {
+        /// The persona. Required: this binary does not resolve the active one.
+        name: Option<String>,
+        /// Keyword-search memories (ranked) instead of listing all.
+        #[arg(short = 'q', long)]
+        query: Option<String>,
+        /// Log lines to show / max search hits (default: 8).
+        #[arg(long, default_value_t = 8, allow_negative_numbers = true)]
+        log: i64,
+    },
+}
+
+/// The clock a write stamps itself with: `--now` in a test, the local clock otherwise.
+pub fn stamp(now: Option<&str>) -> Result<chrono::NaiveDateTime, String> {
+    match now {
+        Some(text) => text
+            .parse()
+            .map_err(|e| format!("--now is not a local naive timestamp: {e}")),
+        None => Ok(chrono::Local::now().naive_local()),
+    }
+}
+
+fn session() -> String {
+    charter_core::trace::bucket(&|name| std::env::var(name).ok())
+}
+
+/// What happens after a memory is written, in charter's words — `commit_memory_reactive`.
+///
+/// `local`, the default, commits nothing and says nothing. Anything else is a plane that
+/// expects the memory committed as it is written, which this binary cannot do; it says so
+/// rather than leaving the operator to find the memory uncommitted later.
+fn reactive(plane: &Plane) {
+    let share = plane.memory_share();
+    if share != "local" {
+        voice::warn(&format!(
+            "memory share is '{share}', and this charter does not commit memory — share it \
+             with the Python charter's `charter workspace save`."
+        ));
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// charter recall
+
+/// `charter recall` — the one memory gate, across every base in scope.
+pub fn recall(plane: &Plane, args: RecallArgs) -> Result<Code, String> {
+    let root = plane.root();
+    // Before anything is searched: a `--persona` that names nothing was searched as if it
+    // did, and answered "no memories" over the persona that holds them (#1055, #1059).
+    let persona = args.persona.filter(|p| !p.is_empty());
+    if let Some(name) = &persona
+        && let Some(refused) = charter_core::personas::name_refusal(root, name)
+    {
+        voice::err(&refused);
+        return Ok(1);
+    }
+    let mut scopes: Vec<String> = recall::DEFAULT_SCOPES.map(str::to_string).to_vec();
+    if let Some(scope) = args.scope.as_deref().filter(|s| !s.is_empty()) {
+        scopes = scope
+            .split(',')
+            .map(memstore::py_strip)
+            .filter(|s| recall::SCOPES.contains(s))
+            .map(str::to_string)
+            .collect();
+        if scopes.is_empty() {
+            voice::err(&format!(
+                "invalid --scope; choose from {}",
+                recall::SCOPES.join(", ")
+            ));
+            return Ok(1);
+        }
+    }
+    if args.ephemeral && !scopes.iter().any(|s| s == "ephemeral") {
+        scopes.push("ephemeral".to_string());
+    }
+    let today = stamp(args.now.as_deref())?.date();
+    let mut since = None;
+    if let Some(value) = args.since.as_deref().filter(|s| !s.is_empty()) {
+        match recall::parse_since(value, today) {
+            Ok(day) => since = Some(day),
+            Err(message) => {
+                voice::err(&message);
+                return Ok(2);
+            }
+        }
+    }
+
+    let has = |scope: &str| scopes.iter().any(|s| s == scope);
+    let workspace = args.workspace.filter(|w| !w.is_empty());
+    let workspaces = if args.all_workspaces {
+        Some(Workspaces::All)
+    } else if let Some(name) = workspace {
+        // A name is checked before it becomes a path. charter joins `-w` straight on and
+        // reads whatever that lands on inside the plane's data; a name that is a path is
+        // not one this reads through.
+        if let Err(e) = plane.workspace(&name) {
+            voice::err(&e.to_string());
+            return Ok(1);
+        }
+        Some(Workspaces::One(name))
+    } else {
+        None
+    };
+    if has("workspace") && workspaces.is_none() {
+        voice::err(
+            "recall needs -w <workspace> or --all-workspaces for the workspace scope: this \
+             charter does not resolve the active workspace",
+        );
+        return Ok(2);
+    }
+    if (has("persona") || has("ephemeral") || has("refs")) && persona.is_none() {
+        voice::err(
+            "recall needs --persona <name> for the persona, ephemeral and refs scopes: this \
+             charter does not resolve the active persona",
+        );
+        return Ok(2);
+    }
+
+    if args.all_workspaces {
+        say_unread_workspaces(root);
+    }
+    let limit = args.limit;
+    let ask = Ask {
+        scopes: scopes.clone(),
+        workspaces,
+        persona,
+        session: session(),
+        query: args.query.clone(),
+        // One more than is shown, so "8 of ?" can say whether anything was cut.
+        limit: if limit != 0 { limit + 1 } else { 0 },
+        since,
+    };
+    let got = recall::recall(root, &ask);
+    voice::unread(root, &got.unread);
+    let skipped = if got.unread.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "; {} base(s) not searched — charter could not read them",
+            got.unread.len()
+        )
+    };
+    let code = if got.unread.is_empty() { 0 } else { 1 };
+    let truncated = limit != 0 && (got.hits.len() as i64) > limit;
+    let results = if limit != 0 {
+        recall::py_head(got.hits, limit)
+    } else {
+        got.hits
+    };
+    let place = if args.all_workspaces {
+        "every workspace".to_string()
+    } else {
+        scopes.join(", ")
+    };
+    let query = args.query.as_deref().filter(|q| !q.is_empty());
+
+    if results.is_empty() {
+        if let Some(q) = query
+            && memstore::terms(q).is_empty()
+        {
+            let dropped = memstore::dropped_terms(q);
+            let named = if dropped.is_empty() {
+                charter_core::pyrepr::repr_str(q)
+            } else {
+                dropped
+                    .iter()
+                    .map(|t| charter_core::pyrepr::repr_str(t))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let verb = if dropped.len() == 1 { "is" } else { "are" };
+            voice::info(&format!(
+                "Nothing searchable in {} — {named} {verb} too short or too common to rank. \
+                 Try a distinctive word.",
+                charter_core::pyrepr::repr_str(q)
+            ));
+            return Ok(code);
+        }
+        let what = match query {
+            Some(q) => format!("match {}", charter_core::pyrepr::repr_str(q)),
+            None => "yet".to_string(),
+        };
+        let when = since
+            .map(|d| format!(" recorded since {}", d.format("%Y-%m-%d")))
+            .unwrap_or_default();
+        voice::info(&format!(
+            "No memories {what} across {place}{when}{skipped}."
+        ));
+        if got.undated > 0 {
+            voice::info(&format!(
+                "{} undated memory(ies) skipped — no recorded date to compare.",
+                got.undated
+            ));
+        }
+        return Ok(code);
+    }
+
+    let dates: Vec<String> = results
+        .iter()
+        .map(|h| {
+            h.date
+                .map(|d| d.format("%Y-%m-%d").to_string())
+                .unwrap_or_else(|| "—".to_string())
+        })
+        .collect();
+    let dw = voice::column(dates.iter().map(String::as_str));
+    let lw = voice::column(results.iter().map(|h| h.label.as_str()));
+    let hang = " ".repeat(2 + dw);
+    let mut out = String::new();
+    for (hit, date) in results.iter().zip(&dates) {
+        let tag = if hit.score > 0 {
+            format!("  ({})", hit.score)
+        } else {
+            String::new()
+        };
+        let line = format!(
+            "  {}{}{}{tag}",
+            voice::pad(date, dw),
+            voice::pad(&hit.label, lw),
+            hit.title
+        );
+        out.push_str(voice::py_rstrip(&line));
+        out.push('\n');
+        out.push_str(&format!("{hang}{}\n", voice::rel(root, &hit.path)));
+        if args.full {
+            let snip = body_snippet(&hit.path, true);
+            if !snip.is_empty() {
+                out.push_str(&format!("{hang}{snip}\n"));
+            }
+        }
+    }
+    print!("{out}");
+    voice::info(&format!(
+        "{} memory(ies) across {place}{skipped}.{}",
+        results.len(),
+        if args.full {
+            ""
+        } else {
+            "  Pass --full for a line of each body."
+        }
+    ));
+    if truncated {
+        voice::info(&format!(
+            "Showing {} — pass --limit 0 for all.",
+            results.len()
+        ));
+    }
+    if got.undated > 0 {
+        voice::info(&format!(
+            "{} undated memory(ies) skipped by --since — no recorded date.",
+            got.undated
+        ));
+    }
+    if got.undated_refs > 0 {
+        voice::info(&format!(
+            "{} ref doc(s) not searched — `--since` filters by recorded date and refs carry \
+             none. Drop --since to include them.",
+            got.undated_refs
+        ));
+    }
+    Ok(code)
+}
+
+/// The first line of a memory's body worth showing — `commands._body_snippet` (with
+/// `frontmatter`) or `commands_persona._snippet` (without). Headings and `_…_` lines are
+/// skipped because none of them tell one memory from another; cut at 90 with `…`.
+fn body_snippet(path: &Path, frontmatter: bool) -> String {
+    let Some(text) = memstore::read_text(path) else {
+        return String::new();
+    };
+    let mut in_front = false;
+    for (i, raw) in charter_core::mdsection::split_lines(&text)
+        .into_iter()
+        .enumerate()
+    {
+        let line = memstore::py_strip(raw);
+        if frontmatter {
+            if i == 0 && line == "---" {
+                in_front = true;
+                continue;
+            }
+            if in_front {
+                in_front = line != "---";
+                continue;
+            }
+        }
+        if !line.is_empty() && !line.starts_with('#') && !line.starts_with('_') {
+            let cut: String = line.chars().take(90).collect();
+            return if line.chars().count() > 90 {
+                format!("{cut}…")
+            } else {
+                cut
+            };
+        }
+    }
+    String::new()
+}
+
+/// Name each workspace `--all-workspaces` could not look at — `workspace.read_workspaces_aloud`.
+fn say_unread_workspaces(root: &Path) {
+    let Ok((_, unread)) = recall::read_workspaces(root) else {
+        return;
+    };
+    for (path, code) in unread {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        let shown = path.to_string_lossy();
+        voice::err(&format!(
+            "workspace '{name}' cannot be checked — charter changes nothing it cannot see; {}.",
+            voice::uncheckable_fix(code, &shown, &shown)
+        ));
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// charter workspace remember | note | recall | forget | optimize
+
+/// `workspace remember` / `note` — record one journal entry, or with no text list them.
+pub fn workspace_remember(
+    plane: &Plane,
+    name: &str,
+    text: Option<&str>,
+    title: Option<&str>,
+    no_sync: bool,
+    now: Option<&str>,
+) -> Result<Code, String> {
+    let Some(text) = text.filter(|t| !t.is_empty()) else {
+        return workspace_recall(plane, name, None);
+    };
+    let ws = plane.workspace(name).map_err(|e| e.to_string())?;
+    let path = match ws.remember_titled(text, title, stamp(now)?) {
+        Ok(path) => path,
+        Err(e) => {
+            voice::err(&e.to_string());
+            return Ok(1);
+        }
+    };
+    voice::ok(&format!(
+        "Remembered in '{name}' → workspaces/{name}/memory/{}",
+        path.file_name().unwrap_or_default().to_string_lossy()
+    ));
+    if !plane.is_live(name) {
+        voice::info(&format!(
+            "  '{name}' is LOCAL (private) — memory stays on disk, not committed. Make it \
+             shareable: charter workspace live {name}"
+        ));
+    } else if no_sync {
+        voice::info("  (--no-sync) recorded locally; share later with: charter workspace save.");
+    } else {
+        reactive(plane);
+    }
+    Ok(0)
+}
+
+/// `workspace recall` — search the journal, or list it in filename order.
+pub fn workspace_recall(plane: &Plane, name: &str, query: Option<&str>) -> Result<Code, String> {
+    let root = plane.root();
+    let ws = plane.workspace(name).map_err(|e| e.to_string())?;
+    let dir = ws.dir().join("memory");
+    let query = query.filter(|q| !q.is_empty());
+    let mut unread: Unread = Vec::new();
+    let results: Vec<(PathBuf, String, usize)> = match query {
+        Some(q) => memstore::search(root, &[dir], q, 8, &mut unread)
+            .into_iter()
+            .map(|(f, score)| (f.path, f.title, score))
+            .collect(),
+        None => memstore::gather(root, &[dir], &mut unread)
+            .into_iter()
+            .map(|f| (f.path, f.title, 0))
+            .collect(),
+    };
+    voice::unread(root, &unread);
+    if !unread.is_empty() {
+        return Ok(1);
+    }
+    if results.is_empty() {
+        match query {
+            Some(q) => voice::info(&format!("No memories in '{name}' match '{q}'.")),
+            None => voice::info(&format!(
+                "workspace '{name}' has no memories yet. Add one: charter workspace remember \
+                 \"<text>\""
+            )),
+        }
+        return Ok(0);
+    }
+    let mut out = String::new();
+    for (path, title, score) in &results {
+        let tag = if *score > 0 {
+            format!("  ({score})")
+        } else {
+            String::new()
+        };
+        out.push_str(&format!(
+            "  • {title}{tag}  [{}]\n",
+            path.file_name().unwrap_or_default().to_string_lossy()
+        ));
+    }
+    print!("{out}");
+    voice::info(&format!(
+        "{} memory(ies) in workspaces/{name}/memory/ — read one: cat workspaces/{name}/memory/<file>",
+        results.len()
+    ));
+    Ok(0)
+}
+
+/// `workspace forget` — delete one journal entry by slug or filename, and its index line.
+pub fn workspace_forget(plane: &Plane, name: &str, slug: &str) -> Result<Code, String> {
+    let ws = plane.workspace(name).map_err(|e| e.to_string())?;
+    match memstore::forget(plane.root(), &ws.dir().join("memory"), slug) {
+        Ok(()) => {
+            voice::ok(&format!("Forgot '{slug}' from workspace '{name}'."));
+            reactive(plane);
+            Ok(0)
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            voice::err(&format!(
+                "no memory '{slug}' in workspace '{name}' (list them: charter workspace recall)."
+            ));
+            Ok(1)
+        }
+        // A slug is one file in the store. `../<elsewhere>` is a path, and the store's own
+        // resolver is never handed one: this is where M1.1's round 3 found a slug deleting
+        // a file outside the plane.
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidInput => {
+            voice::err(&format!(
+                "'{}' is not the slug of one memory — name a file in \
+                 workspaces/{name}/memory/, not a path.",
+                charter_core::shown::short(slug)
+            ));
+            Ok(1)
+        }
+        Err(e) => {
+            voice::err(&e.to_string());
+            Ok(1)
+        }
+    }
+}
+
+/// `workspace optimize` — curate one journal, or every one: the safe ops with `--apply`,
+/// the rest as proposals. Read-only unless `--apply`, and a read-only run names what
+/// `--apply` would do.
+pub fn workspace_optimize(
+    plane: &Plane,
+    name: Option<&str>,
+    apply: bool,
+    stale_days: i64,
+    now: Option<&str>,
+) -> Result<Code, String> {
+    let root = plane.root();
+    let today = stamp(now)?.date();
+    let names: Vec<String> = match name {
+        Some(name) => {
+            let exists = plane.workspace(name).is_ok_and(|ws| ws.dir().exists());
+            if !exists {
+                voice::err(&format!("no workspace '{name}'"));
+                return Ok(1);
+            }
+            vec![name.to_string()]
+        }
+        None => {
+            say_unread_workspaces(root);
+            recall::read_workspaces(root)
+                .map(|(names, _)| names)
+                .map_err(|e| e.to_string())?
+        }
+    };
+    if names.is_empty() {
+        voice::info("No workspaces to optimize.");
+        return Ok(0);
+    }
+    let mut actions_total = 0;
+    let mut unread: Unread = Vec::new();
+    for n in &names {
+        let dir = root.join("workspaces").join(n).join("memory");
+        if !dir.exists() {
+            continue;
+        }
+        let rep = match charter_core::curate::report(root, &dir, stale_days, 0.5, today) {
+            Ok(rep) => rep,
+            Err(missed) => {
+                voice::unread(root, &missed);
+                unread.extend(missed);
+                continue;
+            }
+        };
+        if rep.total == 0 {
+            continue;
+        }
+        println!(
+            "\n◆ {n}  ({} memories · {} exact-dup group(s) · {} near-dup pair(s) · {} stale)",
+            rep.total,
+            rep.exact_dups.len(),
+            rep.near_dups.len(),
+            rep.stale.len()
+        );
+        let rep = if apply {
+            let actions = match charter_core::curate::apply_safe(root, &dir, today) {
+                Ok(actions) => actions,
+                Err(missed) => {
+                    voice::unread(root, &missed);
+                    unread.extend(missed);
+                    continue;
+                }
+            };
+            for action in &actions {
+                voice::ok(&format!("  auto: {action}"));
+            }
+            actions_total += actions.len();
+            if !actions.is_empty() {
+                reactive(plane);
+            }
+            match charter_core::curate::report(root, &dir, stale_days, 0.5, today) {
+                Ok(rep) => rep,
+                Err(missed) => {
+                    voice::unread(root, &missed);
+                    unread.extend(missed);
+                    continue;
+                }
+            }
+        } else {
+            let pending = charter_core::curate::pending_auto(&rep);
+            if !pending.is_empty() {
+                println!("  would auto-apply (re-run with --apply):");
+                for p in pending {
+                    println!("    + {p}");
+                }
+            }
+            rep
+        };
+        let proposals = charter_core::curate::proposals(&rep);
+        if !proposals.is_empty() {
+            println!("  proposals (not auto-applied — decide these yourself):");
+            for p in proposals {
+                println!("    ? {p}");
+            }
+        } else if apply {
+            voice::info("  clean — nothing to propose.");
+        }
+    }
+    if !apply {
+        voice::info(
+            "\nRead-only. Re-run with --apply to auto-apply the safe/reversible ops (exact-dup \
+             collapse + index repair); proposals always stay manual.",
+        );
+    } else if actions_total == 0 {
+        voice::info("\nNo safe ops to apply — the journal is already tidy.");
+    }
+    Ok(if unread.is_empty() { 0 } else { 1 })
+}
+
+// ---------------------------------------------------------------------------------------
+// charter persona remember | recall
+
+/// Refuse a persona this plane does not define, in charter's words; `true` to go on.
+fn persona_ok(root: &Path, name: &str) -> bool {
+    match charter_core::personas::name_refusal(root, name) {
+        Some(refused) => {
+            voice::err(&refused);
+            false
+        }
+        None => true,
+    }
+}
+
+const NO_ACTIVE_PERSONA: &str = "name the persona: this charter does not resolve the active one — charter persona \
+     remember <name> \"<fact>\"";
+
+pub fn persona(plane: &Plane, command: PersonaCommand) -> Result<Code, String> {
+    match command {
+        PersonaCommand::Remember {
+            words,
+            title,
+            shared,
+            ephemeral,
+            no_sync,
+            now,
+        } => {
+            let [name, text] = words.as_slice() else {
+                voice::err(NO_ACTIVE_PERSONA);
+                return Ok(2);
+            };
+            persona_remember(
+                plane,
+                name,
+                text,
+                title.as_deref(),
+                shared,
+                ephemeral,
+                no_sync,
+                stamp(now.as_deref())?,
+            )
+        }
+        PersonaCommand::Recall { name, query, log } => {
+            let Some(name) = name.filter(|n| !n.is_empty()) else {
+                voice::err(
+                    "name the persona: this charter does not resolve the active one — charter \
+                     persona recall <name>",
+                );
+                return Ok(2);
+            };
+            persona_recall(plane, &name, query.as_deref(), log)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn persona_remember(
+    plane: &Plane,
+    name: &str,
+    text: &str,
+    title: Option<&str>,
+    shared: bool,
+    ephemeral: bool,
+    no_sync: bool,
+    stamp: chrono::NaiveDateTime,
+) -> Result<Code, String> {
+    let root = plane.root();
+    if !persona_ok(root, name) {
+        return Ok(1);
+    }
+    let text = memstore::py_strip(text);
+    if text.is_empty() {
+        voice::err("empty memory");
+        return Ok(1);
+    }
+    let title = charter_core::personas::memory_title(text, title);
+    let owner = if shared {
+        charter_core::contain::SHARED_PERSONA
+    } else {
+        name
+    };
+    let session = session();
+    let dir = if ephemeral {
+        recall::ephemeral_dir(root, &session, owner)
+    } else {
+        root.join("personas").join(owner).join("memory")
+    };
+    let kind = if ephemeral { "ephemeral" } else { "persistent" };
+    let path = match memstore::write(
+        root,
+        &dir,
+        text,
+        Some(title.as_str()).filter(|t| !t.is_empty()),
+        false,
+        kind,
+        !ephemeral,
+        stamp,
+    ) {
+        Ok(path) => path,
+        Err(e) => {
+            voice::err(&e.to_string());
+            return Ok(1);
+        }
+    };
+    charter_core::trace::record(
+        root,
+        &session,
+        "memory",
+        &[
+            ("persona", name),
+            ("scope", if shared { "shared" } else { "own" }),
+            ("kind", kind),
+            ("title", title.as_str()),
+        ],
+        stamp,
+    );
+    let place = format!("{}{kind}", if shared { "shared " } else { "" });
+    voice::ok(&format!(
+        "Remembered ({place}) → {}",
+        voice::rel(root, &path)
+    ));
+    if ephemeral {
+        return Ok(0);
+    }
+    if no_sync {
+        voice::info(
+            "  (--no-sync) recorded locally; share later with: charter persona memory-sync.",
+        );
+        return Ok(0);
+    }
+    reactive(plane);
+    Ok(0)
+}
+
+fn persona_recall(
+    plane: &Plane,
+    name: &str,
+    query: Option<&str>,
+    log: i64,
+) -> Result<Code, String> {
+    let root = plane.root();
+    if !persona_ok(root, name) {
+        return Ok(1);
+    }
+    let own = root.join("personas").join(name).join("memory");
+    let shared = root
+        .join("personas")
+        .join(charter_core::contain::SHARED_PERSONA)
+        .join("memory");
+    let mut unread: Unread = Vec::new();
+
+    if let Some(q) = query.filter(|q| !q.is_empty()) {
+        let limit = if log != 0 { log } else { 8 };
+        let found = memstore::search(root, &[own, shared], q, usize::MAX, &mut unread);
+        let hits = recall::py_head(found, limit);
+        voice::unread(root, &unread);
+        let code = if unread.is_empty() { 0 } else { 1 };
+        if hits.is_empty() {
+            if unread.is_empty() {
+                voice::info(&format!("no memory of '{q}' for '{name}'."));
+            } else {
+                voice::info(&format!(
+                    "nothing matching '{q}' in the memory charter could read for '{name}'."
+                ));
+            }
+            return Ok(code);
+        }
+        let mut out = format!("── memory matching '{q}' ({})\n", hits.len());
+        for (found, score) in &hits {
+            out.push_str(&format!(
+                "  [{score:>3}] {}\n        {}\n        {}\n",
+                found.title,
+                voice::rel(root, &found.path),
+                body_snippet(&found.path, false)
+            ));
+        }
+        print!("{out}");
+        return Ok(code);
+    }
+
+    let mut out = String::new();
+    let mut printed = false;
+    for (dir, label) in [
+        (&own, name.to_string()),
+        (&shared, "_shared (all personas)".to_string()),
+    ] {
+        let (mems, missed) = memstore::read_files(root, dir);
+        unread.extend(missed);
+        if mems.is_empty() {
+            continue;
+        }
+        printed = true;
+        out.push_str(&format!(
+            "── persistent memory · {label} ({}) [{}/]\n",
+            mems.len(),
+            voice::rel(root, dir)
+        ));
+        out.push_str(&index_text(root, dir));
+        out.push_str("\n\n");
+    }
+    let session = session();
+    let mut scratch = Vec::new();
+    for owner in [name, charter_core::contain::SHARED_PERSONA] {
+        let (found, missed) =
+            memstore::read_files(root, &recall::ephemeral_dir(root, &session, owner));
+        scratch.extend(found);
+        unread.extend(missed);
+    }
+    if !scratch.is_empty() {
+        printed = true;
+        out.push_str(&format!(
+            "── ephemeral scratch · this session ({})\n",
+            scratch.len()
+        ));
+        for path in &scratch {
+            out.push_str(&format!(
+                "- {}\n",
+                path.file_stem().unwrap_or_default().to_string_lossy()
+            ));
+        }
+        out.push('\n');
+    }
+    let acts = charter_core::trace::for_persona(root, &session, name, log);
+    if !acts.is_empty() {
+        printed = true;
+        out.push_str(&format!(
+            "── recent activity · this session ({})\n",
+            acts.len()
+        ));
+        for act in &acts {
+            let extra: Vec<String> = act
+                .iter()
+                .filter(|(k, _)| !matches!(k.as_str(), "ts" | "event" | "persona"))
+                .map(|(k, v)| format!("{k}={}", py_str(v)))
+                .collect();
+            let ts = act.get("ts").map(py_str).unwrap_or_default();
+            let event = match act.get("event") {
+                Some(serde_json::Value::Number(n)) => {
+                    let n = n.to_string();
+                    format!("{n:>10}")
+                }
+                Some(v) => format!("{:<10}", py_str(v)),
+                None => format!("{:<10}", ""),
+            };
+            out.push_str(&format!("  {ts}  {event} {}\n", extra.join("  ")));
+        }
+    }
+    print!("{out}");
+    voice::unread(root, &unread);
+    if !printed && unread.is_empty() {
+        voice::info(&format!(
+            "persona '{name}' has no memories yet. Add one: charter persona remember {name} \"<fact>\""
+        ));
+    }
+    Ok(if unread.is_empty() { 0 } else { 1 })
+}
+
+/// A store's index as `persona recall` prints it: the whole file, stripped, or
+/// `(no index)`.
+///
+/// **Gated where charter does not gate it.** charter reads the index by name, so a committed
+/// `memory/MEMORY.md -> /elsewhere` is printed to whoever asked — the one read in this
+/// command that `memstore.files` never covered. An index charter's gate refuses reads here
+/// as having none.
+fn index_text(root: &Path, dir: &Path) -> String {
+    let index = dir.join(memstore::INDEX);
+    if !memstore::readable_file(root, &index) {
+        return "(no index)".to_string();
+    }
+    memstore::read_text(&index)
+        .map(|t| memstore::py_strip(&t).to_string())
+        .unwrap_or_else(|| "(no index)".to_string())
+}
+
+/// `str(value)` for a JSON value, as Python prints one it read with `json.loads`.
+fn py_str(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Null => "None".to_string(),
+        serde_json::Value::Bool(true) => "True".to_string(),
+        serde_json::Value::Bool(false) => "False".to_string(),
+        serde_json::Value::Number(n) => n.to_string(),
+        other => py_repr_value(other),
+    }
+}
+
+/// `repr()` of a container JSON decoded into: single-quoted strings, `True`, `None`.
+fn py_repr_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(s) => charter_core::pyrepr::repr_str(s),
+        serde_json::Value::Array(items) => format!(
+            "[{}]",
+            items
+                .iter()
+                .map(py_repr_value)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        serde_json::Value::Object(map) => format!(
+            "{{{}}}",
+            map.iter()
+                .map(|(k, v)| format!(
+                    "{}: {}",
+                    charter_core::pyrepr::repr_str(k),
+                    py_repr_value(v)
+                ))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        other => py_str(other),
+    }
+}

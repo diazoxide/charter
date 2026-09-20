@@ -663,10 +663,10 @@ fn a_bare_slug_matches_at_a_dash_and_nowhere_else() {
     ws.add_todo("the migration", pinned()).unwrap();
     let dir = ws.dir().join("todos");
 
-    assert!(charter_core::memstore::resolve(&dir, "migration").is_some());
-    assert!(charter_core::memstore::resolve(&dir, "the-migration").is_some());
-    assert!(charter_core::memstore::resolve(&dir, "gration").is_none());
-    assert!(charter_core::memstore::resolve(&dir, "e-migration").is_none());
+    assert!(charter_core::memstore::resolve(plane.root(), &dir, "migration").is_some());
+    assert!(charter_core::memstore::resolve(plane.root(), &dir, "the-migration").is_some());
+    assert!(charter_core::memstore::resolve(plane.root(), &dir, "gration").is_none());
+    assert!(charter_core::memstore::resolve(plane.root(), &dir, "e-migration").is_none());
 }
 
 #[test]
@@ -684,7 +684,7 @@ fn an_exact_filename_wins_over_a_suffix_match() {
         .unwrap();
     }
 
-    let found = charter_core::memstore::resolve(&dir, "note").unwrap();
+    let found = charter_core::memstore::resolve(plane.root(), &dir, "note").unwrap();
 
     assert_eq!(found.file_name().unwrap(), "note.md");
 }

@@ -12,9 +12,9 @@
 //!   frame, `workspaces/.default`, `[workspace] default`, then the literal `default`
 //!   (`charter/workspace.py:589` `chosen`). None of that is ported, so omitting `-w` is a
 //!   usage error rather than a guess at the wrong workspace.
-//! - **No command prints its confirmation.** charter says `✓ Vision set for 'alpha' → …` on
-//!   stderr; this is silent. That is the command presentation layer, and porting it is M2's
-//!   "the `charter` binary answers these commands".
+//! - **Not every command prints its confirmation.** charter says `✓ Vision set for 'alpha' →
+//!   …` on stderr, and `vision` and `todo` here are still silent. The memory commands
+//!   (`memory.rs`) are ported whole, their output included.
 //!
 //! `root` and the hidden `--now` have no Python counterpart at all: `--now` is the test seam
 //! charter itself has as `memstore.write(stamp=…)`.
@@ -29,6 +29,9 @@ use charter_core::shown;
 use charter_core::state::Event;
 use charter_core::workspaces::Plane;
 use clap::{Args, Parser, Subcommand};
+
+mod memory;
+mod voice;
 
 #[derive(Parser)]
 #[command(
@@ -94,6 +97,14 @@ enum Command {
         all: bool,
     },
 
+    /// The one memory gate: search/list across ALL bases (a workspace + a persona's own +
+    /// shared), each hit labeled by source.
+    Recall(memory::RecallArgs),
+
+    /// Personas: their memory.
+    #[command(subcommand)]
+    Persona(memory::PersonaCommand),
+
     /// Tell the app what a harness just did. Run by a harness's hooks, never by a person.
     ///
     /// It reads the harness's payload on stdin, says one thing on a socket the app owns, and
@@ -142,19 +153,12 @@ struct InitCommand {
 /// on stderr — coloured only when stderr is a terminal, which is Python's rule too.
 fn say(outcome: &charter_core::scaffold::Outcome) -> ExitCode {
     use charter_core::scaffold::Say;
-    use std::io::IsTerminal;
-    let colour = std::io::stderr().is_terminal();
     for line in &outcome.said {
-        let (code, glyph, text) = match line {
-            Say::Info(t) => ("36", "•", t),
-            Say::Ok(t) => ("32", "✓", t),
-            Say::Warn(t) => ("33", "!", t),
-            Say::Err(t) => ("31", "✗", t),
-        };
-        if colour {
-            eprintln!("\x1b[{code}m{glyph}\x1b[0m {text}");
-        } else {
-            eprintln!("{glyph} {text}");
+        match line {
+            Say::Info(text) => voice::info(text),
+            Say::Ok(text) => voice::ok(text),
+            Say::Warn(text) => voice::warn(text),
+            Say::Err(text) => voice::err(text),
         }
     }
     ExitCode::from(outcome.code)
@@ -187,11 +191,64 @@ enum WorkspaceCommand {
         #[command(flatten)]
         common: Common,
     },
-    /// Record one durable fact in a workspace's journal.
+    /// Record one workspace memory (its own file, indexed) — the task journal. Omit the
+    /// text to list the workspace's memories.
     Remember {
-        text: String,
+        text: Option<String>,
+        /// Optional title (else derived from the first line).
+        #[arg(long)]
+        title: Option<String>,
+        /// Don't reactively commit+push it now (LIVE workspaces; sync later).
+        #[arg(long)]
+        no_sync: bool,
         #[command(flatten)]
         common: Common,
+    },
+    /// Alias for `remember` — record a workspace memory (or list them).
+    Note {
+        message: Option<String>,
+        /// Don't reactively commit+push it now (LIVE workspaces; sync later).
+        #[arg(long)]
+        no_sync: bool,
+        #[command(flatten)]
+        common: Common,
+    },
+    /// Search the workspace's memories (--query) or list them all.
+    Recall {
+        /// Keyword query; omit to list every memory chronologically.
+        #[arg(short = 'q', long)]
+        query: Option<String>,
+        #[command(flatten)]
+        common: Common,
+    },
+    /// Delete one workspace memory by slug or filename.
+    Forget {
+        /// Memory slug or filename (see `charter workspace recall`).
+        slug: String,
+        #[command(flatten)]
+        common: Common,
+    },
+    /// Curate a workspace's memory: collapse exact duplicates and repair the index with
+    /// --apply; propose the rest.
+    Optimize {
+        /// Workspace to optimize (default: every one).
+        name: Option<String>,
+        /// Every workspace (the default).
+        #[arg(long)]
+        all: bool,
+        /// Apply the safe, reversible ops. Proposals always stay manual.
+        #[arg(long)]
+        apply: bool,
+        /// Age at which a memory is proposed for review (default: 90).
+        #[arg(
+            long = "stale-days",
+            default_value_t = 90,
+            allow_negative_numbers = true
+        )]
+        stale_days: i64,
+        /// Pin the clock, for tests only.
+        #[arg(long, hide = true)]
+        now: Option<String>,
     },
     /// Record a todo, list them, or close one with `done <slug>`.
     ///
@@ -459,7 +516,7 @@ fn repo_command(command: &Command) -> Option<ExitCode> {
     Some(ExitCode::from(code))
 }
 
-fn run(command: Command) -> Result<(), String> {
+fn run(command: Command) -> Result<u8, String> {
     match command {
         // Answered in `main`, before this: it is the one command whose exit code is not a
         // plain success or failure, and clap must never be allowed to exit 2 in front of it.
@@ -511,10 +568,59 @@ fn run(command: Command) -> Result<(), String> {
                 }
             }
         }
-        Command::Workspace(WorkspaceCommand::Remember { text, common }) => {
-            workspace(&common)?
-                .remember(&text, common.stamp()?)
-                .map_err(|e| e.to_string())?;
+        Command::Recall(args) => return memory::recall(&plane()?, args),
+        Command::Persona(command) => return memory::persona(&plane()?, command),
+        Command::Workspace(WorkspaceCommand::Remember {
+            text,
+            title,
+            no_sync,
+            common,
+        }) => {
+            return memory::workspace_remember(
+                &plane()?,
+                &common.workspace,
+                text.as_deref(),
+                title.as_deref(),
+                no_sync,
+                common.now.as_deref(),
+            );
+        }
+        Command::Workspace(WorkspaceCommand::Note {
+            message,
+            no_sync,
+            common,
+        }) => {
+            return memory::workspace_remember(
+                &plane()?,
+                &common.workspace,
+                message.as_deref(),
+                None,
+                no_sync,
+                common.now.as_deref(),
+            );
+        }
+        Command::Workspace(WorkspaceCommand::Recall { query, common }) => {
+            return memory::workspace_recall(&plane()?, &common.workspace, query.as_deref());
+        }
+        Command::Workspace(WorkspaceCommand::Forget { slug, common }) => {
+            return memory::workspace_forget(&plane()?, &common.workspace, &slug);
+        }
+        Command::Workspace(WorkspaceCommand::Optimize {
+            name,
+            // `--all` is the default and changes nothing, as in charter; taken so a script
+            // that passes it is not refused.
+            all: _all,
+            apply,
+            stale_days,
+            now,
+        }) => {
+            return memory::workspace_optimize(
+                &plane()?,
+                name.as_deref(),
+                apply,
+                stale_days,
+                now.as_deref(),
+            );
         }
         Command::Workspace(WorkspaceCommand::Todo { words, common }) => {
             let ws = workspace(&common)?;
@@ -558,7 +664,7 @@ fn run(command: Command) -> Result<(), String> {
             }
         }
     }
-    Ok(())
+    Ok(0)
 }
 
 fn main() -> ExitCode {
@@ -628,7 +734,7 @@ fn main() -> ExitCode {
         return code;
     }
     match run(cli.command) {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => ExitCode::from(code),
         Err(message) => {
             eprintln!("charter: {message}");
             ExitCode::FAILURE
