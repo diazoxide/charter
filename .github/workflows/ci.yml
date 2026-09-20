@@ -214,10 +214,13 @@ jobs:
         run: npm run e2e:relaunch
         if: runner.os == 'macOS'
         working-directory: app
-      # `dbus-run-session` because a Linux desktop has a session bus and a bare CI runner
-      # does not: without one the app spends 25 s in `Builder::build()` waiting out a D-Bus
-      # timeout before it ever reaches its chats. That cost is real and is filed separately;
-      # it is not what this test is for.
+      # `dbus-run-session` because a Linux desktop has a WORKING session bus and this runner
+      # does not. The runner has one — that was the wrong description, and charter-app#24's
+      # own title was wrong the same way — but its desktop portal is activatable and cannot
+      # start, so `Builder::build()` waits out D-Bus's 25 s and then WebKitGTK's 5 before the
+      # app ever reaches its chats. (A machine with NO session bus starts in under 0.6 s:
+      # every call fails at once.) That cost is real, it is filed separately, and it is not
+      # what this test is for.
       - name: Reopening what was open, across a real relaunch
         run: dbus-run-session -- xvfb-run -a npm run e2e:relaunch
         if: runner.os == 'Linux'

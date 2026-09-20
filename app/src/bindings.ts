@@ -7,10 +7,15 @@ export const commands = {
 	/**
 	 *  The window says its first frame is on screen, which is where cold start ends.
 	 * 
-	 *  It is silent unless `CHARTER_BENCH_LOG` is set — only `tools/bench.mjs` sets it — so in
-	 *  an ordinary run this is one IPC call at startup that does nothing.
+	 *  It answers with the one line to put on screen when that took longer than the limit, and
+	 *  with nothing when it did not. An operator who launched charter from an icon has no
+	 *  standard error to read, and a start that took half a minute with no window has to say why
+	 *  somewhere they can see it (charter-app#24). Only the first call is answered: a webview
+	 *  that reloads has not started the process again.
+	 * 
+	 *  `CHARTER_BENCH_LOG` — which only `tools/bench.mjs` sets — also prints the number here.
 	 */
-	firstFrame: () => __TAURI_INVOKE<void>("first_frame"),
+	firstFrame: () => __TAURI_INVOKE<string | null>("first_frame"),
 	/**  The plane the app was started in, or why there is none. */
 	planeRoot: () => typedError<string, string>(__TAURI_INVOKE("plane_root")),
 	/**
