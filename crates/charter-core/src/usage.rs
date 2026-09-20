@@ -277,12 +277,6 @@ fn rows_at(plane: &Path, path: &Path) -> Vec<String> {
     let Ok(mut open) = contain::open_no_link(plane, path) else {
         return Vec::new();
     };
-    let Ok(found) = open.metadata() else {
-        return Vec::new();
-    };
-    if crate::reopen::refuse_unusable(path, &found).is_err() {
-        return Vec::new();
-    }
     let mut text = String::new();
     {
         use std::io::Read;
