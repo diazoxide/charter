@@ -120,7 +120,19 @@ jobs:
   stress:
     # Evidence for charter-app#16, not a gate: fifty tabs on a shared runner is timing-bound,
     # and a flaky REQUIRED check blocks every merge — including the fix for the bug it watches.
-    # It runs on every PR, it reports, and it is allowed to fail. Its logs are kept either way.
+    # It runs on every PR, it reports, and it is allowed to fail.
+    #
+    # It was red on five of its last six runs on `main` (2026-09-20) and that was NOT the
+    # timing this comment allows for: the spec asked for a 900 s budget in the first line of
+    # its body, where WebdriverIO has already read the old one, so it silently ran under
+    # `mochaOpts.timeout` — 180 s — against a macOS runner that needs 170–218 s. The budget
+    # decided the result and the app never did. `stress.e2e.ts` carries the measurement and
+    # `e2e/budget.test.ts` keeps the budget where WebdriverIO reads it.
+    #
+    # A job red five times in six is not evidence of anything; it teaches the repo to ignore
+    # a red X. If this one goes red again, read `logs/stress.jsonl` in the artifact below
+    # before assuming the runner: it now records the app's memory, threads and session count
+    # every ten tabs, so a run that stops says which tab it stopped on.
     name: fifty tabs (${{ matrix.os }}, evidence only)
     continue-on-error: true
     strategy:
@@ -156,11 +168,26 @@ jobs:
         working-directory: app
         env:
           STRESS: "1"
+          # The app says how far its launch got (#23). A stress run that loses the app has to
+          # be able to tell a launch that never finished from one that did and then died.
+          CHARTER_LAUNCH_LOG: "1"
       - run: xvfb-run -a npm run e2e
         if: runner.os == 'Linux'
         working-directory: app
         env:
+          CHARTER_LAUNCH_LOG: "1"
           STRESS: "1"
+      # `always()`, not `failure()`: this job's whole output is the numbers, and the run that
+      # SUCCEEDED is the one that says what healthy costs. The comment at the top of this job
+      # claimed the logs were kept either way and nothing kept them — the console scrollback
+      # was all there was, and it does not survive a log rotation.
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: stress-logs-${{ matrix.os }}
+          path: app/logs
+          if-no-files-found: warn
+
   scenario:
     name: scenario tests (${{ matrix.os }})
     strategy:
