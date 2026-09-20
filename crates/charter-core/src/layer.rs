@@ -674,9 +674,33 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&never, dir.path().join(".claude")).unwrap();
         assert!(write_into(dir.path(), SETTINGS, "{}\n").is_err());
-        // The check BEFORE `create_dir_all` is the one this pins: without it the directory is
-        // made out there before any containment test has run.
         assert!(!never.exists(), "charter made a directory outside the tree");
+    }
+
+    /// The check BEFORE `create_dir_all` runs, which the test above does NOT pin — measured
+    /// by deleting it and watching this one go red while that one stayed green.
+    ///
+    /// For a DANGLING link `create_dir_all` fails on its own (`mkdir` answers EEXIST, and the
+    /// name does not resolve to a directory), so the second check never has to speak. The
+    /// shape that needs the first check is a link to a directory that IS there and a rel with
+    /// a directory of its own to make: without it, `create_dir_all` walks the link and makes
+    /// that directory inside somebody else's tree before any containment test has run, and
+    /// the refusal afterwards no longer undoes it.
+    #[cfg(unix)]
+    #[test]
+    fn no_directory_is_made_outside_the_tree_on_the_way_to_a_refused_write() {
+        let outside = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join(".claude")).unwrap();
+
+        assert!(write_into(dir.path(), ".claude/agents/steward.md", "mine\n").is_err());
+
+        assert!(
+            !outside.path().join("agents").exists(),
+            "charter made a directory inside somebody else's tree on the way to a write it \
+             then refused"
+        );
+        assert!(!outside.path().join("agents").join("steward.md").exists());
     }
 
     #[test]
