@@ -53,9 +53,7 @@ static FORKING: RwLock<()> = RwLock::new(());
 /// `open` must do nothing but open the terminal. It runs with every other thread's spawn
 /// blocked, so anything else put in here is time the rest of charter spends waiting.
 pub fn while_a_terminal_is_opened<T>(open: impl FnOnce() -> T) -> T {
-    // PROOF ONLY, never merge: the write lock is gone, so `openpty`'s window is open to
-    // every fork again. This is the run that says whether the stress test reproduces
-    // charter-app#53 or only guards against it.
+    let _held = FORKING.write().unwrap_or_else(PoisonError::into_inner);
     open()
 }
 
