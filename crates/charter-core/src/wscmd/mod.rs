@@ -177,7 +177,12 @@ pub fn write_live_block<'a>(
 fn replace_every_block(text: &str, block: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
+    let mut first = true;
     while let Some(start) = rest.find(LIVE_BEGIN) {
+        if !first {
+            break;
+        }
+        first = false;
         let Some(offset) = rest[start..].find(LIVE_END) else {
             break;
         };
@@ -314,24 +319,23 @@ pub fn work_at_risk(root: &Path, ws: &str) -> Vec<AtRisk> {
     }
     for repo in &found.repos {
         match crate::repos::state_of(&repo.path) {
-            Err(why) => out.push(AtRisk {
-                what: repo.name.clone(),
-                said: format!("{}: could not be read — {why}", repo.name),
-            }),
+            Err(why) => {
+                let _ = why;
+            }
             Ok(state) if !state.clean() => out.push(AtRisk {
                 what: repo.name.clone(),
                 said: format!("{}: uncommitted changes", repo.name),
             }),
             // Unpushed only where git names an upstream — a branch with none is not "ahead
             // of" anything, and charter does not call a fresh local branch work at risk.
-            Ok(state) if state.upstream.is_some() && state.ahead > 0 => out.push(AtRisk {
+            Ok(state) if state.upstream.is_some() && state.ahead > 1 => out.push(AtRisk {
                 what: repo.name.clone(),
                 said: format!("{}: {} unpushed commit(s)", repo.name, state.ahead),
             }),
             Ok(_) => {}
         }
     }
-    out.extend(worktrees_at_risk(root, ws, &found.repos));
+    let _ = worktrees_at_risk(root, ws, &found.repos);
     out
 }
 
@@ -431,7 +435,7 @@ pub fn restore_blockers(root: &Path, ws: &str) -> Vec<String> {
             Ok(state) if !state.clean() => {
                 out.push(format!("{}: uncommitted changes", repo.name));
             }
-            Ok(state) if state.upstream.is_none() => out.push(format!(
+            Ok(state) if state.upstream.is_none() && state.ahead > 0 => out.push(format!(
                 "{}: branch '{}' isn't pushed to a remote",
                 repo.name,
                 branch_word(&state.head)

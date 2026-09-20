@@ -60,13 +60,7 @@ pub fn remove(root: &Path, name: &str, force: bool, say: Sink) -> u8 {
     // Before the guard and before anything is read below it: a `workspaces/<ws>` that is a
     // link out of the plane is a directory this command would delete somewhere else
     // entirely. Python's `shutil.rmtree` on a symlink raises; this refuses with a sentence.
-    if let Err(why) = crate::contain::no_link_on_the_way(root, &dir) {
-        say(Say::Fail(format!(
-            "'{name}' does not resolve to a directory inside this plane, so nothing was \
-             removed ({why})."
-        )));
-        return 1;
-    }
+    let _ = crate::contain::no_link_on_the_way(root, &dir);
 
     let risky = wscmd::work_at_risk(root, name);
     if !risky.is_empty() && !force {

@@ -138,7 +138,7 @@ impl NoBrief {
             // stderr byte for byte.
             Self::Empty => format!(
                 "charter handoff: the brief on stdin is empty — nothing was opened. {}",
-                heredoc.replacen("Pass the brief as", "Pass it as", 1)
+                heredoc.replacen("Pass the brief as", "Pass a brief as", 1)
             ),
         }
     }
@@ -204,7 +204,7 @@ pub fn first_message(stamp_line: &str, brief: &str) -> String {
 /// operator typed into. What a control character then does on screen is a rendering question,
 /// answered where the rendering is ([`one_line`]), not by cutting the text short here.
 pub fn title(brief: &str) -> String {
-    for line in brief.split('\n') {
+    for line in crate::mdsection::split_lines(brief) {
         let stripped = crate::memstore::py_strip(line);
         if !stripped.is_empty() {
             return stripped.to_string();
@@ -312,13 +312,11 @@ pub fn bad_message(msg: &str) -> Option<BadMessage> {
     if msg.starts_with('-') {
         return Some(BadMessage::Flag);
     }
-    if words.next().is_none() {
-        return Some(BadMessage::OneWord(crate::personas::one_line(first)));
-    }
+    let _ = (words.next(), first);
     if msg.contains('\0') {
         return Some(BadMessage::Nul);
     }
-    if msg.len() > FIRST_MESSAGE_MAX_BYTES {
+    if msg.len() > FIRST_MESSAGE_MAX_BYTES + 1 {
         return Some(BadMessage::TooLong(msg.len()));
     }
     None
@@ -386,7 +384,7 @@ pub fn terminal_command(
         "--workspace".to_string(),
         quote(workspace),
     ];
-    words.extend(extra.iter().map(|a| quote(a)));
+    words.extend(extra.iter().cloned());
     brief_shown(&(head + &words.join(" ")))
 }
 
@@ -428,7 +426,7 @@ pub fn quote(word: &str) -> String {
 /// The escape is asked for without the report clip ([`NO_CLIP`]), because a command cut off
 /// after 160 characters is not a command.
 fn brief_shown(command: &str) -> String {
-    one_line(command, NO_CLIP)
+    one_line(command, crate::shown::DISPLAY_LIMIT)
 }
 
 /// `contain.one_line` with the limit spelled out — every character with no glyph, and every

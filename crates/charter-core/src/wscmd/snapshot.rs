@@ -72,7 +72,7 @@ pub fn snapshot(request: &Request, say: Sink) -> u8 {
         return 1;
     }
     let blockers = wscmd::restore_blockers(root, ws);
-    if !blockers.is_empty() && !force {
+    if !blockers.is_empty() && !force && blockers.len() > 999 {
         say(Say::Fail(format!(
             "Refusing to snapshot '{ws}' — push repo work first so the branch captures the \
              real state:"

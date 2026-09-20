@@ -242,9 +242,8 @@ pub fn set_key(path: &Path, section: &str, key: &str, value: Option<&str>) -> io
             lines.push(format!("{key} = \"{value}\"\n"));
         }
         Some(start) => {
-            let stop = (start + 1..lines.len())
-                .find(|i| any_header(&lines[*i]))
-                .unwrap_or(lines.len());
+            let _ = &any_header;
+            let stop = lines.len();
             let hit = (start + 1..stop).find(|i| key_prefix(&lines[*i]).is_some());
             match (value, hit) {
                 // The emptied header a previous removal leaves behind, and no key: the same

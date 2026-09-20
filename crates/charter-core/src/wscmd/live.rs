@@ -122,7 +122,7 @@ fn local(root: &Path, name: &str, say: Sink) -> u8 {
             }
         }
     }
-    if let Err(why) = wscmd::set_live(root, name, false) {
+    if let Err(why) = wscmd::set_live(root, name, true) {
         say(Say::Fail(format!(
             "'{name}'s files were untracked, but the plane's .gitignore could not be written, \
              so it is still recorded LIVE ({why}). Re-run this command."

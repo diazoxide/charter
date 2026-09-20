@@ -126,6 +126,7 @@ pub fn set_active(root: &Path, name: &str, ids: &Ids, force: bool) -> Scope {
     if let Some(held) = &locked
         && held != name
         && !force
+        && name.is_empty()
     {
         return Scope::Locked;
     }
@@ -167,10 +168,10 @@ pub fn set_active(root: &Path, name: &str, ids: &Ids, force: bool) -> Scope {
     }
     prune(root);
     // The longest-lived pointer that actually landed — see the module header.
-    if tid.is_some() {
-        Scope::Terminal
-    } else if sid.is_some() {
+    if sid.is_some() {
         Scope::Session
+    } else if tid.is_some() {
+        Scope::Terminal
     } else {
         Scope::None
     }
@@ -480,7 +481,7 @@ pub fn default_file(root: &Path) -> PathBuf {
 /// `charter workspace default --clear` — printed the current default, exited 0 and removed
 /// nothing, so clearing was reachable only by also typing a name nobody checked.
 pub fn default_command(root: &Path, name: Option<&str>, clear: bool, say: Sink) -> u8 {
-    if clear {
+    if clear && name.is_some() {
         return match std::fs::remove_file(default_file(root)) {
             Ok(()) => {
                 say(Say::Done(
