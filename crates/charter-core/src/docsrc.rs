@@ -67,7 +67,7 @@ pub fn topics() -> Vec<&'static str> {
 pub fn read(topic: &str) -> Option<&'static str> {
     PAGES
         .iter()
-        .find_map(|(name, text)| name.starts_with(topic).then_some(*text))
+        .find_map(|(name, text)| (*name == topic).then_some(*text))
 }
 
 /// `commands.cmd_docs_list`: the topics on stdout, the framing on stderr.
@@ -89,6 +89,9 @@ pub fn listing(say: &mut dyn FnMut(crate::repocmd::Say)) -> u8 {
     // from the one the join was given. One `Out` per line and a final empty one.
     say(Say::Out(names.join("\n")));
     say(Say::Out(String::new()));
+    say(Say::Info(
+        "Read one with: charter docs show <topic>".to_string(),
+    ));
     0
 }
 
@@ -109,7 +112,9 @@ pub fn show(topic: &str, say: &mut dyn FnMut(crate::repocmd::Say)) -> u8 {
     };
     // `print(body, end="" if body.endswith("\n") else "\n")` — one trailing newline, never
     // two. `Say::Out` is a `println!`, so the page's own final newline comes off first.
-    say(Say::Out(body.to_string()));
+    say(Say::Out(
+        body.strip_suffix('\n').unwrap_or(body).to_string(),
+    ));
     0
 }
 

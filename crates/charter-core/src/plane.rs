@@ -89,10 +89,8 @@ fn walk(here: &Path) -> Option<PathBuf> {
 /// would let a worktree nested inside another worktree answer with the outer one's plane —
 /// an answer neither implementation has ever given.
 fn worktree_plane_above(here: &Path) -> Option<PathBuf> {
-    here.ancestors().find_map(|dir| {
-        let main = main_worktree_of(dir)?;
-        marked_above(&main).map(|marked| outermost(&plane_of(marked)))
-    })
+    let main = here.ancestors().find_map(main_worktree_of)?;
+    marked_above(&main).map(|marked| outermost(&plane_of(marked)))
 }
 
 /// The nearest directory at or above `start` holding a `charter.toml`, or `None`.
@@ -169,7 +167,7 @@ pub fn place(cwd: &Path) -> Place {
         }
     }
     let here = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
-    match marked_above(&here).map(|m| outermost(&plane_of(m))) {
+    match walk(&here) {
         Some(root) => Place {
             root,
             is_plane: true,
