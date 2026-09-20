@@ -104,64 +104,28 @@ pub fn short(value: &str) -> String {
 // em-dash is content and has to reach the screen as itself. Folding one into the other would
 // escape every one of those.
 
-/// Unicode general category `Cf`, as ranges.
-///
-/// **The one part of Python's `_INVISIBLE` that Rust's own `char` predicates cannot answer.**
-/// `Cc` is `char::is_control`, `Zl`/`Zp`/`Zs` are all `char::is_whitespace`, and `Cs` — a lone
-/// surrogate — is not a `char` at all. `Cf` is what is left, and it is a table.
-///
-/// Generated from `unicodedata` 16.0.0, the version CPython 3.13 carries:
-///
-/// ```text
-/// python3 -c "import unicodedata as u; print([hex(c) for c in range(0x110000) \
-///     if u.category(chr(c)) == 'Cf'])"
-/// ```
-///
-/// A table goes stale as Unicode grows, which is the objection this module's complement rule
-/// exists to dodge — and it is accepted HERE rather than dodged, because the property being
-/// ported is Python's and Python's is category-based. A `Cf` codepoint assigned after 16.0.0
-/// escapes in charter and not here until this table moves: one line the two implementations
-/// would render differently, named rather than left to be found. U+180E is why the table
-/// cannot be skipped altogether — it is `Cf`, and `char::is_whitespace` is false for it.
-const FORMAT_CHARS: [(char, char); 21] = [
-    ('\u{ad}', '\u{ad}'),
-    ('\u{600}', '\u{605}'),
-    ('\u{61c}', '\u{61c}'),
-    ('\u{6dd}', '\u{6dd}'),
-    ('\u{70f}', '\u{70f}'),
-    ('\u{890}', '\u{891}'),
-    ('\u{8e2}', '\u{8e2}'),
-    ('\u{180e}', '\u{180e}'),
-    ('\u{200b}', '\u{200f}'),
-    ('\u{202a}', '\u{202e}'),
-    ('\u{2060}', '\u{2064}'),
-    ('\u{2066}', '\u{206f}'),
-    ('\u{feff}', '\u{feff}'),
-    ('\u{fff9}', '\u{fffb}'),
-    ('\u{110bd}', '\u{110bd}'),
-    ('\u{110cd}', '\u{110cd}'),
-    ('\u{13430}', '\u{1343f}'),
-    ('\u{1bca0}', '\u{1bca3}'),
-    ('\u{1d173}', '\u{1d17a}'),
-    ('\u{e0001}', '\u{e0001}'),
-    ('\u{e0020}', '\u{e007f}'),
-];
-
 /// Has `c` no glyph of its own — `charter/contain.py`'s `_INVISIBLE`, plus the whitespace
 /// clause beside it?
 ///
-/// Python asks `category(ch) in {Cc, Cf, Cs, Zl, Zp} or (ch.isspace() and ch != ' ')`. These
-/// three clauses are that set, exactly:
+/// Python asks `category(ch) in {Cc, Cf, Cs, Zl, Zp} or (ch.isspace() and ch != ' ')`, and
+/// [`crate::tui::tables::INVISIBLE`] is **that sentence, evaluated by CPython** for every
+/// codepoint and written down as ranges (`tools/gen-unicode-tables.py`).
 ///
-/// * `is_control` is `Cc` and nothing else;
-/// * `is_whitespace` is Rust's `White_Space`, which covers `Zl` (U+2028), `Zp` (U+2029) and
-///   every `Zs` but the space — the whole of Python's `isspace()` clause except the four
-///   separator controls U+001C–U+001F, which are `Cc` and are caught above;
-/// * [`FORMAT_CHARS`] is `Cf`, and `Cs` cannot be a `char`.
+/// **Not decomposed into Rust's own `char` predicates any more, and that is the point.** It
+/// used to be three clauses — `is_control` for `Cc`, `is_whitespace` for `Zl`/`Zp`/`Zs`, and a
+/// hand-pasted `Cf` table — with a paragraph arguing that the three cover Python's set
+/// exactly. The argument was correct and the table beside it still drifted: [`crate::pyrepr`]
+/// derived its own list from the same `unicodedata` on a different day and came out nine
+/// ranges short, so `shown` escaped U+0890 and `repr()` printed it. An argument a reader has
+/// to re-check is not a rule; a table CPython wrote is. The whole file is regenerated from one
+/// CPython, so the two answers cannot be of different Unicode versions either.
+///
+/// The residual risk is unchanged and still stated rather than hidden: the table is of ONE
+/// Unicode version (named at the top of `tables.rs`). A codepoint whose category changes after
+/// it escapes in charter and not here until the table moves — one line the two implementations
+/// would render differently, named rather than left to be found.
 fn invisible(c: char) -> bool {
-    c.is_control()
-        || (c.is_whitespace() && c != ' ')
-        || FORMAT_CHARS.iter().any(|&(lo, hi)| (lo..=hi).contains(&c))
+    crate::tui::in_table(c, &crate::tui::tables::INVISIBLE)
 }
 
 /// `value` as one line of a report, with nothing in it that can forge another

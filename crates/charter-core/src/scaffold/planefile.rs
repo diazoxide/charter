@@ -58,37 +58,20 @@ pub fn load(root: &Path) -> Read {
     }
 }
 
-/// A TOML value as Python's `repr` prints what `tomllib` made of it.
+/// A TOML value as Python's `repr` prints what `tomllib` made of it —
+/// [`crate::pyrepr::repr_toml`], the crate's one answer.
+///
+/// This had a body of its own, and `profiles` had a second one for the same question. They
+/// disagreed about a float: this one asked [`crate::pyjson::float_repr`] and the other let
+/// `toml`'s own `Display` write it, so `1e300` was quoted back as `1e+300` by one refusal and
+/// as `1e300` by the next. `repr_toml` is this body, moved.
 fn py_value(value: &toml::Value) -> String {
-    match value {
-        toml::Value::String(s) => text::py_repr(s),
-        toml::Value::Integer(i) => i.to_string(),
-        toml::Value::Float(f) => crate::pyjson::float_repr(*f),
-        toml::Value::Boolean(true) => "True".to_owned(),
-        toml::Value::Boolean(false) => "False".to_owned(),
-        toml::Value::Array(items) => format!(
-            "[{}]",
-            items.iter().map(py_value).collect::<Vec<_>>().join(", ")
-        ),
-        toml::Value::Table(table) => format!(
-            "{{{}}}",
-            table
-                .iter()
-                .map(|(k, v)| format!("{}: {}", text::py_repr(k), py_value(v)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        toml::Value::Datetime(d) => d.to_string(),
-    }
+    crate::pyrepr::repr_toml(value)
 }
 
-/// `str(value)` for what a `[section] default` holds, or `None` when Python's own reader
-/// would give up on it.
+/// `str(value)` for what a `[section] default` holds — [`crate::pyrepr::str_toml`].
 fn py_str(value: &toml::Value) -> String {
-    match value {
-        toml::Value::String(s) => s.clone(),
-        other => py_value(other),
-    }
+    crate::pyrepr::str_toml(value)
 }
 
 /// `instance.default_persona_of(cfg)` — whether the plane declares a front door.

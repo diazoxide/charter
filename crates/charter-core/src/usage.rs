@@ -214,7 +214,7 @@ pub fn record_turn(plane: &Path, turn: &Turn) -> Recorded {
     let Some(path) = file_for(plane, &turn.session) else {
         return Recorded::Nothing;
     };
-    let mut rows = rows_at(&path);
+    let mut rows = rows_at(plane, &path);
     let head = format!("{},{}", turn.read, turn.write);
     if rows
         .last()
@@ -245,15 +245,63 @@ pub fn record_turn(plane: &Path, turn: &Turn) -> Recorded {
 ///
 /// A blank line is dropped, as Python's `if ln.strip()` drops it, so a file that was
 /// truncated mid-write does not shift the ring buffer by an empty slot.
-fn rows_at(path: &Path) -> Vec<String> {
-    std::fs::read_to_string(path)
-        .map(|text| {
-            text.lines()
-                .filter(|line| !line.trim().is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+///
+/// # The read is gated, and it was the last follow in this module that was not
+///
+/// This was `read_to_string(path)`. [`write_row`] below refuses to write through a link, so a
+/// planted `<plane>/.charter/sessions/<sid>.usage -> /elsewhere` produced no write — but the
+/// READ had already happened, and `charter statusline` runs on every prompt. Nothing was
+/// printed, so nothing leaked; "nothing leaks today" is not the property this repo claims,
+/// and the module below it already pays for the two hazards an ungated read carries (ADR
+/// 0028, `crate::reopen`, `crate::planegit::push_record`):
+///
+/// * **a FIFO is not a link**, so a link check waves it through and `read_to_string` on one
+///   never returns — on a path a status-line hook opens at every prompt;
+/// * **a planted giant** is read whole into memory, and git packs a sparse multi-gigabyte
+///   file small.
+///
+/// So the descriptor is opened `O_NOFOLLOW | O_NONBLOCK` and both questions are asked of
+/// THAT, not of the name — an `lstat` and a later open are two different objects with a
+/// window between them.
+///
+/// **The gate is on `path` itself, not on its parent.** `path` is what
+/// [`self::file_for`] built and what [`write_row`] opens: the same bytes, both sides. Gating
+/// `.charter/sessions/` would leave the `.usage` file — the one component an attacker can
+/// actually plant, because it is the one named by a payload field — ungated, which is the
+/// mistake this repo has already had six review rounds on.
+///
+/// Every failure is `Vec::new()`, as Python's `except OSError: pass` is: a refused read means
+/// the trend starts empty, the turn is still recorded if the write is allowed, and a footer is
+/// never worth taking a session down for.
+fn rows_at(plane: &Path, path: &Path) -> Vec<String> {
+    let Ok(mut open) = contain::open_no_link(plane, path) else {
+        return Vec::new();
+    };
+    let Ok(found) = open.metadata() else {
+        return Vec::new();
+    };
+    if crate::reopen::refuse_unusable(path, &found).is_err() {
+        return Vec::new();
+    }
+    let mut text = String::new();
+    {
+        use std::io::Read;
+
+        // Bounded again on the way in: `refuse_unusable` asked how big it was, and a writer
+        // that appends between the `fstat` and the read would otherwise still be unbounded.
+        if open
+            .by_ref()
+            .take(crate::reopen::MAX_BYTES)
+            .read_to_string(&mut text)
+            .is_err()
+        {
+            return Vec::new();
+        }
+    }
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Write the trend file, 0600, with the same ordering `glrefresh` writes the cache with.
@@ -463,6 +511,121 @@ mod tests {
             std::fs::read_to_string(outside.join("theirs")).unwrap(),
             "NOT CHARTER'S\n",
             "the record was written through the link"
+        );
+    }
+
+    /// A plane with an ordinary `.charter/sessions/`, and somewhere outside it to point at.
+    fn a_plane_and_an_outside() -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let held = tempfile::tempdir().unwrap();
+        let here = std::fs::canonicalize(held.path()).unwrap();
+        let plane = here.join("plane");
+        let outside = here.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(plane.join(SESSIONS)).unwrap();
+        (held, plane, outside)
+    }
+
+    /// The READ, not the write — the follow this module did not gate (M2.20).
+    ///
+    /// **Two things make this test bite, and the module already had a test that had neither.**
+    /// `the_record_is_not_written_through_a_link_out_of_the_plane` plants its link one level
+    /// up, at `.charter/sessions/`, and asserts `record(…) == Nothing`. Both halves of that
+    /// pass against the UNFIXED read: `read_to_string` followed a directory link just as
+    /// happily as a file one, and `record` answered `Nothing` either way because the WRITE
+    /// refused. The escape was invisible from there.
+    ///
+    /// So this one plants the link at the exact path [`self::file_for`] returns — the leaf,
+    /// which is the component named by a payload field and therefore the one an attacker
+    /// picks — and asserts on what `rows_at` RETURNED, which is the value that had the outside
+    /// file in it.
+    #[test]
+    #[cfg(unix)]
+    fn the_trend_is_not_read_through_a_link_at_the_records_own_name() {
+        let (_held, plane, outside) = a_plane_and_an_outside();
+        let theirs = outside.join("theirs");
+        std::fs::write(&theirs, "1,2,3,4\n5,6,7,8\n").unwrap();
+        let path = file_for(&plane, "s1").expect("an ordinary id");
+        std::os::unix::fs::symlink(&theirs, &path).unwrap();
+
+        assert_eq!(
+            rows_at(&plane, &path),
+            Vec::<String>::new(),
+            "the rows outside the plane were read through the link"
+        );
+    }
+
+    /// A link that lands back INSIDE the plane is refused too, and that is deliberate.
+    ///
+    /// `contain::readable` follows a link that stays inside, because a plane that links a
+    /// persona directory depends on it. This path is not that: `.charter/sessions/` is
+    /// charter's own, created by charter, and nothing legitimate makes any part of it a link
+    /// — which is the predicate `open_no_link` already declares for every other record in the
+    /// state directory.
+    #[test]
+    #[cfg(unix)]
+    fn a_link_that_stays_inside_the_plane_is_refused_here_as_well() {
+        let (_held, plane, _outside) = a_plane_and_an_outside();
+        let elsewhere = plane.join("elsewhere.usage");
+        std::fs::write(&elsewhere, "1,2,3,4\n").unwrap();
+        let path = file_for(&plane, "s1").expect("an ordinary id");
+        std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+
+        assert_eq!(rows_at(&plane, &path), Vec::<String>::new());
+    }
+
+    /// A FIFO is not a link, so the walk waves it through — and reading one never returns.
+    #[test]
+    #[cfg(unix)]
+    fn a_trend_that_is_not_a_plain_file_is_refused_instead_of_read_for_ever() {
+        let (_held, plane, _outside) = a_plane_and_an_outside();
+        let path = file_for(&plane, "s1").expect("an ordinary id");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&path)
+            .status()
+            .expect("mkfifo runs");
+        assert!(made.success(), "the test needs a fifo to plant");
+
+        // In a thread, because the whole point is that the unguarded version never returns.
+        let (say, heard) = std::sync::mpsc::channel();
+        let asked = plane.clone();
+        let at = path.clone();
+        std::thread::spawn(move || say.send(rows_at(&asked, &at)));
+        let rows = heard
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("reading a fifo trend must not block");
+
+        assert_eq!(rows, Vec::<String>::new());
+    }
+
+    /// A sparse giant packs small in git and arrives full size, and this file is read whole.
+    #[test]
+    fn a_trend_too_large_to_be_one_is_refused_rather_than_read_whole() {
+        let (_held, plane, _outside) = a_plane_and_an_outside();
+        let path = file_for(&plane, "s1").expect("an ordinary id");
+        let planted = std::fs::File::create(&path).unwrap();
+        planted.set_len(crate::reopen::MAX_BYTES + 1).unwrap();
+        drop(planted);
+
+        assert_eq!(rows_at(&plane, &path), Vec::<String>::new());
+    }
+
+    /// And the gate changes nothing for the file charter itself wrote, which is the half a
+    /// containment test that only plants attacks never proves.
+    #[test]
+    fn an_ordinary_trend_is_still_read_row_for_row() {
+        let (_held, plane, _outside) = a_plane_and_an_outside();
+        let path = file_for(&plane, "s1").expect("an ordinary id");
+        std::fs::write(&path, "1,2,3,4\n\n5,6,7,8\n").unwrap();
+
+        assert_eq!(
+            rows_at(&plane, &path),
+            vec!["1,2,3,4".to_string(), "5,6,7,8".to_string()],
+            "a blank line is dropped, as Python's `if ln.strip()` drops it"
+        );
+        // A trend that is not there yet is no rows, not a failure.
+        assert_eq!(
+            rows_at(&plane, &file_for(&plane, "s2").unwrap()),
+            Vec::<String>::new()
         );
     }
 

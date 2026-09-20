@@ -708,45 +708,24 @@ fn name_ok(name: &str) -> bool {
 }
 
 /// A TOML value as Python's `str()` renders it, for the one place a refusal repeats a value
-/// back that need not be text.
+/// back that need not be text — [`crate::pyrepr::str_toml`].
 ///
 /// Every spelling, not just the easy ones. A review measured three that TOML and Python
 /// disagree about — `true`/`True`, `["claude"]`/`['claude']`, `{ a = 1 }`/`{'a': 1}` — and
 /// a refusal that quotes a value back differently is the second answer this port exists to
 /// prevent, however wrong the value being quoted.
+///
+/// **The body is in `pyrepr` now, because this module and `scaffold::planefile` each had
+/// one.** The two agreed on those three spellings and parted on a fourth: this one handed a
+/// float to `toml`'s own `Display` and wrote `1e300`, where Python's `repr` — and the other
+/// port — write `1e+300`.
 pub(crate) fn py_str(value: &toml::Value) -> String {
-    match value {
-        toml::Value::String(text) => text.clone(),
-        toml::Value::Boolean(yes) => (if *yes { "True" } else { "False" }).to_owned(),
-        toml::Value::Array(items) => format!(
-            "[{}]",
-            items.iter().map(py_repr).collect::<Vec<_>>().join(", ")
-        ),
-        toml::Value::Table(pairs) => format!(
-            "{{{}}}",
-            pairs
-                .iter()
-                .map(|(k, v)| format!("{}: {}", py_repr_str(k), py_repr(v)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        other => other.to_string(),
-    }
+    crate::pyrepr::str_toml(value)
 }
 
 /// A value as Python `repr`s it INSIDE a container, where a string gains quotes.
 pub(crate) fn py_repr(value: &toml::Value) -> String {
-    match value {
-        toml::Value::String(text) => py_repr_str(text),
-        other => py_str(other),
-    }
-}
-
-/// Python's `repr` of a string — [`crate::pyrepr::repr_str`], which is the one this repo
-/// keeps: this had its own two-rule version, and a value holding a tab or a newline was
-/// quoted back differently by the two of them.
-fn py_repr_str(text: &str) -> String {
-    crate::pyrepr::repr_str(text)
+    crate::pyrepr::repr_toml(value)
 }
 
 fn read_toml(path: &Path) -> Result<toml::Table, ()> {
