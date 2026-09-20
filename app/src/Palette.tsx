@@ -170,7 +170,7 @@ export function Palette({
   const aimed = at ?? aim(rows);
   const aimedId = aimed >= 0 ? rows[aimed]?.id : undefined;
 
-  // The aimed row, brought on screen. The list scrolls at 55vh and the catalogue is 119 rows
+  // The aimed row, brought on screen. The list scrolls at 55vh and the catalogue is 117 rows
   // with fifty chats open (charter-app#48), so past the first screenful the arrows were
   // moving `aria-selected` onto a row nobody could see — an aim an operator cannot read is
   // not an aim. `block: "nearest"` scrolls only when it has to, so the list does not jump

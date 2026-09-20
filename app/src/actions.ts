@@ -425,7 +425,7 @@ function byItsWords(query: string, offer: Offer): boolean {
  * found comes before a row that merely has those letters in somebody's name.** Within each
  * of those two groups everything keeps the place the catalogue gave it — still no score and
  * still no cap. That matters at the scale ADR 0026 writes the limits for: with fifty chats
- * open the catalogue is 119 rows, and `re` used to list `Switch to tab release.3` and forty
+ * open the catalogue is 117 rows, and `re` used to list `Switch to tab release.3` and forty
  * other names above `Remove this chat's worktree` (measured, charter-app#48). Two stable
  * groups is not a score — nothing is weighted, nothing moves relative to anything else
  * inside its group, and the same query always gives the same order.
