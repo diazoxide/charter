@@ -47,6 +47,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import filecmp
+import hashlib
 import json
 import os
 import re
@@ -1331,35 +1332,47 @@ NEWS_QUOTED_VERSION = "0.56.0"
 
 
 def check_corpus() -> bool:
-    """The vendored `news/` and the oracle's own entries are the same set of files.
+    """The vendored `news/` and the oracle's own entries are the same files, byte for byte.
 
     Asked of the ORACLE as a subprocess, under the interpreter the scenarios run it with, rather
     than imported here — this file keeps working whether or not charter is importable in its own
     process, and the oracle is pinned to the commit the corpus was taken from.
 
-    Filenames rather than contents: a file whose BYTES drift shows up in that version's
-    `news --for` scenario, in the rendered body, which is a better report than a digest. What a
-    rendered body cannot show is a file that is not there to be rendered.
+    **Bytes rather than names, and the difference is a whole class of drift.** The per-version
+    `news --for` scenarios compare RENDERED BODIES, so a headline or a body that drifts turns one
+    of them red. What a rendered body does not carry is the rest of the frontmatter: `check:`,
+    `adopt:` and — for an entry that is alone in its version — `lead:`. An entry whose `adopt:`
+    line said one thing here and another in charter would render identically in all 27 of them,
+    and the only view that prints an `adopt:` line is `charter news --pending`, which has no
+    scenario at all (its Python answer depends on the runner). A digest closes that, and closes
+    the missing-file case with it: a file nobody vendored is in no scenario to fail.
     """
     said = subprocess.run(
         [sys.executable, "-c",
-         "from charter import news; d = news._dir();"
-         "print('\\n'.join(sorted(p.name for p in d.glob('*.md'))) if d else '')"],
+         "import hashlib;from charter import news;d = news._dir();"
+         "print('\\n'.join(f'{p.name} {hashlib.sha256(p.read_bytes()).hexdigest()}'"
+         " for p in sorted(d.glob('*.md'))) if d else '')"],
         capture_output=True, text=True,
     )
     if said.returncode != 0:
         print("DIFF news-corpus: the oracle could not list its entries — " + said.stderr.strip())
         return False
-    theirs = set(said.stdout.split())
-    ours = {p.name for p in NEWS_DIR.glob("*.md")}
+    theirs = dict(line.split() for line in said.stdout.splitlines() if line.strip())
+    ours = {
+        p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(NEWS_DIR.glob("*.md"))
+    }
     if not theirs:
         print("DIFF news-corpus: the oracle ships no entries, so nothing was compared")
         return False
     problems = []
-    for name in sorted(theirs - ours):
+    for name in sorted(set(theirs) - set(ours)):
         problems.append(f"    only charter has: docs/news/{name}")
-    for name in sorted(ours - theirs):
+    for name in sorted(set(ours) - set(theirs)):
         problems.append(f"    only charter-app has: crates/charter-core/news/{name}")
+    for name in sorted(set(theirs) & set(ours)):
+        if theirs[name] != ours[name]:
+            problems.append(f"    differs: {name}")
     print(("ok   " if not problems else "DIFF ") + f"news-corpus ({len(theirs)} entries)")
     for line in problems:
         print(line)
