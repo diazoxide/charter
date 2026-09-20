@@ -150,6 +150,13 @@ jobs:
         run: npx tauri build --debug --no-bundle --features e2e --config src-tauri/tauri.e2e.conf.json
         working-directory: app
       - run: npm run e2e
+        if: runner.os == 'macOS'
+        working-directory: app
+        env:
+          STRESS: "1"
+      - run: xvfb-run -a npm run e2e
+        if: runner.os == 'Linux'
+        working-directory: app
         env:
           STRESS: "1"
   scenario:
