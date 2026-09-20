@@ -111,13 +111,21 @@ impl Persona {
 
     /// The `role:` line of `persona.md`'s frontmatter, if it has one.
     ///
-    /// Not YAML: charter's frontmatter is line-based with no parser, no quote stripping and
-    /// no nesting, so this reads it the same way.
+    /// **Read by [`frontmatter`], the one reader**, and collapsed by [`meta`] exactly as
+    /// `persona.parse`'s `dict(pairs)` collapses it — so a key written twice answers with
+    /// the LAST line, which is what every other consumer of a definition already gets.
+    ///
+    /// This used to be a THIRD reading of the format (`frontmatter_value`), and it lost a
+    /// persona's role two ways that charter does not (charter-app #67): it returned at the
+    /// first frontmatter line without a colon where charter skips it, so a blank line or a
+    /// stray comment above `role:` answered `None`; and it matched the opening fence on a
+    /// TRIMMED line where charter tests `text.startswith("---")`, so an indented `  ---`
+    /// opened a frontmatter block here and none in charter.
     pub fn role(&self) -> Option<String> {
         let path = self.dir.join("persona.md");
         self.readable(&path).ok()?;
         let text = std::fs::read_to_string(&path).ok()?;
-        frontmatter_value(&text, "role")
+        meta(&frontmatter(&text), "role").map(str::to_string)
     }
 }
 
@@ -156,28 +164,6 @@ fn create_absent(root: &Path, dir: &Path, name: &str, body: &str) -> io::Result<
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
         Err(e) => Err(e),
     }
-}
-
-/// One `key: value` line from the leading `---` block.
-///
-/// charter's frontmatter is deliberately not YAML: no parser, no quote stripping, no
-/// nesting, no comments. So this is the same reading — split once on the first colon, trim,
-/// and stop at the closing fence.
-fn frontmatter_value(text: &str, key: &str) -> Option<String> {
-    let mut lines = crate::mdsection::split_lines(text).into_iter();
-    if lines.next()?.trim() != "---" {
-        return None;
-    }
-    for line in lines {
-        if line.trim() == "---" {
-            return None;
-        }
-        let (found, value) = line.split_once(':')?;
-        if found.trim() == key {
-            return Some(value.trim().to_string());
-        }
-    }
-    None
 }
 
 // ---------------------------------------------------------------------------------------
@@ -514,5 +500,82 @@ mod name_tests {
         assert_eq!(one_line("two\nlines"), "two\\x0alines");
         // Where `repr` writes the short escape and adds its own quotes.
         assert_eq!(crate::pyrepr::repr_str("two\nlines"), "'two\\nlines'");
+    }
+
+    /// The role charter reads for a persona whose definition is `text`.
+    fn role_of(text: &str) -> Option<String> {
+        let dir = plane();
+        persona(dir.path(), "devops", text);
+        Persona::at(
+            dir.path().join("personas").join("devops"),
+            "devops".to_string(),
+            dir.path().to_path_buf(),
+        )
+        .role()
+    }
+
+    /// charter-app #67. `persona._frontmatter` SKIPS a frontmatter line with no colon and
+    /// keeps walking; the reader this replaced returned at the first one, so everything
+    /// below a blank line or a stray comment was invisible.
+    #[test]
+    fn a_frontmatter_line_that_is_not_a_pair_is_skipped_and_the_walk_goes_on() {
+        // The issue's reproduction, exactly.
+        assert_eq!(role_of("---\n\nrole: ops\n---\n").as_deref(), Some("ops"));
+        assert_eq!(
+            role_of("---\n# not a pair\nrole: ops\n---\n").as_deref(),
+            Some("ops"),
+            "charter has no comments; the line is simply not a pair, and it is skipped"
+        );
+        assert_eq!(
+            role_of("---\nname: devops\n  wrapped onto a continuation line\nrole: ops\n---\n")
+                .as_deref(),
+            Some("ops"),
+            "the YAML habit a continuation line is: charter walks past it"
+        );
+        assert_eq!(
+            role_of("---\nno-colon-here\n---\n"),
+            None,
+            "and a block that never declares one still has no role"
+        );
+    }
+
+    /// `persona._frontmatter` opens on `text.startswith("---")`, which an INDENTED fence
+    /// does not satisfy. The reader this replaced compared the line trimmed, so `  ---`
+    /// opened a block here and opened none in charter.
+    #[test]
+    fn the_opening_fence_is_the_first_three_bytes_and_not_a_trimmed_line() {
+        assert_eq!(role_of("---\nrole: ops\n---\n").as_deref(), Some("ops"));
+        assert_eq!(role_of("  ---\nrole: ops\n---\n"), None);
+        assert_eq!(role_of("\n---\nrole: ops\n---\n"), None);
+        assert_eq!(
+            role_of("---\nname: devops\n---\nrole: in the body\n"),
+            None,
+            "below the closing fence is body, and the body is not read for keys"
+        );
+    }
+
+    /// `persona.parse` is `dict(pairs)`: two lines carrying one key collapse to the LAST.
+    /// Every other consumer of a definition already reads it that way ([`meta`]); this one
+    /// used to answer with the first line it saw.
+    #[test]
+    fn a_role_written_twice_answers_with_the_last_line_as_a_dict_does() {
+        assert_eq!(
+            role_of("---\nrole: first\nrole: second\n---\n").as_deref(),
+            Some("second")
+        );
+    }
+
+    /// Split at the FIRST colon, both halves stripped — so a value holding a colon keeps it.
+    #[test]
+    fn a_role_is_split_at_the_first_colon_and_keeps_the_rest_of_the_line() {
+        assert_eq!(
+            role_of("---\nrole:   ops: and then some  \n---\n").as_deref(),
+            Some("ops: and then some")
+        );
+        assert_eq!(
+            role_of("---\nrole:\n---\n").as_deref(),
+            Some(""),
+            "a declared role of nothing is declared, and is not no role at all"
+        );
     }
 }
