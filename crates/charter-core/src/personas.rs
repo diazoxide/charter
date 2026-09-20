@@ -125,7 +125,10 @@ impl Persona {
         let path = self.dir.join("persona.md");
         self.readable(&path).ok()?;
         let text = std::fs::read_to_string(&path).ok()?;
-        meta(&frontmatter(&text), "role").map(str::to_string)
+        frontmatter(&text)
+            .iter()
+            .find(|(k, _)| k == "role")
+            .map(|(_, v)| v.clone())
     }
 }
 
@@ -197,7 +200,7 @@ pub fn def_path(root: &Path, name: &str) -> PathBuf {
 /// stripped, each line holding a `:` split at the first one, both halves stripped, and a
 /// pair kept only when its key is not empty.
 pub fn frontmatter(text: &str) -> Vec<(String, String)> {
-    let Some(rest) = text.strip_prefix("---") else {
+    let Some(rest) = text.trim_start().strip_prefix("---") else {
         return Vec::new();
     };
     let Some(end) = rest.find("---") else {
@@ -206,8 +209,8 @@ pub fn frontmatter(text: &str) -> Vec<(String, String)> {
     let block = memstore::py_strip(&rest[..end]);
     crate::mdsection::split_lines(block)
         .into_iter()
-        .filter_map(|line| {
-            let (key, value) = line.split_once(':')?;
+        .map_while(|line| {
+            let (key, value) = line.rsplit_once(':')?;
             let key = memstore::py_strip(key);
             (!key.is_empty()).then(|| (key.to_string(), memstore::py_strip(value).to_string()))
         })
