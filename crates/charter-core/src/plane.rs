@@ -28,17 +28,28 @@ pub enum PlaneError {
 /// **Not "outermost marker wins".** The hop is allowed only through an enclosing plane's own
 /// `workspaces/`, so a stray `charter.toml` in `~` never swallows the planes beneath it.
 ///
-/// **One step of Python's walk is still not ported**, and it is the same one [`place`] names:
-/// a linked git worktree of a plane resolves, in Python, to the plane in its MAIN worktree
-/// (`_plane_of`, `main_worktree_of`). Here the worktree's own `charter.toml` answers. Left
-/// alone deliberately — porting it under this change would move where a chat in a worktree
-/// writes its memory, which is a behaviour change with its own tests to write.
+/// **One step of Python's walk is still not taken here**, and it is the one
+/// [`command_root`] adds: a linked git worktree of a plane resolves, in Python, to the plane
+/// in its MAIN worktree ([`plane_of`]). Here the worktree's own `charter.toml` answers. Left
+/// alone deliberately — giving every command that redirect would move where a chat in a
+/// worktree writes its memory, which is a behaviour change with its own tests to write, and
+/// the commands that genuinely need it already ask [`command_root`].
 pub fn find_root(start: &Path) -> Result<PathBuf, PlaneError> {
-    start
-        .ancestors()
-        .find(|dir| dir.join(MANIFEST).is_file())
+    marked_above(start)
         .map(outermost)
         .ok_or_else(|| PlaneError::NotFound(start.to_path_buf()))
+}
+
+/// The nearest directory at or above `start` holding a `charter.toml`, or `None`.
+///
+/// **One walk, asked by both resolvers.** [`find_root`] and [`command_root`] differ by a
+/// single step ([`plane_of`]) and by nothing else; writing the walk twice is how two
+/// functions that must agree about a directory come to disagree about it — which is the
+/// defect M2.9 fixed between [`find_root`] and [`place`] two milestones after it appeared.
+///
+/// `is_file`, never `exists`: a DIRECTORY called `charter.toml` is not a marker.
+fn marked_above(start: &Path) -> Option<&Path> {
+    start.ancestors().find(|dir| dir.join(MANIFEST).is_file())
 }
 
 /// The plane a process should act on: `$CHARTER_ROOT` if it is set, else [`find_root`] from
@@ -127,22 +138,31 @@ pub(crate) fn expand_user(path: &Path) -> PathBuf {
 /// variable, else the nearest marker above `cwd`, redirected out of a linked worktree
 /// ([`plane_of`]) and outward through any enclosing plane's `workspaces/` (`outermost`).
 ///
-/// **Not [`resolve`], and the difference is deliberate.** [`resolve`] stops at the nearest
-/// marker, which is right for the commands that only read the plane they are standing in. The
-/// commands that COMMIT the plane — `save`, `git-policy` — have to agree with the vault, the
-/// personas and the memory about which plane that is, or they act on one tree while every
-/// other command acts on another. That disagreement is charter #806 and #809, and the two
-/// refusals `save` carries are only reachable once this resolution is the one it uses.
+/// **Not [`resolve`], and since M2.9 the difference is exactly one step: [`plane_of`].**
+///
+/// This paragraph said "[`resolve`] stops at the nearest marker" when M2.5 wrote it, and that
+/// was true of the day's code and is no longer: M2.9 gave [`find_root`] the outward hop it was
+/// missing, because `place` had always had it and the two answered differently in the same
+/// directory (charter#200). Both walks now share [`marked_above`] and [`outermost`]; what is
+/// left here is the redirect out of a linked WORKTREE, which every other command deliberately
+/// does not take.
+///
+/// It belongs to these two because the commands that COMMIT the plane — `save`, `git-policy` —
+/// have to agree with the vault, the personas and the memory about which plane that is, or
+/// they act on one tree while every other command acts on another. That disagreement is
+/// charter #806 and #809, and the two refusals `save` carries are only reachable once this
+/// resolution is the one it uses.
 pub fn command_root(cwd: &Path) -> Result<PathBuf, PlaneError> {
     if let Some(root) = std::env::var_os("CHARTER_ROOT").filter(|v| !v.is_empty()) {
         return Ok(PathBuf::from(root));
     }
+    // Resolved first, where [`find_root`] takes the caller's path as it stands: `save` reports
+    // the tree it is about to commit, and a path with a link in it names that tree by a route
+    // `git` will not echo back.
     let here = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
-    let marked = here
-        .ancestors()
-        .find(|dir| dir.join(MANIFEST).is_file())
-        .ok_or_else(|| PlaneError::NotFound(cwd.to_path_buf()))?;
-    Ok(outermost(&plane_of(marked)))
+    marked_above(&here)
+        .map(|marked| outermost(&plane_of(marked)))
+        .ok_or_else(|| PlaneError::NotFound(cwd.to_path_buf()))
 }
 
 /// Where charter keeps this plane's machine-local state — Python's `config.STATE_DIR`.

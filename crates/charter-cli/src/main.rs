@@ -752,11 +752,16 @@ fn instant(now: Option<&str>) -> Result<f64, String> {
 /// `save` and `git-policy`, or `None` for any other command.
 ///
 /// **These two resolve the plane the way Python's `config.ROOT` does**
-/// ([`charter_core::plane::command_root`]) rather than the way the read commands do: they act
-/// on the plane the vault, the personas and the memory belong to, out of a linked worktree and
-/// outward through an enclosing plane's `workspaces/`. `save`'s two refusals — you are standing
-/// in a worktree, you are standing in a nested plane — only exist once that is the resolution,
-/// because they are about the caller standing somewhere other than the tree being committed.
+/// ([`charter_core::plane::command_root`]): on the plane the vault, the personas and the
+/// memory belong to, out of a linked worktree and outward through an enclosing plane's
+/// `workspaces/`. `save`'s two refusals — you are standing in a worktree, you are standing in
+/// a nested plane — only exist once that is the resolution, because they are about the caller
+/// standing somewhere other than the tree being committed.
+///
+/// **The gap between this and what every other command does is now one step wide**, and it
+/// was two: M2.9 gave `plane::find_root` the outward hop, so the read commands no longer stop
+/// at the nearest marker and act on a clone's own plane. What is left to these two is the
+/// worktree redirect.
 fn plane_command(command: &Command) -> Option<ExitCode> {
     use charter_core::repocmd::Say;
 
