@@ -113,9 +113,11 @@ class Scenario:
     #: carefully: there the Rust side stops early and its WHOLE stderr is compared against
     #: charter's prefix. Here both sides go on past the boundary and say different things below
     #: it — charter draws the rest of the plane, the Rust build names what it does not draw — so
-    #: both are cut. That makes it weaker, so it is fenced: the marker must appear in BOTH
-    #: outputs, or the scenario fails. Without that fence a Rust side that printed nothing at
-    #: all, or stopped one line short, would pass with an empty prefix on each side.
+    #: both are cut. That makes it weaker, so it is fenced twice: the marker must appear in
+    #: BOTH outputs, and what is above it on charter's side must not be empty. Without the
+    #: first, a Rust side that printed nothing at all would pass with an empty prefix on each
+    #: side; without the second, a marker that turned out to be the first thing charter prints
+    #: would compare nothing against nothing and report `ok` for any implementation at all.
     stdout_cut_at: str = ""
     #: Why that cut is where it is.
     stdout_cut_why: str = ""
@@ -3191,7 +3193,16 @@ def check(scenario: Scenario, binary: Path) -> bool:
                 )
             else:
                 want, got = py.stdout.split(cut, 1)[0], rs.stdout.split(cut, 1)[0]
-                if want != got:
+                if not want:
+                    # The second half of the fence. Reaching the boundary is not enough on its
+                    # own: a marker that turned out to be the first thing charter prints would
+                    # leave two empty prefixes, and a comparison of nothing against nothing
+                    # reports `ok` for every implementation there could be.
+                    problems.append(
+                        f"    python prints nothing before {cut!r}, so this scenario compares "
+                        "two empty strings and asserts nothing"
+                    )
+                elif want != got:
                     problems.append(f"    stdout differs before {cut!r}:")
                     problems.append(f"      python {want!r}")
                     problems.append(f"      rust   {got!r}")
