@@ -23,21 +23,21 @@
 //! module and it is forced: `charter/__version__` is a PYTHON PACKAGE version, and this binary
 //! carries the workspace's `0.1.0`. Defaulting to that would make every range empty.
 //!
-//! **A probe never RUNS anything today, and that is a fact about this CLI rather than a gap in
-//! the port.** `check:` may only name a command from [`PROBEABLE`], and of those four only
-//! `news` is a subcommand this binary has. Every shipped entry names `persona lint` or
-//! `frame-probe`, so every one of them reports *unchecked* here — which is the answer
-//! `charter/news.py` prescribes for a command this CLI does not register, not one invented for
-//! the occasion. The machinery around it is ported whole, because the day `persona lint` lands
-//! the entries start answering and the guards have to already be right.
+//! **Every SHIPPED probe reports unchecked here, and that is a fact about this CLI rather than
+//! a gap in the port.** `check:` may only name a command from [`PROBEABLE`], and of those four
+//! this binary has two — `news` and `doctor` (M2.4). Every entry in the corpus names one of the
+//! other two, `persona lint` or `frame-probe`, so every one of them reports *unchecked* — which
+//! is the answer `charter/news.py` prescribes for a command this CLI does not register, not one
+//! invented for the occasion. The machinery around it is ported whole, because the day `persona
+//! lint` lands the entries start answering and the guards have to already be right.
 //!
 //! **The re-entrancy marker is read and not written.** `news._ENV` travels in the environment
 //! so that a charter started underneath a probe declines to probe. Setting an environment
 //! variable is `unsafe` under Rust 2024 and this workspace forbids `unsafe_code`, so
 //! [`probing`] READS the marker — a Rust charter spawned by a Python charter's probe still
 //! declines, and still leaves the refusal mark that keeps the outer answer honest — and
-//! nothing here writes one. Nothing needs to yet: the only probeable command this binary has
-//! is `news`, which starts no process. When one does, this is the line that has to move.
+//! nothing here writes one. Nothing needs to yet: neither probeable command this binary has —
+//! `news` and `doctor` — starts a charter of its own. The day one does, this line has to move.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -145,40 +145,27 @@ pub struct Entry {
 
 /// `persona._frontmatter`: the frontmatter as `(key, value)` **in file order**, plus the body.
 ///
-/// Deliberately not YAML and deliberately not line-anchored, because `charter/persona.py` is
-/// neither: it splits the whole text on the first two `---` **substrings**, walks what is
-/// between them, drops any line without a colon, and trims both sides of the rest. Reproduced
-/// down to the substring split, because an entry whose body holds a `---` is read by that rule
-/// and a line-anchored reader would give it a different frontmatter.
+/// **The pairs come from [`crate::personas::frontmatter`]**, which is already that function,
+/// rather than from a second copy of it here. A news entry and a persona charter are the same
+/// format read by the same parser in Python, and two Rust readings of one format is how they
+/// start disagreeing about a file — which this repository can already demonstrate: a THIRD
+/// reading, `personas::frontmatter_value`, returns `None` at the first line without a colon
+/// where this one skips it, so a persona with a blank line above `role:` has no role there and
+/// has one here (charter-app #67).
 ///
-/// **This repository holds a second, narrower reading of the same format** in
-/// `personas::frontmatter_value`, which stops at the first line with no colon instead of
-/// skipping it. The two disagree; that one is not this milestone's to move, and it is reported
-/// rather than quietly matched here.
+/// What is here is the BODY, which that function does not return and a news entry needs: the
+/// text after the closing fence. The split is `charter/persona.py`'s, on the first two `---`
+/// **substrings** rather than on lines, so an entry whose body holds a `---` is divided exactly
+/// where charter divides it.
 fn frontmatter(text: &str) -> (Vec<(String, String)>, String) {
-    let mut pairs: Vec<(String, String)> = Vec::new();
-    if !text.starts_with("---") {
-        return (pairs, py_strip(text).to_owned());
-    }
+    let pairs = crate::personas::frontmatter(text);
     // `text.split("---", 2)`: at most two splits, so three parts, and the third keeps every
-    // later `---` it holds.
-    let Some(rest) = text.get(3..) else {
-        return (pairs, py_strip(text).to_owned());
-    };
-    let Some(cut) = rest.find("---") else {
-        return (pairs, py_strip(text).to_owned());
-    };
-    let (front, body) = (&rest[..cut], &rest[cut + 3..]);
-    for line in crate::mdsection::split_lines(py_strip(front)) {
-        let Some((key, value)) = line.split_once(':') else {
-            continue;
-        };
-        let key = py_strip(key);
-        if key.is_empty() {
-            continue;
-        }
-        pairs.push((key.to_owned(), py_strip(value).to_owned()));
-    }
+    // later `---` it holds. With fewer than three parts there is no frontmatter and the body is
+    // the whole text — which is what `persona._frontmatter` returns for that case too.
+    let body = text
+        .strip_prefix("---")
+        .and_then(|rest| rest.find("---").map(|cut| &rest[cut + 3..]))
+        .unwrap_or(text);
     (pairs, py_strip(body).to_owned())
 }
 
@@ -917,10 +904,12 @@ const SHELLISH: [char; 13] = [
 /// `version` fails the second — it always exits 0 — which is why the most obviously harmless
 /// command in the CLI is not here.
 ///
-/// **Three of these four are not commands this binary has yet**, and that is the list being
+/// **Two of these four are not commands this binary has yet**, and that is the list being
 /// charter's rather than this CLI's: it says what an entry may NAME, and an entry naming a
 /// command this charter does not register is separately refused by [`tokens`] with a different
-/// sentence, because the two are different findings.
+/// sentence, because the two are different findings. The list does not shrink to match the CLI,
+/// for the same reason it is not derived from the parser: it is the rule an entry's AUTHOR is
+/// held to, and that rule is the same on every charter.
 pub const PROBEABLE: [&[&str]; 4] = [
     &["doctor"],
     &["news"],

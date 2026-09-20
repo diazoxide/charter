@@ -4,8 +4,8 @@
 //! `tests/differential/run.py`, one scenario per version, and this file does not repeat that.
 //! What it covers is the two things that harness cannot:
 //!
-//! * **`--pending`**, whose Python answer is a function of the MACHINE — the four probes it
-//!   shipped run `persona lint` and `frame-probe`, and whether those exit 0 depends on the
+//! * **`--pending`**, whose Python answer is a function of the MACHINE — the five probes the
+//!   corpus ships run `persona lint` and `frame-probe`, and whether those exit 0 depends on the
 //!   runner's tmux and on what lint makes of a fixture plane. A differential scenario would be
 //!   asserting something about the runner. Here the answer is fixed: this binary has neither
 //!   command, so every probe is unchecked and the report says so instead of ticking.

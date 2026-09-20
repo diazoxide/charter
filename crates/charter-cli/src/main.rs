@@ -321,8 +321,10 @@ fn command_tree() -> charter_core::news::CommandTree {
 ///
 /// **In-process is what makes a dozen probes cheap enough to run on demand; it was never what
 /// made them safe.** What makes a probe safe is `news::PROBEABLE` — a list of command paths a
-/// human has confirmed read rather than act — and the only one of the four this binary has is
-/// `news` itself, whose probe is refused for probing.
+/// human has confirmed read rather than act. Two of the four are wired here: `news`, whose own
+/// probe is then refused for probing, and `doctor` (M2.4), which reads the plane and reports.
+/// `persona lint` and `frame-probe` are commands this binary does not have, and an entry naming
+/// one is refused with its own sentence before it reaches this function.
 struct Probes {
     tree: charter_core::news::CommandTree,
 }
@@ -343,9 +345,27 @@ impl charter_core::news::Dispatch for Probes {
         let parsed = Cli::try_parse_from(&argv).ok()?;
         match parsed.command {
             Command::News(ref news) => Some(i32::from(news_report(news, self).code)),
-            // A listed command this binary does not have never gets this far; a listed one it
-            // grows later and does not wire in here would, and `None` is the honest answer for
-            // it — "no exit code worth reading" rather than a guess.
+            Command::Doctor { preflight, fix, .. } => {
+                // **A probe reads; it does not act.** `PROBEABLE` lists the command PATH and
+                // leaves the flags to the entry, which is charter's rule and is right — flags
+                // are how a `check:` asks a narrower question. `--fix` is the one flag that
+                // asks a different KIND of question, and this binary refuses it and exits 1;
+                // read as an answer that would be `pending`, which is a chore invented out of
+                // a probe that never ran. No exit code worth reading, so none is given.
+                if fix {
+                    return None;
+                }
+                let cwd = std::env::current_dir().ok()?;
+                // The rows, not the table: this is the in-process equivalent of charter
+                // redirecting a probe's stdout, and a probe that printed its report into
+                // `news --pending`'s output would be its own kind of wrong.
+                let rows = charter_core::doctor::Doctor::new(&cwd, preflight).run();
+                Some(i32::from(charter_core::doctor::exit_code(&rows)))
+            }
+            // A listed command this binary does not have never gets this far — `news::tokens`
+            // refuses an unregistered first token with its own sentence. A listed one it grows
+            // later and does not wire in here would, and `None` is the honest answer for it:
+            // "no exit code worth reading" rather than a guess.
             _ => None,
         }
     }

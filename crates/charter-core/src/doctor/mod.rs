@@ -212,39 +212,14 @@ pub(crate) const PATH_DISPLAY_LIMIT: usize = 1024;
 /// [`crate::shown::readable`] it keeps every other glyph as itself: this is for a sentence
 /// that quotes a value, not for a name a reader has to type back.
 ///
-/// Cc is `char::is_control`; Cs cannot occur in a Rust string; Zl and Zp are one character
-/// each. Cf has no test in `std`, so [`is_format`] carries the category's ranges.
+/// **One implementation, in [`crate::shown`], rather than a copy here.** `doctor`, `personas`
+/// and `news` all need the same answer, and three copies of "which characters have no glyph"
+/// is three places for the Cf table to go stale separately — with the failure showing up as
+/// one charter escaping a character another prints, on a report line, which is exactly what
+/// this function is for. Kept as a name here because every call site in this module reads
+/// better for it.
 pub(crate) fn one_line(value: &str, limit: usize) -> String {
-    let mut out = String::with_capacity(value.len());
-    for ch in value.chars() {
-        let invisible = ch.is_control()
-            || is_format(ch)
-            || matches!(ch, '\u{2028}' | '\u{2029}')
-            || (crate::memstore::is_python_space(ch) && ch != ' ');
-        if !invisible {
-            out.push(ch);
-        } else if (ch as u32) < 0x100 {
-            out.push_str(&format!("\\x{:02x}", ch as u32));
-        } else {
-            out.push_str(&format!("\\u{:04x}", ch as u32));
-        }
-    }
-    if out.chars().count() <= limit {
-        return out;
-    }
-    let mut clipped: String = out.chars().take(limit).collect();
-    clipped.push('\u{2026}');
-    clipped
-}
-
-/// Unicode's Cf (format) category — invisible characters that change how their neighbours
-/// render: soft hyphens, bidi controls, zero-width joiners, tags.
-fn is_format(ch: char) -> bool {
-    matches!(ch as u32,
-        0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F | 0x0890..=0x0891 | 0x08E2
-        | 0x180E | 0x200B..=0x200F | 0x202A..=0x202E | 0x2060..=0x2064 | 0x2066..=0x206F
-        | 0xFEFF | 0xFFF9..=0xFFFB | 0x110BD | 0x110CD | 0x13430..=0x1343F
-        | 0x1BCA0..=0x1BCA3 | 0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
+    crate::shown::one_line(value, limit)
 }
 
 /// The plane format version this charter understands — Python's `instance.SCHEMA`.
