@@ -130,8 +130,15 @@ pub fn reinit(root: &Path, scope: Scope, now: chrono::DateTime<chrono::Utc>, say
 
         for row in &layer {
             let rel = &row.rel;
+            // Counted off the ROW's own predicates, never off the arm that happens to print:
+            // "is this a repair" and "what does this row say" must not be able to disagree,
+            // which is what a per-arm `repairs += 1` invites the next arm to get wrong.
             if row.did.is_unresolved() {
                 unresolved.insert(name.clone());
+            }
+            if row.did.is_repair() {
+                repairs += 1;
+                repaired.insert(name.clone());
             }
             match row.did {
                 Did::Foreign => say(Say::Warn(format!(
@@ -152,16 +159,12 @@ pub fn reinit(root: &Path, scope: Scope, now: chrono::DateTime<chrono::Utc>, say
                     // would call a deletion "refreshed". A removal is the one repair here
                     // whose CAUSE the operator cannot see in the workspace — the plane stopped
                     // declaring it — so the row has to carry it.
-                    repairs += 1;
-                    repaired.insert(name.clone());
                     say(Say::Done(format!(
                         "Reinitialized '{name}' → removed {rel} — the plane no longer declares \
                          it (charter's harness layer)."
                     )));
                 }
                 Did::Created | Did::Refreshed => {
-                    repairs += 1;
-                    repaired.insert(name.clone());
                     let what = if row.did == Did::Created {
                         "wrote"
                     } else {

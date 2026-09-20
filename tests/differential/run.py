@@ -3264,6 +3264,33 @@ M28_SCENARIOS = [
         same_stderr=True,
     ),
     Scenario(
+        name="workspace-reinit-with-no-name-repairs-the-workspace-the-ladder-resolves",
+        plane="daily",
+        setup=_a_workspace_missing_a_baseline_file,
+        python=["workspace", "reinit"],
+        # No name and no `--all`: the session pointer names `alpha`, so `beta`'s missing file
+        # is NOT the one repaired. A ladder that resolved differently would repair the wrong
+        # workspace and say so in the line below it.
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-use-brings-an-existing-workspace-up-to-the-layout-on-the-way-in",
+        plane="daily",
+        setup=_a_workspace_layer_the_plane_has_moved_past,
+        python=["workspace", "use", "beta"],
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        ignore={
+            f".charter/persona-state/trace/{FRESH_SESSION}.jsonl": (
+                "charter records every selection in its trace store; this binary writes no "
+                "trace at all, which is a whole store and not this command's to port"
+            )
+        },
+        # `use` runs `ensure`, so selecting a workspace is also where one an older charter
+        # left picks up what this charter writes. It says nothing about the repair — the
+        # resulting plane is the whole of the comparison here.
+        same_stderr=True,
+    ),
+    Scenario(
         name="workspace-reinit-withdraws-a-file-the-plane-no-longer-declares",
         plane="daily",
         setup=_a_generated_file_the_plane_stopped_declaring,

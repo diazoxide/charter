@@ -186,6 +186,14 @@ impl Record {
 
     /// The document this record is published as: a string for a settled entry, a list for a
     /// pending one — the two shapes charter's own writer produces and its reader accepts.
+    ///
+    /// **Keys come out in PATH order**, which is the second divergence from the Python worth
+    /// stating. There the marker is a `dict` read from the file, so its order is whatever the
+    /// file on disk had, with new keys appended — and the file on disk can have any order at
+    /// all, since an older charter or a hand edit wrote it. One order, fixed by the map, is
+    /// what makes the same plane and the same input write the same bytes. Nothing reads a
+    /// marker positionally: [`read_record`] keys it by path, and the single document a
+    /// workspace directory generates today makes the two orders identical anyway.
     pub fn document(&self) -> serde_json::Value {
         let mut doc = serde_json::Map::new();
         for (rel, all) in &self.entries {

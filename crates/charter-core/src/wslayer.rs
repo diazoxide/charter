@@ -334,6 +334,14 @@ pub fn stopped_at(path: &Path, code: Option<i32>) -> PathBuf {
     path.to_path_buf()
 }
 
+/// Whether `path` resolves inside `root`, with BOTH ends resolved.
+fn resolves_inside(path: &Path, root: &Path) -> bool {
+    match (contain::resolved(path), contain::resolved(root)) {
+        (Some(here), Some(root)) => here.starts_with(&root),
+        _ => false,
+    }
+}
+
 /// The top-level segment of a relative path — the whole of it when there is no slash.
 fn root_of(rel: &str) -> &str {
     rel.split('/').next().unwrap_or(rel)
@@ -697,8 +705,20 @@ pub fn in_the_way(base: &Path, p: &Path) -> Option<Blocker> {
             });
         }
         // A directory of the layout that IS a link answers to the same containment every
-        // write here does: it must resolve inside the tree charter is writing in.
-        if link && contain::resolved(q).is_none_or(|real| !real.starts_with(base)) {
+        // write here does — and to a DIFFERENT tree depending on which directory it is, which
+        // is the Python's split verbatim. The workspace directory itself must resolve inside
+        // `workspaces/`, because that is the test `scaffold` and the layer refuse the whole
+        // directory by; anything beneath it must resolve inside the workspace.
+        //
+        // Both ends are RESOLVED before they are compared. On macOS `/var` is itself a link,
+        // so a lexical `starts_with` against an unresolved base calls every link in a
+        // `$TMPDIR` plane an escape.
+        let inside = if n == 0 {
+            base.parent().unwrap_or(base)
+        } else {
+            base
+        };
+        if link && !resolves_inside(q, inside) {
             return Some(Blocker {
                 path: q.clone(),
                 why: Why::IsALink,
@@ -889,6 +909,17 @@ mod tests {
         (dir, ws)
     }
 
+    /// Run the scaffold against a workspace of the test plane, as `ensure` does.
+    fn scaffold_into(plane: &tempfile::TempDir, name: &str) {
+        let opened = crate::workspaces::Plane::open(plane.path());
+        scaffold(
+            &opened,
+            name,
+            "2026-05-04T11:32:17Z".parse().unwrap(),
+            "fixture",
+        );
+    }
+
     fn rows(rows: &[Row]) -> Vec<(&str, Did)> {
         rows.iter().map(|r| (r.rel.as_str(), r.did)).collect()
     }
@@ -994,15 +1025,21 @@ mod tests {
         wire(plane.path(), &ws);
         let kept = std::fs::read_to_string(ws.join(layer::SETTINGS)).unwrap();
         std::fs::write(plane.path().join(layer::SETTINGS), "{ not json").unwrap();
-        // Present, not removed: charter keeps the last good copy rather than taking every
-        // workspace's rules away over a typo.
-        assert_eq!(
-            rows(&wire(plane.path(), &ws)),
-            [(layer::SETTINGS, Did::Present)]
-        );
+        // NO ROW AT ALL, which is the Python's answer too and worth being exact about: a plane
+        // that is HOLDING its settings wants nothing, so there is nothing to compare — and the
+        // record's entry is skipped rather than withdrawn. A `removed` row here would be every
+        // workspace's `enabledPlugins`, `env` and `deny` taken away over a typo.
+        assert_eq!(rows(&wire(plane.path(), &ws)), []);
         assert_eq!(
             std::fs::read_to_string(ws.join(layer::SETTINGS)).unwrap(),
-            kept
+            kept,
+            "charter kept the last good copy"
+        );
+        // And the record still names it, so the day the plane parses again the file reads as
+        // charter's own rather than as somebody else's.
+        assert_eq!(
+            layer::read_record(&ws).settled(layer::SETTINGS),
+            Some(layer::digest(&kept).as_str())
         );
     }
 
@@ -1158,24 +1195,54 @@ mod tests {
         let _ = std::fs::remove_dir_all(&outside);
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_pending_record_left_by_a_blocked_write_still_vouches_for_the_old_file() {
         let (plane, ws) = plane();
         wire(plane.path(), &ws);
         let first = std::fs::read_to_string(ws.join(layer::SETTINGS)).unwrap();
-        // The plane moves, and the write cannot land: a directory at the target.
+        // The plane moves, and the write cannot land: `.claude` becomes a link out of the
+        // workspace, which the gate on the way refuses. The pass publishes its intent, fails
+        // the write, and leaves the entry PENDING.
         std::fs::write(
             plane.path().join(layer::SETTINGS),
             r#"{"permissions":{"deny":["Bash(rm -rf *)"]}}"#,
         )
         .unwrap();
         std::fs::remove_file(ws.join(layer::SETTINGS)).unwrap();
-        std::fs::create_dir_all(ws.join(layer::SETTINGS)).unwrap();
-        let did = wire(plane.path(), &ws);
-        assert_eq!(rows(&did), [(layer::SETTINGS, Did::Foreign)]);
-        // The file charter last wrote is still vouched for, so restoring it reads as stale
-        // rather than as somebody else's.
-        std::fs::remove_dir(ws.join(layer::SETTINGS)).unwrap();
+        std::fs::remove_dir(ws.join(".claude")).unwrap();
+        std::os::unix::fs::symlink(
+            plane.path().parent().unwrap().join("nowhere-at-all"),
+            ws.join(".claude"),
+        )
+        .unwrap();
+        assert_eq!(
+            rows(&wire(plane.path(), &ws)),
+            [(layer::SETTINGS, Did::Blocked)]
+        );
+
+        // The entry vouches for BOTH: what the file held, and what the write would have put
+        // there. Silence is not a verdict — a record published only AFTER the write would
+        // leave the old digest beside a file that may already hold the new text, and that
+        // file then reads as somebody else's for ever.
+        let record = layer::read_record(&ws);
+        let wanted = layer::digest(&want(plane.path())[layer::SETTINGS]);
+        assert!(
+            record
+                .recorded(layer::SETTINGS)
+                .contains(&layer::digest(&first))
+        );
+        assert!(record.recorded(layer::SETTINGS).contains(&wanted));
+        assert_eq!(
+            record.settled(layer::SETTINGS),
+            None,
+            "a pending entry is not a verdict about what the file holds"
+        );
+
+        // And what charter last wrote is still vouched for, so putting it back reads as
+        // charter's own to refresh rather than as somebody else's.
+        std::fs::remove_file(ws.join(".claude")).unwrap();
+        std::fs::create_dir_all(ws.join(".claude")).unwrap();
         std::fs::write(ws.join(layer::SETTINGS), &first).unwrap();
         assert_eq!(
             rows(&wire(plane.path(), &ws)),
@@ -1339,6 +1406,49 @@ mod tests {
         );
         assert!(!status.missing.contains(&"workspace.md"));
         assert!(!never.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_baseline_directory_that_is_a_link_out_of_the_workspace_is_in_the_way() {
+        let (plane, ws) = plane();
+        let outside = plane.path().parent().unwrap().join("victim-refs");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, ws.join("refs")).unwrap();
+        let status = structure_status(&ws);
+        let (_rel, blocker) = status
+            .in_the_way
+            .iter()
+            .find(|(rel, _)| rel == "refs/README.md")
+            .expect("named in_the_way");
+        // The link is named, not the file under it: that is where the repair is.
+        assert_eq!(blocker.why, Why::IsALink);
+        assert_eq!(blocker.path, ws.join("refs"));
+        assert!(!status.missing.contains(&"refs/README.md"));
+        // And nothing is written out there.
+        scaffold_into(&plane, "alpha");
+        assert!(!outside.join("README.md").exists());
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_baseline_directory_that_is_a_link_back_inside_the_workspace_is_not_in_the_way() {
+        let (_plane, ws) = plane();
+        // The other side of the same test, and the reason both ends are resolved before they
+        // are compared: on macOS `$TMPDIR` is itself reached through a link, so a lexical
+        // comparison calls every honest link in a temp plane an escape.
+        std::fs::create_dir_all(ws.join("real-refs")).unwrap();
+        std::os::unix::fs::symlink(ws.join("real-refs"), ws.join("refs")).unwrap();
+        let status = structure_status(&ws);
+        assert!(
+            !status
+                .in_the_way
+                .iter()
+                .any(|(rel, _)| rel == "refs/README.md"),
+            "{status:?}"
+        );
+        assert!(status.missing.contains(&"refs/README.md"));
     }
 
     #[test]
