@@ -19,8 +19,10 @@ copy; the Rust `charter` binary runs the same command against the second. Then:
 - so is the set of directories, so a directory one side creates and the other does not is seen;
 - on POSIX, so is each file's mode, because charter writes 0600 where it means private;
 - so is the exit status;
-- and so is stdout — unless the scenario says `stdout=DIFFERS` with the reason, which is how a
-  known gap is recorded rather than quietly skipped. A scenario that says nothing must match.
+- and so is stdout — unless the scenario says `stdout_differs` with the reason, which is how a
+  known gap is recorded rather than quietly skipped, or `stdout_cut_at`, which is how a render
+  that is ported as far as a declared boundary is compared up to it and no further. A scenario
+  that says nothing must match.
 
 Neither side may write OUTSIDE its plane copy. Each copy is laid out under its own directory
 with a sentinel tree beside it, and both are checked afterwards: a containment bug writes where
@@ -47,6 +49,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import filecmp
+import hashlib
 import json
 import os
 import re
@@ -57,7 +60,7 @@ import sys
 import tempfile
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -103,6 +106,22 @@ class Scenario:
     ignore: dict[str, str] = field(default_factory=dict)
     #: Why the two stdouts are not expected to match yet. Empty means they must.
     stdout_differs: str = ""
+    #: The literal BOTH stdouts are cut at, when only the first part of a render is ported.
+    #: Everything before that marker must match byte for byte; the marker and everything after
+    #: it is each side's own.
+    #:
+    #: `stderr_cut_at`'s sibling, and NOT quite its twin, which is the difference to read
+    #: carefully: there the Rust side stops early and its WHOLE stderr is compared against
+    #: charter's prefix. Here both sides go on past the boundary and say different things below
+    #: it — charter draws the rest of the plane, the Rust build names what it does not draw — so
+    #: both are cut. That makes it weaker, so it is fenced twice: the marker must appear in
+    #: BOTH outputs, and what is above it on charter's side must not be empty. Without the
+    #: first, a Rust side that printed nothing at all would pass with an empty prefix on each
+    #: side; without the second, a marker that turned out to be the first thing charter prints
+    #: would compare nothing against nothing and report `ok` for any implementation at all.
+    stdout_cut_at: str = ""
+    #: Why that cut is where it is.
+    stdout_cut_why: str = ""
     #: Whether the Rust side takes `--now`. A read command does not.
     pins_the_clock: bool = True
     #: Run against each plane copy before the command, for a starting state the fixtures
@@ -983,6 +1002,28 @@ REFRESH_INFLIGHT = {
     "refresh and emptied when it ends; the app watches the plane and draws its own progress",
 }
 
+#: The boundary both stdouts are cut at: charter's own **zone rule**, which `_boxed` draws as
+#: `├───┤` under the workspace line.
+#:
+#: Above it is the whole of what M2.18 ports — the frame's top border and the identity row —
+#: and it is compared byte for byte: the box's width, the workspace the nine-rung ladder
+#: chose, its pin, its reinit tip, its open todos, its pieces, the count of other workspaces,
+#: the separators between them, the truncation when the pane is too narrow and the padding out
+#: to the right border.
+#:
+#: Not a marker invented for the comparison. It is the divider charter itself splices in
+#: (`statusline._zone_rules`), which is why cutting here is a statement about the render rather
+#: than about the test: everything in zone 1 is above it by construction.
+IDENTITY_ROW = "\x1b[2m├"
+
+#: What is below the cut, and why the two sides differ there.
+BELOW_THE_RULE = (
+    "below its zone rule charter draws the rest of the plane — a `git status` per clone, the "
+    "worktree rows, the persona chips with vault health and memory counts, the alert list, the "
+    "session strip and the right-aligned brand — and this build draws a line naming them as "
+    "not drawn instead. Zone 1 and the frame ARE compared, byte for byte, above the rule."
+)
+
 #: One turn's payload, in the shape Claude Code hands the `statusLine` command.
 A_TURN = json.dumps({
     "session_id": "s-1",
@@ -996,27 +1037,113 @@ A_TURN = json.dumps({
     },
 })
 
-#: Why the two status lines do not print the same thing. The RECORD is what this scenario is
-#: for, and the record is a file — so the tree comparison is the assertion, not stdout.
-DOES_NOT_DRAW_YET = (
-    "charter draws the whole plane in the footer — repos, personas, vaults, alerts, the "
-    "session strip — and the Rust binary draws none of it yet (M2.7 ports the command edge "
-    "and the token-usage record, which is what ADR 0019 keeps the command running for). The "
-    "usage file each side leaves is what this scenario compares."
-)
+
+#: The same turn, from the session the fixture plane has a pointer for.
+#:
+#: The difference is the whole workspace ladder in one line: `A_TURN`'s `s-1` is an id no
+#: pointer names, so it SHADOWS `$CHARTER_SESSION_ID` (`session.current(explicit)` takes the
+#: payload first) and the ladder falls all the way to the built-in `default` — which is what a
+#: real Claude Code turn looks like on a plane nobody has chosen a workspace in. This one lands
+#: on `alpha`, where the fixture keeps the todos, the pieces and the structure marker.
+A_TURN_IN_ALPHA = json.dumps({
+    "session_id": SESSION,
+    "cwd": "/nowhere",
+    "context_window": {
+        "used_percentage": 42,
+        "current_usage": {
+            "cache_read_input_tokens": 90,
+            "cache_creation_input_tokens": 10,
+        },
+    },
+})
+
+
+def _pane(cols: int) -> dict[str, str]:
+    """A pane width, pinned per scenario.
+
+    Unpinned, both sides fall back to 80 because stdout is a pipe — the same answer twice, and
+    therefore no test of the width at all. Pinning it is what lets one scenario render wide and
+    another render into a pane too narrow for its own row.
+    """
+    return {"COLUMNS": str(cols)}
+
+
+def _stale_the_workspaces_structure(root: Path) -> None:
+    """Stamp `alpha` with an older layout version, which is what puts the reinit tip on the
+    row — the one item there that reports something BROKEN, and the one that must therefore
+    survive truncation ahead of every count beside it."""
+    (root / "workspaces" / "alpha" / ".charter-structure").write_text("4\n")
+
+
+#: A workspace directory named in a script charter does not validate the name of. Ten CJK
+#: characters: twenty terminal COLUMNS and ten `len`. The row is rendered into a pane too
+#: narrow for it on purpose, so the cut lands inside the name — which is the one place a port
+#: that counted characters instead of columns cannot agree with charter.
+CJK_WORKSPACE = "日本語の作業スペース"
+
+
+def _a_workspace_whose_name_is_not_ascii(root: Path) -> None:
+    ws = root / "workspaces" / CJK_WORKSPACE
+    (ws / "memory").mkdir(parents=True, exist_ok=True)
+    (ws / "refs").mkdir(parents=True, exist_ok=True)
+    (ws / "todos").mkdir(parents=True, exist_ok=True)
+    (ws / "workspace.md").write_text("# ws\n")
+    (ws / "workspace.json").write_text("{}\n")
+    (ws / "memory" / "MEMORY.md").write_text("# Memory\n")
+    (ws / "refs" / "README.md").write_text("# Refs\n")
+    # Current, so the row carries the name and the counts and no repair tip.
+    (ws / ".charter-structure").write_text("5\n")
+
+
+def _pieces_that_have_and_have_not_reported(root: Path) -> None:
+    """Four worktrees under `alpha`: one done, one abandoned, and two that have said nothing
+    since they were claimed — three days ago and two hours ago.
+
+    The cell reports the OLDEST silence, and `3d` against `2h` is exactly the pair that does
+    not sort lexically. Both sides measure it from the same instant: charter's clock is pinned
+    by `time_machine` and the Rust binary is handed `--now`.
+    """
+    base = root / "workspaces" / "alpha" / ".worktrees" / "svc"
+    for piece in ("shipped", "dropped", "quiet-for-days", "quiet-for-hours"):
+        (base / piece).mkdir(parents=True, exist_ok=True)
+
+    def when(hours: float) -> str:
+        return (NOW - timedelta(hours=hours)).isoformat(timespec="seconds")
+
+    lines = [
+        {"ts": when(10), "event": "claimed", "repo": "svc", "piece": "shipped"},
+        {"ts": when(9), "event": "done", "repo": "svc", "piece": "shipped"},
+        {"ts": when(10), "event": "claimed", "repo": "svc", "piece": "dropped"},
+        {"ts": when(8), "event": "abandoned", "repo": "svc", "piece": "dropped",
+         "reason": "the branch was already merged"},
+        {"ts": when(72), "event": "claimed", "repo": "svc", "piece": "quiet-for-days"},
+        {"ts": when(2), "event": "claimed", "repo": "svc", "piece": "quiet-for-hours"},
+        # A line no parser can read: it is skipped and the rest of the log still counts. An
+        # append-only log collects these from workers that were killed mid-write.
+        None,
+    ]
+    log = root / "workspaces" / "alpha" / "pieces" / f"{HOSTNAME}.jsonl"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text("".join(
+        "not json at all\n" if line is None else json.dumps(line, sort_keys=True) + "\n"
+        for line in lines
+    ))
+
 
 STATUSLINE_SCENARIOS = [
     Scenario(
         # ADR 0019's own sentence, as a test: "a `cleanup` that removes it deletes the record
         # silently". Both charters must leave the same `.charter/sessions/<sid>.usage`, byte
         # for byte and mode for mode, or one of them has stopped writing the only copy of this
-        # session's token history that exists anywhere.
+        # session's token history that exists anywhere. The ROW is compared too, now there is
+        # one.
         name="statusline-records-the-turns-tokens",
         plane="daily",
         python=["statusline"],
         stdin=A_TURN,
-        pins_the_clock=False,
-        stdout_differs=DOES_NOT_DRAW_YET,
+        env=_pane(120),
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
     ),
     Scenario(
         # Early in a session and right after `/compact` there is no usage at all. Recording a
@@ -1026,18 +1153,106 @@ STATUSLINE_SCENARIOS = [
         plane="daily",
         python=["statusline"],
         stdin=json.dumps({"session_id": "s-1", "cwd": "/nowhere"}),
-        pins_the_clock=False,
-        stdout_differs=DOES_NOT_DRAW_YET,
+        env=_pane(120),
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
     ),
     Scenario(
         # The outermost boundary of the whole subprocess: a payload that will not parse must
-        # still leave a plane nobody has to repair.
+        # still leave a plane nobody has to repair — and must still draw the row, because the
+        # row is read off the plane and not off the payload.
         name="statusline-survives-a-payload-that-is-not-json",
         plane="daily",
         python=["statusline"],
         stdin="not json {{{",
-        pins_the_clock=False,
-        stdout_differs=DOES_NOT_DRAW_YET,
+        env=_pane(120),
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
+    ),
+    Scenario(
+        # A plane with no `workspaces/` at all: the ladder ends on the built-in `default`, and
+        # the row says so with `ws 0` rather than inventing a workspace or leaving the count
+        # out. The frame is still drawn, because the frame is what makes the row a row.
+        name="statusline-identity-row-on-a-plane-with-nothing-in-it",
+        plane="minimal",
+        python=["statusline"],
+        stdin=A_TURN,
+        env=_pane(120),
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
+    ),
+    Scenario(
+        # `$CHARTER_WORKSPACE` is the one rung that earns a pin: that session cannot be moved
+        # with `charter ws use`, and the `*` beside the name is where a reader finds that out.
+        # The workspace it names is NOT the one the session pointer holds, so a port that read
+        # the wrong rung would draw the wrong name and no pin at once.
+        name="statusline-identity-row-when-the-environment-pins-the-workspace",
+        plane="daily",
+        python=["statusline"],
+        stdin=A_TURN,
+        env={**_pane(120), "CHARTER_WORKSPACE": "beta"},
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
+    ),
+    Scenario(
+        # The active workspace's open todos, beside the name whose todos they are. `alpha` has
+        # one; `MEMORY.md` in the same store is not a todo, and a store that answered "two"
+        # would be counting the index.
+        name="statusline-identity-row-counts-the-active-workspaces-todos",
+        plane="daily",
+        python=["statusline"],
+        stdin=A_TURN_IN_ALPHA,
+        env=_pane(120),
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
+    ),
+    Scenario(
+        # A stale layout puts the repair tip on the row, ahead of every count beside it.
+        name="statusline-identity-row-flags-a-stale-workspace-before-its-counts",
+        plane="daily",
+        python=["statusline"],
+        stdin=A_TURN_IN_ALPHA,
+        env=_pane(120),
+        setup=_stale_the_workspaces_structure,
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
+    ),
+    Scenario(
+        # …and the same plane in a pane too narrow to hold it, which is where the order of the
+        # row becomes its truncation order.
+        name="statusline-identity-row-gives-up-counts-before-the-repair-tip",
+        plane="daily",
+        python=["statusline"],
+        stdin=A_TURN_IN_ALPHA,
+        env=_pane(46),
+        setup=_stale_the_workspaces_structure,
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
+    ),
+    Scenario(
+        # The piece cell: counts, and the oldest silence among the ones that have said nothing.
+        name="statusline-identity-row-counts-the-workspaces-pieces",
+        plane="daily",
+        python=["statusline"],
+        stdin=A_TURN_IN_ALPHA,
+        env=_pane(120),
+        setup=_pieces_that_have_and_have_not_reported,
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
+    ),
+    Scenario(
+        # **The width test.** A workspace directory named in CJK, rendered into a pane too
+        # narrow for it, so the cut lands inside the name. charter measures a column with
+        # `unicodedata.east_asian_width`; a port that counted characters draws this row one
+        # cell short per glyph and its right border stops lining up with every other row's.
+        name="statusline-identity-row-measures-columns-and-not-characters",
+        plane="daily",
+        python=["statusline"],
+        stdin=A_TURN,
+        env={**_pane(30), "CHARTER_WORKSPACE": CJK_WORKSPACE},
+        setup=_a_workspace_whose_name_is_not_ascii,
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
     ),
 ]
 
@@ -1203,6 +1418,171 @@ REPO_SCENARIOS = [
         python=["discover"],
         pins_the_clock=False,
         refusal="gh is not authenticated for github.com. Run: gh auth login",
+    ),
+]
+
+# ---------------------------------------------------------------------------------------
+# M2.11: `charter status` and `charter docs generate`.
+#
+# `status` is what an operator types when something has already gone wrong, so its whole
+# output is the assertion — the header's counts, which rung chose the workspace, the table's
+# column widths, and the three answers the NOTE column may give. It writes nothing, so the
+# tree comparison proves only that; what these scenarios are for is stdout, byte for byte.
+#
+# NOT here, and deliberately: the nested-plane notice, which names two ABSOLUTE paths. Those
+# are two different directories on the two sides of this comparison, so it is asserted in
+# `crates/charter-cli/tests/status.rs`, where one plane is built and one binary runs.
+
+
+def _clones_of_every_shape(root: Path) -> None:
+    """Everything a workspace can hold, in `alpha`, so one table draws all of it:
+
+    a clean clone on the branch it was cloned on; a clone with work in its tree, on a branch
+    of its own, whose `stack` the inventory knows; a directory that is no repository; and a
+    repo the manifest NAMES with nothing on disk. The last two are the pair charter#1043 and
+    M2.3 are about — membership is not presence, and `status` draws presence.
+
+    `widget`'s stack is `node-monorepo` on purpose: thirteen characters, which is what
+    charter#592 measured pushing every monorepo row one column right of every other.
+
+    Neither clone may be called `svc` or `tool`: `alpha` already holds directories of both
+    names (and `tool` is a nested plane of its own), and `git clone` into one refuses.
+    """
+    _forge_repo(root, "widget", "trunk")
+    _forge_repo(root, "gadget", "main")
+    _inventory(root,
+               _record("widget", stack="node-monorepo", kind="service"),
+               _record("gadget", stack="rust", default_branch="main"),
+               _record("absent", stack="go"),
+               _record("never-cloned", stack="python"))
+    alpha = root / "workspaces" / "alpha"
+    side = root.parent
+    _git(side, "clone", "-q", "https://github.com/acme/widget.git", str(alpha / "widget"))
+    _git(side, "clone", "-q", "https://github.com/acme/gadget.git", str(alpha / "gadget"))
+    _git(side, "checkout", "-q", "-b", "feature/x", cwd=alpha / "gadget")
+    (alpha / "gadget" / "README.md").write_text("mine, uncommitted\n")
+    (alpha / "plaindir").mkdir()
+    (alpha / "plaindir" / "README.md").write_text("# not a repo\n")
+    manifest = json.loads((alpha / "workspace.json").read_text())
+    manifest["repos"] = [{"name": "widget", "branch": "trunk"},
+                         {"name": "gadget", "branch": "main"},
+                         {"name": "absent", "branch": "main"}]
+    (alpha / "workspace.json").write_text(json.dumps(manifest, indent=2) + "\n")
+
+
+#: `.git` of each clone the table draws: an index and reflogs carrying timestamps and inode
+#: numbers. `status` writes nothing at all, so there is no `facts` to compare instead — what
+#: these scenarios assert is entirely on stdout.
+STATUS_CLONE_GIT = {
+    f"workspaces/alpha/{name}/.git": "read by `status`, never written; the index and the "
+    "reflogs carry timestamps and inodes no two runs share"
+    for name in ("widget", "gadget")
+}
+
+#: An inventory with one repo in it, so `docs generate` has something to render.
+DOCS_RECORD = {"name": "widget", "path_with_namespace": "acme/widget",
+               "ssh_url": "git@github.com:acme/widget.git", "default_branch": "trunk",
+               "kind": "app", "stack": "rust", "description": "The widget — made well",
+               "topics": [], "web_url": "https://github.com/acme/widget", "forge": "github"}
+
+
+def _a_readme_carrying_the_roster_block(root: Path) -> None:
+    """A README with hand-written prose on both sides of the generated block.
+
+    The prose is the assertion: charter owns the span between the markers and nothing else,
+    and a port that rewrote the file whole would pass a test that only looked at the roster.
+    """
+    _inventory(root, DOCS_RECORD)
+    (root / "README.md").write_text(
+        "# The plane\n\nHand written, and it stays that way.\n\n"
+        "<!-- BEGIN personas — GENERATED by `charter docs`; do not edit by hand. -->\n"
+        "stale — from a charter two versions ago\n"
+        "<!-- END personas -->\n\n"
+        "## Mine\n\nAlso hand written.\n")
+
+
+def _a_readme_carrying_no_block(root: Path) -> None:
+    """A hand-written README with no markers: never appended to, never rewritten."""
+    _inventory(root, DOCS_RECORD)
+    (root / "README.md").write_text("# The plane\n\nNo roster here.\n")
+
+
+def _an_inventory_to_render(root: Path) -> None:
+    _inventory(root, DOCS_RECORD)
+
+
+STATUS_SCENARIOS = [
+    Scenario(
+        name="status-on-a-plane-whose-workspaces-hold-nothing",
+        plane="daily",
+        python=["status"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        name="status-detailing-every-workspace",
+        plane="daily",
+        python=["status", "--all"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        name="status-of-a-workspace-named-on-the-command-line",
+        plane="daily",
+        python=["status", "-w", "beta"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        name="status-from-inside-a-workspaces-own-tree",
+        plane="daily",
+        # The cwd rung, which is the one that cannot be planted as a file — and the header
+        # has to name it, or it explains the answer by naming a rung that did not decide it.
+        cwd="workspaces/alpha/svc",
+        python=["status"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        name="status-on-a-plane-with-no-workspaces-at-all",
+        plane="minimal",
+        # No pane id in this harness, so the last rung says WHY nothing answered rather than
+        # only that nothing did.
+        python=["status"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        name="status-draws-a-clean-clone-a-dirty-one-and-neither-of-the-other-two",
+        plane="daily",
+        setup=_clones_of_every_shape,
+        python=["status"],
+        pins_the_clock=False,
+        ignore=STATUS_CLONE_GIT,
+    ),
+    Scenario(
+        name="docs-generate-refuses-an-empty-inventory",
+        plane="daily",
+        python=["docs", "generate"],
+        pins_the_clock=False,
+        same_stderr=True,
+        refusal="Inventory is empty — run `charter discover` first.",
+    ),
+    Scenario(
+        name="bare-docs-still-generates",
+        plane="daily",
+        setup=_an_inventory_to_render,
+        python=["docs"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        name="docs-generate-rewrites-only-the-readmes-roster-block",
+        plane="daily",
+        setup=_a_readme_carrying_the_roster_block,
+        python=["docs", "generate"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        name="docs-generate-leaves-a-readme-with-no-block-exactly-as-it-is",
+        plane="daily",
+        setup=_a_readme_carrying_no_block,
+        python=["docs", "generate"],
+        pins_the_clock=False,
     ),
 ]
 
@@ -2262,9 +2642,175 @@ LADDER_SCENARIOS = [
     ),
 ]
 
+# --------------------------------------------------------------------------------------------
+# `charter news`: the entries themselves, rendered
+# --------------------------------------------------------------------------------------------
+#
+# **These scenarios are the tie between two copies of one corpus.** charter ships `docs/news/`
+# in its wheel; charter-app compiles `crates/charter-core/news/` into its binary. Until news is
+# authored in one place there are two copies, and `charter/news.py`'s own docstring says what a
+# second copy does: *it drifts from the binary, invisibly and in both directions.*
+#
+# Nothing inside either implementation can see that drift. This can: the oracle is pinned to the
+# charter commit the corpus was taken from, and `news --for <version>` renders every entry of a
+# version through every rule there is — the order, the `security:` label, the elision and its
+# arithmetic, the percent-encoded filename, the tag a link points at. One scenario per version,
+# generated from the vendored directory rather than listed, so a version added to the corpus is
+# compared from the day it lands and a version that quietly vanishes from it is not silently
+# uncompared.
+#
+# The version list is read from the DIRECTORY and not from the oracle, because this file has to
+# keep working whether or not charter is importable in its own process (`_declare_a_profile_per_
+# command_word` says the same thing about the other direction).
+#
+# **That leaves one hole, and `check_corpus` closes it.** A scenario generated from the vendored
+# directory cannot see a file DELETED from that directory: no scenario is generated for a version
+# that is not there, and every scenario that is generated passes. So the two corpora are compared
+# as file lists, once, before any scenario runs — which is also the cheapest possible failure for
+# the most likely kind of drift, and the one that names the files rather than a rendered diff.
+
+NEWS_DIR = REPO / "crates" / "charter-core" / "news"
+
+#: `charter news --for` REFUSES this version: six of its entries quote a headline, and the
+#: release gate reports that rather than publishing the quotes inside the heading (charter #902).
+#: Its own scenario below, because the generated ones expect an exit 0 — and if a future version
+#: joins it, that version's generated scenario goes red, which is exactly what a release gate
+#: catching a new offender should look like.
+NEWS_QUOTED_VERSION = "0.56.0"
+
+
+def check_corpus() -> bool:
+    """The vendored `news/` and the oracle's own entries are the same files, byte for byte.
+
+    Asked of the ORACLE as a subprocess, under the interpreter the scenarios run it with, rather
+    than imported here — this file keeps working whether or not charter is importable in its own
+    process, and the oracle is pinned to the commit the corpus was taken from.
+
+    **Bytes rather than names, and the difference is a whole class of drift.** The per-version
+    `news --for` scenarios compare RENDERED BODIES, so a headline or a body that drifts turns one
+    of them red. What a rendered body does not carry is the rest of the frontmatter: `check:`,
+    `adopt:` and — for an entry that is alone in its version — `lead:`. An entry whose `adopt:`
+    line said one thing here and another in charter would render identically in all 27 of them,
+    and the only view that prints an `adopt:` line is `charter news --pending`, which has no
+    scenario at all (its Python answer depends on the runner). A digest closes that, and closes
+    the missing-file case with it: a file nobody vendored is in no scenario to fail.
+    """
+    said = subprocess.run(
+        [sys.executable, "-c",
+         "import hashlib;from charter import news;d = news._dir();"
+         "print('\\n'.join(f'{p.name} {hashlib.sha256(p.read_bytes()).hexdigest()}'"
+         " for p in sorted(d.glob('*.md'))) if d else '')"],
+        capture_output=True, text=True,
+    )
+    if said.returncode != 0:
+        print("DIFF news-corpus: the oracle could not list its entries — " + said.stderr.strip())
+        return False
+    theirs = dict(line.split() for line in said.stdout.splitlines() if line.strip())
+    ours = {
+        p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(NEWS_DIR.glob("*.md"))
+    }
+    if not theirs:
+        print("DIFF news-corpus: the oracle ships no entries, so nothing was compared")
+        return False
+    problems = []
+    for name in sorted(set(theirs) - set(ours)):
+        problems.append(f"    only charter has: docs/news/{name}")
+    for name in sorted(set(ours) - set(theirs)):
+        problems.append(f"    only charter-app has: crates/charter-core/news/{name}")
+    for name in sorted(set(theirs) & set(ours)):
+        if theirs[name] != ours[name]:
+            problems.append(f"    differs: {name}")
+    print(("ok   " if not problems else "DIFF ") + f"news-corpus ({len(theirs)} entries)")
+    for line in problems:
+        print(line)
+    if problems:
+        print("    the two copies of charter's news have drifted; see "
+              "crates/charter-core/news/SOURCE")
+    return not problems
+
+
+def _news_versions() -> list[str]:
+    """Every version the vendored corpus names, oldest first, with `unreleased` last.
+
+    From the FILENAME rather than the frontmatter: this list only decides which commands to run,
+    and both sides then answer from the frontmatter — so a file whose name and `version:` field
+    disagree shows up as a scenario that renders nothing on either side, which is a finding.
+    """
+    seen: dict[str, None] = {}
+    for path in sorted(NEWS_DIR.glob("*.md")):
+        seen.setdefault(path.name.split("-", 1)[0], None)
+    versions = [v for v in seen if v != "unreleased"]
+    versions.sort(key=lambda v: [int(part) for part in v.split(".")])
+    if "unreleased" in seen:
+        versions.append("unreleased")
+    return versions
+
+
+NEWS_SCENARIOS = [
+    Scenario(
+        name=f"news-for-{version}-renders-the-same-notes",
+        plane="minimal",
+        python=["news", "--for", version],
+        pins_the_clock=False,
+    )
+    for version in _news_versions()
+    if version != NEWS_QUOTED_VERSION
+] + [
+    Scenario(
+        name="news-for-a-version-that-quotes-a-headline-is-refused-before-it-publishes",
+        plane="minimal",
+        python=["news", "--for", NEWS_QUOTED_VERSION],
+        pins_the_clock=False,
+        refusal=f"the news for {NEWS_QUOTED_VERSION} quotes a value charter does not unquote:",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="news-for-a-version-nothing-shipped",
+        plane="minimal",
+        python=["news", "--for", "9.9.9"],
+        pins_the_clock=False,
+        refusal="no news entry for 9.9.9.",
+        same_stderr=True,
+    ),
+    Scenario(
+        # 62 entries across three versions, two of them carrying `security:` notes and one a
+        # `lead:` — so this compares the ORDER and the label, which `--for` compares inside one
+        # version and this compares across three.
+        #
+        # `--until` is given rather than defaulted on purpose: charter's default is
+        # `charter.__version__`, a Python package version, and the Rust binary's default is the
+        # newest version its corpus names (`news::shipped_version`). Those are different
+        # questions with different answers, and this scenario is about the entries rather than
+        # about which of the two is right — the PR argues that.
+        #
+        # None of these three versions carries a `check:`, which is what makes the two sides'
+        # stdout comparable at all: every entry is informational on both, so neither prints an
+        # adopt line. A range that did carry one would compare charter's real probe against a
+        # Rust CLI that has no `persona lint` to run.
+        name="news-range-lists-the-same-entries-in-the-same-order",
+        plane="daily",
+        python=["news", "--since", "0.60.0", "--until", "0.62.1"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        # The view that is honest about having no baseline. charter never READS the baseline
+        # `charter update` stamps (`commands_update.read_baseline` has no caller), so this
+        # sentence is what a plane gets whether or not one is recorded — reported upstream, and
+        # ported as it stands rather than quietly improved, because an improvement here is a
+        # divergence nothing else would catch.
+        name="news-with-no-baseline-reports-no-range",
+        plane="daily",
+        python=["news"],
+        pins_the_clock=False,
+    ),
+]
+
+
 SCENARIOS = [
     *INIT_SCENARIOS,
     *LADDER_SCENARIOS,
+    *NEWS_SCENARIOS,
     Scenario(
         name="harness-list-refuses-every-name-that-is-a-charter-command",
         plane="minimal",
@@ -2515,6 +3061,7 @@ SCENARIOS = [
         refusal="already on the list",
     ),
     *REPO_SCENARIOS,
+    *STATUS_SCENARIOS,
     *GL_REFRESH_SCENARIOS,
     *STATUSLINE_SCENARIOS,
 
@@ -3276,6 +3823,30 @@ def check(scenario: Scenario, binary: Path) -> bool:
                     "    stdout now MATCHES, but the scenario still says it differs "
                     f"({scenario.stdout_differs}) — drop the note"
                 )
+        elif scenario.stdout_cut_at:
+            cut = scenario.stdout_cut_at
+            missing = [side for side, out in (("python", py.stdout), ("rust", rs.stdout))
+                       if cut not in out]
+            if missing:
+                problems.append(
+                    f"    {' and '.join(missing)} never reach {cut!r} on stdout, so this "
+                    "scenario is cutting at a boundary that is not in both renders"
+                )
+            else:
+                want, got = py.stdout.split(cut, 1)[0], rs.stdout.split(cut, 1)[0]
+                if not want:
+                    # The second half of the fence. Reaching the boundary is not enough on its
+                    # own: a marker that turned out to be the first thing charter prints would
+                    # leave two empty prefixes, and a comparison of nothing against nothing
+                    # reports `ok` for every implementation there could be.
+                    problems.append(
+                        f"    python prints nothing before {cut!r}, so this scenario compares "
+                        "two empty strings and asserts nothing"
+                    )
+                elif want != got:
+                    problems.append(f"    stdout differs before {cut!r}:")
+                    problems.append(f"      python {want!r}")
+                    problems.append(f"      rust   {got!r}")
         elif py.stdout != rs.stdout:
             problems.append("    stdout differs:")
             problems.append(f"      python {py.stdout!r}")
@@ -3333,11 +3904,17 @@ def main() -> int:
             ap.error(f"no such scenario: {', '.join(unknown)} (have {', '.join(sorted(names))})")
         wanted = [s for s in everything if s.name in set(args.scenario)]
 
+    # Before the scenarios, and whichever of them were asked for: a corpus that has drifted makes
+    # every `news --for` scenario report a difference in a rendered body, and this names the file.
+    drifted = not check_corpus()
+
     failed = [
         s.name for s in wanted
         if not (doctor_scenarios.check(s, args.binary)
                 if isinstance(s, doctor_scenarios.DoctorScenario) else check(s, args.binary))
     ]
+    if drifted:
+        failed.append("news-corpus")
     if args.time_preflight:
         print()
         doctor_scenarios.time_preflight(args.binary, args.time_preflight)

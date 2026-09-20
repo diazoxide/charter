@@ -158,6 +158,25 @@ pub(crate) fn expand_user(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
+/// The nested plane the caller is STANDING IN, when [`find_root`] redirected past it — else
+/// `None`. `charter/root.py:standing_in_nested_plane`.
+///
+/// Without this the redirect is invisible. Once the resolver answers with the OUTER plane,
+/// [`enclosing`] of that answer is `None` by construction — the outer plane is not nested —
+/// so every surface that would name the nesting falls silent and charter acts, quietly, on a
+/// plane the operator cannot see it choose. `charter status` is the surface that says it
+/// (ADR 0013's second rule applies to charter's own corrections too).
+///
+/// Never raises: it is read on a render path. A directory that cannot be resolved, or a walk
+/// that meets an unreadable parent, answers `None` — the same as "nothing nested here",
+/// because a notice charter cannot substantiate is one it does not print.
+pub fn standing_in_nested_plane(start: &Path) -> Option<PathBuf> {
+    let here = start.canonicalize().ok()?;
+    let marked = marked_above(&here)?;
+    let inner = plane_of(marked);
+    enclosing(&inner).map(|_| inner)
+}
+
 /// Where charter keeps this plane's machine-local state — Python's `config.STATE_DIR`.
 ///
 /// `$CHARTER_HOME` is taken verbatim, as Python takes it: an operator points it at a shared
