@@ -150,6 +150,10 @@ pub(crate) fn repo_states(workspace: &str) -> Result<RepoStates, String> {
         Ok(cache) => (Some(cache), None),
         Err(why) => (None, Some(why.to_string())),
     };
+    // Read FIRST, then decide whether to refresh: this listing draws what the cache holds now,
+    // and the refresh is for the next one. Python's render path does the two in this order for
+    // the same reason (`glstate.read_for`, then `glstate.maybe_spawn`).
+    refresh_if_it_is_due(&root, workspace);
     Ok(RepoStates {
         workspace: workspace.to_string(),
         repos: found
@@ -159,6 +163,44 @@ pub(crate) fn repo_states(workspace: &str) -> Result<RepoStates, String> {
             .collect(),
         cache_refused,
     })
+}
+
+/// Kick off a background forge refresh for this workspace, if the policy says one is due —
+/// charter-app#69.
+///
+/// **This is the trigger, and it is a user action rather than a timer.** Focusing a workspace
+/// is what runs this panel, and no daemon runs anywhere in charter-app: an app nobody touches
+/// makes no forge call, ever. `charter_core::glstate` holds the decision — the refresh window,
+/// the cooldown, the stuck window, and the lock that names the refresh in flight — so that two
+/// panels in quick succession are one refresh and a wedged one is not replaced every two
+/// minutes, each replacement holding the forge credential.
+///
+/// It **spawns**, never waits: the spec's budget for a workspace switch is 100 ms, and the
+/// slow thing in this command is already the one `git status` per clone above.
+///
+/// Silent where a refusal is routine — cooling down, already running, nothing stale — and out
+/// loud where it is not, because a CI column that never fills over a `charter` binary that
+/// went missing would otherwise look exactly like one nobody has refreshed.
+fn refresh_if_it_is_due(root: &std::path::Path, workspace: &str) {
+    use charter_core::glstate::Refreshing;
+
+    let Some(binary) = crate::charter_binary() else {
+        // Already said once, at startup, by the launch that could not find it. Saying it again
+        // on every workspace focus would be the same sentence fifty times an hour.
+        return;
+    };
+    // The same list the refresher itself walks, and the same one the panel draws.
+    let Ok(targets) = charter_core::glrefresh::trees(root, workspace) else {
+        return;
+    };
+    match charter_core::glstate::maybe_spawn(root, workspace, &targets.trees, &binary) {
+        // Cooling down, one already in flight, nothing stale, or the operator's own brake:
+        // every one of these is the policy working, and none of them is news.
+        Refreshing::Started { .. } | Refreshing::Declined(_) => {}
+        Refreshing::NotStarted { why } => {
+            eprintln!("charter: a forge refresh for '{workspace}' would not start ({why})");
+        }
+    }
 }
 
 /// One row: what git said, and then what the cache says about the branch git named.

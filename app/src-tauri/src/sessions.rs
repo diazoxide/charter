@@ -123,6 +123,32 @@ impl Sessions {
             .iter()
             .map(Into::into)
             .collect();
+        // **The chat is what charter's per-session state is keyed on, and this is what says
+        // so** — charter-app#63. Without it `active::session_id` falls to the harness's own
+        // `$CLAUDE_CODE_SESSION_ID`, which names the CONVERSATION: `/clear` starts a new one
+        // inside the same chat, so `.charter/sessions/<sid>.workspace` becomes a key nothing
+        // reads again and the workspace the operator picked stops deciding. It is the same
+        // mechanism the tmux frame used (`-e CHARTER_SESSION_ID=<chat id>`, ADR 0019), which
+        // is why every process in a frame answered identically for the life of the chat.
+        //
+        // **Unconditional, and above the `reporting` block on purpose.** `CHARTER_CHAT` is
+        // set only when the app has a socket to hear about the chat on, because without one
+        // there is nothing to report to. This is not a report — it is the chat's identity,
+        // and an app whose channel would not open still owns fifty ptys that each need a key
+        // of their own. It also keeps the LAST rung of `active::terminal_id` from ever
+        // deciding here: the app sets none of `$TERM_SESSION_ID`/`$TMUX_PANE`/`$STY`/
+        // `$SSH_TTY`, so that rung is `ttyname(0)` — a device name the kernel RECYCLES, which
+        // is the sharing hazard `WINDOWID` was taken out of `PANE_ID_VARS` for, one layer
+        // down.
+        //
+        // It is set here rather than in `charter_core::start::environment` because the
+        // number does not exist yet where that runs: `start::ready` resolves a launch before
+        // any session is opened, and the id is chosen above. The value is the one
+        // `CHARTER_CHAT` carries, so the two can never name different chats.
+        spec.env.push((
+            charter_core::active::SESSION_ID_ENV.into(),
+            id.to_string().into(),
+        ));
         if let Some(reporting) = &self.reporting {
             spec.env
                 .push((SOCKET_ENV.into(), reporting.socket.clone().into()));
@@ -593,6 +619,163 @@ mod tests {
         opening.program = Some("/definitely/not/a/program".to_owned());
 
         assert!(sessions.open(&opening, &|_| {}).is_err());
+    }
+
+    // --- the chat's own session id (charter-app#63) ------------------------------------ //
+
+    /// What `$CHARTER_SESSION_ID` was in the environment of the program a chat started.
+    ///
+    /// Read out of the running program rather than off the `Opening`, because what this is
+    /// about is the variable the HARNESS sees: every rung of the workspace ladder is read by
+    /// a `charter` the harness starts, which inherits exactly this.
+    fn session_id_of_a_chat(sessions: &Sessions) -> (u32, String) {
+        let id = sessions
+            .open(
+                &opening("printf 'sid=<%s>' \"$CHARTER_SESSION_ID\"; sleep 600"),
+                &|_| {},
+            )
+            .expect("the session opens");
+        let (_view, seen) = watching(sessions, id);
+        let deadline = Instant::now() + PATIENCE;
+        loop {
+            let shown = lock(&seen).clone();
+            // Both halves, because an EMPTY value is the defect this is about and `sid=<`
+            // alone would read as the answer before the `>` that ends it has arrived.
+            if let Some((_, rest)) = shown.split_once("sid=<")
+                && let Some((value, _)) = rest.split_once('>')
+            {
+                return (id, value.to_owned());
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the chat never printed its session id, only {shown:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// A plane with nothing selected anywhere, so the only rung that can answer is the one
+    /// the pointer written below is keyed on.
+    fn bare_plane() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("a plane");
+        let root = std::fs::canonicalize(dir.path()).expect("a resolved plane");
+        std::fs::write(root.join("charter.toml"), "").expect("a manifest");
+        std::fs::create_dir_all(root.join(".charter/sessions")).expect("a state directory");
+        (dir, root)
+    }
+
+    /// The ladder, asked the way a `charter` inside that chat asks it: the chat's own
+    /// environment, plus the conversation the harness is under at this moment.
+    fn workspace_of(
+        root: &std::path::Path,
+        sid: &str,
+        conversation: &str,
+    ) -> charter_core::active::ActiveWorkspace {
+        use charter_core::active::{CONVERSATION_ENV, SESSION_ID_ENV};
+        let held: HashMap<String, String> = [
+            (SESSION_ID_ENV.to_owned(), sid.to_owned()),
+            (CONVERSATION_ENV.to_owned(), conversation.to_owned()),
+        ]
+        .into_iter()
+        .filter(|(_, value)| !value.is_empty())
+        .collect();
+        let ids = charter_core::active::Ids::of(&|name| held.get(name).cloned());
+        charter_core::active::workspace(&charter_core::active::Asking {
+            root,
+            // Not inside any tree, so the cwd rung cannot answer and the pointers decide.
+            cwd: root,
+            flag: None,
+            ids: &ids,
+            env: None,
+        })
+    }
+
+    #[test]
+    fn a_chat_the_app_starts_is_given_the_session_id_charter_keys_its_pointers_on() {
+        // charter-app#63. The app's own number for the chat went out as `CHARTER_CHAT`, which
+        // `hookwire` reads and nothing else does, so `active::session_id` fell to the
+        // harness's `$CLAUDE_CODE_SESSION_ID` — the CONVERSATION.
+        let sessions = Sessions::new();
+
+        let (id, sid) = session_id_of_a_chat(&sessions);
+
+        assert_eq!(sid, id.to_string(), "the chat's number is its session id");
+    }
+
+    #[test]
+    fn a_chat_is_given_one_even_when_the_app_has_no_channel_to_hear_it_on() {
+        // `CHARTER_CHAT` is set only when the app is listening, because without a socket
+        // there is nothing to report to. The session id is not a report: an app whose channel
+        // would not open still owns fifty ptys that each need a key of their own, and one
+        // with none falls to `ttyname(0)` — a device name the kernel recycles between chats.
+        let sessions = Sessions::reporting_to(None);
+
+        let (id, sid) = session_id_of_a_chat(&sessions);
+
+        assert_eq!(sid, id.to_string());
+    }
+
+    #[test]
+    fn two_chats_are_not_given_one_session_id_to_share() {
+        let sessions = Sessions::new();
+
+        let (first_id, first) = session_id_of_a_chat(&sessions);
+        let (second_id, second) = session_id_of_a_chat(&sessions);
+
+        assert_ne!(first_id, second_id);
+        assert_ne!(first, second, "two chats would read one another's pointers");
+    }
+
+    #[test]
+    fn the_workspace_a_chat_picked_still_decides_after_a_clear() {
+        // **The defect as the operator meets it** (charter-app#63): `charter ws use finance`,
+        // then `/clear`, and the selection is gone. `/clear` ends one conversation and starts
+        // another inside the same chat — same terminal, same program — so a pointer keyed on
+        // the conversation id is a key nothing reads again.
+        //
+        // It asserts the RUNG and not only the name: landing on `finance` because some other
+        // rung happens to name it would prove nothing about what the pointer is keyed on.
+        let (_plane, root) = bare_plane();
+        let sessions = Sessions::new();
+        let (_id, sid) = session_id_of_a_chat(&sessions);
+        // What `charter ws use finance` inside that chat writes.
+        std::fs::write(
+            root.join(format!(".charter/sessions/{sid}.workspace")),
+            "finance\n",
+        )
+        .expect("the pointer is written");
+
+        let before = workspace_of(&root, &sid, "9f2c-the-conversation-it-was-picked-in");
+        let after = workspace_of(&root, &sid, "41ab-the-one-the-clear-started");
+
+        for (when, found) in [("before the clear", before), ("after it", after)] {
+            assert_eq!(found.name, "finance", "{when}");
+            assert_eq!(
+                found.rung,
+                charter_core::active::WorkspaceRung::SessionPointer,
+                "{when}: the pointer is not keyed on the chat"
+            );
+        }
+    }
+
+    #[test]
+    fn a_chat_with_no_session_id_of_its_own_is_what_the_clear_used_to_lose() {
+        // The other half of the same test, and what makes the one above about the FIX rather
+        // than about the ladder: keyed on the conversation, the pointer written in one
+        // conversation is not read in the next. Written out here so that a chat which stops
+        // being given a session id cannot pass the suite by looking like this.
+        let (_plane, root) = bare_plane();
+        let first = "9f2c-the-conversation-it-was-picked-in";
+        std::fs::write(
+            root.join(format!(".charter/sessions/{first}.workspace")),
+            "finance\n",
+        )
+        .expect("the pointer is written");
+
+        assert_eq!(workspace_of(&root, "", first).name, "finance");
+        let after = workspace_of(&root, "", "41ab-the-one-the-clear-started");
+        assert_eq!(after.name, "default");
+        assert_eq!(after.rung, charter_core::active::WorkspaceRung::BuiltIn);
     }
 
     #[test]
