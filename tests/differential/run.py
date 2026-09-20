@@ -3418,13 +3418,19 @@ VERSION_SCENARIOS = [
         # The one that must agree, and the reason the other two are here: an exit 1 that only
         # one implementation gives turns a wrapper's `charter version || conform` into a no-op
         # on the other.
+        #
+        # `refusal` rather than `stderr_differs`, and it says more than the note would: the
+        # harness treats a Python exit that a scenario has not declared as a defect in the
+        # scenario, and the substring it then requires of the RUST stderr is one both sides
+        # write. So what is compared here is that both implementations call this state drift
+        # and both name the pin — the sentences around that phrase are each their own.
         name="version-on-a-plane-pinning-a-release-neither-side-is-exits-one",
         plane="daily",
         setup=_pinning(PIN_NEITHER_SIDE_MEETS),
         python=["version"],
         pins_the_clock=False,
         stdout_differs=VERSION_ROWS_DIFFER,
-        stderr_differs=VERSION_VERDICT_DIFFERS,
+        refusal=f"drift: this control plane pins {PIN_NEITHER_SIDE_MEETS}",
     ),
 ]
 
