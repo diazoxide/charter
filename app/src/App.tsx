@@ -229,8 +229,8 @@ function App() {
 
   const newTab = useCallback(() => void ask({ tab: true }), [ask]);
 
-  /** A row was picked: the chat starts on that profile, with that persona, and with or
-   *  drawing charter's footer in its pane (charter ADR 0029). */
+  /** A row was picked: the chat starts on that profile, with that persona, and either
+   *  drawing charter's footer in its pane or leaving it blank (charter ADR 0029). */
   const startPicked = useCallback(
     async (profile: string, persona: string | null, showFooter: boolean) => {
       const where = picking?.where;
