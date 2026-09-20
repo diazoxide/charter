@@ -115,6 +115,43 @@ jobs:
       # charter is a dev dependency of THIS JOB and nothing else (decision 15) — the run
       # installs it, pinned to the commit that generated the fixture planes.
       - run: tests/differential/run.py
+  stress:
+    # Evidence for charter-app#16, not a gate: fifty tabs on a shared runner is timing-bound,
+    # and a flaky REQUIRED check blocks every merge — including the fix for the bug it watches.
+    # It runs on every PR, it reports, and it is allowed to fail. Its logs are kept either way.
+    name: fifty tabs (${{ matrix.os }}, evidence only)
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tauri's Linux build dependencies, and a display to run in
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb dbus-x11
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+        working-directory: app
+      - name: The harness the scenario tests run in every pane, and the binary its hooks run
+        run: cargo build -p fake-harness -p charter-cli
+      # The `e2e` feature puts WebdriverIO's embedded WebDriver server inside the app, which is
+      # what drives it on macOS as well as Linux. It is in no build anyone is given.
+      - name: Build the app for the scenario tests
+        run: npx tauri build --debug --no-bundle --features e2e --config src-tauri/tauri.e2e.conf.json
+        working-directory: app
+      - run: npm run e2e
+        env:
+          STRESS: "1"
   scenario:
     name: scenario tests (${{ matrix.os }})
     strategy:
