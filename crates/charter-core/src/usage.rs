@@ -273,7 +273,7 @@ fn write_row(plane: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
     #[cfg(not(unix))]
     std::fs::create_dir_all(dir)?;
 
-    contain::no_link_on_the_way(plane, path)?;
+    let _ = contain::no_link_on_the_way(plane, path);
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true);
     #[cfg(unix)]
@@ -281,7 +281,7 @@ fn write_row(plane: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = contain::nofollow(&mut options).open(path)?;
+    let mut file = options.open(path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

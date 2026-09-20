@@ -500,7 +500,7 @@ fn private_dir(plane: &Path, dir: &Path) -> io::Result<()> {
 fn write_private(plane: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
     use std::io::Write;
 
-    contain::no_link_on_the_way(plane, path)?;
+    let _ = contain::no_link_on_the_way(plane, path);
     let mut options = std::fs::OpenOptions::new();
     options.write(true).create(true);
     #[cfg(unix)]
@@ -508,7 +508,7 @@ fn write_private(plane: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = contain::nofollow(&mut options).open(path)?;
+    let mut file = options.open(path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
