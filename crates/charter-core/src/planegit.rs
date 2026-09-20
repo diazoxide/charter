@@ -13,8 +13,12 @@
 //!
 //! **A count is not a description**, so this port prints the directory breakdown of what is
 //! staged BEFORE the commit is made. It is the one thing the incident's own write-up says is
-//! the whole check, and it is the only line this command has that Python does not (recorded in
-//! the differential harness as `rust_only_lines`). The behaviour itself is ported faithfully:
+//! the whole check, and it is the only block this command has that Python does not. Being
+//! charter's alone is not a reason for nothing to check it: the differential harness takes it
+//! out of the Rust stderr (`rust_only_lines`) and then compares the block it took out, byte
+//! for byte, against what the scenario declares (`rust_only_block`) — the headline's counts,
+//! every row's count and directory, the order they are in, and the tail that says how many
+//! directories were not listed. The behaviour itself is ported faithfully:
 //! `save` still stages everything, because narrowing it would silently stop saving things
 //! planes rely on it saving.
 //!
@@ -132,6 +136,33 @@ impl PushResult {
 /// `None` — the token is neither pushed with nor named in the warning the caller then prints.
 /// That is a property worth a test rather than a second check: the danger is not the `@`, it is
 /// handing git a URL charter did not build.
+///
+/// # Testing this against a local stand-in forge, and the trap in doing so
+///
+/// **`git remote get-url` APPLIES `url.<base>.insteadOf`.** A test that stands a bare
+/// repository up beside the plane and rewrites the forge's URL onto it — which is the only way
+/// to exercise a push without reaching a real forge — decides, by which URL it keys the
+/// rewrite, whether this function sees a forge at all:
+///
+/// - keyed on the HTTPS base (`url.file:///…/forge/acme/.insteadOf =
+///   https://github.com/acme/`) with `origin` in the SSH form, `get-url` returns the SSH URL
+///   untouched, [`forge::resolve_host`] places it, the rewrite below runs, and git maps the
+///   HTTPS URL charter built onto the bare repository. This is the arrangement that tests
+///   anything.
+/// - keyed on the SSH form, or with `origin` already HTTPS, `get-url` hands back
+///   `file:///…`. [`forge::resolve_host`] answers `None`, this function answers `None`, and
+///   the caller warns and skips the push. **Both implementations agree perfectly and nothing
+///   is pushed** — a green differential scenario over a code path neither side entered.
+///
+/// `env_clear()` in [`crate::worktree::git`] does not close this: `insteadOf` arrives through
+/// CONFIG, not the environment, and `HOME` is the one variable that runner deliberately keeps
+/// (its module docs say why), so `~/.gitconfig`'s rewrite reaches every git call charter
+/// makes. It cannot be measured by looking at argv either — the rewrite happens inside git.
+///
+/// `tests/differential/run.py` therefore measures what `origin` resolves to before it runs
+/// the command, and fails any scenario whose plane has a stand-in forge beside it and an
+/// origin that came back `file://` without the scenario saying it meant that
+/// (`local_origin_why`). Read that check before writing a new forge scenario.
 pub fn origin_https(root: &Path) -> Option<String> {
     let url = git::run(root, &["remote", "get-url", "origin"], git::READ)
         .ok()

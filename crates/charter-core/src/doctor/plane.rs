@@ -29,18 +29,18 @@ fn standing_in_nested_plane(cwd: &Path) -> Option<PathBuf> {
 /// `workspaces/` (#140)? Standing in one, every command operates on the inner plane — its own
 /// vault registry, workspace pointers and `workspaces/` — and nothing says so.
 ///
-/// **This binary does not hop outward, and the row says so rather than borrowing Python's
-/// sentence.** Python's `find_root` resolves past a nested plane to the one holding the vault
-/// and only lands inside one when `$CHARTER_ROOT` pins it there; its row's words assume that.
-/// [`crate::plane::resolve`] — what every command but `init` and `reinit` uses — takes the
-/// nearest `charter.toml` instead, so standing in a nested clone IS the pinned case with
-/// nobody having pinned anything, and telling the operator to "unset CHARTER_ROOT" there
-/// would send them after a variable that is not set.
+/// **The gap this row was written around is closed, and the last arm below still describes
+/// it.** When M2.5 wrote that arm, [`crate::plane::resolve`] stopped at the nearest
+/// `charter.toml` while Python's `find_root` hopped outward, so standing in a nested clone was
+/// the pinned case with nobody having pinned anything and the row had to say so. M2.9 gave
+/// `resolve` the outward hop and M2.16 gave it the worktree redirect, so `enclosing_plane` of
+/// the plane this binary resolved is now `None` by construction unless `$CHARTER_ROOT` put it
+/// there — which makes that arm unreachable rather than wrong, and its words about "does not
+/// hop outward" are no longer true of this binary.
 ///
-/// **The gap is the resolver's, and it is being fixed elsewhere.** [`crate::plane::place`]
-/// already hops (`outermost`), for `init` and `reinit` alone; `resolve` has not caught up,
-/// and two ports found that independently. This row's wording depends on which of the two
-/// answers, so it changes with the resolver rather than before it.
+/// Left standing on purpose: deleting a match arm is not a row's behaviour changing, it is a
+/// row losing a case nobody re-derived, and which sentence an operator should read when a
+/// resolver lands them inside a nested plane is its own ticket.
 pub(super) fn nested(d: &Doctor) -> Row {
     const NAME: &str = "nested plane";
     if !d.has_plane {
