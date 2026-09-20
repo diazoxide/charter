@@ -31,6 +31,7 @@ use charter_core::workspaces::Plane;
 use clap::{Args, Parser, Subcommand};
 
 mod memory;
+mod statusline;
 mod voice;
 
 #[derive(Parser)]
@@ -121,6 +122,54 @@ enum Command {
         /// charter yet: refused, so nobody reads the report as the state after a repair.
         #[arg(long)]
         fix: bool,
+    },
+
+    /// Refresh the forge state the CI column is drawn from: each clone's open PR/MR and the
+    /// last pipeline on the branch it is actually on.
+    ///
+    /// **This is the process that holds the forge credential, and it draws nothing.** The
+    /// panels read the file it writes and can never fetch, which is deliberate: a fetch on a
+    /// render path puts a forge token in the process that draws the window.
+    #[command(name = "gl-refresh")]
+    GlRefresh {
+        /// The workspace to refresh.
+        ///
+        /// Required, where charter resolves the active one. The nine-rung resolution is not
+        /// ported (see this file's own header), and a refresh keyed to the wrong workspace
+        /// writes another workspace's rows.
+        #[arg(short = 'w', long = "workspace")]
+        workspace: String,
+        /// Return at once and refresh in a process that outlives this one.
+        ///
+        /// What a hook's `async` used to buy, done by charter — one harness skips async hooks
+        /// outright.
+        #[arg(long)]
+        detach: bool,
+        /// Pin the instant every entry is stamped with, for tests only.
+        #[arg(long, hide = true)]
+        now: Option<String>,
+    },
+
+    /// Claude Code's footer, from the per-turn JSON on stdin.
+    ///
+    /// Inside the app it prints an empty line and still records the turn's token usage, which
+    /// is the only place that record exists (ADR 0019). Everywhere else it says, in one line,
+    /// that this build does not draw the plane yet.
+    Statusline {
+        /// Repaint in place until Ctrl-C, on a harness with no status bar of its own.
+        ///
+        /// Taken and answered with the same one line, because there is no render to repeat
+        /// yet. Accepted rather than refused: a plane wired for `charter statusline --watch`
+        /// must not meet a usage error from a `charter` that appeared first on PATH.
+        #[arg(long)]
+        watch: bool,
+        /// Seconds between repaints with --watch.
+        ///
+        /// Taken and ignored, for the same reason `--watch` is: there is nothing to repaint
+        /// yet. Refusing the flag would refuse a command line a plane already has.
+        #[allow(dead_code)]
+        #[arg(long, default_value = "10")]
+        interval: f64,
     },
 
     /// Tell the app what a harness just did. Run by a harness's hooks, never by a person.
@@ -455,6 +504,145 @@ fn hook(name: &str, plugin_version: Option<&str>) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// `charter gl-refresh` — ask each clone's own forge about the branch it is on, and write the
+/// answers into the cache the panels read.
+///
+/// A port of `charter/commands.py:cmd_gl_refresh`. The work itself is
+/// [`charter_core::glrefresh`], which is where the credential boundary is argued.
+fn gl_refresh(ws: &str, detach: bool, now: Option<&str>) -> ExitCode {
+    use charter_core::glrefresh;
+
+    // Checked FIRST: the point is to return before any of the work below, in a process the
+    // harness will not tear down with the turn.
+    if detach {
+        return match detach_self(ws, now) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(why) => {
+                eprintln!("charter: {why}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    let root = match plane() {
+        Ok(plane) => plane.root().to_path_buf(),
+        Err(why) => {
+            eprintln!("charter: {why}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let stamp = match instant(now) {
+        Ok(stamp) => stamp,
+        Err(why) => {
+            eprintln!("charter: {why}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let trees = match glrefresh::trees(&root, ws) {
+        Ok(trees) => trees,
+        Err(why) => {
+            eprintln!("charter: {why}");
+            return ExitCode::FAILURE;
+        }
+    };
+    if trees.is_empty() {
+        voice::info(&format!("No repos in workspace '{ws}'."));
+        return ExitCode::SUCCESS;
+    }
+    let cache = glrefresh::refresh(&root, &trees, stamp);
+    voice::ok(&format!(
+        "Refreshed forge state for {} tree(s) in '{ws}'.",
+        trees.len()
+    ));
+    for tree in &trees {
+        let entry = cache.get(&glrefresh::key_for(tree));
+        let field = |name: &str| entry.and_then(|row| row.get(name));
+        let mut bits: Vec<String> = Vec::new();
+        // `if ent.get("change")`: a change of zero or none is no change to report.
+        if let Some(change) = field("change")
+            .and_then(serde_json::Value::as_u64)
+            .filter(|n| *n > 0)
+        {
+            // An entry written before the forge protocol carried a sigil has none, and the
+            // display default is GitLab's — which is what `cmd_gl_refresh` prints.
+            let sigil = field("sigil")
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("!");
+            bits.push(format!("{sigil}{change}"));
+        }
+        if let Some(ci) = field("ci")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.is_empty())
+        {
+            bits.push(format!("pipeline:{ci}"));
+        }
+        if !bits.is_empty() {
+            let name = tree
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            voice::info(&format!("  {name}: {}", bits.join(" · ")));
+        }
+    }
+    ExitCode::SUCCESS
+}
+
+/// Re-run this binary's `gl-refresh` in a process that outlives this one.
+/// `charter/util.py:detach_self`.
+///
+/// **Two differences from Python, both deliberate.**
+///
+/// Python re-launches `python -m charter` and drops `--workspace`, leaving the child to
+/// resolve the active workspace for itself. This binary has no resolution ladder, so the
+/// workspace is carried — and carrying it is the better half of that argument anyway:
+/// `glstate.maybe_spawn` already passes `--workspace` explicitly because "a refresh keyed to a
+/// different workspace than the row it is refreshing is the defect".
+///
+/// Python calls `setsid`; this sets the child's own process GROUP. A hook's process group is
+/// what a harness tears down when the turn ends, so the group is what has to be left — and
+/// `Command::process_group` is safe, where `setsid` would need a `pre_exec` closure and this
+/// workspace forbids `unsafe`. What it does not buy is detachment from the controlling
+/// terminal, which a background refresh writing to `/dev/null` never touches.
+fn detach_self(ws: &str, now: Option<&str>) -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let me = std::env::current_exe().map_err(|e| format!("cannot find this binary: {e}"))?;
+    let mut child = Command::new(me);
+    child.arg("gl-refresh").arg("-w").arg(ws);
+    if let Some(now) = now {
+        child.arg("--now").arg(now);
+    }
+    child
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("could not start a detached refresh: {e}"))
+}
+
+/// The instant a refresh stamps every entry with: `--now` as a local naive time, else the
+/// wall clock. Seconds since the epoch, as Python's `time.time()` answers.
+fn instant(now: Option<&str>) -> Result<f64, String> {
+    let Some(text) = now else {
+        return Ok(std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|since| since.as_secs_f64())
+            .unwrap_or(0.0));
+    };
+    let naive: chrono::NaiveDateTime = text
+        .parse()
+        .map_err(|e| format!("--now is not a local naive timestamp: {e}"))?;
+    // A naive stamp is LOCAL time, as `--now` is everywhere in this binary.
+    chrono::TimeZone::from_local_datetime(&chrono::Local, &naive)
+        .single()
+        .map(|local| local.timestamp() as f64)
+        .ok_or_else(|| "--now names no single local instant".to_string())
+}
+
 /// `discover`, `clone` and `sync`, or `None` for any other command.
 fn repo_command(command: &Command) -> Option<ExitCode> {
     use charter_core::repocmd::{self, Say};
@@ -544,7 +732,9 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Discover { .. }
         | Command::Clone { .. }
         | Command::Sync { .. }
-        | Command::Doctor { .. } => {
+        | Command::Doctor { .. }
+        | Command::GlRefresh { .. }
+        | Command::Statusline { .. } => {
             unreachable!("answered before run")
         }
         Command::Root => {
@@ -751,6 +941,29 @@ fn main() -> ExitCode {
             preflight,
             fix,
         } => return doctor(*json, *preflight, *fix),
+        // A background refresh and a footer: neither is a plane write, and both choose their
+        // own exit status as their Python counterparts do.
+        Command::GlRefresh {
+            workspace,
+            detach,
+            now,
+        } => {
+            return gl_refresh(workspace, *detach, now.as_deref());
+        }
+        Command::Statusline { watch, .. } => {
+            // Nothing writes a payload to a `--watch` render, and reading stdin there would
+            // sit on the deadline for no reason.
+            let payload = if *watch { String::new() } else { payload() };
+            // No plane means nothing is recorded: see `statusline::run`, which declares that
+            // divergence from Python and why it is the right way round.
+            let here = plane().ok();
+            statusline::run(
+                here.as_ref().map(|plane| plane.root()),
+                &payload,
+                &statusline::Ambient::here(),
+            );
+            return ExitCode::SUCCESS;
+        }
         _ => {}
     }
     // The repo commands speak line by line as they go — a clone is slow, and the line that

@@ -1,10 +1,11 @@
 //! The forges a plane declares, and asking them what repos exist.
 //!
 //! A port of `charter/forge/` — the registry, and the parts of the GitHub and GitLab backends
-//! `discover` and `clone` use: authentication, enumerating an owner's repos, a repo's
-//! top-level file list, and the credential helper and SSH→HTTPS rewrite each forge's clones
-//! get. The status-line and change-surface calls are not here; nothing in the Rust charter
-//! asks them yet.
+//! `discover`, `clone` and `gl-refresh` use: authentication, enumerating an owner's repos, a
+//! repo's top-level file list, the branch's open change and last CI result, and the
+//! credential helper and SSH→HTTPS rewrite each forge's clones get. The change surface —
+//! opening, reviewing and merging a request — is not here; nothing in the Rust charter asks
+//! it yet.
 //!
 //! # One credential, and charter never holds it
 //!
@@ -76,6 +77,16 @@ impl Kind {
         match self {
             Kind::GitHub => "gh",
             Kind::GitLab => "glab",
+        }
+    }
+
+    /// How this forge names a change: `#` for a GitHub pull request, `!` for a GitLab merge
+    /// request. Python's `Forge.change_sigil`, and the only two characters
+    /// [`crate::cistate`] will read back out of the cache.
+    pub fn change_sigil(self) -> &'static str {
+        match self {
+            Kind::GitHub => "#",
+            Kind::GitLab => "!",
         }
     }
 
@@ -242,6 +253,75 @@ pub fn host_of(url: &str) -> String {
         return host.to_ascii_lowercase();
     }
     String::new()
+}
+
+/// `path_with_namespace` out of a git remote URL — the other half of [`host_of`], and the
+/// value every forge API path below is built from. Python's `registry.namespace_of`.
+///
+/// `None` when there is no path to take, which a caller must read as *this clone names no
+/// repository on a forge* and never as a guess.
+///
+/// **One parser, because two callers already exist in Python** (`glstate._remote_path` and
+/// the change surface), and a remote shape that confuses one must not quietly answer
+/// differently for the other.
+pub fn namespace_of(url: &str) -> Option<String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return None;
+    }
+    let url = url.strip_suffix(".git").unwrap_or(url);
+    if let Some((scheme, _)) = url.split_once("://") {
+        let path = url_path(scheme, url);
+        let trimmed = path.trim_matches('/');
+        return (!trimmed.is_empty()).then(|| trimmed.to_string());
+    }
+    // scp-like: `git@host:group/sub/repo`.
+    if let Some((_, rest)) = url.split_once(':') {
+        let trimmed = rest.trim_matches('/');
+        return (!trimmed.is_empty()).then(|| trimmed.to_string());
+    }
+    None
+}
+
+/// The schemes `urllib.parse.urlparse` splits `;params` off the last path segment for
+/// (`urllib.parse.uses_params`). Reproduced rather than ignored: Python's `.path` is what
+/// `namespace_of` returns, and for `https://h/a/b;x` that is `/a/b`, not `/a/b;x`.
+const USES_PARAMS: [&str; 15] = [
+    "", "ftp", "hdl", "prospero", "http", "imap", "https", "shttp", "rtsp", "rtspu", "sip", "sips",
+    "mms", "sftp", "tel",
+];
+
+/// `urllib.parse.urlparse(url).path` for a URL that has a `://`.
+///
+/// Query and fragment are cut at the first `?` or `#`; `urlsplit` also drops every tab and
+/// newline anywhere in the URL before parsing, which is its own defence against a header
+/// split and is reproduced here so the two implementations read the same remote the same way.
+fn url_path(scheme: &str, url: &str) -> String {
+    let cleaned: String = url
+        .chars()
+        .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+        .collect();
+    let Some((_, after)) = cleaned.split_once("://") else {
+        return String::new();
+    };
+    // The netloc runs to the first `/`, `?` or `#`; everything from a `/` onwards is the path.
+    let rest = match after.find(['/', '?', '#']) {
+        Some(i) if after.as_bytes()[i] == b'/' => &after[i..],
+        // No path at all: `https://host?q`, `https://host`.
+        _ => return String::new(),
+    };
+    let path = &rest[..rest.find(['?', '#']).unwrap_or(rest.len())];
+    // Bound outside the condition: a temporary borrowed inside an `if` chain is dropped at a
+    // point the 2024 edition moved, and this reads the same either way.
+    let scheme = scheme.to_ascii_lowercase();
+    if USES_PARAMS.contains(&scheme.as_str())
+        && let Some(last) = path.rsplit('/').next()
+        && let Some((before, _)) = last.split_once(';')
+    {
+        let head = &path[..path.len() - last.len()];
+        return format!("{head}{before}");
+    }
+    path.to_string()
 }
 
 // ---------------------------------------------------------------------------------------
@@ -836,6 +916,229 @@ impl Forge {
                 Ok(out)
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// The status-line pair: an open change, and the branch's last CI result                   #
+// ---------------------------------------------------------------------------------------
+
+/// A JSON shape the call did not expect, where **Python raised**.
+///
+/// Carried rather than folded into "no answer", because `glstate.state_for_repo` catches the
+/// exception around all three fields at once: a forge that answers `{"message": "…"}` where a
+/// list was asked for blanks the change, the CI word **and** the sigil together, and a port
+/// that answered "no change, CI as read" would write a different entry to the cache.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Raised;
+
+/// GitHub's `statusCheckRollup.state` → charter's neutral vocabulary. Python's
+/// `github._CI_MAP`; anything unlisted is no answer rather than an invented one.
+const GITHUB_CI: [(&str, &str); 5] = [
+    ("SUCCESS", "success"),
+    ("FAILURE", "failed"),
+    ("ERROR", "failed"),
+    ("PENDING", "pending"),
+    ("EXPECTED", "pending"),
+];
+
+/// GitLab's pipeline `status` → the same vocabulary. Python's `gitlab._CI_MAP`.
+const GITLAB_CI: [(&str, &str); 11] = [
+    ("success", "success"),
+    ("failed", "failed"),
+    ("running", "running"),
+    ("canceled", "canceled"),
+    ("skipped", "skipped"),
+    ("manual", "manual"),
+    ("pending", "pending"),
+    ("created", "pending"),
+    ("preparing", "pending"),
+    ("waiting_for_resource", "pending"),
+    ("scheduled", "pending"),
+];
+
+/// The one GraphQL document charter sends, byte for byte as `github._ROLLUP_QUERY` spells it
+/// — leading newline included, because it is a value on a command line a recorded `gh`
+/// matches against.
+///
+/// GraphQL and not REST because **there is no single CI status in GitHub's REST API**: a
+/// commit carries N check runs plus legacy commit statuses, and GitHub computes the rollup
+/// only here. Inventing an aggregation would either lose information or state something
+/// GitHub does not.
+const ROLLUP_QUERY: &str = "\nquery($owner:String!, $name:String!, $ref:String!) {\n  \
+                            repository(owner:$owner, name:$name) {\n    \
+                            ref(qualifiedName:$ref) { target { ... on Commit {\n      \
+                            statusCheckRollup { state } } } }\n  }\n}\n";
+
+/// Python's truthiness, which is what `if not arr: return None` asks.
+fn falsy(value: &Value) -> bool {
+    !truthy(value)
+}
+
+/// `arr[0].get(key)` as Python evaluates it on whatever `_api` came back with.
+///
+/// `Ok(None)` is Python's `if arr else None` — nothing to report. `Err(Raised)` is every
+/// shape where Python would have thrown: a dict (`KeyError`), a string or a number
+/// (`TypeError`/`AttributeError`), or a list whose first element is not a dict.
+fn first_field(answer: Option<Value>, key: &str) -> Result<Option<Value>, Raised> {
+    let Some(answer) = answer else {
+        return Ok(None);
+    };
+    if falsy(&answer) {
+        return Ok(None);
+    }
+    let Some(items) = answer.as_array() else {
+        return Err(Raised);
+    };
+    // Non-empty by `falsy` above.
+    let first = items.first().ok_or(Raised)?;
+    match first.as_object() {
+        Some(row) => Ok(row.get(key).cloned()),
+        None => Err(Raised),
+    }
+}
+
+/// A mapping table's answer for `word`, or `None` for a word it does not list.
+fn mapped(table: &[(&str, &str)], word: &str) -> Option<String> {
+    table
+        .iter()
+        .find(|(from, _)| *from == word)
+        .map(|(_, to)| (*to).to_string())
+}
+
+impl Forge {
+    /// Best-effort JSON GET. `None` on **every** failure — a missing CLI, a non-zero exit, a
+    /// timeout, an empty body or unparsable JSON. Python's `_api` on both backends.
+    ///
+    /// Split from [`Self::api_strict`] deliberately and for the reason `github.py`'s module
+    /// docstring gives: the callers here feed a surface that renders every turn and must
+    /// never raise, while `list_repos` must never let a failure read as "no repos".
+    fn api(&self, path: &str) -> Option<Value> {
+        let answer = call(self.kind, &self.api_args(path), STATUS_TIMEOUT).ok()?;
+        if answer.code != 0 || answer.out.trim().is_empty() {
+            return None;
+        }
+        serde_json::from_str(&answer.out).ok()
+    }
+
+    /// The open change on `branch`, as the forge's own field holds it — **uncoerced**.
+    ///
+    /// Coercion is [`crate::glrefresh::change_or_none`]'s, because Python coerces in
+    /// `glstate` and not in the backend, and a forge that serialises its id as `"42"` must be
+    /// read the same way on both sides of that split.
+    pub fn open_change(&self, path: &str, branch: &str) -> Result<Option<Value>, Raised> {
+        match self.kind {
+            Kind::GitHub => {
+                let (owner, name) = path.split_once('/').unwrap_or((path, ""));
+                let asked = format!(
+                    "repos/{}/{}/pulls?state=open&head={}:{}&per_page=1",
+                    quote(owner),
+                    quote(name),
+                    quote(owner),
+                    quote(branch)
+                );
+                first_field(self.api(&asked), "number")
+            }
+            Kind::GitLab => {
+                let asked = format!(
+                    "projects/{}/merge_requests?state=opened&source_branch={}&per_page=1",
+                    quote(path),
+                    quote(branch)
+                );
+                first_field(self.api(&asked), "iid")
+            }
+        }
+    }
+
+    /// The branch's last CI result as one of [`crate::cistate::CI_STATES`], or `None`.
+    ///
+    /// `None` collapses six worlds — no pipeline, a CLI failure, a timeout, a non-zero exit,
+    /// unparsable JSON, and a state charter's vocabulary does not list — and
+    /// `charter/forge/base.py` records that as deliberate: the cell this feeds has room for
+    /// one word, and "I could not look" is not one of the seven.
+    pub fn ci_status(&self, path: &str, branch: &str) -> Result<Option<String>, Raised> {
+        match self.kind {
+            Kind::GitHub => self.rollup(path, branch),
+            Kind::GitLab => {
+                let asked = format!(
+                    "projects/{}/pipelines?ref={}&per_page=1",
+                    quote(path),
+                    quote(branch)
+                );
+                let status = first_field(self.api(&asked), "status")?;
+                Ok(mapped(&GITLAB_CI, word_of(status.as_ref())))
+            }
+        }
+    }
+
+    /// GitHub's rollup, over `gh api graphql`.
+    ///
+    /// **`-f`, never `-F`** (charter #323). None of these three values is charter's: `branch`
+    /// is read out of the tree's `HEAD` and `path` out of `git remote get-url origin`, so
+    /// both are written by whoever wrote the repo. `-F` gives a value magic meaning — a
+    /// leading `@` names a file to read it from, and `-` means stdin — which turned a status
+    /// refresh into an arbitrary local file read **by a process holding the forge token**, on
+    /// a surface that repaints every ten seconds with no human in the loop. `-f` sends the
+    /// value as a literal string.
+    ///
+    /// **Not percent-encoded**, and this is the one place that differs from
+    /// [`Self::open_change`]. Those are URL path and query segments, which the server decodes
+    /// again; these are GraphQL variables, which are JSON strings GitHub never decodes.
+    /// Encoding here would send `feature%2Fx` for `feature/x`, match no ref, and blank the CI
+    /// cell for every branch with a slash in its name.
+    fn rollup(&self, path: &str, branch: &str) -> Result<Option<String>, Raised> {
+        let (owner, name) = path.split_once('/').unwrap_or((path, ""));
+        let args = vec![
+            "api".to_string(),
+            "graphql".to_string(),
+            "--hostname".to_string(),
+            self.host.clone(),
+            "-f".to_string(),
+            format!("query={ROLLUP_QUERY}"),
+            "-f".to_string(),
+            format!("owner={owner}"),
+            "-f".to_string(),
+            format!("name={name}"),
+            "-f".to_string(),
+            format!("ref={branch}"),
+        ];
+        let Ok(answer) = call(self.kind, &args, STATUS_TIMEOUT) else {
+            return Ok(None);
+        };
+        if answer.code != 0 {
+            return Ok(None);
+        }
+        let Ok(data) = serde_json::from_str::<Value>(&answer.out) else {
+            return Ok(None);
+        };
+        // `(x or {}).get(…)` five times over. The `or {}` is what makes a MISSING key
+        // harmless; a key that is present and is not an object is where the next `.get`
+        // makes Python raise, and that distinction is the whole of this loop.
+        let mut node = data;
+        for key in ["data", "repository", "ref", "target", "statusCheckRollup"] {
+            let Some(map) = node.as_object() else {
+                return Err(Raised);
+            };
+            let found = map.get(key).cloned().unwrap_or(Value::Null);
+            node = if falsy(&found) {
+                Value::Object(serde_json::Map::new())
+            } else {
+                found
+            };
+        }
+        let Some(rollup) = node.as_object() else {
+            return Err(Raised);
+        };
+        Ok(mapped(&GITHUB_CI, word_of(rollup.get("state"))))
+    }
+}
+
+/// `value or ""` for a field that is meant to be a word: Python looks the falsy ones up as
+/// the empty string, which no map lists.
+fn word_of(value: Option<&Value>) -> &str {
+    match value {
+        Some(Value::String(word)) => word,
+        _ => "",
     }
 }
 

@@ -346,7 +346,7 @@ fn leaf_create(path: &std::path::Path) -> std::io::Result<std::fs::File> {
 /// return, and on a regular file — which is all charter's own paths ever are — POSIX gives it
 /// no effect at all.
 #[cfg(unix)]
-fn nofollow(options: &mut std::fs::OpenOptions) -> &mut std::fs::OpenOptions {
+pub(crate) fn nofollow(options: &mut std::fs::OpenOptions) -> &mut std::fs::OpenOptions {
     use std::os::unix::fs::OpenOptionsExt;
     let flags = rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK;
     options.custom_flags(flags.bits() as i32)
@@ -360,7 +360,7 @@ fn nofollow(options: &mut std::fs::OpenOptions) -> &mut std::fs::OpenOptions {
 /// a link at the last component here, so this is the shipped behaviour minus the atomicity —
 /// and it needs its own decision at M4, not a guess now.
 #[cfg(not(unix))]
-fn nofollow(options: &mut std::fs::OpenOptions) -> &mut std::fs::OpenOptions {
+pub(crate) fn nofollow(options: &mut std::fs::OpenOptions) -> &mut std::fs::OpenOptions {
     options
 }
 

@@ -108,6 +108,12 @@ class Scenario:
     #: Run against each plane copy before the command, for a starting state the fixtures
     #: cannot carry — a symlink, a mode, a file in the way.
     setup: "Callable[[Path], None] | None" = None
+    #: What both sides are given on stdin. `charter statusline` is the whole reason this
+    #: exists: its input is a JSON payload a harness pipes in, and a command run with no
+    #: stdin of its own would inherit this harness's — which is a terminal under `./run.py`
+    #: and a closed descriptor in CI, so the two would disagree about what "no payload"
+    #: means depending on where the suite ran.
+    stdin: str = ""
     #: What a refusal must SAY, on the Rust side, as a substring of stderr. Setting it is
     #: what declares the command refused. "Both exited non-zero" is not a test: a binary
     #: that panics on every input satisfies it, and one did — three containment scenarios
@@ -821,6 +827,206 @@ def _clone_git(name: str) -> dict[str, str]:
             "reflogs carry timestamps and inodes no two runs share"}
 
 
+# --------------------------------------------------------------------------------------- #
+# gl-refresh and statusline                                                                 #
+# --------------------------------------------------------------------------------------- #
+#
+# `gl-refresh` is the process that HOLDS THE FORGE CREDENTIAL, and the panels only read the
+# file it leaves. So what these scenarios compare is that file: the same clone, the same
+# recorded forge, the same entry.
+#
+# The cache is keyed by the clone's ABSOLUTE path, which is `python/plane/...` on one side and
+# `rust/plane/...` on the other. That is not a difference in what either wrote — it is the two
+# copies being in two places — so the file is compared through `facts`, with each side's own
+# root taken out, rather than byte for byte by the tree walk.
+
+ROLLUP_STATE = "SUCCESS"
+
+
+def _a_clone_of_a_github_repo(root: Path) -> None:
+    """A clone in `alpha` on `trunk` whose `origin` is a GitHub URL, and a recorded `gh`.
+
+    No `insteadOf` here, unlike the clone scenarios: `git remote get-url` APPLIES the rewrite,
+    so a plane set up that way answers `file:///…` and charter correctly decides it manages no
+    such host — measured, and it is why this scenario builds the remote directly. `gl-refresh`
+    runs no network git at all, so nothing has to be fetchable.
+    """
+    clone = root / "workspaces" / "alpha" / "widget"
+    clone.mkdir(parents=True, exist_ok=True)
+    _git(root.parent, "init", "-q", "-b", "trunk", ".", cwd=clone)
+    _git(root.parent, "remote", "add", "origin", "https://github.com/acme/widget.git", cwd=clone)
+    _stub_forge_gh(root)
+
+
+def _stub_forge_gh(root: Path) -> None:
+    """A recorded `gh` answering the two calls the status-line pair makes, and nothing else.
+
+    The rollup comes back from `gh api graphql` whatever the query says, because the query is a
+    multi-line GraphQL document and matching it in `sh` would test the shell rather than
+    charter. What IS matched is the verb pair (`api graphql`), which is where the two
+    implementations could differ in argument order — and they do not.
+    """
+    bin_dir = root.parent / "bin"
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    (bin_dir / "pulls.json").write_text(json.dumps([{"number": 41}]))
+    (bin_dir / "rollup.json").write_text(json.dumps(
+        {"data": {"repository": {"ref": {"target": {
+            "statusCheckRollup": {"state": ROLLUP_STATE}}}}}}))
+    gh = bin_dir / "gh"
+    gh.write_text(
+        "#!/bin/sh\n"
+        'case "$1 $2" in\n'
+        f"  \"api graphql\") cat '{bin_dir}/rollup.json'; exit 0;;\n"
+        "esac\n"
+        'case "$*" in\n'
+        f"  *\"pulls?state=open&head=acme:trunk&per_page=1\"*) cat '{bin_dir}/pulls.json'; "
+        "exit 0;;\n"
+        "esac\n"
+        'echo "gh: Server Error (HTTP 502)" >&2\n'
+        "exit 1\n"
+    )
+    gh.chmod(0o755)
+
+
+def _glstate_facts(root: Path) -> str:
+    """The forge cache, with each side's own plane root replaced by one word.
+
+    Everything else about the file is compared exactly — the key's shape below the root, the
+    field ORDER (`json.dumps` writes a dict in insertion order, so a writer that sorted would
+    differ here), the timestamp, and every value.
+
+    **Both spellings of the root are masked, and that is a real difference being declared
+    rather than a path being tidied.** charter RESOLVES `$CHARTER_ROOT` (`root.find_root`:
+    `p.resolve()`) and the Rust binary takes it as given (`plane::resolve`), so on macOS —
+    where a scratch plane sits under `/var/folders/…`, itself a link to `/private/var/…` —
+    the two write the same checkout under two spellings. That costs nothing on the read side
+    by construction: the key is a path string and `cistate` falls back to `contain::resolved`
+    for exactly this case, which `the_refresher_writes_the_key_the_panel_reads.rs` drives end
+    to end. What it would cost is this comparison, which is about the ENTRY.
+    """
+    cache = root / ".charter" / "cache" / "glstate.json"
+    if not cache.exists():
+        return "no cache"
+    text = cache.read_text()
+    for spelling in {str(root), str(root.resolve())}:
+        text = text.replace(spelling, "<plane>")
+    return text
+
+
+#: Python's in-flight record directory, created by `gl-refresh` and emptied when it ends. The
+#: app draws its own progress from the plane, so the Rust binary keeps no such record.
+REFRESH_INFLIGHT = {
+    ".charter/dispatch-inflight": "Python's in-flight record directory, created by the "
+    "refresh and emptied when it ends; the app watches the plane and draws its own progress",
+}
+
+#: One turn's payload, in the shape Claude Code hands the `statusLine` command.
+A_TURN = json.dumps({
+    "session_id": "s-1",
+    "cwd": "/nowhere",
+    "context_window": {
+        "used_percentage": 42,
+        "current_usage": {
+            "cache_read_input_tokens": 90,
+            "cache_creation_input_tokens": 10,
+        },
+    },
+})
+
+#: Why the two status lines do not print the same thing. The RECORD is what this scenario is
+#: for, and the record is a file — so the tree comparison is the assertion, not stdout.
+DOES_NOT_DRAW_YET = (
+    "charter draws the whole plane in the footer — repos, personas, vaults, alerts, the "
+    "session strip — and the Rust binary draws none of it yet (M2.7 ports the command edge "
+    "and the token-usage record, which is what ADR 0019 keeps the command running for). The "
+    "usage file each side leaves is what this scenario compares."
+)
+
+STATUSLINE_SCENARIOS = [
+    Scenario(
+        # ADR 0019's own sentence, as a test: "a `cleanup` that removes it deletes the record
+        # silently". Both charters must leave the same `.charter/sessions/<sid>.usage`, byte
+        # for byte and mode for mode, or one of them has stopped writing the only copy of this
+        # session's token history that exists anywhere.
+        name="statusline-records-the-turns-tokens",
+        plane="daily",
+        python=["statusline"],
+        stdin=A_TURN,
+        pins_the_clock=False,
+        stdout_differs=DOES_NOT_DRAW_YET,
+    ),
+    Scenario(
+        # Early in a session and right after `/compact` there is no usage at all. Recording a
+        # zero there would invent a turn — and a `0/0` divided — so NEITHER side may leave a
+        # file behind, which is what an identical (and unchanged) plane says here.
+        name="statusline-with-no-numbers-records-nothing",
+        plane="daily",
+        python=["statusline"],
+        stdin=json.dumps({"session_id": "s-1", "cwd": "/nowhere"}),
+        pins_the_clock=False,
+        stdout_differs=DOES_NOT_DRAW_YET,
+    ),
+    Scenario(
+        # The outermost boundary of the whole subprocess: a payload that will not parse must
+        # still leave a plane nobody has to repair.
+        name="statusline-survives-a-payload-that-is-not-json",
+        plane="daily",
+        python=["statusline"],
+        stdin="not json {{{",
+        pins_the_clock=False,
+        stdout_differs=DOES_NOT_DRAW_YET,
+    ),
+]
+
+def _a_clone_of_an_unmanaged_host(root: Path) -> None:
+    clone = root / "workspaces" / "alpha" / "widget"
+    clone.mkdir(parents=True, exist_ok=True)
+    _git(root.parent, "init", "-q", "-b", "trunk", ".", cwd=clone)
+    _git(root.parent, "remote", "add", "origin", "git@git.example.invalid:acme/widget.git",
+         cwd=clone)
+
+
+GL_REFRESH_SCENARIOS = [
+    Scenario(
+        name="gl-refresh-in-a-workspace-with-no-clones",
+        plane="daily",
+        python=["gl-refresh", "-w", "alpha"],
+    ),
+    Scenario(
+        # The one that matters: the entry a panel then reads. Same key below the root, same
+        # branch, same instant, same change, same CI word, same sigil — and the same private
+        # mode on the file, which the tree walk checks.
+        name="gl-refresh-writes-what-the-forge-said",
+        plane="daily",
+        setup=_a_clone_of_a_github_repo,
+        python=["gl-refresh", "-w", "alpha"],
+        facts=_glstate_facts,
+        ignore={
+            **REFRESH_INFLIGHT,
+            ".charter/cache/glstate.json": "the key is the clone's absolute path, which is "
+            "each side's own copy; compared through `facts` with the root taken out",
+            **_clone_git("widget"),
+        },
+    ),
+    Scenario(
+        # A repo charter manages no forge for. `resolve_host` answers None and NEITHER side
+        # asks anything — the entry still exists, naming the branch and the instant, because
+        # "the last refresh found nothing" and "nobody has looked" are different answers.
+        name="gl-refresh-leaves-an-entry-for-a-host-it-does-not-manage",
+        plane="daily",
+        setup=_a_clone_of_an_unmanaged_host,
+        python=["gl-refresh", "-w", "alpha"],
+        facts=_glstate_facts,
+        ignore={
+            **REFRESH_INFLIGHT,
+            ".charter/cache/glstate.json": "the key is the clone's absolute path; compared "
+            "through `facts`",
+            **_clone_git("widget"),
+        },
+    ),
+]
+
+
 REPO_SCENARIOS = [
     Scenario(
         name="clone-checks-out-the-default-branch-and-wires-the-layer",
@@ -1339,6 +1545,8 @@ SCENARIOS = [
         refusal="already on the list",
     ),
     *REPO_SCENARIOS,
+    *GL_REFRESH_SCENARIOS,
+    *STATUSLINE_SCENARIOS,
 
     # --- M2.2: `charter recall`. What an agent reads at session start; byte for byte.
     Scenario(
@@ -1808,9 +2016,14 @@ def _lay_out(scratch: Path, plane: str, side: str) -> tuple[Path, Path, Path]:
     return root, home, pins
 
 
-def _run(argv: list[str], root: Path, home: Path, pins: Path) -> subprocess.CompletedProcess:
+def _run(argv: list[str], root: Path, home: Path, pins: Path,
+         stdin: str = "") -> subprocess.CompletedProcess:
+    # `input=` always, never an inherited descriptor: a command that reads stdin would
+    # otherwise get this harness's, which is a terminal when `./run.py` is typed and a closed
+    # pipe in CI. `""` is a clean EOF on both.
     return subprocess.run(
-        argv, cwd=root, env=_env(root, home, pins), capture_output=True, text=True
+        argv, cwd=root, env=_env(root, home, pins), capture_output=True, text=True,
+        input=stdin,
     )
 
 
@@ -1940,11 +2153,12 @@ def check(scenario: Scenario, binary: Path) -> bool:
         py_before = _outside(scratch, "python", py_root)
         rs_before = _outside(scratch, "rust", rs_root)
 
-        py = _run([sys.executable, "-m", "charter", *scenario.python], py_root, py_home, py_pins)
+        py = _run([sys.executable, "-m", "charter", *scenario.python], py_root, py_home, py_pins,
+                  scenario.stdin)
         rust_argv = [str(binary), *scenario.rust_args()]
         if scenario.pins_the_clock:
             rust_argv += ["--now", NOW_NAIVE]
-        rs = _run(rust_argv, rs_root, rs_home, rs_pins)
+        rs = _run(rust_argv, rs_root, rs_home, rs_pins, scenario.stdin)
 
         problems: list[str] = []
         if scenario.python_only_items:
