@@ -46,11 +46,27 @@ use std::path::{Path, PathBuf};
 pub fn program(dir: &Path, name: &str, contents: &str) -> PathBuf {
     let (path, beside) = places(dir, name);
 
-    // PROOF ONLY. The fix as charter-app#81 proposed it: written from THIS process to a
-    // temporary name, then renamed into place. The claim is that this is enough; the race
-    // test is what says it is not.
-    std::fs::write(&beside, contents)
-        .unwrap_or_else(|e| panic!("the stand-in {} was not written: {e}", path.display()));
+    // The write happens in the CHILD, which is the whole point: this process opens no
+    // descriptor on the inode it is about to hand to `execve`, so there is none for a fork on
+    // another thread to copy. `printf %s` is a builtin in every /bin/sh charter runs on
+    // (dash on the Linux runners, bash in sh mode on macOS), so nothing is looked up on PATH
+    // and `env_clear` cannot starve it. The redirection, not the argument, is what writes:
+    // `%s` is the format and the script is data, so a script full of `%` or `\` arrives
+    // unchanged.
+    let wrote = std::process::Command::new("/bin/sh")
+        .arg("-c")
+        .arg(r#"printf %s "$1" > "$2""#)
+        .arg("sh")
+        .arg(contents)
+        .arg(&beside)
+        .env_clear()
+        .status()
+        .expect("/bin/sh runs");
+    assert!(
+        wrote.success(),
+        "the stand-in {} was not written: {wrote}",
+        path.display()
+    );
 
     put_in_place(&beside, path)
 }
