@@ -134,8 +134,13 @@ export const commands = {
 	 *  A command of its own rather than a flag on `open_session`, so neither can be mistaken
 	 *  for the other by a caller passing null: this one goes through every gate a launch has,
 	 *  and that one opens the operator's shell.
+	 * 
+	 *  `show_footer` is the picker's footer checkbox, and it is a property of THIS chat
+	 *  (charter ADR 0029). It reaches the harness as an environment variable set at the exec, so
+	 *  it is decided here and nowhere later: Claude Code's footer command inherits the
+	 *  environment its harness was started with, and no later click can change it.
 	 */
-	startChat: (profile: string, persona: string | null, cwd: string | null, name: string, columns: number, rows: number) => typedError<Started, string>(__TAURI_INVOKE("start_chat", { profile, persona, cwd, name, columns, rows })),
+	startChat: (profile: string, persona: string | null, cwd: string | null, name: string, showFooter: boolean, columns: number, rows: number) => typedError<Started, string>(__TAURI_INVOKE("start_chat", { profile, persona, cwd, name, showFooter, columns, rows })),
 	/**
 	 *  The piece a chat's working directory sits in, or `None`.
 	 * 
