@@ -618,8 +618,12 @@ enum WorkspaceCommand {
     /// Create a workspace: its directory, its baseline files and charter's harness layer.
     Create {
         name: String,
+        /// Repos to clone into it immediately, by inventory name. POSITIONAL, as charter's
+        /// own `workspace create <name> [repos...]` takes them — a `--repos` of this port's
+        /// own would be a command line that works against one charter and not the other.
+        repos: Vec<String>,
         /// What this workspace is for, recorded in its `workspace.md` charter.
-        #[arg(long)]
+        #[arg(long, alias = "about")]
         vision: Option<String>,
         /// Share its charter, manifest and memory from birth.
         #[arg(long)]
@@ -630,9 +634,6 @@ enum WorkspaceCommand {
         /// Select it even though this session is locked to another workspace.
         #[arg(long)]
         force: bool,
-        /// Repos to clone into it, by inventory name.
-        #[arg(long, num_args = 1..)]
-        repos: Vec<String>,
         /// Pin the clock the manifest's `updated_at` is stamped with, for tests only.
         #[arg(long, hide = true)]
         now: Option<String>,
@@ -641,8 +642,10 @@ enum WorkspaceCommand {
     Reinit {
         /// The workspace (default: the active one).
         name: Option<String>,
-        /// Every workspace this plane has.
-        #[arg(long, conflicts_with = "name")]
+        /// Every workspace this plane has. Given with a name, this wins and the name is
+        /// ignored — charter's own parser refuses neither, and a port that refused one would
+        /// be a command line that works against one charter and not the other.
+        #[arg(long)]
         all: bool,
         /// Pin the clock a backfilled manifest is stamped with, for tests only.
         #[arg(long, hide = true)]
