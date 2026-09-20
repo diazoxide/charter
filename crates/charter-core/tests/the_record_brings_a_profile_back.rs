@@ -24,6 +24,7 @@ fn a_chat_on(profile: &str, persona: Option<&str>) -> Chat {
         active: true,
         profile: Some(profile.to_owned()),
         persona: persona.map(str::to_owned),
+        show_harness_footer: false,
     }
 }
 
@@ -117,4 +118,75 @@ fn a_profile_name_that_is_not_one_charter_would_mint_reads_as_no_profile() {
         back.chats[0].persona, None,
         "a name no persona has was kept"
     );
+}
+
+#[test]
+fn a_chats_footer_choice_survives_a_quit_and_comes_back_with_it() {
+    // Charter ADR 0029. The choice is the operator's, made once in the picker, and a
+    // relaunch that dropped it would blank a footer they had turned on with nothing on
+    // screen to say why.
+    let dir = tempfile::tempdir().unwrap();
+    let mut asked = a_chat_on("claude-work", None);
+    asked.show_harness_footer = true;
+
+    reopen::write(
+        dir.path(),
+        &Record {
+            chats: vec![asked, a_chat_on("claude-work", None)],
+        },
+    )
+    .unwrap();
+    let back = reopen::read_or_refusal(dir.path()).unwrap();
+
+    assert!(back.chats[0].show_harness_footer);
+    assert!(
+        !back.chats[1].show_harness_footer,
+        "one chat's choice was written onto another"
+    );
+    // The word on disk is the word the environment carries, so the record and the launch
+    // cannot come to mean different things by it.
+    let text = fs::read_to_string(dir.path().join(reopen::IN_PLANE)).unwrap();
+    let doc: serde_json::Value = serde_json::from_str(&text).expect("the record is JSON");
+    assert_eq!(doc["chats"][0]["footer"], charter_core::start::FOOTER_SHOW);
+    assert_eq!(doc["chats"][1]["footer"], "");
+}
+
+#[test]
+fn a_record_written_before_the_footer_was_a_choice_comes_back_blanked() {
+    // Charter ADR 0029 keeps the default exactly as it was, and this is the upgrade path:
+    // every record already on disk has no such key, and every chat in one was running under
+    // a blanked footer when it was written.
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".charter/app")).unwrap();
+    fs::write(
+        dir.path().join(reopen::IN_PLANE),
+        r#"{"version":1,"at":1789000000,"chats":[{"program":"claude","args":[],"cwd":"","name":"1","resume":"","active":true,"profile":"claude-work","persona":""}]}"#,
+    )
+    .unwrap();
+
+    let back = reopen::read_or_refusal(dir.path()).unwrap();
+
+    assert!(!back.chats[0].show_harness_footer);
+    assert_eq!(back.chats[0].profile.as_deref(), Some("claude-work"));
+}
+
+#[test]
+fn a_footer_word_charter_did_not_write_reads_as_the_default() {
+    // The same rule `profile` and `persona` are held to: a value off a file somebody else
+    // may have written is only ever taken as the one word charter itself writes.
+    let dir = tempfile::tempdir().unwrap();
+    fs::create_dir_all(dir.path().join(".charter/app")).unwrap();
+    for said in ["true", "1", "SHOW", "yes", "show it"] {
+        fs::write(
+            dir.path().join(reopen::IN_PLANE),
+            format!(
+                r#"{{"version":1,"at":1789000000,"chats":[{{"program":"claude","args":[],"cwd":"","name":"1","resume":"","active":true,"footer":{said:?}}}]}}"#
+            ),
+        )
+        .unwrap();
+
+        let back = reopen::read_or_refusal(dir.path()).unwrap();
+
+        assert!(!back.chats[0].show_harness_footer, "{said:?}");
+    }
 }

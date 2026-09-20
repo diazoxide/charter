@@ -229,9 +229,10 @@ function App() {
 
   const newTab = useCallback(() => void ask({ tab: true }), [ask]);
 
-  /** A row was picked: the chat starts on that profile, with that persona. */
+  /** A row was picked: the chat starts on that profile, with that persona, and with or
+   *  without its harness's own footer (charter ADR 0029). */
   const startPicked = useCallback(
-    async (profile: string, persona: string | null) => {
+    async (profile: string, persona: string | null, showHarnessFooter: boolean) => {
       const where = picking?.where;
       if (where === undefined) return;
       const inFront = now.current.inFront;
@@ -240,7 +241,15 @@ function App() {
           ? now.current.byId[inFront].name
           : String(now.current.named.tabs + 1);
       const started = await commands
-        .startChat(profile, persona, startIn, name, STARTING_SIZE.columns, STARTING_SIZE.rows)
+        .startChat(
+          profile,
+          persona,
+          startIn,
+          name,
+          showHarnessFooter,
+          STARTING_SIZE.columns,
+          STARTING_SIZE.rows,
+        )
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
       if (started.status === "error") {
         // In the picker, not behind it: the operator is still choosing, and a refusal they
@@ -270,7 +279,7 @@ function App() {
   /** The approval IS this click. After it, the whole chain of checks runs again from the
    *  top before anything is exec'd, so a yes never walks past a refusal standing behind it. */
   const approveAndStart = useCallback(
-    async (profile: string, persona: string | null, shown: string) => {
+    async (profile: string, persona: string | null, showHarnessFooter: boolean, shown: string) => {
       const said = await commands
         .approveProfile(profile, shown)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
@@ -281,7 +290,9 @@ function App() {
       // The persona the OPERATOR picked, carried up from the dialog with the profile. It
       // used to take the plane's default out of the options instead, which silently threw
       // away the choice on the one path where a profile is being used for the first time.
-      await startPicked(profile, persona);
+      // The footer choice rides the same path, and for the same reason: a first run of a
+      // profile is exactly where a dropped choice would go unnoticed.
+      await startPicked(profile, persona, showHarnessFooter);
     },
     [startPicked],
   );
@@ -619,8 +630,10 @@ function App() {
         <StartChat
           options={picking.options}
           trouble={pickerTrouble}
-          onStart={(profile, persona) => void startPicked(profile, persona)}
-          onApprove={(profile, persona, shown) => void approveAndStart(profile, persona, shown)}
+          onStart={(profile, persona, footer) => void startPicked(profile, persona, footer)}
+          onApprove={(profile, persona, footer, shown) =>
+            void approveAndStart(profile, persona, footer, shown)
+          }
           onCancel={() => {
             setPicking(undefined);
             setPickerTrouble(undefined);

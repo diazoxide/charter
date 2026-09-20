@@ -190,6 +190,67 @@ fn a_harness_with_no_footer_of_its_own_is_never_suppressed() {
 }
 
 #[test]
+fn a_chat_started_asking_for_its_harnesss_footer_gets_one_while_the_rest_stay_blank() {
+    // Charter ADR 0029: the blanking is the default, and one chat may opt out of it without
+    // moving anything for the chats beside it. Both halves are asserted here against one
+    // app, because "it can be turned on" and "turning it on for one chat leaves the others
+    // alone" are different claims and only the second is the product decision.
+    //
+    // The variable is spelled out here rather than imported: this file runs the real
+    // binary the way Claude Code does, and the name is the contract an operator reads in
+    // the ADR. A rename that only edited the constant should fail here.
+    let (_keep, at) = plane();
+    let socket = at.join(".charter/app/hooks.sock");
+    std::fs::create_dir_all(socket.parent().expect("a parent")).expect("the app's directory");
+    let _listening = Listener::bind(&at, &socket).expect("a socket");
+    let app: [(&str, &str); 3] = [
+        (SOCKET_ENV, socket.to_str().expect("a path")),
+        (CHAT_ENV, "7"),
+        ("CHARTER_HARNESS", "claude-code"),
+    ];
+    let mut asking: Vec<(&str, &str)> = app.to_vec();
+    asking.push(("CHARTER_HARNESS_FOOTER", "show"));
+
+    let asked = statusline(&at, A_TURN, &asking);
+    let beside_it = statusline(&at, A_TURN, &app);
+
+    assert_eq!(asked.code, 0);
+    assert_ne!(asked.out, "\n", "the chat that asked got a blank line");
+    assert_eq!(
+        beside_it.out, "\n",
+        "one chat's choice moved another chat's footer"
+    );
+    // The record is still the reason this command runs, on this branch as on the others.
+    assert_eq!(recorded(&at), "90,10,90,42\n");
+}
+
+#[test]
+fn a_footer_variable_charter_did_not_write_leaves_the_default_alone() {
+    // The variable is charter's own, set to one word at the exec. Anything else reaching
+    // this process — inherited from the shell the app was launched from, or left over —
+    // must not turn a surface on that the operator never picked for this chat.
+    let (_keep, at) = plane();
+    let socket = at.join(".charter/app/hooks.sock");
+    std::fs::create_dir_all(socket.parent().expect("a parent")).expect("the app's directory");
+    let _listening = Listener::bind(&at, &socket).expect("a socket");
+
+    for said in ["", "1", "true", "SHOW", "blank"] {
+        let ran = statusline(
+            &at,
+            A_TURN,
+            &[
+                (SOCKET_ENV, socket.to_str().expect("a path")),
+                (CHAT_ENV, "7"),
+                ("CHARTER_HARNESS", "claude-code"),
+                ("CHARTER_HARNESS_FOOTER", said),
+            ],
+        );
+
+        assert_eq!(ran.out, "\n", "{said:?} drew a footer");
+    }
+}
+
+#[test]
 fn a_turn_that_carries_no_numbers_records_nothing_and_still_answers() {
     // Early in a session and right after `/compact` the payload has no usage at all.
     // Recording a zero there would invent a turn — and a `0/0` divided.

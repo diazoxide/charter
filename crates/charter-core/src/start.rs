@@ -43,7 +43,33 @@ pub struct Start {
     pub cwd: Option<PathBuf>,
     /// The conversation to bring back, where the record holds one.
     pub resume: Option<SessionId>,
+    /// Whether THIS chat keeps the harness's own footer instead of charter blanking it.
+    ///
+    /// Default `false`, which is the app as it has always behaved. See [`FOOTER_ENV`] for
+    /// what it does and charter ADR 0029 for why it is a chat's property and not a plane's.
+    pub show_harness_footer: bool,
 }
+
+/// Where a chat is told to leave the harness's own footer alone.
+///
+/// `charter statusline` blanks Claude Code's footer inside the app, because the app already
+/// draws the plane (charter ADR 0019, transposed — see `charter-cli/src/statusline.rs`). ADR
+/// 0029 makes that a default rather than a law: a chat started with this variable set to
+/// [`FOOTER_SHOW`] gets its harness's footer back, and every other chat in the same window is
+/// unaffected.
+///
+/// **Set by charter, never by a profile.** `CHARTER_`-prefixed names are refused in a
+/// profile's `env` ([`crate::profiles`], ruling 14), so this cannot be turned on by editing
+/// `charter.local.toml` — which is deliberate: it is a choice made in the picker, for one
+/// chat, and recorded with that chat.
+///
+/// **Absence is the default.** Only the exact word [`FOOTER_SHOW`] shows the footer, so a
+/// value inherited from somewhere else, or a stale one, reads as "blank" rather than as a
+/// surprise.
+pub const FOOTER_ENV: &str = "CHARTER_HARNESS_FOOTER";
+
+/// The one value of [`FOOTER_ENV`] that means "draw it".
+pub const FOOTER_SHOW: &str = "show";
 
 /// A chat that may start, with everything the session core and the board need.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,7 +163,7 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
     Ok(Ready {
         program,
         args,
-        env: environment(profile, root, persona.as_deref()),
+        env: environment(profile, root, persona.as_deref(), start.show_harness_footer),
         cwd: start.cwd.clone(),
         harness,
         session,
@@ -238,7 +264,17 @@ fn arguments(
 /// Hooks compare that variable to `claude-code` for session ids, resume and the working
 /// spinner, so a value of `claude-work` would make each of them quietly answer "not Claude
 /// Code".
-fn environment(profile: &Profile, root: &Path, persona: Option<&str>) -> Vec<(String, String)> {
+///
+/// [`FOOTER_ENV`] is pushed **only** when the chat asked for its harness's footer. An
+/// absent variable is the default, so nothing has to be unset for a chat that did not ask —
+/// and a chat that did cannot be confused with one whose value came from somewhere else,
+/// because only this line writes it.
+fn environment(
+    profile: &Profile,
+    root: &Path,
+    persona: Option<&str>,
+    show_harness_footer: bool,
+) -> Vec<(String, String)> {
     let home = profiles::home().unwrap_or_else(|| PathBuf::from("~"));
     let mut env: Vec<(String, String)> =
         profiles::expanded_env(profile, &home).into_iter().collect();
@@ -247,6 +283,9 @@ fn environment(profile: &Profile, root: &Path, persona: Option<&str>) -> Vec<(St
     env.push(("CHARTER_HARNESS_PROFILE".to_owned(), profile.name.clone()));
     if let Some(who) = persona {
         env.push(("CHARTER_PERSONA".to_owned(), who.to_owned()));
+    }
+    if show_harness_footer {
+        env.push((FOOTER_ENV.to_owned(), FOOTER_SHOW.to_owned()));
     }
     env.sort();
     env

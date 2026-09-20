@@ -28,6 +28,19 @@
 //! it"*, and that property holds in the app exactly as it held in the frame. If it is wrong,
 //! it is wrong at the rung level and the rungs are separable.
 //!
+//! # The transposition is a DEFAULT now, not a law (charter ADR 0029)
+//!
+//! That judgement was made by a port and never decided for the app, and it sits against ADR
+//! 0018 — "charter may run the harness, but never draws it" — because blanking the harness's
+//! own footer IS charter deciding what the harness's surface shows. The footer also carries
+//! state charter has no other place for: how much context is left, which model is answering,
+//! which mode the harness is in.
+//!
+//! So the operator decides, per chat. The default is unchanged — blank, exactly as this
+//! module has always behaved, so nobody's panel moves on an upgrade — and a chat started
+//! with [`charter_core::start::FOOTER_ENV`] set to `show` keeps its harness's footer while
+//! every other chat in the window is untouched.
+//!
 //! # Suppression means "render nothing", never "stop running"
 //!
 //! This is the part ADR 0019 writes down hardest, and it is why this command exists in Rust
@@ -69,6 +82,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 
 use charter_core::hookwire::{CHAT_ENV, SOCKET_ENV};
+use charter_core::start::{FOOTER_ENV, FOOTER_SHOW};
 use charter_core::{footer, tui, usage};
 
 /// The registry's name for Claude Code, as `$CHARTER_HARNESS` carries it.
@@ -80,6 +94,8 @@ pub struct Ambient {
     pub socket: Option<PathBuf>,
     pub chat: Option<String>,
     pub harness: Option<String>,
+    /// `$CHARTER_HARNESS_FOOTER`: what THIS chat was started asking for (charter ADR 0029).
+    pub footer: Option<String>,
 }
 
 impl Ambient {
@@ -90,6 +106,7 @@ impl Ambient {
             socket: std::env::var_os(SOCKET_ENV).map(PathBuf::from),
             chat: std::env::var(CHAT_ENV).ok(),
             harness: std::env::var("CHARTER_HARNESS").ok(),
+            footer: std::env::var(FOOTER_ENV).ok(),
         }
     }
 }
@@ -127,8 +144,18 @@ impl Ambient {
 ///   exception to it. Asked LAST, and that ordering is the cost argument: it is one
 ///   environment lookup on the only path that reaches it.
 ///
+/// **And one rung that is not ADR 0019's: the chat may have said no.** Charter ADR 0029 turns
+/// the blanking into a DEFAULT. A chat started with `$CHARTER_HARNESS_FOOTER` set to `show`
+/// keeps its harness's footer, and every other chat in the same window is untouched. It is
+/// asked FIRST because it is the cheapest question here — one environment lookup against a
+/// socket `connect` — and because an operator who has said "draw it" is owed the same answer
+/// whether or not the app's socket happens to be up at this instant.
+///
 /// Never fails. Everything it touches is ambient.
 pub fn the_app_owns_this_surface(ambient: &Ambient) -> bool {
+    if ambient.footer.as_deref() == Some(FOOTER_SHOW) {
+        return false;
+    }
     if ambient.stdout_is_a_tty {
         return false;
     }
@@ -227,6 +254,9 @@ mod tests {
             socket: Some(socket.to_path_buf()),
             chat: Some("7".into()),
             harness: Some(CLAUDE_CODE.into()),
+            // The default: a chat that asked for nothing. Charter sets this variable only
+            // for a chat that did, so absence is what the app's chats ordinarily carry.
+            footer: None,
         }
     }
 
@@ -271,6 +301,42 @@ mod tests {
             let mut other = in_the_app(&socket);
             other.harness = harness.clone();
             assert!(!the_app_owns_this_surface(&other), "{harness:?}");
+        }
+    }
+
+    #[test]
+    fn a_chat_that_asked_for_its_harnesss_footer_keeps_it_while_every_rung_holds() {
+        // Charter ADR 0029. The point of the rung is that it wins against a situation in
+        // which the app would otherwise blank: every other rung here says "in the app".
+        let dir = tempfile::tempdir().unwrap();
+        let (_held, socket) = listening(dir.path());
+
+        let mut asked = in_the_app(&socket);
+        asked.footer = Some(FOOTER_SHOW.into());
+
+        assert!(!the_app_owns_this_surface(&asked));
+    }
+
+    #[test]
+    fn only_the_word_charter_writes_shows_the_footer_and_everything_else_is_the_default() {
+        // The variable is charter's own and it is set to one word. A value that is not that
+        // word is a value charter did not write — inherited, stale, or hand-edited — and the
+        // honest answer to it is the default, not a surface the operator never chose.
+        let dir = tempfile::tempdir().unwrap();
+        let (_held, socket) = listening(dir.path());
+
+        for said in [
+            None,
+            Some(String::new()),
+            Some("SHOW".into()),
+            Some("show ".into()),
+            Some("true".into()),
+            Some("1".into()),
+            Some("blank".into()),
+        ] {
+            let mut other = in_the_app(&socket);
+            other.footer = said.clone();
+            assert!(the_app_owns_this_surface(&other), "{said:?}");
         }
     }
 }
