@@ -79,7 +79,7 @@ pub const THE_APP_MOVES_IT: &str = "This charter is a binary inside the app, and
 /// One sentence, and it names the mechanism rather than apologising: an operator who reads
 /// "charter update did nothing" and an operator who reads this take different next steps.
 fn not_the_installer() -> String {
-    format!("charter update does not install anything here. {THE_APP_MOVES_IT}")
+    "charter update does not install anything here. It is a binary in the app.".to_owned()
 }
 
 /// And what it DOES do, said in the same breath, so the refusal is not the whole message.
@@ -168,7 +168,9 @@ pub fn locked_version(root: &Path) -> Option<String> {
     let doc: toml::Table = text.parse().ok()?;
     let pinned = doc.get("charter")?.as_table()?.get("version")?.as_str()?;
     let pinned = crate::memstore::py_strip(pinned);
-    (!pinned.is_empty()).then(|| pinned.to_owned())
+    crate::version::version_key(pinned)
+        .is_version()
+        .then(|| pinned.to_owned())
 }
 
 /// `charter version`: which charter this is, what the plane asks for, and whether they agree.
@@ -243,7 +245,6 @@ pub fn version_report(root: Option<&Path>) -> Report {
                  charter brought, or run the charter-cp the plane names."
                     .to_owned(),
             ));
-            report.code = 1;
         }
     }
     report
