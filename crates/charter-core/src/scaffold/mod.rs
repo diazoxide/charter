@@ -1004,10 +1004,13 @@ fn typed_flags(args: &InitArgs) -> String {
 /// A repository this merely sits INSIDE is untouched by any of it, exactly as the offer was:
 /// a `$HOME` kept under git would otherwise refuse to hold a plane at all.
 fn repo_is_not_a_plane_yet(root: &Path, args: &InitArgs) -> Option<Outcome> {
+    if args.plane_is_this_repo || args.clone_this_repo {
+        return None;
+    }
     if already_a_plane(root) {
         return None;
     }
-    if !root.ancestors().any(|p| p.join(".git").exists()) {
+    if !is_repo_top_level(root) {
         return None;
     }
     let name = first_clone_name(root);
@@ -1054,8 +1057,8 @@ fn repo_is_not_a_plane_yet(root: &Path, args: &InitArgs) -> Option<Outcome> {
 /// so a manifest that is a link out of the plane does not count as one. It is not a plane
 /// charter can heal, and answering "no" here only costs that run its scaffolding, which is
 /// the side to be wrong on.
-fn already_a_plane(_root: &Path) -> bool {
-    false
+fn already_a_plane(root: &Path) -> bool {
+    gate(root, crate::plane::MANIFEST).is_ok_and(|path| path.exists())
 }
 
 /// `commands._first_clone_step`: the one thing being inside a git repo changes about `init`
