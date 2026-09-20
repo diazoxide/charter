@@ -217,10 +217,26 @@ pub(crate) const PATH_DISPLAY_LIMIT: usize = 1024;
 ///
 /// **One implementation, in [`crate::shown`], rather than a copy here.** `doctor`, `personas`
 /// and `news` all need the same answer, and three copies of "which characters have no glyph"
-/// is three places for the Cf table to go stale separately — with the failure showing up as
+/// is three places for the table to go stale separately — with the failure showing up as
 /// one charter escaping a character another prints, on a report line, which is exactly what
 /// this function is for. Kept as a name here because every call site in this module reads
 /// better for it.
+///
+/// **And the table under it is generated, not pasted.** This module carried its own `Cf`
+/// list once; `shown` carried a second one; `pyrepr` carried a third that was nine ranges
+/// short of `shown`'s, so the two disagreed about U+0890. They are one generated file now
+/// ([`crate::tui::tables`], from `tools/gen-unicode-tables.py` run against the CPython the
+/// differential oracle runs), which is the only arrangement in which "one glyph rule" is a
+/// fact rather than a convention.
+///
+/// **`doctor` does not NFC-normalise anything, and that is a port decision, not an
+/// omission.** `$CLAUDE_CONFIG_DIR` reaches [`self::session::session_root`] and is printed as
+/// the bytes the environment held. charter's Python has no `unicodedata.normalize` in it at
+/// all, so normalising here would make the two implementations print different folders for
+/// the same environment — and the folder a row names has to be the one an operator can go
+/// and look at, which is the one the bytes name. Two differential scenarios hold it:
+/// `doctor-with-a-claude-config-dir-that-is-not-nfc-normalised` and
+/// `doctor-with-format-characters-in-the-claude-config-dir`.
 pub(crate) fn one_line(value: &str, limit: usize) -> String {
     crate::shown::one_line(value, limit)
 }

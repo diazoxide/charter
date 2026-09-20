@@ -294,12 +294,10 @@ pub fn record(forge: &Forge, project: &Value, stack: &str) -> Value {
     Value::Object(out)
 }
 
-/// Python's `repr()` of a JSON value, for a sentence that quotes one back.
+/// Python's `repr()` of a JSON value, for a sentence that quotes one back —
+/// [`crate::pyrepr::repr_json`], which is the crate's one answer for the shape.
 fn repr(value: &Value) -> String {
-    match value {
-        Value::String(s) => repr_str(s),
-        other => py_str(other),
-    }
+    crate::pyrepr::repr_json(value)
 }
 
 /// Every forge's list as one inventory, keyed by bare name, a genuine collision refused

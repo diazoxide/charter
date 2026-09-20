@@ -116,13 +116,17 @@ fn strerror(e: &io::Error) -> String {
 
 /// An `OSError` about `path` as Python prints one — `[Errno 13] Permission denied: '/p'` —
 /// which is what a row's `not checked (…)` quotes when a directory could not be listed.
+///
+/// **The filename is `repr`'d, and that is CPython's own rule, not a choice made here.**
+/// `OSError.__str__` formats the filename with `%R`, so this had to be a `repr` and was a
+/// fourth hand-rolled one: it chose the quote and escaped the backslash and the quote, and
+/// stopped there. A directory whose name holds a newline — which nothing on this path
+/// validates, because the name comes off the filesystem — came back with the newline
+/// UNESCAPED, and a row's `not checked (…)` then carried a second line that looked exactly as
+/// much like doctor's own output as the first. [`crate::pyrepr::repr_str`] is the whole of
+/// `repr`, and it escapes it.
 pub(super) fn py_os_error(e: &io::Error, path: &Path) -> String {
-    let shown = path.display().to_string();
-    let quoted = if shown.contains('\'') && !shown.contains('"') {
-        format!("\"{shown}\"")
-    } else {
-        format!("'{}'", shown.replace('\\', "\\\\").replace('\'', "\\'"))
-    };
+    let quoted = crate::pyrepr::repr_str(&path.display().to_string());
     match e.raw_os_error() {
         Some(code) => format!("[Errno {code}] {}: {quoted}", strerror(e)),
         None => e.to_string(),

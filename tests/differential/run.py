@@ -632,6 +632,14 @@ INIT_SCENARIOS = [
           python=[*INIT, "--front-door", "front-door.2x", "--host", "git.example.com"]),
     _init("init-with-a-front-door-name-that-is-not-a-persona",
           python=[*INIT, "--front-door", "Bad Name"]),
+    # charter warns `--front-door {name!r} is not a valid persona name`, so this compares
+    # `repr()` itself, byte for byte, over the characters the ports disagreed about: U+00A0
+    # (`Zs`), U+200B (`Cf`) and U+0890 (`Cf`, assigned after one of the hand-written tables
+    # was pasted). The Rust side had three `repr`s and the one `init` used escaped none of
+    # them — it escaped `char::is_control` and stopped — so this scenario fails against the
+    # implementation it was written for.
+    _init("init-with-a-front-door-name-whose-characters-have-no-glyph",
+          python=[*INIT, "--front-door", "bad\u00a0name\u200b\u0890"]),
     _init("init-twice-changes-nothing", plane="minimal"),
     _init("init-on-a-plane-in-use-changes-nothing", plane="daily"),
     _init("init-appends-only-what-a-gitignore-of-its-own-is-missing",

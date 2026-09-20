@@ -1172,15 +1172,15 @@ pub fn truthy(value: &Value) -> bool {
     }
 }
 
-/// Python's `str()` of a JSON value, for the few places a record field is interpolated.
+/// Python's `str()` of a JSON value, for the few places a record field is interpolated —
+/// [`crate::pyrepr::str_json`].
+///
+/// **The container arm is why this is a delegation now.** It used to be `other.to_string()`,
+/// which is `serde_json`'s writer: a forge record whose field held a list came back as
+/// `["a","b"]` where Python writes `['a', 'b']`, and a number came back as the literal the
+/// file held rather than as the value Python read out of it.
 pub fn py_str(value: &Value) -> String {
-    match value {
-        Value::Null => "None".to_string(),
-        Value::Bool(true) => "True".to_string(),
-        Value::Bool(false) => "False".to_string(),
-        Value::String(s) => s.clone(),
-        other => other.to_string(),
-    }
+    crate::pyrepr::str_json(value)
 }
 
 #[cfg(test)]

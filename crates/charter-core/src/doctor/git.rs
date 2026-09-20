@@ -392,15 +392,11 @@ fn truthy(v: &serde_json::Value) -> bool {
     }
 }
 
-/// Python's `str()` of a JSON value, as an f-string interpolates it.
+/// Python's `str()` of a JSON value, as an f-string interpolates it —
+/// [`crate::pyrepr::str_json`], so this row and the rest of the binary quote one value one
+/// way.
 fn py_str(v: &serde_json::Value) -> String {
-    match v {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Bool(true) => "True".to_owned(),
-        serde_json::Value::Bool(false) => "False".to_owned(),
-        serde_json::Value::Null => "None".to_owned(),
-        other => other.to_string(),
-    }
+    crate::pyrepr::str_json(v)
 }
 
 /// How long ago, coarsely — `gitstate.age_phrase`, and the crate's one copy of it.

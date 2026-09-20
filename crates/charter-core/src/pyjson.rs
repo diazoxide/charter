@@ -207,7 +207,7 @@ mod tests {
 /// `1E5` comes back `100000.0` and `1e400` comes back `Infinity`. `charter init` rewrites the
 /// operator's `.claude/settings.json` when it adds a key, so a float somebody wrote by hand
 /// is on this path, and [`float_repr`] is CPython's rule for it.
-fn number(n: &serde_json::Number) -> String {
+pub(crate) fn number(n: &serde_json::Number) -> String {
     let literal = n.as_str();
     if !literal.contains(['.', 'e', 'E']) {
         return if literal == "-0" {

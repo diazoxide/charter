@@ -931,41 +931,13 @@ fn index_text(root: &Path, dir: &Path) -> String {
         .unwrap_or_else(|| "(no index)".to_string())
 }
 
-/// `str(value)` for a JSON value, as Python prints one it read with `json.loads`.
+/// `str(value)` for a JSON value, as Python prints one it read with `json.loads` —
+/// [`charter_core::pyrepr::str_json`].
+///
+/// **This crate had the second copy of the pair.** `charter-core`'s `inventory` had the other,
+/// and the two parted on a number: this one wrote `n.to_string()`, which under
+/// `arbitrary_precision` is the LITERAL the file held, so `1E5` was quoted back as `1E5` where
+/// Python — which reads it as a float and prints its `repr` — writes `100000.0`.
 fn py_str(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Null => "None".to_string(),
-        serde_json::Value::Bool(true) => "True".to_string(),
-        serde_json::Value::Bool(false) => "False".to_string(),
-        serde_json::Value::Number(n) => n.to_string(),
-        other => py_repr_value(other),
-    }
-}
-
-/// `repr()` of a container JSON decoded into: single-quoted strings, `True`, `None`.
-fn py_repr_value(value: &serde_json::Value) -> String {
-    match value {
-        serde_json::Value::String(s) => charter_core::pyrepr::repr_str(s),
-        serde_json::Value::Array(items) => format!(
-            "[{}]",
-            items
-                .iter()
-                .map(py_repr_value)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        serde_json::Value::Object(map) => format!(
-            "{{{}}}",
-            map.iter()
-                .map(|(k, v)| format!(
-                    "{}: {}",
-                    charter_core::pyrepr::repr_str(k),
-                    py_repr_value(v)
-                ))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        other => py_str(other),
-    }
+    charter_core::pyrepr::str_json(value)
 }

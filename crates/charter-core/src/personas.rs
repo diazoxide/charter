@@ -293,9 +293,34 @@ pub fn ancestor_that_does_not_load(root: &Path, name: &str) -> Option<String> {
 ///
 /// **One implementation, in [`crate::shown`], rather than a copy here.** This module, `doctor`
 /// and `news` all need the same answer, and three copies of "which characters have no glyph"
-/// is three places for the Cf table to go stale separately — with the failure showing up as
-/// one charter escaping a character another prints, on a report line, which is exactly what
-/// the function is for.
+/// is three places for the table to go stale separately — with the failure showing up as one
+/// charter escaping a character another prints, on a report line, which is exactly what the
+/// function is for.
+///
+/// # This is NOT [`crate::pyrepr::repr_str`], and folding it into one is a bug, not a cleanup
+///
+/// Every refusal in the module below quotes its value between `'…'` that the SENTENCE
+/// supplies — `"no persona '{}' (…)"` — and `one_line` puts nothing round the value. `repr`
+/// supplies its own quotes and chooses between `'` and `"` by what the value holds. So the
+/// obvious-looking tidy, "these both escape invisible characters, use the one in `pyrepr`",
+/// changes `no persona 'x'` into `no persona ''x''` for every ordinary name and into
+/// `no persona '"it's"'` for one holding an apostrophe. Those sentences are compared BYTE FOR
+/// BYTE against Python's in the differential, and charter's Python spells them with
+/// `one_line` here, not with `!r`.
+///
+/// Two smaller differences that outlive the quoting, for whoever revisits this:
+///
+/// * `one_line` **clips** at `DISPLAY_LIMIT` with a `…`, because a persona name is
+///   attacker-chosen and a refusal is one row of a TUI. `repr` never clips — a refusal that
+///   quotes back a truncated value is not Python's refusal.
+/// * `one_line` leaves the **backslash** alone and escapes by general category; `repr`
+///   doubles the backslash and escapes by `str.isprintable`, which is also false for every
+///   unassigned codepoint. They are close and they are not the same set, and the day they
+///   are made the same set is the day one of them stops being a port of its Python.
+///
+/// What the two DO share is the source of "which characters are which": one generated file,
+/// `crate::tui::tables`, so the divergence stays the deliberate one and does not quietly
+/// acquire an accidental one on top.
 pub fn one_line(value: &str) -> String {
     crate::shown::line(value)
 }
@@ -464,5 +489,30 @@ mod name_tests {
             "",
             "spaces are a title of nothing"
         );
+    }
+
+    /// The divergence `one_line`'s docs call deliberate, asserted so a "cleanup" goes red.
+    ///
+    /// charter's Python spells these refusals with `contain.one_line` inside quotes the
+    /// sentence supplies, NOT with an f-string's `!r`. Swapping in `pyrepr::repr_str` — which
+    /// escapes almost the same characters, which is what makes the swap look safe — doubles
+    /// the quotes on every one of them, and the differential compares these sentences byte
+    /// for byte.
+    #[test]
+    fn a_refusal_quotes_a_name_with_one_line_and_not_with_repr() {
+        let dir = plane();
+
+        let refusal = name_refusal(dir.path(), "it's").unwrap();
+        assert!(
+            refusal.starts_with("invalid persona name 'it's'"),
+            "the sentence supplies the quotes: {refusal}"
+        );
+        // What `repr` would have put there instead, spelled out rather than described.
+        assert_eq!(crate::pyrepr::repr_str("it's"), "\"it's\"");
+
+        // And `one_line` still escapes what could forge a second line of the report.
+        assert_eq!(one_line("two\nlines"), "two\\x0alines");
+        // Where `repr` writes the short escape and adds its own quotes.
+        assert_eq!(crate::pyrepr::repr_str("two\nlines"), "'two\\nlines'");
     }
 }
