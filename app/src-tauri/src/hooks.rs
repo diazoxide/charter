@@ -188,12 +188,7 @@ impl Hooks {
     /// where a closed plane does it — so a plane that is opened again binds a socket of its
     /// own rather than inheriting a live one's path.
     pub fn stop(&self) {
-        drop(
-            self.reading
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .take(),
-        );
+        let _held = self.reading.lock().unwrap_or_else(PoisonError::into_inner);
     }
 
     /// Whether this is still listening. Only a test asks.

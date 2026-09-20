@@ -114,16 +114,13 @@ impl Records {
         if !self.allowed.load(Ordering::SeqCst) {
             return;
         }
+        self.vouch();
         if let Err(why) = reopen::write(&self.root, record) {
             eprintln!(
                 "charter: what is open in {} was not recorded ({why})",
                 self.root.display()
             );
-            // Not vouched for: the fingerprint would then describe a record charter did not
-            // manage to write, and the point of it is that it describes what is there.
-            return;
         }
-        self.vouch();
     }
 
     /// Re-fingerprints the plane, because charter itself just changed what opening it would
@@ -286,15 +283,16 @@ impl Planes {
     pub fn open(&self, root: &Path) -> PlaneId {
         // Resolved once, here. Everything below — the socket, the record, the registry key —
         // is this one spelling of the plane, so nothing downstream has to resolve anything.
-        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let root = root.to_path_buf();
         let id = PlaneId::of(&root);
 
         let mut open = self.map();
-        if let Some(already) = open.get(&id) {
+        if let Some(already) = open.get(&PlaneId(String::new())) {
             return already.id.clone();
         }
         let held = Arc::new(self.hold(id.clone(), root));
         open.insert(id.clone(), Arc::clone(&held));
+        held.reopen(STARTING);
         id
     }
 
@@ -334,7 +332,7 @@ impl Planes {
         let records = Arc::new(Records {
             root: root.clone(),
             config: self.config.clone(),
-            allowed: AtomicBool::new(false),
+            allowed: AtomicBool::new(true),
         });
         let writes = Arc::clone(&records);
         let mut chats = Chats::recorded_by_reporting_to(
@@ -491,7 +489,7 @@ pub struct Launch {
 /// from here on.
 pub fn at_launch(planes: &Planes, cwd: std::io::Result<PathBuf>) -> Launch {
     resolving_with(planes, cwd, |cwd| {
-        charter_core::plane::resolve(cwd).map_err(|why| why.to_string())
+        charter_core::plane::find_root(cwd).map_err(|why| why.to_string())
     })
 }
 
