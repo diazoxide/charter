@@ -1198,33 +1198,41 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_pending_record_left_by_a_blocked_write_still_vouches_for_the_old_file() {
+        use std::os::unix::fs::PermissionsExt;
+
         let (plane, ws) = plane();
         wire(plane.path(), &ws);
         let first = std::fs::read_to_string(ws.join(layer::SETTINGS)).unwrap();
-        // The plane moves, and the write cannot land: `.claude` becomes a link out of the
-        // workspace, which the gate on the way refuses. The pass publishes its intent, fails
-        // the write, and leaves the entry PENDING.
+        // The plane moves, so charter's own file is `stale` and charter is about to rewrite
+        // it. The write is then made to fail with the FILE STILL THERE, which is the only
+        // shape that tests this: a path that is GONE is one the record forgets by design, and
+        // a link on the way makes the row `foreign` before any write is attempted.
         std::fs::write(
             plane.path().join(layer::SETTINGS),
             r#"{"permissions":{"deny":["Bash(rm -rf *)"]}}"#,
         )
         .unwrap();
-        std::fs::remove_file(ws.join(layer::SETTINGS)).unwrap();
-        std::fs::remove_dir(ws.join(".claude")).unwrap();
-        std::os::unix::fs::symlink(
-            plane.path().parent().unwrap().join("nowhere-at-all"),
-            ws.join(".claude"),
-        )
-        .unwrap();
+        let claude = ws.join(".claude");
+        std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o500)).unwrap();
+        // `r-x`: the file is still readable and still `stat`-able, and the temp `write_whole`
+        // writes beside it cannot be created. Root ignores the bits, so the state is asserted
+        // rather than assumed — a test that quietly did nothing here would report every guard
+        // below it green.
+        let probe = std::fs::File::create_new(claude.join("probe"));
+        assert!(
+            probe.is_err(),
+            "this test needs a user the mode bits apply to; it cannot run as root"
+        );
+
         assert_eq!(
             rows(&wire(plane.path(), &ws)),
             [(layer::SETTINGS, Did::Blocked)]
         );
 
-        // The entry vouches for BOTH: what the file held, and what the write would have put
+        // The entry vouches for BOTH: what the file holds, and what the write would have put
         // there. Silence is not a verdict — a record published only AFTER the write would
-        // leave the old digest beside a file that may already hold the new text, and that
-        // file then reads as somebody else's for ever.
+        // leave the old digest beside a file that may already hold the new text, and charter's
+        // own file then reads as somebody else's for ever.
         let record = layer::read_record(&ws);
         let wanted = layer::digest(&want(plane.path())[layer::SETTINGS]);
         assert!(
@@ -1238,15 +1246,23 @@ mod tests {
             None,
             "a pending entry is not a verdict about what the file holds"
         );
+        assert_eq!(
+            std::fs::read_to_string(ws.join(layer::SETTINGS)).unwrap(),
+            first,
+            "a write that did not land left the file exactly as it was"
+        );
 
-        // And what charter last wrote is still vouched for, so putting it back reads as
-        // charter's own to refresh rather than as somebody else's.
-        std::fs::remove_file(ws.join(".claude")).unwrap();
-        std::fs::create_dir_all(ws.join(".claude")).unwrap();
-        std::fs::write(ws.join(layer::SETTINGS), &first).unwrap();
+        // And once the write can land, the file charter last wrote is still charter's own to
+        // refresh rather than somebody else's to leave alone.
+        std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o700)).unwrap();
         assert_eq!(
             rows(&wire(plane.path(), &ws)),
             [(layer::SETTINGS, Did::Refreshed)]
+        );
+        assert_eq!(
+            layer::read_record(&ws).settled(layer::SETTINGS),
+            Some(wanted.as_str()),
+            "and the record settles on what is now there"
         );
     }
 
