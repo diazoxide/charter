@@ -25,6 +25,7 @@ serde_json = { workspace = true, features = ["preserve_order", "arbitrary_precis
 sha2 = "0.10"
 thiserror.workspace = true
 toml = { version = "0.9", features = ["preserve_order"] }
+unicode-normalization = "0.1.25"
 uuid = { version = "1.26.1", features = ["v4"] }
 
 [dev-dependencies]

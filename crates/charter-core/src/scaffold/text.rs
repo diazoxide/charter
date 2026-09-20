@@ -70,43 +70,13 @@ pub fn stripped_lines(text: &str) -> Vec<&str> {
 
 /// `repr(s)` for a `str` — the quoting a Python f-string's `!r` puts round a value.
 ///
-/// Single quotes unless the text holds one and no double quote, then double. Backslashes,
-/// the chosen quote and the three common controls are escaped; any other control character
-/// is `\xNN`, `\uNNNN` or `\UNNNNNNNN` by its size, as `str.isprintable` decides for ASCII
-/// and C1. Printable non-ASCII is kept, as Python keeps it.
+/// **[`crate::pyrepr::repr_str`], and not a second port of it.** This module had its own,
+/// which escaped `char::is_control` plus U+2028 and U+2029 and printed every other
+/// non-printable character as itself — so a name holding a no-break space came back
+/// `'nb\u{a0}sp'` from `init` and `'nb\\xa0sp'` from every other refusal in the binary.
+/// The name stays here because `init`'s call sites read better for it; the rule does not.
 pub fn py_repr(s: &str) -> String {
-    let quote = if s.contains('\'') && !s.contains('"') {
-        '"'
-    } else {
-        '\''
-    };
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push(quote);
-    for c in s.chars() {
-        match c {
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if c == quote => {
-                out.push('\\');
-                out.push(c);
-            }
-            c if c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') => {
-                let n = c as u32;
-                if n < 0x100 {
-                    out.push_str(&format!("\\x{n:02x}"));
-                } else if n < 0x10000 {
-                    out.push_str(&format!("\\u{n:04x}"));
-                } else {
-                    out.push_str(&format!("\\U{n:08x}"));
-                }
-            }
-            c => out.push(c),
-        }
-    }
-    out.push(quote);
-    out
+    crate::pyrepr::repr_str(s)
 }
 
 /// `str.title()` over the ASCII a persona name can hold: a letter is upper-cased when the
@@ -164,6 +134,9 @@ mod tests {
     }
 
     /// Verified against CPython 3.14: `repr(s)`.
+    ///
+    /// Kept although the rule now lives in `pyrepr`: these are `init`'s own values, and the
+    /// day somebody gives this name a second body again, this is the test that says so.
     #[test]
     fn a_value_is_quoted_the_way_python_quotes_it() {
         assert_eq!(py_repr("Bad Name"), "'Bad Name'");
@@ -171,6 +144,8 @@ mod tests {
         assert_eq!(py_repr("a'b\"c"), "'a\\'b\"c'");
         assert_eq!(py_repr("x\ny\u{7}"), "'x\\ny\\x07'");
         assert_eq!(py_repr("é"), "'é'");
+        // The divergence that made this a delegation: a `Zs` the old body printed raw.
+        assert_eq!(py_repr("nb\u{a0}sp"), "'nb\\xa0sp'");
     }
 
     /// Verified against CPython 3.14: `s.title()`.

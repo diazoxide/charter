@@ -107,6 +107,14 @@ class DoctorScenario:
     #: A plane-relative directory to run in that is NOT the plane `$CHARTER_ROOT` names — a
     #: chat rooted in a workspace or a clone.
     cwd: str = ""
+    #: Extra environment for BOTH sides, on top of `run._env`. `{home}` and `{plane}` in a
+    #: value are replaced with that side's own directories, because the two sides have
+    #: different ones and a scenario is written once. A value of `None` UNSETS the variable.
+    #:
+    #: `$CLAUDE_CONFIG_DIR` is what this exists for: it names the folder `session root` and
+    #: the settings rows read, and nothing else in the fixtures can put a chosen string on a
+    #: doctor row.
+    env: dict = field(default_factory=dict)
 
 
 def _identity(home: Path) -> None:
@@ -243,6 +251,53 @@ def _no_plane(root: Path) -> None:
     (root / "charter.toml").unlink()
 
 
+#: A `$CLAUDE_CONFIG_DIR` that is not ASCII. `session root` prints the folder in use, so the
+#: value reaches a row as itself — the only string in a doctor report a scenario gets to
+#: choose. The folder is deliberately NOT created: creating it would put the question to the
+#: filesystem, and the question here is what each implementation does with the bytes.
+_CCD_NON_ASCII = "{home}/.claude-\u65e5\u672c\u8a9e"
+
+#: The same, spelled so that **NFC changes it** — because Claude Code's own binary spells the
+#: folder `(CLAUDE_CONFIG_DIR ?? …).normalize("NFC")`, and `charter/harness/claude_code.py`
+#: reproduces that. A row naming the folder has to name the one the binary opens.
+#:
+#: This is the scenario that caught the port: it printed the environment's own bytes, and
+#: charter printed the composed folder. Four shapes, not four spellings of one, so a
+#: normaliser that got any of them wrong is seen here rather than believed:
+#:
+#: * `cafe` + U+0301 — the ordinary base-plus-mark composition;
+#: * U+212B ANGSTROM SIGN — a singleton, which NFC replaces with U+00C5 outright;
+#: * U+0958 DEVANAGARI QA — a composition EXCLUSION, which NFC DECOMPOSES and must not put
+#:   back together;
+#: * U+1100 + U+1161 — Hangul jamo, which compose by arithmetic rather than by table.
+_CCD_DECOMPOSED = "{home}/.claude-cafe\u0301-\u212b-\u0958-\u1100\u1161"
+
+#: The same, holding a `Cf` character with no glyph of its own (U+200B ZERO WIDTH SPACE) and
+#: one assigned after the hand-written tables in this repo were pasted (U+0890).
+_CCD_FORMAT_CHARS = "{home}/.claude-\u200bzero\u0890width"
+
+
+def _link_an_index_to_a_name_with_no_glyph(root: Path) -> None:
+    """`_link_an_index_out_of_the_plane`, with the outside file named in characters that a
+    report has to escape.
+
+    This is the one path in `doctor` where a scenario can drive `contain.one_line` over a
+    chosen string: the refusal quotes the link's RESOLVED target, and the target's name is
+    the scenario's to pick. U+200B is `Cf`, U+0301 is a combining mark that must survive as
+    itself, and U+0890 is `Cf` assigned after one of the two hand-written tables this repo
+    carried was written — so before they were generated from one CPython, `shown` escaped it
+    and `pyrepr` printed it.
+    """
+    outside = root.parent / "outside"
+    outside.mkdir(parents=True, exist_ok=True)
+    named = outside / "cre\u200bdentials-cafe\u0301-\u0890.md"
+    named.write_text("token\n")
+    index = root / "personas" / "_shared" / "memory" / "MEMORY.md"
+    index.parent.mkdir(parents=True, exist_ok=True)
+    index.unlink(missing_ok=True)
+    index.symlink_to(named)
+
+
 _GIT_INTERNALS = "each side's setup made its own repository, so its index and objects differ"
 _TOML_DIAGNOSTIC = (r"is not valid TOML: [^\"]*",
                     "tomllib's diagnostic against toml's; the sentence around it must match")
@@ -345,6 +400,24 @@ DOCTOR_SCENARIOS = [
         name="doctor-from-a-clone-names-its-own-trust-acceptance", plane="daily",
         args=["--json"], setup=_a_clone_behind_its_upstream, cwd="workspaces/beta/svc",
         ignore={"workspaces/beta/svc": _GIT_INTERNALS}),
+    # `$CLAUDE_CONFIG_DIR` reaches a row only from a session that is NOT the plane, which is
+    # what `cwd` is for here: `session root` names the config folder in use precisely because
+    # the plane's own `.claude/` is not the one the rows below it read.
+    DoctorScenario(
+        name="doctor-with-a-non-ascii-claude-config-dir", plane="daily", args=["--json"],
+        cwd="workspaces/alpha", env={"CLAUDE_CONFIG_DIR": _CCD_NON_ASCII}),
+    DoctorScenario(
+        name="doctor-with-a-claude-config-dir-that-is-not-nfc-normalised", plane="daily",
+        args=["--json"], cwd="workspaces/alpha", env={"CLAUDE_CONFIG_DIR": _CCD_DECOMPOSED}),
+    DoctorScenario(
+        name="doctor-with-format-characters-in-the-claude-config-dir", plane="daily",
+        args=["--json"], cwd="workspaces/alpha",
+        env={"CLAUDE_CONFIG_DIR": _CCD_FORMAT_CHARS}),
+    # And the same characters where a row ESCAPES them rather than printing them, which is
+    # the half the three above cannot reach.
+    DoctorScenario(
+        name="doctor-a-memory-index-linked-to-a-name-with-no-glyph", plane="daily",
+        args=["--json"], setup=_link_an_index_to_a_name_with_no_glyph),
 ]
 
 
@@ -391,6 +464,11 @@ def check(s: DoctorScenario, binary: Path) -> bool:
 
         def env(root: Path, home: Path, pins: Path) -> dict:
             e = base._env(root / s.at if s.at else root, home, pins)
+            for name, value in s.env.items():
+                if value is None:
+                    e.pop(name, None)
+                else:
+                    e[name] = value.format(home=home, plane=root)
             return e
 
         json_args = s.args if "--json" in s.args else [*s.args, "--json"]
