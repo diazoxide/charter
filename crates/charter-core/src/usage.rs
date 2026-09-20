@@ -527,12 +527,17 @@ mod tests {
 
     /// The READ, not the write — the follow this module did not gate (M2.20).
     ///
-    /// The write side has refused a linked record since M1, so `record` answered `Nothing`
-    /// either way and the escape was invisible from there. `rows_at` is where it was:
-    /// `read_to_string` on a name follows the link, and a status-line hook runs it at every
-    /// prompt. The link is planted at the EXACT path `file_for` returns — one level up would
-    /// be `.charter/sessions/` itself, which the old code also refused, so a test that
-    /// planted it there would have passed against the unfixed read.
+    /// **Two things make this test bite, and the module already had a test that had neither.**
+    /// `the_record_is_not_written_through_a_link_out_of_the_plane` plants its link one level
+    /// up, at `.charter/sessions/`, and asserts `record(…) == Nothing`. Both halves of that
+    /// pass against the UNFIXED read: `read_to_string` followed a directory link just as
+    /// happily as a file one, and `record` answered `Nothing` either way because the WRITE
+    /// refused. The escape was invisible from there.
+    ///
+    /// So this one plants the link at the exact path [`self::file_for`] returns — the leaf,
+    /// which is the component named by a payload field and therefore the one an attacker
+    /// picks — and asserts on what `rows_at` RETURNED, which is the value that had the outside
+    /// file in it.
     #[test]
     #[cfg(unix)]
     fn the_trend_is_not_read_through_a_link_at_the_records_own_name() {
