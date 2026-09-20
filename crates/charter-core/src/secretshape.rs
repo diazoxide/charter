@@ -184,8 +184,10 @@ fn is_python_word(c: char) -> bool {
 /// CPython's `\b` immediately before `at`, where what follows is known to be a word
 /// character (every keyword starts with an ASCII letter).
 fn python_boundary_before(text: &str, at: usize) -> bool {
-    let _ = (text, at, is_python_word);
-    true
+    text[..at]
+        .chars()
+        .next_back()
+        .is_none_or(|c| !is_python_word(c))
 }
 
 /// The next character boundary after `at`, so a rejected position can be stepped over

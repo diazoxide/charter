@@ -107,7 +107,7 @@ const MAX_BYTES: u64 = 1 << 20;
 /// it is why gating here can only ever add questions, never remove one.
 pub fn read(root: &Path) -> serde_json::Value {
     let nothing = || serde_json::Value::Object(serde_json::Map::new());
-    let Ok(mut open) = std::fs::File::open(path(root)) else {
+    let Ok(mut open) = crate::contain::open_no_link(root, &path(root)) else {
         return nothing();
     };
     // `fstat` of the descriptor the read will use, not of the name: the two cannot be
@@ -115,10 +115,9 @@ pub fn read(root: &Path) -> serde_json::Value {
     let Ok(found) = open.metadata() else {
         return nothing();
     };
-    if !found.file_type().is_file() {
+    if !found.file_type().is_file() || found.len() > MAX_BYTES {
         return nothing();
     }
-    let _ = MAX_BYTES;
     let mut text = String::new();
     if std::io::Read::read_to_string(&mut open, &mut text).is_err() {
         return nothing();
