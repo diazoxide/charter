@@ -108,6 +108,16 @@ class Scenario:
     #: Run against each plane copy before the command, for a starting state the fixtures
     #: cannot carry — a symlink, a mode, a file in the way.
     setup: "Callable[[Path], None] | None" = None
+    #: Extra environment for BOTH sides, on top of `_env`. How a scenario drives the rungs of
+    #: the two resolution ladders that live in the environment (`$CHARTER_WORKSPACE`,
+    #: `$CHARTER_PERSONA`, the pane id the terminal pointer is keyed on). A value of `None`
+    #: UNSETS the variable, which is how a scenario turns OFF a rung `_env` sets for every
+    #: other one.
+    env: dict[str, "str | None"] = field(default_factory=dict)
+    #: Where the command runs, relative to the plane root; the default is the root itself.
+    #: The tree you are standing in is a rung of the workspace ladder and the only one that
+    #: cannot be planted as a file, so it has to be driven from here.
+    cwd: str = ""
     #: What both sides are given on stdin. `charter statusline` is the whole reason this
     #: exists: its input is a JSON payload a harness pipes in, and a command run with no
     #: stdin of its own would inherit this harness's — which is a terminal under `./run.py`
@@ -1669,8 +1679,309 @@ SAVE_SCENARIOS = [
 ]
 
 
+# --------------------------------------------------------------------------------------- #
+# M2.9: the two resolution ladders, one rung at a time                                      #
+# --------------------------------------------------------------------------------------- #
+#: The pane id the ladder scenarios key their terminal pointer on. `_env` sets no pane
+#: variable and `_run` gives nothing a tty, so that rung is off in every other scenario.
+PANE = "fixture-pane-1"
+
+#: Why `workspace current` and `persona current` say more on the Python side. Their STDOUT —
+#: the resolved name, alone, which is what a script reads — must match byte for byte; the
+#: sentence explaining which rung decided, whether the workspace is live, the session lock
+#: and the vision is the command presentation layer, and porting it is not what M2.9 is.
+CURRENT_EXPLAINS_ITSELF = (
+    "charter's `current` prints the name on stdout and then explains it on stderr — the rung "
+    "that decided, LIVE/LOCAL, the session lock, the vision. The name is what this compares; "
+    "the explanation is the presentation layer."
+)
+
+#: Every rung of the workspace ladder that lives on disk, top to bottom. Each names a
+#: DIFFERENT workspace, because a rung naming the same one as the rung below it proves
+#: nothing about which of the two decided.
+WORKSPACE_RUNGS = ("session", "frame", "terminal", "declared", "plane")
+
+#: The same for personas. `steward` and `devops` are personas the `daily` plane HAS, and the
+#: bottom two rungs need that: a committed rung naming a persona that does not exist resolves
+#: to nothing, while the pointers above it deliberately still win with a name nothing defines.
+PERSONA_RUNGS = ("session", "terminal", "active", "plane", "committed")
+
+
+def _workspace_ladder(*absent: str):
+    """A setup that plants every workspace rung except the ones named.
+
+    Removing rungs from the TOP down, one scenario per rung, is the only way to prove
+    precedence: a test that sets one rung and reads it back cannot tell "this rung decided"
+    from "this rung and the four below it happen to agree".
+    """
+    unknown = set(absent) - set(WORKSPACE_RUNGS)
+    assert not unknown, f"no such rung: {unknown}"
+
+    def plant(root: Path) -> None:
+        (root / ".charter" / "sessions").mkdir(parents=True, exist_ok=True)
+        (root / ".charter" / "terminals").mkdir(parents=True, exist_ok=True)
+        (root / ".charter" / "frame" / SESSION).mkdir(parents=True, exist_ok=True)
+        # The tree rung: a workspace with something inside it, because `workspaces/<ws>` on
+        # its own is the container and not a tree.
+        (root / "workspaces" / "from-cwd" / "repo").mkdir(parents=True, exist_ok=True)
+        (root / "workspaces" / "beta" / "repo").mkdir(parents=True, exist_ok=True)
+        files = {
+            "session": (root / ".charter" / "sessions" / f"{SESSION}.workspace", "from-session"),
+            "frame": (root / ".charter" / "frame" / SESSION / "workspace", "from-frame"),
+            "terminal": (root / ".charter" / "terminals" / f"{PANE}.workspace", "from-terminal"),
+            "declared": (root / "workspaces" / ".default", "from-declared"),
+        }
+        for rung, (path, value) in files.items():
+            if rung in absent:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_text(value + "\n")
+        if "plane" not in absent:
+            toml = root / "charter.toml"
+            toml.write_text(toml.read_text() + '\n[workspace]\ndefault = "from-plane"\n')
+
+    return plant
+
+
+def _persona_ladder(*absent: str):
+    """The same for the persona ladder — `charter/persona.py:1379`."""
+    unknown = set(absent) - set(PERSONA_RUNGS)
+    assert not unknown, f"no such rung: {unknown}"
+
+    def plant(root: Path) -> None:
+        (root / ".charter" / "sessions").mkdir(parents=True, exist_ok=True)
+        (root / ".charter" / "terminals").mkdir(parents=True, exist_ok=True)
+        files = {
+            "session": (root / ".charter" / "sessions" / f"{SESSION}.persona", "from-session"),
+            "terminal": (root / ".charter" / "terminals" / f"{PANE}.persona", "from-terminal"),
+            "active": (root / ".charter" / "active-persona", "from-active"),
+            # The two committed rungs name personas the plane HAS, because a committed rung
+            # that names one it does not resolves to nothing at all.
+            "committed": (root / "personas" / ".default", "devops"),
+        }
+        for rung, (path, value) in files.items():
+            if rung in absent:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_text(value + "\n")
+        if "plane" in absent:
+            toml = root / "charter.toml"
+            toml.write_text(toml.read_text().replace('[persona]\ndefault = "steward"\n', ""))
+
+    return plant
+
+
+def _workspace_rung(name: str, *, absent: tuple = (), env: dict | None = None, **kw) -> Scenario:
+    """One `workspace current`, with the named rungs taken away.
+
+    The pane id is on by default because the terminal pointer is a rung; a scenario that
+    wants it off says so with `env={"TERM_SESSION_ID": None}` rather than by omission.
+    """
+    return Scenario(
+        name=name,
+        plane="daily",
+        python=["workspace", "current"],
+        pins_the_clock=False,
+        setup=_workspace_ladder(*absent),
+        env={"TERM_SESSION_ID": PANE, **(env or {})},
+        stderr_differs=CURRENT_EXPLAINS_ITSELF,
+        **kw,
+    )
+
+
+def _persona_rung(name: str, *, absent: tuple = (), env: dict | None = None, **kw) -> Scenario:
+    """One `persona current`, with the named rungs taken away."""
+    return Scenario(
+        name=name,
+        plane="daily",
+        python=["persona", "current"],
+        pins_the_clock=False,
+        setup=_persona_ladder(*absent),
+        env={"TERM_SESSION_ID": PANE, **(env or {})},
+        stderr_differs=CURRENT_EXPLAINS_ITSELF,
+        **kw,
+    )
+
+
+LADDER_SCENARIOS = [
+    # --- the workspace ladder, rung by rung -------------------------------------------- #
+    _workspace_rung(
+        "workspace-the-environment-outranks-the-tree-and-every-pointer",
+        # `workspace current` takes no `-w` in either implementation, so the top rung is
+        # proved where it is actually used: on the commands that WRITE, below.
+        env={"CHARTER_WORKSPACE": "from-env"},
+        cwd="workspaces/from-cwd/repo",
+    ),
+    _workspace_rung(
+        "workspace-a-blank-environment-is-not-a-rung-and-the-tree-decides",
+        # charter#1055. Taken as a name, a whitespace `$CHARTER_WORKSPACE` hid every rung
+        # below it and `source` reported the variable as the operator's own choice.
+        env={"CHARTER_WORKSPACE": " \t "},
+        cwd="workspaces/from-cwd/repo",
+    ),
+    _workspace_rung(
+        "workspace-the-tree-you-stand-in-outranks-every-pointer",
+        cwd="workspaces/from-cwd/repo",
+    ),
+    _workspace_rung(
+        "workspace-the-workspace-directory-itself-is-a-container-and-not-a-tree",
+        cwd="workspaces/from-cwd",
+    ),
+    _workspace_rung("workspace-with-no-tree-the-sessions-own-pointer-decides"),
+    _workspace_rung(
+        "workspace-the-frames-launch-record-is-a-rung-in-python-and-not-here",
+        absent=("session",),
+        # **The one rung this port deliberately does not have.** `docs/plane-format.md`:
+        # `.charter/frame/**` is the tmux frame's, and the app replaces that frame rather
+        # than reading its state — so nothing on this side can ever write this record, and a
+        # rung nothing can set is a rung nobody can reason about. Python answers `from-frame`
+        # and this answers the rung below it.
+        stdout_differs=(
+            "the frame's launch record is `.charter/frame/<fid>/workspace`, which "
+            "docs/plane-format.md rules is the tmux frame's and the app neither reads nor "
+            "writes. Python takes it as the rung below the session pointer; this port has no "
+            "such rung and falls to the terminal pointer."
+        ),
+    ),
+    _workspace_rung(
+        "workspace-with-no-session-pointer-the-terminals-decides",
+        absent=("session", "frame"),
+    ),
+    _workspace_rung(
+        "workspace-with-no-pane-id-the-terminal-pointer-is-not-read",
+        absent=("session", "frame"),
+        # No pane variable and no tty: the id is `None`, so the pointer that IS there is not
+        # this shell's to read. Costing only a convenience is the deliberate trade — an id
+        # that is wrong in the sharing direction is worse than no id.
+        env={"TERM_SESSION_ID": None},
+    ),
+    _workspace_rung(
+        "workspace-with-neither-pointer-the-nominated-default-decides",
+        absent=("session", "frame", "terminal"),
+    ),
+    _workspace_rung(
+        "workspace-with-nothing-nominated-the-planes-declared-default-decides",
+        absent=("session", "frame", "terminal", "declared"),
+    ),
+    _workspace_rung(
+        "workspace-with-a-plane-that-declares-nothing-the-answer-is-the-built-in",
+        absent=WORKSPACE_RUNGS,
+    ),
+    # --- the persona ladder, rung by rung ---------------------------------------------- #
+    _persona_rung(
+        "persona-the-environment-outranks-every-pointer",
+        env={"CHARTER_PERSONA": "from-env"},
+    ),
+    _persona_rung(
+        "persona-a-blank-environment-is-not-a-rung",
+        # charter#1048, the same defect one noun over.
+        env={"CHARTER_PERSONA": "  "},
+    ),
+    _persona_rung("persona-with-no-environment-the-sessions-own-pointer-decides"),
+    _persona_rung(
+        "persona-with-no-session-pointer-the-terminals-decides",
+        absent=("session",),
+    ),
+    _persona_rung(
+        "persona-with-neither-pointer-the-plane-wide-active-file-decides",
+        absent=("session", "terminal"),
+    ),
+    _persona_rung(
+        "persona-with-nothing-selected-the-planes-declared-front-door-decides",
+        absent=("session", "terminal", "active"),
+    ),
+    _persona_rung(
+        "persona-with-nothing-declared-the-legacy-committed-default-decides",
+        absent=("session", "terminal", "active", "plane"),
+    ),
+    _persona_rung(
+        "persona-a-plane-with-no-front-door-has-none-and-says-so",
+        absent=PERSONA_RUNGS,
+    ),
+    # --- and the same ladders on the commands that act ---------------------------------- #
+    Scenario(
+        name="recall-with-no-flags-at-all-is-how-a-harness-calls-it",
+        # **The command M2.9 exists for.** Before it this exited 2 with "recall needs -w
+        # <workspace> ... this charter does not resolve the active workspace", and a harness
+        # calls it exactly like this at session start.
+        plane="daily",
+        python=["recall"],
+    ),
+    Scenario(
+        name="recall-with-no-flags-on-a-plane-with-no-front-door",
+        # A persona rung that answers nothing is not a refusal: `recall.sources` skips a
+        # scope with no owner, and the workspace and shared bases are still searched.
+        plane="daily",
+        setup=_persona_ladder(*PERSONA_RUNGS),
+        python=["recall"],
+    ),
+    Scenario(
+        name="recall-with-no-flags-resolves-the-workspace-from-the-tree-it-runs-in",
+        plane="daily",
+        setup=_workspace_ladder("frame"),
+        cwd="workspaces/beta/repo",
+        python=["recall"],
+    ),
+    Scenario(
+        name="persona-recall-with-no-name-resolves-the-active-persona",
+        plane="daily",
+        python=["persona", "recall"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        name="persona-remember-with-one-word-takes-it-as-the-fact-not-the-persona",
+        plane="daily",
+        python=["persona", "remember", "The importer drops rows over 4 MB", "--no-sync"],
+    ),
+    Scenario(
+        name="workspace-recall-with-no-w-reads-the-workspace-the-pointer-names",
+        plane="daily",
+        pins_the_clock=False,
+        python=["workspace", "recall"],
+    ),
+    Scenario(
+        name="workspace-forget-with-no-w-names-the-workspace-it-resolved",
+        plane="daily",
+        python=["workspace", "forget", "nope"],
+        refusal="no memory 'nope' in workspace 'alpha'",
+        same_stderr=True,
+    ),
+    Scenario(
+        stderr_differs=CONFIRMS_ON_STDERR,
+        name="vision-with-no-w-writes-where-the-environment-says",
+        plane="daily",
+        python=["workspace", "vision", "Ship the widget"],
+        env={"CHARTER_WORKSPACE": "beta"},
+    ),
+    Scenario(
+        stderr_differs=CONFIRMS_ON_STDERR,
+        name="vision-with-w-outranks-an-environment-naming-another-workspace",
+        plane="daily",
+        python=["workspace", "vision", "Ship the widget", "-w", "alpha"],
+        env={"CHARTER_WORKSPACE": "beta"},
+    ),
+    Scenario(
+        name="workspace-remember-with-no-w-writes-where-the-sessions-pointer-says",
+        # The `daily` fixture's own `.charter/sessions/fixture-session-1.workspace` says
+        # `alpha`, so this is the rung a harness actually lands on, unplanted.
+        plane="daily",
+        python=["workspace", "remember", "The importer drops rows over 4 MB", "--no-sync"],
+    ),
+    Scenario(
+        stderr_differs=CONFIRMS_ON_STDERR,
+        name="todo-with-no-w-writes-into-the-tree-you-are-standing-in",
+        # The session pointer says `from-session` and the tree says `beta`; the tree outranks
+        # it, because you cannot be in two directories at once.
+        plane="daily",
+        python=["ws", "todo", "Cut the release"],
+        setup=_workspace_ladder("frame"),
+        cwd="workspaces/beta/repo",
+    ),
+]
+
 SCENARIOS = [
     *INIT_SCENARIOS,
+    *LADDER_SCENARIOS,
     Scenario(
         name="harness-list-refuses-every-name-that-is-a-charter-command",
         plane="minimal",
@@ -2393,13 +2704,26 @@ def _lay_out(scratch: Path, plane: str, side: str) -> tuple[Path, Path, Path]:
     return root, home, pins
 
 
-def _run(argv: list[str], root: Path, home: Path, pins: Path,
-         stdin: str = "") -> subprocess.CompletedProcess:
+def _run(argv: list[str], root: Path, home: Path, pins: Path, stdin: str = "",
+         extra: "dict[str, str | None] | None" = None,
+         cwd: str = "") -> subprocess.CompletedProcess:
+    env = _env(root, home, pins)
+    for name, value in (extra or {}).items():
+        if value is None:
+            env.pop(name, None)
+        else:
+            env[name] = value
     # `input=` always, never an inherited descriptor: a command that reads stdin would
     # otherwise get this harness's, which is a terminal when `./run.py` is typed and a closed
     # pipe in CI. `""` is a clean EOF on both.
+    #
+    # **It decides a resolution rung as well as a payload**, which is why no scenario may go
+    # back to inheriting one: `session.terminal()`'s last rung is `os.ttyname(0)`, so with a
+    # terminal on stdin Python charter has a per-terminal pointer id and the answer to "which
+    # workspace" would depend on where the suite was run. A pipe is not a terminal, so that
+    # rung is OFF unless a scenario turns it on with `env={"TERM_SESSION_ID": …}`.
     return subprocess.run(
-        argv, cwd=root, env=_env(root, home, pins), capture_output=True, text=True,
+        argv, cwd=root / cwd if cwd else root, env=env, capture_output=True, text=True,
         input=stdin,
     )
 
@@ -2531,11 +2855,12 @@ def check(scenario: Scenario, binary: Path) -> bool:
         rs_before = _outside(scratch, "rust", rs_root)
 
         py = _run([sys.executable, "-m", "charter", *scenario.python], py_root, py_home, py_pins,
-                  scenario.stdin)
+                  scenario.stdin, scenario.env, scenario.cwd)
         rust_argv = [str(binary), *scenario.rust_args()]
         if scenario.pins_the_clock:
             rust_argv += ["--now", NOW_NAIVE]
-        rs = _run(rust_argv, rs_root, rs_home, rs_pins, scenario.stdin)
+        rs = _run(rust_argv, rs_root, rs_home, rs_pins, scenario.stdin, scenario.env,
+                  scenario.cwd)
 
         problems: list[str] = []
         if scenario.python_only_items:
