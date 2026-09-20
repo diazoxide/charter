@@ -1307,3 +1307,82 @@ fn harness_listing(set: &ProfileSet, check: &profiles::IgnoreCheck) -> String {
     }
     out
 }
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// The clap `Command` at a subcommand path, or `None` when this binary has no such command.
+    fn command_at(path: &[&str]) -> Option<clap::Command> {
+        let mut at = Cli::command();
+        for name in path {
+            at = at.find_subcommand(name)?.clone();
+        }
+        Some(at)
+    }
+
+    #[test]
+    fn no_command_a_probe_may_name_takes_a_pass_through_argv() {
+        // **charter #317, and the half of it a parser can answer.** `secret exec` takes the rest
+        // of the line as a pass-through argv, so a `check:` naming it reached any binary on the
+        // machine with a vault's credential in the child's environment — on every plane that
+        // upgraded, from a SessionStart hook. `news::PROBEABLE` is a list a human keeps because
+        // the other half ("does it write to the disk?") cannot be read off a parser; this half
+        // can be, and asking it of the list rather than at runtime makes it a proof.
+        //
+        // In `main.rs` rather than under `tests/`, because a binary's parser is not importable
+        // from an integration test and a copy of the enum over there would be a test of the copy.
+        let mut found = Vec::new();
+        for path in charter_core::news::PROBEABLE {
+            // Only the paths this binary registers. The two it does not have are refused before
+            // a probe reaches them, and a list that shrank to match this CLI would stop being
+            // the rule an entry's AUTHOR is held to.
+            let Some(cmd) = command_at(path) else {
+                continue;
+            };
+            found.push(path.join(" "));
+            for arg in cmd.get_positionals() {
+                assert!(
+                    !arg.get_num_args().is_some_and(|n| n.max_values() > 1),
+                    "`charter {}` takes `{}` as an open-ended argv, so a `check:` naming it \
+                     would hand an entry's own words to whatever it runs — take it off \
+                     news::PROBEABLE, or take the positional off the command",
+                    path.join(" "),
+                    arg.get_id()
+                );
+            }
+        }
+        assert_eq!(
+            found,
+            vec!["doctor".to_owned(), "news".to_owned()],
+            "the probeable commands this binary has changed; the notes in `news`'s module \
+             docstring that say which two they are have to change with it"
+        );
+    }
+
+    #[test]
+    fn the_tree_a_probe_is_checked_against_is_this_binarys_own() {
+        // Read off clap rather than written down. A command added to the CLI is in it the same
+        // day; a name that is only an ALIAS is in it too, because argparse's `choices` holds one
+        // key per alias, so `ws` IS a subcommand name in charter and a tree without it would
+        // read `check: ws …` as a command this charter does not have.
+        let tree = command_tree();
+        let names: Vec<&str> = tree.children.iter().map(|c| c.name.as_str()).collect();
+        for expected in ["news", "update", "doctor", "workspace", "ws"] {
+            assert!(
+                names.contains(&expected),
+                "{expected} is missing from {names:?}"
+            );
+        }
+        let alias = tree
+            .children
+            .iter()
+            .find(|c| c.name == "ws")
+            .expect("the alias is a child");
+        assert!(
+            alias.children.iter().any(|c| c.name == "todo"),
+            "an alias carries the same subcommands as the name it stands for"
+        );
+    }
+}
