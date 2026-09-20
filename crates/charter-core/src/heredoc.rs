@@ -1024,9 +1024,15 @@ pub fn commit_message_on_stdin(argv: &[String]) -> bool {
             || ((w == "-F" || w == "--file") && opts.get(k + 1).map(String::as_str) == Some("-"))
         {
             stdin = true;
-        } else if w.chars().count() >= 3 && "--edit".starts_with(w.as_str()) {
-            return false;
-        } else if w.starts_with('-') && !w.starts_with("--") && w.contains('e') {
+        } else if
+        // Any spelling of `--edit`, including the abbreviations git accepts (`--e`, `--edi`)…
+        (w.chars().count() >= 3 && "--edit".starts_with(w.as_str()))
+            // …and a short cluster holding `e` (`-ae`). One arm because they answer the same
+            // way and clippy refuses two blocks that do; two conditions because they are two
+            // separate spellings and the oracle keeps them apart. A cluster whose `e` is a
+            // VALUE (`-mfixe`) is refused along with them, which is a missed allow.
+            || (w.starts_with('-') && !w.starts_with("--") && w.contains('e'))
+        {
             return false;
         }
     }
@@ -1069,9 +1075,13 @@ pub fn gh_body_on_stdin(argv: &[String]) -> bool {
                 && opts.get(k + 1).map(String::as_str) == Some("-"))
         {
             stdin = true;
-        } else if w == "--editor" || w.starts_with("--editor=") {
-            return false;
-        } else if w.starts_with('-') && !w.starts_with("--") && w.contains('e') {
+        } else if
+        // `--editor`, with or without a value…
+        (w == "--editor" || w.starts_with("--editor="))
+            // …and a short cluster holding `e`. One arm for the reason git's is; gh opens no
+            // editor when the body is on stdin anyway, so all of this costs a missed allow.
+            || (w.starts_with('-') && !w.starts_with("--") && w.contains('e'))
+        {
             return false;
         }
     }

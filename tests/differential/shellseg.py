@@ -305,6 +305,45 @@ CURATED: list[str] = [
     # `\d` is `\p{Nd}`: an Arabic-Indic digit is a file descriptor to both engines.
     f"٣> out cat {VAULT}",
     "timeout ٣ cat x",
+    # ---- stage 2, second pass: the rows a MUTATION SWEEP found the recording could not see.
+    #
+    # Each of these was added because breaking the rule beside it changed answers in the fuzz and
+    # changed NOTHING in the 162 rows above — which is a rule with no test on the day the fuzz is
+    # trimmed. They are not decoration; each one is a mutation that now goes red.
+    #
+    # `--edit` in its LONG spellings. The short cluster `-e` was covered; the prefix branch
+    # (`len(w) >= 3 and "--edit".startswith(w)`) was covered by nothing at all.
+    "git commit --edit -F - <<'MSG'\nfix: it\nMSG",
+    "git commit --edi -F - <<'MSG'\nfix: it\nMSG",
+    # A compound word OUT of command position, with the executor in one. Every earlier row had
+    # `while` where a command begins, so relaxing the position test changed no recorded answer.
+    "echo while | eval x",
+    # git stops reading its own globals at the first non-option token: the `-C` before `switch`
+    # is a chdir and the one after it is `--force-create` (#483).
+    "git -C /tmp switch -C neu",
+    # The `\d*` of `_REDIRECT_RE` is only ever REACHED through a quoted token, because the lexer
+    # hands a bare `2>` back as `2` and `>`. So a Unicode digit needs the quoted spelling to
+    # matter at all — and then it decides whether the SHELL opens the path.
+    f'cat "٣<" {VAULT}',
+    f'env "٣>" x cat {VAULT}',
+    # CPython's `$` matches before a newline that ends the string; the `regex` crate's does not.
+    # A quoted token really can hold one.
+    f'cat "<\n" {VAULT}',
+    # In an UNQUOTED body a trailing backslash splices, so the next line cannot be the
+    # terminator — bash runs the body on past it, and the first `A` here is body, not the end.
+    f"cat <<A\nbody \\\nA\nA\ncat {VAULT}",
+    # The pipeline, not the line: the `bash` after the `;` does not run this body. Asking the
+    # whole line is the round-4 over-refusal, and the group is what makes the plan unknown so
+    # that `_heredoc_could_run` is the answer at all.
+    f"( cat <<'A' ; bash )\n{VAULT}\nA",
+    # ...and with the break IN FRONT of the opener, which is the half that moves `lo` rather
+    # than `hi`. Without it the slice is the whole line either way and the rule looks inert.
+    f"( bash ; cat <<'A' )\n{VAULT}\nA",
+    # A VERSIONED interpreter is one: `python3.12` is in no name list and runs the body.
+    "python3.12 <<'EOF'\ncharter handoff w\nEOF",
+    # An EVEN run of trailing backslashes is a literal `\`, not a continuation.
+    "echo a\\\\",
+    f"echo a\\\\\ncat {VAULT}",
 ]
 
 #: What a case is built out of. Single characters where the shell gives one meaning, and the
@@ -553,7 +592,12 @@ def ask_rust(binary: Path, cases: list[str]) -> list[dict]:
     )
     if run.returncode != 0:
         sys.exit(f"{binary} exited {run.returncode}\n{run.stderr}")
-    lines = [ln for ln in run.stdout.splitlines() if ln]
+    # `split("\n")`, NOT `splitlines()`. Python's `str.splitlines` also breaks on U+000B,
+    # U+000C, U+001C-U+001F, U+0085, U+2028 and U+2029 — and `serde_json` escapes only the
+    # first group, because the last three are ordinary characters inside a JSON string. Stage
+    # 2 put U+0085/U+2028/U+2029 in the alphabet, and the reader promptly reported "answered
+    # 18,510 of 10,000 cases". The transport is newline-delimited JSON; `\n` is the delimiter.
+    lines = [ln for ln in run.stdout.split("\n") if ln]
     if len(lines) != len(cases):
         sys.exit(f"{binary} answered {len(lines)} of {len(cases)} cases")
     return [json.loads(ln) for ln in lines]

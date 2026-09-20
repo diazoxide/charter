@@ -92,7 +92,7 @@ fn said(err: LexError) -> &'static str {
 fn the_recorded_python_answer_is_the_answer_this_module_gives() {
     let rows = corpus();
     assert!(
-        rows.len() >= 140,
+        rows.len() >= 170,
         "the corpus is the evidence; {} rows is not it",
         rows.len()
     );
