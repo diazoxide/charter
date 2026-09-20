@@ -11,6 +11,10 @@ publish = false
 [dependencies]
 alacritty_terminal = "0.26"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# The conventional application-data directory per platform, for the one store charter keeps
+# outside a plane (`machine`). Already in this workspace's lockfile — Tauri depends on it —
+# so this adds no crate to the tree and no licence to review.
+dirs = "6"
 # The same searcher vte uses to find these sequences in the same bytes.
 memchr = "2"
 portable-pty = "0.9"
