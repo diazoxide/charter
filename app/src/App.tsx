@@ -230,9 +230,9 @@ function App() {
   const newTab = useCallback(() => void ask({ tab: true }), [ask]);
 
   /** A row was picked: the chat starts on that profile, with that persona, and with or
-   *  without its harness's own footer (charter ADR 0029). */
+   *  drawing charter's footer in its pane (charter ADR 0029). */
   const startPicked = useCallback(
-    async (profile: string, persona: string | null, showHarnessFooter: boolean) => {
+    async (profile: string, persona: string | null, showFooter: boolean) => {
       const where = picking?.where;
       if (where === undefined) return;
       const inFront = now.current.inFront;
@@ -246,7 +246,7 @@ function App() {
           persona,
           startIn,
           name,
-          showHarnessFooter,
+          showFooter,
           STARTING_SIZE.columns,
           STARTING_SIZE.rows,
         )
@@ -279,7 +279,7 @@ function App() {
   /** The approval IS this click. After it, the whole chain of checks runs again from the
    *  top before anything is exec'd, so a yes never walks past a refusal standing behind it. */
   const approveAndStart = useCallback(
-    async (profile: string, persona: string | null, showHarnessFooter: boolean, shown: string) => {
+    async (profile: string, persona: string | null, showFooter: boolean, shown: string) => {
       const said = await commands
         .approveProfile(profile, shown)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
@@ -292,7 +292,7 @@ function App() {
       // away the choice on the one path where a profile is being used for the first time.
       // The footer choice rides the same path, and for the same reason: a first run of a
       // profile is exactly where a dropped choice would go unnoticed.
-      await startPicked(profile, persona, showHarnessFooter);
+      await startPicked(profile, persona, showFooter);
     },
     [startPicked],
   );

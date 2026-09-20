@@ -440,7 +440,7 @@ fn approve_profile(name: String, shown: String) -> Result<(), String> {
 /// for the other by a caller passing null: this one goes through every gate a launch has,
 /// and that one opens the operator's shell.
 ///
-/// `show_harness_footer` is the picker's footer checkbox, and it is a property of THIS chat
+/// `show_footer` is the picker's footer checkbox, and it is a property of THIS chat
 /// (charter ADR 0029). It reaches the harness as an environment variable set at the exec, so
 /// it is decided here and nowhere later: Claude Code's footer command inherits the
 /// environment its harness was started with, and no later click can change it.
@@ -457,7 +457,7 @@ fn start_chat(
     persona: Option<String>,
     cwd: Option<String>,
     name: String,
-    show_harness_footer: bool,
+    show_footer: bool,
     columns: u16,
     rows: u16,
 ) -> Result<Started, String> {
@@ -468,7 +468,7 @@ fn start_chat(
         name: name.clone(),
         cwd: cwd.as_deref().map(PathBuf::from),
         resume: None,
-        show_harness_footer,
+        show_footer,
     };
     let ready = charter_core::start::ready(&start, &root)?;
     let chat = Chat {
@@ -482,7 +482,7 @@ fn start_chat(
         active: false,
         profile: Some(profile),
         persona,
-        show_harness_footer,
+        show_footer,
     };
     let session = chats.start_ready(&chat, &ready, Size { columns, rows })?;
     Ok(Started {
@@ -534,7 +534,7 @@ fn open_session(
         persona: None,
         // And it is not on a harness either, so there is no footer to keep or blank: this
         // path builds no charter environment at all (`Chats::start` passes an empty one).
-        show_harness_footer: false,
+        show_footer: false,
     };
     // The board already knows about it: `Chats` announces a chat BEFORE its program starts,
     // so its very first hook lands somewhere. Registering it here would be too late.

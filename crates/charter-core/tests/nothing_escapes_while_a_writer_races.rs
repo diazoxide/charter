@@ -79,7 +79,7 @@ fn one_chat() -> Record {
             active: true,
             profile: None,
             persona: None,
-            show_harness_footer: false,
+            show_footer: false,
         }],
     }
 }

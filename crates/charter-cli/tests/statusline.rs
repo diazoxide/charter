@@ -190,7 +190,7 @@ fn a_harness_with_no_footer_of_its_own_is_never_suppressed() {
 }
 
 #[test]
-fn a_chat_started_asking_for_its_harnesss_footer_gets_one_while_the_rest_stay_blank() {
+fn a_chat_started_asking_for_charters_footer_gets_one_while_the_rest_stay_blank() {
     // Charter ADR 0029: the blanking is the default, and one chat may opt out of it without
     // moving anything for the chats beside it. Both halves are asserted here against one
     // app, because "it can be turned on" and "turning it on for one chat leaves the others
@@ -209,7 +209,7 @@ fn a_chat_started_asking_for_its_harnesss_footer_gets_one_while_the_rest_stay_bl
         ("CHARTER_HARNESS", "claude-code"),
     ];
     let mut asking: Vec<(&str, &str)> = app.to_vec();
-    asking.push(("CHARTER_HARNESS_FOOTER", "show"));
+    asking.push(("CHARTER_FOOTER", "show"));
 
     let asked = statusline(&at, A_TURN, &asking);
     let beside_it = statusline(&at, A_TURN, &app);
@@ -242,7 +242,7 @@ fn a_footer_variable_charter_did_not_write_leaves_the_default_alone() {
                 (SOCKET_ENV, socket.to_str().expect("a path")),
                 (CHAT_ENV, "7"),
                 ("CHARTER_HARNESS", "claude-code"),
-                ("CHARTER_HARNESS_FOOTER", said),
+                ("CHARTER_FOOTER", said),
             ],
         );
 

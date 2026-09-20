@@ -113,7 +113,7 @@ impl Plane {
             resume: None,
             // The default every chat starts under, so the tests below describe the app as
             // it ships (charter ADR 0029).
-            show_harness_footer: false,
+            show_footer: false,
         }
     }
 }
@@ -229,15 +229,16 @@ fn the_persona_a_chat_adopts_rides_on_its_environment() {
 }
 
 #[test]
-fn a_chat_that_asked_for_its_harnesss_footer_carries_the_word_that_says_so() {
+fn a_chat_that_asked_for_charters_footer_carries_the_word_that_says_so() {
     // Charter ADR 0029. The choice is per chat and it reaches the harness the only way it
-    // can: an environment variable set at the exec, which the harness's own footer command
-    // inherits. `charter statusline` reads it and renders instead of blanking.
+    // can: an environment variable set at the exec, which Claude Code's `statusLine` command
+    // inherits — and `charter statusline` IS that command, so it reads it and draws instead of
+    // printing the empty line.
     let plane = Plane::new();
     let bin = plane.wired();
     plane.profile("claude", &bin, "");
     let mut start = plane.start("work");
-    start.show_harness_footer = true;
+    start.show_footer = true;
 
     let ready = start::ready(&start, plane.root()).expect("it starts");
 

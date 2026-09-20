@@ -5,17 +5,18 @@ import { READY } from "../harness.js";
 import { pressOnly } from "../opening.js";
 
 /**
- * The harness's own footer, per chat, against the real app (charter ADR 0029).
+ * Charter's footer inside a chat's pane, per chat, against the real app (charter ADR 0029).
  *
- * charter blanks Claude Code's footer inside a pane because the app already draws the plane
- * — a transposition of ADR 0019 that a port made and nobody decided. ADR 0029 keeps that as
- * the DEFAULT and gives one chat a way out of it, and both halves are what this spec holds:
- * the chat that asked carries the word, the chat beside it carries nothing.
+ * Inside a pane charter prints an empty line where its footer would go, because the app's
+ * panels already draw the plane — a transposition of ADR 0019 that a port made and nobody
+ * decided. ADR 0029 keeps that as the DEFAULT and gives one chat a way out of it, and both
+ * halves are what this spec holds: the chat that asked carries the word, the chat beside it
+ * carries nothing.
  *
  * **What is observed is the chat's ENVIRONMENT, not a drawn footer.** The decision is
- * `charter statusline`'s, made from `$CHARTER_HARNESS_FOOTER`, and the fake harness draws no
- * footer to look at. So the profile's own wrapper writes the variable it was started with
- * into the plane (`harness.ts`), which is the same thing a real Claude Code's footer command
+ * `charter statusline`'s, made from `$CHARTER_FOOTER`, and the fake harness never runs that
+ * command. So the profile's own wrapper writes the variable it was started with into the
+ * plane (`harness.ts`), which is the same thing a real Claude Code's `statusLine` command
  * would have inherited. `crates/charter-cli/tests/statusline.rs` holds the other half: what
  * the command does with that word.
  *
@@ -75,7 +76,7 @@ async function startAChat(plane: string, showTheFooter: boolean): Promise<void> 
   await dialog().waitForDisplayed({ timeout: 20_000 });
   await $('input[type="radio"][name="profile"]').waitForExist({ timeout: 20_000 });
 
-  const box = await $('input[type="checkbox"][name="harness-footer"]');
+  const box = await $('input[type="checkbox"][name="pane-footer"]');
   await box.waitForExist({ timeout: 20_000 });
   expect(await box.isSelected()).toBe(false);
   if (showTheFooter) await box.click();
@@ -101,7 +102,7 @@ async function startAChat(plane: string, showTheFooter: boolean): Promise<void> 
   });
 }
 
-describe("the harness's own footer", () => {
+describe("charter's footer inside a chat", () => {
   /** The tabs that were already there, so only this file's own are closed again. */
   let wereAlreadyOpen: string[] = [];
 

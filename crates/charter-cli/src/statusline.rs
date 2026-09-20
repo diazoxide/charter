@@ -30,16 +30,22 @@
 //!
 //! # The transposition is a DEFAULT now, not a law (charter ADR 0029)
 //!
-//! That judgement was made by a port and never decided for the app, and it sits against ADR
-//! 0018 — "charter may run the harness, but never draws it" — because blanking the harness's
-//! own footer IS charter deciding what the harness's surface shows. The footer also carries
-//! state charter has no other place for: how much context is left, which model is answering,
-//! which mode the harness is in.
+//! That judgement was made by a port and never decided for the app, and one thing about the
+//! app breaks the ADR's premise rather than carrying it over. **A frame held one harness, and
+//! this window holds fifty.** In a frame, the panels and the suppressed footer described the
+//! same session, so the second one really was a duplicate. Here the panels describe the
+//! FOCUSED workspace, and a chat's footer describes the workspace that CHAT resolves to —
+//! which, for any chat that is not the focused one, is not the same fact at all.
+//!
+//! **What the choice is between.** Not "charter's footer or the harness's": this command IS
+//! Claude Code's `statusLine`, so that line is charter's to fill or to leave empty, and ADR
+//! 0019 measured what the empty one costs — a suppressed session "has no context/cache gauge
+//! on any surface". The choice is between charter's footer and nothing.
 //!
 //! So the operator decides, per chat. The default is unchanged — blank, exactly as this
-//! module has always behaved, so nobody's panel moves on an upgrade — and a chat started
-//! with [`charter_core::start::FOOTER_ENV`] set to `show` keeps its harness's footer while
-//! every other chat in the window is untouched.
+//! module has always behaved, so nobody's pane moves on an upgrade — and a chat started with
+//! [`charter_core::start::FOOTER_ENV`] set to `show` draws the footer while every other chat
+//! in the window is untouched.
 //!
 //! # Suppression means "render nothing", never "stop running"
 //!
@@ -94,7 +100,7 @@ pub struct Ambient {
     pub socket: Option<PathBuf>,
     pub chat: Option<String>,
     pub harness: Option<String>,
-    /// `$CHARTER_HARNESS_FOOTER`: what THIS chat was started asking for (charter ADR 0029).
+    /// `$CHARTER_FOOTER`: what THIS chat was started asking for (charter ADR 0029).
     pub footer: Option<String>,
 }
 
@@ -145,11 +151,11 @@ impl Ambient {
 ///   environment lookup on the only path that reaches it.
 ///
 /// **And one rung that is not ADR 0019's: the chat may have said no.** Charter ADR 0029 turns
-/// the blanking into a DEFAULT. A chat started with `$CHARTER_HARNESS_FOOTER` set to `show`
-/// keeps its harness's footer, and every other chat in the same window is untouched. It is
-/// asked FIRST because it is the cheapest question here — one environment lookup against a
-/// socket `connect` — and because an operator who has said "draw it" is owed the same answer
-/// whether or not the app's socket happens to be up at this instant.
+/// the blanking into a DEFAULT. A chat started with `$CHARTER_FOOTER` set to `show` draws the
+/// footer, and every other chat in the same window is untouched. It is asked FIRST because it
+/// is the cheapest question here — one environment lookup against a socket `connect` — and
+/// because an operator who has said "draw it" is owed the same answer whether or not the
+/// app's socket happens to be up at this instant.
 ///
 /// Never fails. Everything it touches is ambient.
 pub fn the_app_owns_this_surface(ambient: &Ambient) -> bool {
@@ -305,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn a_chat_that_asked_for_its_harnesss_footer_keeps_it_while_every_rung_holds() {
+    fn a_chat_that_asked_for_charters_footer_keeps_it_while_every_rung_holds() {
         // Charter ADR 0029. The point of the rung is that it wins against a situation in
         // which the app would otherwise blank: every other rung here says "in the app".
         let dir = tempfile::tempdir().unwrap();
@@ -318,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_word_charter_writes_shows_the_footer_and_everything_else_is_the_default() {
+    fn only_the_word_charter_writes_draws_the_footer_and_everything_else_is_the_default() {
         // The variable is charter's own and it is set to one word. A value that is not that
         // word is a value charter did not write — inherited, stale, or hand-edited — and the
         // honest answer to it is the default, not a surface the operator never chose.

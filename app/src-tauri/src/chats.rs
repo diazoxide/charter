@@ -224,7 +224,7 @@ impl Chats {
                 // The chat's own footer choice, brought back with it. It rides on the
                 // environment, which is rebuilt at every start, so a relaunch that did not
                 // carry it would silently blank a footer the operator had turned on.
-                show_harness_footer: chat.show_harness_footer,
+                show_footer: chat.show_footer,
             },
             root,
         )?;
@@ -521,7 +521,7 @@ mod tests {
                     active: false,
                     profile: None,
                     persona: None,
-                    show_harness_footer: false,
+                    show_footer: false,
                 },
                 Size {
                     columns: 80,
@@ -581,7 +581,7 @@ mod tests {
                     active: false,
                     profile: None,
                     persona: None,
-                    show_harness_footer: false,
+                    show_footer: false,
                 },
                 Size {
                     columns: 80,
@@ -626,7 +626,7 @@ mod tests {
                 active: false,
                 profile: None,
                 persona: None,
-                show_harness_footer: false,
+                show_footer: false,
             },
             Size {
                 columns: 80,
@@ -672,7 +672,7 @@ mod tests {
                     active: false,
                     profile: None,
                     persona: None,
-                    show_harness_footer: false,
+                    show_footer: false,
                 },
                 Size {
                     columns: 80,
@@ -731,7 +731,7 @@ mod tests {
             active: false,
             profile: None,
             persona: None,
-            show_harness_footer: false,
+            show_footer: false,
         }
     }
 
@@ -1298,7 +1298,7 @@ mod tests {
             active: false,
             profile: Some("claude-work".to_owned()),
             persona: Some("steward".to_owned()),
-            show_harness_footer: true,
+            show_footer: true,
         };
 
         let session = chats
@@ -1315,7 +1315,7 @@ mod tests {
         assert_eq!(record.chats.len(), 1);
         assert_eq!(record.chats[0].profile.as_deref(), Some("claude-work"));
         assert_eq!(record.chats[0].persona.as_deref(), Some("steward"));
-        assert!(record.chats[0].show_harness_footer);
+        assert!(record.chats[0].show_footer);
         let _ = chats.close(session);
     }
     #[test]
@@ -1335,7 +1335,7 @@ mod tests {
             active: false,
             profile: Some("claude-work".to_owned()),
             persona: None,
-            show_harness_footer: false,
+            show_footer: false,
         };
         assert_eq!(
             chat.harness(),
@@ -1399,7 +1399,7 @@ mod tests {
             active: false,
             profile: Some("claude-work".to_owned()),
             persona: Some("steward".to_owned()),
-            show_harness_footer: false,
+            show_footer: false,
         };
         assert_eq!(
             chat.harness(),

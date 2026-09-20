@@ -43,30 +43,37 @@ pub struct Start {
     pub cwd: Option<PathBuf>,
     /// The conversation to bring back, where the record holds one.
     pub resume: Option<SessionId>,
-    /// Whether THIS chat keeps the harness's own footer instead of charter blanking it.
+    /// Whether THIS chat draws charter's footer in its pane rather than a blank line.
     ///
     /// Default `false`, which is the app as it has always behaved. See [`FOOTER_ENV`] for
     /// what it does and charter ADR 0029 for why it is a chat's property and not a plane's.
-    pub show_harness_footer: bool,
+    pub show_footer: bool,
 }
 
-/// Where a chat is told to leave the harness's own footer alone.
+/// Where a chat is told to draw charter's footer rather than a blank line.
 ///
-/// `charter statusline` blanks Claude Code's footer inside the app, because the app already
-/// draws the plane (charter ADR 0019, transposed — see `charter-cli/src/statusline.rs`). ADR
-/// 0029 makes that a default rather than a law: a chat started with this variable set to
-/// [`FOOTER_SHOW`] gets its harness's footer back, and every other chat in the same window is
-/// unaffected.
+/// **What this is not.** It does not bring back a footer Claude Code would otherwise draw:
+/// `charter statusline` **is** Claude Code's `statusLine` command, so that line is charter's
+/// to fill or to leave empty, and a harness with charter wired in has no footer of its own to
+/// fall back on (charter ADR 0019 measured exactly that — a framed session "has no
+/// context/cache gauge on any surface"). What this variable chooses is between **charter's
+/// footer** and **nothing**.
+///
+/// Inside the app the answer has been "nothing", because the app's own panels draw the plane
+/// (charter ADR 0019, transposed — see `charter-cli/src/statusline.rs`). ADR 0029 makes that
+/// a default rather than a law: a chat started with this variable set to [`FOOTER_SHOW`]
+/// draws the footer, and every other chat in the same window is unaffected.
 ///
 /// **Set by charter, never by a profile.** `CHARTER_`-prefixed names are refused in a
 /// profile's `env` ([`crate::profiles`], ruling 14), so this cannot be turned on by editing
 /// `charter.local.toml` — which is deliberate: it is a choice made in the picker, for one
 /// chat, and recorded with that chat.
 ///
-/// **Absence is the default.** Only the exact word [`FOOTER_SHOW`] shows the footer, so a
+/// **Absence is the default.** Only the exact word [`FOOTER_SHOW`] draws the footer, so a
 /// value inherited from somewhere else, or a stale one, reads as "blank" rather than as a
-/// surprise.
-pub const FOOTER_ENV: &str = "CHARTER_HARNESS_FOOTER";
+/// surprise. Both the name and the value are constants here, so nothing a chat or a record
+/// can write ever reaches the environment charter builds.
+pub const FOOTER_ENV: &str = "CHARTER_FOOTER";
 
 /// The one value of [`FOOTER_ENV`] that means "draw it".
 pub const FOOTER_SHOW: &str = "show";
@@ -163,7 +170,7 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
     Ok(Ready {
         program,
         args,
-        env: environment(profile, root, persona.as_deref(), start.show_harness_footer),
+        env: environment(profile, root, persona.as_deref(), start.show_footer),
         cwd: start.cwd.clone(),
         harness,
         session,
@@ -265,7 +272,7 @@ fn arguments(
 /// spinner, so a value of `claude-work` would make each of them quietly answer "not Claude
 /// Code".
 ///
-/// [`FOOTER_ENV`] is pushed **only** when the chat asked for its harness's footer. An
+/// [`FOOTER_ENV`] is pushed **only** when the chat asked for charter's footer. An
 /// absent variable is the default, so nothing has to be unset for a chat that did not ask —
 /// and a chat that did cannot be confused with one whose value came from somewhere else,
 /// because only this line writes it.
@@ -273,7 +280,7 @@ fn environment(
     profile: &Profile,
     root: &Path,
     persona: Option<&str>,
-    show_harness_footer: bool,
+    show_footer: bool,
 ) -> Vec<(String, String)> {
     let home = profiles::home().unwrap_or_else(|| PathBuf::from("~"));
     let mut env: Vec<(String, String)> =
@@ -284,7 +291,7 @@ fn environment(
     if let Some(who) = persona {
         env.push(("CHARTER_PERSONA".to_owned(), who.to_owned()));
     }
-    if show_harness_footer {
+    if show_footer {
         env.push((FOOTER_ENV.to_owned(), FOOTER_SHOW.to_owned()));
     }
     env.sort();

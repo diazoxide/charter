@@ -24,7 +24,7 @@ fn a_chat_on(profile: &str, persona: Option<&str>) -> Chat {
         active: true,
         profile: Some(profile.to_owned()),
         persona: persona.map(str::to_owned),
-        show_harness_footer: false,
+        show_footer: false,
     }
 }
 
@@ -127,7 +127,7 @@ fn a_chats_footer_choice_survives_a_quit_and_comes_back_with_it() {
     // screen to say why.
     let dir = tempfile::tempdir().unwrap();
     let mut asked = a_chat_on("claude-work", None);
-    asked.show_harness_footer = true;
+    asked.show_footer = true;
 
     reopen::write(
         dir.path(),
@@ -138,9 +138,9 @@ fn a_chats_footer_choice_survives_a_quit_and_comes_back_with_it() {
     .unwrap();
     let back = reopen::read_or_refusal(dir.path()).unwrap();
 
-    assert!(back.chats[0].show_harness_footer);
+    assert!(back.chats[0].show_footer);
     assert!(
-        !back.chats[1].show_harness_footer,
+        !back.chats[1].show_footer,
         "one chat's choice was written onto another"
     );
     // The word on disk is the word the environment carries, so the record and the launch
@@ -166,7 +166,7 @@ fn a_record_written_before_the_footer_was_a_choice_comes_back_blanked() {
 
     let back = reopen::read_or_refusal(dir.path()).unwrap();
 
-    assert!(!back.chats[0].show_harness_footer);
+    assert!(!back.chats[0].show_footer);
     assert_eq!(back.chats[0].profile.as_deref(), Some("claude-work"));
 }
 
@@ -187,6 +187,6 @@ fn a_footer_word_charter_did_not_write_reads_as_the_default() {
 
         let back = reopen::read_or_refusal(dir.path()).unwrap();
 
-        assert!(!back.chats[0].show_harness_footer, "{said:?}");
+        assert!(!back.chats[0].show_footer, "{said:?}");
     }
 }

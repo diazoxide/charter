@@ -18,11 +18,15 @@ import type { ProfileRow, StartOptions } from "./bindings";
  * stops a chat editing plane config — which is why the ask is about the words that are
  * about to run and not about the profile's name.
  *
- * **The footer checkbox is asked here and nowhere else** (charter ADR 0029). Charter blanks
- * the harness's own footer inside a pane because the app already draws the plane, and this
- * is where an operator says "not this chat". It is asked at the start rather than offered as
- * a switch on a running pane because the harness's footer command inherits the environment
- * its harness was exec'd with: a toggle on a live chat would appear to work and would not.
+ * **The footer checkbox is asked here and nowhere else** (charter ADR 0029). Inside a pane
+ * charter prints an empty line where its own footer would go, because the app's panels
+ * already draw the plane — and this is where an operator says "not this chat". The choice is
+ * between charter's footer and nothing: `charter statusline` IS Claude Code's `statusLine`
+ * command, so a blank line there leaves the harness with no status line at all.
+ *
+ * It is asked at the start rather than offered as a switch on a running pane because that
+ * command inherits the environment its harness was exec'd with: a toggle on a live chat would
+ * appear to work and would not.
  */
 export function StartChat({
   options,
@@ -34,16 +38,11 @@ export function StartChat({
   options: StartOptions;
   /** Why the last attempt did not start, if it did not. */
   trouble?: string;
-  onStart: (profile: string, persona: string | null, showHarnessFooter: boolean) => void;
+  onStart: (profile: string, persona: string | null, showFooter: boolean) => void;
   /** The profile, the persona, the footer choice, and the exact line the operator read — so
    *  the approval is for what was on screen and not for whatever the file says by the time
    *  it is clicked. */
-  onApprove: (
-    profile: string,
-    persona: string | null,
-    showHarnessFooter: boolean,
-    shown: string,
-  ) => void;
+  onApprove: (profile: string, persona: string | null, showFooter: boolean, shown: string) => void;
   onCancel: () => void;
 }) {
   const [profile, setProfile] = useState<string | undefined>(
@@ -56,11 +55,11 @@ export function StartChat({
   const [persona, setPersona] = useState<string | null>(
     options.persona !== null && options.personas.includes(options.persona) ? options.persona : null,
   );
-  // Off, which is the app as it has always behaved: a pane's harness footer is blank unless
+  // Off, which is the app as it has always behaved: a pane's footer is blank unless
   // this chat asks for it (charter ADR 0029). Not remembered between chats on purpose —
   // there is no plane-wide or machine-wide setting for it, and a box that silently stayed
   // ticked would be one.
-  const [showHarnessFooter, setShowHarnessFooter] = useState(false);
+  const [showFooter, setShowFooter] = useState(false);
   const picked = options.profiles.find((p) => p.name === profile);
 
   // Escape starts nothing. Listened for on the window rather than the dialog, so it answers
@@ -135,17 +134,18 @@ export function StartChat({
           <label>
             <input
               type="checkbox"
-              name="harness-footer"
-              checked={showHarnessFooter}
-              onChange={(e) => setShowHarnessFooter(e.target.checked)}
+              name="pane-footer"
+              checked={showFooter}
+              onChange={(e) => setShowFooter(e.target.checked)}
             />
-            <span className="who">show the harness&apos;s own footer</span>
-            {/* Said rather than left to be discovered: charter blanks it by default because
-                the app draws the plane already, and the harness's footer carries things the
-                app does not — how much context is left, which model, which mode. */}
+            <span className="who">draw charter&apos;s footer in this chat</span>
+            {/* Said rather than left to be discovered. The reason for the default and the
+                reason against it both belong on screen: the panels repeat most of what the
+                footer says, and the footer says it about THIS chat's own workspace. */}
             <span className="what">
-              charter blanks it because the app already draws the plane; the harness&apos;s own
-              footer carries context, model and mode. This chat only.
+              blank by default, because the panels already draw the plane. The footer says which
+              workspace this chat is on, which the panels say only for the focused one. This chat
+              only, and only from its next start.
             </span>
           </label>
         </fieldset>
@@ -187,14 +187,14 @@ export function StartChat({
           {picked?.approval ? (
             <button
               className="ends-it"
-              onClick={() => onApprove(picked.name, persona, showHarnessFooter, picked.shown)}
+              onClick={() => onApprove(picked.name, persona, showFooter, picked.shown)}
               disabled={!picked}
             >
               Approve and start
             </button>
           ) : (
             <button
-              onClick={() => profile && onStart(profile, persona, showHarnessFooter)}
+              onClick={() => profile && onStart(profile, persona, showFooter)}
               disabled={!profile}
             >
               Start

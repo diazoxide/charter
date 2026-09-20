@@ -66,13 +66,13 @@ pub struct Chat {
     pub profile: Option<String>,
     /// The persona this chat adopted.
     pub persona: Option<String>,
-    /// Whether this chat kept its harness's own footer (charter ADR 0029).
+    /// Whether this chat draws charter's footer in its pane (charter ADR 0029).
     ///
     /// Recorded for the same reason `persona` is: it is a choice the operator made about
     /// THIS chat in the picker, and a relaunch that dropped it would silently blank a footer
     /// they had turned on. A record written before ADR 0029 has no such key, and `false` is
     /// both serde's default and the behaviour every such record was written under.
-    pub show_harness_footer: bool,
+    pub show_footer: bool,
 }
 
 /// Every chat that was open.
@@ -383,7 +383,7 @@ struct ChatOnDisk {
     /// The persona's name, or empty, under the same rule.
     #[serde(default)]
     persona: String,
-    /// `"show"` where this chat kept its harness's own footer, empty otherwise.
+    /// `"show"` where this chat draws charter's footer in its pane, empty otherwise.
     ///
     /// The same word the chat's environment carries
     /// ([`crate::start::FOOTER_SHOW`]), so the record and the launch cannot come to mean
@@ -421,7 +421,7 @@ impl From<&Record> for OnDisk {
                     active: chat.active,
                     profile: chat.profile.clone().unwrap_or_default(),
                     persona: chat.persona.clone().unwrap_or_default(),
-                    footer: if chat.show_harness_footer {
+                    footer: if chat.show_footer {
                         crate::start::FOOTER_SHOW.to_owned()
                     } else {
                         String::new()
@@ -447,7 +447,7 @@ impl From<ChatOnDisk> for Chat {
             persona: Some(chat.persona).filter(|name| crate::contain::persona_name_ok(name)),
             // One word means "show" and every other word means the default, which is what
             // the app did before ADR 0029 and what a record written before it says.
-            show_harness_footer: chat.footer == crate::start::FOOTER_SHOW,
+            show_footer: chat.footer == crate::start::FOOTER_SHOW,
         }
     }
 }
@@ -467,7 +467,7 @@ mod tests {
             active: false,
             profile: None,
             persona: None,
-            show_harness_footer: false,
+            show_footer: false,
         }
     }
 
@@ -783,7 +783,7 @@ mod tests {
                 active: true,
                 profile: None,
                 persona: None,
-                show_harness_footer: false,
+                show_footer: false,
             }],
         }
     }

@@ -86,32 +86,32 @@ describe("the picker a chat starts from", () => {
     expect(onStart).toHaveBeenCalledWith("claude", null, false);
   });
 
-  it("leaves the harness's own footer blanked unless this chat asks for it", async () => {
+  it("leaves the pane's footer blank unless this chat asks for charter's", async () => {
     // The default, and charter ADR 0029 keeps it: nobody's pane moves on an upgrade. The
     // box is drawn unticked and the start carries `false`.
     const { onStart, user } = show();
 
-    expect(screen.getByRole("checkbox", { name: /harness's own footer/ })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /charter's footer/ })).not.toBeChecked();
     await user.click(screen.getByRole("button", { name: "Start" }));
 
     expect(onStart).toHaveBeenCalledWith("claude", "steward", false);
   });
 
-  it("starts a chat that keeps its harness's own footer when the box is ticked", async () => {
+  it("starts a chat that draws charter's footer when the box is ticked", async () => {
     const { onStart, user } = show();
 
-    await user.click(screen.getByRole("checkbox", { name: /harness's own footer/ }));
+    await user.click(screen.getByRole("checkbox", { name: /charter's footer/ }));
     await user.click(screen.getByRole("button", { name: "Start" }));
 
     expect(onStart).toHaveBeenCalledWith("claude", "steward", true);
   });
 
   it("says why charter blanks it, rather than leaving the box to be guessed at", () => {
-    // The footer carries context, model and mode, and the app draws none of them. An
-    // operator deciding this is owed the reason on screen.
+    // The panels repeat most of it, and it says something about THIS chat that they say
+    // only for the focused one. An operator deciding this is owed both halves on screen.
     show();
 
-    expect(screen.getByText(/already draws the plane/)).toBeInTheDocument();
+    expect(screen.getByText(/panels already draw the plane/)).toBeInTheDocument();
     expect(screen.getByText(/This chat only/)).toBeInTheDocument();
   });
 
@@ -131,7 +131,7 @@ describe("the picker a chat starts from", () => {
       ],
     });
 
-    await user.click(screen.getByRole("checkbox", { name: /harness's own footer/ }));
+    await user.click(screen.getByRole("checkbox", { name: /charter's footer/ }));
     await user.click(screen.getByRole("button", { name: "Approve and start" }));
 
     expect(onApprove).toHaveBeenCalledWith("work", "steward", true, "claude --model opus");
