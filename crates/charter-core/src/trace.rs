@@ -87,6 +87,19 @@ pub fn append_private(root: &Path, path: &Path, bytes: &[u8]) -> std::io::Result
 
 /// Create `dir` and every missing level above it at 0700 — `config.private_mkdir`. A
 /// directory that already exists is left exactly as it is.
+///
+/// **The mode goes on the `mkdir`, and the chmod after it may fail** (M3). Two divergences
+/// from `config._mkdir_0700` lived here, and both were in the unsafe direction:
+///
+/// - `fs::create_dir` asks for 0777, so under the ordinary `umask 022` this directory
+///   existed at 0755 between the create and the chmod — and it holds a session's trace,
+///   which carries `persona note`'s text. Python has never had that window: `mkdir(mode=)`
+///   names the bits outright. `DirBuilder::mode` is the same call. The chmod is kept for
+///   Python's own stated reason — mkdir's mode is masked by the umask, so a process under
+///   a permissive umask is not guaranteed the bits it asked for.
+/// - That chmod propagated with `?`, where Python's is `except OSError: pass`. On a
+///   filesystem with no modes — exFAT, some network mounts — charter dropped the record
+///   Python writes. Observability may not be the thing that fails.
 pub fn private_mkdir(dir: &Path) -> std::io::Result<()> {
     let mut missing = Vec::new();
     let mut at = dir;
@@ -98,7 +111,13 @@ pub fn private_mkdir(dir: &Path) -> std::io::Result<()> {
         }
     }
     for level in missing.into_iter().rev() {
-        match std::fs::create_dir(&level) {
+        let mut builder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            builder.mode(0o700);
+        }
+        match builder.create(&level) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(e) => return Err(e),
@@ -106,7 +125,7 @@ pub fn private_mkdir(dir: &Path) -> std::io::Result<()> {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&level, std::fs::Permissions::from_mode(0o700))?;
+            let _ = std::fs::set_permissions(&level, std::fs::Permissions::from_mode(0o700));
         }
     }
     Ok(())
@@ -204,6 +223,39 @@ mod tests {
             std::fs::read_to_string(file(dir.path(), "s1")).unwrap(),
             "{\"ts\": \"2026-05-04T11:32:17\", \"event\": \"memory\", \"persona\": \"devops\", \"scope\": \"own\", \"title\": \"\\u00e9\\u2028x\"}\n"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn every_directory_the_trace_makes_is_private() {
+        // The END state, which is all a test can see: the 0755 window between `create_dir`
+        // and the chmod that used to exist here is a race, and closing it is a matter of
+        // which call is made rather than of what is on disk afterwards. So this pins the
+        // mode, and `private_mkdir`'s docstring carries the window.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("charter.toml"), "").unwrap();
+
+        record(
+            dir.path(),
+            "s1",
+            "memory",
+            &[],
+            "2026-05-04T11:32:17".parse().unwrap(),
+        );
+
+        for level in [
+            ".charter",
+            ".charter/persona-state",
+            ".charter/persona-state/trace",
+        ] {
+            let mode = std::fs::metadata(dir.path().join(level))
+                .unwrap_or_else(|_| panic!("{level} was made"))
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o700, "{level}");
+        }
     }
 
     #[cfg(unix)]
