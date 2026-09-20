@@ -511,19 +511,16 @@ mod tests {
 
     /// Whether a process is still there, as the operating system sees it.
     fn alive(pid: u32) -> bool {
-        charter_core::forklock::output(std::process::Command::new("ps").args([
-            "-o",
-            "stat=",
-            "-p",
-            &pid.to_string(),
-        ]))
-        .map(|out| {
-            out.status.success()
-                && !String::from_utf8_lossy(&out.stdout)
-                    .trim_start()
-                    .starts_with('Z')
-        })
-        .unwrap_or(false)
+        std::process::Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .map(|out| {
+                out.status.success()
+                    && !String::from_utf8_lossy(&out.stdout)
+                        .trim_start()
+                        .starts_with('Z')
+            })
+            .unwrap_or(false)
     }
 
     #[test]

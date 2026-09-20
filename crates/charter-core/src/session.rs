@@ -2048,7 +2048,9 @@ mod tests {
 
     fn alive(pid: u32) -> bool {
         // `ps` exits non-zero once no such process exists; a zombie awaiting its parent counts as gone.
-        crate::forklock::output(Command::new("ps").args(["-o", "stat=", "-p", &pid.to_string()]))
+        Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
             .map(|out| {
                 out.status.success()
                     && !String::from_utf8_lossy(&out.stdout)
