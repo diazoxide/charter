@@ -227,3 +227,131 @@ jobs:
         with:
           name: scenario-logs-${{ matrix.os }}
           path: app/logs
+
+  windows:
+    # M4, the Windows question. ADR 0025 names macOS, Linux AND Windows; nothing has ever
+    # been compiled on Windows, so this job exists to find out what is true rather than to
+    # pass.
+    #
+    # **Not a gate, and not one of the nine required checks.** The same reasoning `fifty
+    # tabs` gives above, and more of it: a required check on a platform with no port would
+    # block every merge in the repo — including the ports that would make it green. It runs
+    # on every PR, it reports, and it is allowed to fail.
+    name: windows (build, test, evidence only)
+    continue-on-error: true
+    runs-on: windows-latest
+    defaults:
+      run:
+        # Git Bash, so one shell reads the same way everywhere in this job. Where the answer
+        # would be Git Bash's rather than Windows's — a path, a device name — the step says
+        # `shell: pwsh`, and says why.
+        shell: bash
+    env:
+      # `-D warnings` is the gate's setting and it is the wrong one for a survey: on a
+      # platform with no port every unused import becomes an "error" and the real ones
+      # drown. Here an error is an error.
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: What this runner is
+        run: |
+          rustc -vV
+          cargo -V
+          git --version
+          python --version || true
+      # Every step from here runs whatever happened before it (`if: always()`): the
+      # deliverable is the whole list, not its first line.
+      - name: cargo check, every crate on the ladder, as a list rather than a stop
+        if: always()
+        run: cargo check --workspace --all-targets --message-format short 2>&1 | tee windows-check.txt || true
+      - name: The error list, counted
+        if: always()
+        run: |
+          echo '## errors by code'
+          grep -oE 'error\[E[0-9]+\]' windows-check.txt | sort | uniq -c | sort -rn || true
+          echo '## errors by file'
+          grep -oE '^[^ :]+\.rs' windows-check.txt | sort | uniq -c | sort -rn | head -40 || true
+          echo '## how many lines say error at all'
+          grep -cE 'error' windows-check.txt || true
+      - name: cargo build, the binary a plane actually needs
+        if: always()
+        run: cargo build -p charter-cli 2>&1 | tail -40 || true
+      - name: cargo test, if there is anything left to run
+        if: always()
+        run: cargo test --workspace --no-fail-fast 2>&1 | tail -80 || true
+      # The three properties `session.rs` takes from a unix pty, asked of a real ConPTY. Its
+      # own workspace, built and run here and nowhere else, and it always exits 0.
+      - name: What ConPTY does that a unix pty does not
+        if: always()
+        run: cargo run --manifest-path tools/windows-probe/Cargo.toml 2>&1 | tail -40 || true
+      # `worktree::git` searches four FIXED directories before it trusts `PATH`. Asked in
+      # pwsh and not bash: Git Bash maps `/usr/bin` onto its own installation, while
+      # charter's Rust hands the literal string to the Win32 API, which resolves it against
+      # the current drive.
+      - name: The directories worktree::git searches, as Windows resolves them
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($d in '/usr/bin','/usr/local/bin','/opt/homebrew/bin','/bin') {
+            $p = Join-Path $d 'git.exe'
+            "GIT_DIRS $p exists: $(Test-Path $p)"
+          }
+          "git on PATH: $((Get-Command git -ErrorAction SilentlyContinue).Source)"
+      # `-c core.hooksPath=/dev/null` is the guard that stops a repo's own hook running under
+      # charter. Whether it still bites on a platform with no `/dev/null` is a measurement,
+      # not a guess. pwsh again, so nothing mangles the argument on its way to git.exe.
+      - name: Whether core.hooksPath=/dev/null still disables a hook here
+        if: always()
+        shell: pwsh
+        run: |
+          $r = Join-Path $env:RUNNER_TEMP 'hookprobe'
+          Remove-Item -Recurse -Force $r -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path $r | Out-Null
+          git -C $r init -q
+          git -C $r config user.email probe@example.com
+          git -C $r config user.name probe
+          Set-Content -Path (Join-Path $r 'f.txt') -Value 'x'
+          git -C $r add f.txt
+          $hook = Join-Path $r '.git/hooks/pre-commit'
+          Set-Content -Path $hook -Value "#!/bin/sh`necho THE-HOOK-RAN 1>&2`nexit 1"
+          "--- without the guard: the hook must run and refuse the commit"
+          git -C $r commit -m one 2>&1 | Out-String
+          "exit: $LASTEXITCODE"
+          "--- with the guard: the commit must go through"
+          git -C $r -c core.hooksPath=/dev/null -c core.fsmonitor=false commit -m one 2>&1 | Out-String
+          "exit: $LASTEXITCODE"
+      # Whether Windows could ever be a differential platform or only a build-and-test one.
+      # The harness plants symlinks, writes `#!/bin/sh` stand-ins and compares file MODES,
+      # and the oracle is the Python charter. Five cheap questions settle it.
+      - name: Whether the differential oracle could run here at all
+        if: always()
+        run: |
+          python - <<'PY' || true
+          import os, pathlib, tempfile
+          d = pathlib.Path(tempfile.mkdtemp())
+          try:
+              (d / "target").write_text("x")
+              (d / "link").symlink_to(d / "target")
+              print("symlink: YES")
+          except OSError as e:
+              print("symlink: NO -", e)
+          for name in ("fcntl", "termios", "pwd", "grp"):
+              try:
+                  __import__(name)
+                  print(f"{name}: YES")
+              except ImportError as e:
+                  print(f"{name}: NO - {e}")
+          p = d / "gh"
+          p.write_text("#!/bin/sh\necho hi\n")
+          os.chmod(p, 0o755)
+          print("mode after chmod 0755:", oct(p.stat().st_mode & 0o777))
+          print("/bin/sh is there:", os.path.exists("/bin/sh"))
+          PY
+      - name: The whole check log, kept
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-check
+          path: windows-check.txt

@@ -9,19 +9,19 @@
 //! charter wanted to draw a spinner is worse than a spinner that is wrong.
 
 use std::io;
-use std::io::Read;
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 
 use crate::state::{Detail, Ending, Event, Started};
 
-// The channel is a unix socket, and every platform charter is built for has them (CI builds
-// macOS and Linux). Windows has `AF_UNIX` but Rust's standard library does not expose it, so
-// the day charter is built there this module needs a second answer — a named pipe — rather
-// than a wall of errors about a module that is not there.
-#[cfg(not(unix))]
-compile_error!(
-    "charter's hook channel is a unix socket; a Windows build needs a named pipe here first"
-);
+// The channel is a unix socket. Windows has `AF_UNIX` but Rust's standard library does not
+// expose it, and a socket file's `0600` — which is what keeps anything else on the machine
+// out of the channel — has no mode bit to set there either. So Windows gets a second answer,
+// and until it is written that answer is a REFUSAL and not a quiet no-op: `bind` returns
+// `Unsupported`, `send` returns `Unsupported`, and an app that cannot open its hook channel
+// says so instead of running with a channel nothing is listening on (charter-app#95).
+//
+// This used to be a `compile_error!`, which stopped the whole crate at expansion and so hid
+// every OTHER thing Windows has to say about the core. What is below says the same thing at
+// the same volume and lets the rest of the build be measured (M4).
 
 /// The socket a hook writes to, in the environment of every session the app starts.
 pub const SOCKET_ENV: &str = "CHARTER_HOOK_SOCKET";
@@ -205,6 +205,7 @@ fn conversation(
 /// One connection is one report, written and closed. Nothing is waited for: the app has the
 /// line, and a hook that waited for an answer would be spending a harness's turn on a
 /// spinner.
+#[cfg(unix)]
 pub fn send(path: &std::path::Path, report: &Report) -> io::Result<()> {
     use std::io::Write;
 
@@ -217,12 +218,35 @@ pub fn send(path: &std::path::Path, report: &Report) -> io::Result<()> {
     socket.flush()
 }
 
+/// There is no channel to send on where charter has no unix socket.
+///
+/// The hook's own contract already covers this — every failure here is silent and fast, and
+/// `charter hook` drops the error on the floor — so a Windows hook costs its turn nothing.
+/// What it does NOT do is pretend: the error names the platform, so a `doctor` that asks
+/// gets an answer rather than a success that moved nothing.
+#[cfg(not(unix))]
+pub fn send(_path: &std::path::Path, _report: &Report) -> io::Result<()> {
+    Err(no_channel())
+}
+
+/// The one refusal both halves give, so the two cannot drift into two different stories.
+#[cfg(not(unix))]
+fn no_channel() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        "charter's hook channel is a unix socket with a 0600 mode on it, and neither has an \
+         answer on this platform yet (charter-app#95)",
+    )
+}
+
 /// The socket the app listens on for hook reports.
+#[cfg(unix)]
 pub struct Listener {
     socket: std::os::unix::net::UnixListener,
     path: std::path::PathBuf,
 }
 
+#[cfg(unix)]
 impl Listener {
     /// Binds a fresh socket at `socket`, replacing one left behind by a process that is gone.
     ///
@@ -264,6 +288,7 @@ impl Listener {
         // secret travels over it and nothing it carries is executed, so this is not a
         // secret's lock — it is the difference between "the operator" and "anything running
         // on the machine", and it is one call.
+        use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
         Ok(Self {
             socket,
@@ -341,7 +366,10 @@ impl Listener {
 /// DISCARDED the result of tightening it. Every step here is checked, and a path that is
 /// already something else — a symlink, a file, a directory somebody else owns — is refused
 /// rather than used.
+#[cfg(unix)]
 fn private_directory(directory: &std::path::Path) -> io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+
     if let Some(above) = directory.parent() {
         std::fs::create_dir_all(above)?;
     }
@@ -381,8 +409,9 @@ const A_REPORT_TAKES_AT_MOST: std::time::Duration = std::time::Duration::from_se
 const A_REPORT_IS_AT_MOST: u64 = 64 * 1024;
 
 /// Reads one report from one connection, or nothing.
+#[cfg(unix)]
 fn read_one(connection: std::os::unix::net::UnixStream) -> Option<Report> {
-    use std::io::BufRead;
+    use std::io::{BufRead, Read};
 
     // Both directions: a client that connects and neither writes nor closes must not hold
     // this thread past the deadline.
@@ -395,12 +424,14 @@ fn read_one(connection: std::os::unix::net::UnixStream) -> Option<Report> {
 }
 
 /// A listener being read on its own thread. Dropping it stops the reading.
+#[cfg(unix)]
 pub struct Reading {
     stopping: std::sync::Arc<std::sync::atomic::AtomicBool>,
     path: std::path::PathBuf,
     reading: Option<std::thread::JoinHandle<()>>,
 }
 
+#[cfg(unix)]
 impl Drop for Reading {
     fn drop(&mut self) {
         self.stopping
@@ -416,7 +447,39 @@ impl Drop for Reading {
     }
 }
 
-#[cfg(test)]
+/// The channel the app could not open, where there is no unix socket to open.
+///
+/// **An empty enum and not a struct with a stub in it.** Nothing can construct one, so
+/// [`Listener::path`] and [`Listener::each`] below are not "unimplemented" — they are
+/// unreachable, and the compiler is the one saying so. The only way in is [`Listener::bind`],
+/// and it refuses. An app that takes that refusal for what it is cannot end up holding a
+/// channel that quietly carries nothing.
+#[cfg(not(unix))]
+pub enum Listener {}
+
+#[cfg(not(unix))]
+impl Listener {
+    /// Refuses, with the reason. See the note at the top of this module.
+    pub fn bind(_within: &std::path::Path, _socket: &std::path::Path) -> io::Result<Self> {
+        Err(no_channel())
+    }
+
+    /// Unreachable: no `Listener` is ever constructed on this platform.
+    pub fn path(&self) -> &std::path::Path {
+        match *self {}
+    }
+
+    /// Unreachable, for the same reason.
+    pub fn each(self, _each: Box<dyn Fn(Report) + Send + Sync + 'static>) -> Reading {
+        match self {}
+    }
+}
+
+/// [`Reading`]'s counterpart on a platform with no channel, and empty for the same reason.
+#[cfg(not(unix))]
+pub enum Reading {}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::sync::Arc;
