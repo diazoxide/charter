@@ -41,7 +41,17 @@ export const config: WebdriverIO.Config = {
   // The state specs run separately, against a harness that reports through hooks
   // (`wdio.state.conf.ts`): the app reads `SHELL` once, and one run is one harness.
   specs: ["./specs/**/*.e2e.ts"],
-  exclude: ["./specs/**/*.state.e2e.ts"],
+  // The state specs run separately (above). The stress spec runs separately too, and for a
+  // different reason: it exists to give charter-app#16 — an app that died once while fifty
+  // tabs were opening — a chance to recur where the evidence is kept. Fifty windows on a
+  // shared CI runner is inherently timing-bound, and it has failed on `main`'s own push and
+  // on four of five attempts from an unrelated branch. As a REQUIRED check it stopped being
+  // evidence and became a gate that blocks every merge, including fixes for the very bug it
+  // watches for. `STRESS=1` includes it; its own CI job runs it and is allowed to fail.
+  exclude: [
+    "./specs/**/*.state.e2e.ts",
+    ...(process.env.STRESS === "1" ? [] : ["./specs/stress.e2e.ts"]),
+  ],
   maxInstances: 1,
   framework: "mocha",
   reporters: ["spec"],
