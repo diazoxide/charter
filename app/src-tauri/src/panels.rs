@@ -168,7 +168,7 @@ fn states_of(
     // Read FIRST, then decide whether to refresh: this listing draws what the cache holds now,
     // and the refresh is for the next one. Python's render path does the two in this order for
     // the same reason (`glstate.read_for`, then `glstate.maybe_spawn`).
-    let _ = (&refresh_if_it_is_due, binary);
+    refresh_if_it_is_due(root, workspace, binary);
     Ok(RepoStates {
         workspace: workspace.to_string(),
         repos: found

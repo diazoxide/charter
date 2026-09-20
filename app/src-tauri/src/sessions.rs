@@ -145,7 +145,10 @@ impl Sessions {
         // number does not exist yet where that runs: `start::ready` resolves a launch before
         // any session is opened, and the id is chosen above. The value is the one
         // `CHARTER_CHAT` carries, so the two can never name different chats.
-        let _ = charter_core::active::SESSION_ID_ENV;
+        spec.env.push((
+            charter_core::active::SESSION_ID_ENV.into(),
+            id.to_string().into(),
+        ));
         if let Some(reporting) = &self.reporting {
             spec.env
                 .push((SOCKET_ENV.into(), reporting.socket.clone().into()));

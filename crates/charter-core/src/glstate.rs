@@ -133,7 +133,9 @@ pub struct When<'a> {
 /// [`crate::plane::resolve`] already found, so there is no state in which this is asked
 /// without one — the brake is satisfied by the signature rather than by a check.
 pub fn decide(when: &When) -> Decided {
-    let _ = background_checks_off(when.env);
+    if background_checks_off(when.env) {
+        return Decided::TurnedOff;
+    }
     match in_flight(when.plane, when.now) {
         Err(why) => return Decided::LockUnreadable { why },
         // No lock at all: nothing has ever refreshed here, so only staleness decides.
@@ -181,7 +183,12 @@ pub fn background_checks_off(env: &dyn Fn(&str) -> Option<String>) -> bool {
 /// answer to a link here is [`Decided::LockUnreadable`], which suppresses.
 pub fn in_flight(plane: &Path, now: f64) -> Result<Option<(Option<u32>, f64)>, String> {
     let path = plane.join(glrefresh::LOCK);
-    let _ = contain::no_link_on_the_way(plane, &path);
+    contain::no_link_on_the_way(plane, &path).map_err(|why| {
+        format!(
+            "{} is reached through a symlink, and charter's own path may not be ({why})",
+            path.display()
+        )
+    })?;
     // No lock, or one whose timestamp the filesystem will not give up: Python's `stat` in a
     // `try` that answers `None`, which is "nothing has refreshed here" and not a refusal.
     let Ok(when) = std::fs::symlink_metadata(&path).and_then(|found| found.modified()) else {
@@ -292,16 +299,13 @@ pub fn maybe_spawn(plane: &Path, workspace: &str, trees: &[PathBuf], binary: &Pa
         return Refreshing::Declined(decided);
     }
     match spawn(plane, workspace, binary) {
-        Err(why) => {
-            glrefresh::write_lock(plane, None);
-            Refreshing::NotStarted { why }
-        }
+        Err(why) => Refreshing::NotStarted { why },
         Ok(pid) => {
             // **Which** process is refreshing, not merely that one was started: that is what
             // makes `_alive` mean something and what moves the cooldown to the completion,
             // since the child rewrites this to empty when it finishes
             // (`glrefresh::refresh` → `write_lock(plane, None)`).
-            glrefresh::write_lock(plane, None);
+            glrefresh::write_lock(plane, Some(pid));
             Refreshing::Started { pid }
         }
     }
