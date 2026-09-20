@@ -8,7 +8,9 @@
 //!   corpus ships run `persona lint` and `frame-probe`, and whether those exit 0 depends on the
 //!   runner's tmux and on what lint makes of a fixture plane. A differential scenario would be
 //!   asserting something about the runner. Here the answer is fixed: this binary has neither
-//!   command, so every probe is unchecked and the report says so instead of ticking.
+//!   command, so every probe is unchecked and the report says so instead of ticking — and
+//!   WHICH of charter's three "no answer" sentences each one gets is pinned, because that is
+//!   the part a port can get subtly wrong without anything else noticing.
 //! * **`update`**, which in Python reaches PyPI and runs `uv tool install`. It cannot be run in
 //!   a test harness at all — charter's own suite stubs its installer — and the half of it that
 //!   IS ported is `charter news --since`, which the differential suite does cover.
@@ -66,16 +68,44 @@ fn a_probe_this_charter_cannot_run_is_unchecked_and_never_ticked() {
         err(&said)
     );
     // And each one says which command it was, so the reader can see it is this CLI's gap.
-    assert!(
-        err(&said).contains("`charter persona lint` did not run here"),
-        "{}",
-        err(&said)
-    );
+    //
+    // **The two sentences are different, and the difference is charter's own rule meeting a
+    // state charter's CLI never reaches.** `news::dispatch` tells apart a first token this
+    // charter does not register (`_NOT_RUN` — "did not run here", a fact about this machine)
+    // from a command path a `check:` may not name (`_UNLISTED` — a defect in the entry).
+    // `frame-probe` is the first kind. `persona lint` is neither, quite: this binary HAS
+    // `persona` and has no `lint` under it, so `command_path` stops at `("persona",)`, which is
+    // not on `PROBEABLE`, and the entry gets the sentence written for an entry that named
+    // something silly. Python's `_command_path` does exactly the same thing — it is only that
+    // charter's own CLI has `persona lint`, so it never lands there.
+    //
+    // Pinned as it is rather than given a fourth sentence of charter-app's own: a reason that
+    // exists in one charter and not the other is a fork, and the differential suite cannot see
+    // this path at all. Reported in the PR instead.
     assert!(
         err(&said).contains("`charter frame-probe` did not run here"),
-        "{}",
+        "a first token this CLI does not register is news about this machine:\n{}",
         err(&said)
     );
+    assert!(
+        err(&said).contains("`charter persona lint` is not a command a `check:` may name"),
+        "a path this CLI does not register falls to the unlisted sentence:\n{}",
+        err(&said)
+    );
+    // Whichever sentence each one got, the slug names the entry the reader has to look at.
+    for slug in [
+        "delegate-when",
+        "lint-sees-project-skills",
+        "persona-bin",
+        "charter-runs-the-harness",
+        "the-charter-a-sub-agent-reads-cannot-drift-from-the-persona",
+    ] {
+        assert!(
+            err(&said).contains(&format!("! {slug}: ")),
+            "{slug} was not named:\n{}",
+            err(&said)
+        );
+    }
 }
 
 #[test]

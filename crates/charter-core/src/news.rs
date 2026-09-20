@@ -31,6 +31,17 @@
 //! invented for the occasion. The machinery around it is ported whole, because the day `persona
 //! lint` lands the entries start answering and the guards have to already be right.
 //!
+//! **One of those two lands on a sentence written for something else, and it is reported rather
+//! than papered over.** [`dispatch`] tells a first token this charter does not register
+//! ([`NOT_RUN`] — a fact about this machine) from a command a `check:` may not name
+//! ([`UNLISTED`] — a defect in the entry). `frame-probe` is the first. `persona lint` is
+//! neither, quite: this binary HAS `persona` and has no `lint` under it, so [`command_path`]
+//! stops at `("persona",)`, which is not on [`PROBEABLE`], and a correct entry is told it named
+//! something a probe may not run. `charter/news.py`'s `_command_path` does exactly the same
+//! thing; charter's own CLI simply has `persona lint`, so it never lands there. A fourth reason
+//! written here and nowhere in charter would be a fork between the two implementations, in a
+//! sentence no differential scenario can reach — so the port keeps charter's three.
+//!
 //! **The re-entrancy marker is read and not written.** `news._ENV` travels in the environment
 //! so that a charter started underneath a probe declines to probe. Setting an environment
 //! variable is `unsafe` under Rust 2024 and this workspace forbids `unsafe_code`, so
