@@ -220,7 +220,11 @@ fn no_link_on_the_way(plane_root: &Path, file: &Path) -> std::io::Result<()> {
 /// Taken as `Metadata` rather than a path so the caller chooses the object: the read side
 /// hands it an `fstat` of the descriptor it is about to read, which no swap can get between,
 /// and the write side hands it an `lstat` of a file that is not open yet.
-fn refuse_unusable(file: &Path, found: &std::fs::Metadata) -> std::io::Result<()> {
+///
+/// `pub(crate)` for `planegit`'s push record, which is the same kind of object — a small JSON
+/// file charter keeps under the state directory and reads back — and meets the same two
+/// hazards. A FIFO there blocks `charter save`, which an operator runs all day.
+pub(crate) fn refuse_unusable(file: &Path, found: &std::fs::Metadata) -> std::io::Result<()> {
     // A record that is not a plain file: a FIFO would block the read for ever, a device
     // never ends. Directories above it are fine, the record itself is not.
     if !found.file_type().is_file() {

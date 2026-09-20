@@ -278,17 +278,17 @@ fn default_branch(root: &Path) -> Result<Option<String>, String> {
     Ok(None)
 }
 
-/// Where charter keeps the plane's machine-local state — Python's `config.STATE_DIR`.
+/// Where charter keeps the plane's machine-local state — Python's `config.STATE_DIR`, and the
+/// crate's one answer to it (`plane::state_dir`), because `save` writes the record this module
+/// reads.
 pub(super) fn state_dir(root: &Path) -> PathBuf {
-    match std::env::var_os("CHARTER_HOME") {
-        Some(home) if !home.is_empty() => PathBuf::from(home),
-        _ => root.join(".charter"),
-    }
+    crate::plane::state_dir(root)
 }
 
 /// The bound on the one state file this module reads, as `contain.MAX_BYTES` bounds plane
-/// data: nothing charter writes there comes near it.
-const RECORD_LIMIT: u64 = 1_048_576;
+/// data: nothing charter writes there comes near it. One number, shared with the record
+/// `reopen` keeps and with the writer of this one.
+const RECORD_LIMIT: u64 = crate::reopen::MAX_BYTES;
 
 /// A small file of charter's own machine-local state, or `None` when it cannot be had —
 /// `planegit.push_record`, which answers `None` for a missing, unreadable or malformed file
@@ -403,23 +403,17 @@ fn py_str(v: &serde_json::Value) -> String {
     }
 }
 
-/// How long ago, coarsely — `gitstate.age_phrase`.
+/// How long ago, coarsely — `gitstate.age_phrase`, and the crate's one copy of it.
+///
+/// `save` prints the same phrase about the same lock (`crate::gitstate`), and two spellings of
+/// "how old is this" is how one command calls a lock stale and another calls it live.
 pub(super) fn age_phrase(seconds: f64) -> String {
-    // `int()` truncates toward zero and the clamp comes after it, as Python's does.
-    let secs = (seconds.trunc() as i64).max(0);
-    if secs < 60 {
-        format!("{secs}s")
-    } else if secs < 3600 {
-        format!("{}m", secs / 60)
-    } else if secs < 86_400 {
-        format!("{}h", secs / 3600)
-    } else {
-        format!("{}d", secs / 86_400)
-    }
+    crate::gitstate::age_phrase(seconds)
 }
 
-/// A lock that never grew and has sat there this long is a crash, not contention.
-const STALE_AFTER: f64 = 15.0 * 60.0;
+/// A lock that never grew and has sat there this long is a crash, not contention — the one
+/// threshold, so `doctor` and `save` cannot disagree about which locks are corpses.
+const STALE_AFTER: f64 = crate::gitstate::STALE_AFTER;
 
 /// The git directory behind `root` — `gitstate.git_dir_of`: the filesystem first, which knows
 /// both a clone's `.git` directory and a worktree's `.git` file, and git only when the

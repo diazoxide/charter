@@ -12,17 +12,49 @@ pub enum PlaneError {
 }
 
 /// Finds the plane that `start` sits in: the nearest directory at or above it holding
-/// `charter.toml`.
+/// `charter.toml`, then **outward** through any enclosing plane's `workspaces/`.
+///
+/// **The hop is the whole of `charter/root.py:find_root`'s second half, and leaving it out
+/// was a defect two reviews found independently.** `charter.toml` is a tracked file, so every
+/// clone of a plane is itself a plane — and `charter clone` puts clones at
+/// `workspaces/<ws>/<repo>`. Stopping at the nearest marker means that, standing in one,
+/// `charter root`, `charter ws remember` and `charter sync` all acted on the INNER plane:
+/// different personas, no vault, a memory written into the cloned repo's git index instead of
+/// the operator's plane (charter#200). [`place`] already hopped — it is `find_root_or_cwd`'s
+/// port and has carried [`outermost`] since it was written — so `charter init` and
+/// `charter reinit` answered one plane and every other command answered another, in the same
+/// directory. One ladder, one answer.
+///
+/// **Not "outermost marker wins".** The hop is allowed only through an enclosing plane's own
+/// `workspaces/`, so a stray `charter.toml` in `~` never swallows the planes beneath it.
+///
+/// **One step of Python's walk is still not taken here**, and it is the one
+/// [`command_root`] adds: a linked git worktree of a plane resolves, in Python, to the plane
+/// in its MAIN worktree ([`plane_of`]). Here the worktree's own `charter.toml` answers. Left
+/// alone deliberately — giving every command that redirect would move where a chat in a
+/// worktree writes its memory, which is a behaviour change with its own tests to write, and
+/// the commands that genuinely need it already ask [`command_root`].
 pub fn find_root(start: &Path) -> Result<PathBuf, PlaneError> {
-    start
-        .ancestors()
-        .find(|dir| dir.join(MANIFEST).is_file())
-        .map(Path::to_path_buf)
+    marked_above(start)
+        .map(outermost)
         .ok_or_else(|| PlaneError::NotFound(start.to_path_buf()))
 }
 
-/// The plane a process should act on: `$CHARTER_ROOT` if it is set, else the nearest
-/// `charter.toml` at or above `start`.
+/// The nearest directory at or above `start` holding a `charter.toml`, or `None`.
+///
+/// **One walk, asked by both resolvers.** [`find_root`] and [`command_root`] differ by a
+/// single step ([`plane_of`]) and by nothing else; writing the walk twice is how two
+/// functions that must agree about a directory come to disagree about it — which is the
+/// defect M2.9 fixed between [`find_root`] and [`place`] two milestones after it appeared.
+///
+/// `is_file`, never `exists`: a DIRECTORY called `charter.toml` is not a marker.
+fn marked_above(start: &Path) -> Option<&Path> {
+    start.ancestors().find(|dir| dir.join(MANIFEST).is_file())
+}
+
+/// The plane a process should act on: `$CHARTER_ROOT` if it is set, else [`find_root`] from
+/// `start` — the nearest `charter.toml` at or above it, hopped outward through any enclosing
+/// plane's `workspaces/`.
 ///
 /// The variable wins, as it does in Python charter, because it is how a caller PINS a plane
 /// rather than inheriting whichever one its working directory happens to sit in — which is
@@ -102,10 +134,96 @@ pub(crate) fn expand_user(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
+/// The plane a process should ACT on, the way `charter/config.py` resolves it: the pinning
+/// variable, else the nearest marker above `cwd`, redirected out of a linked worktree
+/// ([`plane_of`]) and outward through any enclosing plane's `workspaces/` (`outermost`).
+///
+/// **Not [`resolve`], and since M2.9 the difference is exactly one step: [`plane_of`].**
+///
+/// This paragraph said "[`resolve`] stops at the nearest marker" when M2.5 wrote it, and that
+/// was true of the day's code and is no longer: M2.9 gave [`find_root`] the outward hop it was
+/// missing, because `place` had always had it and the two answered differently in the same
+/// directory (charter#200). Both walks now share [`marked_above`] and [`outermost`]; what is
+/// left here is the redirect out of a linked WORKTREE, which every other command deliberately
+/// does not take.
+///
+/// It belongs to these two because the commands that COMMIT the plane — `save`, `git-policy` —
+/// have to agree with the vault, the personas and the memory about which plane that is, or
+/// they act on one tree while every other command acts on another. That disagreement is
+/// charter #806 and #809, and the two refusals `save` carries are only reachable once this
+/// resolution is the one it uses.
+pub fn command_root(cwd: &Path) -> Result<PathBuf, PlaneError> {
+    if let Some(root) = std::env::var_os("CHARTER_ROOT").filter(|v| !v.is_empty()) {
+        return Ok(PathBuf::from(root));
+    }
+    // Resolved first, where [`find_root`] takes the caller's path as it stands: `save` reports
+    // the tree it is about to commit, and a path with a link in it names that tree by a route
+    // `git` will not echo back.
+    let here = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
+    marked_above(&here)
+        .map(|marked| outermost(&plane_of(marked)))
+        .ok_or_else(|| PlaneError::NotFound(cwd.to_path_buf()))
+}
+
+/// Where charter keeps this plane's machine-local state — Python's `config.STATE_DIR`.
+///
+/// `$CHARTER_HOME` is taken verbatim, as Python takes it: an operator points it at a shared
+/// directory to keep one vault and one state across several clones. It is here rather than in
+/// either caller because `save` WRITES the push record and `doctor` READS it, and a state
+/// directory the two disagree about is a record written where nothing looks for it.
+pub fn state_dir(root: &Path) -> PathBuf {
+    match std::env::var_os("CHARTER_HOME") {
+        Some(home) if !home.is_empty() => PathBuf::from(home),
+        _ => root.join(".charter"),
+    }
+}
+
+/// `root.py:_plane_of`: the plane a found marker really belongs to.
+///
+/// `charter.toml` is a tracked file, so when the repo IS a plane every linked worktree cut
+/// from it gets its own copy checked out and looks like a control plane of its own. Identity
+/// follows the MAIN working tree — otherwise personas, the vault and every written memory
+/// resolve into a directory `git worktree remove` deletes — and only when the marker is
+/// present there too.
+pub fn plane_of(marked: &Path) -> PathBuf {
+    match main_worktree_of(marked) {
+        Some(main) if main.join(MANIFEST).is_file() => main,
+        _ => marked.to_path_buf(),
+    }
+}
+
+/// The MAIN working tree behind `tree`, when `tree` is a linked worktree — else `None`.
+///
+/// A linked worktree's `.git` is a FILE reading `gitdir: <main>/.git/worktrees/<name>`, so the
+/// main tree is the directory holding that `.git`. Pure path arithmetic, no subprocess,
+/// because this sits under every command's plane resolution.
+///
+/// `None` for the main tree itself (`.git` is a directory), for a non-repo, and for a gitdir
+/// with no `.git` component — a worktree of a BARE repo has no working tree to redirect to, so
+/// the caller keeps what it had.
+pub fn main_worktree_of(tree: &Path) -> Option<PathBuf> {
+    let dot = tree.join(".git");
+    let meta = std::fs::symlink_metadata(&dot).ok()?;
+    if meta.is_dir() {
+        return None;
+    }
+    let text = std::fs::read_to_string(&dot).ok()?;
+    let named = text.trim().strip_prefix("gitdir:")?.trim();
+    let mut path = PathBuf::from(named);
+    if !path.is_absolute() {
+        path = tree.join(path);
+    }
+    let path = path.canonicalize().ok()?;
+    path.ancestors()
+        .find(|a| a.file_name().is_some_and(|n| n == ".git"))
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+}
+
 /// `root.py:_outermost`: follow `workspaces/` nesting outward until no plane encloses this
 /// one. A plane is enclosed only through ANOTHER plane's own `workspaces/`, so a stray
 /// `charter.toml` further up never swallows the planes beneath it.
-fn outermost(marked: &Path) -> PathBuf {
+pub(crate) fn outermost(marked: &Path) -> PathBuf {
     let mut seen = vec![marked.to_path_buf()];
     let mut cur = marked.to_path_buf();
     while let Some(outer) = enclosing(&cur) {
@@ -121,7 +239,8 @@ fn outermost(marked: &Path) -> PathBuf {
 /// `root.py:enclosing_plane`: the plane whose `workspaces/` contains `root`, or `None`.
 ///
 /// `pub(crate)` for `doctor`s `nested plane` row, which asks this of the plane a command
-/// resolved: two walks for one question is how two answers about one directory arrive.
+/// resolved, and for `planegit`s refusal to commit a plane the caller is not standing in:
+/// several walks for one question is how several answers about one directory arrive.
 pub(crate) fn enclosing(root: &Path) -> Option<PathBuf> {
     let here = root.canonicalize().ok()?;
     here.ancestors().skip(1).find_map(|parent| {
@@ -184,6 +303,41 @@ mod tests {
         fs::create_dir_all(&clone).unwrap();
 
         assert_eq!(find_root(&clone), Ok(dir.path().to_path_buf()));
+    }
+
+    #[test]
+    fn a_clone_that_is_itself_a_plane_resolves_to_the_plane_holding_it() {
+        // `charter.toml` is tracked, so a clone of a plane carries one. Stopping at the
+        // nearest marker acted on the inner plane — different personas, no vault, memory
+        // written into the clone's git index (charter#200). `place` already hopped; this is
+        // the same ladder, and the two answered differently in the same directory.
+        let dir = tempfile::tempdir().unwrap();
+        let outer = dir.path().canonicalize().unwrap();
+        fs::write(outer.join(MANIFEST), "").unwrap();
+        let inner = outer.join("workspaces/ide/charter");
+        fs::create_dir_all(inner.join("crates/src")).unwrap();
+        fs::write(inner.join(MANIFEST), "").unwrap();
+
+        assert_eq!(find_root(&inner.join("crates/src")), Ok(outer.clone()));
+        // The same answer `place` has always given here, which is the point of the fix: the
+        // two entry points disagreed in this directory. Asked through `outermost` rather than
+        // `place` because `place` reads `$CHARTER_ROOT`, and a test must not depend on the
+        // environment the suite happens to run in.
+        assert_eq!(outermost(&inner), outer);
+    }
+
+    #[test]
+    fn a_stray_marker_above_a_plane_that_does_not_hold_it_in_workspaces_never_swallows_it() {
+        // "Outermost marker wins" would let one `charter.toml` in `~` take every plane
+        // beneath it. The hop is only ever through an enclosing plane's own `workspaces/`.
+        let dir = tempfile::tempdir().unwrap();
+        let outer = dir.path().canonicalize().unwrap();
+        fs::write(outer.join(MANIFEST), "").unwrap();
+        let inner = outer.join("projects/acme");
+        fs::create_dir_all(&inner).unwrap();
+        fs::write(inner.join(MANIFEST), "").unwrap();
+
+        assert_eq!(find_root(&inner), Ok(inner));
     }
 
     #[test]

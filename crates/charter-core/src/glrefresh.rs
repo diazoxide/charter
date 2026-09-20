@@ -678,9 +678,41 @@ mod tests {
         #[cfg(unix)]
         std::os::unix::fs::symlink(&outside, plane.join(".charter/cache")).unwrap();
 
-        // The gate is on the FILE charter opens and not on `.charter/`, so a link at any
-        // component of the way refuses the write rather than redirecting it.
+        // A link at a DIRECTORY on the way. `private_dir` refuses it and the write never
+        // starts.
         assert!(save(&plane, &Map::new()).is_err());
         assert!(!outside.join("glstate.json").exists());
+    }
+
+    #[test]
+    fn a_cache_that_is_itself_a_link_is_not_written_through() {
+        // **The other half, and the one a check on the parent cannot see.** `cistate` says it
+        // about the read side in as many words — "a link at `glstate.json` redirects the read
+        // exactly as one at the directory does, and a check on the parent cannot see it" —
+        // and the write side is the same path with the arrow reversed. `.charter/cache/` here
+        // is an ordinary directory; only the file is a link.
+        //
+        // It is held by TWO things at once, deliberately: the walk in `write_private` and the
+        // `O_NOFOLLOW` on the open. That is `contain::open_no_link`'s own pairing — the walk
+        // answers about a path and does not hold it, and the flag moves the last component's
+        // answer to the instant of the open — so neither alone going missing shows up here.
+        // What this pins is the property, and what a mutation of ONE of them proves is only
+        // that the other is still there.
+        let dir = tempfile::tempdir().unwrap();
+        let here = std::fs::canonicalize(dir.path()).unwrap();
+        let plane = here.join("plane");
+        let outside = here.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("theirs.json"), "NOT CHARTER'S\n").unwrap();
+        std::fs::create_dir_all(plane.join(".charter/cache")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.join("theirs.json"), plane.join(CACHE)).unwrap();
+
+        assert!(save(&plane, &Map::new()).is_err());
+        assert_eq!(
+            std::fs::read_to_string(outside.join("theirs.json")).unwrap(),
+            "NOT CHARTER'S\n",
+            "the cache was written through the link"
+        );
     }
 }

@@ -19,7 +19,7 @@ pub(super) type Unread = (PathBuf, Option<i32>);
 const ELOOP: i32 = if cfg!(target_os = "linux") { 40 } else { 62 };
 
 /// Python's `except (FileNotFoundError, NotADirectoryError)`: the path is simply not there.
-fn absent(e: &io::Error) -> bool {
+pub(crate) fn absent(e: &io::Error) -> bool {
     e.kind() == io::ErrorKind::NotFound || e.raw_os_error() == Some(not_a_directory())
 }
 
@@ -235,7 +235,7 @@ pub(super) fn unread_name(root: &Path, path: &Path) -> String {
 
 /// `workspace.uncheckable_fix`: a loop names the link, because no permission is in the way
 /// of one; anything else is read as a refusal.
-fn uncheckable_fix(code: Option<i32>, shown: &str) -> String {
+pub(crate) fn uncheckable_fix(code: Option<i32>, shown: &str) -> String {
     if code == Some(ELOOP) {
         format!("fix the symlink loop at {shown}")
     } else {

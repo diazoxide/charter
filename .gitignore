@@ -8,3 +8,9 @@ mutants.out*/
 # Bytecode from `tests/differential/run.py`, which is imported by name when its scenario
 # list is checked by hand.
 __pycache__/
+
+# The charter binary the release workflow stages as a Tauri sidecar before bundling.
+/app/src-tauri/binaries/
+
+# Where the release workflow gathers the bundles it uploads.
+/dist/

@@ -6,11 +6,8 @@
 //! demand, and whatever consumes it parses these exact lines; the differential harness
 //! (`tests/differential/run.py`) compares them with Python's.
 //!
-//! Three things this binary does not do, and says so where a command meets them:
+//! Two things this binary does not do, and says so where a command meets them:
 //!
-//! - **Resolve the active workspace or persona.** charter walks a ladder of pointers and
-//!   settings for both; none of it is ported, so a command that needs one names it
-//!   (`-w`, `--persona`, a positional) or is refused rather than guessing.
 //! - **Commit memory reactively.** A plane whose `[memory] share` is `commit` or `push` has
 //!   charter commit each memory as it is written. That is the plane-git layer, not ported;
 //!   the memory is written and the operator is told it was not committed.
@@ -43,12 +40,10 @@ pub struct RecallArgs {
     /// Also print a line of each memory's body (the path is always shown).
     #[arg(long)]
     full: bool,
-    /// The persona whose memory and refs are searched. Required for those scopes: this
-    /// binary does not resolve the active persona.
+    /// The persona whose memory and refs are searched (default: the active one).
     #[arg(long)]
     persona: Option<String>,
-    /// The workspace whose journal is searched. Required for that scope, or
-    /// --all-workspaces: this binary does not resolve the active workspace.
+    /// The workspace whose journal is searched (default: the active one).
     #[arg(short = 'w', long = "workspace", conflicts_with = "all_workspaces")]
     workspace: Option<String>,
     /// Search EVERY workspace's journal (persona + shared appear once).
@@ -67,10 +62,17 @@ pub struct RecallArgs {
 
 #[derive(Subcommand)]
 pub enum PersonaCommand {
+    /// Print the active persona — the name alone, or `(none)`.
+    ///
+    /// Not a memory command, and it lives here because this is the enum `charter persona`
+    /// dispatches on rather than because it belongs to memory. It takes no `--persona`, as
+    /// charter's own `persona current` takes none: the top rung of the ladder is typed on
+    /// the command it acts on, and a flag here would report a resolution nothing performed.
+    Current,
     /// Write a memory (persistent by default; --ephemeral for scratch).
     Remember {
-        /// `[NAME] TEXT` — the persona, then the fact. The persona is required: this binary
-        /// does not resolve the active one.
+        /// `[NAME] TEXT` — the persona, then the fact. One word is the FACT, and the persona
+        /// is the active one, which is how charter's own `name nargs="?"` reads it.
         #[arg(num_args = 1..=2, required = true)]
         words: Vec<String>,
         /// Short title (default: first line of the text).
@@ -91,7 +93,7 @@ pub enum PersonaCommand {
     },
     /// Show a persona's memory, or --query to search it.
     Recall {
-        /// The persona. Required: this binary does not resolve the active one.
+        /// The persona (default: the active one).
         name: Option<String>,
         /// Keyword-search memories (ranked) instead of listing all.
         #[arg(short = 'q', long)]
@@ -135,7 +137,8 @@ fn reactive(plane: &Plane) {
 // charter recall
 
 /// `charter recall` — the one memory gate, across every base in scope.
-pub fn recall(plane: &Plane, args: RecallArgs) -> Result<Code, String> {
+pub fn recall(here: &crate::Here, args: RecallArgs) -> Result<Code, String> {
+    let plane = &here.plane;
     let root = plane.root();
     // Before anything is searched: a `--persona` that names nothing was searched as if it
     // did, and answered "no memories" over the persona that holds them (#1055, #1059).
@@ -178,35 +181,33 @@ pub fn recall(plane: &Plane, args: RecallArgs) -> Result<Code, String> {
     }
 
     let has = |scope: &str| scopes.iter().any(|s| s == scope);
-    let workspace = args.workspace.filter(|w| !w.is_empty());
+    // **The ladder, not a refusal.** `charter recall` with no flags is how a harness calls
+    // it at session start; before M2.9 this exited 2 with "does not resolve the active
+    // workspace", so the one command a session begins with could not be called at all.
     let workspaces = if args.all_workspaces {
         Some(Workspaces::All)
-    } else if let Some(name) = workspace {
+    } else if has("workspace") {
         // A name is checked before it becomes a path. charter joins `-w` straight on and
-        // reads whatever that lands on inside the plane's data; a name that is a path is
-        // not one this reads through.
+        // reads whatever that lands on inside the plane's data; a name that is a path is not
+        // one this reads through. The resolved name has already passed the same check on the
+        // way out of the ladder, so this can only ever fire for a flag somebody typed.
+        let name = here.active_workspace(args.workspace.as_deref().filter(|w| !w.is_empty()));
         if let Err(e) = plane.workspace(&name) {
             voice::err(&e.to_string());
             return Ok(1);
         }
         Some(Workspaces::One(name))
     } else {
+        // `--scope persona` names no workspace at all, and charter's `sources` resolves one
+        // only for the scope that uses it. Resolving here anyway would let a `-w` the search
+        // will never touch refuse the command.
         None
     };
-    if has("workspace") && workspaces.is_none() {
-        voice::err(
-            "recall needs -w <workspace> or --all-workspaces for the workspace scope: this \
-             charter does not resolve the active workspace",
-        );
-        return Ok(2);
-    }
-    if (has("persona") || has("ephemeral") || has("refs")) && persona.is_none() {
-        voice::err(
-            "recall needs --persona <name> for the persona, ephemeral and refs scopes: this \
-             charter does not resolve the active persona",
-        );
-        return Ok(2);
-    }
+    // A persona is allowed to be absent, where a workspace is not: a plane may genuinely
+    // have no front door, and charter then SKIPS those scopes rather than refusing the
+    // search (`recall.sources`: "a scope with no owner"). The flag is still refused when it
+    // names nothing — that is the check above, and it is about the flag, not the rung.
+    let persona = persona.or_else(|| here.active_persona(None));
 
     if args.all_workspaces {
         say_unread_workspaces(root);
@@ -653,11 +654,25 @@ fn persona_ok(root: &Path, name: &str) -> bool {
     }
 }
 
-const NO_ACTIVE_PERSONA: &str = "name the persona: this charter does not resolve the active one — charter persona \
-     remember <name> \"<fact>\"";
-
-pub fn persona(plane: &Plane, command: PersonaCommand) -> Result<Code, String> {
+/// `charter persona remember|recall`, with the persona resolved when it is not named.
+///
+/// **A silent exit 1 when nothing resolves, which is charter's own answer**:
+/// `cmd_persona_remember` and `cmd_persona_recall` both open with
+/// `if not name or not _require(name): return 1`, and the first half of that prints nothing.
+/// Measured against the oracle on a plane with no front door. It reads like a defect and it
+/// is charter's, so it is ported rather than improved here.
+pub fn persona(here: &crate::Here, command: PersonaCommand) -> Result<Code, String> {
+    let plane = &here.plane;
     match command {
+        PersonaCommand::Current => {
+            // `(none)` is the word charter prints, and it is NOT what it prints for a rung
+            // that named a persona this plane does not have: THAT name is printed, because a
+            // rung decided and is hiding every rung below it. A script reading this has
+            // always been handed the name the ladder resolved.
+            let found = here.active_persona(None);
+            println!("{}", found.as_deref().unwrap_or("(none)"));
+            Ok(0)
+        }
         PersonaCommand::Remember {
             words,
             title,
@@ -666,13 +681,20 @@ pub fn persona(plane: &Plane, command: PersonaCommand) -> Result<Code, String> {
             no_sync,
             now,
         } => {
-            let [name, text] = words.as_slice() else {
-                voice::err(NO_ACTIVE_PERSONA);
-                return Ok(2);
+            // `[NAME] TEXT`, told apart by the SHAPE of the call: one word is the fact
+            // and the persona is the active one, which is `name nargs="?"` in charter's own
+            // parser. `num_args` has already refused nought and three.
+            let (named, text) = match words.as_slice() {
+                [text] => (None, text),
+                [name, text] => (Some(name.as_str()), text),
+                _ => unreachable!("clap takes one or two"),
+            };
+            let Some(name) = here.active_persona(named) else {
+                return Ok(1);
             };
             persona_remember(
                 plane,
-                name,
+                &name,
                 text,
                 title.as_deref(),
                 shared,
@@ -682,12 +704,8 @@ pub fn persona(plane: &Plane, command: PersonaCommand) -> Result<Code, String> {
             )
         }
         PersonaCommand::Recall { name, query, log } => {
-            let Some(name) = name.filter(|n| !n.is_empty()) else {
-                voice::err(
-                    "name the persona: this charter does not resolve the active one — charter \
-                     persona recall <name>",
-                );
-                return Ok(2);
+            let Some(name) = here.active_persona(name.as_deref().filter(|n| !n.is_empty())) else {
+                return Ok(1);
             };
             persona_recall(plane, &name, query.as_deref(), log)
         }

@@ -439,6 +439,34 @@ mod tests {
     }
 
     #[test]
+    fn a_record_that_is_itself_a_link_is_not_written_through() {
+        // The half a check on the parent cannot see: `.charter/sessions/` is an ordinary
+        // directory and only the file is a link. Held by the walk and by the `O_NOFOLLOW` on
+        // the open together — `contain::open_no_link`'s own pairing — so this pins the
+        // property rather than either guard alone.
+        let dir = tempfile::tempdir().unwrap();
+        let here = std::fs::canonicalize(dir.path()).unwrap();
+        let plane = here.join("plane");
+        let outside = here.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("theirs"), "NOT CHARTER'S\n").unwrap();
+        std::fs::create_dir_all(plane.join(SESSIONS)).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            outside.join("theirs"),
+            file_for(&plane, "s1").expect("an ordinary id"),
+        )
+        .unwrap();
+
+        assert_eq!(record(&plane, &payload(90, 10)), Recorded::Nothing);
+        assert_eq!(
+            std::fs::read_to_string(outside.join("theirs")).unwrap(),
+            "NOT CHARTER'S\n",
+            "the record was written through the link"
+        );
+    }
+
+    #[test]
     fn a_context_percentage_is_read_the_way_python_reads_it() {
         let with = |value: Value| {
             let mut doc = payload(1, 1);

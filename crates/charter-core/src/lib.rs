@@ -1,5 +1,6 @@
 //! charter's core, shared by the desktop app and the `charter` binary.
 
+pub mod active;
 pub mod adopt;
 pub mod cistate;
 pub mod contain;
@@ -8,6 +9,7 @@ pub mod doctor;
 pub mod engine;
 pub mod forge;
 pub mod gitpolicy;
+pub mod gitstate;
 pub mod glrefresh;
 pub mod guest;
 pub mod harness;
@@ -19,6 +21,7 @@ pub mod memstore;
 pub mod news;
 pub mod personas;
 pub mod plane;
+pub mod planegit;
 pub mod profiles;
 pub mod profiletrust;
 pub mod pyjson;
@@ -28,6 +31,7 @@ pub mod reopen;
 pub mod repocmd;
 pub mod repos;
 pub mod scaffold;
+pub mod secretshape;
 pub mod session;
 pub mod shown;
 pub mod start;
