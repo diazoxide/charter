@@ -1351,6 +1351,29 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_plane_that_is_already_open_is_shown_rather_than_asked_about_when_it_changes() {
+        // "Open it" for a project already on screen means "show me that project" — a recents
+        // row, or a second launch naming it. A dialog there would be in front of chats that
+        // are already running, about a grant that is already in force, and there is nothing
+        // the operator could answer that would undo either. That is the prompt that teaches
+        // them to click yes without reading, which is the failure the whole ask exists to
+        // avoid paying for.
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        let planes = planes_keeping(&config);
+        let shown = asking(planes.open_if_approved(&root).expect("it is a plane")).contributes;
+        let plane = planes.approve_and_open(&root, &shown).expect("yes");
+
+        // The kind of change that WOULD re-ask about a plane that was not open.
+        enabling_a_plugin(&root, "arrived@market");
+
+        let again = opened(planes.open_if_approved(&root).expect("it is a plane"));
+        assert_eq!(plane, again);
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn a_plane_that_gained_a_plugin_since_it_was_approved_asks_again_and_says_what_is_new() {
         // `enabledPlugins` is code that will run inside the operator's harness, and it
         // travels out of the plane's COMMITTED settings — so an ordinary `git pull` of a
