@@ -83,10 +83,10 @@ pub fn unread(root: &Path, unread: &charter_core::memstore::Unread) {
     }
 }
 
-/// `charter/workspace.py`'s two helpers behind that sentence, from the core for the same
-/// reason: the commands that run there and the commands that print here must not be able to
-/// word one unreadable path two ways.
-pub use charter_core::memstore::{PATH_LIMIT, uncheckable_fix};
+/// `charter/workspace.py`'s remedy clause, from the core for the same reason: the commands
+/// that run there and the commands that print here must not be able to word one unreadable
+/// path two ways.
+pub use charter_core::memstore::uncheckable_fix;
 
 #[cfg(test)]
 mod tests {

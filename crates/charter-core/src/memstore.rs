@@ -462,11 +462,7 @@ pub fn uncheckable_fix(code: Option<i32>, path: &str, place: &str) -> String {
 pub fn cannot_check(root: &std::path::Path, path: &std::path::Path, code: Option<i32>) -> String {
     let shown = crate::shown::readable(&path.to_string_lossy(), PATH_LIMIT);
     let named = crate::shown::readable(
-        &path
-            .strip_prefix(root)
-            .unwrap_or(path)
-            .to_string_lossy()
-            .into_owned(),
+        &path.strip_prefix(root).unwrap_or(path).to_string_lossy(),
         PATH_LIMIT,
     );
     format!(

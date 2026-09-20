@@ -99,16 +99,11 @@ fn field(meta: &BTreeMap<String, String>, key: &str) -> String {
 fn round_half_even(x: f64) -> u64 {
     let down = x.floor();
     let frac = x - down;
-    let n = if frac > 0.5 {
-        down + 1.0
-    } else if frac < 0.5 {
-        down
-    } else if (down as i64) % 2 == 0 {
-        down
-    } else {
-        down + 1.0
-    };
-    n.max(0.0) as u64
+    // Exactly a half goes to whichever of the two neighbours is even; everything else goes
+    // to the nearer one.
+    let up = frac > 0.5 || (frac == 0.5 && (down as i64) % 2 != 0);
+    let rounded = if up { down + 1.0 } else { down };
+    rounded.max(0.0) as u64
 }
 
 /// The unicode bar for one row. `render._bar`.
@@ -142,32 +137,36 @@ pub fn block(rows: &[Row], generic: u64, total: u64) -> String {
         "## Personas — roster & routing health".to_string(),
         String::new(),
     ];
-    if total == 0 {
-        out.push(
-            "_No dispatches recorded yet._ The tally fills as sub-agents are dispatched; seed \
-             it from past sessions with `charter persona dispatch-backfill`."
-                .to_string(),
-        );
-        out.push(String::new());
-    } else {
-        // Integer division, as Python's `//` is: the headline never rounds a 49% share up.
-        let pct = 100 * generic / total;
-        out.push(format!(
-            "**{} of {total} dispatches went to a persona**; {generic} went to a generic agent \
-             (**{pct}%**). A rising generic share means work a persona owns is being done \
-             without it.",
-            total - generic
-        ));
-        out.push(String::new());
-        out.push("```mermaid".to_string());
-        out.push("pie showData".to_string());
-        out.push(format!(
-            "    \"dispatched to a persona\" : {}",
-            total - generic
-        ));
-        out.push(format!("    \"dispatched to a generic agent\" : {generic}"));
-        out.push("```".to_string());
-        out.push(String::new());
+    // Integer division, as Python's `//` is: the headline never rounds a 49% share up. Asked
+    // as a CHECKED division, because "no dispatches at all" and "the share cannot be
+    // computed" are the same fact, and writing them as two conditions is how they drift.
+    match (100 * generic).checked_div(total) {
+        None => {
+            out.push(
+                "_No dispatches recorded yet._ The tally fills as sub-agents are dispatched; \
+                 seed it from past sessions with `charter persona dispatch-backfill`."
+                    .to_string(),
+            );
+            out.push(String::new());
+        }
+        Some(pct) => {
+            out.push(format!(
+                "**{} of {total} dispatches went to a persona**; {generic} went to a generic \
+                 agent (**{pct}%**). A rising generic share means work a persona owns is being \
+                 done without it.",
+                total - generic
+            ));
+            out.push(String::new());
+            out.push("```mermaid".to_string());
+            out.push("pie showData".to_string());
+            out.push(format!(
+                "    \"dispatched to a persona\" : {}",
+                total - generic
+            ));
+            out.push(format!("    \"dispatched to a generic agent\" : {generic}"));
+            out.push("```".to_string());
+            out.push(String::new());
+        }
     }
     out.push("| Persona | Dispatches | | Memory | Capability |".to_string());
     out.push("| --- | ---: | --- | ---: | --- |".to_string());
