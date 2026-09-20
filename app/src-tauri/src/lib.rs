@@ -6,6 +6,7 @@ mod hooks;
 mod lifecycle;
 mod panels;
 mod panics;
+mod planes;
 mod sessions;
 mod slowstart;
 mod worktrees;
@@ -17,16 +18,16 @@ use std::time::Instant;
 
 use charter_core::engine::Size;
 use charter_core::harness::Harness;
-use charter_core::reopen::{self, Chat, Fresh, Reopened};
+use charter_core::reopen::{Chat, Fresh, Reopened};
 use tauri::Emitter;
 use tauri::Manager;
 use tauri::ipc::Channel;
 use tauri_plugin_notification::NotificationExt;
 use tauri_specta::{Builder, collect_commands};
 
-use chats::Chats;
-use hooks::{Hooks, Moved};
+use hooks::Moved;
 use lifecycle::Quitting;
+use planes::{Launch, PlaneId, Planes};
 
 /// The `charter` binary a hook runs, or none when the app cannot find one.
 ///
@@ -57,17 +58,8 @@ pub(crate) fn charter_binary() -> Option<PathBuf> {
 /// nothing.
 fn told(app: &tauri::AppHandle, moved: Moved) {
     let _ = app.emit("chat-moved", &moved);
-    if moved.needs_you && !already_looking_at(app, moved.session) {
-        let name = app
-            .try_state::<Chats>()
-            .and_then(|chats| {
-                chats
-                    .open_now()
-                    .into_iter()
-                    .find(|open| open.session == moved.session)
-                    .map(|open| open.name)
-            })
-            .unwrap_or_else(|| format!("chat {}", moved.session));
+    if moved.needs_you && !already_looking_at(app, &moved) {
+        let name = chat_called(app, &moved).unwrap_or_else(|| format!("chat {}", moved.session));
         // Best effort, always. A desktop that refuses notifications, or an operator who
         // turned them off, is not a reason for anything else here to stop working.
         let _ = app
@@ -79,8 +71,27 @@ fn told(app: &tauri::AppHandle, moved: Moved) {
     }
 }
 
+/// What a chat that moved is called, asked of the plane it moved in.
+fn chat_called(app: &tauri::AppHandle, moved: &Moved) -> Option<String> {
+    app.try_state::<Planes>()?
+        .held(&moved.plane)
+        .ok()?
+        .chats()
+        .open_now()
+        .into_iter()
+        .find(|open| open.session == moved.session)
+        .map(|open| open.name)
+}
+
 /// Whether the operator is already looking at this chat.
-fn already_looking_at(app: &tauri::AppHandle, session: u32) -> bool {
+///
+/// **It asks the chat's OWN plane which of its chats is in front**, because every plane
+/// numbers its chats from one and "is session 3 in front" has as many answers as there are
+/// planes open. What it cannot yet ask is which plane the window is showing — there is one
+/// window and no window-to-plane map until the opener lands — so with two planes open this
+/// can still suppress a notification for a chat in the plane that is NOT on screen. It errs
+/// the cheap way round elsewhere, and that gap is named rather than papered over.
+fn already_looking_at(app: &tauri::AppHandle, moved: &Moved) -> bool {
     let Some(window) = app.get_webview_window("main") else {
         return false;
     };
@@ -90,20 +101,10 @@ fn already_looking_at(app: &tauri::AppHandle, session: u32) -> bool {
     if !window.is_visible().unwrap_or(false) || !window.is_focused().unwrap_or(false) {
         return false;
     }
-    app.try_state::<Chats>()
-        .is_some_and(|chats| chats.front() == Some(session))
+    app.try_state::<Planes>()
+        .and_then(|planes| planes.held(&moved.plane).ok())
+        .is_some_and(|held| held.chats().front() == Some(moved.session))
 }
-
-/// The size a session starts at. The pane it lands in tells it the real one at once, and a
-/// chat put back at a launch has no pane yet to ask.
-const STARTING: Size = Size {
-    columns: 80,
-    rows: 24,
-};
-
-/// The plane the app is running in, where there is one. Held because quitting has to write
-/// the record into it, and by then the current directory is not worth trusting.
-struct Plane(Option<PathBuf>);
 
 /// A view a pane has open, and what its terminal has to match to show the session as it is:
 /// the size the screen was drawn for, so what was wrapped stays wrapped, and how much history
@@ -159,15 +160,27 @@ fn first_frame() -> Option<String> {
     slowstart::why(took, std::env::consts::OS)
 }
 
-/// The plane the app was started in, or why there is none.
+/// What this launch had to go on, and the plane it opened — or the fact that it opened none.
+///
+/// **Never an error.** The working directory is a HINT: it is resolved once, at startup, to
+/// decide which plane the first window opens, and after that a window's plane is explicit and
+/// the working directory is never consulted again. A launch that resolved no plane leaves the
+/// app running and holding nothing, which is a state the window draws rather than a failure
+/// it reports.
 #[tauri::command]
 #[specta::specta]
-fn plane_root() -> Result<String, String> {
-    let cwd = std::env::current_dir()
-        .map_err(|err| format!("cannot read the current directory: {err}"))?;
-    charter_core::plane::resolve(&cwd)
-        .map(|root| root.display().to_string())
-        .map_err(|err| err.to_string())
+fn plane_at_launch(launch: tauri::State<'_, Launch>) -> Launch {
+    (*launch).clone()
+}
+
+/// Every plane this process is holding, by id.
+///
+/// There can be none, and none is an ordinary state: it is what an app launched outside any
+/// plane comes up in, and what it returns to when the last project is closed.
+#[tauri::command]
+#[specta::specta]
+fn open_planes(planes: tauri::State<'_, Planes>) -> Vec<PlaneId> {
+    planes.open_now()
 }
 
 /// One chat the app has open, as the UI draws it and as the quit warning lists it.
@@ -229,20 +242,19 @@ struct Sidebar {
 /// app stays out of it.
 #[tauri::command]
 #[specta::specta]
-fn plane_sidebar(chats: tauri::State<'_, Chats>) -> Result<Sidebar, String> {
-    let cwd = std::env::current_dir()
-        .map_err(|err| format!("cannot read the current directory: {err}"))?;
-    let root = charter_core::plane::resolve(&cwd).map_err(|err| err.to_string())?;
-    let plane = charter_core::workspaces::Plane::open(&root);
+fn plane_sidebar(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Sidebar, String> {
+    let held = planes.held(&plane)?;
+    let root = held.root();
+    let on_disk = charter_core::workspaces::Plane::open(root);
 
     let mut filed: std::collections::HashMap<String, Vec<OpenChat>> =
         std::collections::HashMap::new();
     let mut unfiled = Vec::new();
-    for chat in chats.open_now().into_iter().map(OpenChat::from) {
+    for chat in held.chats().open_now().into_iter().map(OpenChat::from) {
         match chat
             .cwd
             .as_deref()
-            .and_then(|c| plane.workspace_of(std::path::Path::new(c)))
+            .and_then(|c| on_disk.workspace_of(std::path::Path::new(c)))
         {
             Some(name) => filed.entry(name).or_default().push(chat),
             None => unfiled.push(chat),
@@ -250,10 +262,10 @@ fn plane_sidebar(chats: tauri::State<'_, Chats>) -> Result<Sidebar, String> {
     }
 
     let mut workspaces = Vec::new();
-    for name in plane.workspaces().map_err(|err| err.to_string())? {
+    for name in on_disk.workspaces().map_err(|err| err.to_string())? {
         // A name off disk is re-checked before it is joined onto a path; one that cannot be
         // a workspace is left out rather than drawn.
-        let Ok(ws) = plane.workspace(&name) else {
+        let Ok(ws) = on_disk.workspace(&name) else {
             continue;
         };
         workspaces.push(SidebarWorkspace {
@@ -275,8 +287,8 @@ fn plane_sidebar(chats: tauri::State<'_, Chats>) -> Result<Sidebar, String> {
     Ok(Sidebar {
         root: root.display().to_string(),
         workspaces,
-        personas: plane.personas().map_err(|err| err.to_string())?,
-        persona: plane.default_persona(),
+        personas: on_disk.personas().map_err(|err| err.to_string())?,
+        persona: on_disk.default_persona(),
         unfiled,
     })
 }
@@ -352,10 +364,11 @@ struct StartOptions {
 /// "what is on disk" that nothing invalidates.
 #[tauri::command]
 #[specta::specta]
-fn start_options() -> Result<StartOptions, String> {
-    let root = here()?;
-    let (set, check) = charter_core::profiles::for_launch(&root);
-    let plane = charter_core::workspaces::Plane::open(&root);
+fn start_options(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<StartOptions, String> {
+    let held = planes.held(&plane)?;
+    let root = held.root();
+    let (set, check) = charter_core::profiles::for_launch(root);
+    let on_disk = charter_core::workspaces::Plane::open(root);
     Ok(StartOptions {
         profiles: set
             .profiles()
@@ -366,7 +379,7 @@ fn start_options() -> Result<StartOptions, String> {
                 shown: charter_core::profiles::display(p),
                 source: p.source.as_str().to_owned(),
                 is_default: set.default.as_deref() == Some(p.name.as_str()),
-                approval: charter_core::profiletrust::approval_needed(&root, p)
+                approval: charter_core::profiletrust::approval_needed(root, p)
                     .map(|a| a.as_str().to_owned()),
             })
             .collect(),
@@ -384,12 +397,12 @@ fn start_options() -> Result<StartOptions, String> {
                 )
             })
             .collect(),
-        personas: plane.personas().map_err(|err| err.to_string())?,
+        personas: on_disk.personas().map_err(|err| err.to_string())?,
         // Only a persona this plane HAS. `[persona] default` is a committed line that
         // nothing checks, so it can name a deleted persona or `_shared` — and preselecting
         // one the picker does not draw means the operator presses Start and is refused over
         // a persona they never chose.
-        persona: charter_core::start::persona_for_a_new_chat(&root),
+        persona: charter_core::start::persona_for_a_new_chat(root),
         ignore_fix: (!check.passes()).then(|| check.fix.clone()),
         declares_none: set
             .profiles()
@@ -413,12 +426,18 @@ fn start_options() -> Result<StartOptions, String> {
 /// approval, and a command that both asked and ran would be asking nothing.
 #[tauri::command]
 #[specta::specta]
-fn approve_profile(name: String, shown: String) -> Result<(), String> {
-    let root = here()?;
+fn approve_profile(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    name: String,
+    shown: String,
+) -> Result<(), String> {
+    let held = planes.held(&plane)?;
+    let root = held.root();
     // Read through the LAUNCH read, so a profile in a file git would carry cannot be
     // approved into existence — the approval would be recorded and the launch would still
     // refuse, which is a yes that buys nothing.
-    let (set, _check) = charter_core::profiles::for_launch(&root);
+    let (set, _check) = charter_core::profiles::for_launch(root);
     let profile = set.get(&name).ok_or_else(|| {
         format!(
             "no profile '{}' to approve",
@@ -434,7 +453,7 @@ fn approve_profile(name: String, shown: String) -> Result<(), String> {
         ));
     }
     charter_core::profiletrust::record_launched(
-        &root,
+        root,
         &profile.name,
         &charter_core::profiletrust::fingerprint(profile),
     )
@@ -464,7 +483,8 @@ fn approve_profile(name: String, shown: String) -> Result<(), String> {
 #[specta::specta]
 #[allow(clippy::too_many_arguments)]
 fn start_chat(
-    chats: tauri::State<'_, Chats>,
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
     profile: String,
     persona: Option<String>,
     cwd: Option<String>,
@@ -473,7 +493,8 @@ fn start_chat(
     columns: u16,
     rows: u16,
 ) -> Result<Started, String> {
-    let root = here()?;
+    let held = planes.held(&plane)?;
+    let root = held.root();
     let start = charter_core::start::Start {
         profile: Some(profile.clone()),
         persona: persona.clone(),
@@ -482,7 +503,7 @@ fn start_chat(
         resume: None,
         show_footer,
     };
-    let ready = charter_core::start::ready(&start, &root)?;
+    let ready = charter_core::start::ready(&start, root)?;
     let chat = Chat {
         program: ready.program.clone(),
         // What the RECORD keeps: the profile's own words, without charter's. A resume
@@ -496,7 +517,9 @@ fn start_chat(
         persona,
         show_footer,
     };
-    let session = chats.start_ready(&chat, &ready, Size { columns, rows })?;
+    let session = held
+        .chats()
+        .start_ready(&chat, &ready, Size { columns, rows })?;
     Ok(Started {
         session,
         wired: (!ready.wired.is_empty()).then_some(ready.wired),
@@ -511,19 +534,14 @@ struct Started {
     wired: Option<String>,
 }
 
-/// The plane this app is acting on.
-fn here() -> Result<PathBuf, String> {
-    let cwd = std::env::current_dir()
-        .map_err(|err| format!("cannot read the current directory: {err}"))?;
-    charter_core::plane::resolve(&cwd).map_err(|err| err.to_string())
-}
-
 /// Starts a session, and remembers it as a chat so a quit can write it down. No program is
 /// the operator's shell.
 #[tauri::command]
 #[specta::specta]
+#[allow(clippy::too_many_arguments)]
 fn open_session(
-    chats: tauri::State<'_, Chats>,
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
     program: Option<String>,
     args: Vec<String>,
     cwd: Option<String>,
@@ -550,21 +568,25 @@ fn open_session(
     };
     // The board already knows about it: `Chats` announces a chat BEFORE its program starts,
     // so its very first hook lands somewhere. Registering it here would be too late.
-    chats.start(&chat, Size { columns, rows })
+    planes
+        .held(&plane)?
+        .chats()
+        .start(&chat, Size { columns, rows })
 }
 
 /// Ends a session and everything it started. It is no longer a chat a quit would record.
 #[tauri::command]
 #[specta::specta]
 fn close_session(
-    chats: tauri::State<'_, Chats>,
-    hooks: tauri::State<'_, Hooks>,
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
     session: u32,
 ) -> Result<(), String> {
-    chats.close(session)?;
+    let held = planes.held(&plane)?;
+    held.chats().close(session)?;
     // Off the board entirely, not merely ended: a report that arrives for it afterwards —
     // from a hook that outlived the harness by a moment — moves nothing.
-    hooks.board().closed(session);
+    held.hooks().board().closed(session);
     Ok(())
 }
 
@@ -574,23 +596,37 @@ fn close_session(
 /// there is a window, so that a relaunch does not depend on a webview having run.
 #[tauri::command]
 #[specta::specta]
-fn opened_chats(chats: tauri::State<'_, Chats>) -> Vec<OpenChat> {
-    chats.open_now().into_iter().map(OpenChat::from).collect()
+fn opened_chats(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Vec<OpenChat>, String> {
+    Ok(planes
+        .held(&plane)?
+        .chats()
+        .open_now()
+        .into_iter()
+        .map(OpenChat::from)
+        .collect())
 }
 
 /// The chats this launch could not start, by name and reason. They are still recorded, and
 /// will be tried again at the next launch.
 #[tauri::command]
 #[specta::specta]
-fn chats_that_would_not_start(chats: tauri::State<'_, Chats>) -> Vec<(String, String)> {
-    chats.would_not_start()
+fn chats_that_would_not_start(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+) -> Result<Vec<(String, String)>, String> {
+    Ok(planes.held(&plane)?.chats().would_not_start())
 }
 
 /// Says which chat is in front, so the record brings that one back in front.
 #[tauri::command]
 #[specta::specta]
-fn chat_in_front(chats: tauri::State<'_, Chats>, session: Option<u32>) {
-    chats.bring_to_front(session);
+fn chat_in_front(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: Option<u32>,
+) -> Result<(), String> {
+    planes.held(&plane)?.chats().bring_to_front(session);
+    Ok(())
 }
 
 /// Asks the app to quit, the way the menu's Quit and the tray's do.
@@ -675,31 +711,47 @@ impl From<chats::Open> for OpenChat {
 /// hook shows.
 #[tauri::command]
 #[specta::specta]
-fn chat_states(chats: tauri::State<'_, Chats>, hooks: tauri::State<'_, Hooks>) -> Vec<Moved> {
-    chats
+fn chat_states(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Vec<Moved>, String> {
+    let held = planes.held(&plane)?;
+    Ok(held
+        .chats()
         .open_now()
         .into_iter()
-        .map(|open| hooks.now(open.session))
-        .collect()
+        .map(|open| held.hooks().now(open.session))
+        .collect())
 }
 
 /// Sends what a pane typed to the session's program.
 #[tauri::command]
 #[specta::specta]
-fn send_input(chats: tauri::State<'_, Chats>, session: u32, text: String) -> Result<(), String> {
-    chats.sessions().input(session, &text)
+fn send_input(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+    text: String,
+) -> Result<(), String> {
+    planes
+        .held(&plane)?
+        .chats()
+        .sessions()
+        .input(session, &text)
 }
 
 /// Tells a session how big the pane showing it now is.
 #[tauri::command]
 #[specta::specta]
 fn resize_session(
-    chats: tauri::State<'_, Chats>,
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
     session: u32,
     columns: u16,
     rows: u16,
 ) -> Result<(), String> {
-    chats.sessions().resize(session, Size { columns, rows })
+    planes
+        .held(&plane)?
+        .chats()
+        .sessions()
+        .resize(session, Size { columns, rows })
 }
 
 /// Opens a view of a session for a pane that is now on screen: the channel is sent the screen
@@ -707,11 +759,12 @@ fn resize_session(
 #[tauri::command]
 #[specta::specta]
 fn watch_session(
-    chats: tauri::State<'_, Chats>,
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
     session: u32,
     output: Channel<String>,
 ) -> Result<Watching, String> {
-    let watching = chats.sessions().watch(
+    let watching = planes.held(&plane)?.chats().sessions().watch(
         session,
         // A view whose window has gone is closed by the pane that owned it; until then, text
         // it cannot take is dropped rather than held, and the session keeps running.
@@ -730,15 +783,24 @@ fn watch_session(
 /// Closes a view, for a pane that has gone off screen. The session keeps running.
 #[tauri::command]
 #[specta::specta]
-fn unwatch_session(chats: tauri::State<'_, Chats>, session: u32, view: u32) -> Result<(), String> {
-    chats.sessions().unwatch(session, view)
+fn unwatch_session(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+    view: u32,
+) -> Result<(), String> {
+    planes
+        .held(&plane)?
+        .chats()
+        .sessions()
+        .unwatch(session, view)
 }
 
 /// The sessions that are running, in the order they were opened.
 #[tauri::command]
 #[specta::specta]
-fn running_sessions(chats: tauri::State<'_, Chats>) -> Vec<u32> {
-    chats.sessions().running()
+fn running_sessions(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Vec<u32>, String> {
+    Ok(planes.held(&plane)?.chats().sessions().running())
 }
 
 /// Every command the UI can call, in one place: the source of both the handler and the
@@ -746,7 +808,8 @@ fn running_sessions(chats: tauri::State<'_, Chats>) -> Vec<u32> {
 fn commands() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new().commands(collect_commands![
         first_frame,
-        plane_root,
+        plane_at_launch,
+        open_planes,
         open_session,
         close_session,
         send_input,
@@ -863,50 +926,9 @@ pub fn run() {
             }
             app.manage(Quitting::default());
 
-            let plane = std::env::current_dir()
-                .ok()
-                .and_then(|cwd| charter_core::plane::find_root(&cwd).ok());
-            // The record is written as what is open changes, and not only on the way out:
-            // an app that is killed, or crashes, runs no exit handler, and a day's chats
-            // would go with it. Outside a plane there is nowhere to write it, and the app
-            // still runs — it just cannot bring anything back next time.
-            // The channel a hook writes to, beside the record M1.7 already keeps. An app
-            // that cannot open it still runs: every chat reads `unknown`, which is exactly
-            // what the spec says a harness with no state hook shows.
-            let socket = hooks::socket_for(plane.as_deref());
-            let hooks = {
-                let window = app.handle().clone();
-                Hooks::listening_on(&socket, Box::new(move |moved| told(&window, moved)))
-                    .unwrap_or_else(|why| {
-                        eprintln!(
-                            "charter: no hook channel at {} ({why}); every chat will show \
-                             as unknown",
-                            socket.socket.display()
-                        );
-                        Hooks::deaf()
-                    })
-            };
-            let reporting = hooks.socket().map(|socket| sessions::Reporting {
-                socket: socket.to_path_buf(),
-            });
-
-            let writing_to = plane.clone();
-            let mut chats = Chats::recorded_by_reporting_to(
-                Box::new(move |record| {
-                    if let Some(root) = &writing_to {
-                        // A record that cannot be written is not worth interrupting the
-                        // operator over, but it is worth saying: a refused record means every
-                        // later launch comes back empty, and silence makes that look like a
-                        // plane that never had chats in it.
-                        if let Err(why) = reopen::write(root, record) {
-                            eprintln!("charter: what is open was not recorded ({why})");
-                        }
-                    }
-                }),
-                reporting,
-            );
             // Which `charter` a hook runs. Without one, nothing is armed and every chat
-            // reads `unknown` — never a hook pointed at a path that is not there.
+            // reads `unknown` — never a hook pointed at a path that is not there. It is a
+            // property of this build and not of a project, so every plane arms with it.
             let binary = charter_binary();
             if binary.is_none() {
                 eprintln!(
@@ -914,93 +936,24 @@ pub fn run() {
                      state; every one will show as unknown"
                 );
             }
-            chats.arming_with(binary);
-            // **Before a single session is started, because `put_back` below starts them.**
-            // A harness fires `SessionStart` at its own exec, and a board that learned the
-            // chat's number afterwards would miss it — for a chat that is then idle, waiting
-            // for a first prompt, no second event ever comes and it reads `unknown` for the
-            // rest of the run. That is every chat of a relaunch, which is exactly the case
-            // the sidebar exists for. A review found it.
-            {
-                let board = hooks.shared_board();
-                chats.when_one_starts(Box::new({
-                    let board = std::sync::Arc::clone(&board);
-                    move |session, harness, conversation| {
-                        hooks::held_board(&board).opened(session, harness, conversation);
-                    }
-                }));
-                // And taken back if the program then fails to start: the announcement has to
-                // come first, so it can be about a chat that never happens.
-                chats.when_one_does_not_start(Box::new(move |session| {
-                    hooks::held_board(&board).closed(session);
-                }));
-            }
-            // Armed before a single session is started, because `put_back` starts them: a
-            // chat restored by a relaunch whose program dies at once must still be able to
-            // say so. The board is held directly rather than through the app's state, which
-            // is not managed yet at this point.
-            //
-            // No hook can report a program dying (the process is gone), so the operating
-            // system does. That is not charter reading a harness's output (ADR 0018) — it is
-            // the process's own exit status, and the only honest source for `failed`.
-            {
-                let board = hooks.shared_board();
-                let window = app.handle().clone();
-                chats
-                    .sessions()
-                    .when_one_ends(Box::new(move |session, exit| {
-                        let changed =
-                            hooks::held_board(&board).exited(session, hooks::code_of(&exit));
-                        if changed {
-                            told(&window, hooks::now(&board, session));
-                        }
-                    }));
-            }
-            // Put back what was open before there is a window, so a relaunch does not
-            // depend on a webview having run. The window asks `opened_chats` for the result.
-            //
-            // What happened is said out loud, on stderr. An operator who launched charter
-            // somewhere without a plane, or whose chats did not come back, otherwise has
-            // nothing at all to look at — and neither does a CI log.
-            match &plane {
-                Some(root) => {
-                    let record = match reopen::read_or_refusal(root) {
-                        Ok(record) => record,
-                        Err(why) => {
-                            // Not the same thing as an empty plane, and an operator told
-                            // "nothing to reopen" would go looking in the wrong place.
-                            eprintln!(
-                                "charter: the record of what was open was refused ({why}); \
-                                 nothing is reopened and nothing will be recorded until it is repaired"
-                            );
-                            reopen::Record::default()
-                        }
-                    };
-                    let wanted = record.chats.len();
-                    let back = chats.put_back(&record, root, STARTING).len();
-                    if wanted > 0 {
-                        eprintln!(
-                            "charter: plane {}, {back} of {wanted} chats back",
-                            root.display()
-                        );
-                        for (name, why) in chats.would_not_start() {
-                            eprintln!(
-                                "charter: {name} did not start ({why}); it is still recorded"
-                            );
-                        }
-                    } else {
-                        eprintln!("charter: plane {}, nothing to reopen", root.display());
-                    }
-                }
-                None => eprintln!(
-                    "charter: no plane here, so nothing is reopened and nothing is recorded \
-                     (a plane is the nearest directory at or above this one with a charter.toml)"
-                ),
-            }
+            // The registry is managed BEFORE a plane is opened, because opening one starts
+            // programs, and a program that dies at once tells the board, which tells the
+            // window, which asks this registry what the chat is called.
+            app.manage(Planes::telling(
+                {
+                    let window = app.handle().clone();
+                    std::sync::Arc::new(move |moved: Moved| told(&window, moved))
+                },
+                binary,
+            ));
+
+            // The working directory, resolved ONCE, to decide which plane the first window
+            // opens. Everything after this names its plane; nothing asks the working
+            // directory again. A launch that finds no plane leaves the app holding none,
+            // which is a state and not a failure.
+            let launch = planes::at_launch(&app.state::<Planes>(), std::env::current_dir());
+            app.manage(launch);
             reached("the record is back");
-            app.manage(hooks);
-            app.manage(chats);
-            app.manage(Plane(plane));
 
             // Last, and never fatal. A tray is somewhere to put the window; the sessions
             // are the work. A desktop with no system tray at all — some Linux sessions, and
@@ -1025,16 +978,10 @@ pub fn run() {
         // system, and one that ignores a hangup outlives the app that started it.
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::Exit) {
-                let chats = app.state::<Chats>();
-                // Written before the sessions are ended, because ending them is what makes
-                // there be nothing to write. A failure here is not worth refusing to exit
-                // over: the next launch reads no record and starts empty.
-                if let Plane(Some(root)) = &*app.state::<Plane>()
-                    && let Err(why) = reopen::write(root, &chats.record())
-                {
-                    eprintln!("charter: what was open was not recorded ({why})");
-                }
-                chats.end_all();
+                // Every plane, not "the" plane: each one writes its own record into itself
+                // and ends its own sessions. A failure is not worth refusing to exit over —
+                // the next launch of that plane reads no record and starts empty.
+                app.state::<Planes>().let_go_of_all();
             }
         });
 }

@@ -4,7 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import * as bench from "./bench";
-import { commands } from "./bindings";
+import { commands, type PlaneId } from "./bindings";
 import { draw } from "./renderer";
 
 /**
@@ -15,10 +15,14 @@ import { draw } from "./renderer";
  * go without the session noticing — the core has held its terminal all along.
  */
 export function SessionPane({
+  plane,
   session,
   focused,
   onFocus,
 }: {
+  /** The plane this session belongs to. A session number is only half of a chat's name —
+   *  every plane numbers its own from one — so it travels with every call this pane makes. */
+  plane: PlaneId;
   session: number;
   focused: boolean;
   onFocus: () => void;
@@ -63,7 +67,7 @@ export function SessionPane({
     void draw(pane, say, () => !gone).then((drawing) => bench.paneDrawing(session, drawing));
     const typed = pane.onData((text) => {
       // Input refused is worth seeing: the program has stopped reading it, or has ended.
-      void commands.sendInput(session, text).then(
+      void commands.sendInput(plane, session, text).then(
         (sent) => {
           if (sent.status === "error") say(sent.error);
         },
@@ -72,7 +76,7 @@ export function SessionPane({
     });
     // The terminal decides the size, and the program is told it.
     const resized = pane.onResize(({ cols, rows }) => {
-      void commands.resizeSession(session, cols, rows);
+      void commands.resizeSession(plane, session, cols, rows);
     });
     const watching = new ResizeObserver(() => fit.fit());
     watching.observe(where);
@@ -95,14 +99,14 @@ export function SessionPane({
     void (async () => {
       fit.fit();
       const opened = await commands
-        .watchSession(session, output)
+        .watchSession(plane, session, output)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
       if (opened.status === "error") {
         say(opened.error);
         return;
       }
       if (gone) {
-        void commands.unwatchSession(session, opened.data.view);
+        void commands.unwatchSession(plane, session, opened.data.view);
         return;
       }
       view = opened.data.view;
@@ -121,12 +125,12 @@ export function SessionPane({
       watching.disconnect();
       typed.dispose();
       resized.dispose();
-      if (view !== undefined) void commands.unwatchSession(session, view);
+      if (view !== undefined) void commands.unwatchSession(plane, session, view);
       pane.dispose();
       terminal.current = undefined;
       bench.paneClosed(session);
     };
-  }, [session]);
+  }, [plane, session]);
 
   return (
     <div

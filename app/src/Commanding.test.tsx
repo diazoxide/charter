@@ -103,7 +103,8 @@ function core(over: (cmd: string, args: unknown) => unknown = () => undefined) {
     asked.push({ cmd, args });
     const mine = over(cmd, args);
     if (mine !== undefined) return mine;
-    if (cmd === "plane_root") return "/home/dev/plane";
+    if (cmd === "plane_at_launch")
+      return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
     if (cmd === "plane_sidebar") return SIDEBAR;
     if (cmd === "running_sessions") return [];
     if (cmd === "opened_chats") return [];
@@ -245,7 +246,7 @@ describe("the palette reaching what the window can do", () => {
 
     expect(screen.queryAllByTestId("pane")).toEqual([]);
     expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
-      { session: 1 },
+      { plane: "/home/dev/plane", session: 1 },
     ]);
   });
 
@@ -259,7 +260,7 @@ describe("the palette reaching what the window can do", () => {
     await runFromPalette("close pane");
 
     expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
-      { session: 2 },
+      { plane: "/home/dev/plane", session: 2 },
     ]);
   });
 
@@ -432,7 +433,9 @@ describe("handing F2 to the chat in front", () => {
     await userEvent.keyboard("{F2}");
 
     expect(commandsSent(asked)).toEqual(
-      expect.arrayContaining([{ cmd: "send_input", args: { session: 1, text: F2_BYTES } }]),
+      expect.arrayContaining([
+        { cmd: "send_input", args: { plane: "/home/dev/plane", session: 1, text: F2_BYTES } },
+      ]),
     );
     expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
   });

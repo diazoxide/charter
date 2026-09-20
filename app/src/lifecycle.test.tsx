@@ -103,7 +103,8 @@ function core(
       listeners.set(event, handler);
       return 1;
     }
-    if (cmd === "plane_root") return "/home/dev/plane";
+    if (cmd === "plane_at_launch")
+      return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
     if (cmd === "start_options") return START_OPTIONS;
     if (cmd === "start_chat") return { session: ++opened, wired: null };
     if (cmd === "opened_chats") return open;
@@ -236,7 +237,10 @@ describe("what the window does with the chats the core already has", () => {
     );
 
     await vi.waitFor(() =>
-      expect(of("chat_in_front", asked).slice(-1)[0]?.args).toEqual({ session: 8 }),
+      expect(of("chat_in_front", asked).slice(-1)[0]?.args).toEqual({
+        plane: "/home/dev/plane",
+        session: 8,
+      }),
     );
   });
 });
@@ -260,7 +264,13 @@ describe("being asked to quit", () => {
 
   /** What a hook would have reported, as the core hands it to the window. */
   function doing(session: number, state: string, needsYou = false): Moved {
-    return { session, state, needs_you: needsYou, queue: needsYou ? [session] : [] };
+    return {
+      plane: "/home/dev/plane",
+      session,
+      state,
+      needs_you: needsYou,
+      queue: needsYou ? [session] : [],
+    };
   }
 
   it("says which session is mid-turn, now that a hook can tell it", async () => {
@@ -354,7 +364,8 @@ describe("being asked to quit", () => {
         listeners.set(event, handler);
         return 1;
       }
-      if (cmd === "plane_root") return "/home/dev/plane";
+      if (cmd === "plane_at_launch")
+        return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
       if (cmd === "chats_that_would_not_start") return [];
       if (cmd !== "opened_chats") return null;
       await new Promise<void>((arrive) => (letTheChatsArrive = arrive));
@@ -379,6 +390,9 @@ describe("being asked to quit", () => {
     const { asked } = core();
     render(<App />);
     await screen.findByText(/No sessions/);
+    // And settled: the window asks its plane first and what it has open second, so "no tabs"
+    // is only "nothing to end" once that second answer is back.
+    await vi.waitFor(() => expect(of("chats_that_would_not_start", asked)).toHaveLength(1));
 
     const listen = of("plugin:event|listen", asked).find(
       (one) => (one.args as { event: string }).event === "quit-asked",

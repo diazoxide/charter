@@ -16,28 +16,43 @@ export const commands = {
 	 *  `CHARTER_BENCH_LOG` — which only `tools/bench.mjs` sets — also prints the number here.
 	 */
 	firstFrame: () => __TAURI_INVOKE<string | null>("first_frame"),
-	/**  The plane the app was started in, or why there is none. */
-	planeRoot: () => typedError<string, string>(__TAURI_INVOKE("plane_root")),
+	/**
+	 *  What this launch had to go on, and the plane it opened — or the fact that it opened none.
+	 *
+	 *  **Never an error.** The working directory is a HINT: it is resolved once, at startup, to
+	 *  decide which plane the first window opens, and after that a window's plane is explicit and
+	 *  the working directory is never consulted again. A launch that resolved no plane leaves the
+	 *  app running and holding nothing, which is a state the window draws rather than a failure
+	 *  it reports.
+	 */
+	planeAtLaunch: () => __TAURI_INVOKE<Launch>("plane_at_launch"),
+	/**
+	 *  Every plane this process is holding, by id.
+	 *
+	 *  There can be none, and none is an ordinary state: it is what an app launched outside any
+	 *  plane comes up in, and what it returns to when the last project is closed.
+	 */
+	openPlanes: () => __TAURI_INVOKE<PlaneId[]>("open_planes"),
 	/**
 	 *  Starts a session, and remembers it as a chat so a quit can write it down. No program is
 	 *  the operator's shell.
 	 */
-	openSession: (program: string | null, args: string[], cwd: string | null, name: string, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("open_session", { program, args, cwd, name, columns, rows })),
+	openSession: (plane: PlaneId, program: string | null, args: string[], cwd: string | null, name: string, columns: number, rows: number) => typedError<number, string>(__TAURI_INVOKE("open_session", { plane, program, args, cwd, name, columns, rows })),
 	/**  Ends a session and everything it started. It is no longer a chat a quit would record. */
-	closeSession: (session: number) => typedError<null, string>(__TAURI_INVOKE("close_session", { session })),
+	closeSession: (plane: PlaneId, session: number) => typedError<null, string>(__TAURI_INVOKE("close_session", { plane, session })),
 	/**  Sends what a pane typed to the session's program. */
-	sendInput: (session: number, text: string) => typedError<null, string>(__TAURI_INVOKE("send_input", { session, text })),
+	sendInput: (plane: PlaneId, session: number, text: string) => typedError<null, string>(__TAURI_INVOKE("send_input", { plane, session, text })),
 	/**  Tells a session how big the pane showing it now is. */
-	resizeSession: (session: number, columns: number, rows: number) => typedError<null, string>(__TAURI_INVOKE("resize_session", { session, columns, rows })),
+	resizeSession: (plane: PlaneId, session: number, columns: number, rows: number) => typedError<null, string>(__TAURI_INVOKE("resize_session", { plane, session, columns, rows })),
 	/**
 	 *  Opens a view of a session for a pane that is now on screen: the channel is sent the screen
 	 *  as it already is, and then the session's output. Answers with the id that closes the view.
 	 */
-	watchSession: (session: number, output: Channel<string>) => typedError<Watching, string>(__TAURI_INVOKE("watch_session", { session, output })),
+	watchSession: (plane: PlaneId, session: number, output: Channel<string>) => typedError<Watching, string>(__TAURI_INVOKE("watch_session", { plane, session, output })),
 	/**  Closes a view, for a pane that has gone off screen. The session keeps running. */
-	unwatchSession: (session: number, view: number) => typedError<null, string>(__TAURI_INVOKE("unwatch_session", { session, view })),
+	unwatchSession: (plane: PlaneId, session: number, view: number) => typedError<null, string>(__TAURI_INVOKE("unwatch_session", { plane, session, view })),
 	/**  The sessions that are running, in the order they were opened. */
-	runningSessions: () => __TAURI_INVOKE<number[]>("running_sessions"),
+	runningSessions: (plane: PlaneId) => typedError<number[], string>(__TAURI_INVOKE("running_sessions", { plane })),
 	/**
 	 *  What every chat is doing, and which of them are asking for you.
 	 * 
@@ -45,21 +60,21 @@ export const commands = {
 	 *  has never heard from is `unknown`, which is what the spec says a harness with no state
 	 *  hook shows.
 	 */
-	chatStates: () => __TAURI_INVOKE<Moved[]>("chat_states"),
+	chatStates: (plane: PlaneId) => typedError<Moved[], string>(__TAURI_INVOKE("chat_states", { plane })),
 	/**
 	 *  The chats the app already has open — at a launch, the ones put back from the record.
 	 * 
 	 *  The window asks this instead of opening its own: putting the record back happens before
 	 *  there is a window, so that a relaunch does not depend on a webview having run.
 	 */
-	openedChats: () => __TAURI_INVOKE<OpenChat[]>("opened_chats"),
+	openedChats: (plane: PlaneId) => typedError<OpenChat[], string>(__TAURI_INVOKE("opened_chats", { plane })),
 	/**
 	 *  The chats this launch could not start, by name and reason. They are still recorded, and
 	 *  will be tried again at the next launch.
 	 */
-	chatsThatWouldNotStart: () => __TAURI_INVOKE<([string, string])[]>("chats_that_would_not_start"),
+	chatsThatWouldNotStart: (plane: PlaneId) => typedError<([string, string])[], string>(__TAURI_INVOKE("chats_that_would_not_start", { plane })),
 	/**  Says which chat is in front, so the record brings that one back in front. */
-	chatInFront: (session: number | null) => __TAURI_INVOKE<void>("chat_in_front", { session }),
+	chatInFront: (plane: PlaneId, session: number | null) => typedError<null, string>(__TAURI_INVOKE("chat_in_front", { plane, session })),
 	/**
 	 *  Asks the app to quit, the way the menu's Quit and the tray's do.
 	 * 
@@ -88,7 +103,7 @@ export const commands = {
 	 *  nothing on the plane records a chat: `.charter/frame/` belongs to the tmux frame and the
 	 *  app stays out of it.
 	 */
-	planeSidebar: () => typedError<Sidebar, string>(__TAURI_INVOKE("plane_sidebar")),
+	planeSidebar: (plane: PlaneId) => typedError<Sidebar, string>(__TAURI_INVOKE("plane_sidebar", { plane })),
 	/**
 	 *  The focused workspace's panels: its repos, its todos and the plane's personas.
 	 * 
@@ -116,7 +131,7 @@ export const commands = {
 	 *  operator edits by hand and a chat can write, so a cache here would be a second answer to
 	 *  "what is on disk" that nothing invalidates.
 	 */
-	startOptions: () => typedError<StartOptions, string>(__TAURI_INVOKE("start_options")),
+	startOptions: (plane: PlaneId) => typedError<StartOptions, string>(__TAURI_INVOKE("start_options", { plane })),
 	/**
 	 *  Records that the operator approved running this profile's command — **the one they were
 	 *  shown**.
@@ -132,7 +147,7 @@ export const commands = {
 	 *  Its own command, and a separate click from the one that starts the chat: this IS the
 	 *  approval, and a command that both asked and ran would be asking nothing.
 	 */
-	approveProfile: (name: string, shown: string) => typedError<null, string>(__TAURI_INVOKE("approve_profile", { name, shown })),
+	approveProfile: (plane: PlaneId, name: string, shown: string) => typedError<null, string>(__TAURI_INVOKE("approve_profile", { plane, name, shown })),
 	/**
 	 *  Starts a chat on a harness profile, with a persona.
 	 * 
@@ -145,7 +160,7 @@ export const commands = {
 	 *  it is decided here and nowhere later: Claude Code's footer command inherits the
 	 *  environment its harness was started with, and no later click can change it.
 	 */
-	startChat: (profile: string, persona: string | null, cwd: string | null, name: string, showFooter: boolean, columns: number, rows: number) => typedError<Started, string>(__TAURI_INVOKE("start_chat", { profile, persona, cwd, name, showFooter, columns, rows })),
+	startChat: (plane: PlaneId, profile: string, persona: string | null, cwd: string | null, name: string, showFooter: boolean, columns: number, rows: number) => typedError<Started, string>(__TAURI_INVOKE("start_chat", { plane, profile, persona, cwd, name, showFooter, columns, rows })),
 	/**
 	 *  The piece a chat's working directory sits in, or `None`.
 	 * 
@@ -185,6 +200,31 @@ export type ChatWorktree = {
 	stale: boolean,
 };
 
+/**
+ *  What a launch had to go on, and what came of it.
+ *
+ *  **Three states, and none of them is an error.** The app has to come up holding no plane at
+ *  all and stay useful — that is what an opener attaches to — and "there is no plane where you
+ *  launched me" is a different thing to tell an operator from "you have not opened one yet".
+ *  A window double-clicked from the dock has a working directory of `/` and is the second;
+ *  `charter` run in a directory that is in no plane is the first.
+ *
+ *  They are told apart by shape rather than by reading a sentence: `plane` set is a plane in
+ *  hand, `from` set without it is a directory that is in no plane, and neither is a launch
+ *  that was given nothing to go on.
+ */
+export type Launch = {
+	/**  The plane this launch opened, and the id every command for it names. */
+	plane: PlaneId | null,
+	/**
+	 *  The directory the launch was given, when it could be read. A HINT and nothing more:
+	 *  it is resolved once, here, and no command consults the working directory again.
+	 */
+	from: string | null,
+	/**  Why no plane was opened, in the resolver's own words. */
+	why: string | null,
+};
+
 /**  What a merge did, for the window to report. */
 export type Merged = {
 	branch: string,
@@ -192,8 +232,15 @@ export type Merged = {
 	now: string,
 };
 
-/**  The event the window listens for. One chat, its state, whether it is asking for you. */
+/**
+ *  The event the window listens for. One chat, its state, whether it is asking for you.
+ *
+ *  **The plane travels with it, and that is not decoration.** Every plane numbers its chats
+ *  from one, so a window holding two of them would be told "session 3 is waiting" twice about
+ *  two different chats. The pair is the identity; one half of it is a guess.
+ */
 export type Moved = {
+	plane: PlaneId,
 	session: number,
 	state: string,
 	needs_you: boolean,
@@ -279,6 +326,16 @@ export type Piece = {
 	/**  Set when git still has a registration whose directory is gone. */
 	stale: boolean,
 };
+
+/**
+ *  Which plane something is acting for.
+ *
+ *  It is the plane's root as the registry resolved it, and it is minted by [`Planes::open`]
+ *  alone — a caller hands one back, it never spells one. Two spellings of one directory would
+ *  otherwise be two entries in the registry holding two boards for one plane on disk, which
+ *  is the "acting on the wrong plane" defect wearing a different hat.
+ */
+export type PlaneId = string;
 
 /**
  *  One row of the profile picker: what it runs, where charter read it, and what pressing

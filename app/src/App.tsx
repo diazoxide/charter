@@ -6,6 +6,7 @@ import {
   commands,
   type ChatWorktree,
   type OpenChat,
+  type PlaneId,
   type Sidebar as SidebarModel,
   type StartOptions,
 } from "./bindings";
@@ -40,17 +41,31 @@ import { ChatState, NeedsYou } from "./NeedsYou";
 import { Panels } from "./Panels";
 import { quietOnes, stateOf, useChatStates } from "./chatState";
 
+/**
+ * What this window is showing, plane-wise.
+ *
+ * **"No plane" is a state and not a failure.** The core comes up holding none whenever the
+ * launch had no plane to resolve, and the two ways that happens are different things to tell
+ * an operator: `here` is a directory that is in no plane, and not-`here` is a launch that had
+ * nothing to go on at all — an app started from the dock, whose working directory is `/`.
+ * The opener attaches to both; until it lands the header says which.
+ */
 type Plane =
-  { state: "loading" } | { state: "found"; root: string } | { state: "missing"; reason: string };
+  | { state: "loading" }
+  | { state: "open"; plane: PlaneId }
+  | { state: "none"; here: boolean; reason: string };
 
 /** The size a session starts at. The pane it lands in tells it the real one at once. */
 const STARTING_SIZE = { columns: 80, rows: 24 };
 
 function App() {
   const [plane, setPlane] = useState<Plane>({ state: "loading" });
+  /** The plane every command below names. There is no "current plane" in the core: a command
+   *  that does not carry one cannot act on anything. */
+  const planeId = plane.state === "open" ? plane.plane : undefined;
   const [tabs, setTabs] = useState<Tabs>(noTabs);
-  /** What every chat is doing. Pushed from the core; nothing here polls. */
-  const states = useChatStates();
+  /** What every chat is doing, in THIS plane. Pushed from the core; nothing here polls. */
+  const states = useChatStates(planeId);
   const [trouble, setTrouble] = useState<string>();
   const [sidebar, setSidebar] = useState<SidebarModel>();
   const [focused, setFocused] = useState<string>();
@@ -93,20 +108,24 @@ function App() {
   // inside a state update. React may run an update again, and a session must not be opened or
   // ended twice because it did.
   const now = useRef(tabs);
-  const change = useCallback((how: (tabs: Tabs) => Tabs): Tabs => {
-    const next = how(now.current);
-    const wasInFront = now.current.inFront;
-    now.current = next;
-    setTabs(next);
-    // The core records which chat was in front, so it is told whenever that changes — and
-    // only then, rather than on every split and every keystroke.
-    if (next.inFront !== wasInFront) {
-      const front = next.inFront === undefined ? undefined : next.byId[next.inFront];
-      const pane = front && panesOf(next, front.id)[0];
-      void commands.chatInFront(pane ? pane.session : null).catch(() => undefined);
-    }
-    return next;
-  }, []);
+  const change = useCallback(
+    (how: (tabs: Tabs) => Tabs): Tabs => {
+      const next = how(now.current);
+      const wasInFront = now.current.inFront;
+      now.current = next;
+      setTabs(next);
+      // The core records which chat was in front, so it is told whenever that changes — and
+      // only then, rather than on every split and every keystroke. The plane travels with it:
+      // "chat 3 is in front" belongs to a plane, and every plane numbers its chats from one.
+      if (next.inFront !== wasInFront && planeId !== undefined) {
+        const front = next.inFront === undefined ? undefined : next.byId[next.inFront];
+        const pane = front && panesOf(next, front.id)[0];
+        void commands.chatInFront(planeId, pane ? pane.session : null).catch(() => undefined);
+      }
+      return next;
+    },
+    [planeId],
+  );
 
   // What the core already has open, which at a launch is the record put back before there
   // was a window. The window draws them; it never ends them — a reload during development,
@@ -116,17 +135,26 @@ function App() {
   // every chat again.
   const adopted = useRef(false);
   useEffect(() => {
-    if (adopted.current) return;
+    // Nothing is asked until the core has said which plane this launch opened, if any:
+    // there is no plane to ask about before that, and no default one to fall back on.
+    if (plane.state === "loading" || adopted.current) return;
     adopted.current = true;
+    if (planeId === undefined) {
+      // No plane, so nothing was put back and nothing is running. That is settled, and a
+      // quit from here has nothing to warn about.
+      settled.current = true;
+      return;
+    }
     void commands
-      .openedChats()
-      .then((open) => {
+      .openedChats(planeId)
+      .then((answer) => {
         settled.current = true;
         void commands
           // A window that cannot ask, or is answered with nothing, simply says nothing.
-          .chatsThatWouldNotStart()
-          .then((trouble) => setWouldNotStart(trouble ?? []))
+          .chatsThatWouldNotStart(planeId)
+          .then((trouble) => setWouldNotStart(trouble.status === "ok" ? (trouble.data ?? []) : []))
           .catch(() => undefined);
+        const open = answer.status === "ok" ? (answer.data ?? []) : [];
         if (open.length === 0) return;
         setReopened(open);
         const drawn = open.reduce((tabs, chat) => openTab(tabs, chat.session, chat.name), noTabs());
@@ -138,7 +166,7 @@ function App() {
       .catch(() => {
         settled.current = true;
       });
-  }, [change]);
+  }, [change, plane.state, planeId]);
 
   // Something asked the app to quit: the menu, the tray, or Cmd-Q. The answer is the
   // operator's, and it is given here because this is where what would be ended is known.
@@ -163,8 +191,12 @@ function App() {
   // nothing to invalidate a cache of it. `tabs` is the dependency because opening or ending a
   // chat is what this window can change about the answer.
   useEffect(() => {
+    // A window with no plane has no sidebar to draw, and asking for one would be asking
+    // which of no planes. Nothing is cleared here: the sidebar starts empty, and clearing
+    // state from inside an effect is a render the window does not need.
+    if (planeId === undefined) return;
     void commands
-      .planeSidebar()
+      .planeSidebar(planeId)
       .then((answer) => {
         // Only an `ok` answer WITH a body is used. Both halves are load-bearing: the
         // state updater below runs on the NEXT render, outside this promise, so nothing
@@ -187,7 +219,7 @@ function App() {
       })
       // A window with no readable plane still runs its panes; the header already says so.
       .catch(() => setSidebar(undefined));
-  }, [tabs]);
+  }, [planeId, tabs]);
 
   // Cold start ends when a person can see the window, which is the frame after the one this
   // paints in. The core answers with why that took as long as it did, when it took longer
@@ -213,18 +245,25 @@ function App() {
     };
   }, []);
 
+  // Which plane this launch opened — asked once, and the answer every command below carries.
+  // The core resolved the working directory once to get it; nothing asks again.
   useEffect(() => {
     void commands
-      .planeRoot()
-      .then((found) => {
+      .planeAtLaunch()
+      .then((launch) => {
         setPlane(
-          found.status === "ok"
-            ? { state: "found", root: found.data }
-            : { state: "missing", reason: found.error },
+          launch.plane !== null
+            ? { state: "open", plane: launch.plane }
+            : {
+                state: "none",
+                // A directory it could read, that is in no plane, versus nothing to go on.
+                here: launch.from !== null,
+                reason: launch.why ?? "charter has no plane open.",
+              },
         );
       })
       // A command can also fail outright, with no answer of its own to give.
-      .catch((err: unknown) => setPlane({ state: "missing", reason: String(err) }));
+      .catch((err: unknown) => setPlane({ state: "none", here: true, reason: String(err) }));
   }, []);
 
   // Where a chat starts: the focused workspace's directory, so the sidebar can file it under
@@ -233,17 +272,24 @@ function App() {
   const startIn = sidebar?.workspaces.find((ws) => ws.name === focused)?.path ?? null;
 
   /** Asks which profile and which persona. It starts nothing by itself. */
-  const ask = useCallback(async (where: { tab: true } | { split: Direction }) => {
-    setPickerTrouble(undefined);
-    const options = await commands
-      .startOptions()
-      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-    if (options.status === "error") {
-      setTrouble(options.error);
-      return;
-    }
-    setPicking({ options: options.data, where });
-  }, []);
+  const ask = useCallback(
+    async (where: { tab: true } | { split: Direction }) => {
+      setPickerTrouble(undefined);
+      if (planeId === undefined) {
+        setTrouble("charter has no plane open, so there is nowhere to start a chat.");
+        return;
+      }
+      const options = await commands
+        .startOptions(planeId)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (options.status === "error") {
+        setTrouble(options.error);
+        return;
+      }
+      setPicking({ options: options.data, where });
+    },
+    [planeId],
+  );
 
   const newTab = useCallback(() => void ask({ tab: true }), [ask]);
 
@@ -252,7 +298,7 @@ function App() {
   const startPicked = useCallback(
     async (profile: string, persona: string | null, showFooter: boolean) => {
       const where = picking?.where;
-      if (where === undefined) return;
+      if (where === undefined || planeId === undefined) return;
       const inFront = now.current.inFront;
       const name =
         "split" in where && inFront !== undefined
@@ -260,6 +306,7 @@ function App() {
           : String(now.current.named.tabs + 1);
       const started = await commands
         .startChat(
+          planeId,
           profile,
           persona,
           startIn,
@@ -288,18 +335,19 @@ function App() {
       // The tab that was to be split can have closed while the picker was open. Nothing
       // would show that session, so it is ended rather than left running unseen.
       if (change((tabs) => splitFocusedPane(tabs, where.split, session)) === before) {
-        void commands.closeSession(session);
+        void commands.closeSession(planeId, session);
       }
     },
-    [change, picking, startIn],
+    [change, picking, planeId, startIn],
   );
 
   /** The approval IS this click. After it, the whole chain of checks runs again from the
    *  top before anything is exec'd, so a yes never walks past a refusal standing behind it. */
   const approveAndStart = useCallback(
     async (profile: string, persona: string | null, showFooter: boolean, shown: string) => {
+      if (planeId === undefined) return;
       const said = await commands
-        .approveProfile(profile, shown)
+        .approveProfile(planeId, profile, shown)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
       if (said.status === "error") {
         setPickerTrouble(said.error);
@@ -312,7 +360,7 @@ function App() {
       // profile is exactly where a dropped choice would go unnoticed.
       await startPicked(profile, persona, showFooter);
     },
-    [startPicked],
+    [planeId, startPicked],
   );
 
   const quit = useCallback(() => {
@@ -333,16 +381,17 @@ function App() {
       now.current.inFront === undefined ? undefined : now.current.byId[now.current.inFront];
     const going = tab && panesOf(now.current, tab.id).find((pane) => pane.pane === tab.focused);
     change(closeFocusedPane);
-    if (going) void commands.closeSession(going.session);
-  }, [change]);
+    if (going && planeId !== undefined) void commands.closeSession(planeId, going.session);
+  }, [change, planeId]);
 
   const close = useCallback(
     (id: number) => {
       const ending = panesOf(now.current, id);
       change((tabs) => closeTab(tabs, id));
-      for (const pane of ending) void commands.closeSession(pane.session);
+      if (planeId === undefined) return;
+      for (const pane of ending) void commands.closeSession(planeId, pane.session);
     },
-    [change],
+    [change, planeId],
   );
 
   /** Brings the tab holding a chat to the front. The queue and the palette both use it. */
@@ -411,15 +460,14 @@ function App() {
   // clearing state from inside an effect is a render the window does not need, and a stale
   // answer is simply not this chat's.
   const worktree = located?.cwd === frontCwd ? located.piece : undefined;
-  const planeRoot = plane.state === "found" ? plane.root : undefined;
 
   /** Removes the piece the chat in front works in. The core's refusal travels back whole. */
   const removeWorktree = useCallback(
     async (force: boolean): Promise<Ran> => {
-      if (!worktree || planeRoot === undefined)
+      if (!worktree || planeId === undefined)
         return { ok: false, refused: "There is no worktree in front to remove." };
       const answer = await commands
-        .worktreeRemove(planeRoot, worktree.workspace, worktree.repo, worktree.piece, force)
+        .worktreeRemove(planeId, worktree.workspace, worktree.repo, worktree.piece, force)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
       // Verbatim. The sentence names the repair, and an operator shown a reworded version of
       // it can neither follow that repair nor search for it.
@@ -431,22 +479,22 @@ function App() {
         said: `The worktree ${worktree.piece} is gone. The branch ${worktree.branch ?? worktree.piece} stays.`,
       };
     },
-    [planeRoot, worktree],
+    [planeId, worktree],
   );
 
   /** Lands the piece in its clone, fast-forward only. The core never pushes. */
   const mergeWorktree = useCallback(async (): Promise<Ran> => {
-    if (!worktree || planeRoot === undefined)
+    if (!worktree || planeId === undefined)
       return { ok: false, refused: "There is no worktree in front to merge." };
     const answer = await commands
-      .worktreeMerge(planeRoot, worktree.workspace, worktree.repo, worktree.piece)
+      .worktreeMerge(planeId, worktree.workspace, worktree.repo, worktree.piece)
       .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
     if (answer.status === "error") return { ok: false, refused: answer.error };
     return {
       ok: true,
       said: `${answer.data.branch} landed: ${answer.data.was} → ${answer.data.now}`,
     };
-  }, [planeRoot, worktree]);
+  }, [planeId, worktree]);
 
   /**
    * Hands a key the palette claimed to the chat in front.
@@ -463,8 +511,10 @@ function App() {
       if (frontSession === undefined)
         return { ok: false, refused: "No chat is in front, so there is nowhere to send it." };
       if (key !== PASS_THROUGH_KEY) return { ok: false, refused: `charter cannot send ${key}.` };
+      if (planeId === undefined)
+        return { ok: false, refused: "charter has no plane open, so there is nowhere to send it." };
       const sent = await commands
-        .sendInput(frontSession, PASS_THROUGH_BYTES)
+        .sendInput(planeId, frontSession, PASS_THROUGH_BYTES)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
       // Verbatim: a session that has stopped reading its input says so in the core's words.
       if (sent.status === "error") return { ok: false, refused: sent.error };
@@ -472,7 +522,7 @@ function App() {
       // every press of a key an operator means to press repeatedly is noise.
       return { ok: true };
     },
-    [frontSession],
+    [frontSession, planeId],
   );
 
   const doing = useMemo<Doing>(
@@ -532,7 +582,7 @@ function App() {
         workspaces: sidebar?.workspaces.map((ws) => ws.name) ?? [],
         focused,
         worktree,
-        plane: planeRoot,
+        plane: planeId,
         // Only a refusal the REMOVAL gave, and only while it is still on screen: the
         // discard row is the operator's answer to a sentence they have read.
         refusal: report?.refused && report.from === "worktree.remove" ? report.words : undefined,
@@ -540,7 +590,7 @@ function App() {
         quiet,
         nameOf,
       }),
-    [focused, nameOf, planeRoot, quiet, report, sidebar, states.needsYou, tabs, worktree],
+    [focused, nameOf, planeId, quiet, report, sidebar, states.needsYou, tabs, worktree],
   );
 
   const by = useCallback((id: string) => offers.find((offer) => offer.id === id), [offers]);
@@ -616,8 +666,13 @@ function App() {
         </div>
         <NeedsYou queue={states.needsYou} quiet={quiet} nameOf={nameOf} show={showChat} />
         <span className="plane">
-          {plane.state === "found" && <code>{plane.root}</code>}
-          {plane.state === "missing" && <span role="alert">No plane: {plane.reason}</span>}
+          {plane.state === "open" && <code>{plane.plane}</code>}
+          {/* Two different things to say, and the difference is what an opener will act on:
+              a directory that is in no plane, and a launch that had nothing to go on. */}
+          {plane.state === "none" && plane.here && (
+            <span role="alert">No plane: {plane.reason}</span>
+          )}
+          {plane.state === "none" && !plane.here && <span role="status">No plane open yet.</span>}
         </span>
       </header>
 
@@ -693,6 +748,7 @@ function App() {
         <div className="panes">
           {inFront ? (
             <LayoutPanes
+              plane={planeId}
               layout={inFront.layout}
               focused={inFront.focused}
               onFocus={(pane) => change((tabs) => focusPane(tabs, pane))}
@@ -782,17 +838,23 @@ function chatOf(reopened: OpenChat[], session: number, name: string): OpenChat {
 
 /** A tab's layout, as panes with a handle between each split. */
 function LayoutPanes({
+  plane,
   layout,
   focused,
   onFocus,
 }: {
+  /** Which plane's sessions these panes are showing. A pane without one draws nothing: a
+   *  session number belongs to a plane, and there is no plane to ask. */
+  plane: PlaneId | undefined;
   layout: Layout;
   focused: number;
   onFocus: (pane: number) => void;
 }) {
   if (layout.kind === "pane") {
+    if (plane === undefined) return null;
     return (
       <SessionPane
+        plane={plane}
         session={layout.session}
         focused={layout.pane === focused}
         onFocus={() => onFocus(layout.pane)}
@@ -805,7 +867,7 @@ function LayoutPanes({
         <Fragment key={nameOf(child)}>
           {side === 1 && <Separator />}
           <Panel>
-            <LayoutPanes layout={child} focused={focused} onFocus={onFocus} />
+            <LayoutPanes plane={plane} layout={child} focused={focused} onFocus={onFocus} />
           </Panel>
         </Fragment>
       ))}

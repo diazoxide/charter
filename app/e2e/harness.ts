@@ -6,6 +6,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -314,4 +315,18 @@ function git(cwd: string, args: string[]): void {
       },
     },
   );
+}
+
+/**
+ * Leaves `plane` with no record of what was open, which is what a first launch reads.
+ *
+ * The app writes `.charter/app/reopen.json` into the plane it was launched in. It always
+ * meant to; until the launch and the commands agreed on one resolver it silently did not,
+ * because the launch resolved the working directory while every command resolved
+ * `$CHARTER_ROOT` (charter-app#109). Now that it does, one plane copy shared by more than one
+ * session would hand the second session the first one's chats — a spec testing the record
+ * instead of itself. Every session starts from none.
+ */
+export function anEmptyRecord(plane: string): void {
+  rmSync(join(plane, ".charter", "app", "reopen.json"), { force: true });
 }
