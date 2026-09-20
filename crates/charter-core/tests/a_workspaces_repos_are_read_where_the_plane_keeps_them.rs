@@ -10,7 +10,6 @@
 
 mod support;
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use charter_core::repos::{self, Head};
@@ -312,13 +311,13 @@ fn the_fsmonitor_a_repository_names_is_never_run_by_the_panel() {
     // command line beats every config file.
     let f = support::plane_with_clone("thing");
     let marker = f.workspace().join("FSMONITOR-RAN");
-    let hook = f.workspace().join("fsmonitor.sh");
-    std::fs::write(
-        &hook,
-        format!("#!/bin/sh\ntouch {}\nexit 1\n", marker.display()),
-    )
-    .unwrap();
-    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Through `stand_in::program`: this is run the moment it is written, and a program this
+    // process wrote through its own descriptor can lose to `ETXTBSY` (charter-app#81).
+    let hook = stand_in::program(
+        &f.workspace(),
+        "fsmonitor.sh",
+        &format!("#!/bin/sh\ntouch {}\nexit 1\n", marker.display()),
+    );
     support::git(
         &f.clone,
         &["config", "core.fsmonitor", &hook.display().to_string()],

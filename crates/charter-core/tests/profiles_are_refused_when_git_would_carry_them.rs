@@ -8,7 +8,6 @@
 //! An answer git could not give refuses too: an unknown is not a pass (ADR 0009).
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 
@@ -209,11 +208,12 @@ fn a_replacement_refused_by_the_git_check_does_not_let_its_built_in_stand_in() {
 }
 
 /// A stand-in `git` in `dir` that runs `body` whatever it is asked.
+///
+/// Through `stand_in::program`, never `fs::write` here: these tests run it the instant it is
+/// written, and written from this process that lost to `ETXTBSY` on a green branch
+/// (charter-app#81). The reasoning is in that crate.
 fn a_git_that(dir: &Path, name: &str, body: &str) -> std::path::PathBuf {
-    let git = dir.join(name);
-    fs::write(&git, format!("#!/bin/sh\n{body}\n")).unwrap();
-    fs::set_permissions(&git, fs::Permissions::from_mode(0o755)).unwrap();
-    git
+    stand_in::program(dir, name, &format!("#!/bin/sh\n{body}\n"))
 }
 
 #[test]
@@ -273,9 +273,7 @@ fn a_git_that_never_answers_refuses_too_because_a_hang_is_not_a_pass() {
     // one that would turn "an unknown is not a pass" into a pass, and it was unexercised —
     // found in review. This test waits out the real timeout, which is why it is the slow one.
     let dir = repo("/charter.local.toml\n");
-    let hanging = dir.path().join("git-that-hangs");
-    fs::write(&hanging, "#!/bin/sh\nsleep 300\n").unwrap();
-    fs::set_permissions(&hanging, fs::Permissions::from_mode(0o755)).unwrap();
+    let hanging = a_git_that(dir.path(), "git-that-hangs", "sleep 300");
 
     let check = profiles::ignore_check_with(dir.path(), &hanging);
 
