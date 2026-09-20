@@ -101,7 +101,27 @@ pub fn status(req: &Request, out: Out, say: Sink) -> u8 {
     }
 
     let plane_at = Plane::open(root);
-    let (all_ws, unread) = plane_at.read_workspaces().unwrap_or_default();
+    let (all_ws, unread) = match plane_at.read_workspaces() {
+        Ok(found) => found,
+        // **A `workspaces/` charter could not LIST is not a plane with no workspaces**, and
+        // every number below would be a count of nothing presented as a count of an empty
+        // plane — this module's third answer, one directory up. So nothing is printed:
+        // `status` answers "what is here", and here it cannot. Python raises the `OSError`
+        // out of `read_workspaces_aloud`, before its first line of stdout too; this says the
+        // sentence instead of the traceback.
+        Err(why) => {
+            say(Say::Fail(format!(
+                "workspaces/ cannot be listed ({why}) — charter cannot say what this plane \
+                 holds, and an empty answer would not be the same thing. {}",
+                crate::memstore::uncheckable_fix(
+                    why.raw_os_error(),
+                    &root.join("workspaces").display().to_string(),
+                    "it",
+                )
+            )));
+            return 1;
+        }
+    };
     // Said BEFORE the counts that leave it out, as `read_workspaces_aloud` says it: the
     // header's `N workspace(s)` is a count of the workspaces charter could read, and a
     // reader who is about to be handed that number is owed the ones it could not.
@@ -280,7 +300,14 @@ fn counted(root: &Path, ws: &str) -> usize {
 /// very escape the gate below exists to stop.
 fn not_there_yet(root: &Path, ws: &str) -> bool {
     crate::contain::workspace_name_ok(ws)
-        && std::fs::symlink_metadata(root.join("workspaces").join(ws)).is_err()
+        && matches!(
+            std::fs::symlink_metadata(root.join("workspaces").join(ws)),
+            // `NotFound` and nothing else. Any other errno is charter failing to LOOK — a
+            // `workspaces/` it may not search answers `EACCES` — and reading that as "not
+            // created yet" would be the same conflation this file is about, three lines
+            // long instead of a whole command.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound
+        )
 }
 
 /// The NOTE column of one row. Python's `_clone_note`.

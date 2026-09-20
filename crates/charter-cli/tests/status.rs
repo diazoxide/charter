@@ -198,6 +198,37 @@ fn a_repo_the_manifest_names_with_nothing_on_disk_is_not_drawn_as_a_clone() {
 }
 
 #[test]
+#[cfg(unix)]
+fn a_workspaces_directory_charter_cannot_list_is_not_a_plane_with_no_workspaces() {
+    // The third answer, one directory above the one `repos::state_of` is about: a listing
+    // that FAILED and a plane with nothing in it are not the same fact, and `status`'s every
+    // count is a count of that listing. So it says so and prints nothing — an empty report
+    // would be the lie.
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = plane(tmp.path().join("plane"), &["alpha"]);
+    let dir = root.join("workspaces");
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let listable = std::fs::read_dir(&dir).is_ok();
+    let ran = run(&root, &["status"]);
+    // Restored before the assertions, so a failure still leaves a removable tree.
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert!(
+        !listable,
+        "this test needs a process that cannot read a 000 directory; as root it would pass \
+         without asking anything"
+    );
+    assert_eq!(ran.code, 1, "{}", ran.err);
+    assert_eq!(ran.out, "", "no count charter did not take");
+    assert!(
+        ran.err.contains("workspaces/ cannot be listed"),
+        "{}",
+        ran.err
+    );
+}
+
+#[test]
 fn docs_generate_writes_the_topology_and_leaves_an_unmarked_readme_alone() {
     let tmp = tempfile::tempdir().unwrap();
     let root = plane(tmp.path().join("plane"), &[]);
