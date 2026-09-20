@@ -46,7 +46,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
-use crate::contain;
+// `contain` is no longer named here: the two private writers this file had are
+// [`crate::plane::private_dir`] and [`crate::plane::write_private`] now, and they carry the
+// containment walk with them.
 use crate::forge::{self, Raised};
 use crate::worktree::git;
 

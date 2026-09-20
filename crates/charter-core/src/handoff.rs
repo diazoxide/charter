@@ -618,7 +618,7 @@ mod tests {
     #[test]
     fn the_printed_command_is_never_clipped() {
         let brief = "word ".repeat(400);
-        let line = terminal_command("claude", "beta", &[brief.clone()], None, None);
+        let line = terminal_command("claude", "beta", std::slice::from_ref(&brief), None, None);
         assert!(line.len() > 160);
         assert!(!line.contains('…'), "a command cut off is not a command");
         assert!(line.ends_with(&format!("{brief}'")));
