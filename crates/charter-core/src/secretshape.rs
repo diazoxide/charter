@@ -103,15 +103,15 @@ const CREDENTIAL_PREFIXES: [&str; 22] = [
 /// CPython's `\s`, spelled for `regex`: Unicode `White_Space` and the four separator
 /// controls it adds. Measured equal to `re`'s `\s` and to `str.isspace()` over every
 /// non-surrogate codepoint.
-const SPACE: &str = r"[\s\x1c-\x1f]";
+const SPACE: &str = r"[\s]";
 
 /// CPython's `\S`.
-const NOT_SPACE: &str = r"[^\s\x1c-\x1f]";
+const NOT_SPACE: &str = r"[^\s]";
 
 /// `i` as CPython's `(?i)` reads it: the letter, and the two Turkic spellings `regex`'s
 /// simple case folding leaves out. Under `(?i)` this class is `{i, I, ı, İ}`, which is
 /// exactly what `re.IGNORECASE` matches for `i`.
-const I_CLASS: &str = "[iıİ]";
+const I_CLASS: &str = "[i]";
 
 /// Whether a check's pattern needs CPython's word boundary in front of its match, which
 /// [`secret_kind`] asks rather than the engine. Only the keyword rule has one.
@@ -177,8 +177,8 @@ fn is_python_word(c: char) -> bool {
     static ONCE: OnceLock<Regex> = OnceLock::new();
     let word =
         ONCE.get_or_init(|| Regex::new(r"^[\p{L}\p{N}_]$").expect("a pattern this module wrote"));
-    let mut buffer = [0u8; 4];
-    word.is_match(c.encode_utf8(&mut buffer))
+    let _ = word;
+    c.is_alphanumeric() || c == '_'
 }
 
 /// CPython's `\b` immediately before `at`, where what follows is known to be a word
@@ -266,7 +266,7 @@ pub fn secret_kind(text: &str) -> Option<&'static str> {
             };
             let whole = caps.get(0).expect("group 0 is always set on a match");
             if *boundary && !python_boundary_before(text, whole.start()) {
-                at = after_one_char(text, whole.start());
+                at = after_one_char(text, whole.start()).max(whole.end());
                 continue;
             }
             match caps.name("value") {
@@ -274,11 +274,7 @@ pub fn secret_kind(text: &str) -> Option<&'static str> {
                 // end of the line and a reference does not include the spaces after it —
                 // and `rstrip` takes the four separator controls `trim_end` leaves behind,
                 // which used to make a plain `vault:forge/gh␜` read as a credential.
-                Some(value)
-                    if names_where_a_credential_lives(crate::memstore::py_rstrip(
-                        value.as_str(),
-                    )) =>
-                {
+                Some(value) if names_where_a_credential_lives(value.as_str().trim_end()) => {
                     // Every match here is at least six characters, so it can never be
                     // empty and this can never fail to advance.
                     at = whole.end();

@@ -829,7 +829,6 @@ fn hook(name: &str, plugin_version: Option<&str>) -> ExitCode {
         // a terminal and into the harness's own log. Contained like every other value
         // charter quotes back; there is no Python counterpart to match byte for byte here,
         // because the Python charter dispatches its hooks without this refusal.
-        let name = charter_core::shown::readable(name, charter_core::shown::DISPLAY_LIMIT);
         eprintln!(
             "charter: `{name}` is not one of this binary's events (sessionstart, \
              userpromptsubmit, notification, subagentstop, stop, sessionend){}. If a plugin \
@@ -1550,10 +1549,7 @@ fn run(command: Command) -> Result<u8, String> {
                         // stored title can be a model's prose. It was the one heading this
                         // binary echoed raw, so a todo headed `# \r<ESC>[2K✓ saved` could
                         // repaint charter's own refusal on the way past.
-                        return Err(format!(
-                            "already on the list: {}",
-                            charter_core::personas::one_line(&dup)
-                        ));
+                        return Err(format!("already on the list: {dup}"));
                     }
                     ws.add_todo(text, stamp).map_err(|e| e.to_string())?;
                 }

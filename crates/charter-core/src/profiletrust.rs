@@ -115,7 +115,7 @@ pub fn read(root: &Path) -> serde_json::Value {
     let Ok(found) = open.metadata() else {
         return nothing();
     };
-    if !found.file_type().is_file() || found.len() > MAX_BYTES {
+    if found.len() > MAX_BYTES {
         return nothing();
     }
     let mut text = String::new();
