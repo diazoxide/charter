@@ -633,6 +633,15 @@ mod tests {
     fn the_scope_is_the_longest_lived_pointer_that_landed() {
         let dir = plane();
         workspace(dir.path(), "beta");
+        // **Both ids, first**, because that is the case the rule is about and the one a first
+        // cut of this test left out: Python assigned the two branches in sequence, so the
+        // session branch overwrote the terminal branch and every caller was told `session`.
+        // A mutation that swapped the two arms left this test green until this line existed.
+        assert_eq!(
+            set_active(dir.path(), "beta", &ids(Some("s0"), Some("t0")), false),
+            Scope::Terminal,
+            "the terminal pointer outlives the session one, so it is what the scope names"
+        );
         assert_eq!(
             set_active(dir.path(), "beta", &ids(Some("s1"), None), false),
             Scope::Session,
