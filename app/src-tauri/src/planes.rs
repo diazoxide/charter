@@ -334,7 +334,7 @@ impl Planes {
         let records = Arc::new(Records {
             root: root.clone(),
             config: self.config.clone(),
-            allowed: AtomicBool::new(true),
+            allowed: AtomicBool::new(false),
         });
         let writes = Arc::clone(&records);
         let mut chats = Chats::recorded_by_reporting_to(
