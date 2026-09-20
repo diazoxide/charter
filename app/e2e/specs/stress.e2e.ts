@@ -32,14 +32,20 @@ const TABS = 50;
  * spec ran under `mochaOpts.timeout` — 180 s — while its own first line asked for 900.
  *
  * Measured on `main` on 2026-09-20, the whole body end to end: macOS 170 s in the one run of
- * six that passed, and 176 s, 181 s, 200 s, 212 s, 218 s in the five that did not (the last
- * four read off the per-round trace below, which the timeout cut short); Linux 128–145 s.
- * The 180 s budget sat inside that spread, so it decided the result and the app never did.
+ * six that passed and Linux 128 s in the same run. The five macOS runs that did not finish
+ * would have taken 176, 181, 200, 212 and 218 s — extrapolations, each at its own run's
+ * measured round cost, because the timeout cut the trace short. The 180 s budget sat inside
+ * that spread, so it decided the result and the app never did.
+ *
+ * The first run of this spec with the budget where WebdriverIO reads it settles it: 225 s on
+ * macOS, past the old budget, with the app healthy throughout — 219/217/217 threads with
+ * fifty open and 14/13/14 once they were closed, one process, 194–213 MB. Under the old
+ * spelling that run is a sixth red X and nothing to show for it.
  *
  * 900 s is the backstop of last resort, not a limit anything is expected to approach: it is
- * a little over four times the slowest macOS run measured, and every wait inside the body
- * has a deadline and a message of its own that fires long before it. `ROUND_BUDGET` bounds
- * the one loop that had none.
+ * four times the slowest macOS run measured, and every wait inside the body has a deadline
+ * and a message of its own that fires long before it. `ROUND_BUDGET` bounds the one loop
+ * that had none.
  *
  * `budget.test.ts` keeps this on the suite, because the mistake is invisible from the spec.
  */
