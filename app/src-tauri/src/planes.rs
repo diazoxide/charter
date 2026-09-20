@@ -283,7 +283,7 @@ impl Planes {
     pub fn open(&self, root: &Path) -> PlaneId {
         // Resolved once, here. Everything below — the socket, the record, the registry key —
         // is this one spelling of the plane, so nothing downstream has to resolve anything.
-        let root = root.to_path_buf();
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let id = PlaneId::of(&root);
 
         let mut open = self.map();
