@@ -240,6 +240,9 @@ fn stack_of(by_name: &BTreeMap<String, Value>, name: &str) -> String {
 /// repo", which is the same class of lie as a `git status` that failed reading as clean —
 /// and the operator is the only one who can tell whether the link is theirs.
 fn drawn(root: &Path, ws: &str, say: Sink) -> Vec<repos::Repo> {
+    if not_there_yet(root, ws) {
+        return Vec::new();
+    }
     match repos::clones(root, ws) {
         Ok(found) => {
             for (name, why) in found.refused {
@@ -256,7 +259,28 @@ fn drawn(root: &Path, ws: &str, say: Sink) -> Vec<repos::Repo> {
 
 /// How many clones a workspace holds, silently — the roster's `(N cloned)`.
 fn counted(root: &Path, ws: &str) -> usize {
+    if not_there_yet(root, ws) {
+        return 0;
+    }
     repos::clones(root, ws).map(|f| f.repos.len()).unwrap_or(0)
+}
+
+/// Has this workspace no directory at all yet?
+///
+/// **A workspace nobody has created is not a refusal.** The ladder always ends on a name —
+/// `[workspace] default`, and under that the literal `default` — so a plane with no
+/// `workspaces/` still has an active workspace to report on, and `status` reports on it as
+/// empty. `confine::workspace_dir` answers "not a directory charter can resolve" for absent
+/// and present-but-not-a-directory alike, and only the first of those is ordinary; Python
+/// separates them too (`workspace.clones`: `if not wd.exists(): return []`).
+///
+/// Asked with `symlink_metadata`, so a DANGLING link wearing the workspace's name is still
+/// the refusal it is rather than an absence. And asked only of a name that can BE a
+/// workspace: `-w` is taken as typed, so joining an unchecked one onto the plane is the
+/// very escape the gate below exists to stop.
+fn not_there_yet(root: &Path, ws: &str) -> bool {
+    crate::contain::workspace_name_ok(ws)
+        && std::fs::symlink_metadata(root.join("workspaces").join(ws)).is_err()
 }
 
 /// The NOTE column of one row. Python's `_clone_note`.

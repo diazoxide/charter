@@ -131,6 +131,12 @@ fn a_shell_with_no_pane_id_is_told_that_is_why_it_is_on_default() {
         "{:?}",
         ran.out
     );
+    // And nothing is refused. The ladder always ends on a name, so this plane has an active
+    // workspace with no directory behind it — an empty workspace, not a containment
+    // failure. `confine::workspace_dir` cannot tell those apart, and saying "not a directory
+    // charter can resolve" about a plane nobody has cloned into yet is noise on the one
+    // command an operator runs when they do not know where they are.
+    assert_eq!(ran.err, "", "an uncreated workspace is not a refusal");
 }
 
 #[test]
@@ -176,8 +182,11 @@ fn a_repo_the_manifest_names_with_nothing_on_disk_is_not_drawn_as_a_clone() {
     // A directory that is not a repository at all is not a row either.
     std::fs::create_dir_all(root.join("workspaces/alpha/plaindir")).unwrap();
 
-    let ran = run(&root, &["status"]);
+    // `-w`, because standing at the plane root with no pointers the ladder ends on
+    // `default` — which is not the workspace this test planted anything in.
+    let ran = run(&root, &["status", "-w", "alpha"]);
 
+    assert_eq!(ran.err, "", "nothing was refused");
     assert!(
         ran.out
             .contains("— workspace: alpha (active) · 0 repo(s) —"),
