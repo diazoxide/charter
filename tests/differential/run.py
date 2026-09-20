@@ -2046,6 +2046,8 @@ def main() -> int:
                     help="the Rust charter to test (default: target/debug/charter)")
     ap.add_argument("--scenario", action="append", default=None,
                     help="run only this scenario (repeatable)")
+    ap.add_argument("--time-preflight", type=int, default=0, metavar="RUNS",
+                    help="after the scenarios, time `charter doctor --preflight` on both sides")
     args = ap.parse_args()
 
     if not args.binary.is_file():
@@ -2071,15 +2073,27 @@ def main() -> int:
             f"`cargo build -p charter-cli`, or this run tests code that no longer exists"
         )
 
-    wanted = SCENARIOS
+    # `charter doctor`'s scenarios compare a document rather than a plane write, so they live
+    # beside this file with their own comparison (`doctor_scenarios.py`).
+    import doctor_scenarios
+
+    everything = [*SCENARIOS, *doctor_scenarios.DOCTOR_SCENARIOS]
+    wanted = everything
     if args.scenario:
-        names = {s.name for s in SCENARIOS}
+        names = {s.name for s in everything}
         unknown = [n for n in args.scenario if n not in names]
         if unknown:
             ap.error(f"no such scenario: {', '.join(unknown)} (have {', '.join(sorted(names))})")
-        wanted = [s for s in SCENARIOS if s.name in set(args.scenario)]
+        wanted = [s for s in everything if s.name in set(args.scenario)]
 
-    failed = [s.name for s in wanted if not check(s, args.binary)]
+    failed = [
+        s.name for s in wanted
+        if not (doctor_scenarios.check(s, args.binary)
+                if isinstance(s, doctor_scenarios.DoctorScenario) else check(s, args.binary))
+    ]
+    if args.time_preflight:
+        print()
+        doctor_scenarios.time_preflight(args.binary, args.time_preflight)
     print()
     if failed:
         print(f"{len(failed)} of {len(wanted)} scenarios differ: {', '.join(failed)}")

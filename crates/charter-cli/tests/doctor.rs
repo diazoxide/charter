@@ -1,0 +1,127 @@
+//! `charter doctor` as a process: the environment it is run in, its output and its exit.
+//!
+//! What each row says is `charter-core`'s tests and the differential's; these are the parts
+//! only a real process has — the variables it is started with, and the status it ends with.
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+fn plane() -> (tempfile::TempDir, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = std::fs::canonicalize(dir.path()).unwrap();
+    std::fs::write(root.join("charter.toml"), "schema = 1\n").unwrap();
+    for d in ["personas", "inventory", "workspaces", "home"] {
+        std::fs::create_dir_all(root.join(d)).unwrap();
+    }
+    (dir, root)
+}
+
+/// `charter doctor <args>` in `root`, with a home of the test's choosing and nothing inherited.
+fn doctor(root: &Path, home: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_charter"))
+        .arg("doctor")
+        .args(args)
+        .current_dir(root)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", home)
+        .env("CHARTER_ROOT", root)
+        .output()
+        .expect("charter runs")
+}
+
+fn rows(out: &Output) -> Vec<serde_json::Value> {
+    serde_json::from_slice(&out.stdout).expect("--json prints JSON")
+}
+
+fn row<'a>(rows: &'a [serde_json::Value], name: &str) -> &'a serde_json::Value {
+    rows.iter()
+        .find(|r| r["name"] == name)
+        .unwrap_or_else(|| panic!("no row {name}"))
+}
+
+#[test]
+fn with_no_git_identity_the_doctor_names_a_blocker_and_exits_non_zero() {
+    let (_d, root) = plane();
+    let out = doctor(&root, &root.join("home"), &["--json"]);
+    let rows = rows(&out);
+    let identity = row(&rows, "git identity");
+    assert_eq!(identity["status"], "fail", "{identity}");
+    assert_eq!(identity["detail"], "not set: user.name, user.email");
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        out.stderr.is_empty(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn with_an_identity_and_nothing_wrong_the_exit_is_zero_and_the_warnings_are_counted() {
+    let (_d, root) = plane();
+    let home = root.join("home");
+    std::fs::write(
+        home.join(".gitconfig"),
+        "[user]\n\tname = Fixture User\n\temail = fixture@example.invalid\n",
+    )
+    .unwrap();
+    let out = doctor(&root, &home, &["--json"]);
+    let rows = rows(&out);
+    assert_eq!(
+        row(&rows, "git identity")["detail"],
+        "Fixture User <fixture@example.invalid>"
+    );
+    assert!(
+        rows.iter().all(|r| r["status"] != "fail"),
+        "{}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    assert_eq!(out.status.code(), Some(0));
+
+    let table = doctor(&root, &home, &[]);
+    let text = String::from_utf8(table.stdout).unwrap();
+    assert!(text.starts_with("charter preflight:\n\n"), "{text}");
+    assert!(
+        text.ends_with("optional item(s) pending \u{2014} see hints above.\n"),
+        "{text}"
+    );
+    // Never coloured into a pipe: another program is reading this.
+    assert!(!text.contains('\x1b'), "{text:?}");
+    assert_eq!(table.status.code(), Some(0));
+}
+
+#[test]
+fn fix_is_refused_rather_than_run_as_a_report_of_a_repair_that_never_happened() {
+    let (_d, root) = plane();
+    let out = doctor(&root, &root.join("home"), &["--fix"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(out.stdout.is_empty());
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        said.contains("nothing was installed and nothing was checked"),
+        "{said}"
+    );
+}
+
+#[test]
+fn a_preflight_probes_no_profile_even_one_that_is_declared() {
+    let (_d, root) = plane();
+    std::fs::write(
+        root.join("charter.local.toml"),
+        "[harness.claude-work]\nkind = \"claude\"\ncommand = [\"claude\"]\n",
+    )
+    .unwrap();
+    let preflight = rows(&doctor(
+        &root,
+        &root.join("home"),
+        &["--json", "--preflight"],
+    ));
+    assert!(
+        !preflight
+            .iter()
+            .any(|r| r["name"].as_str().unwrap().starts_with("profile ")),
+        "{preflight:?}"
+    );
+    let typed = rows(&doctor(&root, &root.join("home"), &["--json"]));
+    assert_eq!(row(&typed, "profile claude-work")["status"], "warn");
+}

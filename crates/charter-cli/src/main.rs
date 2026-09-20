@@ -105,6 +105,24 @@ enum Command {
     #[command(subcommand)]
     Persona(memory::PersonaCommand),
 
+    /// Preflight: check the plane, its workspaces, personas and profiles before working.
+    ///
+    /// Exits non-zero only on a blocker. Every check this charter does not run yet is still
+    /// listed, as a warning saying it was not checked — never as a pass.
+    Doctor {
+        /// Emit machine-readable results.
+        #[arg(long)]
+        json: bool,
+        /// Run as the SessionStart hook does: no harness-profile probe and no git call for
+        /// one. Every other check runs.
+        #[arg(long)]
+        preflight: bool,
+        /// Install what charter can install for this plane before reporting. Not in this
+        /// charter yet: refused, so nobody reads the report as the state after a repair.
+        #[arg(long)]
+        fix: bool,
+    },
+
     /// Tell the app what a harness just did. Run by a harness's hooks, never by a person.
     ///
     /// It reads the harness's payload on stdin, says one thing on a socket the app owns, and
@@ -525,7 +543,8 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Reinit
         | Command::Discover { .. }
         | Command::Clone { .. }
-        | Command::Sync { .. } => {
+        | Command::Sync { .. }
+        | Command::Doctor { .. } => {
             unreachable!("answered before run")
         }
         Command::Root => {
@@ -690,7 +709,9 @@ fn main() -> ExitCode {
     {
         return hook(name, plugin_version.as_deref());
     }
-    // `init` and `reinit` say several lines of their own and choose their own exit status.
+    // `init`, `reinit` and `doctor` each say several lines of their own and choose their own
+    // exit status — and for `doctor` the status IS the verdict, where a blocker is not an
+    // error message.
     match &cli.command {
         Command::Init(init) => {
             let args = charter_core::scaffold::InitArgs {
@@ -725,6 +746,11 @@ fn main() -> ExitCode {
                 }
             };
         }
+        Command::Doctor {
+            json,
+            preflight,
+            fix,
+        } => return doctor(*json, *preflight, *fix),
         _ => {}
     }
     // The repo commands speak line by line as they go — a clone is slow, and the line that
@@ -740,6 +766,42 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// `charter doctor`: every check, as a table or as `--json`, and the verdict as the exit.
+///
+/// **`--fix` is refused, not ignored.** Python's installs the Claude Code plugin before it
+/// reports, so the report reads as the state after the repair; this charter installs nothing
+/// yet, and a report printed under that flag would be read as one.
+fn doctor(json: bool, preflight: bool, fix: bool) -> ExitCode {
+    use std::io::IsTerminal;
+
+    if fix {
+        eprintln!(
+            "charter: `doctor --fix` installs the Claude Code plugin for this plane, which this \
+             charter does not do yet — nothing was installed and nothing was checked. The \
+             Python charter's `charter doctor --fix` does it; `charter doctor` reports without \
+             it."
+        );
+        return ExitCode::FAILURE;
+    }
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(e) => {
+            eprintln!("charter: cannot read the current directory: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let rows = charter_core::doctor::Doctor::new(&cwd, preflight).run();
+    if json {
+        print!("{}", charter_core::doctor::json(&rows));
+    } else {
+        print!(
+            "{}",
+            charter_core::doctor::table(&rows, std::io::stdout().is_terminal())
+        );
+    }
+    ExitCode::from(charter_core::doctor::exit_code(&rows))
 }
 
 /// The profile listing, as `charter harness list` prints it on stderr.

@@ -85,7 +85,10 @@ pub fn place(cwd: &Path) -> Place {
 }
 
 /// `~` and `~/…` against `$HOME`, as `Path.expanduser` reads them. `~user` is left alone.
-fn expand_user(path: &Path) -> PathBuf {
+///
+/// `pub(crate)` because `doctor` reads the same `~` out of a committed `[plane] worktrees`,
+/// and one spelling of "what does a tilde mean here" is the point of having one at all.
+pub(crate) fn expand_user(path: &Path) -> PathBuf {
     let text = path.to_string_lossy();
     let home = || std::env::var_os("HOME").map(PathBuf::from);
     if text == "~" {
@@ -116,7 +119,10 @@ fn outermost(marked: &Path) -> PathBuf {
 }
 
 /// `root.py:enclosing_plane`: the plane whose `workspaces/` contains `root`, or `None`.
-fn enclosing(root: &Path) -> Option<PathBuf> {
+///
+/// `pub(crate)` for `doctor`s `nested plane` row, which asks this of the plane a command
+/// resolved: two walks for one question is how two answers about one directory arrive.
+pub(crate) fn enclosing(root: &Path) -> Option<PathBuf> {
     let here = root.canonicalize().ok()?;
     here.ancestors().skip(1).find_map(|parent| {
         if !parent.join(MANIFEST).is_file() {
