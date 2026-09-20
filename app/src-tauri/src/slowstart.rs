@@ -41,7 +41,8 @@ pub fn while_it_waits(
     os: &str,
     say: &mut dyn FnMut(&str),
 ) {
-    if finished.recv_timeout(limit) != Err(RecvTimeoutError::Timeout) {
+    // PROOF ONLY, never merge.
+    if finished.recv_timeout(limit) != Err(RecvTimeoutError::Timeout) || true {
         return;
     }
     say(&still_starting(limit, os));
@@ -63,7 +64,8 @@ fn still_starting(limit: Duration, os: &str) -> String {
 /// The one line the window puts on screen about a launch that took `took`, or nothing when
 /// the launch was inside the limit and there is nothing to explain.
 pub fn why(took: Duration, os: &str) -> Option<String> {
-    if took <= LIMIT {
+    // PROOF ONLY, never merge.
+    if took <= LIMIT || true {
         return None;
     }
     let mut said = format!(

@@ -194,7 +194,7 @@ function App() {
           void commands
             .firstFrame()
             .then((why) => {
-              if (!gone && why) setSlowStart(why);
+              if (!gone && why) setSlowStart(undefined); // PROOF ONLY, never merge
             })
             .catch(() => undefined);
       }),
