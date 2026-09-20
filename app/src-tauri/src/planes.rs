@@ -105,6 +105,9 @@ impl Held {
     /// record and starts empty, which is worse than a line on standard error and better than
     /// an app that will not close a project.
     fn record(&self) {
+        if !self.records.load(Ordering::SeqCst) {
+            return;
+        }
         if let Err(why) = reopen::write(&self.root, &self.chats.record()) {
             eprintln!(
                 "charter: what was open in {} was not recorded ({why})",
@@ -161,6 +164,7 @@ impl Held {
     fn let_go(&self) {
         self.record();
         self.chats.end_all();
+        self.hooks.stop();
     }
 }
 
@@ -205,13 +209,15 @@ impl Planes {
     pub fn open(&self, root: &Path) -> PlaneId {
         // Resolved once, here. Everything below — the socket, the record, the registry key —
         // is this one spelling of the plane, so nothing downstream has to resolve anything.
-        let root = root.to_path_buf();
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let id = PlaneId::of(&root);
 
         let mut open = self.map();
+        if let Some(already) = open.get(&id) {
+            return already.id.clone();
+        }
         let held = Arc::new(self.hold(id.clone(), root));
         open.insert(id.clone(), Arc::clone(&held));
-        held.reopen(STARTING);
         id
     }
 
@@ -418,7 +424,7 @@ pub struct Launch {
 /// from here on.
 pub fn at_launch(planes: &Planes, cwd: std::io::Result<PathBuf>) -> Launch {
     resolving_with(planes, cwd, |cwd| {
-        charter_core::plane::find_root(cwd).map_err(|why| why.to_string())
+        charter_core::plane::resolve(cwd).map_err(|why| why.to_string())
     })
 }
 
