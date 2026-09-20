@@ -103,7 +103,8 @@ function core(over: (cmd: string, args: unknown) => unknown = () => undefined) {
     asked.push({ cmd, args });
     const mine = over(cmd, args);
     if (mine !== undefined) return mine;
-    if (cmd === "plane_root") return "/home/dev/plane";
+    if (cmd === "plane_at_launch")
+      return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
     if (cmd === "plane_sidebar") return SIDEBAR;
     if (cmd === "running_sessions") return [];
     if (cmd === "opened_chats") return [];
@@ -143,14 +144,37 @@ const tabNames = () =>
     .map((tab) => tab.querySelector(".tab-name")?.textContent);
 
 /**
- * What the window ASKED the core, as a sequence two routes can be compared on.
+ * The reads the window makes about the plane on its own initiative.
+ *
+ * Every one of them is an effect that chains off another effect's answer — the launch says
+ * which plane, the sidebar says which workspaces, the panels read the focused one — so where
+ * they land in a sequence is about how many awaits the chain took, not about what an action
+ * did. No action performs any of them.
+ */
+const WATCHING = new Set([
+  "plane_at_launch",
+  "plane_sidebar",
+  "opened_chats",
+  "chats_that_would_not_start",
+  "chat_states",
+  "workspace_panels",
+  "workspace_repos",
+  "worktree_of_chat",
+]);
+
+/**
+ * What the window ASKED THE CORE TO DO, as a sequence two routes can be compared on.
  *
  * Tauri's own event plumbing is filtered out, and so is the cold-start marker: both carry a
  * handler id that is new every render and land whenever a frame happens to, which is noise
- * about the test runner rather than about the action.
+ * about the test runner rather than about the action. So are the plane reads above, for the
+ * same reason — what is left is the action itself, which is what "one action, two doorways"
+ * is a claim about.
  */
 const commandsSent = (asked: { cmd: string; args: unknown }[]) =>
-  asked.filter(({ cmd }) => !cmd.startsWith("plugin:") && cmd !== "first_frame");
+  asked.filter(
+    ({ cmd }) => !cmd.startsWith("plugin:") && cmd !== "first_frame" && !WATCHING.has(cmd),
+  );
 
 /** What the window IS: its tabs, its panes, and which pane has the keyboard. */
 const arrangement = () => ({
@@ -245,7 +269,7 @@ describe("the palette reaching what the window can do", () => {
 
     expect(screen.queryAllByTestId("pane")).toEqual([]);
     expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
-      { session: 1 },
+      { plane: "/home/dev/plane", session: 1 },
     ]);
   });
 
@@ -259,7 +283,7 @@ describe("the palette reaching what the window can do", () => {
     await runFromPalette("close pane");
 
     expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
-      { session: 2 },
+      { plane: "/home/dev/plane", session: 2 },
     ]);
   });
 
@@ -391,6 +415,9 @@ describe("one list, two surfaces", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Start" }));
     const byButton = arrangement();
     const askedByButton = commandsSent(fromTheButton.asked);
+    // Not vacuous: filtering the plane reads out must leave the action itself behind, or
+    // the comparison below would pass by comparing two empty lists.
+    expect(askedByButton.map(({ cmd }) => cmd)).toContain("start_chat");
 
     cleanup();
     clearMocks();
@@ -432,7 +459,9 @@ describe("handing F2 to the chat in front", () => {
     await userEvent.keyboard("{F2}");
 
     expect(commandsSent(asked)).toEqual(
-      expect.arrayContaining([{ cmd: "send_input", args: { session: 1, text: F2_BYTES } }]),
+      expect.arrayContaining([
+        { cmd: "send_input", args: { plane: "/home/dev/plane", session: 1, text: F2_BYTES } },
+      ]),
     );
     expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
   });

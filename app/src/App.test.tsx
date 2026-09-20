@@ -87,7 +87,8 @@ function core(): { asked: { cmd: string; args: unknown }[] } {
   let opened = 0;
   mockIPC((cmd, args) => {
     asked.push({ cmd, args });
-    if (cmd === "plane_root") return "/home/dev/plane";
+    if (cmd === "plane_at_launch")
+      return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
     if (cmd === "plane_sidebar") return SIDEBAR;
     if (cmd === "running_sessions") return [];
     if (cmd === "opened_chats") return [];
@@ -114,7 +115,8 @@ const tabs = () =>
 describe("App", () => {
   it("shows the plane the core found", async () => {
     mockIPC((cmd) => {
-      if (cmd === "plane_root") return "/home/dev/plane";
+      if (cmd === "plane_at_launch")
+        return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
       if (cmd === "plane_sidebar") return SIDEBAR;
       return [];
     });
@@ -150,7 +152,8 @@ describe("App", () => {
     // so the first frame is where they are told.
     mockIPC((cmd) => {
       if (cmd === "first_frame") return "charter took 31 s to start, against a 2 s limit.";
-      if (cmd === "plane_root") return "/home/dev/plane";
+      if (cmd === "plane_at_launch")
+        return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
       if (cmd === "plane_sidebar") return SIDEBAR;
       if (cmd === "chats_that_would_not_start") return [];
       return null;
@@ -177,7 +180,8 @@ describe("App", () => {
     // The launch is over by the time it is read, and the news does not improve.
     mockIPC((cmd) => {
       if (cmd === "first_frame") return "charter took 31 s to start, against a 2 s limit.";
-      if (cmd === "plane_root") return "/home/dev/plane";
+      if (cmd === "plane_at_launch")
+        return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
       if (cmd === "plane_sidebar") return SIDEBAR;
       if (cmd === "chats_that_would_not_start") return [];
       return null;
@@ -207,7 +211,8 @@ describe("App", () => {
     // unhandled rejection is not how it says so.
     mockIPC((cmd) => {
       if (cmd === "first_frame") throw new Error("no");
-      if (cmd === "plane_root") return "/home/dev/plane";
+      if (cmd === "plane_at_launch")
+        return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
       if (cmd === "plane_sidebar") return SIDEBAR;
       return null;
     });
@@ -279,9 +284,11 @@ describe("App", () => {
     await userEvent.click(screen.getByRole("button", { name: "Close tab 1" }));
 
     expect(screen.queryAllByTestId("pane")).toEqual([]);
+    // The plane travels with the session, because a session number alone names a chat in
+    // every plane the process holds.
     expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
-      { session: 1 },
-      { session: 2 },
+      { plane: "/home/dev/plane", session: 1 },
+      { plane: "/home/dev/plane", session: 2 },
     ]);
   });
 
@@ -295,7 +302,7 @@ describe("App", () => {
 
     expect(panes()).toEqual(["session 1"]);
     expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
-      { session: 2 },
+      { plane: "/home/dev/plane", session: 2 },
     ]);
   });
 
@@ -307,7 +314,8 @@ describe("App", () => {
     let opened = 0;
     mockIPC(async (cmd, args) => {
       asked.push({ cmd, args });
-      if (cmd === "plane_root") return "/home/dev/plane";
+      if (cmd === "plane_at_launch")
+        return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
       if (cmd === "plane_sidebar") return SIDEBAR;
       if (cmd === "running_sessions") return [];
       if (cmd === "opened_chats") return [];
@@ -328,8 +336,8 @@ describe("App", () => {
 
     await vi.waitFor(() =>
       expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
-        { session: 1 },
-        { session: 2 },
+        { plane: "/home/dev/plane", session: 1 },
+        { plane: "/home/dev/plane", session: 2 },
       ]),
     );
     expect(screen.queryAllByTestId("pane")).toEqual([]);
@@ -341,7 +349,8 @@ describe("App", () => {
     // launch has arrives this way — an unwired profile, a kind v1 does not start, a file
     // git would carry.
     mockIPC((cmd) => {
-      if (cmd === "plane_root") return "/home/dev/plane";
+      if (cmd === "plane_at_launch")
+        return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
       if (cmd === "plane_sidebar") return SIDEBAR;
       if (cmd === "running_sessions") return [];
       if (cmd === "opened_chats") return [];

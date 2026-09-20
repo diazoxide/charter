@@ -3,8 +3,11 @@ import { describe, expect, it } from "vitest";
 import { moved, nothingKnown, quietOnes, stateOf, underneath } from "./chatState";
 import type { Moved, OpenChat } from "./bindings";
 
+/** One plane, because these are about the reducer and not about telling planes apart. */
+const PLANE = "/home/dev/plane";
+
 function doing(session: number, state: string, queue: number[] = []): Moved {
-  return { session, state, needs_you: queue.includes(session), queue };
+  return { plane: PLANE, session, state, needs_you: queue.includes(session), queue };
 }
 
 describe("what the window keeps about the chats", () => {

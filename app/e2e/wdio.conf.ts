@@ -1,5 +1,6 @@
 import process from "node:process";
 import {
+  anEmptyRecord,
   built,
   cloneTheFixtureRepos,
   copyFixturePlane,
@@ -59,6 +60,14 @@ export const config: WebdriverIO.Config = {
   waitforTimeout: 20_000,
   connectionRetryTimeout: 120_000,
   mochaOpts: { ui: "bdd", timeout: 180_000 },
+
+  // Every session starts from a plane with no record in it, so a spec is never handed the
+  // chats of the one before it. Each config declares this for ITS OWN plane: `wdio.state.conf`
+  // spreads this one and copies a plane of its own, and a hook that closed over the wrong
+  // path would quietly clean nothing.
+  beforeSession() {
+    anEmptyRecord(plane);
+  },
 
   // The service reads `tauri:options`, which WebdriverIO's own capability type does not know.
   capabilities: [{ browserName: "tauri", "tauri:options": { application: app } }] as never,

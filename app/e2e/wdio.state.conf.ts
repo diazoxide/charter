@@ -1,5 +1,11 @@
 import { config as base } from "./wdio.conf.js";
-import { built, copyFixturePlane, declareAProfile, writeReportingShell } from "./harness.js";
+import {
+  anEmptyRecord,
+  built,
+  copyFixturePlane,
+  declareAProfile,
+  writeReportingShell,
+} from "./harness.js";
 import { PANIC_LOG } from "./processes.js";
 
 /**
@@ -27,6 +33,10 @@ export const config: WebdriverIO.Config = {
   // The base run EXCLUDES these; spreading it would exclude them here too, and a config
   // that finds no specs exits green-ish rather than loudly.
   exclude: [],
+  // The base's own hook cleans the base's plane. This run has one of its own.
+  beforeSession() {
+    anEmptyRecord(plane);
+  },
   services: [
     [
       "@wdio/tauri-service",

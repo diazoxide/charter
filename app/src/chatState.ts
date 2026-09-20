@@ -6,10 +6,10 @@
  * questions a second to learn nothing, and the spec's whole point is that the answer arrives
  * from a hook.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 
-import { commands, type Moved, type OpenChat } from "./bindings";
+import { commands, type Moved, type OpenChat, type PlaneId } from "./bindings";
 
 /** The five states the spec names. `unknown` is a harness that carries no state hook. */
 export type State = "unknown" | "running" | "waiting" | "done" | "failed";
@@ -56,25 +56,41 @@ export function moved(states: ChatStates, move: Moved): ChatStates {
 }
 
 /**
- * Subscribes to what the chats are doing, starting from what the core already knows.
+ * Subscribes to what the chats are doing in ONE plane, starting from what the core knows.
  *
  * The first answer matters: chats are put back before there is a window (M1.7), so some of
  * them may have fired hooks already.
+ *
+ * **Every move is checked against the plane it came from.** `chat-moved` is emitted on the
+ * app, not on a window, and every plane numbers its chats from one — so a process holding two
+ * projects would otherwise have one project's "session 3 is waiting" land on the other's chat
+ * 3. The event carries its plane precisely so this can be a comparison rather than a hope.
  */
-export function useChatStates(): ChatStates {
+export function useChatStates(plane: PlaneId | undefined): ChatStates {
   const [states, setStates] = useState<ChatStates>(nothingKnown);
+  /** Which plane's moves count, read at the moment one arrives. */
+  const showing = useRef(plane);
+  // Kept current in an effect rather than during the render, which is where a ref may be
+  // written. Effects run in the order they are declared, so this lands before the listener
+  // below is (re)registered and before any event this commit could deliver.
+  useEffect(() => {
+    showing.current = plane;
+  }, [plane]);
 
+  // **Listening starts at the mount and not when the plane is known**, and the two are
+  // separate effects for that reason. The window learns its plane from a command, which
+  // answers after the first paint — a listener that waited for it would be registered in the
+  // window's second render and could be torn down mid-registration, and an event fired in
+  // between would be lost with nothing to re-sync from.
   useEffect(() => {
     let gone = false;
     let stop: (() => void) | undefined;
 
     void (async () => {
-      // Listening BEFORE asking, and awaited: `listen` registers asynchronously, so an event
-      // emitted between the answer arriving and the listener being ready would otherwise be
-      // lost with nothing to re-sync from.
       try {
         const unlisten = await listen<Moved>("chat-moved", (event) => {
-          if (!gone) setStates((states) => moved(states, event.payload));
+          if (gone || event.payload.plane !== showing.current) return;
+          setStates((states) => moved(states, event.payload));
         });
         if (gone) unlisten();
         else stop = unlisten;
@@ -82,10 +98,26 @@ export function useChatStates(): ChatStates {
         // No window to listen in — a unit test, or a webview being torn down. The first
         // answer below is still worth having.
       }
+    })();
 
+    return () => {
+      gone = true;
+      stop?.();
+    };
+  }, []);
+
+  // And the first answer, once there is a plane to ask about. Asked AFTER the listener is
+  // registered above, which is what makes the fold below safe.
+  useEffect(() => {
+    if (plane === undefined) return;
+    let gone = false;
+
+    void (async () => {
       let known: Moved[];
       try {
-        known = await commands.chatStates();
+        const answer = await commands.chatStates(plane);
+        if (answer.status !== "ok") return;
+        known = answer.data;
       } catch {
         return;
       }
@@ -99,9 +131,8 @@ export function useChatStates(): ChatStates {
 
     return () => {
       gone = true;
-      stop?.();
     };
-  }, []);
+  }, [plane]);
 
   return states;
 }

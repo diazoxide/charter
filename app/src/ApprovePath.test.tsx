@@ -50,7 +50,8 @@ function core(options: typeof START_OPTIONS = START_OPTIONS) {
   let opened = 0;
   mockIPC((cmd, args) => {
     asked.push({ cmd, args: (args ?? {}) as Record<string, unknown> });
-    if (cmd === "plane_root") return "/home/dev/plane";
+    if (cmd === "plane_at_launch")
+      return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
     if (cmd === "plane_sidebar") return SIDEBAR;
     if (cmd === "running_sessions") return [];
     if (cmd === "opened_chats") return [];

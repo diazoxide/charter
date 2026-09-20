@@ -92,6 +92,8 @@ function core(
   asked: Asked[];
   /** Fires the event the app is sent when something asks it to quit. */
   askToQuit: () => Promise<void>;
+  /** Fires one `chat-moved`, the way the core pushes one. */
+  move: (moved: Moved) => void;
 } {
   const asked: Asked[] = [];
   const listeners = new Map<string, number>();
@@ -103,7 +105,8 @@ function core(
       listeners.set(event, handler);
       return 1;
     }
-    if (cmd === "plane_root") return "/home/dev/plane";
+    if (cmd === "plane_at_launch")
+      return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
     if (cmd === "start_options") return START_OPTIONS;
     if (cmd === "start_chat") return { session: ++opened, wired: null };
     if (cmd === "opened_chats") return open;
@@ -114,6 +117,15 @@ function core(
   });
   return {
     asked,
+    move: (moved: Moved) => {
+      const handler = listeners.get("chat-moved");
+      if (handler === undefined) throw new Error("the window is not listening for moves");
+      window.__TAURI_INTERNALS__.runCallback(handler, {
+        event: "chat-moved",
+        id: 1,
+        payload: moved,
+      });
+    },
     askToQuit: async () => {
       const handler = listeners.get("quit-asked");
       if (handler === undefined) throw new Error("the window is not listening for a quit");
@@ -236,8 +248,57 @@ describe("what the window does with the chats the core already has", () => {
     );
 
     await vi.waitFor(() =>
-      expect(of("chat_in_front", asked).slice(-1)[0]?.args).toEqual({ session: 8 }),
+      expect(of("chat_in_front", asked).slice(-1)[0]?.args).toEqual({
+        plane: "/home/dev/plane",
+        session: 8,
+      }),
     );
+  });
+});
+
+/** What the tab for `name` says its chat is doing. */
+function stateShown(name: string): string | null | undefined {
+  const tab = within(screen.getByRole("tablist", { name: "Tabs" }))
+    .getAllByRole("tab")
+    .find((one) => one.querySelector(".tab-name")?.textContent === name);
+  return tab?.querySelector("[data-state]")?.getAttribute("data-state");
+}
+
+describe("what the window is told about the chats", () => {
+  /** A move, as the core pushes it: one chat, in one plane. */
+  function moving(plane: string, session: number, state: string, queue: number[] = []): Moved {
+    return { plane, session, state, needs_you: queue.includes(session), queue };
+  }
+
+  it("takes a move in the plane it is showing", async () => {
+    const { move } = core([chat({ session: 7, name: "ide.7" })]);
+    render(<App />);
+    await vi.waitFor(() => expect(tabs()).toEqual(["ide.7"]));
+
+    move(moving("/home/dev/plane", 7, "waiting", [7]));
+
+    await vi.waitFor(() => expect(stateShown("ide.7")).toBe("waiting"));
+  });
+
+  it("leaves a chat alone when the move belongs to another plane", async () => {
+    // Every plane numbers its chats from one, so "session 7 is waiting" is half a name. A
+    // process holding two projects would otherwise paint one project's state onto the
+    // other's chat 7 — and a chat that is waiting for you has no next event to correct it.
+    //
+    // The second move is what makes this a test rather than a hope: it is for THIS plane and
+    // a different chat, so waiting for it proves the window had finished with the foreign one.
+    const { move } = core([
+      chat({ session: 7, name: "ide.7" }),
+      chat({ session: 8, name: "ide.8" }),
+    ]);
+    render(<App />);
+    await vi.waitFor(() => expect(tabs()).toEqual(["ide.7", "ide.8"]));
+
+    move(moving("/home/dev/another-plane", 7, "waiting", [7]));
+    move(moving("/home/dev/plane", 8, "running"));
+
+    await vi.waitFor(() => expect(stateShown("ide.8")).toBe("running"));
+    expect(stateShown("ide.7")).toBe("unknown");
   });
 });
 
@@ -260,7 +321,13 @@ describe("being asked to quit", () => {
 
   /** What a hook would have reported, as the core hands it to the window. */
   function doing(session: number, state: string, needsYou = false): Moved {
-    return { session, state, needs_you: needsYou, queue: needsYou ? [session] : [] };
+    return {
+      plane: "/home/dev/plane",
+      session,
+      state,
+      needs_you: needsYou,
+      queue: needsYou ? [session] : [],
+    };
   }
 
   it("says which session is mid-turn, now that a hook can tell it", async () => {
@@ -354,7 +421,8 @@ describe("being asked to quit", () => {
         listeners.set(event, handler);
         return 1;
       }
-      if (cmd === "plane_root") return "/home/dev/plane";
+      if (cmd === "plane_at_launch")
+        return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
       if (cmd === "chats_that_would_not_start") return [];
       if (cmd !== "opened_chats") return null;
       await new Promise<void>((arrive) => (letTheChatsArrive = arrive));
@@ -379,6 +447,9 @@ describe("being asked to quit", () => {
     const { asked } = core();
     render(<App />);
     await screen.findByText(/No sessions/);
+    // And settled: the window asks its plane first and what it has open second, so "no tabs"
+    // is only "nothing to end" once that second answer is back.
+    await vi.waitFor(() => expect(of("chats_that_would_not_start", asked)).toHaveLength(1));
 
     const listen = of("plugin:event|listen", asked).find(
       (one) => (one.args as { event: string }).event === "quit-asked",

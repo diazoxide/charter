@@ -5,15 +5,22 @@
 //! polling anywhere: the listener blocks on `accept`, and the window is pushed to.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use charter_core::hookwire::{Listener, Reading, Report};
 use charter_core::session::Exit;
 use charter_core::state::{Board, State};
 
+use crate::planes::{PlaneId, Teller};
+
 /// The event the window listens for. One chat, its state, whether it is asking for you.
+///
+/// **The plane travels with it, and that is not decoration.** Every plane numbers its chats
+/// from one, so a window holding two of them would be told "session 3 is waiting" twice about
+/// two different chats. The pair is the identity; one half of it is a guess.
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
 pub struct Moved {
+    pub plane: PlaneId,
     pub session: u32,
     pub state: String,
     pub needs_you: bool,
@@ -22,13 +29,18 @@ pub struct Moved {
     pub queue: Vec<u32>,
 }
 
-/// The board, the socket, and the thread reading it — the app's whole side of the channel.
+/// The board, the socket, and the thread reading it — one plane's whole side of the channel.
 pub struct Hooks {
+    /// The plane this listens for, stamped onto every event it sends.
+    plane: PlaneId,
     /// Shared with the thread reading the socket: one board, so what the window is told and
     /// what the window can ask for can never disagree.
     board: Arc<Mutex<Board>>,
-    /// Kept so the socket lives as long as the app does; dropping it stops the reading.
-    _reading: Option<Reading>,
+    /// The reading, while it is going on. Held in a lock rather than owned outright so that
+    /// closing a plane can release the socket THEN, rather than whenever the last handle to
+    /// the plane happens to be dropped — a project the operator closed has to stop listening
+    /// while they are still looking at the app.
+    reading: Mutex<Option<Reading>>,
     socket: Option<PathBuf>,
 }
 
@@ -135,10 +147,11 @@ fn keyed_on(plane: Option<&Path>) -> u64 {
 impl Hooks {
     /// Nothing listening: every chat is `unknown`, which is what the spec says a harness with
     /// no state hook shows. The app runs perfectly well like this.
-    pub fn deaf() -> Self {
+    pub fn deaf(plane: PlaneId) -> Self {
         Self {
+            plane,
             board: Arc::new(Mutex::new(Board::new())),
-            _reading: None,
+            reading: Mutex::new(None),
             socket: None,
         }
     }
@@ -148,26 +161,48 @@ impl Hooks {
     /// A socket that cannot be opened is not worth refusing to start over: the app comes up
     /// with every chat `unknown` and says so on stderr, which is a working app with one
     /// feature missing rather than no app at all.
-    pub fn listening_on(
-        at: &Where,
-        moved: Box<dyn Fn(Moved) + Send + Sync + 'static>,
-    ) -> std::io::Result<Self> {
+    pub fn listening_on(plane: PlaneId, at: &Where, moved: Teller) -> std::io::Result<Self> {
         let listener = Listener::bind(&at.within, &at.socket)?;
         let socket = listener.path().to_path_buf();
         let board = Arc::new(Mutex::new(Board::new()));
         let reading = listener.each({
             let board = Arc::clone(&board);
+            let plane = plane.clone();
             Box::new(move |report| {
-                if let Some(what) = apply(&board, &report) {
+                if let Some(what) = apply(&board, &plane, &report) {
                     moved(what);
                 }
             })
         });
         Ok(Self {
+            plane,
             board,
-            _reading: Some(reading),
+            reading: Mutex::new(Some(reading)),
             socket: Some(socket),
         })
+    }
+
+    /// Stops listening and releases the socket. The plane on disk is untouched.
+    ///
+    /// Dropping the reader is what unlinks the socket file and joins the thread, and this is
+    /// where a closed plane does it — so a plane that is opened again binds a socket of its
+    /// own rather than inheriting a live one's path.
+    pub fn stop(&self) {
+        drop(
+            self.reading
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take(),
+        );
+    }
+
+    /// Whether this is still listening. Only a test asks.
+    #[cfg(test)]
+    pub fn listening(&self) -> bool {
+        self.reading
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
     }
 
     pub fn socket(&self) -> Option<&Path> {
@@ -187,19 +222,20 @@ impl Hooks {
     /// What the window is told when something other than a hook moves a chat: a chat opening
     /// or closing, or a program that has died.
     pub fn now(&self, session: u32) -> Moved {
-        now(&self.board, session)
+        now(&self.board, self.plane.clone(), session)
     }
 }
 
 /// What a reader sees for this chat right now.
-pub fn now(board: &Mutex<Board>, session: u32) -> Moved {
-    seen_by(&held_board(board), session)
+pub fn now(board: &Mutex<Board>, plane: PlaneId, session: u32) -> Moved {
+    seen_by(&held_board(board), &plane, session)
 }
 
 /// The same, for a caller that is already holding the board.
-fn seen_by(board: &Board, session: u32) -> Moved {
+fn seen_by(board: &Board, plane: &PlaneId, session: u32) -> Moved {
     let queue = board.needs_you();
     Moved {
+        plane: plane.clone(),
         session,
         state: word(board.state(session)),
         needs_you: queue.contains(&session),
@@ -213,9 +249,11 @@ fn seen_by(board: &Board, session: u32) -> Moved {
 /// dropping the lock in between let two of them interleave — mutate, mutate, read, read — and
 /// the window could then be sent the older of the two snapshots last and keep it until the
 /// next event. A review found it.
-fn apply(board: &Mutex<Board>, report: &Report) -> Option<Moved> {
+fn apply(board: &Mutex<Board>, plane: &PlaneId, report: &Report) -> Option<Moved> {
     let mut guard = held_board(board);
-    guard.reported(report).then(|| seen_by(&guard, report.chat))
+    guard
+        .reported(report)
+        .then(|| seen_by(&guard, plane, report.chat))
 }
 
 /// The board, whether or not a thread panicked while holding it.
