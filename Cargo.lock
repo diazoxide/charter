@@ -654,6 +654,7 @@ dependencies = [
  "memchr",
  "portable-pty",
  "proptest",
+ "regex",
  "rustix",
  "serde",
  "serde_json",

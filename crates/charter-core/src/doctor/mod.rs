@@ -23,7 +23,10 @@
 mod clones;
 mod config;
 mod deferred;
-mod fsx;
+// `pub(crate)`: `gitpolicy` asks the same two questions about the same
+// directories — what clears a path charter could not check, and whether a path is
+// simply not there — and `charter/workspace.py` answers them once for both.
+pub(crate) mod fsx;
 mod git;
 mod inventory;
 mod memory;

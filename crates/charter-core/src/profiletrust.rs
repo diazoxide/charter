@@ -125,7 +125,7 @@ pub fn record_launched(root: &Path, name: &str, print: &Fingerprint) -> io::Resu
 }
 
 /// Create the state directory, private to the operator.
-fn private_dir(dir: &Path) -> io::Result<()> {
+pub(crate) fn private_dir(dir: &Path) -> io::Result<()> {
     // `symlink_metadata`, not `is_dir`: the latter is true for a symlink TO a directory, so
     // the early return followed the link instead of refusing it.
     match std::fs::symlink_metadata(dir) {
@@ -160,7 +160,7 @@ fn private_dir(dir: &Path) -> io::Result<()> {
 ///
 /// The mode is set on the TEMP file, because a rename carries the source's mode onto the
 /// target rather than the other way round.
-fn write_private(target: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_private(target: &Path, bytes: &[u8]) -> io::Result<()> {
     let dir = target.parent().unwrap_or(Path::new("."));
     let name = target
         .file_name()
