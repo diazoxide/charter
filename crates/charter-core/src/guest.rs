@@ -110,8 +110,8 @@ const PLANE_LOCAL_SETTINGS: &str = ".claude/settings.local.json";
 /// Delimited rather than "charter's lines are the ones charter recognises": an operator's own
 /// `/.claude/settings.json` line, written before charter ever arrived, is indistinguishable
 /// from charter's by content alone, and a removal would take it with it.
-const EXCLUDE_BEGIN: &str = "# >>> charter (generated layer — `charter workspace reinit`) >>>";
-const EXCLUDE_END: &str = "# <<< charter <<<";
+pub const EXCLUDE_BEGIN: &str = "# >>> charter (generated layer — `charter workspace reinit`) >>>";
+pub const EXCLUDE_END: &str = "# <<< charter <<<";
 
 /// The lines inside the block, for the person who finds them in a repo they own.
 const EXCLUDE_NOTE: [&str; 3] = [

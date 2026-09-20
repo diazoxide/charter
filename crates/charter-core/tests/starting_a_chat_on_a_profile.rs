@@ -10,7 +10,6 @@
 //! and where its workspace's code was never meant to go.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use charter_core::harness::{Harness, SessionId};
@@ -63,11 +62,15 @@ impl Plane {
         self.stand_in_named("claude-stand-in", answer)
     }
 
+    /// Through `stand_in::program`, which is how every program a charter test runs is
+    /// written: one written through this process's own descriptor can lose to `ETXTBSY` when
+    /// it is run straight away (charter-app#81).
     fn stand_in_named(&self, program: &str, answer: &str) -> PathBuf {
-        let bin = self.root().join(program);
-        fs::write(&bin, format!("#!/bin/sh\ncat <<'JSON'\n{answer}\nJSON\n")).unwrap();
-        fs::set_permissions(&bin, fs::Permissions::from_mode(0o755)).unwrap();
-        bin
+        stand_in::program(
+            self.root(),
+            program,
+            &format!("#!/bin/sh\ncat <<'JSON'\n{answer}\nJSON\n"),
+        )
     }
 
     fn declares(&self, toml: &str) -> &Self {
@@ -461,9 +464,9 @@ fn a_probe_whose_harness_writes_more_than_a_pipe_holds_still_answers() {
     // sat on the whole timeout before refusing a chat that was fine. Well over any pipe
     // buffer, and the answer has to arrive in seconds rather than in the timeout.
     let plane = Plane::new();
-    let chatty = plane.root().join("chatty-claude");
-    fs::write(
-        &chatty,
+    let chatty = stand_in::program(
+        plane.root(),
+        "chatty-claude",
         "#!/bin/sh\n\
          i=0\n\
          while [ $i -lt 400 ]; do\n\
@@ -471,9 +474,7 @@ fn a_probe_whose_harness_writes_more_than_a_pipe_holds_still_answers() {
          \x20 i=$((i+1))\n\
          done\n\
          printf '\\n[{\"id\":\"charter@charter\",\"scope\":\"user\",\"enabled\":true}]\\n'\n",
-    )
-    .unwrap();
-    fs::set_permissions(&chatty, fs::Permissions::from_mode(0o755)).unwrap();
+    );
     plane.profile("claude", &chatty, "");
     let p = profiles::current(plane.root()).get("work").unwrap().clone();
 

@@ -46,7 +46,9 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
 
-use crate::contain;
+// `contain` is no longer named here: the two private writers this file had are
+// [`crate::plane::private_dir`] and [`crate::plane::write_private`] now, and they carry the
+// containment walk with them.
 use crate::forge::{self, Raised};
 use crate::worktree::git;
 
@@ -484,55 +486,13 @@ fn mark_done(plane: &Path) {
 /// charter tightens what it creates and reports what it did not, because `$CHARTER_HOME` can
 /// point the state directory at a home or a shared team directory.
 fn private_dir(plane: &Path, dir: &Path) -> io::Result<()> {
-    contain::no_link_on_the_way(plane, dir)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(dir)
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::create_dir_all(dir)
-    }
+    crate::plane::private_dir(plane, dir)
 }
 
-/// Write charter's own state at 0600, settling the mode on the **inode** before any content
-/// reaches it — `charter/config.py:_private_fd`, including its ordering.
-///
-/// `OpenOptions::mode` applies **only when the call creates the inode**, so a file written by
-/// an older charter, restored from a tarball or made by hand keeps whatever mode it had and
-/// every byte written after it sits at that mode. The permission is therefore set on the
-/// descriptor this call holds.
-///
-/// **`O_TRUNC` is deliberately not in the flags.** Truncating first would empty the file while
-/// it is still at its old mode; the truncate happens after, so there is no window in which new
-/// content is readable by an account the finished file is not.
-///
-/// A failed chmod is swallowed rather than raised, as Python's is: filesystems with fixed
-/// permissions (exFAT, many network mounts) cannot hold a mode, and refusing to write a cache
-/// to protect a mode the filesystem was never going to keep helps nobody.
+/// Write charter's own state at 0600 — [`crate::plane::write_private`], which is where the
+/// ordering of the chmod and the truncate is argued.
 fn write_private(plane: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
-    use std::io::Write;
-
-    contain::no_link_on_the_way(plane, path)?;
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = contain::nofollow(&mut options).open(path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
-    }
-    file.set_len(0)?;
-    file.write_all(bytes)
+    crate::plane::write_private(plane, path, bytes)
 }
 
 #[cfg(test)]

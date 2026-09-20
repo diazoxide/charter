@@ -494,14 +494,11 @@ mod tests {
         std::fs::create_dir_all(&hooks).unwrap();
         let marker = home.path().join("RAN");
         let script = format!("#!/bin/sh\ntouch {}\n", marker.display());
-        std::fs::write(hooks.join("post-checkout"), &script).unwrap();
-        std::fs::write(hooks.join("query-watchman"), &script).unwrap();
+        // Through `stand_in::program`: these are run the moment they are written, and a
+        // program this process wrote through its own descriptor can lose to `ETXTBSY`
+        // (charter-app#81).
         for hook in ["post-checkout", "query-watchman"] {
-            std::fs::set_permissions(
-                hooks.join(hook),
-                <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
-            )
-            .unwrap();
+            stand_in::program(&hooks, hook, &script);
         }
         std::fs::write(
             home.path().join(".gitconfig"),

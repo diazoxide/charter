@@ -468,17 +468,13 @@ fn the_signer_is_never_asked_even_when_the_operator_signs_every_commit() {
     // commit.gpgsign=false` and this goes red.
     let fixture = Fixture::plane();
     let ran = fixture.root.parent().unwrap().join("gpg-ran");
-    let signer = fixture.root.parent().unwrap().join("gpg");
-    std::fs::write(
-        &signer,
-        format!("#!/bin/sh\ntouch '{}'\nexit 1\n", ran.display()),
-    )
-    .unwrap();
-    std::fs::set_permissions(
-        &signer,
-        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
-    )
-    .unwrap();
+    // Through `stand_in::program`: it is run the moment it is written, and a program this
+    // process wrote through its own descriptor can lose to `ETXTBSY` (charter-app#81).
+    let signer = stand_in::program(
+        fixture.root.parent().unwrap(),
+        "gpg",
+        &format!("#!/bin/sh\ntouch '{}'\nexit 1\n", ran.display()),
+    );
     run(&fixture.root, &["config", "commit.gpgsign", "true"]);
     run(
         &fixture.root,
@@ -626,20 +622,14 @@ fn a_branch_that_requires_a_pull_request_gets_one_rather_than_a_stranded_commit(
     let bare = fixture.with_a_remote();
     // A real pre-receive hook refusing `refs/heads/main` in GitHub's own wording. Charter may
     // name a cause it RECOGNISED, never one it inferred, so the rejection is the evidence.
-    let hook = bare.join("hooks/pre-receive");
-    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
-    std::fs::write(
-        &hook,
+    std::fs::create_dir_all(bare.join("hooks")).unwrap();
+    stand_in::program(
+        &bare,
+        "hooks/pre-receive",
         "#!/bin/sh\nwhile read _ _ ref; do\n  case \"$ref\" in refs/heads/main)\n    echo \
          'remote: error: GH006: Protected branch update failed for refs/heads/main.' >&2\n    \
          exit 1;; esac\ndone\nexit 0\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(
-        &hook,
-        <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
-    )
-    .unwrap();
+    );
     std::fs::write(fixture.root.join("work.md"), "work").unwrap();
 
     let (code, said) = fixture.just_save();

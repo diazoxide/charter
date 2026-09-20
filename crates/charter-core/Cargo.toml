@@ -30,6 +30,9 @@ uuid = { version = "1.26.1", features = ["v4"] }
 [dev-dependencies]
 proptest = "1"
 serde_json = { workspace = true }
+# A test that writes a program and then runs it goes through this and nothing else
+# (charter-app#81).
+stand-in.workspace = true
 tempfile.workspace = true
 
 [lints]

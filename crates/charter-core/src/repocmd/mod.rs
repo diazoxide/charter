@@ -56,6 +56,14 @@ pub enum Say {
     /// A refusal with no mark: Python's `raise SystemExit(message)`, which prints the
     /// message as it is.
     Plain(String),
+    /// A line of the command's ANSWER, on **stdout** and with no mark — Python's bare
+    /// `print(…)`.
+    ///
+    /// Apart from `Plain`, which is an unmarked line on stderr, because the stream is the
+    /// difference that matters: `charter persona default` prints the persona's name for a
+    /// script to read and says everything else on stderr, and a sink that sent both to one
+    /// place would make the name unreadable without the prose around it.
+    Out(String),
 }
 
 impl fmt::Display for Say {
@@ -65,7 +73,7 @@ impl fmt::Display for Say {
             Say::Done(s) => write!(f, "✓ {s}"),
             Say::Warn(s) => write!(f, "! {s}"),
             Say::Fail(s) => write!(f, "✗ {s}"),
-            Say::Plain(s) => write!(f, "{s}"),
+            Say::Plain(s) | Say::Out(s) => write!(f, "{s}"),
         }
     }
 }

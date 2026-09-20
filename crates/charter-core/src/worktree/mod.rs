@@ -179,6 +179,24 @@ pub enum Dirt {
     Unknown,
 }
 
+/// [`Dirt`] for one tree, for a caller outside this module.
+///
+/// `charter workspace remove` asks the same question `wt remove` does, and it has to get the
+/// same answer: a workspace that deleted a worktree `wt remove` would have refused over is
+/// charter#91 again, one command along.
+pub fn dirt_of(tree: &Path) -> Dirt {
+    dirt(tree)
+}
+
+/// How many commits this tree holds that no other ref reaches, or `None` when git would not
+/// say — the second half of the same shared guard as [`dirt_of`].
+pub fn unique_commits_of(tree: &Path, branch: Option<&str>) -> Option<u32> {
+    // A `Refusal` here means git could not be run at all, which is the same "charter does not
+    // know" the `Ok(None)` inside stands for — and the caller's sentence for both is "could
+    // not be checked for unique commits".
+    unique_commits(tree, branch).ok().flatten()
+}
+
 fn dirt(tree: &Path) -> Dirt {
     match git::run(tree, &["status", "--porcelain"], git::READ) {
         Ok(seen) if seen.ok() => {

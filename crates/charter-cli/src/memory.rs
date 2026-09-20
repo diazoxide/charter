@@ -91,6 +91,18 @@ pub enum PersonaCommand {
         #[arg(long, hide = true)]
         now: Option<String>,
     },
+    /// Show, set or clear the plane's declared front door — `charter.toml`'s
+    /// `[persona] default`.
+    ///
+    /// Not a memory command either, and here for the same reason `current` is: this is the
+    /// enum `charter persona` dispatches on. The work is [`charter_core::personacmd`].
+    Default {
+        /// The persona to declare. Omit to print what is declared.
+        name: Option<String>,
+        /// Undeclare it — from `charter.toml` AND from the legacy `personas/.default`.
+        #[arg(long)]
+        clear: bool,
+    },
     /// Show a persona's memory, or --query to search it.
     Recall {
         /// The persona (default: the active one).
@@ -672,6 +684,15 @@ pub fn persona(here: &crate::Here, command: PersonaCommand) -> Result<Code, Stri
             let found = here.active_persona(None);
             println!("{}", found.as_deref().unwrap_or("(none)"));
             Ok(0)
+        }
+        PersonaCommand::Default { name, clear } => {
+            let mut sink = crate::speak;
+            Ok(charter_core::personacmd::default_command(
+                plane.root(),
+                name.as_deref(),
+                clear,
+                &mut sink,
+            ))
         }
         PersonaCommand::Remember {
             words,
