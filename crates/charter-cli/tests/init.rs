@@ -67,6 +67,30 @@ impl Scene {
         self.run(&["init", "--forge", "github", "--owner", "acme"])
     }
 
+    /// Make `dir` the top level of a git working tree with an origin on a forge charter
+    /// knows. The test's own git, never charter's runner.
+    fn git_repo(&self, dir: &Path) {
+        for args in [
+            vec!["init", "-q", "-b", "main", "."],
+            vec![
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/acme/widget.git",
+            ],
+        ] {
+            let out = Command::new("git")
+                .args(&args)
+                .current_dir(dir)
+                .env("HOME", &self.home)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_SYSTEM", "/dev/null")
+                .output()
+                .expect("git runs");
+            assert!(out.status.success(), "git {args:?}: {:?}", out);
+        }
+    }
+
     fn write(&self, rel: &str, body: &str) {
         let path = self.plane.join(rel);
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -476,6 +500,146 @@ fn reinit_heals_a_missing_directory_and_then_has_nothing_to_do() {
     assert!(again.status.success(), "{}", stderr(&again));
     assert!(stderr(&again).contains("Up to date"), "{}", stderr(&again));
     assert_eq!(tree(&scene.plane), whole);
+}
+
+// ------------------------------------------------------------------------------------------
+// ADR 0035 / spec decision 27: `init` at the top of a repository does not colonise it
+// ------------------------------------------------------------------------------------------
+//
+// The DECLARED divergence from the Python charter, which still scaffolds into the repository
+// and prints the first-clone offer afterwards. `tests/differential/run.py` asserts that
+// difference by name against the oracle; what is pinned here is the Rust side's own contract:
+// exactly which runs refuse, and that a refusing run writes nothing at all.
+
+#[test]
+fn init_at_the_top_of_a_git_repo_writes_nothing_into_it() {
+    let scene = Scene::new();
+    scene.git_repo(&scene.plane);
+    let before = tree(&scene.plane);
+
+    let out = scene.init();
+
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(
+        tree(&scene.plane),
+        before,
+        "a refusing `init` wrote into the repository"
+    );
+    let said = stderr(&out);
+    // Named from its origin, not from the directory the plane copy happens to sit in.
+    assert!(said.contains("this is the git repo 'widget'"), "{said}");
+    // The opt-in is on the screen, and it says what it will do.
+    assert!(said.contains("charter init --plane-is-this-repo"), "{said}");
+    assert!(
+        said.contains(
+            "That writes charter.toml, .claude/settings.json, opencode.json, personas/, \
+             inventory/, workspaces/ into this repo, and charter's own rules into its \
+             tracked .gitignore."
+        ),
+        "{said}"
+    );
+    // The flags the operator typed come back with both suggestions, ready to paste.
+    assert!(
+        said.contains("charter init --forge github --owner acme"),
+        "{said}"
+    );
+    assert!(
+        said.contains("charter init --plane-is-this-repo --forge github --owner acme"),
+        "{said}"
+    );
+    // And where the next reader finds out why.
+    assert!(
+        said.contains("docs/adr/0035-a-plane-is-untrusted-until-the-operator-opens-it.md"),
+        "{said}"
+    );
+    assert!(said.contains("spec decision 27"), "{said}");
+}
+
+#[test]
+fn the_flag_that_asks_for_it_makes_the_repo_the_plane_and_offers_the_first_clone() {
+    let scene = Scene::new();
+    scene.git_repo(&scene.plane);
+
+    let out = scene.run(&[
+        "init",
+        "--plane-is-this-repo",
+        "--forge",
+        "github",
+        "--owner",
+        "acme",
+    ]);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(scene.plane.join("charter.toml").is_file());
+    // Python's offer, unchanged: what the old default printed after scaffolding.
+    assert!(
+        stderr(&out).contains("You are standing in the git repo 'widget'"),
+        "{}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn clone_this_repo_asks_for_the_plane_here_too_and_is_not_refused_by_the_new_default() {
+    // It asks for a clone INTO the plane this run makes here, so it says the same thing
+    // `--plane-is-this-repo` says. Its own refusal — this charter does not clone yet — is
+    // what it must reach; being turned back by the repo check instead would hide it.
+    let scene = Scene::new();
+    scene.git_repo(&scene.plane);
+
+    let out = scene.run(&["init", "--clone-this-repo", "--forge", "github"]);
+
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("does not clone the repo you are standing in yet"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(scene.plane.join("charter.toml").is_file());
+}
+
+#[test]
+fn a_repo_that_is_already_a_plane_is_healed_rather_than_refused() {
+    // Every re-run of `init`, and charter's own plane, which IS a repository. A refusal here
+    // would break the one flow this repo develops itself in.
+    let scene = Scene::new();
+    assert!(scene.init().status.success());
+    scene.git_repo(&scene.plane);
+    let whole = tree(&scene.plane);
+
+    let again = scene.init();
+
+    assert!(again.status.success(), "{}", stderr(&again));
+    assert!(
+        stderr(&again).contains("nothing to do"),
+        "{}",
+        stderr(&again)
+    );
+    assert_eq!(tree(&scene.plane), whole);
+}
+
+#[test]
+fn a_directory_that_merely_sits_inside_a_repo_still_gets_its_plane() {
+    // `_is_repo_top_level`'s equality case, and the reason for it: a `$HOME` kept under git
+    // would otherwise refuse to hold a plane anywhere beneath it.
+    let scene = Scene::new();
+    scene.git_repo(&scene.plane);
+    let under = scene.plane.join("planes").join("acme");
+    std::fs::create_dir_all(&under).unwrap();
+
+    let out = Command::new(charter())
+        .args(["init", "--forge", "github", "--owner", "acme"])
+        .current_dir(&under)
+        .env_remove("CHARTER_ROOT")
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("XDG_CONFIG_HOME")
+        .env("HOME", &scene.home)
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .expect("the binary runs");
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(under.join("charter.toml").is_file());
 }
 
 #[test]

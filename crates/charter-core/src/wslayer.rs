@@ -20,19 +20,29 @@
 //!
 //! **No `.git/info/exclude` entry, and that is measured rather than assumed.**
 //! `/workspaces/*/*` is already in the plane's `.gitignore` and the managed LIVE block
-//! un-ignores four named paths, none of them `.claude/`. Nothing generated here can reach a
-//! commit, so there is no block to write and — the consequence that matters — no
-//! `withheld` and no `unrecorded` row: those two exist in the Python because a checkout's
-//! write is not made at all when its exclude line or its record cannot be published first. A
-//! record that cannot be published here costs only the record, and the layer still lands.
+//! un-ignores four named paths, none of them `.claude/`. Nothing generated in the DIRECTORY
+//! can reach a commit, so there is no block to write for it and — the consequence that
+//! matters — no `withheld` and no `unrecorded` row for it: those two exist in the Python
+//! because a checkout's write is not made at all when its exclude line or its record cannot
+//! be published first. A record that cannot be published here costs only the record, and the
+//! layer still lands.
 //!
 //! **No machine-local document.** Claude Code reads `.claude/settings.local.json` at the git
 //! root as well as in the session's own directory, and a workspace directory is inside the
 //! plane's own repository, so the plane's copy already reaches it. It is therefore never
-//! wanted here — and since it is also the only path the harness itself writes into
-//! ([`crate::guest`]'s `COWRITTEN`), the `harness-edited` and `harness-behind` states cannot
-//! be reached in a workspace directory at all. See [`Found`] and [`Did`], which carry only
-//! the states this target has.
+//! wanted in the directory — and since it is also the only path the harness itself writes
+//! into ([`crate::guest`]'s `COWRITTEN`), [`Did::HarnessBehind`] is a state only a CHECKOUT
+//! reaches.
+//!
+//! # The checkouts under it are wired here too
+//!
+//! [`wire`] descends into every checkout [`checkouts`] finds and hands each to
+//! [`crate::guest::wire`], whose rows come back labelled `<checkout>/<path>` — charter's
+//! `checkout_label`. That is charter's own shape: its `wire_harnesses` materialises the
+//! workspace directory and then extends with each guest tree's rows, so `reinit` is the
+//! repair for a clone made by an older charter as well as for the directory around it.
+//! [`Did`] therefore covers both targets; the table on [`Did`] says which of charter's
+//! states each one can reach and which are still absent.
 //!
 //! # Deliberate divergences from the Python, both in the refusing direction
 //!
@@ -126,9 +136,14 @@ pub enum Found {
 
 /// What charter DID at one path. The Python's `wire_harnesses`.
 ///
-/// `withheld` and `unrecorded` are absent for the reason the module docs give: both are a
-/// checkout's, where a write whose exclude line or whose record cannot be published is not
-/// made at all.
+/// `withheld`, `unrecorded`, `unhidden` and `unlisted` are absent, and [`crate::wscmd`]'s gap
+/// list says what each would take. All four are a CHECKOUT's, and all four come out of the
+/// same bookkeeping this port does not have: `_shared_rels`, which asks git to list every
+/// worktree of the checkout's repository and then asks `git status` per path per other tree
+/// before a line is added or left out. [`crate::guest::wire`] is deliberately stronger in
+/// that gap's place — a checkout whose block cannot be written gets NO files rather than an
+/// unhidden machine-local one — so what charter reports one path at a time this reports as
+/// one [`Did::Blocked`] for the checkout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Did {
     /// Written where there was nothing.
@@ -146,6 +161,12 @@ pub enum Did {
     Blocked,
     /// A generated path charter cannot read, left exactly as it is.
     Unreadable,
+    /// A path the HARNESS writes into too, holding content charter cannot vouch for as its
+    /// own write — charter's `harness-behind`. Never [`Did::Foreign`] and never "remove it":
+    /// the approvals in that file are the harness's own and deleting it to get charter's copy
+    /// back destroys them. Only a checkout can reach it: the one co-written path is
+    /// `.claude/settings.local.json`, which a workspace directory never wants.
+    HarnessBehind,
 }
 
 impl Did {
@@ -157,7 +178,10 @@ impl Did {
     /// Whether this row names a state `reinit` cannot clear, so the closing line may not say
     /// "nothing to do" over it.
     pub fn is_unresolved(self) -> bool {
-        matches!(self, Did::Foreign | Did::Blocked | Did::Unreadable)
+        matches!(
+            self,
+            Did::Foreign | Did::Blocked | Did::Unreadable | Did::HarnessBehind
+        )
     }
 }
 
@@ -201,6 +225,12 @@ fn writable_directory(plane: &Path, dir: &Path) -> bool {
 ///
 /// **Read only, because `doctor` calls this from a hook.** A check that writes is not a
 /// check: it would report every workspace healthy by having just healed it.
+///
+/// **The DIRECTORY's half alone**, unlike [`wire`], which also descends into the checkouts
+/// under it. charter's read-only `harness_layer` does descend; nothing in this binary reads
+/// this function yet, and giving it a `git worktree list` per repository on a `doctor` hook
+/// path is a cost to measure rather than to assume. Named here so the asymmetry is a
+/// decision an adversarial reader can find, not one they have to derive.
 pub fn status(
     plane: &Path,
     dir: &Path,
@@ -408,15 +438,28 @@ fn withdraw(
 ///
 /// Called from [`scaffold`], so a launch gets it. `charter workspace reinit` is the repair.
 ///
+/// # The checkouts inside it, too
+///
+/// A clone or a linked worktree under the workspace is a git root of its own, and it cuts a
+/// chat off from the plane far more sharply than this directory does: project settings are
+/// read from the session's own directory and the walk for agents and skills stops at the git
+/// root. So every checkout [`checkouts`] finds is wired through [`crate::guest::wire`] and
+/// its rows come back prefixed with the checkout's own directory name — charter's
+/// `checkout_label`, which is what makes `reinit` the repair for a clone as well as for the
+/// directory around it.
+///
+/// **Its root is contained as one decision, exactly as this directory's is.** A
+/// `workspaces/<ws>/<name>` linked at a repository OUTSIDE the plane is a tree whose own root
+/// has already escaped, and [`crate::guest`]'s per-file guard is relative to *that* root, so
+/// it would pass. charter's `_wired_tree_ok` asks the same question of the tree root, and so
+/// does this.
+///
 /// # What this does NOT do
 ///
-/// It does not descend into the guest CHECKOUTS inside the workspace — a clone, or a linked
-/// worktree, each a git root of its own that cuts a chat off from the plane far more sharply
-/// than this directory does. [`crate::guest::wire`] is that machinery and it exists; what has
-/// no port is the Python's row vocabulary for it (`unhidden`, `unlisted`, `unrecorded`,
-/// `withheld`) and the `.git/info/exclude` bookkeeping those rows report on. [`checkouts`]
-/// names them so `reinit` can say so out loud rather than print "up to date" over an unwired
-/// clone.
+/// It does not reach a checkout's own linked worktrees — `.worktrees/<repo>/<piece>`, which
+/// charter finds by asking git to list them. That listing is what `unlisted` reports on, and
+/// it is named in [`crate::wscmd`]'s gap list with the three states that share its
+/// bookkeeping.
 pub fn wire(plane: &Path, dir: &Path) -> Vec<Row> {
     let want_all = want(plane);
     if !writable_directory(plane, dir) {
@@ -520,16 +563,93 @@ pub fn wire(plane: &Path, dir: &Path) -> Vec<Row> {
     // NOT sorted: the order is the Python's — what was withdrawn, then what was found in
     // path order, then what was written. `reinit` prints these one by one, so an order of
     // this port's own would be a different report for one plane.
+    //
+    // The checkouts come AFTER the directory's own rows, which is charter's order too: its
+    // `wire_harnesses` materialises the workspace directory, then extends with each guest
+    // tree's rows.
+    for tree in checkouts(dir) {
+        rows.extend(guest_rows(plane, &tree));
+    }
     rows
+}
+
+/// One checkout's rows, labelled the way charter labels them — `<checkout>/<path>`.
+///
+/// The status vocabularies are two spellings of one question and the mapping is stated here
+/// rather than at each printing site, so `reinit` and anything that reports a layer cannot
+/// come to disagree about what one row means.
+///
+/// A tree whose ROOT resolves out of the plane is refused whole and nothing in it is read or
+/// written — `_wired_tree_ok`. It is reported at the checkout's exclude path rather than at
+/// the marker, because that is the path a reader goes to.
+fn guest_rows(plane: &Path, tree: &Path) -> Vec<Row> {
+    let label = tree.file_name().unwrap_or_default().to_string_lossy();
+    let exclude = format!("{label}/.git/info/exclude");
+    if !writable_directory(plane, tree) {
+        return vec![Row {
+            rel: exclude,
+            did: Did::Blocked,
+        }];
+    }
+    let wired = crate::guest::wire(plane, tree);
+    if matches!(wired.hidden, crate::guest::Hidden::Blocked(..)) {
+        // Nothing was written, so there are no file rows to report: the block is the one
+        // fact, and it is the one charter's `blocked` exclude row carries too.
+        return vec![Row {
+            rel: exclude,
+            did: Did::Blocked,
+        }];
+    }
+    let mut rows: Vec<Row> = wired
+        .rows
+        .into_iter()
+        .map(|row| Row {
+            rel: format!("{label}/{}", row.rel),
+            did: match row.status {
+                crate::guest::Status::Created => Did::Created,
+                crate::guest::Status::Refreshed => Did::Refreshed,
+                crate::guest::Status::Current => Did::Present,
+                crate::guest::Status::Foreign => Did::Foreign,
+                crate::guest::Status::Theirs => Did::HarnessBehind,
+                crate::guest::Status::Blocked => Did::Blocked,
+            },
+        })
+        .collect();
+    // The block's own row, and only when there is one to report: charter appends it when it
+    // owns something in the checkout or the block was not already right, and a checkout where
+    // every wanted path holds somebody else's file has neither.
+    let did = match wired.block {
+        crate::guest::Block::Created => Did::Created,
+        crate::guest::Block::Refreshed => Did::Refreshed,
+        crate::guest::Block::Present => Did::Present,
+        crate::guest::Block::Untouched => return rows,
+    };
+    rows.push(Row { rel: exclude, did });
+    rows
+}
+
+/// The path INSIDE a checkout that a layer row of workspace `dir` names — `None` for a row
+/// of the workspace directory's own — charter's `checkout_row`.
+///
+/// One answer for every command that words a checkout's file differently from the
+/// workspace's, because only a checkout is somebody else's repository: a file charter did not
+/// write is committed there with `git add -f`, and nowhere else.
+pub fn checkout_row(dir: &Path, rel: &str) -> Option<String> {
+    let (head, inner) = rel.split_once('/')?;
+    (!inner.is_empty() && dir.join(head).join(".git").exists()).then(|| inner.to_string())
 }
 
 /// Every checkout directly inside the workspace directory that charter is a GUEST in — a
 /// clone or a linked worktree, each a git root of its own.
 ///
-/// Named so `reinit` can report what it did not wire. `.git` is a DIRECTORY in a clone and a
-/// FILE reading `gitdir: <path>` in a linked worktree, and both count: this asks "where would
-/// a chat's cwd be cut off from the plane's layer", and a worktree's root is a git boundary
-/// exactly as a clone's is.
+/// [`wire`] hands each of these to [`crate::guest::wire`]. `.git` is a DIRECTORY in a clone
+/// and a FILE reading `gitdir: <path>` in a linked worktree, and both count: this asks "where
+/// would a chat's cwd be cut off from the plane's layer", and a worktree's root is a git
+/// boundary exactly as a clone's is.
+///
+/// charter's `guest_trees` is this plus every PIECE — a worktree of one of these checkouts'
+/// repositories, which it finds by asking git to list them. That listing is the `unlisted`
+/// state [`crate::wscmd`]'s gap list names, and it is not asked here.
 pub fn checkouts(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -1340,10 +1460,14 @@ mod tests {
             Did::Foreign,
             Did::Blocked,
             Did::Unreadable,
+            // A CHECKOUT's only, and named by `wscmd::reinit`'s own tests: the one
+            // co-written path is `.claude/settings.local.json`, which a workspace directory
+            // never wants.
+            Did::HarnessBehind,
         ];
-        assert_eq!(reachable.len(), 7);
+        assert_eq!(reachable.len(), 8);
         assert_eq!(reachable.iter().filter(|d| d.is_repair()).count(), 3);
-        assert_eq!(reachable.iter().filter(|d| d.is_unresolved()).count(), 3);
+        assert_eq!(reachable.iter().filter(|d| d.is_unresolved()).count(), 4);
     }
 
     #[test]

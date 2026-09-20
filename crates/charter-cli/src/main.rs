@@ -358,6 +358,12 @@ struct InitCommand {
     /// Also clone the git repo you are standing in into the first workspace.
     #[arg(long)]
     clone_this_repo: bool,
+    /// Make the git repo you are standing in BE the control plane: write charter.toml,
+    /// personas/, inventory/, workspaces/ and charter's rules into that repo's own tracked
+    /// .gitignore. Without it, `init` at the top of a repo writes nothing and says how to put
+    /// the plane in a directory of its own (ADR 0035).
+    #[arg(long)]
+    plane_is_this_repo: bool,
     /// Name of the generic front-door persona to scaffold and declare. Skipped if this
     /// plane already has personas.
     #[arg(long, value_name = "NAME", overrides_with = "no_front_door")]
@@ -680,6 +686,27 @@ enum WorkspaceCommand {
         #[arg(long)]
         force: bool,
         /// Pin the clock the manifest's `updated_at` is stamped with, for tests only.
+        #[arg(long, hide = true)]
+        now: Option<String>,
+    },
+    /// Fork a workspace: a new one pre-loaded with its charter, memory, todos and manifest.
+    ///
+    /// The clones are NOT copied — they are reconstructible. `--restore` is charter's way of
+    /// cloning them straight away; this binary does not restore from a manifest (see
+    /// `wscmd::fork`), performs the fork in full, and says so where the clone would be.
+    #[command(alias = "duplicate")]
+    Fork {
+        /// The workspace to fork from.
+        src: String,
+        /// The fork's name.
+        new: String,
+        /// Also clone the inherited repos now.
+        #[arg(long)]
+        restore: bool,
+        /// Make the fork LIVE (default LOCAL).
+        #[arg(long)]
+        live: bool,
+        /// Pin the clock the fork's manifest and note are stamped with, for tests only.
         #[arg(long, hide = true)]
         now: Option<String>,
     },
@@ -1404,6 +1431,7 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
             | WorkspaceCommand::Default { .. }
             | WorkspaceCommand::Snapshot { .. }
             | WorkspaceCommand::Create { .. }
+            | WorkspaceCommand::Fork { .. }
             | WorkspaceCommand::Reinit { .. }
     ) {
         return None;
@@ -1466,6 +1494,28 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
                     repos,
                     now,
                     ids: &here.ids,
+                },
+                say,
+            )
+        }
+        WorkspaceCommand::Fork {
+            src,
+            new,
+            restore,
+            live,
+            now,
+        } => {
+            let Some(now) = pinned(now) else {
+                return Some(ExitCode::FAILURE);
+            };
+            wscmd::fork::fork(
+                &wscmd::fork::Request {
+                    root: &root,
+                    src,
+                    new,
+                    live: *live,
+                    restore: *restore,
+                    now,
                 },
                 say,
             )
@@ -1613,6 +1663,7 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Workspace(WorkspaceCommand::Default { .. })
         | Command::Workspace(WorkspaceCommand::Snapshot { .. })
         | Command::Workspace(WorkspaceCommand::Create { .. })
+        | Command::Workspace(WorkspaceCommand::Fork { .. })
         | Command::Workspace(WorkspaceCommand::Reinit { .. })
         | Command::GitPolicy { .. } => {
             unreachable!("answered before run")
@@ -1816,6 +1867,7 @@ fn main() -> ExitCode {
                 owner: init.owner.clone().unwrap_or_default(),
                 host: init.host.clone(),
                 clone_this_repo: init.clone_this_repo,
+                plane_is_this_repo: init.plane_is_this_repo,
                 front_door: if init.no_front_door {
                     None
                 } else {

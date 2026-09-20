@@ -11,6 +11,20 @@
 //! one this command silently repaired while printing "nothing to do" until it was said out
 //! loud.
 //!
+//! # The checkouts inside it, too
+//!
+//! A clone or a linked worktree under the workspace is a git root of its own: a chat started
+//! there reads project settings from that directory and the walk for agents and skills stops
+//! at the git root, so without charter's layer it runs with none of the plane's ask/deny
+//! rules, no persona agents and no `$CHARTER_HARNESS`. [`crate::wslayer::wire`] wires each
+//! one and its rows arrive here labelled `<checkout>/<path>`, so this command is the repair
+//! for a clone an older charter made as well as for the directory around it.
+//!
+//! **A checkout's file of the operator's is worded differently, and that is not decoration.**
+//! Only a checkout is somebody else's repository, where charter's line in `info/exclude`
+//! keeps their file hidden while it is there — so the one true piece of advice is `git add
+//! -f`, and "move it aside", which the workspace directory's own row says, would be wrong.
+//!
 //! # Two counters, because they are two units
 //!
 //! A workspace can need several repairs — the layer is a row per file, the structure bump is
@@ -141,9 +155,29 @@ pub fn reinit(root: &Path, scope: Scope, now: chrono::DateTime<chrono::Utc>, say
                 repaired.insert(name.clone());
             }
             match row.did {
-                Did::Foreign => say(Say::Warn(format!(
-                    "'{name}': {rel} was not written by charter — left completely untouched; \
-                     charter never overwrites it."
+                // Never "remove it" in a checkout: the file is somebody's own in their own
+                // repository and stays hidden while it is there, so the one thing to say is
+                // how to commit it on purpose. Everywhere else `doctor` says a foreign file
+                // stays exactly as it is, and one command may not advise what the other
+                // rules out.
+                Did::Foreign => match wslayer::checkout_row(&dir, rel) {
+                    Some(inside) => say(Say::Warn(format!(
+                        "'{name}': {rel} holds content charter did not write — left completely \
+                         untouched, and hidden in that checkout while it is there; if this is \
+                         your own file and you mean to commit it: git add -f {inside}"
+                    ))),
+                    None => say(Say::Warn(format!(
+                        "'{name}': {rel} was not written by charter — left completely \
+                         untouched; charter never overwrites it."
+                    ))),
+                },
+                // Not `foreign` and never "remove it": the approvals in that file are the
+                // harness's own, and deleting it to get charter's copy back destroys them.
+                Did::HarnessBehind => say(Say::Warn(format!(
+                    "'{name}': {rel} is a file charter cannot vouch for as its own write, and \
+                     the harness saves its approvals into that file, so charter does not \
+                     rewrite it: the plane's machine-local rules it lacks are not in force \
+                     there."
                 ))),
                 Did::Blocked => say(Say::Fail(format!(
                     "'{name}': {rel} could not be written — something is in the way at that \
@@ -176,24 +210,6 @@ pub fn reinit(root: &Path, scope: Scope, now: chrono::DateTime<chrono::Utc>, say
                 }
                 Did::Present => {}
             }
-        }
-
-        for path in wslayer::checkouts(&dir) {
-            // The named gap (M2.22): the workspace DIRECTORY's layer is ported and a checkout
-            // inside it is not, so this says so rather than letting "up to date" stand over a
-            // clone a chat would start in with none of the plane's rules.
-            unresolved.insert(name.clone());
-            let label = path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            say(Say::Warn(format!(
-                "'{name}': {label} is a checkout of its own, and this charter does not wire one \
-                 — a chat started there runs without the plane's ask/deny rules, its persona \
-                 agents and $CHARTER_HARNESS. Run the Python charter's `charter workspace \
-                 reinit {name}` to wire it."
-            )));
         }
 
         for found in &before.unreadable {
@@ -544,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn a_checkout_inside_the_workspace_is_named_as_the_thing_this_charter_did_not_wire() {
+    fn a_checkout_inside_the_workspace_is_wired_and_its_rows_are_named_under_it() {
         let dir = plane();
         made(dir.path(), "gamma");
         let clone = dir.path().join("workspaces/gamma/svc");
@@ -553,12 +569,134 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|l| l.contains("svc is a checkout of its own")),
+                .any(|l| l.contains("wrote svc/.claude/settings.json")),
+            "the whole of M2.24: a chat started in that clone gets the plane's layer — \
+             {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("wrote svc/.git/info/exclude")),
+            "and it is hidden in the repo charter is a guest in — {lines:?}"
+        );
+        assert!(
+            clone.join(".claude/settings.json").exists(),
+            "the row is a report of a write that happened"
+        );
+        let block = std::fs::read_to_string(clone.join(".git/info/exclude")).unwrap();
+        assert!(block.contains("/.claude/settings.json"), "{block}");
+    }
+
+    #[test]
+    fn a_second_reinit_over_a_wired_checkout_says_there_is_nothing_to_do() {
+        // M2.25, and the measurement behind it: with the rows ported, "up to date" is
+        // sayable again over a plane that HAS clones. The warning M2.22 shipped fired on
+        // every run of every plane with a checkout in it, which is every plane in use.
+        let dir = plane();
+        made(dir.path(), "gamma");
+        let clone = dir.path().join("workspaces/gamma/svc");
+        std::fs::create_dir_all(clone.join(".git")).unwrap();
+        run(dir.path(), Scope::One("gamma"));
+        let (code, lines) = run(dir.path(), Scope::One("gamma"));
+        assert_eq!(code, 0);
+        assert_eq!(
+            lines,
+            vec!["✓ Up to date (structure v5) — nothing to do.".to_string()],
             "{lines:?}"
         );
-        // And the closing line must not then claim the plane is current.
+    }
+
+    #[test]
+    fn a_file_of_the_operators_in_a_checkout_is_named_with_how_to_commit_it_on_purpose() {
+        // A checkout is somebody else's repository, and that is the whole difference: the
+        // file stays hidden while it is there, so the only advice that is true is `git add
+        // -f`. "Move it aside" is what the workspace directory's own row says, and one
+        // command may not advise what the other rules out.
+        let dir = plane();
+        made(dir.path(), "gamma");
+        let clone = dir.path().join("workspaces/gamma/svc");
+        std::fs::create_dir_all(clone.join(".git")).unwrap();
+        std::fs::create_dir_all(clone.join(".claude")).unwrap();
+        std::fs::write(clone.join(".claude/settings.json"), "{\"mine\": true}\n").unwrap();
+        let (_code, lines) = run(dir.path(), Scope::One("gamma"));
+        assert!(
+            lines.iter().any(|l| l
+                .contains("svc/.claude/settings.json holds content charter did not write")
+                && l.contains("git add -f .claude/settings.json")),
+            "{lines:?}"
+        );
         assert!(
             !lines.iter().any(|l| l.contains("nothing to do")),
+            "and the closing line may not call the plane current over it: {lines:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(clone.join(".claude/settings.json")).unwrap(),
+            "{\"mine\": true}\n",
+            "left exactly as it is"
+        );
+    }
+
+    #[test]
+    fn a_machine_local_file_the_harness_rewrote_is_kept_and_never_merged_into() {
+        // The one status only a CHECKOUT reaches: `.claude/settings.local.json` is the one
+        // path the harness writes into too — "Yes, and don't ask again" lands there — and a
+        // workspace directory never wants it, because Claude Code already reads the plane's
+        // copy at the git root.
+        let dir = plane();
+        std::fs::write(
+            dir.path().join(".claude/settings.local.json"),
+            r#"{"permissions":{"deny":["Bash(rm -rf *)"]}}"#,
+        )
+        .unwrap();
+        made(dir.path(), "gamma");
+        let clone = dir.path().join("workspaces/gamma/svc");
+        std::fs::create_dir_all(clone.join(".git")).unwrap();
+        run(dir.path(), Scope::One("gamma"));
+        let local = clone.join(".claude/settings.local.json");
+        assert!(local.exists(), "charter writes it in a checkout");
+        // The harness saves its own approval into it.
+        let theirs = "{\"permissions\":{\"allow\":[\"Bash(ls)\"]}}\n";
+        std::fs::write(&local, theirs).unwrap();
+
+        let (_code, lines) = run(dir.path(), Scope::One("gamma"));
+
+        assert!(
+            lines.iter().any(|l| l.contains(
+                "svc/.claude/settings.local.json is a file charter cannot vouch for as its own \
+                 write"
+            )),
+            "{lines:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&local).unwrap(),
+            theirs,
+            "deleting it to get charter's copy back destroys the harness's approvals"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("nothing to do")),
+            "the plane's machine-local rules are NOT in force there: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_checkout_linked_out_of_the_plane_is_refused_whole_and_nothing_in_it_is_written() {
+        let dir = plane();
+        made(dir.path(), "gamma");
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(outside.path().join(".git")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("workspaces/gamma/svc"))
+            .unwrap();
+        let (_code, lines) = run(dir.path(), Scope::One("gamma"));
+        let wrote = outside.path().join(".claude").exists();
+        assert!(
+            !wrote,
+            "a tree whose own root has escaped is one charter writes nothing into"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("svc/.git/info/exclude could not be written")),
             "{lines:?}"
         );
     }
