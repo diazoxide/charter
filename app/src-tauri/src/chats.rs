@@ -221,6 +221,10 @@ impl Chats {
                 name: chat.name.clone(),
                 cwd: chat.cwd.clone(),
                 resume: chat.resume.clone(),
+                // The chat's own footer choice, brought back with it. It rides on the
+                // environment, which is rebuilt at every start, so a relaunch that did not
+                // carry it would silently blank a footer the operator had turned on.
+                show_footer: chat.show_footer,
             },
             root,
         )?;
@@ -517,6 +521,7 @@ mod tests {
                     active: false,
                     profile: None,
                     persona: None,
+                    show_footer: false,
                 },
                 Size {
                     columns: 80,
@@ -576,6 +581,7 @@ mod tests {
                     active: false,
                     profile: None,
                     persona: None,
+                    show_footer: false,
                 },
                 Size {
                     columns: 80,
@@ -620,6 +626,7 @@ mod tests {
                 active: false,
                 profile: None,
                 persona: None,
+                show_footer: false,
             },
             Size {
                 columns: 80,
@@ -665,6 +672,7 @@ mod tests {
                     active: false,
                     profile: None,
                     persona: None,
+                    show_footer: false,
                 },
                 Size {
                     columns: 80,
@@ -723,6 +731,7 @@ mod tests {
             active: false,
             profile: None,
             persona: None,
+            show_footer: false,
         }
     }
 
@@ -1270,12 +1279,15 @@ mod tests {
         assert_eq!(chats.sessions().running(), Vec::<u32>::new());
     }
     #[test]
-    fn the_record_keeps_the_profile_and_persona_a_chat_was_started_on() {
+    fn the_record_keeps_the_profile_persona_and_footer_a_chat_was_started_on() {
         // `record()` rebuilds each chat with `..chat.clone()`, so these ride along — which
         // means nothing says so when they stop. A struct literal that names one field and
         // spreads the rest is exactly where a later edit drops one silently, and an edit
         // that added `profile: None` beside the spread would do it: the record would still
         // be written, still be read, and every chat would come back as a shell.
+        //
+        // The footer choice (charter ADR 0029) rides the same spread and fails the same way:
+        // it would be dropped at the quit and the chat would come back blanked.
         let chats = Chats::new();
         let chat = Chat {
             program: "/bin/sh".to_owned(),
@@ -1286,6 +1298,7 @@ mod tests {
             active: false,
             profile: Some("claude-work".to_owned()),
             persona: Some("steward".to_owned()),
+            show_footer: true,
         };
 
         let session = chats
@@ -1302,6 +1315,7 @@ mod tests {
         assert_eq!(record.chats.len(), 1);
         assert_eq!(record.chats[0].profile.as_deref(), Some("claude-work"));
         assert_eq!(record.chats[0].persona.as_deref(), Some("steward"));
+        assert!(record.chats[0].show_footer);
         let _ = chats.close(session);
     }
     #[test]
@@ -1321,6 +1335,7 @@ mod tests {
             active: false,
             profile: Some("claude-work".to_owned()),
             persona: None,
+            show_footer: false,
         };
         assert_eq!(
             chat.harness(),
@@ -1384,6 +1399,7 @@ mod tests {
             active: false,
             profile: Some("claude-work".to_owned()),
             persona: Some("steward".to_owned()),
+            show_footer: false,
         };
         assert_eq!(
             chat.harness(),
