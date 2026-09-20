@@ -182,6 +182,15 @@ body {
   opacity: 0.6;
 }
 
+/* What a chat's harness cannot tell charter (#27). Read as a note on the chat, never as
+   trouble: nothing is wrong, the harness is different. */
+.sidebar .unreported {
+  margin: 0.1rem 0 0;
+  font-size: 0.85em;
+  font-style: italic;
+  opacity: 0.7;
+}
+
 .sidebar .focused,
 .sidebar .unfiled {
   border-top: 1px solid var(--edge, #3a3a3a);
@@ -327,8 +336,13 @@ body {
 .needs-you-count {
   font-weight: 600;
 }
-.needs-you-empty {
+/* The fade is on the reassuring words alone. The note beside them is the half of the answer
+   the app cannot vouch for, and it must not fade with them (#27). */
+.needs-you-empty > span:not(.needs-you-quiet) {
   opacity: 0.55;
+}
+.needs-you-quiet {
+  font-style: italic;
 }
 .mid-turn {
   font-weight: 600;

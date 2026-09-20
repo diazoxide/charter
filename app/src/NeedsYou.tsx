@@ -30,22 +30,38 @@ export function ChatState({ state }: { state: State }) {
  *
  * It holds only chats that ASKED — one that has never run is `waiting` for a first prompt,
  * which is not the same thing. A relaunch that put twenty chats back must not fill this.
+ *
+ * And it names the chats it cannot vouch for. A harness that cannot report everything — a
+ * Codex chat stopped mid-turn for an approval says nothing — can be waiting on you while
+ * the queue is empty, so "Nothing needs you" is never said over the top of it alone.
  */
 export function NeedsYou({
   queue,
+  quiet,
   nameOf,
   show,
 }: {
   queue: readonly number[];
+  /** The chats that can be waiting on you without saying so, by name. */
+  quiet: readonly string[];
   nameOf: (session: number) => string;
   show: (session: number) => void;
 }) {
+  const unsaid =
+    quiet.length === 0 ? null : (
+      <span className="needs-you-quiet">
+        {quiet.length === 1
+          ? `${quiet[0]} can be waiting on you without saying so.`
+          : `${quiet.length} chats can be waiting on you without saying so.`}
+      </span>
+    );
   if (queue.length === 0) {
     // Said rather than left blank: an empty queue is the good state, and a blank space does
     // not tell anyone the app is watching.
     return (
       <div className="needs-you needs-you-empty" aria-label="Needs you">
         <span>Nothing needs you</span>
+        {unsaid}
       </div>
     );
   }
@@ -59,6 +75,7 @@ export function NeedsYou({
           </li>
         ))}
       </ul>
+      {unsaid}
     </div>
   );
 }

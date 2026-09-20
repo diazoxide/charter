@@ -30,7 +30,7 @@ import {
 } from "./tabs";
 import { ChatState, NeedsYou } from "./NeedsYou";
 import { Panels } from "./Panels";
-import { stateOf, useChatStates } from "./chatState";
+import { quietOnes, stateOf, useChatStates } from "./chatState";
 
 type Plane =
   { state: "loading" } | { state: "found"; root: string } | { state: "missing"; reason: string };
@@ -495,6 +495,11 @@ function App() {
   );
   const frontChat =
     inFront && reopened.find((chat) => chat.session === panesOf(tabs, inFront.id)[0]?.session);
+  // Read from the sidebar, which is the core's own list of what is open and what each chat
+  // runs — `open` above knows the harness only of the chats a relaunch put back.
+  const quiet = sidebar
+    ? quietOnes([...sidebar.workspaces.flatMap((ws) => ws.chats), ...sidebar.unfiled], states)
+    : [];
 
   return (
     <main className="window">
@@ -531,7 +536,7 @@ function App() {
           <Doer offer={by("pane.split.down")} onPress={press} />
           <Doer offer={by("pane.close")} onPress={press} />
         </div>
-        <NeedsYou queue={states.needsYou} nameOf={nameOf} show={showChat} />
+        <NeedsYou queue={states.needsYou} quiet={quiet} nameOf={nameOf} show={showChat} />
         <span className="plane">
           {plane.state === "found" && <code>{plane.root}</code>}
           {plane.state === "missing" && <span role="alert">No plane: {plane.reason}</span>}
@@ -676,6 +681,7 @@ function chatOf(reopened: OpenChat[], session: number, name: string): OpenChat {
       fresh: null,
       profile: null,
       persona: null,
+      unreported: null,
     }
   );
 }

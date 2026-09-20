@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { moved, nothingKnown, stateOf, underneath } from "./chatState";
-import type { Moved } from "./bindings";
+import { moved, nothingKnown, quietOnes, stateOf, underneath } from "./chatState";
+import type { Moved, OpenChat } from "./bindings";
 
 function doing(session: number, state: string, queue: number[] = []): Moved {
   return { session, state, needs_you: queue.includes(session), queue };
@@ -48,5 +48,49 @@ describe("what the window keeps about the chats", () => {
 
     expect(stateOf(settled, 7)).toBe("waiting");
     expect(settled.needsYou).toEqual([7]);
+  });
+});
+
+/** A chat as the sidebar has it, with only what `quietOnes` reads worth setting. */
+function open(session: number, unreported: string | null): OpenChat {
+  return {
+    session,
+    name: `ide.${session}`,
+    cwd: null,
+    harness: unreported ? "codex" : "claude",
+    in_front: false,
+    resumed: null,
+    fresh: null,
+    profile: null,
+    persona: null,
+    unreported,
+  };
+}
+
+describe("the chats that can be waiting on you without saying so", () => {
+  const CODEX = "it never says when it stops mid-turn for your approval";
+
+  it("names a chat whose harness cannot report everything, and only that one", () => {
+    // #27: a Codex chat asking for approval mid-turn says nothing, so an empty queue beside
+    // it is not the app knowing nothing needs you.
+    expect(quietOnes([open(7, CODEX), open(8, null)], nothingKnown)).toEqual(["ide.7"]);
+  });
+
+  it("leaves out one already in the queue, which is named there", () => {
+    const states = moved(nothingKnown, doing(7, "waiting", [7]));
+
+    expect(quietOnes([open(7, CODEX), open(9, CODEX)], states)).toEqual(["ide.9"]);
+  });
+
+  it("leaves out one whose program has ended, which cannot be waiting on anybody", () => {
+    const states = moved(moved(nothingKnown, doing(7, "done")), doing(8, "failed"));
+
+    expect(quietOnes([open(7, CODEX), open(8, CODEX), open(9, CODEX)], states)).toEqual(["ide.9"]);
+  });
+
+  it("keeps one that is running, because running is what a chat waiting on approval looks like", () => {
+    const states = moved(nothingKnown, doing(7, "running"));
+
+    expect(quietOnes([open(7, CODEX)], states)).toEqual(["ide.7"]);
   });
 });

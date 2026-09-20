@@ -77,6 +77,7 @@ function chat(one: Partial<OpenChat> & { session: number }): OpenChat {
     fresh: null,
     profile: null,
     persona: null,
+    unreported: null,
     ...one,
   };
 }

@@ -42,14 +42,6 @@ export const commands = {
 	 */
 	chatStates: () => __TAURI_INVOKE<Moved[]>("chat_states"),
 	/**
-	 *  Why this chat can never report its state, where it cannot.
-	 * 
-	 *  Codex is the case: its hooks live only in a machine-wide file, and it fires no
-	 *  `Notification` at all. A chat showing `unknown` with no reason looks like charter is
-	 *  broken rather than like the harness is different.
-	 */
-	whyUnknown: (session: number) => __TAURI_INVOKE<string | null>("why_unknown", { session }),
-	/**
 	 *  The chats the app already has open — at a launch, the ones put back from the record.
 	 * 
 	 *  The window asks this instead of opening its own: putting the record back happens before
@@ -219,6 +211,8 @@ export type OpenChat = {
 	profile: string | null,
 	/**  The persona it adopted. */
 	persona: string | null,
+	/**  What its harness cannot tell charter, said on the chat — none where it tells all. */
+	unreported: string | null,
 };
 
 /**  One open todo. There is no state field: a closed todo is a deleted file (ADR 0004). */

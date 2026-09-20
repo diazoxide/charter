@@ -102,6 +102,11 @@ function ChatRow({ chat, states }: { chat: OpenChat; states: ChatStates }) {
       )}
       {chat.persona && <span className="persona"> · {chat.persona}</span>}
       {chat.cwd && <code className="cwd">{chat.cwd}</code>}
+      {/* What its harness cannot tell charter, on the chat itself. A Codex chat reads
+          `unknown` until its first prompt and never says it is waiting on an approval;
+          without this it would look like charter is broken, or like a chat that needs
+          nothing. */}
+      {chat.unreported && <p className="unreported">{chat.unreported}</p>}
     </>
   );
 }

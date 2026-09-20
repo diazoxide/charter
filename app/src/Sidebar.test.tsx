@@ -19,6 +19,7 @@ function chat(session: number, name: string, cwd: string, on: Partial<OpenChat> 
     fresh: null,
     profile: null,
     persona: null,
+    unreported: null,
     ...on,
   };
 }
@@ -145,6 +146,39 @@ describe("Sidebar", () => {
     expect(
       within(screen.getByTestId("workspace-alpha")).getAllByRole("img", { name: "unknown" }),
     ).toHaveLength(2);
+  });
+
+  it("says on the chat what its harness cannot report, rather than leaving it unexplained", () => {
+    // #27. A Codex chat reads `unknown` until its first prompt and never says when it waits
+    // on an approval. The core says so in a sentence, and the sentence is on the chat — the
+    // honest half named where it applies, not left for the operator to guess from a mark.
+    const said =
+      "Codex says nothing until your first prompt, and nothing at all until you trust " +
+      "charter's hooks when Codex asks; it never says when it stops mid-turn for your approval.";
+    const codex = {
+      ...model,
+      workspaces: [
+        {
+          ...model.workspaces[0],
+          chats: [
+            chat(1, "ide.1", "/home/dev/plane/workspaces/alpha", {
+              harness: "codex",
+              unreported: said,
+            }),
+            chat(2, "ide.2", "/home/dev/plane/workspaces/alpha", { harness: "claude" }),
+          ],
+        },
+      ],
+    };
+
+    render(<Sidebar states={nothingKnown} sidebar={codex} focused="alpha" onFocus={() => {}} />);
+
+    const row = screen.getByText("ide.1").parentElement as HTMLElement;
+    expect(within(row).getByText(said)).toBeInTheDocument();
+    expect(within(row).getByRole("img", { name: "unknown" })).toBeInTheDocument();
+    // And only there: a harness that reports everything carries no such sentence.
+    const other = screen.getByText("ide.2").parentElement as HTMLElement;
+    expect(within(other).queryByText(said)).toBeNull();
   });
 
   it("shows a chat working outside every workspace rather than dropping it", () => {

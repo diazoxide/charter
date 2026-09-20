@@ -176,6 +176,8 @@ struct OpenChat {
     profile: Option<String>,
     /// The persona it adopted.
     persona: Option<String>,
+    /// What its harness cannot tell charter, said on the chat — none where it tells all.
+    unreported: Option<String>,
 }
 
 /// One workspace as the sidebar draws it: what it is for, what it still means to do, and the
@@ -609,6 +611,10 @@ impl From<chats::Open> for OpenChat {
             name: open.name,
             cwd: open.cwd.map(|cwd| cwd.display().to_string()),
             harness: open.harness.map(Harness::name).map(str::to_owned),
+            unreported: open
+                .harness
+                .and_then(Harness::unreported)
+                .map(str::to_owned),
             profile: open.profile,
             persona: open.persona,
             in_front: open.in_front,
@@ -647,22 +653,6 @@ fn chat_states(chats: tauri::State<'_, Chats>, hooks: tauri::State<'_, Hooks>) -
         .into_iter()
         .map(|open| hooks.now(open.session))
         .collect()
-}
-
-/// Why this chat can never report its state, where it cannot.
-///
-/// Codex is the case: its hooks live only in a machine-wide file, and it fires no
-/// `Notification` at all. A chat showing `unknown` with no reason looks like charter is
-/// broken rather than like the harness is different.
-#[tauri::command]
-#[specta::specta]
-fn why_unknown(chats: tauri::State<'_, Chats>, session: u32) -> Option<String> {
-    let harness = chats
-        .open_now()
-        .into_iter()
-        .find(|open| open.session == session)?
-        .harness;
-    chats.cannot_report(harness).map(str::to_owned)
 }
 
 /// Sends what a pane typed to the session's program.
@@ -737,7 +727,6 @@ fn commands() -> Builder<tauri::Wry> {
         unwatch_session,
         running_sessions,
         chat_states,
-        why_unknown,
         opened_chats,
         chats_that_would_not_start,
         chat_in_front,
