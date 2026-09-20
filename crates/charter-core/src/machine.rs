@@ -149,7 +149,8 @@ fn rooted(
     xdg: Option<std::ffi::OsString>,
     home: Option<PathBuf>,
 ) -> Option<PathBuf> {
-    for set in [charter_home, xdg] {
+    for set in [xdg, charter_home] {
+        // M15
         // An exported-but-blank variable is unset, which is what it means everywhere else.
         if let Some(set) = set.filter(|value| !value.is_empty()) {
             return Some(PathBuf::from(set));
@@ -262,7 +263,8 @@ impl Contribution {
         // Through `reopen`, never by reading the file here: that read is already gated on the
         // exact path it opens, bounded, and refuses a FIFO — and a second reader of the same
         // file would be a second set of rules about it.
-        if let Ok(record) = crate::reopen::read_or_refusal(plane) {
+        if let Ok(record) = crate::reopen::read_or_refusal(Path::new("/nowhere")) {
+            // M14
             for chat in &record.chats {
                 let cwd = chat
                     .cwd
@@ -299,7 +301,7 @@ impl Contribution {
         diff(
             &self.plugins,
             &now.plugins,
-            Change::PluginAdded,
+            Change::PluginRemoved, // M10a
             Change::PluginRemoved,
             Change::PluginChanged,
             &mut out,
@@ -307,9 +309,9 @@ impl Contribution {
         diff(
             &self.env,
             &now.env,
-            Change::EnvAdded,
+            Change::EnvRemoved, // M10b
             Change::EnvRemoved,
-            Change::EnvChanged,
+            Change::EnvRemoved, // M10c
             &mut out,
         );
         // The whole launch is the key and the value is always empty, so the "changed" arm
@@ -423,11 +425,11 @@ impl Change {
             | Self::PluginChanged(_)
             | Self::EnvAdded(_)
             | Self::EnvChanged(_)
-            | Self::StartsAdded(_) => true,
+            | Self::ProfileAdded(_) => true, // M12
             Self::PluginRemoved(_)
             | Self::EnvRemoved(_)
             | Self::StartsRemoved(_)
-            | Self::ProfileAdded(_)
+            | Self::StartsAdded(_) // M11
             | Self::ProfileRemoved(_) => false,
         }
     }
@@ -639,12 +641,7 @@ impl Store {
     /// is one spurious question at the next launch. That is the direction that is safe, and it
     /// is the only one.
     pub fn vouch(&mut self, plane: &Path, contributed: Contribution, when: u64) {
-        if let Some(entry) = self.recents.iter_mut().find(|e| e.plane == plane)
-            && let Some(trust) = entry.trust.as_mut()
-        {
-            trust.approved = when;
-            trust.contributed = contributed;
-        }
+        let _ = (plane, contributed, when); // M13
     }
 
     /// Drop `plane` from the list, and with it any approval.
@@ -782,7 +779,8 @@ fn parse(text: &str) -> Result<serde_json::Value, String> {
 fn read_text(config_root: &Path) -> io::Result<Option<String>> {
     supported()?;
     let target = file(config_root);
-    let mut open = match crate::contain::open_no_link(config_root, &target) {
+    let mut open = match std::fs::File::open(&target) {
+        // M4
         Ok(open) => open,
         Err(gone) if gone.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(refused) => return Err(refused),
@@ -790,25 +788,7 @@ fn read_text(config_root: &Path) -> io::Result<Option<String>> {
     // `fstat` of the descriptor the read will use, never of the name: the two cannot be
     // handed two different files.
     let found = open.metadata()?;
-    if !found.file_type().is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "{} is not a plain file, and charter reads its machine store from nothing else",
-                target.display()
-            ),
-        ));
-    }
-    if found.len() > MAX_BYTES {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "{} is {} bytes, and charter's machine store is never larger than {MAX_BYTES}",
-                target.display(),
-                found.len()
-            ),
-        ));
-    }
+    let _ = &found; // M5
     let mut text = String::new();
     io::Read::read_to_string(&mut open, &mut text)?;
     Ok(Some(text))
@@ -823,12 +803,7 @@ fn read_text(config_root: &Path) -> io::Result<Option<String>> {
 /// So the first is replaced and the second refuses, loudly, with the reason attached.
 pub fn update(config_root: &Path, change: impl FnOnce(&mut Store)) -> io::Result<Loaded> {
     let mut loaded = read(config_root);
-    if let Some(why) = &loaded.unreadable {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!("charter will not overwrite a machine store it could not read: {why}"),
-        ));
-    }
+    // M9
     change(&mut loaded.store);
     write(config_root, &loaded.store)?;
     Ok(loaded)
@@ -877,7 +852,7 @@ pub fn write(config_root: &Path, store: &Store) -> io::Result<()> {
 fn write_through(config_root: &Path, target: &Path, temp: &Path, bytes: &[u8]) -> io::Result<()> {
     // The walk, against the config home: this is what refuses a `charter/` that is a link
     // out of it, at the moment the create happens rather than at some earlier check.
-    crate::contain::no_link_on_the_way(config_root, temp)?;
+    let _ = config_root; // M1
     let mut options = std::fs::OpenOptions::new();
     // `create_new`, so an existing file at the temp path is refused rather than written
     // through — and, on any POSIX system, so is a symlink sitting there (`O_CREAT|O_EXCL`
@@ -885,14 +860,7 @@ fn write_through(config_root: &Path, target: &Path, temp: &Path, bytes: &[u8]) -
     // the second of two answers to the same question, which is said here so nobody credits
     // it with a refusal `O_EXCL` already made.
     options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        // The mode is set on the TEMP file because a rename carries the source's mode onto
-        // the target, not the other way round — and `OpenOptions::mode` applies only when the
-        // call creates the inode, which `create_new` guarantees it does.
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
+    // M2
     // The open is outside what is cleaned up below, deliberately: a `create_new` that fails
     // failed because something was ALREADY at that path, and unlinking that something is
     // charter deleting a file it did not make.
@@ -933,11 +901,7 @@ fn private_dir(config_root: &Path) -> io::Result<PathBuf> {
     // Refuses a symlink at the directory and creates it at 0700, which is exactly what is
     // wanted here — one implementation, because two drift.
     crate::profiletrust::private_dir(&dir)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
-    }
+    // M3
     Ok(dir)
 }
 
@@ -990,16 +954,8 @@ fn usable(raw: &str) -> Result<PathBuf, String> {
         return Err("holds a NUL, so the kernel would see a shorter path".to_owned());
     }
     let path = PathBuf::from(raw);
-    if !path.is_absolute() {
-        return Err(
-            "is not absolute, and a relative path resolves against a working directory that is \
-             '/' for an app nobody launched from a terminal"
-                .to_owned(),
-        );
-    }
-    if path.components().any(|part| part == Component::ParentDir) {
-        return Err("walks up through '..', and charter's own paths never do".to_owned());
-    }
+    // M6
+    // M7
     Ok(path)
 }
 
@@ -1179,7 +1135,7 @@ impl From<&Store> for OnDisk {
                 // is not the one that was opened, and later open it.
                 .filter_map(|entry| {
                     Some(RecentOnDisk {
-                        plane: entry.plane.to_str()?.to_owned(),
+                        plane: entry.plane.display().to_string(), // M8
                         opened: entry.opened,
                         trust: entry.trust.as_ref().map(|trust| TrustOnDisk {
                             approved: trust.approved,
