@@ -1312,9 +1312,13 @@ ABSOLUTE_PATHS = (r"'/[^']*'", "each side's plane copy lives at its own absolute
 #
 # The version list is read from the DIRECTORY and not from the oracle, because this file has to
 # keep working whether or not charter is importable in its own process (`_declare_a_profile_per_
-# command_word` says the same thing about the other direction). A version only the ORACLE has is
-# still caught: `news --for` on it is one of these scenarios only if the corpus has it, and the
-# range scenario below lists every entry between two versions on both sides.
+# command_word` says the same thing about the other direction).
+#
+# **That leaves one hole, and `check_corpus` closes it.** A scenario generated from the vendored
+# directory cannot see a file DELETED from that directory: no scenario is generated for a version
+# that is not there, and every scenario that is generated passes. So the two corpora are compared
+# as file lists, once, before any scenario runs — which is also the cheapest possible failure for
+# the most likely kind of drift, and the one that names the files rather than a rendered diff.
 
 NEWS_DIR = REPO / "crates" / "charter-core" / "news"
 
@@ -1324,6 +1328,45 @@ NEWS_DIR = REPO / "crates" / "charter-core" / "news"
 #: joins it, that version's generated scenario goes red, which is exactly what a release gate
 #: catching a new offender should look like.
 NEWS_QUOTED_VERSION = "0.56.0"
+
+
+def check_corpus() -> bool:
+    """The vendored `news/` and the oracle's own entries are the same set of files.
+
+    Asked of the ORACLE as a subprocess, under the interpreter the scenarios run it with, rather
+    than imported here — this file keeps working whether or not charter is importable in its own
+    process, and the oracle is pinned to the commit the corpus was taken from.
+
+    Filenames rather than contents: a file whose BYTES drift shows up in that version's
+    `news --for` scenario, in the rendered body, which is a better report than a digest. What a
+    rendered body cannot show is a file that is not there to be rendered.
+    """
+    said = subprocess.run(
+        [sys.executable, "-c",
+         "from charter import news; d = news._dir();"
+         "print('\\n'.join(sorted(p.name for p in d.glob('*.md'))) if d else '')"],
+        capture_output=True, text=True,
+    )
+    if said.returncode != 0:
+        print("DIFF news-corpus: the oracle could not list its entries — " + said.stderr.strip())
+        return False
+    theirs = set(said.stdout.split())
+    ours = {p.name for p in NEWS_DIR.glob("*.md")}
+    if not theirs:
+        print("DIFF news-corpus: the oracle ships no entries, so nothing was compared")
+        return False
+    problems = []
+    for name in sorted(theirs - ours):
+        problems.append(f"    only charter has: docs/news/{name}")
+    for name in sorted(ours - theirs):
+        problems.append(f"    only charter-app has: crates/charter-core/news/{name}")
+    print(("ok   " if not problems else "DIFF ") + f"news-corpus ({len(theirs)} entries)")
+    for line in problems:
+        print(line)
+    if problems:
+        print("    the two copies of charter's news have drifted; see "
+              "crates/charter-core/news/SOURCE")
+    return not problems
 
 
 def _news_versions() -> list[str]:
@@ -2411,11 +2454,17 @@ def main() -> int:
             ap.error(f"no such scenario: {', '.join(unknown)} (have {', '.join(sorted(names))})")
         wanted = [s for s in everything if s.name in set(args.scenario)]
 
+    # Before the scenarios, and whichever of them were asked for: a corpus that has drifted makes
+    # every `news --for` scenario report a difference in a rendered body, and this names the file.
+    drifted = not check_corpus()
+
     failed = [
         s.name for s in wanted
         if not (doctor_scenarios.check(s, args.binary)
                 if isinstance(s, doctor_scenarios.DoctorScenario) else check(s, args.binary))
     ]
+    if drifted:
+        failed.append("news-corpus")
     if args.time_preflight:
         print()
         doctor_scenarios.time_preflight(args.binary, args.time_preflight)
