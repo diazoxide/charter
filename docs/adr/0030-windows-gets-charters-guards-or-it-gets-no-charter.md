@@ -233,6 +233,33 @@ which the module's own doc already says means **render**; `detach_self` gets
 not the same guarantee; and the two unix-only tests are marked as *missing on Windows*, not
 as not applying.
 
+**And the rung after that, run 35523107470, commit `9c63c3a`. This is the state this PR
+leaves the platform in, and it is the number the estimate below should be read against.**
+
+```
+cargo build -p charter-cli
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 12.66s
+
+cargo check --workspace --all-targets
+crates\charter-cli\tests\repo_commands.rs:619  error[E0425] cannot find `program` in `stand_in`
+crates\charter-cli\tests\init.rs:79            error[E0433] cannot find `unix` in `os`
+```
+
+**The `charter` binary builds on Windows.** `charter-core`'s library and `charter-cli`'s
+binary both compile; `cargo build -p charter-cli` produces an executable. Everything a plane
+runs as a command is, at the level of "it compiles", there.
+
+What does not is the **test suite**, and the first of the two remaining errors is the wall
+itself: `stand_in::program` is `#[cfg(unix)]`, and rustc says so — *"found an item that was
+configured out"*. That is charter-app#101 arriving exactly where it was predicted.
+
+Two things this PR's own `cfg` work leaves behind, said here so a reviewer does not have to
+find them: three constants in `hookwire` and `session` became unix-only and are now marked so
+(they were dead-code warnings for one run), and the empty-enum `Listener` produces four
+`unreachable definition` warnings at its call sites in `crates/charter-cli/tests/statusline.rs`.
+Warnings, because this job clears `-D warnings` — but the day Windows becomes a gate they are
+errors, and that is the right moment to decide whether those tests should be `cfg(unix)` too.
+
 **What is still not known, and how far the next rungs are.** `app/src-tauri` had begun
 compiling when the run aborted, and `charter-core`'s own test targets were scheduled but not
 proven either way — cargo stops handing out new units once one fails. Counted by hand, so the
@@ -264,8 +291,8 @@ because it joins `git` and not `git.exe`.
 absent, `/bin/sh` does not exist, and `chmod 0o755` leaves a file at `0o666` — so the mode
 comparison at the heart of the harness compares a number Windows does not keep.
 
-**ConPTY: one property confirmed, one worry refuted, and two questions the probe's own control
-invalidated.**
+**ConPTY: all four questions answered, over three runs, and the first two runs are kept here
+because what they got wrong is part of the answer.**
 
 - *Confirmed.* `drop(pair.slave)` does not end the output: the reader was still open ten
   seconds later, and reached EOF `20.01s` in — at the instant the **master** was dropped, and
@@ -295,15 +322,51 @@ invalidated.**
   question here was measuring that.
 
   This is a real constraint on `Session::start` and not a probe artefact. charter's engine
-  does answer a DSR — `alacritty_terminal` raises it and `take_replies` carries it back — but
-  the **ordering** is new: on Windows the writer has to be taken and the reply path live
-  before `spawn_command`, because the first thing owed is owed before there is any output to
-  react to. The probe now answers the query and the next run is what says whether `259` and
-  the kill's reach are real findings or were only ever this one.
+  does answer a DSR — `alacritty_terminal` raises it and `read_until_the_output_ends` calls
+  `take_replies` on **every** read, with no view open — and `Session::start` already takes the
+  writer and starts the reader before it spawns. So charter satisfies this today, by an
+  ordering that was chosen for other reasons. On Windows it stops being an accident: anything
+  that moved the spawn earlier, or started the engine lazily on first output, would produce a
+  chat that opens and then does nothing at all, with no error anywhere. That belongs in a test
+  whose name says so.
 
   A hypothesis worth recording as **wrong**: an almost-empty environment block would also have
   explained a program that never ran, but `CommandBuilder::new` calls `get_base_env()` and
   inherits, so that was never it.
+
+**With the query answered, the other three answer too — run 35523107470, commit `9c63c3a`.**
+The control and the questions are in one run, so each of these is a finding and not a
+symptom:
+
+```
+no-pty-baseline: Some(7), stdout "hello", stderr ""
+cursor-query: answered after 8.327ms (Ok(()))
+exit-code: the program exited 7, and portable-pty reports 7
+pty-said-by-then: 68 bytes, "\e[6n\e[?9001h\e[?1004h\e[m\e]0;C:\Windows\system32\cmd.exe\a\e[?25hhello\r\n"
+eof-after-exit: NO, the reader was still open 10s after the program exited
+eof-after-master-drop: YES, after 10.0537668s
+exit-259: NO — 10s of try_wait and the program still reads as running
+grandchild-ticks: 21 bytes before the kill, 28 just after, 56 eight seconds later
+kill-reaches-descendants: NO — what the program started outlived the kill
+```
+
+- **The exit code is right.** Eight milliseconds after the reply, the program ran, printed
+  `hello` and exited `7`, and `portable-pty` reported `7`. Nothing is wrong with the ordinary
+  path once the query is paid.
+- **`drop(pair.slave)` does not end the output.** Third run in a row. EOF arrives when the
+  master drops and at no other time.
+- **A program that exits `259` never exits**, now measured against a working control in the
+  same run. `WinChild::is_complete` reads `STILL_ACTIVE` — which is 259 — as "not finished",
+  so `Session::when_it_ends` would wait for ever on a harness that happened to exit with it.
+- **A kill reaches the program and nothing it started.** The ticker the program launched kept
+  writing after `TerminateProcess`: 21 bytes, then 28, then 56. On unix `session::end` kills
+  the process *group* precisely so this cannot happen; there is no group here, and
+  `portable-pty` puts the child in no job object. **Every chat closed on Windows would leak
+  its whole subtree**, which for a harness is the harness's own children.
+
+One more thing the preamble shows, worth knowing before a pane is pointed at it: ConPTY opens
+with `ESC[?9001h` (win32-input-mode) and `ESC[?1004h` (focus reporting), neither of which a
+unix harness turns on by itself.
 
 ## The work, as issues
 
@@ -356,7 +419,7 @@ as trustworthy as the macOS and Linux ones — not a Windows charter that starts
 
 | | work | basis | estimate |
 | --- | --- | --- | --- |
-| **A** | the string rules (#96), one `alive` answer (#102), and the mechanical half of the program lookups (#100: `git.exe`, `join_paths`, `USERPROFILE`, the `SystemRoot` allowlist, `PATHEXT`) | each is a named function with a test that can go red on macOS today | **3–5 days** |
+| **A** | the string rules (#96), one `alive` answer (#102), and the mechanical half of the program lookups (#100: `git.exe`, `join_paths`, `USERPROFILE`, the `SystemRoot` allowlist, `PATHEXT`) | each is a named function with a test that can go red on macOS today; and the *compiling* half of A is already done — the `charter` binary builds there | **3–5 days** |
 | **B** | the guards that need a design: ACLs for private state (#98), the reparse-tag walk (#97), the named-pipe channel (#95) | each is a crate choice, a `deny.toml` licence review, and a test that needs a second account on the runner | **3–5 weeks** |
 | **C** | the session lifecycle (#99): end from a wait on the handle, a job object for the kill, `259` | needs either an upstream `portable-pty` change or charter assigning the job after `spawn_command` | **1 week**, and it cannot be trusted until the scenario tests run on Windows |
 | **D** | test infrastructure (#101): `stand-in` rewritten, and the 44 files that reach for `std::os::unix` | 1177 tests; 21 `#!/bin/sh` stand-ins across 12 files; symlink tests need Developer Mode or admin on the runner; `mkfifo` has no counterpart | **2–3 weeks** |

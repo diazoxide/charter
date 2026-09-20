@@ -502,6 +502,9 @@ const POLL: Duration = Duration::from_millis(10);
 /// has it reaped. Bounded so the thread cannot outlive the answer it is waiting for.
 const REAPING: Duration = Duration::from_secs(5);
 /// How long a program gets to exit on its hangup before its group is killed.
+///
+/// `cfg(unix)`: there is no process group to hang up off it, so nothing reads this.
+#[cfg(unix)]
 const HANGUP_GRACE: Duration = Duration::from_millis(500);
 
 /// Hangs up the program's process group, then kills whatever is left of it, then reaps.

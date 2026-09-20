@@ -398,6 +398,9 @@ fn private_directory(directory: &std::path::Path) -> io::Result<()> {
 /// A hook writes its line and closes at once; this is only a bound on something that does
 /// not. Short, because the thread holding it is doing nothing else, and generous next to the
 /// 1.8 ms the whole hook call was measured at.
+///
+/// `cfg(unix)` because its one reader is: off unix there is no connection to bound.
+#[cfg(unix)]
 const A_REPORT_TAKES_AT_MOST: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// The most one report may be.
@@ -406,6 +409,9 @@ const A_REPORT_TAKES_AT_MOST: std::time::Duration = std::time::Duration::from_se
 /// is what stops a client that writes without ever sending a newline from growing a `String`
 /// in the app's memory until there is none left: the deadline above bounds how LONG one may
 /// write, and two seconds of writing is gigabytes.
+///
+/// `cfg(unix)` for the same reason as the deadline above it.
+#[cfg(unix)]
 const A_REPORT_IS_AT_MOST: u64 = 64 * 1024;
 
 /// Reads one report from one connection, or nothing.
