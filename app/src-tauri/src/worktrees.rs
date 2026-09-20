@@ -165,21 +165,23 @@ mod tests {
             vec!["config", "user.email", "t@e.invalid"],
             vec!["config", "user.name", "t"],
         ] {
-            std::process::Command::new("git")
-                .arg("-C")
-                .arg(&clone)
-                .args(&args)
-                .output()
-                .unwrap();
+            charter_core::forklock::output(
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&clone)
+                    .args(&args),
+            )
+            .unwrap();
         }
         std::fs::write(clone.join("README.md"), "one\n").unwrap();
         for args in [vec!["add", "-A"], vec!["commit", "-q", "-m", "one"]] {
-            std::process::Command::new("git")
-                .arg("-C")
-                .arg(&clone)
-                .args(&args)
-                .output()
-                .unwrap();
+            charter_core::forklock::output(
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&clone)
+                    .args(&args),
+            )
+            .unwrap();
         }
         (dir, root, clone)
     }
@@ -227,13 +229,14 @@ mod tests {
         let (_dir, root, clone) = plane();
         let by_hand = root.join("workspaces/alpha/.worktrees/thing/hand");
         std::fs::create_dir_all(by_hand.parent().unwrap()).unwrap();
-        std::process::Command::new("git")
-            .arg("-C")
-            .arg(&clone)
-            .args(["worktree", "add", "-q", "-b", "hand"])
-            .arg(&by_hand)
-            .output()
-            .unwrap();
+        charter_core::forklock::output(
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&clone)
+                .args(["worktree", "add", "-q", "-b", "hand"])
+                .arg(&by_hand),
+        )
+        .unwrap();
 
         let seen = worktree_of_chat(by_hand.display().to_string())
             .unwrap()

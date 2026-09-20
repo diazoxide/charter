@@ -1011,9 +1011,7 @@ fn a_planted_push_record_cannot_hang_the_save_or_be_read_whole() {
 
     // A FIFO is not a link, so the link check waves it through and the read never returns.
     std::fs::remove_file(&record).unwrap();
-    let made = std::process::Command::new("mkfifo")
-        .arg(&record)
-        .status()
+    let made = crate::forklock::status(std::process::Command::new("mkfifo").arg(&record))
         .expect("mkfifo runs");
     assert!(made.success(), "the test needs a fifo to plant");
     let (say, heard) = std::sync::mpsc::channel();

@@ -205,10 +205,10 @@ fn a_fifo_where_the_record_goes_asks_again_instead_of_never_returning() {
     let dir = plane(WORK);
     let p = work(dir.path());
     fs::create_dir_all(dir.path().join(".charter")).unwrap();
-    let made = std::process::Command::new("mkfifo")
-        .arg(record(dir.path()))
-        .status()
-        .expect("mkfifo runs");
+    let made = charter_core::forklock::status(
+        std::process::Command::new("mkfifo").arg(record(dir.path())),
+    )
+    .expect("mkfifo runs");
     assert!(made.success(), "the test's own premise: a FIFO was made");
 
     let (tx, rx) = mpsc::channel();

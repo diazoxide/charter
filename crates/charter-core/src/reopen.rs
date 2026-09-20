@@ -872,9 +872,7 @@ mod tests {
         let held = tempfile::tempdir().unwrap();
         let plane = held.path().to_path_buf();
         std::fs::create_dir_all(plane.join(".charter/app")).unwrap();
-        let made = std::process::Command::new("mkfifo")
-            .arg(path(&plane))
-            .status()
+        let made = crate::forklock::status(std::process::Command::new("mkfifo").arg(path(&plane)))
             .expect("mkfifo runs");
         assert!(made.success(), "the test needs a fifo to plant");
 

@@ -1,0 +1,24 @@
+# This crate opens pseudo-terminals, so every fork in a process that links it has to go
+# through `charter_core::forklock` — `portable-pty`'s `openpty` leaves both descriptors
+# without `FD_CLOEXEC` for a few syscalls, and a child forked in that window inherits the
+# terminal's slave and holds the chat's view open after its program has ended
+# (charter-app#53). A lock cannot guard a call that does not take it, so the calls that
+# would escape it are disallowed here rather than left to a reviewer to notice.
+#
+# `forklock::spawn`, `forklock::output` and `forklock::status` are the way through, and
+# `forklock` itself is the one place the disallowed methods are called.
+#
+# Tests are in too, deliberately: charter-core's own test binary opens terminals and shells
+# out to git in the same process, under `--test-threads`, which is exactly the shape of the
+# window.
+#
+# Not covered, knowingly: `crates/stand-in`, which forks `/bin/sh` and `/bin/cp` to write a
+# program a test is about to run. It cannot take this lock without depending on charter-core,
+# and no process that links it opens a terminal — every pty in this repo is opened by the app,
+# by charter-core's own test binary, or by `fake-harness`'s. Give it the lock before that
+# stops being true.
+disallowed-methods = [
+  { path = "std::process::Command::spawn", reason = "use charter_core::forklock::spawn — charter-app#53" },
+  { path = "std::process::Command::output", reason = "use charter_core::forklock::output — charter-app#53" },
+  { path = "std::process::Command::status", reason = "use charter_core::forklock::status — charter-app#53" },
+]

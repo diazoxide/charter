@@ -38,7 +38,7 @@ pub fn git(dir: &Path, args: &[&str]) -> std::process::Output {
     // A developer's own `init.defaultBranch`, hooks or templates must not reach a fixture.
     cmd.env("GIT_CONFIG_GLOBAL", "/dev/null");
     cmd.env("GIT_CONFIG_SYSTEM", "/dev/null");
-    let out = cmd.output().expect("git runs");
+    let out = charter_core::forklock::output(&mut cmd).expect("git runs");
     assert!(
         out.status.success(),
         "git {args:?} failed: {}",

@@ -27,6 +27,9 @@ unsafe_code = "forbid"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+# Named rather than left to `all`, so that what the `clippy.toml` files disallow is refused
+# and not merely mentioned. It does nothing in a crate with no `clippy.toml` to configure it.
+disallowed_methods = "deny"
 
 [profile.release]
 codegen-units = 1

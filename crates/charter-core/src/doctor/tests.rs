@@ -12,18 +12,19 @@ use super::*;
 /// git for a test's own setup, never the code under test: pinned identity, and no developer
 /// config reaching the fixture.
 fn git(dir: &Path, args: &[&str]) {
-    let out = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .env("GIT_CONFIG_GLOBAL", "/dev/null")
-        .env("GIT_CONFIG_SYSTEM", "/dev/null")
-        .env("GIT_AUTHOR_NAME", "t")
-        .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
-        .env("GIT_COMMITTER_NAME", "t")
-        .env("GIT_COMMITTER_EMAIL", "t@example.invalid")
-        .output()
-        .expect("git runs");
+    let out = crate::forklock::output(
+        Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.invalid")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.invalid"),
+    )
+    .expect("git runs");
     assert!(
         out.status.success(),
         "git {args:?} failed: {}",
@@ -490,12 +491,13 @@ fn a_push_record_whose_commit_reached_the_upstream_is_spent_whatever_it_says() {
     for dir in ["personas", "inventory", "workspaces", ".charter"] {
         std::fs::create_dir_all(root.join(dir)).unwrap();
     }
-    let head = Command::new("git")
-        .arg("-C")
-        .arg(&root)
-        .args(["rev-parse", "HEAD"])
-        .output()
-        .unwrap();
+    let head = crate::forklock::output(
+        Command::new("git")
+            .arg("-C")
+            .arg(&root)
+            .args(["rev-parse", "HEAD"]),
+    )
+    .unwrap();
     let head = String::from_utf8(head.stdout).unwrap();
     std::fs::write(
         root.join(".charter/plane-push.json"),

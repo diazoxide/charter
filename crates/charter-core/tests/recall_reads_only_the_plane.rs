@@ -173,10 +173,10 @@ fn a_fifo_or_an_oversized_file_is_not_a_memory() {
     // opens anything first. If this hangs, the gate opened it.
     let (_dir, root) = plane();
     let store = root.join("workspaces/alpha/memory");
-    let made = std::process::Command::new("mkfifo")
-        .arg(store.join("pipe.md"))
-        .status()
-        .unwrap();
+    let made = charter_core::forklock::status(
+        std::process::Command::new("mkfifo").arg(store.join("pipe.md")),
+    )
+    .unwrap();
     assert!(made.success());
     std::fs::write(
         store.join("big.md"),

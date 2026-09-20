@@ -480,9 +480,7 @@ mod nofollow_tests {
         let dir = plane();
         let file = dir.path().join(".charter/app/reopen.json");
         no_link_on_the_way(dir.path(), &file).expect("the walk passes before the plant");
-        let made = std::process::Command::new("mkfifo")
-            .arg(&file)
-            .status()
+        let made = crate::forklock::status(std::process::Command::new("mkfifo").arg(&file))
             .expect("mkfifo runs");
         assert!(made.success(), "the test needs a fifo to plant");
 
