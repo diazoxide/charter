@@ -187,7 +187,7 @@ pub fn the_app_owns_this_surface(ambient: &Ambient) -> bool {
 /// A `connect` succeeds only while an app is accepting, and a socket file left behind by one
 /// that has gone refuses with `ECONNREFUSED`. Neither can hang, so no deadline is armed.
 #[cfg(unix)]
-fn an_app_is_listening(socket: &str) -> bool {
+fn an_app_is_listening(socket: &Path) -> bool {
     std::os::unix::net::UnixStream::connect(socket).is_ok()
 }
 
@@ -197,7 +197,7 @@ fn an_app_is_listening(socket: &str) -> bool {
 /// status line that vanished for a reason nobody can see is the worst outcome available"*.
 /// The day the channel is a named pipe this asks the same question of it.
 #[cfg(not(unix))]
-fn an_app_is_listening(_socket: &str) -> bool {
+fn an_app_is_listening(_socket: &Path) -> bool {
     false
 }
 
