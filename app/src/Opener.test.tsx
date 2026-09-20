@@ -203,8 +203,8 @@ describe("the opener", () => {
       if (cmd === "recent_planes")
         return {
           planes: [
-            { path: "/home/dev/one", name: "one", opened: 200, approved: true },
-            { path: "/home/dev/two", name: "two", opened: 100, approved: false },
+            { path: "/home/dev/one", name: "one", approved: true },
+            { path: "/home/dev/two", name: "two", approved: false },
           ],
           dropped: [],
           forgetful: null,
@@ -272,6 +272,56 @@ describe("the opener", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("is not a plane");
     expect(screen.getByRole("button", { name: "Open Project…" })).toBeInTheDocument();
+  });
+
+  it("comes back to the opener when the project is closed, and can open it again", async () => {
+    // The way back. Closing is the window letting go of a project — its chats end and its
+    // record is written into it — and nothing of it on disk goes, so the same one opens
+    // again with everything still in it. Opening it again has to draw its chats again: a
+    // window showing a project with no tabs and no way to get them is the state this whole
+    // screen exists to remove.
+    const { asked } = core((cmd) => {
+      if (cmd === "plane_at_launch")
+        return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
+      if (cmd === "open_plane") return { plane: "/home/dev/plane", ask: null };
+      if (cmd === "opened_chats")
+        return [
+          {
+            session: 1,
+            name: "one",
+            cwd: null,
+            harness: null,
+            in_front: true,
+            resumed: null,
+            fresh: null,
+            profile: null,
+            persona: null,
+            unreported: null,
+          },
+        ];
+      if (cmd === "close_plane") return null;
+      return undefined;
+    });
+
+    render(<App />);
+    const person = userEvent.setup();
+    await screen.findByText("/home/dev/plane");
+    // Through the catalogue, which is where every button in this window comes from.
+    await person.click(await screen.findByRole("button", { name: "Close this project" }));
+
+    expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(
+      "You have not opened a project yet",
+    );
+    expect(asked.some((one) => one.cmd === "close_plane")).toBe(true);
+
+    await openByPath("/home/dev/plane");
+
+    expect(await screen.findByText("/home/dev/plane")).toBeInTheDocument();
+    // Its chats are drawn again, which is what a ref still naming the project it just let go
+    // of would have silently prevented.
+    await vi.waitFor(() =>
+      expect(asked.filter((one) => one.cmd === "opened_chats").length).toBeGreaterThanOrEqual(2),
+    );
   });
 
   it("tells the core which project this window has in front", async () => {

@@ -503,7 +503,16 @@ export type ProfileRow = {
 	approval: string | null,
 };
 
-/**  One plane this machine remembers, as the opener draws it. */
+/**
+ *  One plane this machine remembers, as the opener draws it.
+ * 
+ *  **When it was last opened is not here**, though the store holds it: it is what puts the
+ *  list in order, and the list is already in that order when it arrives. Carrying it would be
+ *  carrying a `u64` across the wire for nobody to draw — and specta refuses to export one at
+ *  all, to avoid the precision loss a JavaScript number would silently have. A row that says
+ *  "three days ago" can have it as a number this side of that limit, when there is a row that
+ *  says it.
+ */
 export type RecentPlane = {
 	/**  The plane's root: the path it was approved under and the path it will be opened by. */
 	path: string,
@@ -512,8 +521,6 @@ export type RecentPlane = {
 	 *  the path is shown beside it and is what identifies the row.
 	 */
 	name: string,
-	/**  When it was last opened, in seconds since the epoch. */
-	opened: number,
 	/**
 	 *  Whether the operator has approved this plane before.
 	 * 

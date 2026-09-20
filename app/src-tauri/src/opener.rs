@@ -86,6 +86,13 @@ fn pairs(map: &BTreeMap<String, String>) -> Vec<(String, String)> {
 }
 
 /// One plane this machine remembers, as the opener draws it.
+///
+/// **When it was last opened is not here**, though the store holds it: it is what puts the
+/// list in order, and the list is already in that order when it arrives. Carrying it would be
+/// carrying a `u64` across the wire for nobody to draw — and specta refuses to export one at
+/// all, to avoid the precision loss a JavaScript number would silently have. A row that says
+/// "three days ago" can have it as a number this side of that limit, when there is a row that
+/// says it.
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
 pub struct RecentPlane {
     /// The plane's root: the path it was approved under and the path it will be opened by.
@@ -93,8 +100,6 @@ pub struct RecentPlane {
     /// What to call it in a list — the directory's own name. Two projects can share one, so
     /// the path is shown beside it and is what identifies the row.
     pub name: String,
-    /// When it was last opened, in seconds since the epoch.
-    pub opened: u64,
     /// Whether the operator has approved this plane before.
     ///
     /// **Not a promise that opening it will not ask.** Whether it still contributes what they
@@ -160,7 +165,7 @@ impl Ask {
                 .iter()
                 .map(ToString::to_string)
                 .collect(),
-            first: matches!(asking.consent, machine::Consent::New),
+            first: asking.first(),
         }
     }
 }
@@ -231,7 +236,6 @@ fn offer(loaded: machine::Loaded) -> Recents {
                     // A root directory has no name of its own, so it is called by its path.
                     .unwrap_or_else(|| shown.clone()),
                 path: shown,
-                opened: entry.opened,
                 approved: entry.trust.is_some(),
             }),
         }

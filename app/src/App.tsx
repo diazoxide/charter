@@ -343,6 +343,12 @@ function App() {
     if (answer.status === "error") return { ok: false, refused: answer.error };
     // The window forgets what it was drawing for that plane. Its tabs named sessions in it,
     // and a session number means nothing without its plane.
+    //
+    // **And it forgets that it adopted it.** The same project opened again is a project whose
+    // chats have to be drawn again — the core still has whatever it put back — so a ref that
+    // still named it would leave the window showing a project with no tabs and no way to get
+    // them, which is the one state this whole screen exists to remove.
+    adopted.current = undefined;
     change(() => noTabs());
     setReopened([]);
     setWouldNotStart([]);
@@ -777,6 +783,10 @@ function App() {
           <Doer offer={by("pane.split.right")} onPress={press} />
           <Doer offer={by("pane.split.down")} onPress={press} />
           <Doer offer={by("pane.close")} onPress={press} />
+          {/* The way back to the opener, and it has to be a button rather than a palette row
+              alone: an operator who has just learned that this window holds a project needs
+              to see how to leave it. The catalogue's row, like every other button here. */}
+          <Doer offer={by("project.close")} onPress={press} />
         </div>
         <NeedsYou queue={states.needsYou} quiet={quiet} nameOf={nameOf} show={showChat} />
         <span className="plane">

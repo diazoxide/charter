@@ -627,6 +627,18 @@ pub struct Asking {
     pub consent: machine::Consent,
 }
 
+impl Asking {
+    /// Whether nothing has approved this plane at all, rather than its having changed since it
+    /// was approved.
+    ///
+    /// The two read differently to an operator — one is "open this?" and the other is "this is
+    /// not what you said yes to" — so the difference is named once, here, and not spelled out
+    /// again by every caller that has to tell them apart.
+    pub fn first(&self) -> bool {
+        matches!(self.consent, machine::Consent::New)
+    }
+}
+
 /// The plane a path names, resolved to the one spelling everything downstream uses.
 ///
 /// **`find_root`, never `resolve`.** `resolve` honours `$CHARTER_ROOT`, so a window built on
@@ -1233,7 +1245,7 @@ mod tests {
             planes.open_now().is_empty(),
             "an ask attached the plane; a cancelled dialog would leave a socket bound in it"
         );
-        assert!(asked.first, "a plane nobody has approved is a first ask");
+        assert!(asked.first(), "a plane nobody has approved is a first ask");
         assert!(
             asked.contributes.plugins.contains_key("stranger@market"),
             "the ask did not say which plugins the plane enables"
@@ -1305,7 +1317,7 @@ mod tests {
         enabling_a_plugin(&root, "new@market");
         let asked = asking(planes.open_if_approved(&root).expect("it is a plane"));
 
-        assert!(!asked.first, "a re-ask was drawn as a first approval");
+        assert!(!asked.first(), "a re-ask was drawn as a first approval");
         assert!(
             asked
                 .consent
@@ -1364,7 +1376,7 @@ mod tests {
         assert!(planes.open_now().is_empty(), "it opened the plane anyway");
         // And nothing was written down either, so the next ask is still a first ask.
         assert!(
-            asking(planes.open_if_approved(&root).expect("it is a plane")).first,
+            asking(planes.open_if_approved(&root).expect("it is a plane")).first(),
             "a refused approval was recorded"
         );
     }
@@ -1427,7 +1439,7 @@ mod tests {
         planes.close(&plane).expect("it closes");
 
         assert!(
-            asking(planes.open_if_approved(&root).expect("it is a plane")).first,
+            asking(planes.open_if_approved(&root).expect("it is a plane")).first(),
             "a machine that cannot remember an approval behaved as though it had one"
         );
     }
