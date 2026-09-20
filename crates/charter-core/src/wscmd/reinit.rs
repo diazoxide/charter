@@ -637,6 +637,48 @@ mod tests {
     }
 
     #[test]
+    fn a_machine_local_file_the_harness_rewrote_is_kept_and_never_merged_into() {
+        // The one status only a CHECKOUT reaches: `.claude/settings.local.json` is the one
+        // path the harness writes into too — "Yes, and don't ask again" lands there — and a
+        // workspace directory never wants it, because Claude Code already reads the plane's
+        // copy at the git root.
+        let dir = plane();
+        std::fs::write(
+            dir.path().join(".claude/settings.local.json"),
+            r#"{"permissions":{"deny":["Bash(rm -rf *)"]}}"#,
+        )
+        .unwrap();
+        made(dir.path(), "gamma");
+        let clone = dir.path().join("workspaces/gamma/svc");
+        std::fs::create_dir_all(clone.join(".git")).unwrap();
+        run(dir.path(), Scope::One("gamma"));
+        let local = clone.join(".claude/settings.local.json");
+        assert!(local.exists(), "charter writes it in a checkout");
+        // The harness saves its own approval into it.
+        let theirs = "{\"permissions\":{\"allow\":[\"Bash(ls)\"]}}\n";
+        std::fs::write(&local, theirs).unwrap();
+
+        let (_code, lines) = run(dir.path(), Scope::One("gamma"));
+
+        assert!(
+            lines.iter().any(|l| l.contains(
+                "svc/.claude/settings.local.json is a file charter cannot vouch for as its own \
+                 write"
+            )),
+            "{lines:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&local).unwrap(),
+            theirs,
+            "deleting it to get charter's copy back destroys the harness's approvals"
+        );
+        assert!(
+            !lines.iter().any(|l| l.contains("nothing to do")),
+            "the plane's machine-local rules are NOT in force there: {lines:?}"
+        );
+    }
+
+    #[test]
     fn a_checkout_linked_out_of_the_plane_is_refused_whole_and_nothing_in_it_is_written() {
         let dir = plane();
         made(dir.path(), "gamma");
