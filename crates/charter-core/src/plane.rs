@@ -64,11 +64,7 @@ fn walk(here: &Path) -> Option<PathBuf> {
     if let Some(marked) = marked_above(here) {
         return Some(outermost(&plane_of(marked)));
     }
-    // PROOF ONLY: the second walk is still asked, and its answer thrown away. Deleting the
-    // call instead would make `worktree_plane_above` dead code, which `-D warnings` refuses
-    // to compile — and a mutation that does not build proves nothing.
-    let _ = worktree_plane_above(here);
-    None
+    worktree_plane_above(here)
 }
 
 /// `root.py:find_root`'s SECOND walk: this directory sits in a linked worktree whose plane
