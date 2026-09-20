@@ -260,7 +260,12 @@ jobs:
           rustc -vV
           cargo -V
           git --version
+          git config --get core.autocrlf || echo "core.autocrlf: unset"
           python --version || true
+      # `--workspace` includes the app crate, and `tauri::generate_context!` reads the built
+      # frontend — the same reason the `rust` job above does this. Without it the app crate's
+      # only Windows error is a missing directory, which says nothing.
+      - run: mkdir -p app/dist
       # Every step from here runs whatever happened before it (`if: always()`): the
       # deliverable is the whole list, not its first line.
       - name: cargo check, every crate on the ladder, as a list rather than a stop

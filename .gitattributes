@@ -1,0 +1,13 @@
+# Nothing in this repository is line-ending-converted on checkout or on commit.
+#
+# Almost everything here that is a test is a BYTE comparison: `tests/fixtures/planes/**` is
+# regenerated and diffed byte for byte in CI, `tests/differential/run.py` compares every file
+# under two plane copies byte for byte, `fixtures/corpora/*.raw` are raw terminal recordings
+# with escape sequences in them, and a good part of `crates/charter-core` asserts on exact
+# output. Git for Windows enables `core.autocrlf` by default, and a checkout that rewrote a
+# line ending would make every one of those tests measure the checkout instead of the code —
+# silently, and only on one platform.
+#
+# `-text` and not `text=auto`: `auto` still normalises on the way IN, which is a rewrite of a
+# recording nobody asked for. This repository's files are LF and stay LF everywhere.
+* -text

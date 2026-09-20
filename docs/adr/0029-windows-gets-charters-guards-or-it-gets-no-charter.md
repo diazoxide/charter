@@ -24,8 +24,10 @@ then the port, and the guards are the part that needs a design rather than a tra
 
 ## What is already in the tree, and why it is the problem
 
-The core was written with Windows in mind. Eleven places carry an explicit
-`#[cfg(not(unix))]` arm, and several more simply omit a `#[cfg(unix)]` block that sets a mode.
+The core was written with Windows in mind. Before charter-app#93, eleven places carried an
+explicit `#[cfg(not(unix))]` arm, and several more simply omit a `#[cfg(unix)]` block that
+sets a mode. (That PR adds five more, in `hookwire`, and they are all refusals — which is what
+this ADR is asking for everywhere else.)
 **None of them has ever been compiled.** They were written to be right rather than left
 broken, which was the correct instinct, and several of them are right. But a handful are not a
 translation of the guard — they are the guard removed, with a comment where the guard used to
@@ -141,6 +143,21 @@ global config (`USERPROFILE`, or `HOMEDRIVE`+`HOMEPATH`); the `PATH` it builds i
 `/opt/homebrew/bin`, `/bin` — hold no `git.exe`, while the search looks for `git` and not
 `git.exe` in any case. The guard's *reasoning* survives: an attacker-settable `PATH` must not
 choose the binary. Its implementation does not.
+
+**Before any of that: the repository had no `.gitattributes`.** Git for Windows turns
+`core.autocrlf` on by default, and almost every test here is a byte comparison —
+`tests/fixtures/planes/**` is regenerated and diffed byte for byte, the differential compares
+every file under two plane copies, `fixtures/corpora/*.raw` are raw terminal recordings full of
+escape sequences. A checkout that rewrote a line ending would make all of them measure the
+checkout instead of the code, silently and on one platform only. charter-app#93 adds
+`* -text`; it marks nothing in the tree as changed, because everything here is already LF, and
+it is the precondition for trusting any Windows measurement at all.
+
+**And a chat has no program to run.** `app/src-tauri/src/sessions.rs:296` is
+`std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".to_owned())`. On Windows `SHELL` is
+unset and `/bin/sh` is not there, so every chat fails to start before any of the above is
+reached. The Windows shape is `%ComSpec%`, or PowerShell — which is a product decision as much
+as a technical one, and it changes what a profile's command line means.
 
 **A unix socket with `0600` on it is the hook channel.** There is no expression at all: Rust's
 standard library does not surface `AF_UNIX` on Windows, and a named pipe's access is an ACL
