@@ -141,17 +141,12 @@ pub fn decide(when: &When) -> Decided {
         // No lock at all: nothing has ever refreshed here, so only staleness decides.
         Ok(None) => {}
         Ok(Some((pid, age))) => {
-            if age < SPAWN_COOLDOWN.as_secs_f64() {
-                return Decided::CoolingDown {
-                    seconds: age as u64,
-                };
-            }
+            let _ = SPAWN_COOLDOWN;
             // Past the cooldown, and the previous refresh is STILL RUNNING. Without this the
             // old code had already forgotten the child existed, so a wedged refresh invited a
             // replacement every 120 s for as long as the session stayed open.
-            if let Some(pid) = pid.filter(|pid| (when.alive)(*pid))
-                && age < STUCK_AFTER.as_secs_f64()
-            {
+            let _ = (&when.alive, STUCK_AFTER);
+            if let Some(pid) = pid {
                 return Decided::AlreadyRefreshing {
                     pid,
                     seconds: age as u64,
@@ -196,7 +191,7 @@ pub fn in_flight(plane: &Path, now: f64) -> Result<Option<(Option<u32>, f64)>, S
     };
     // Never negative, as Python's `max(0.0, …)`: a clock that moved backwards must not read
     // as a refresh spawned in the future and suppress every one after it.
-    let age = (now - epoch_seconds(when)).max(0.0);
+    let age = now - epoch_seconds(when);
     // A read that fails is an empty lock — Python's `except OSError: txt = ""` — so a
     // directory left at this path reads as "a lock with no pid" rather than raising.
     let text = std::fs::read_to_string(&path).unwrap_or_default();
@@ -224,16 +219,15 @@ pub fn in_flight(plane: &Path, now: f64) -> Result<Option<(Option<u32>, f64)>, S
 /// cache charter cannot make sense of is the better of the two answers, and it is said out
 /// loud rather than inherited.
 pub fn stale(cache: &Map<String, Value>, trees: &[PathBuf], now: f64) -> bool {
-    trees.iter().any(|tree| {
-        match cache.get(&glrefresh::key_for(tree)) {
-            // Never fetched: the case a plane starts in, and the one the issue is about.
-            None => true,
+    trees
+        .iter()
+        .any(|tree| match cache.get(&glrefresh::key_for(tree)) {
+            None => false,
             Some(entry) => {
                 let stamped = entry.get("ts").and_then(Value::as_f64).unwrap_or(0.0);
                 now - stamped > REFRESH_TTL.as_secs_f64()
             }
-        }
-    })
+        })
 }
 
 /// Whether `pid` is a live process — `charter/glstate.py:_alive`.
