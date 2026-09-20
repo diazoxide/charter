@@ -34,6 +34,19 @@ export const commands = {
 	 */
 	openPlanes: () => __TAURI_INVOKE<PlaneId[]>("open_planes"),
 	/**
+	 *  Lets go of a plane: its record is written, its sessions are ended, and its hook socket is
+	 *  released.
+	 *
+	 *  **Nothing of the plane on disk goes.** Closing a project is the app letting go of it, and
+	 *  a plane closed here can be opened again — by this process or another — with everything
+	 *  still in it.
+	 *
+	 *  There is no `open_plane` beside this one, deliberately. Opening a plane the operator has
+	 *  not approved would run what its record names, and the gate for that is a separate piece of
+	 *  work; until it exists the only plane this process opens is the one its launch resolved.
+	 */
+	closePlane: (plane: PlaneId) => typedError<null, string>(__TAURI_INVOKE("close_plane", { plane })),
+	/**
 	 *  Starts a session, and remembers it as a chat so a quit can write it down. No program is
 	 *  the operator's shell.
 	 */

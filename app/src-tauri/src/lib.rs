@@ -183,6 +183,22 @@ fn open_planes(planes: tauri::State<'_, Planes>) -> Vec<PlaneId> {
     planes.open_now()
 }
 
+/// Lets go of a plane: its record is written, its sessions are ended, and its hook socket is
+/// released.
+///
+/// **Nothing of the plane on disk goes.** Closing a project is the app letting go of it, and
+/// a plane closed here can be opened again — by this process or another — with everything
+/// still in it.
+///
+/// There is no `open_plane` beside this one, deliberately. Opening a plane the operator has
+/// not approved would run what its record names, and the gate for that is a separate piece of
+/// work; until it exists the only plane this process opens is the one its launch resolved.
+#[tauri::command]
+#[specta::specta]
+fn close_plane(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<(), String> {
+    planes.close(&plane)
+}
+
 /// One chat the app has open, as the UI draws it and as the quit warning lists it.
 #[derive(serde::Serialize, specta::Type)]
 struct OpenChat {
@@ -810,6 +826,7 @@ fn commands() -> Builder<tauri::Wry> {
         first_frame,
         plane_at_launch,
         open_planes,
+        close_plane,
         open_session,
         close_session,
         send_input,

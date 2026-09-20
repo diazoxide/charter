@@ -87,10 +87,6 @@ pub struct Held {
 }
 
 impl Held {
-    pub fn id(&self) -> &PlaneId {
-        &self.id
-    }
-
     pub fn root(&self) -> &Path {
         &self.root
     }
@@ -513,6 +509,9 @@ mod tests {
 
         let refused = planes
             .held(&PlaneId::of(&a_plane(&dir.path().join("plane"))))
+            // `Held` holds a listener thread and a table of terminals, so it is not `Debug`.
+            // The refusal is what this is about; the plane itself is dropped to read it.
+            .map(|_| ())
             .expect_err("a plane nobody opened is not held");
 
         assert!(refused.contains("no plane open at"), "{refused}");
