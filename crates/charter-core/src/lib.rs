@@ -43,6 +43,7 @@ pub mod roster;
 pub mod scaffold;
 pub mod secretshape;
 pub mod session;
+pub mod shellseg;
 pub mod shown;
 pub mod start;
 pub mod state;

@@ -6,6 +6,7 @@ Real harness output, recorded off a pseudo-terminal, for benchmarks (spec §Limi
 | File | What it is |
 | --- | --- |
 | `claude-code-session.raw` | Claude Code 2.1.274 answering "Print the numbers 1 to 2000, one per line", on a 150×42 terminal, macOS 26.2, 2026-09-17. 132 KB, ending mid-session where the recorder hung up. |
+| `shellseg-oracle.jsonl` | Command lines the Python charter's `hooks.py` docstrings name as bypasses that SHIPPED, each with what the frozen Python answers for six functions. Recorded, not written: `tests/differential/shellseg.py --record` produced it and `--check` fails if it stops matching the oracle. Replayed offline by `crates/charter-core/tests/the_shell_is_read_the_way_python_reads_it.rs`, so the plain `cargo test` job holds the line with no Python present. |
 
 Re-record with:
 

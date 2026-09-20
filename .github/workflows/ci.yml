@@ -117,6 +117,15 @@ jobs:
       # `--time-preflight`: `charter doctor --preflight` runs at every session start, so what it
       # costs is printed here on every run, for both implementations, on the same plane.
       - run: tests/differential/run.py --time-preflight 20
+      # M3.1 stage 1: `shellseg` is what every Bash refusal reads a command line with, and it is
+      # wired to nothing yet. So it has no CLI surface for `run.py` to drive, and it is compared
+      # FUNCTION BY FUNCTION instead — 200,000 generated command lines through both
+      # implementations, six answers apiece. The example is dev-only; nothing ships it.
+      - name: The shell reader, against the command lines Python answers
+        run: |
+          cargo build -p charter-core --example shellseg_oracle
+          tests/differential/shellseg.py --check
+          tests/differential/shellseg.py
   stress:
     # Evidence for charter-app#16, not a gate: fifty tabs on a shared runner is timing-bound,
     # and a flaky REQUIRED check blocks every merge — including the fix for the bug it watches.
