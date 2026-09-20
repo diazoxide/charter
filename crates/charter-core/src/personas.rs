@@ -289,67 +289,15 @@ pub fn ancestor_that_does_not_load(root: &Path, name: &str) -> Option<String> {
     def_path(root, &parent).exists().then_some(parent)
 }
 
-/// A value as one line of a report — `contain.one_line`: every character with no glyph,
-/// and every whitespace but the space, as its escape, then clipped to 160 with `…`.
+/// A value as one line of a report — `contain.one_line`, at the ordinary budget.
 ///
-/// "No glyph" is the control, format, surrogate and line/paragraph-separator categories.
-/// The format characters are listed rather than looked up, from Unicode's own list.
+/// **One implementation, in [`crate::shown`], rather than a copy here.** This module, `doctor`
+/// and `news` all need the same answer, and three copies of "which characters have no glyph"
+/// is three places for the Cf table to go stale separately — with the failure showing up as
+/// one charter escaping a character another prints, on a report line, which is exactly what
+/// the function is for.
 pub fn one_line(value: &str) -> String {
-    let mut out = String::new();
-    for c in value.chars() {
-        let cp = c as u32;
-        let invisible = c.is_control()
-            || is_format(cp)
-            || cp == 0x2028
-            || cp == 0x2029
-            || (memstore::is_python_space(c) && c != ' ');
-        if !invisible {
-            out.push(c);
-        } else if cp < 0x100 {
-            out.push_str(&format!("\\x{cp:02x}"));
-        } else {
-            out.push_str(&format!("\\u{cp:04x}"));
-        }
-    }
-    if out.chars().count() <= 160 {
-        out
-    } else {
-        let mut cut: String = out.chars().take(160).collect();
-        cut.push('…');
-        cut
-    }
-}
-
-/// Unicode's `Cf` — format characters: soft hyphen, bidi controls, zero-width joiners,
-/// the BOM, tag characters and the rest.
-///
-/// Not [`crate::pyrepr`]'s `printable`, which answers a different question: `repr()` escapes
-/// a private-use codepoint and `contain.one_line` does not, because `Co` is not one of the
-/// five categories that list names.
-fn is_format(cp: u32) -> bool {
-    matches!(
-        cp,
-        0xAD | 0x600..=0x605
-            | 0x61C
-            | 0x6DD
-            | 0x70F
-            | 0x890..=0x891
-            | 0x8E2
-            | 0x180E
-            | 0x200B..=0x200F
-            | 0x202A..=0x202E
-            | 0x2060..=0x2064
-            | 0x2066..=0x206F
-            | 0xFEFF
-            | 0xFFF9..=0xFFFB
-            | 0x110BD
-            | 0x110CD
-            | 0x13430..=0x1343F
-            | 0x1BCA0..=0x1BCA3
-            | 0x1D173..=0x1D17A
-            | 0xE0001
-            | 0xE0020..=0xE007F
-    )
+    crate::shown::line(value)
 }
 
 /// Why a command must not act on the persona `name`, or `None` when this plane defines it

@@ -49,6 +49,7 @@ from __future__ import annotations
 import argparse
 import difflib
 import filecmp
+import hashlib
 import json
 import os
 import re
@@ -2193,9 +2194,175 @@ LADDER_SCENARIOS = [
     ),
 ]
 
+# --------------------------------------------------------------------------------------------
+# `charter news`: the entries themselves, rendered
+# --------------------------------------------------------------------------------------------
+#
+# **These scenarios are the tie between two copies of one corpus.** charter ships `docs/news/`
+# in its wheel; charter-app compiles `crates/charter-core/news/` into its binary. Until news is
+# authored in one place there are two copies, and `charter/news.py`'s own docstring says what a
+# second copy does: *it drifts from the binary, invisibly and in both directions.*
+#
+# Nothing inside either implementation can see that drift. This can: the oracle is pinned to the
+# charter commit the corpus was taken from, and `news --for <version>` renders every entry of a
+# version through every rule there is — the order, the `security:` label, the elision and its
+# arithmetic, the percent-encoded filename, the tag a link points at. One scenario per version,
+# generated from the vendored directory rather than listed, so a version added to the corpus is
+# compared from the day it lands and a version that quietly vanishes from it is not silently
+# uncompared.
+#
+# The version list is read from the DIRECTORY and not from the oracle, because this file has to
+# keep working whether or not charter is importable in its own process (`_declare_a_profile_per_
+# command_word` says the same thing about the other direction).
+#
+# **That leaves one hole, and `check_corpus` closes it.** A scenario generated from the vendored
+# directory cannot see a file DELETED from that directory: no scenario is generated for a version
+# that is not there, and every scenario that is generated passes. So the two corpora are compared
+# as file lists, once, before any scenario runs — which is also the cheapest possible failure for
+# the most likely kind of drift, and the one that names the files rather than a rendered diff.
+
+NEWS_DIR = REPO / "crates" / "charter-core" / "news"
+
+#: `charter news --for` REFUSES this version: six of its entries quote a headline, and the
+#: release gate reports that rather than publishing the quotes inside the heading (charter #902).
+#: Its own scenario below, because the generated ones expect an exit 0 — and if a future version
+#: joins it, that version's generated scenario goes red, which is exactly what a release gate
+#: catching a new offender should look like.
+NEWS_QUOTED_VERSION = "0.56.0"
+
+
+def check_corpus() -> bool:
+    """The vendored `news/` and the oracle's own entries are the same files, byte for byte.
+
+    Asked of the ORACLE as a subprocess, under the interpreter the scenarios run it with, rather
+    than imported here — this file keeps working whether or not charter is importable in its own
+    process, and the oracle is pinned to the commit the corpus was taken from.
+
+    **Bytes rather than names, and the difference is a whole class of drift.** The per-version
+    `news --for` scenarios compare RENDERED BODIES, so a headline or a body that drifts turns one
+    of them red. What a rendered body does not carry is the rest of the frontmatter: `check:`,
+    `adopt:` and — for an entry that is alone in its version — `lead:`. An entry whose `adopt:`
+    line said one thing here and another in charter would render identically in all 27 of them,
+    and the only view that prints an `adopt:` line is `charter news --pending`, which has no
+    scenario at all (its Python answer depends on the runner). A digest closes that, and closes
+    the missing-file case with it: a file nobody vendored is in no scenario to fail.
+    """
+    said = subprocess.run(
+        [sys.executable, "-c",
+         "import hashlib;from charter import news;d = news._dir();"
+         "print('\\n'.join(f'{p.name} {hashlib.sha256(p.read_bytes()).hexdigest()}'"
+         " for p in sorted(d.glob('*.md'))) if d else '')"],
+        capture_output=True, text=True,
+    )
+    if said.returncode != 0:
+        print("DIFF news-corpus: the oracle could not list its entries — " + said.stderr.strip())
+        return False
+    theirs = dict(line.split() for line in said.stdout.splitlines() if line.strip())
+    ours = {
+        p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(NEWS_DIR.glob("*.md"))
+    }
+    if not theirs:
+        print("DIFF news-corpus: the oracle ships no entries, so nothing was compared")
+        return False
+    problems = []
+    for name in sorted(set(theirs) - set(ours)):
+        problems.append(f"    only charter has: docs/news/{name}")
+    for name in sorted(set(ours) - set(theirs)):
+        problems.append(f"    only charter-app has: crates/charter-core/news/{name}")
+    for name in sorted(set(theirs) & set(ours)):
+        if theirs[name] != ours[name]:
+            problems.append(f"    differs: {name}")
+    print(("ok   " if not problems else "DIFF ") + f"news-corpus ({len(theirs)} entries)")
+    for line in problems:
+        print(line)
+    if problems:
+        print("    the two copies of charter's news have drifted; see "
+              "crates/charter-core/news/SOURCE")
+    return not problems
+
+
+def _news_versions() -> list[str]:
+    """Every version the vendored corpus names, oldest first, with `unreleased` last.
+
+    From the FILENAME rather than the frontmatter: this list only decides which commands to run,
+    and both sides then answer from the frontmatter — so a file whose name and `version:` field
+    disagree shows up as a scenario that renders nothing on either side, which is a finding.
+    """
+    seen: dict[str, None] = {}
+    for path in sorted(NEWS_DIR.glob("*.md")):
+        seen.setdefault(path.name.split("-", 1)[0], None)
+    versions = [v for v in seen if v != "unreleased"]
+    versions.sort(key=lambda v: [int(part) for part in v.split(".")])
+    if "unreleased" in seen:
+        versions.append("unreleased")
+    return versions
+
+
+NEWS_SCENARIOS = [
+    Scenario(
+        name=f"news-for-{version}-renders-the-same-notes",
+        plane="minimal",
+        python=["news", "--for", version],
+        pins_the_clock=False,
+    )
+    for version in _news_versions()
+    if version != NEWS_QUOTED_VERSION
+] + [
+    Scenario(
+        name="news-for-a-version-that-quotes-a-headline-is-refused-before-it-publishes",
+        plane="minimal",
+        python=["news", "--for", NEWS_QUOTED_VERSION],
+        pins_the_clock=False,
+        refusal=f"the news for {NEWS_QUOTED_VERSION} quotes a value charter does not unquote:",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="news-for-a-version-nothing-shipped",
+        plane="minimal",
+        python=["news", "--for", "9.9.9"],
+        pins_the_clock=False,
+        refusal="no news entry for 9.9.9.",
+        same_stderr=True,
+    ),
+    Scenario(
+        # 62 entries across three versions, two of them carrying `security:` notes and one a
+        # `lead:` — so this compares the ORDER and the label, which `--for` compares inside one
+        # version and this compares across three.
+        #
+        # `--until` is given rather than defaulted on purpose: charter's default is
+        # `charter.__version__`, a Python package version, and the Rust binary's default is the
+        # newest version its corpus names (`news::shipped_version`). Those are different
+        # questions with different answers, and this scenario is about the entries rather than
+        # about which of the two is right — the PR argues that.
+        #
+        # None of these three versions carries a `check:`, which is what makes the two sides'
+        # stdout comparable at all: every entry is informational on both, so neither prints an
+        # adopt line. A range that did carry one would compare charter's real probe against a
+        # Rust CLI that has no `persona lint` to run.
+        name="news-range-lists-the-same-entries-in-the-same-order",
+        plane="daily",
+        python=["news", "--since", "0.60.0", "--until", "0.62.1"],
+        pins_the_clock=False,
+    ),
+    Scenario(
+        # The view that is honest about having no baseline. charter never READS the baseline
+        # `charter update` stamps (`commands_update.read_baseline` has no caller), so this
+        # sentence is what a plane gets whether or not one is recorded — reported upstream, and
+        # ported as it stands rather than quietly improved, because an improvement here is a
+        # divergence nothing else would catch.
+        name="news-with-no-baseline-reports-no-range",
+        plane="daily",
+        python=["news"],
+        pins_the_clock=False,
+    ),
+]
+
+
 SCENARIOS = [
     *INIT_SCENARIOS,
     *LADDER_SCENARIOS,
+    *NEWS_SCENARIOS,
     Scenario(
         name="harness-list-refuses-every-name-that-is-a-charter-command",
         plane="minimal",
@@ -3263,11 +3430,17 @@ def main() -> int:
             ap.error(f"no such scenario: {', '.join(unknown)} (have {', '.join(sorted(names))})")
         wanted = [s for s in everything if s.name in set(args.scenario)]
 
+    # Before the scenarios, and whichever of them were asked for: a corpus that has drifted makes
+    # every `news --for` scenario report a difference in a rendered body, and this names the file.
+    drifted = not check_corpus()
+
     failed = [
         s.name for s in wanted
         if not (doctor_scenarios.check(s, args.binary)
                 if isinstance(s, doctor_scenarios.DoctorScenario) else check(s, args.binary))
     ]
+    if drifted:
+        failed.append("news-corpus")
     if args.time_preflight:
         print()
         doctor_scenarios.time_preflight(args.binary, args.time_preflight)

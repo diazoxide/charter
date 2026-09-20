@@ -1,0 +1,29 @@
+These entries are charter's `docs/news/`, taken whole from
+
+    https://github.com/diazoxide/charter  @ 50d31dc66835592ccea625bab8f5a0da313f2444
+
+which is the same commit `tests/differential/run.py` pins its Python oracle to. That is not a
+coincidence and it is not documentation: it is the only thing tying the two copies together.
+`news --for <version>` is compared byte for byte against that oracle, one scenario per version,
+so an entry that drifts here — edited, dropped, added, re-ordered — turns a differential
+scenario red rather than shipping a release body charter would not have written.
+
+WHY THERE ARE TWO COPIES AT ALL
+
+`charter/news.py` says it plainly: a news entry travels with the code that implements it, and a
+control plane has no reason to vendor a copy and every reason not to, because a copy drifts from
+the binary invisibly and in both directions. The Python charter satisfies that with a wheel
+(`docs/news` is force-included as `charter/_news`). A Rust charter shipping inside a signed app
+has no checkout to fall back on, so the entries are compiled in — `build.rs` reads this
+directory and `include_str!`s every file.
+
+What that leaves is one copy per implementation for as long as both exist. It ends the way it
+started: when news is authored here rather than in charter's repository, this becomes the only
+copy and `news::DEV_REPO` moves with the authoring — not before, because every link in every
+published release body points at `diazoxide/charter` by tag.
+
+NO FILE IN HERE IS NOT AN ENTRY
+
+`build.rs` compiles in every `*.md`, and `news::unreadable` reports any of them charter cannot
+read as an entry — which the release gate then refuses on. So a note about this directory has to
+be a file the glob does not match. This one is.
