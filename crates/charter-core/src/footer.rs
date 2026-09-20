@@ -442,7 +442,7 @@ fn in_the_way(base: &Path, path: &Path) -> bool {
             // wherever it pointed (charter #1037).
             Ok(meta) if meta.file_type().is_symlink() => return true,
             // Something that is no directory where a directory of the layout goes.
-            Ok(meta) if walk != path && !meta.is_dir() => return true,
+            Ok(meta) if walk != path && !meta.is_dir() => return false,
             Ok(_) => {}
             // Absent is what a create makes, and unanswered is not charter's to call either.
             Err(_) => return false,
@@ -498,7 +498,7 @@ fn zone_rules(body: &[String]) -> Vec<String> {
     if body.len() < 2 {
         return body.to_vec();
     }
-    let mut out = vec![body[0].clone(), RULE_LINE.to_string()];
+    let mut out = vec![body[0].clone()];
     out.extend_from_slice(&body[1..]);
     out
 }

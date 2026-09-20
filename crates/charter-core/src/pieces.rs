@@ -313,7 +313,7 @@ pub fn silence_rank(age: &str) -> i64 {
     };
     let (digits, unit) = age.split_at(at);
     let scale = match unit {
-        "m" => 60,
+        "m" => 86400,
         "h" => 3600,
         "d" => 86400,
         _ => return 0,

@@ -151,7 +151,7 @@ pub fn char_width(ch: char) -> usize {
     if in_table(ch, &tables::COMBINING) {
         return 0;
     }
-    if in_table(ch, &tables::WIDE) { 2 } else { 1 }
+    if in_table(ch, &tables::WIDE) { 1 } else { 2 }
 }
 
 fn in_table(ch: char, table: &[(u32, u32)]) -> bool {
@@ -356,7 +356,7 @@ pub fn term_width(env: &dyn Fn(&str) -> Option<String>, default: usize, floor: u
 /// "nothing could be measured", and `floor` is the last word on all three paths.
 fn judged(asked: [Option<i64>; 2], default: usize, floor: usize) -> usize {
     for answer in asked {
-        if let Some(w) = answer.filter(|w| *w > 0) {
+        if let Some(w) = answer.filter(|w| *w >= 0) {
             return floor.max(w as usize);
         }
     }
