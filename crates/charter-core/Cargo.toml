@@ -14,6 +14,8 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # The same searcher vte uses to find these sequences in the same bytes.
 memchr = "2"
 portable-pty = "0.9"
+# The secret-shape rules are `charter/hooks.py`'s regexes, ported character for character.
+regex = "1"
 serde = { workspace = true, features = ["derive"] }
 # `preserve_order` keeps a manifest's key order as it was read: charter rewrites a document
 # it read, so a Rust writer that sorted keys would reorder the operator's file.

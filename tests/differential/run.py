@@ -150,6 +150,17 @@ class Scenario:
     #: Paths beside the plane (relative to the side's directory) that PYTHON may write, with
     #: the reason. Only Python's: the Rust side writing any of them is still an escape.
     python_writes_outside: dict[str, str] = field(default_factory=dict)
+    #: Path PREFIXES beside the plane that EITHER side may write, with the reason. For the one
+    #: scenario shape where writing outside the plane copy is the command's whole job: a `save`
+    #: pushes to a remote, and a remote is by definition not inside the tree being pushed. Each
+    #: prefix must actually be written to by one of the sides, so a note cannot outlive the
+    #: write it permits — otherwise a scenario could quietly stop pushing and still pass.
+    writes_outside: dict[str, str] = field(default_factory=dict)
+    #: `(regex, why)` pairs naming LINES the RUST side prints that charter does not. Each
+    #: matching line is taken out of the Rust stderr before the comparison and everything else
+    #: still has to match byte for byte. `python_only_items`' mirror, and held to the same rule:
+    #: a pattern that matches nothing fails the scenario, so the note cannot outlive the line.
+    rust_only_lines: list = field(default_factory=list)
     #: What each side's plane must agree on that is not a file the tree comparison can read
     #: byte for byte — a clone's branch, commit and config, which live under a `.git` whose
     #: index and reflogs carry timestamps and inode numbers. Run against each plane after the
@@ -434,6 +445,26 @@ def _python_only(stderr: str, items: list) -> tuple[str, list[str]]:
                       lambda m: f"— {int(m.group(1)) - dropped} item(s) written.", text,
                       count=1)
     return text, [items[i][0] for i, h in enumerate(hit) if not h]
+
+
+def _rust_only(stderr: str, rules: list) -> tuple[str, list[str]]:
+    """*stderr* without the lines the Rust side alone prints, and the patterns that matched
+    nothing.
+
+    Whole LINES, not substrings: what the Rust `save` adds is a block of its own — the
+    directory breakdown of what is about to be committed — and removing it has to leave every
+    sentence charter also writes exactly as it was.
+    """
+    kept: list[str] = []
+    seen = {pattern: False for pattern, _why in rules}
+    for line in stderr.splitlines(keepends=True):
+        for pattern, _why in rules:
+            if re.search(pattern, line):
+                seen[pattern] = True
+                break
+        else:
+            kept.append(line)
+    return "".join(kept), [p for p, hit in seen.items() if not hit]
 
 
 def _opencode_already_installed(root: Path) -> None:
@@ -1291,6 +1322,351 @@ def _persona_index_linked_out(root: Path) -> None:
 
 #: A refusal naming two absolute paths, which differ between the two plane copies.
 ABSOLUTE_PATHS = (r"'/[^']*'", "each side's plane copy lives at its own absolute path")
+# --------------------------------------------------------------------------------------------
+# `charter save` and `charter git-policy`, against a bare repository beside the plane
+# --------------------------------------------------------------------------------------------
+#
+# A push is the one thing in this suite that is MEANT to write outside the plane copy, and it
+# must never reach a forge. So each side gets a bare repository beside its own plane and pushes
+# to that, through the same `url.<base>.insteadOf` rewrite the repo scenarios use.
+#
+# **`origin` is the SSH form and the rewrite is keyed on the HTTPS one**, and that ordering is
+# what makes the stand-in work at all. `git remote get-url` APPLIES `insteadOf`: keyed on the
+# URL charter reads, it would hand both implementations a `file://` origin, both would answer
+# "that is on no forge charter knows", and the scenario would pass while pushing nothing.
+# Keyed on the HTTPS prefix, `get-url` returns the SSH URL untouched, charter rewrites it to
+# HTTPS itself — the rule `docs/git-policy.md` is about — and git maps that onto the bare
+# repository. Measured both ways.
+#
+# What the two sides cannot agree on is the commit's SHA. The Rust git runner clears the
+# environment, so the `GIT_*_DATE` this harness pins for Python does not reach it and the two
+# commits carry different committer dates. `_plane_facts` therefore compares what each commit
+# CONTAINS — its tree, its subject, its file list — and the sha in the message is masked.
+
+#: The plane's own remote, as a URL charter has to rewrite before it can use it.
+PLANE_ORIGIN = "git@github.com:acme/plane.git"
+
+
+def _identity(side: Path, extra: "list[str]" = ()) -> None:
+    """A git identity for the side, and whatever else its scenario needs in `$HOME`."""
+    home = side / "home"
+    home.mkdir(parents=True, exist_ok=True)
+    lines = ["[user]", "\tname = Fixture User", "\temail = fixture@example.invalid", *extra]
+    (home / ".gitconfig").write_text("\n".join(lines) + "\n")
+
+
+def _plane_repo(root: Path, *, origin: "str | None" = PLANE_ORIGIN, rewrite: bool = True,
+                extra_config: "list[str]" = ()) -> Path:
+    """The fixture plane as a git repository with one commit, and a bare remote beside it."""
+    side = root.parent
+    rule = [f'[url "file://{side}/forge/acme/"]', "\tinsteadOf = https://github.com/acme/"]
+    # `extra_config` goes in AFTER the setup commit: a `commit.gpgsign = true` written before it
+    # signs the fixture's own first commit, and there is no signer.
+    _identity(side, rule if rewrite else [])
+    bare = side / "forge" / "acme" / "plane.git"
+    bare.mkdir(parents=True)
+    _git(side, "init", "-q", "--bare", "-b", "main", ".", cwd=bare)
+    _git(side, "init", "-q", "-b", "main", ".", cwd=root)
+    # What `charter init` writes: the plane's machine-local state is not committed.
+    (root / ".gitignore").write_text(".charter/\n")
+    _git(side, "add", "-A", cwd=root)
+    _git(side, "commit", "-q", "-m", "the plane", cwd=root)
+    _git(side, "push", "-q", str(bare), "HEAD:refs/heads/main", cwd=root)
+    if origin:
+        _git(side, "remote", "add", "origin", origin, cwd=root)
+    if extra_config:
+        _identity(side, [*(rule if rewrite else []), *extra_config])
+    return bare
+
+
+def _pending(root: Path) -> None:
+    """Two memories and a file nobody meant to commit — the shape of the 2026-09-12 incident."""
+    for rel, text in (
+        ("personas/steward/memory/m.md", "# a memory\n\nbody\n"),
+        ("personas/_shared/memory/s.md", "# shared\n\nbody\n"),
+        ("uv.lock", "some agent's local uv run left this here\n"),
+    ):
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+
+def _a_plane_with_work_pending(root: Path) -> None:
+    _plane_repo(root)
+    _pending(root)
+
+
+def _a_plane_with_nothing_pending(root: Path) -> None:
+    _plane_repo(root)
+
+
+def _a_plane_that_is_not_a_repository(root: Path) -> None:
+    _pending(root)
+
+
+def _a_plane_whose_origin_is_on_no_forge_charter_knows(root: Path) -> None:
+    bare = _plane_repo(root, origin=None, rewrite=False)
+    _git(root.parent, "remote", "add", "origin", f"file://{bare}", cwd=root)
+    _pending(root)
+
+
+def _a_plane_with_a_secret_in_a_memory_file(root: Path) -> None:
+    _plane_repo(root)
+    store = root / "personas" / "steward" / "memory"
+    store.mkdir(parents=True, exist_ok=True)
+    (store / "leak.md").write_text(
+        "# the deploy\n\ntoken: ghp_0123456789abcdefghijklmnopqrstuvwxyz\n"
+    )
+
+
+def _a_plane_whose_operator_signs_every_commit(root: Path) -> None:
+    """A global `commit.gpgsign = true`, which is the ordinary case the policy exists for.
+
+    What this scenario holds the two implementations to is that the plane still BEHAVES: both
+    commit, and both say the same thing. It cannot hold them to more, because a commit that
+    reached the signer and failed is rescued by the `--no-gpg-sign` retry either way — so
+    "the signer was never asked" needs a signer that records being asked, and that lives in
+    `planegit`'s own tests (`the_signer_is_never_asked_even_when_the_operator_signs_every_commit`)
+    where the marker can be checked directly.
+    """
+    side = root.parent
+    _plane_repo(root, extra_config=["[commit]", "\tgpgsign = true",
+                                    "[tag]", "\tgpgsign = true",
+                                    "[gpg]", f"\tprogram = {side}/no-such-signer"])
+    _pending(root)
+
+
+def _a_plane_whose_branch_requires_a_pull_request(root: Path) -> None:
+    """The stand-in forge refuses `refs/heads/main` in GitHub's own wording.
+
+    A real `pre-receive` hook, because the rejection IS the evidence: charter never asks a forge
+    whether a branch is protected, and guessing it from the branch name is the unearned
+    diagnosis ADR 0009 forbids.
+    """
+    bare = _plane_repo(root)
+    hook = bare / "hooks" / "pre-receive"
+    hook.parent.mkdir(parents=True, exist_ok=True)
+    hook.write_text(
+        "#!/bin/sh\nwhile read _ _ ref; do\n  case \"$ref\" in refs/heads/main)\n"
+        "    echo 'remote: error: GH006: Protected branch update failed for "
+        "refs/heads/main.' >&2\n    exit 1;; esac\ndone\nexit 0\n"
+    )
+    hook.chmod(0o755)
+    _pending(root)
+
+
+def _a_plane_and_a_clone_with_no_policy(root: Path) -> None:
+    side = root.parent
+    _identity(side)
+    _git(side, "init", "-q", "-b", "main", ".", cwd=root)
+    _git(side, "remote", "add", "origin", "https://github.com/acme/plane.git", cwd=root)
+    clone = root / "workspaces" / "alpha" / "widget"
+    clone.mkdir(parents=True, exist_ok=True)
+    _git(side, "init", "-q", "-b", "main", ".", cwd=clone)
+    _git(side, "remote", "add", "origin", "git@gitlab.com:acme/widget.git", cwd=clone)
+
+
+def _a_clone_on_a_forge_charter_cannot_place(root: Path) -> None:
+    side = root.parent
+    _identity(side)
+    _git(side, "init", "-q", "-b", "main", ".", cwd=root)
+    _git(side, "remote", "add", "origin", "https://github.com/acme/plane.git", cwd=root)
+    clone = root / "workspaces" / "alpha" / "widget"
+    clone.mkdir(parents=True, exist_ok=True)
+    _git(side, "init", "-q", "-b", "main", ".", cwd=clone)
+    _git(side, "remote", "add", "origin", "https://evil.example/acme/widget.git", cwd=clone)
+
+
+def _plane_facts(root: Path) -> str:
+    """What the plane's repository and its stand-in forge say — everything about the commit
+    except when it was made, which is the one thing the two sides cannot share."""
+
+    def ask(where: Path, *args: str) -> str:
+        return subprocess.run(
+            ["git", "-C", str(where), *args], capture_output=True, text=True,
+            env={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "GIT_CONFIG_NOSYSTEM": "1"},
+        ).stdout
+
+    out = [
+        f"branch: {ask(root, 'symbolic-ref', '-q', 'HEAD')}",
+        f"tree: {ask(root, 'rev-parse', 'HEAD^{tree}')}",
+        f"subject: {ask(root, 'log', '-1', '--format=%s')}",
+        f"committed:\n{ask(root, 'show', '--name-only', '--format=', 'HEAD')}",
+        f"status:\n{ask(root, 'status', '--porcelain')}",
+        f"config:\n{ask(root, 'config', '--local', '--list')}",
+    ]
+    clone = root / "workspaces" / "alpha" / "widget"
+    if (clone / ".git").is_dir():
+        out.append(f"clone config:\n{ask(clone, 'config', '--local', '--list')}")
+    bare = root.parent / "forge" / "acme" / "plane.git"
+    if bare.is_dir():
+        refs = []
+        for ref in ask(bare, "for-each-ref", "--format=%(refname)").split():
+            # A `charter/<sha>` branch is named after a commit the two sides cannot share.
+            named = re.sub(r"charter/[0-9a-f]{7,}$", "charter/<sha>", ref)
+            refs.append(f"{named} tree {ask(bare, 'rev-parse', ref + '^{tree}').strip()} "
+                        f"subject {ask(bare, 'log', '-1', '--format=%s', ref).strip()}")
+        out.append("remote:\n" + "\n".join(sorted(refs)))
+    # The two copies live under `python/` and `rust/`, and a scenario whose `origin` is a
+    # `file://` path therefore records a different absolute URL on each side. That is the
+    # harness's own doing, so the SIDE is blanked and every other character still has to match.
+    return re.sub(r"/(?:python|rust)/", "/<side>/", "\n".join(out))
+
+
+#: What the HARNESS itself makes differ, not the implementations: the plane copies live in
+#: directories named after their side, and the two commits are made a committer date apart
+#: because the Rust git runner clears the environment this harness pins the date in — so the
+#: sha in the commit line, and the `charter/<sha>` branch named after it, differ too.
+SAVE_MASKS = [
+    (r"\S*/(?:python|rust)/plane", "the two plane copies are in differently named directories"),
+    (r"Committed [0-9a-f]{7,} in",
+     "the two commits carry different committer dates, so their shas differ"),
+    (r"charter/[0-9a-f]{7,}", "the pull-request branch is named after that sha"),
+]
+
+#: The block the Rust `save` prints and charter does not: what is about to be committed, by
+#: directory. charter prints only the count, afterwards — and a count is not a description
+#: (`crates/charter-core/src/planegit.rs` carries the incident this comes from).
+SAVE_BREAKDOWN = [
+    (r"^! charter save commits everything pending in ",
+     "the headline of the Rust save's pre-commit breakdown"),
+    (r"^• +\d+ {2}", "one directory row of that breakdown"),
+]
+
+#: The plane's own `.git`, whose index, reflogs and object timestamps no two runs share.
+#: `_plane_facts` compares what it SAYS instead.
+PLANE_GIT = {
+    ".git": "compared through `facts`: the index and the reflogs carry timestamps and inodes "
+            "no two runs share, and the two commits carry different committer dates",
+    "workspaces/alpha/widget/.git": "the same, for the clone `git-policy` acts on",
+}
+
+#: The record of a push that did not land on the branch HEAD is on. It carries the commit it is
+#: about and the moment it was written, and the two sides share neither.
+PUSH_RECORD = ("the record names the commit it is about and the time it was written, and the "
+               "two sides' commits differ; the branch it points at is compared through `facts`")
+
+#: Where a push lands, which is by definition not inside the tree being pushed.
+PUSHED_TO = {
+    "forge/acme/plane.git/": "the bare repository standing in for the forge — this is where "
+                             "`save`'s push is supposed to land, and a scenario in which "
+                             "nothing lands there has stopped testing the push",
+}
+
+SAVE_SCENARIOS = [
+    Scenario(
+        name="save-commits-everything-pending-and-pushes-it",
+        plane="daily",
+        setup=_a_plane_with_work_pending,
+        python=["save", "one save"],
+        pins_the_clock=False,
+        stderr_mask=SAVE_MASKS,
+        rust_only_lines=SAVE_BREAKDOWN,
+        ignore=PLANE_GIT,
+        facts=_plane_facts,
+        writes_outside=PUSHED_TO,
+    ),
+    Scenario(
+        name="save-with-no-push-commits-and-leaves-the-remote-where-it-was",
+        plane="daily",
+        setup=_a_plane_with_work_pending,
+        python=["save", "one save", "--no-push"],
+        pins_the_clock=False,
+        stderr_mask=SAVE_MASKS,
+        rust_only_lines=SAVE_BREAKDOWN,
+        ignore=PLANE_GIT,
+        facts=_plane_facts,
+    ),
+    Scenario(
+        name="save-on-a-clean-tree-commits-nothing",
+        plane="daily",
+        setup=_a_plane_with_nothing_pending,
+        python=["save"],
+        pins_the_clock=False,
+        ignore=PLANE_GIT,
+        facts=_plane_facts,
+    ),
+    Scenario(
+        name="save-commits-under-a-global-commit-gpgsign",
+        plane="daily",
+        setup=_a_plane_whose_operator_signs_every_commit,
+        python=["save", "one save"],
+        pins_the_clock=False,
+        stderr_mask=SAVE_MASKS,
+        rust_only_lines=SAVE_BREAKDOWN,
+        ignore=PLANE_GIT,
+        facts=_plane_facts,
+        writes_outside=PUSHED_TO,
+    ),
+    Scenario(
+        name="save-whose-origin-is-on-no-forge-charter-knows-commits-locally",
+        plane="daily",
+        setup=_a_plane_whose_origin_is_on_no_forge_charter_knows,
+        python=["save", "one save"],
+        pins_the_clock=False,
+        stderr_mask=SAVE_MASKS,
+        rust_only_lines=SAVE_BREAKDOWN,
+        ignore=PLANE_GIT,
+        facts=_plane_facts,
+    ),
+    Scenario(
+        name="save-refuses-a-secret-shaped-value-in-a-memory-file",
+        plane="daily",
+        setup=_a_plane_with_a_secret_in_a_memory_file,
+        python=["save"],
+        pins_the_clock=False,
+        refusal="Refusing to save — a secret-shaped value in a memory/ref file:",
+        ignore=PLANE_GIT,
+        facts=_plane_facts,
+    ),
+    Scenario(
+        name="save-on-a-plane-that-is-not-a-git-repository",
+        plane="daily",
+        setup=_a_plane_that_is_not_a_repository,
+        python=["save"],
+        pins_the_clock=False,
+        refusal="is not a git repository, so there is nothing to commit to.",
+    ),
+    Scenario(
+        name="save-onto-a-branch-that-requires-a-pull-request-opens-one",
+        plane="daily",
+        setup=_a_plane_whose_branch_requires_a_pull_request,
+        python=["save", "one save"],
+        pins_the_clock=False,
+        stderr_mask=SAVE_MASKS,
+        rust_only_lines=SAVE_BREAKDOWN,
+        ignore={**PLANE_GIT, ".charter/plane-push.json": PUSH_RECORD},
+        facts=_plane_facts,
+        writes_outside=PUSHED_TO,
+    ),
+    Scenario(
+        name="git-policy-reports-the-plane-and-a-clone-that-are-not-token-only",
+        plane="daily",
+        setup=_a_plane_and_a_clone_with_no_policy,
+        python=["git-policy"],
+        pins_the_clock=False,
+        ignore=PLANE_GIT,
+        facts=_plane_facts,
+    ),
+    Scenario(
+        name="git-policy-apply-writes-the-token-only-policy-per-forge",
+        plane="daily",
+        setup=_a_plane_and_a_clone_with_no_policy,
+        python=["git-policy", "--apply"],
+        pins_the_clock=False,
+        ignore=PLANE_GIT,
+        facts=_plane_facts,
+    ),
+    Scenario(
+        name="git-policy-names-a-clone-whose-forge-it-cannot-place-rather-than-guessing",
+        plane="daily",
+        setup=_a_clone_on_a_forge_charter_cannot_place,
+        python=["git-policy"],
+        pins_the_clock=False,
+        ignore=PLANE_GIT,
+        facts=_plane_facts,
+    ),
+]
 
 
 SCENARIOS = [
@@ -1945,6 +2321,7 @@ SCENARIOS = [
         same_stderr=True,
         stderr_mask=[ABSOLUTE_PATHS],
     ),
+    *SAVE_SCENARIOS,
 ]
 
 
@@ -2169,6 +2546,14 @@ def check(scenario: Scenario, binary: Path) -> bool:
                     "python's alone — drop the note"
                 )
             py = subprocess.CompletedProcess(py.args, py.returncode, py.stdout, text)
+        if scenario.rust_only_lines:
+            text, stale = _rust_only(rs.stderr, scenario.rust_only_lines)
+            for pattern in stale:
+                problems.append(
+                    f"    rust no longer prints {pattern!r}, but the scenario still says it is "
+                    "rust's alone — drop the note"
+                )
+            rs = subprocess.CompletedProcess(rs.args, rs.returncode, rs.stdout, text)
         if py.returncode != rs.returncode:
             problems.append(
                 f"    exit status differs: python {py.returncode} "
@@ -2232,11 +2617,26 @@ def check(scenario: Scenario, binary: Path) -> bool:
                         py_facts.splitlines(), rs_facts.splitlines(), "python", "rust",
                         lineterm="", n=1)
                 )
-        problems.extend(
-            line for line in _escaped("python", py_before, _outside(scratch, "python", py_root))
-            if not any(f": {path} (" in line for path in scenario.python_writes_outside)
+        escapes = _escaped("python", py_before, _outside(scratch, "python", py_root)) + _escaped(
+            "rust", rs_before, _outside(scratch, "rust", rs_root)
         )
-        problems.extend(_escaped("rust", rs_before, _outside(scratch, "rust", rs_root)))
+        for prefix in scenario.writes_outside:
+            if not any(f": {prefix}" in line for line in escapes):
+                problems.append(
+                    f"    neither side wrote {prefix!r}, but the scenario says that is where "
+                    "this command's work lands — drop the note, or find out why nothing was "
+                    "pushed"
+                )
+
+        def allowed(line: str) -> bool:
+            if any(f": {prefix}" in line for prefix in scenario.writes_outside):
+                return True  # either side; this is where the command's work lands
+            # Python's alone: the Rust side writing one of these is still an escape.
+            return line.startswith("    python ") and any(
+                f": {path} (" in line for path in scenario.python_writes_outside
+            )
+
+        problems.extend(line for line in escapes if not allowed(line))
         if scenario.stdout_differs:
             if py.stdout == rs.stdout:
                 problems.append(

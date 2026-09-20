@@ -88,6 +88,29 @@ enum Command {
         now: Option<String>,
     },
 
+    /// Commit and push the control plane's own changes over its forge's HTTPS token.
+    ///
+    /// It stages EVERYTHING pending in the plane's tree, not only what you changed, and prints
+    /// the directory breakdown of what it is about to commit before it commits it.
+    Save {
+        /// The commit message. Default: `charter save: N file(s)`.
+        message: Option<String>,
+        /// Sign the commit. Off by default, so a signer prompt can never hang an agent.
+        #[arg(long)]
+        sign: bool,
+        /// Commit only; do not push.
+        #[arg(long)]
+        no_push: bool,
+    },
+
+    /// Golden rule 0: check — or `--apply` — token-only git auth on the plane and every clone.
+    #[command(name = "git-policy")]
+    GitPolicy {
+        /// Write the policy. Without it, drift is reported and nothing is changed.
+        #[arg(long)]
+        apply: bool,
+    },
+
     /// Fetch and fast-forward the clones in a workspace, skipping any that hold work.
     Sync {
         /// The workspace to sync.
@@ -657,6 +680,58 @@ fn instant(now: Option<&str>) -> Result<f64, String> {
         .ok_or_else(|| "--now names no single local instant".to_string())
 }
 
+/// `save` and `git-policy`, or `None` for any other command.
+///
+/// **These two resolve the plane the way Python's `config.ROOT` does**
+/// ([`charter_core::plane::command_root`]) rather than the way the read commands do: they act
+/// on the plane the vault, the personas and the memory belong to, out of a linked worktree and
+/// outward through an enclosing plane's `workspaces/`. `save`'s two refusals — you are standing
+/// in a worktree, you are standing in a nested plane — only exist once that is the resolution,
+/// because they are about the caller standing somewhere other than the tree being committed.
+fn plane_command(command: &Command) -> Option<ExitCode> {
+    use charter_core::repocmd::Say;
+
+    let mut say = |line: Say| eprintln!("{line}");
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(e) => {
+            eprintln!("charter: cannot read the current directory: {e}");
+            return Some(ExitCode::FAILURE);
+        }
+    };
+    let root = match command {
+        Command::Save { .. } | Command::GitPolicy { .. } => {
+            match charter_core::plane::command_root(&cwd) {
+                Ok(root) => root,
+                Err(why) => {
+                    eprintln!("charter: {why}");
+                    return Some(ExitCode::FAILURE);
+                }
+            }
+        }
+        _ => return None,
+    };
+    let code = match command {
+        Command::Save {
+            message,
+            sign,
+            no_push,
+        } => charter_core::planegit::save(
+            &charter_core::planegit::Request {
+                root: &root,
+                message: message.as_deref(),
+                sign: *sign,
+                no_push: *no_push,
+                cwd: &cwd,
+            },
+            &mut say,
+        ),
+        Command::GitPolicy { apply } => charter_core::gitpolicy::policy(&root, *apply, &mut say),
+        _ => return None,
+    };
+    Some(ExitCode::from(code))
+}
+
 /// `discover`, `clone` and `sync`, or `None` for any other command.
 fn repo_command(command: &Command) -> Option<ExitCode> {
     use charter_core::repocmd::{self, Say};
@@ -748,7 +823,9 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Sync { .. }
         | Command::Doctor { .. }
         | Command::GlRefresh { .. }
-        | Command::Statusline { .. } => {
+        | Command::Statusline { .. }
+        | Command::Save { .. }
+        | Command::GitPolicy { .. } => {
             unreachable!("answered before run")
         }
         Command::Root => {
@@ -984,6 +1061,10 @@ fn main() -> ExitCode {
     // says which repo is being fetched is worth nothing once it has been — and choose their
     // own exit status, as their Python counterparts do.
     if let Some(code) = repo_command(&cli.command) {
+        return code;
+    }
+    // `save` and `git-policy` likewise: several lines each, and an exit status of their own.
+    if let Some(code) = plane_command(&cli.command) {
         return code;
     }
     match run(cli.command) {
