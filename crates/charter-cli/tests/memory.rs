@@ -313,3 +313,47 @@ fn a_plane_that_commits_memory_is_told_this_charter_did_not() {
         stderr(&out)
     );
 }
+
+#[test]
+fn a_duplicate_todos_heading_is_quoted_back_escaped_and_never_raw() {
+    // `duplicate_of` answers with the `# ` heading of a file on disk, and this was the one
+    // heading this binary printed straight into a refusal. Since `charter handoff` a stored
+    // title can be a model's prose, so that line could carry an ESC and repaint charter's
+    // own output — `commands_workspace.py` wraps the same value for the same reason.
+    //
+    // stderr is a pipe here, so `voice`'s own glyph is uncoloured and the ONLY way an ESC
+    // reaches this string is through the heading. That is what makes the last assertion a
+    // test rather than a coincidence.
+    let tmp = daily();
+    let root = root(&tmp);
+    let todos = root.join("workspaces/alpha/todos");
+    std::fs::create_dir_all(&todos).unwrap();
+    std::fs::write(
+        todos.join("webhooks.md"),
+        "# retry the failed webhook deliveries\u{1b}[2K\n\n_2026-03-02 09:14 · open_\n",
+    )
+    .unwrap();
+
+    let out = charter(
+        &root,
+        &[
+            "ws",
+            "todo",
+            "-w",
+            "alpha",
+            "retry the failed webhook deliveries",
+        ],
+    );
+
+    let said = stderr(&out);
+    assert_ne!(out.status.code(), Some(0), "{said}");
+    assert!(said.contains("already on the list:"), "{said}");
+    assert!(
+        said.contains("deliveries\\x1b[2K"),
+        "the heading was not escaped: {said:?}"
+    );
+    assert!(
+        !said.contains('\u{1b}'),
+        "a raw ESC reached the terminal: {said:?}"
+    );
+}

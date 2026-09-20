@@ -455,6 +455,133 @@ fn a_memory_file_that_leads_out_of_the_plane_is_refused_rather_than_read_through
     assert!(!said.contains("BEGIN OPENSSH"), "it read through the link");
 }
 
+#[test]
+fn a_memory_file_that_is_a_link_is_refused_even_when_it_lands_back_inside_the_plane() {
+    // What is COMMITTED for a link is the link — a blob holding the target's path — so a
+    // scan of that blob would answer "no secret" about a file charter never read. The
+    // containment check alone let this one through: the target is inside the plane.
+    let fixture = Fixture::plane();
+    // Outside `/memory/`, so the guard judges the LINK and not its target: a target the
+    // guard also flagged would make this test pass for the wrong reason.
+    let target = fixture.root.join("personas/steward/real.md");
+    std::fs::write(&target, "# k\n\npassword: hunter2is\n").unwrap();
+    std::os::unix::fs::symlink(
+        &target,
+        fixture.root.join("personas/steward/memory/leak.md"),
+    )
+    .unwrap();
+
+    let (code, said) = fixture.save(Request {
+        root: &fixture.root,
+        message: None,
+        sign: false,
+        no_push: true,
+        cwd: &fixture.root,
+    });
+
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("leak.md"), "{said}");
+    assert_eq!(fixture.head_subject(), "one", "nothing was committed");
+}
+
+// --------------------------------------------------------------------------------------- //
+// the secret guard reads what is STAGED (M3)                                                //
+// --------------------------------------------------------------------------------------- //
+
+#[test]
+fn a_secret_staged_and_then_cleaned_out_of_the_working_tree_is_still_refused() {
+    // **The bypass this guard had from the first line of it.** The guard took its list of
+    // paths from the index and its BYTES from the working tree, and `skip-worktree` is what
+    // stops `add -A` putting the two back in step. Measured with git 2.50.1: the row is
+    // listed, the working tree says `clean`, the index and the commit say `password: …`.
+    let fixture = Fixture::plane();
+    let file = fixture.root.join("personas/steward/memory/n.md");
+    std::fs::write(&file, "# the deploy\n\npassword: hunter2is\n").unwrap();
+    run(&fixture.root, &["add", "personas/steward/memory/n.md"]);
+    run(
+        &fixture.root,
+        &[
+            "update-index",
+            "--skip-worktree",
+            "personas/steward/memory/n.md",
+        ],
+    );
+    std::fs::write(&file, "clean\n").unwrap();
+    assert_eq!(
+        ask(&fixture.root, &["show", ":personas/steward/memory/n.md"]),
+        "# the deploy\n\npassword: hunter2is\n",
+        "the test's own premise: the index and the working tree disagree"
+    );
+
+    let (code, said) = fixture.save(Request {
+        root: &fixture.root,
+        message: None,
+        sign: false,
+        no_push: true,
+        cwd: &fixture.root,
+    });
+
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("(credential assignment)"), "{said}");
+    assert!(
+        !said.contains("hunter2is"),
+        "the refusal repeated the secret"
+    );
+    assert_eq!(fixture.head_subject(), "one", "nothing was committed");
+}
+
+#[test]
+fn a_staged_path_git_would_quote_is_examined_rather_than_skipped() {
+    // `core.quotePath` is on by default, so `--name-only` printed this row as
+    // `"personas/caf\303\251/memory/n.md"` — quotes and octal escapes included. The
+    // substring test still selected it and the file lookup then found nothing, so the row
+    // went through unexamined. `-z` is what turns the quoting off.
+    let fixture = Fixture::plane();
+    let dir = fixture.root.join("personas/café/memory");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("n.md"), "# the deploy\n\npassword: hunter2is\n").unwrap();
+    assert!(
+        ask(&fixture.root, &["diff", "--cached", "--name-only"]).is_empty(),
+        "the premise: `save` is what stages it"
+    );
+
+    let (code, said) = fixture.save(Request {
+        root: &fixture.root,
+        message: None,
+        sign: false,
+        no_push: true,
+        cwd: &fixture.root,
+    });
+
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("(credential assignment)"), "{said}");
+    assert_eq!(fixture.head_subject(), "one", "nothing was committed");
+}
+
+#[test]
+fn a_staged_memory_file_that_is_not_utf8_is_examined_rather_than_skipped() {
+    // `read_to_string` answered `Err` for it and the `if let Ok` fell through to no flag at
+    // all — a guard failing in the one direction a guard may not. The blob is read as bytes
+    // and the undecodable ones become replacement characters, which is enough to see an
+    // ASCII credential sitting beside them.
+    let fixture = Fixture::plane();
+    let mut bytes = b"# the deploy\n\npassword: hunter2is\n".to_vec();
+    bytes.extend_from_slice(&[0xff, 0xfe]);
+    std::fs::write(fixture.root.join("personas/steward/memory/n.md"), bytes).unwrap();
+
+    let (code, said) = fixture.save(Request {
+        root: &fixture.root,
+        message: None,
+        sign: false,
+        no_push: true,
+        cwd: &fixture.root,
+    });
+
+    assert_eq!(code, 1, "{said}");
+    assert!(said.contains("(credential assignment)"), "{said}");
+    assert_eq!(fixture.head_subject(), "one", "nothing was committed");
+}
+
 // --------------------------------------------------------------------------------------- //
 // signing                                                                                   //
 // --------------------------------------------------------------------------------------- //

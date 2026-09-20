@@ -17,6 +17,16 @@ import type { ProfileRow, StartOptions } from "./bindings";
  * file is gitignored, so an edit to it leaves no diff for a reviewer to catch, and nothing
  * stops a chat editing plane config — which is why the ask is about the words that are
  * about to run and not about the profile's name.
+ *
+ * **The footer checkbox is asked here and nowhere else** (charter ADR 0029). Inside a pane
+ * charter prints an empty line where its own footer would go, because the app's panels
+ * already draw the plane — and this is where an operator says "not this chat". The choice is
+ * between charter's footer and nothing: `charter statusline` IS Claude Code's `statusLine`
+ * command, so a blank line there leaves the harness with no status line at all.
+ *
+ * It is asked at the start rather than offered as a switch on a running pane because that
+ * command inherits the environment its harness was exec'd with: a toggle on a live chat would
+ * appear to work and would not.
  */
 export function StartChat({
   options,
@@ -28,10 +38,11 @@ export function StartChat({
   options: StartOptions;
   /** Why the last attempt did not start, if it did not. */
   trouble?: string;
-  onStart: (profile: string, persona: string | null) => void;
-  /** The profile, the persona, and the exact line the operator read — so the approval is
-   *  for what was on screen and not for whatever the file says by the time it is clicked. */
-  onApprove: (profile: string, persona: string | null, shown: string) => void;
+  onStart: (profile: string, persona: string | null, showFooter: boolean) => void;
+  /** The profile, the persona, the footer choice, and the exact line the operator read — so
+   *  the approval is for what was on screen and not for whatever the file says by the time
+   *  it is clicked. */
+  onApprove: (profile: string, persona: string | null, showFooter: boolean, shown: string) => void;
   onCancel: () => void;
 }) {
   const [profile, setProfile] = useState<string | undefined>(
@@ -44,6 +55,11 @@ export function StartChat({
   const [persona, setPersona] = useState<string | null>(
     options.persona !== null && options.personas.includes(options.persona) ? options.persona : null,
   );
+  // Off, which is the app as it has always behaved: a pane's footer is blank unless
+  // this chat asks for it (charter ADR 0029). Not remembered between chats on purpose —
+  // there is no plane-wide or machine-wide setting for it, and a box that silently stayed
+  // ticked would be one.
+  const [showFooter, setShowFooter] = useState(false);
   const picked = options.profiles.find((p) => p.name === profile);
 
   // Escape starts nothing. Listened for on the window rather than the dialog, so it answers
@@ -113,6 +129,27 @@ export function StartChat({
           ))}
         </fieldset>
 
+        <fieldset className="surface">
+          <legend>Footer</legend>
+          <label>
+            <input
+              type="checkbox"
+              name="pane-footer"
+              checked={showFooter}
+              onChange={(e) => setShowFooter(e.target.checked)}
+            />
+            <span className="who">draw charter&apos;s footer in this chat</span>
+            {/* Said rather than left to be discovered. The reason for the default and the
+                reason against it both belong on screen: the panels repeat most of what the
+                footer says, and the footer says it about THIS chat's own workspace. */}
+            <span className="what">
+              blank by default, because the panels already draw the plane. The footer says which
+              workspace this chat is on, which the panels say only for the focused one. This chat
+              only, and only from its next start.
+            </span>
+          </label>
+        </fieldset>
+
         {options.refused.length > 0 && (
           <details className="refused">
             {/* A missing profile is a row that is not in the list — easy to miss in a way a
@@ -150,13 +187,16 @@ export function StartChat({
           {picked?.approval ? (
             <button
               className="ends-it"
-              onClick={() => onApprove(picked.name, persona, picked.shown)}
+              onClick={() => onApprove(picked.name, persona, showFooter, picked.shown)}
               disabled={!picked}
             >
               Approve and start
             </button>
           ) : (
-            <button onClick={() => profile && onStart(profile, persona)} disabled={!profile}>
+            <button
+              onClick={() => profile && onStart(profile, persona, showFooter)}
+              disabled={!profile}
+            >
               Start
             </button>
           )}
