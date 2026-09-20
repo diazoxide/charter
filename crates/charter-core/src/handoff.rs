@@ -132,8 +132,13 @@ impl NoBrief {
                 "charter handoff: the brief on stdin is not UTF-8 text — nothing was opened."
                     .to_string()
             }
+            // "Pass IT", where the two above say "Pass THE BRIEF". charter words this one
+            // differently — the sentence in front of it has just named the brief — and the
+            // differential caught the paraphrase, which is the whole reason it compares
+            // stderr byte for byte.
             Self::Empty => format!(
-                "charter handoff: the brief on stdin is empty — nothing was opened. {heredoc}"
+                "charter handoff: the brief on stdin is empty — nothing was opened. {}",
+                heredoc.replacen("Pass the brief as", "Pass it as", 1)
             ),
         }
     }
@@ -494,6 +499,26 @@ mod tests {
                 .say("beta")
                 .contains("charter handoff beta <<'BRIEF'")
         );
+    }
+
+    #[test]
+    fn the_empty_brief_names_the_heredoc_in_charters_own_words() {
+        // charter says "Pass IT" here and "Pass THE BRIEF" in the other two — the sentence in
+        // front of this one has just named the brief. The differential caught the paraphrase,
+        // which is the whole reason it compares stderr byte for byte.
+        assert!(
+            NoBrief::Empty
+                .say("beta")
+                .contains("nothing was opened. Pass it as a quoted heredoc in the same call:")
+        );
+        for other in [NoBrief::Closed, NoBrief::Terminal] {
+            assert!(
+                other
+                    .say("beta")
+                    .contains("Pass the brief as a quoted heredoc"),
+                "{other:?}"
+            );
+        }
     }
 
     #[test]

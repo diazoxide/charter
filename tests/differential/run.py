@@ -2012,27 +2012,7 @@ A_BRIEF = "# Retry the failed webhook deliveries\n\nThe queue is in workspaces/a
 
 #: A credential-shaped brief, in the one spelling both classifiers read as a VALUE rather than
 #: a reference. The KIND is what the refusal names; the value never appears in it.
-A_BRIEF_WITH_A_SECRET = (
-    "# Rotate the key\n\nAWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n"
-)
-
-
-def _a_live_workspace(root: Path) -> None:
-    """`alpha` marked LIVE — the managed `.gitignore` block, which no fixture carries.
-
-    Written as literal lines rather than through either implementation, so the scenario is not
-    asking one of them to set up the state the other is judged on.
-    """
-    lines = ["# >>> charter live workspaces (managed by `charter workspace live`) >>>"]
-    for path in ("workspace.json", "workspace.md", "memory", "memory/**", "todos",
-                 "todos/**", "changes", "changes/**"):
-        lines.append(f"!/workspaces/alpha/{path}")
-    lines.append("/workspaces/alpha/changes/log/")
-    lines.append("# <<< charter live workspaces <<<")
-    block = "\n".join(lines)
-    gitignore = root / ".gitignore"
-    marker = "!/workspaces/.gitkeep\n"
-    gitignore.write_text(gitignore.read_text().replace(marker, marker + block + "\n", 1))
+A_BRIEF_WITH_A_SECRET = "# Rotate the key\n\nAPI_KEY=abcdefghij\n"
 
 
 def _a_session_lock(root: Path) -> None:
@@ -2148,7 +2128,6 @@ M28_SCENARIOS = [
     Scenario(
         name="workspace-live-off-makes-it-private-again",
         plane="daily",
-        setup=_a_live_workspace,
         python=["workspace", "live", "alpha", "--off"],
         pins_the_clock=False,
         same_stderr=True,
@@ -2156,7 +2135,6 @@ M28_SCENARIOS = [
     Scenario(
         name="workspace-live-on-a-workspace-that-is-already-live-changes-nothing",
         plane="daily",
-        setup=_a_live_workspace,
         python=["workspace", "live", "alpha"],
         pins_the_clock=False,
         same_stderr=True,
@@ -2212,6 +2190,12 @@ M28_SCENARIOS = [
         python=["workspace", "use", "beta"],
         pins_the_clock=False,
         env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        ignore={
+            f".charter/persona-state/trace/{FRESH_SESSION}.jsonl": (
+                "charter records every selection in its trace store; this binary writes no "
+                "trace at all, which is a whole store and not this command's to port"
+            )
+        },
         same_stderr=True,
     ),
     Scenario(

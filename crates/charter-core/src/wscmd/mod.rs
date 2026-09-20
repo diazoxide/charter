@@ -148,20 +148,8 @@ pub fn write_live_block<'a>(
     crate::contain::no_link_on_the_way(root, &path)?;
     let text = std::fs::read_to_string(&path).unwrap_or_default();
     let block = live_block(names);
-    let next = if let Some(start) = text.find(LIVE_BEGIN) {
-        // `re.sub(BEGIN .*? END, block, text, flags=DOTALL)` — the FIRST block, non-greedy,
-        // so a file that somehow holds two keeps the second untouched exactly as Python's
-        // single substitution does.
-        match text[start..].find(LIVE_END) {
-            Some(offset) => {
-                let end = start + offset + LIVE_END.len();
-                format!("{}{block}{}", &text[..start], &text[end..])
-            }
-            // A begin with no end: `re.sub` matches nothing, so the file is left as it is and
-            // the block is not written. Faithful — and the file is not silently repaired,
-            // because half a managed block is a thing an operator edited.
-            None => text.clone(),
-        }
+    let next = if text.contains(LIVE_BEGIN) {
+        replace_every_block(&text, &block)
     } else if let Some(at) = text.find("!/workspaces/.gitkeep\n") {
         let cut = at + "!/workspaces/.gitkeep\n".len();
         format!("{}{block}\n{}", &text[..cut], &text[cut..])
@@ -171,6 +159,35 @@ pub fn write_live_block<'a>(
         format!("{}\n{block}\n", text.trim_end_matches('\n'))
     };
     std::fs::write(&path, next)
+}
+
+/// Every `BEGIN … END` span in `text`, replaced by `block` —
+/// `re.sub(BEGIN.*?END, block, text, flags=DOTALL)`.
+///
+/// **EVERY span, not the first**, and the differential is what found that: Python's `re.sub`
+/// takes `count=0` by default, which means all. A plane whose `.gitignore` holds two managed
+/// blocks — one the fixture carries and one a hand or an older charter added — had the second
+/// left behind by a `live --off`, so the workspace the operator had just made private was
+/// still un-ignored by the block further down, and the next `charter save` would have
+/// committed its memory. Non-greedy, so two blocks in a row are two spans and not one.
+///
+/// A BEGIN with no END after it matches nothing and is left exactly as it is, which is what
+/// `re.sub` does: half a managed block is something an operator edited, and this is not the
+/// command that repairs it.
+fn replace_every_block(text: &str, block: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find(LIVE_BEGIN) {
+        let Some(offset) = rest[start..].find(LIVE_END) else {
+            break;
+        };
+        let end = start + offset + LIVE_END.len();
+        out.push_str(&rest[..start]);
+        out.push_str(block);
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
 }
 
 /// Mark `name` LIVE or LOCAL; `true` when the liveness actually changed.
@@ -542,6 +559,50 @@ mod tests {
         assert!(
             !set_live(dir.path(), "beta", false).unwrap(),
             "already LOCAL is not a change"
+        );
+    }
+
+    #[test]
+    fn a_second_managed_block_is_rewritten_too_and_never_left_behind() {
+        // The differential found this: Python's `re.sub` replaces EVERY span, and a first
+        // port replaced one. A `live --off` then left the workspace un-ignored by the block
+        // further down, so the next `charter save` would have committed its memory.
+        let dir = plane();
+        let block = live_block(["alpha"]);
+        std::fs::write(
+            dir.path().join(".gitignore"),
+            format!("head\n{block}\nmiddle\n{block}\ntail\n"),
+        )
+        .unwrap();
+        assert_eq!(
+            live_workspaces(dir.path()),
+            BTreeSet::from(["alpha".to_string()])
+        );
+
+        assert!(set_live(dir.path(), "alpha", false).unwrap());
+        let text = std::fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert!(!text.contains("/alpha/"), "{text}");
+        assert_eq!(text.matches(LIVE_BEGIN).count(), 2, "{text}");
+        assert!(text.starts_with("head\n"), "{text}");
+        assert!(text.contains("\nmiddle\n"), "{text}");
+        assert!(text.ends_with("\ntail\n"), "{text}");
+    }
+
+    #[test]
+    fn a_begin_with_no_end_after_it_is_left_exactly_as_it_is() {
+        let dir = plane();
+        let torn = format!("head\n{LIVE_BEGIN}\n!/workspaces/alpha/workspace.json\n");
+        std::fs::write(dir.path().join(".gitignore"), &torn).unwrap();
+        // The line is inside an unterminated block, so it still reads as LIVE…
+        assert_eq!(
+            live_workspaces(dir.path()),
+            BTreeSet::from(["alpha".to_string()])
+        );
+        // …and the rewrite matches nothing, exactly as `re.sub` would.
+        set_live(dir.path(), "alpha", false).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(".gitignore")).unwrap(),
+            torn
         );
     }
 
