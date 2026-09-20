@@ -358,6 +358,12 @@ struct InitCommand {
     /// Also clone the git repo you are standing in into the first workspace.
     #[arg(long)]
     clone_this_repo: bool,
+    /// Make the git repo you are standing in BE the control plane: write charter.toml,
+    /// personas/, inventory/, workspaces/ and charter's rules into that repo's own tracked
+    /// .gitignore. Without it, `init` at the top of a repo writes nothing and says how to put
+    /// the plane in a directory of its own (ADR 0035).
+    #[arg(long)]
+    plane_is_this_repo: bool,
     /// Name of the generic front-door persona to scaffold and declare. Skipped if this
     /// plane already has personas.
     #[arg(long, value_name = "NAME", overrides_with = "no_front_door")]
@@ -1861,6 +1867,7 @@ fn main() -> ExitCode {
                 owner: init.owner.clone().unwrap_or_default(),
                 host: init.host.clone(),
                 clone_this_repo: init.clone_this_repo,
+                plane_is_this_repo: init.plane_is_this_repo,
                 front_door: if init.no_front_door {
                     None
                 } else {
