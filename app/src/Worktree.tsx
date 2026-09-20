@@ -1,4 +1,3 @@
-import { useState } from "react";
 import type { ChatWorktree } from "./bindings";
 
 /** What a chat's row says about the worktree it is working in.
@@ -37,78 +36,5 @@ export function WorktreeMark({ worktree }: { worktree: ChatWorktree }) {
         </span>
       )}
     </span>
-  );
-}
-
-/** Removing a piece, with the core's refusal in front of the operator.
- *
- *  The whole reason this verb is in the window rather than only in the terminal is that the
- *  guards have something to say. `charter_core::worktree::remove` refuses a tree with
- *  uncommitted changes, a tree it could not read, and a branch holding commits that exist
- *  nowhere else — each with a sentence naming the repair. Those sentences are shown here
- *  **verbatim**: the window does not reword them, and does not replace them with a generic
- *  failure.
- *
- *  `--force` is how the operator says to discard that work. It is deliberately a second
- *  decision, offered only after the refusal has been read, and it is never sent on the
- *  operator's behalf. */
-export function RemovePiece({
-  worktree,
-  plane,
-  onRemove,
-  onRemoved,
-}: {
-  worktree: ChatWorktree;
-  plane: string;
-  onRemove: (args: {
-    plane: string;
-    workspace: string;
-    repo: string;
-    piece: string;
-    force: boolean;
-  }) => Promise<{ status: "ok" } | { status: "error"; error: string }>;
-  onRemoved?: () => void;
-}) {
-  const [refusal, setRefusal] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  async function ask(force: boolean) {
-    setBusy(true);
-    const answer = await onRemove({
-      plane,
-      workspace: worktree.workspace,
-      repo: worktree.repo,
-      piece: worktree.piece,
-      force,
-    });
-    setBusy(false);
-    if (answer.status === "ok") {
-      setRefusal(null);
-      onRemoved?.();
-      return;
-    }
-    setRefusal(answer.error);
-  }
-
-  return (
-    <div className="remove-piece" data-testid={`remove-${worktree.piece}`}>
-      <button disabled={busy} onClick={() => ask(false)}>
-        Remove worktree
-      </button>
-      <p className="keeps-the-branch">
-        The worktree goes; the branch <code>{worktree.branch ?? worktree.piece}</code> stays.
-      </p>
-
-      {refusal && (
-        <div className="refusal" role="alert">
-          {/* Verbatim. The sentence names the repair, and an operator who is shown a
-              reworded version of it cannot follow that repair or search for it. */}
-          <p className="said">{refusal}</p>
-          <button className="discard" disabled={busy} onClick={() => ask(true)}>
-            Discard it anyway
-          </button>
-        </div>
-      )}
-    </div>
   );
 }
