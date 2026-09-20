@@ -491,7 +491,7 @@ pub fn entry_errors(entries: &[Entry]) -> Vec<String> {
         }
         for key in &e.unknown {
             let folded = key.to_lowercase();
-            match KNOWN_FIELDS.iter().find(|f| **f == folded) {
+            match KNOWN_FIELDS.iter().find(|f| **f == folded.as_str()) {
                 Some(known) => out.push(shown::sentence(
                     MISCASED_KEY,
                     &[
@@ -1060,9 +1060,9 @@ pub fn probeable(argv: &str, tree: &CommandTree) -> bool {
     let Some(path) = command_path(&tokens, tree) else {
         return false;
     };
-    PROBEABLE
-        .iter()
-        .any(|listed| listed.len() == path.len() && listed.iter().zip(&path).all(|(a, b)| *a == b))
+    PROBEABLE.iter().any(|listed| {
+        listed.len() == path.len() && listed.iter().zip(&path).all(|(a, b)| *a == b.as_str())
+    })
 }
 
 /// How many [`dispatch`] calls are in flight.

@@ -161,7 +161,7 @@ const FORMAT_CHARS: [(char, char); 21] = [
 fn invisible(c: char) -> bool {
     c.is_control()
         || (c.is_whitespace() && c != ' ')
-        || FORMAT_CHARS.iter().any(|&(lo, hi)| lo <= c && c <= hi)
+        || FORMAT_CHARS.iter().any(|&(lo, hi)| (lo..=hi).contains(&c))
 }
 
 /// `value` as one line of a report, with nothing in it that can forge another
