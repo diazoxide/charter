@@ -585,6 +585,12 @@ pub fn wire(plane: &Path, dir: &Path) -> Vec<Row> {
 fn guest_rows(plane: &Path, tree: &Path) -> Vec<Row> {
     let label = tree.file_name().unwrap_or_default().to_string_lossy();
     let exclude = format!("{label}/.git/info/exclude");
+    if !writable_directory(plane, tree) {
+        return vec![Row {
+            rel: exclude,
+            did: Did::Blocked,
+        }];
+    }
     let wired = crate::guest::wire(plane, tree);
     if matches!(wired.hidden, crate::guest::Hidden::Blocked(..)) {
         // Nothing was written, so there are no file rows to report: the block is the one
@@ -604,7 +610,7 @@ fn guest_rows(plane: &Path, tree: &Path) -> Vec<Row> {
                 crate::guest::Status::Refreshed => Did::Refreshed,
                 crate::guest::Status::Current => Did::Present,
                 crate::guest::Status::Foreign => Did::Foreign,
-                crate::guest::Status::Theirs => Did::Present,
+                crate::guest::Status::Theirs => Did::HarnessBehind,
                 crate::guest::Status::Blocked => Did::Blocked,
             },
         })
@@ -629,8 +635,8 @@ fn guest_rows(plane: &Path, tree: &Path) -> Vec<Row> {
 /// workspace's, because only a checkout is somebody else's repository: a file charter did not
 /// write is committed there with `git add -f`, and nowhere else.
 pub fn checkout_row(dir: &Path, rel: &str) -> Option<String> {
-    let _ = (dir, rel);
-    None
+    let (head, inner) = rel.split_once('/')?;
+    (!inner.is_empty() && dir.join(head).join(".git").exists()).then(|| inner.to_string())
 }
 
 /// Every checkout directly inside the workspace directory that charter is a GUEST in — a
