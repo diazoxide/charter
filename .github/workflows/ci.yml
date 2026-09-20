@@ -285,7 +285,14 @@ jobs:
       # own workspace, built and run here and nowhere else, and it always exits 0.
       - name: What ConPTY does that a unix pty does not
         if: always()
-        run: cargo run --manifest-path tools/windows-probe/Cargo.toml 2>&1 | tail -40 || true
+        # A probe that hangs teaches nothing and holds the whole run open, which is the one
+        # way this job could cost anybody something. `child.wait()` has no deadline of its
+        # own, so the deadline is here.
+        timeout-minutes: 6
+        # No pipe: a `| tail` killed together with a timed-out step prints nothing at all, and
+        # a probe that has answered two of three questions before it stalls is exactly the
+        # run worth reading. It prints a dozen lines.
+        run: cargo run --manifest-path tools/windows-probe/Cargo.toml 2>&1 || true
       # `worktree::git` searches four FIXED directories before it trusts `PATH`. Asked in
       # pwsh and not bash: Git Bash maps `/usr/bin` onto its own installation, while
       # charter's Rust hands the literal string to the Win32 API, which resolves it against

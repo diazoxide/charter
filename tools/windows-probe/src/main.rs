@@ -49,6 +49,32 @@ fn main() {
 
     let _ = std::fs::remove_dir_all(&dir);
     println!("# done");
+    // `ClosePseudoConsole` — which is what dropping a master runs — blocks while a client is
+    // still attached, and question 3 deliberately leaves one running. Nothing below this line
+    // is a measurement, so the process leaves rather than waiting on a destructor whose
+    // blocking is the very thing being reported.
+    std::io::Write::flush(&mut std::io::stdout()).ok();
+    std::process::exit(0);
+}
+
+/// Drops a master on a thread, and says whether the drop itself returned.
+///
+/// The drop is `ClosePseudoConsole`, and on Windows it waits for the last attached client.
+/// A probe that blocks there reports nothing at all, so the block is measured instead of
+/// suffered.
+fn close(master: Box<dyn portable_pty::MasterPty + Send>, what: &str) {
+    let (say, heard) = mpsc::channel();
+    std::thread::spawn(move || {
+        drop(master);
+        let _ = say.send(());
+    });
+    match heard.recv_timeout(PATIENCE) {
+        Ok(()) => println!("close-{what}: the master dropped"),
+        Err(_) => println!(
+            "close-{what}: BLOCKED — {PATIENCE:?} inside the drop. ClosePseudoConsole waits \
+             for the last attached client, and charter drops a master on the UI's thread"
+        ),
+    }
 }
 
 fn size() -> PtySize {
@@ -72,6 +98,22 @@ fn drain(mut reader: Box<dyn Read + Send>) {
         let mut sink = Vec::new();
         let _ = reader.read_to_end(&mut sink);
     });
+}
+
+/// Waits for the program to end, but never longer than [`PATIENCE`].
+///
+/// `Child::wait` has no deadline of its own, and a probe that hangs teaches nothing while
+/// holding a CI run open. Polling `try_wait` is the same question with an end to it.
+fn ended(child: &mut Box<dyn portable_pty::Child + Send + Sync>) -> Option<u32> {
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Some(status.exit_code()),
+            Ok(None) | Err(_) if Instant::now() >= deadline => return None,
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(_) => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
 }
 
 /// Question 1. Spawns something that prints and exits, drops the slave exactly as
@@ -104,11 +146,10 @@ fn eof_when_the_program_exits(dir: &Path) {
         let _ = say.send((started.elapsed(), read));
     });
 
-    let status = child.wait().expect("a status");
-    println!(
-        "exit-code: the program exited 7, and portable-pty reports {}",
-        status.exit_code()
-    );
+    match ended(&mut child) {
+        Some(code) => println!("exit-code: the program exited 7, and portable-pty reports {code}"),
+        None => println!("exit-code: UNANSWERED — {PATIENCE:?} and the program had not ended"),
+    }
 
     match heard.recv_timeout(PATIENCE) {
         Ok((took, bytes)) => println!(
@@ -120,7 +161,7 @@ fn eof_when_the_program_exits(dir: &Path) {
         ),
     }
     // Dropping the master closes the pseudo console, which is what DOES end the reader here.
-    drop(pair.master);
+    close(pair.master, "q1");
     match heard.recv_timeout(PATIENCE) {
         Ok((took, _)) => println!("eof-after-master-drop: YES, after {took:?}"),
         Err(_) => println!("eof-after-master-drop: NO, not even then"),
@@ -165,7 +206,7 @@ fn an_exit_code_of_259(dir: &Path) {
             }
         }
     }
-    drop(pair.master);
+    close(pair.master, "q2");
 }
 
 /// Question 3. Kills the program the way `session::end`'s `cfg(not(unix))` arm does, and
@@ -202,7 +243,7 @@ fn what_the_program_started(dir: &Path) {
     let before_kill = size_of(&ticks);
     // The whole of what charter does on this platform today.
     let _ = child.kill();
-    let _ = child.wait();
+    let _ = ended(&mut child);
     std::thread::sleep(Duration::from_secs(1));
     let just_after = size_of(&ticks);
     std::thread::sleep(Duration::from_secs(8));
@@ -226,7 +267,7 @@ fn what_the_program_started(dir: &Path) {
     } else {
         println!("kill-reaches-descendants: YES — nothing kept ticking after the kill");
     }
-    drop(pair.master);
+    close(pair.master, "q3");
 }
 
 /// How many bytes are at `path`, or 0 if it is not there.

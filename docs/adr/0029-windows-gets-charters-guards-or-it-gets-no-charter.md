@@ -97,17 +97,22 @@ hard. All of it is work that has not been costed, and until it is done the hones
 refusal: charter cannot write private state on this platform.
 
 **Windows resolves names charter believes are ordinary.** `contain::segment_ok` refuses a
-separator, a NUL, `.`, `..`, an absolute path and a drive-qualified name. It does not refuse:
+separator, a NUL, `.`, `..`, an absolute path and a drive-qualified name — and it is used
+*alone*, without the `^[A-Za-z0-9][A-Za-z0-9._-]*$` alphabet, on session ids, memory
+identifiers, repo names on clone, worktree names and inventory entries. It does not refuse:
 
 - a reserved device name — `con`, `nul`, `prn`, `aux`, `com1`–`com9`, `lpt1`–`lpt9`, with or
-  without an extension. `persona_name_ok("nul")` is `true` today, and a persona called `nul`
-  is a write to the null device;
-- an alternate data stream — `drive_qualified` catches `C:x` because it looks at the *second*
-  character, so `alpha:evil` passes and writes to a stream of `alpha`;
-- a trailing dot or space — `alpha.` and `alpha ` both resolve to `alpha`, so two workspaces
-  the plane believes are distinct are one directory;
-- an 8.3 short name — `PROGRA~1` names a directory whose long name it does not start with,
-  which `contained`'s `starts_with` cannot see.
+  without an extension. The alphabet does not catch these either: `persona_name_ok("nul")` is
+  `true` today, and a session id of `nul` makes `.charter/sessions/nul.usage` the null device;
+- a trailing dot — `alpha.` resolves to `alpha`, and the alphabet admits `.` deliberately, for
+  names like `my-repo.v2`. Two workspaces the plane believes are distinct are one directory;
+- an alternate data stream — `drive_qualified` catches `C:x` by looking at the *second*
+  character, so `alpha:evil` passes `segment_ok` and names a stream of `alpha`. The alphabet
+  does catch this one, so today it is reachable through the `segment_ok`-only callers and not
+  through a workspace name;
+- an 8.3 short name — `PROGRA~1` names a directory whose long name it does not begin with, so
+  `contained`'s `starts_with` refuses a path that is in fact inside. Fail-closed, so a
+  usability bug rather than a hole, but it should be known rather than discovered.
 
 And the case rule runs the other way from the one `persona_name_ok` already documents:
 personas are lowercase-only *because* a case-insensitive filesystem would let `DevOps` reach
@@ -195,6 +200,29 @@ throwing the first away.
 So: the string rules and the two coin-toss `alive` defaults are worth fixing now, because they
 are cheap and they are wrong on every platform's terms. Everything else waits for M3 and lands
 with the rewrite, and charter refuses on Windows in the meantime.
+
+## What is left, in weeks rather than in adjectives
+
+The estimate ADR 0025 rested on had no Windows number in it at all. This is one, with its
+basis written next to it so it can be argued with. It is the work to reach a Windows charter
+as trustworthy as the macOS and Linux ones — not a Windows charter that starts.
+
+| | work | basis | estimate |
+| --- | --- | --- | --- |
+| **A** | the string rules (#96), one `alive` answer (#102), and the mechanical half of the program lookups (#100: `git.exe`, `join_paths`, `USERPROFILE`, the `SystemRoot` allowlist, `PATHEXT`) | each is a named function with a test that can go red on macOS today | **3–5 days** |
+| **B** | the guards that need a design: ACLs for private state (#98), the reparse-tag walk (#97), the named-pipe channel (#95) | each is a crate choice, a `deny.toml` licence review, and a test that needs a second account on the runner | **3–5 weeks** |
+| **C** | the session lifecycle (#99): end from a wait on the handle, a job object for the kill, `259` | needs either an upstream `portable-pty` change or charter assigning the job after `spawn_command` | **1 week**, and it cannot be trusted until the scenario tests run on Windows |
+| **D** | test infrastructure (#101): `stand-in` rewritten, and the 44 files that reach for `std::os::unix` | 1177 tests; 21 `#!/bin/sh` stand-ins across 12 files; symlink tests need Developer Mode or admin on the runner; `mkfifo` has no counterpart | **2–3 weeks** |
+| **E** | not attempted and not costed here: the Tauri bundle, WebView2 bootstrapping, signing, the tray, single-instance, and the scenario suite on Windows | nothing has been built, so any number would be invented | **unknown** |
+
+**6–10 weeks** for A–D, of which roughly half is test infrastructure that buys no shipped
+behaviour — plus E.
+
+**Taking option C below moves the number.** The reparse-tag work in B is the same work as the
+`openat`-beneath-a-descriptor rewrite ADR 0028 already puts at M3, so doing Windows after that
+rewrite rather than before it takes B down to the ACLs and the pipe. A–D then lands nearer
+**4–6 weeks**. That is the strongest argument for the order this ADR recommends, and it is an
+argument about cost rather than about safety, which is why it comes second.
 
 ## What this costs, stated so it is not a surprise
 
