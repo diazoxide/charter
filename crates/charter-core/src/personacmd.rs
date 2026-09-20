@@ -353,6 +353,21 @@ mod tests {
     }
 
     #[test]
+    fn a_default_in_a_later_section_is_never_the_one_rewritten() {
+        // The span, from the other side: `[persona]` comes FIRST here and holds no `default`,
+        // so the key is INSERTED under it. Without the span the next `default =` in the file
+        // is `[workspace]`'s, and declaring a front door would swap the plane's workspace for
+        // a persona name.
+        let dir = plane("[persona]\n\n[workspace]\ndefault = \"alpha\"\n");
+        persona_file(dir.path(), "devops");
+        run(dir.path(), Some("devops"), false);
+        assert_eq!(
+            manifest(dir.path()),
+            "[persona]\ndefault = \"devops\"\n\n[workspace]\ndefault = \"alpha\"\n"
+        );
+    }
+
+    #[test]
     fn an_existing_key_keeps_its_indent_and_spacing() {
         let dir = plane("[persona]\n  default   =    \"old\"\n");
         persona_file(dir.path(), "devops");
