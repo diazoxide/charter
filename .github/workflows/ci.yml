@@ -7,7 +7,12 @@ on:
 
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseding a PR's run is right: only the newest push is a claim about that branch.
+  # Superseding a run on `main` is NOT: every merge's run is the record for that commit, and
+  # `main` is protected by nine required checks. Cancelling it leaves the commit with no
+  # verified result at all — measured on 2026-09-20, three merges in a row cancelled the
+  # previous merge's run, so three commits on a protected branch were never checked.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
