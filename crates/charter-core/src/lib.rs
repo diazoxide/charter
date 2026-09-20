@@ -6,6 +6,7 @@ pub mod cistate;
 pub mod contain;
 pub mod curate;
 pub mod dispatch;
+pub mod docsrc;
 pub mod doctor;
 pub mod engine;
 pub mod footer;

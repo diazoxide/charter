@@ -270,6 +270,18 @@ enum Command {
         bump: bool,
     },
 
+    /// Which charter this is, what this control plane pins, and whether they agree.
+    ///
+    /// Not charter's three rows, and ADR 0030 is why: two of them — the installed wheel and
+    /// the newest one on PyPI — have no subject for a binary that ships inside the app. What
+    /// this prints instead is the release this build's news corpus comes up to (the only
+    /// number on the same scale as the pin), the build carrying it, and the pin itself. The
+    /// EXIT STATUS is charter's: 0 with no pin, 0 when the pin is met, 1 on drift.
+    Version {
+        #[command(subcommand)]
+        what: Option<VersionCommand>,
+    },
+
     /// Open a chat in a workspace you name, already working on a brief you pass as a quoted
     /// heredoc on stdin. Your harness asks before it runs.
     ///
@@ -512,10 +524,43 @@ enum HarnessCommand {
     List,
 }
 
+/// The two `version` verbs that move a PUBLISHED `charter-cp` release.
+///
+/// Registered rather than left to clap so that each gets a sentence instead of a usage error
+/// — M2.21's rule, applied to the verbs beside it. Their flags are declared as charter
+/// declares them, because a script that passes `--cli` or `--push` must meet the refusal
+/// rather than the parser.
+#[derive(Subcommand)]
+enum VersionCommand {
+    /// Move THIS plane to the version it pins.
+    Sync {
+        /// Conform the machine-global `charter` binary instead.
+        #[arg(long)]
+        cli: bool,
+    },
+    /// Move the pin: install + verify the target, then write `charter.toml`.
+    Bump {
+        /// Version to pin (default: the latest published).
+        #[arg(long)]
+        to: Option<String>,
+        /// Also commit + push the lock.
+        #[arg(long)]
+        push: bool,
+    },
+}
+
 #[derive(Subcommand)]
 enum DocsCommand {
     /// Regenerate `docs/topology.md` from the inventory, and the README's roster block.
     Generate,
+    /// List charter's own documentation topics.
+    List,
+    /// Print one of charter's own documentation pages — served by the install that
+    /// implements it, so it cannot be a version behind the CLI reading it.
+    Show {
+        /// e.g. secrets, personas, git-policy (see `docs list`).
+        topic: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1110,6 +1155,35 @@ fn plane_command(command: &Command) -> Option<ExitCode> {
     Some(ExitCode::from(code))
 }
 
+/// `docs list` and `docs show`, or `None` for any other command.
+///
+/// **Kept apart from the `docs` that generates, and before any plane is resolved.** One
+/// command describes charter and the other describes your repos; they share a noun and
+/// nothing else. `charter/cli.py` hangs all three off one parser and routes them to three
+/// functions, of which only `cmd_docs` reads `config.ROOT` — so `charter docs list` answers
+/// outside a plane, and a Rust binary that resolved a plane first would refuse there.
+///
+/// **M2.21, and the alternative was an honest refusal.** These two were clap usage errors
+/// (exit 2, the parser's own wording) for verbs the tool being replaced has: a Makefile
+/// calling `charter docs list` with a Rust `charter` first on `$PATH` met one. The port costs
+/// a vendored directory and a lookup, because `news` had already built the road — so it is
+/// the port, not a sentence apologising for the gap.
+fn docs_command(command: &Command) -> Option<ExitCode> {
+    use charter_core::docsrc;
+
+    let mut say = speak;
+    let code = match command {
+        Command::Docs {
+            what: Some(DocsCommand::List),
+        } => docsrc::listing(&mut say),
+        Command::Docs {
+            what: Some(DocsCommand::Show { topic }),
+        } => docsrc::show(topic, &mut say),
+        _ => return None,
+    };
+    Some(ExitCode::from(code))
+}
+
 /// `discover`, `clone`, `sync`, `status` and `docs`, or `None` for any other command.
 fn repo_command(command: &Command) -> Option<ExitCode> {
     use charter_core::repocmd::{self, Say};
@@ -1120,7 +1194,12 @@ fn repo_command(command: &Command) -> Option<ExitCode> {
         | Command::Clone { .. }
         | Command::Sync { .. }
         | Command::Status { .. }
-        | Command::Docs { .. } => match Here::read() {
+        // `list` and `show` are NOT here: they read charter's own documentation, which this
+        // binary carries, and asking `Here::read()` first would make them refuse outside a
+        // plane where charter answers. [`docs_command`] takes them before this runs.
+        | Command::Docs {
+            what: None | Some(DocsCommand::Generate),
+        } => match Here::read() {
             Ok(here) => here,
             Err(why) => {
                 eprintln!("charter: {why}");
@@ -1215,10 +1294,9 @@ fn repo_command(command: &Command) -> Option<ExitCode> {
             )
         }
         // Bare `charter docs` and `charter docs generate` are the same command.
-        Command::Docs { what } => {
-            match what {
-                Some(DocsCommand::Generate) | None => {}
-            }
+        Command::Docs {
+            what: None | Some(DocsCommand::Generate),
+        } => {
             let cfg = match charter_core::forge::load_config(&root) {
                 Ok(cfg) => cfg,
                 Err(why) => {
@@ -1374,6 +1452,7 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Reinit
         | Command::News(_)
         | Command::Update { .. }
+        | Command::Version { .. }
         | Command::Discover { .. }
         | Command::Clone { .. }
         | Command::Sync { .. }
@@ -1663,6 +1742,22 @@ fn main() -> ExitCode {
             );
             return ExitCode::SUCCESS;
         }
+        // `charter version`, and it needs no plane: Python builds `config.ROOT` from
+        // `find_root_or_cwd`, so the command answers outside one and simply has no pin to
+        // report. What it answers, and why it is not Python's three rows, is ADR 0030.
+        Command::Version { what } => {
+            use charter_core::adopt;
+            return emit(&match what {
+                Some(VersionCommand::Sync { .. }) => adopt::version_move_refusal("sync"),
+                Some(VersionCommand::Bump { .. }) => adopt::version_move_refusal("bump"),
+                None => {
+                    let cwd =
+                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    let place = charter_core::plane::place(&cwd);
+                    adopt::version_report(place.is_plane.then_some(place.root.as_path()))
+                }
+            });
+        }
         // `news` and `update` say several lines of their own on both streams and choose their
         // own exit status, exactly as `init` does.
         Command::News(news) => {
@@ -1689,6 +1784,11 @@ fn main() -> ExitCode {
     // The repo commands speak line by line as they go — a clone is slow, and the line that
     // says which repo is being fetched is worth nothing once it has been — and choose their
     // own exit status, as their Python counterparts do.
+    // Before the repo commands, because `docs list` and `docs show` need no plane and those
+    // resolve one first.
+    if let Some(code) = docs_command(&cli.command) {
+        return code;
+    }
     if let Some(code) = repo_command(&cli.command) {
         return code;
     }

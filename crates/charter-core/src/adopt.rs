@@ -1,5 +1,4 @@
-//! `charter update`, minus the install: what the versions this plane skipped brought, and what
-//! it has not taken up.
+//! `charter update`, minus the install, and `charter version` — what charter this is.
 //!
 //! `charter/commands_update.py` converges three things that all get called "updating charter",
 //! and they have three different blast radii: the **CLI**, one machine-global install shared by
@@ -12,10 +11,14 @@
 //! three moves a *Python package*: `uv tool install charter-cp==X`, a version PyPI publishes, a
 //! pin naming that version. None of them describes a Rust binary shipped inside a signed app,
 //! which moves as the app moves — through Tauri's updater, in M4 — and cannot be moved by this
-//! command at all. The PR for this milestone puts the question of what `charter update` should
-//! MEAN for such a binary beside M2.12's, which is the same question asked of `charter
-//! version`; until it is answered, this command does the half it can do and says plainly which
-//! half that is.
+//! command at all. So this command does the half it can do and says plainly which half that is.
+//!
+//! **That question — what a version means for a binary that is not a Python package — is
+//! answered here too, and it is why `charter version` shares this file.** M2.12 settled it
+//! (ADR 0030): the binary reports the charter release its news corpus comes up to, the build
+//! carrying it, and the pin, and says so in the same sentence as `update` when the plane pins
+//! something the corpus does not reach. The two commands live together because they turn on one
+//! fact — [`THE_APP_MOVES_IT`] — and a fact stated twice is a fact that drifts.
 //!
 //! **A charter that tells an operator to adopt something it cannot install is worse than one
 //! that says which half it does.** So the refusal is the first line of the output, before the
@@ -63,12 +66,21 @@ pub fn read_baseline(root: &Path) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
+/// The fact `charter update` and `charter version` both turn on, written once.
+///
+/// Two commands saying this in two sentences is two sentences to keep in step, and the day
+/// they disagree an operator gets two different accounts of the same artifact. M2.12 is what
+/// made it a constant rather than a paragraph in one command's output.
+pub const THE_APP_MOVES_IT: &str = "This charter is a binary inside the app, and the app is what moves it — not a package \
+     manager this command can call.";
+
 /// What `charter update` says about the half it does not do.
 ///
 /// One sentence, and it names the mechanism rather than apologising: an operator who reads
 /// "charter update did nothing" and an operator who reads this take different next steps.
-const NOT_THE_INSTALLER: &str = "charter update does not install anything here. This charter is a binary inside the app, \
-     and the app is what moves it — not a package manager this command can call.";
+fn not_the_installer() -> String {
+    format!("charter update does not install anything here. {THE_APP_MOVES_IT}")
+}
 
 /// And what it DOES do, said in the same breath, so the refusal is not the whole message.
 const THE_HALF_IT_DOES: &str = "  the other half is this command's: what the versions this plane skipped brought, and \
@@ -99,7 +111,7 @@ pub struct UpdateArgs {
 /// same reason: "has this plane adopted it?" has no subject outside a control plane.
 pub fn update_report(root: Option<&Path>, args: &UpdateArgs, d: &dyn Dispatch) -> Report {
     let mut report = Report::new_public();
-    report.said.push(Say::Warn(NOT_THE_INSTALLER.to_owned()));
+    report.said.push(Say::Warn(not_the_installer()));
     report.said.push(Say::Info(THE_HALF_IT_DOES.to_owned()));
     if !args.to.is_empty() {
         report.said.push(Say::Warn(NO_TARGET.to_owned()));
@@ -129,6 +141,139 @@ pub fn update_report(root: Option<&Path>, args: &UpdateArgs, d: &dyn Dispatch) -
             ));
         }
     }
+    report
+}
+
+// ------------------------------------------------------------------------------------------
+// `charter version` (M2.12)
+// ------------------------------------------------------------------------------------------
+
+/// What Python prints in the `locked` row when a plane pins nothing — its words, because this
+/// row means the same thing in both implementations.
+const NO_PIN: &str = "— (this control plane pins no version)";
+
+/// `instance.locked_version`: `[charter] version` as the manifest holds it, or `None`.
+///
+/// The pin is reported **as written**, a value that is not a version included: refusing here
+/// would fold "pinned something malformed" into "pinned nothing", and a plane that opted into
+/// conformance would then behave exactly like one that never did.
+///
+/// **One divergence, and it is Python's crash.** `(cfg.get("charter") or {}).get("version")`
+/// raises `AttributeError` when `charter` is a scalar, so `charter version` tracebacks on a
+/// manifest `doctor`'s `version lock` row reports calmly. Answering `None` is this binary
+/// declining to reproduce a traceback; nothing downstream can tell the two apart, because the
+/// only caller is a row that then prints the no-pin line.
+pub fn locked_version(root: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(root.join(crate::plane::MANIFEST)).ok()?;
+    let doc: toml::Table = text.parse().ok()?;
+    let pinned = doc.get("charter")?.as_table()?.get("version")?.as_str()?;
+    let pinned = crate::memstore::py_strip(pinned);
+    (!pinned.is_empty()).then(|| pinned.to_owned())
+}
+
+/// `charter version`: which charter this is, what the plane asks for, and whether they agree.
+///
+/// **This is a decision, not a port — ADR 0030, and it is the question `adopt`'s own module
+/// note parks beside `charter update`'s.** Python's three rows are three facts about a PYTHON
+/// PACKAGE: the `charter-cp` wheel installed on this machine, the release the plane pins, and
+/// the newest release on PyPI. Two of the three have no subject here. This binary is not
+/// installed from an index, so there is no *installed* wheel to name and no *latest* to
+/// compare against — `charter update` already says why, in the same sentence this does
+/// ([`THE_APP_MOVES_IT`]).
+///
+/// So the command answers the question the rows were for, with the numbers this artifact
+/// actually has:
+///
+/// * `charter` — [`crate::news::shipped_version`], the release this build's news corpus comes
+///   up to. That function's own note is why it stands in for `charter.__version__`: an entry
+///   travels with the code that implements it, so the newest entry a binary ships is the
+///   newest thing that binary brought. **It is the only number here on the same scale as the
+///   pin**, which is what makes a comparison possible at all.
+/// * `build` — `charter-app`'s own version, the artifact carrying it. Two numbers rather than
+///   one because they move independently and an operator debugging a plane needs both: the
+///   first says which charter this behaves like, the second says which build to re-download.
+/// * `pinned` — `[charter] version`, verbatim.
+///
+/// **The verdict does not reuse charter's sentences, and that is deliberate.** Python says *in
+/// sync with the lock* when the numbers match. A Rust charter saying that would claim parity
+/// it does not have: M2 is still porting commands, so a binary whose corpus reaches 0.62.1 is
+/// not everything 0.62.1 does. ADR 0013's rule — the absence of information is not evidence of
+/// health — applies to charter's own claims about itself, so the line states the fact it can
+/// substantiate (*this charter brought X, which is what the plane pins*) and no more.
+///
+/// **The exit status IS charter's**, and that is the part scripts read: 0 with no pin, 0 when
+/// the pin is met, 1 on drift. A wrapper that branches on `charter version` behaves the same
+/// against either implementation even though neither sentence matches — which is what the
+/// differential scenarios compare, since the words legitimately differ.
+pub fn version_report(root: Option<&Path>) -> Report {
+    let mut report = Report::new_public();
+    let brought = crate::news::shipped_version();
+    let pinned = root.and_then(locked_version);
+
+    report.out.push_str(&format!("  charter    {brought}\n"));
+    report
+        .out
+        .push_str(&format!("  build      charter-app {}\n", build_version()));
+    report.out.push_str(&format!(
+        "  pinned     {}\n\n",
+        pinned.as_deref().unwrap_or(NO_PIN)
+    ));
+
+    match pinned {
+        None => {
+            report.said.push(Say::Info(
+                "this control plane pins no charter version, so there is nothing to conform \
+                 to."
+                .to_owned(),
+            ));
+            report.said.push(Say::Info(format!("  {THE_APP_MOVES_IT}")));
+        }
+        Some(pin) if pin == brought => {
+            report.said.push(Say::Ok(format!(
+                "this charter brought {pin}, which is what this control plane pins."
+            )));
+        }
+        Some(pin) => {
+            report.said.push(Say::Warn(format!(
+                "drift: this control plane pins {pin}, and this charter brought {brought}."
+            )));
+            report.said.push(Say::Info(format!("  {THE_APP_MOVES_IT}")));
+            report.said.push(Say::Info(
+                "  conform the plane instead:  move `[charter] version` to the release this \
+                 charter brought, or run the charter-cp the plane names."
+                    .to_owned(),
+            ));
+            report.code = 1;
+        }
+    }
+    report
+}
+
+/// This build's own version — `charter-app`'s, which every crate in the workspace shares.
+fn build_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+/// `charter version sync` and `charter version bump`: what neither of them can do here.
+///
+/// **They are answered rather than left to clap**, for M2.21's reason: a usage error is what a
+/// script meets for a verb the tool being replaced has, and it says nothing about why. Both
+/// move a PUBLISHED `charter-cp` release — `sync` installs one over this machine's binary,
+/// `bump` writes one into `charter.toml` after installing and verifying it — and this binary
+/// is neither installed from an index nor able to verify a wheel it cannot run.
+///
+/// Exit 1, because the operator asked for something that did not happen.
+pub fn version_move_refusal(verb: &str) -> Report {
+    let mut report = Report::new_public();
+    report.said.push(Say::Err(format!(
+        "charter version {verb} moves a published charter-cp release, and this charter is not \
+         one."
+    )));
+    report.said.push(Say::Info(format!("  {THE_APP_MOVES_IT}")));
+    report.said.push(Say::Info(
+        "  what this charter is, and what this plane pins:  charter version".to_owned(),
+    ));
+    report.code = 1;
     report
 }
 
@@ -222,5 +367,136 @@ mod tests {
         let text = said(&update_report(Some(dir.path()), &args, &NoCommands));
         assert!(text.contains("--to names a published version"));
         assert!(text.contains("--bump moves this plane's `[charter] version` pin"));
+    }
+
+    // `charter version` (M2.12, ADR 0030)
+
+    /// A plane whose manifest is `manifest`.
+    fn pinned(manifest: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(crate::plane::MANIFEST), manifest).unwrap();
+        dir
+    }
+
+    #[test]
+    fn the_rows_name_the_charter_this_build_brought_and_the_build_carrying_it() {
+        // Two numbers, not one, and they are different numbers: the corpus reaches a charter
+        // release and the artifact has a version of its own. A row that printed only the
+        // second would answer the pin with a number that cannot be compared to it; a row that
+        // printed only the first would hide which build to re-download.
+        let dir = pinned("");
+        let report = version_report(Some(dir.path()));
+        let brought = crate::news::shipped_version();
+        assert!(!brought.is_empty(), "the corpus names no released version");
+        assert_ne!(
+            brought,
+            build_version(),
+            "this test is vacuous if the two numbers are the same"
+        );
+        assert_eq!(
+            report.out,
+            format!(
+                "  charter    {brought}\n  build      charter-app {}\n  pinned     {NO_PIN}\n\n",
+                build_version()
+            )
+        );
+        assert_eq!(report.code, 0, "pinning nothing is not drift");
+    }
+
+    #[test]
+    fn a_pin_the_corpus_reaches_is_met_and_a_pin_it_does_not_is_drift() {
+        let brought = crate::news::shipped_version();
+        let met = pinned(&format!("[charter]\nversion = \"{brought}\"\n"));
+        let report = version_report(Some(met.path()));
+        assert_eq!(report.code, 0, "{}", said(&report));
+        assert!(
+            said(&report).contains(&format!("this charter brought {brought}, which is what")),
+            "{}",
+            said(&report)
+        );
+        // And NOT charter's own verdict: "in sync with the lock" claims a parity a partial
+        // port does not have (ADR 0013, applied to charter's claims about itself).
+        assert!(!said(&report).contains("in sync with the lock"));
+
+        let adrift = pinned("[charter]\nversion = \"0.44.0\"\n");
+        let report = version_report(Some(adrift.path()));
+        assert_eq!(report.code, 1, "drift is exit 1, as it is in charter");
+        assert!(said(&report).contains("drift: this control plane pins 0.44.0"));
+        assert!(
+            report.out.contains("  pinned     0.44.0\n"),
+            "the row prints the pin as written: {}",
+            report.out
+        );
+    }
+
+    #[test]
+    fn a_pin_is_reported_as_written_and_a_manifest_that_pins_nothing_reads_as_no_pin() {
+        // `instance.locked_version`: as written, malformed included, because folding a bad
+        // pin into "no pin" makes a plane that opted into conformance behave like one that
+        // never did.
+        let junk = pinned("[charter]\nversion = \"  not-a-version  \"\n");
+        assert_eq!(
+            locked_version(junk.path()).as_deref(),
+            Some("not-a-version"),
+            "the value is stripped, not judged"
+        );
+        for manifest in [
+            "",
+            "schema = 1\n",
+            "[charter]\n",
+            "[charter]\nversion = \"\"\n",
+            "[charter]\nversion = \"   \"\n",
+            // `isinstance(v, str)` in Python: a number is not a pin.
+            "[charter]\nversion = 62\n",
+            // `charter` is not a table: Python raises here, and this answers no-pin rather
+            // than reproducing a traceback.
+            "charter = \"nope\"\n",
+            "this is not toml at all [[[\n",
+        ] {
+            let dir = pinned(manifest);
+            assert_eq!(
+                locked_version(dir.path()),
+                None,
+                "{manifest:?} read as a pin"
+            );
+        }
+        assert_eq!(locked_version(Path::new("/nonexistent/plane")), None);
+    }
+
+    #[test]
+    fn outside_a_plane_there_is_no_pin_to_report_and_nothing_is_read() {
+        let report = version_report(None);
+        assert!(report.out.contains(NO_PIN), "{}", report.out);
+        assert_eq!(report.code, 0);
+    }
+
+    #[test]
+    fn moving_a_published_release_is_refused_by_name_and_exits_one() {
+        for verb in ["sync", "bump"] {
+            let report = version_move_refusal(verb);
+            assert_eq!(report.code, 1, "a refusal is not a success");
+            assert!(report.out.is_empty(), "nothing goes to stdout");
+            let text = said(&report);
+            assert!(
+                text.contains(&format!("charter version {verb} moves a published")),
+                "{text}"
+            );
+            assert!(text.contains(THE_APP_MOVES_IT), "{text}");
+        }
+    }
+
+    #[test]
+    fn one_sentence_says_what_moves_this_charter_and_both_commands_use_it() {
+        // The constant exists so `update` and `version` cannot drift into two accounts of one
+        // artifact. This is what holds that: both outputs carry the same bytes.
+        let dir = tempfile::tempdir().unwrap();
+        let update = said(&update_report(
+            Some(dir.path()),
+            &UpdateArgs::default(),
+            &NoCommands,
+        ));
+        let version = said(&version_report(Some(dir.path())));
+        assert!(update.contains(THE_APP_MOVES_IT), "{update}");
+        assert!(version.contains(THE_APP_MOVES_IT), "{version}");
     }
 }

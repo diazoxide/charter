@@ -2316,6 +2316,41 @@ def _a_plane_and_a_worktree_cut_from_it(root: Path) -> None:
     _git(side, "worktree", "add", "-q", "-b", "feature", "sandbox", cwd=root)
 
 
+#: The one `.git` inside the plane copy. The worktree is BESIDE the plane here, not under it,
+#: so its own `.git` is not part of the tree comparison at all — the containment check reads
+#: it before and after instead, which is what a file outside the plane gets.
+BARE_WORKTREE_GIT = {
+    ".git": WORKTREE_GIT[".git"],
+}
+
+
+def _a_plane_whose_marker_was_never_committed_and_a_worktree(root: Path) -> None:
+    """The plane committed WITHOUT its `charter.toml`, and `git worktree add ../sandbox`.
+
+    `charter init` writes the marker and never stages it, so this — not the committed marker
+    above — is what a worktree cut from `main` actually looks like. `git rm --cached` rather
+    than a `.gitignore` entry, because that is the state `init` leaves: the file is untracked
+    and still shows up in `git status`, which is how an operator meets it.
+
+    Only the plane's OWN marker is unstaged. The `daily` fixture carries a second one deep
+    under `workspaces/alpha/tool/`, which stays committed — it is below the caller, never
+    above, so no walk can reach it, and taking it out would change what the fixture is.
+    """
+    side = root.parent
+    _identity(side)
+    _git(side, "init", "-q", "-b", "main", ".", cwd=root)
+    (root / ".gitignore").write_text(".charter/\n")
+    _git(side, "add", "-A", cwd=root)
+    _git(side, "rm", "--cached", "-q", "charter.toml", cwd=root)
+    _git(side, "commit", "-q", "-m", "the plane, with its marker never staged", cwd=root)
+    _git(side, "worktree", "add", "-q", "-b", "feature", "../sandbox", cwd=root)
+    if (side / "sandbox" / "charter.toml").exists():
+        raise SystemExit(
+            "setup: the worktree carries a charter.toml, so this scenario would exercise the "
+            "first walk and say nothing about the second"
+        )
+
+
 WORKTREE_SCENARIOS = [
     Scenario(
         # The proof. Before M2.16 charter-app wrote the memory into `sandbox/workspaces/…`
@@ -2346,6 +2381,50 @@ WORKTREE_SCENARIOS = [
         same_stderr=True,
         stderr_mask=SAVE_MASKS,
         ignore=WORKTREE_GIT,
+    ),
+    # M2.23: the SECOND walk — a worktree that carries no `charter.toml` at all
+    # ----------------------------------------------------------------------------------------
+    #
+    # The two above are the case where the worktree HAS the marker, because the plane committed
+    # it. This is the other one, and it is the common shape rather than the exotic: `charter
+    # init` writes `charter.toml` and never stages it, so a worktree cut from `main` does not
+    # contain one. `plane_of` cannot fire here — the first walk found no marker to redirect —
+    # and before M2.23 the Rust resolver simply stopped, so following charter's own `enter:`
+    # line landed a session in a plane-less directory with no personas and no vault, writing
+    # memory where `git worktree remove --force` deletes it, while `doctor` reported green.
+    #
+    # **The worktree is `../sandbox`, BESIDE the plane copy rather than inside it.** A worktree
+    # under the plane is answered by the first walk — the marker above it — and a scenario
+    # placed there would say nothing about the second at all.
+    Scenario(
+        # The write proof, and the same shape as the M2.16 one above: before the fix the Rust
+        # side resolved no plane, exited non-zero and wrote nothing, so the memory is a file
+        # only python has.
+        name="remember-from-a-worktree-whose-plane-was-never-committed-writes-to-the-plane",
+        plane="daily",
+        setup=_a_plane_whose_marker_was_never_committed_and_a_worktree,
+        python=["workspace", "remember", "The importer drops rows over 4 MB", "-w", "alpha",
+                "--no-sync"],
+        cwd="../sandbox",
+        env={"CHARTER_ROOT": None},
+        ignore=BARE_WORKTREE_GIT,
+    ),
+    Scenario(
+        # `reinit` resolves through `place` — `find_root_or_cwd` — which is the SAME walk in
+        # Python and was a second one here. Its failure mode is the loudest of all: with no
+        # plane resolved, `place` falls back to the working directory, so `reinit` scaffolds a
+        # second plane into the worktree — a write outside this side's plane copy, which the
+        # containment check reports by name.
+        name="reinit-from-a-worktree-whose-plane-was-never-committed-heals-the-plane",
+        plane="daily",
+        setup=_both(_opencode_already_installed,
+                    _a_plane_whose_marker_was_never_committed_and_a_worktree),
+        python=["reinit"],
+        cwd="../sandbox",
+        env={"CHARTER_ROOT": None},
+        pins_the_clock=False,
+        python_writes_outside={OPENCODE_CONTEXT: OPENCODE_CONTEXT_WHY},
+        ignore=BARE_WORKTREE_GIT,
     ),
 ]
 
@@ -3122,6 +3201,240 @@ M28_SCENARIOS = [
 ]
 
 
+# M2.21: charter's own documentation, printed by the install that implements it
+# --------------------------------------------------------------------------------------------
+#
+# `docs list` and `docs show` were clap usage errors. They are ported rather than refused,
+# which means charter-app carries a SECOND copy of charter's `docs/*.md` — vendored from the
+# wheel's `charter/_docs` at the oracle's pinned commit and compiled in by `build.rs`, exactly
+# as `news/` is, and for the reason `charter/docsrc.py` gives: the page a user reads must come
+# from the same install as the behaviour.
+#
+# Two copies need a tie, and it is the same pair `news` uses: one generated scenario per topic
+# renders `docs show <topic>` on both sides byte for byte, and `check_docs_corpus` compares the
+# two corpora as digests before any of them run — because a generated scenario cannot see a
+# page DELETED from the directory it was generated from.
+
+DOCS_DIR = REPO / "crates" / "charter-core" / "docs"
+
+#: Ask the ORACLE what it serves, as a subprocess under the interpreter the scenarios use.
+#: `docsrc.topics()` and not a glob of the directory: what is compared is what `docs show`
+#: would print, and the topic list is the thing that decides that.
+_DOCS_DIGEST = (
+    "import hashlib\n"
+    "from charter import docsrc\n"
+    "root = docsrc.source()\n"
+    "for topic in (docsrc.topics() if root else []):\n"
+    "    print(topic, hashlib.sha256((root / (topic + '.md')).read_bytes()).hexdigest())\n"
+)
+
+#: The one thing in `docs list` that cannot match: Python names the DIRECTORY it read the
+#: pages out of, and charter-app names the binary they are compiled into. The sentence around
+#: it — and every topic in the listing — still has to match byte for byte. A lookbehind, so
+#: `charter documentation (` and `):` are themselves compared rather than masked away.
+DOCS_SOURCE_MASK = [
+    (r"(?<=charter documentation \()[^)]*(?=\):)",
+     "the pages' source is a path into the install carrying them, and the two installs are "
+     "different things: a wheel's charter/_docs, and this binary"),
+]
+
+
+def check_docs_corpus() -> bool:
+    """The vendored `docs/` and the pages the oracle serves are the same pages, byte for byte.
+
+    `check_corpus`'s twin for M2.21, and it exists for the same reason: the per-topic scenarios
+    compare what each side PRINTS, so a page that drifts turns one of them red — but a page
+    that is missing from this repository is in no scenario at all, and a page charter dropped
+    would leave a scenario that still passes against a corpus nobody updated.
+
+    Python's `docs show` prints the file's text, so a digest of the file's bytes is a digest of
+    the whole answer. There is no frontmatter here that a rendered body leaves out, which is
+    what makes this simpler than `news`'s — the digest is belt to the scenarios' braces only
+    for the corpus's SHAPE, not for a part of the page nothing renders.
+    """
+    said = subprocess.run([sys.executable, "-c", _DOCS_DIGEST], capture_output=True, text=True)
+    if said.returncode != 0:
+        print("DIFF docs-corpus: the oracle could not list its pages — " + said.stderr.strip())
+        return False
+    theirs = dict(line.split() for line in said.stdout.splitlines() if line.strip())
+    ours = {
+        p.stem: hashlib.sha256(p.read_bytes()).hexdigest()
+        for p in sorted(DOCS_DIR.glob("*.md"))
+    }
+    if not theirs:
+        print("DIFF docs-corpus: the oracle ships no pages, so nothing was compared")
+        return False
+    problems = []
+    for topic in sorted(set(theirs) - set(ours)):
+        problems.append(f"    only charter has: docs/{topic}.md")
+    for topic in sorted(set(ours) - set(theirs)):
+        problems.append(f"    only charter-app has: crates/charter-core/docs/{topic}.md")
+    for topic in sorted(set(theirs) & set(ours)):
+        if theirs[topic] != ours[topic]:
+            problems.append(f"    differs: {topic}.md")
+    print(("ok   " if not problems else "DIFF ") + f"docs-corpus ({len(theirs)} pages)")
+    for line in problems:
+        print(line)
+    if problems:
+        print("    the two copies of charter's documentation have drifted; see "
+              "crates/charter-core/docs/SOURCE")
+    return not problems
+
+
+def _docs_topics() -> list[str]:
+    """Every topic the vendored corpus carries, in `docsrc.topics()`'s order.
+
+    From the DIRECTORY rather than from the oracle, exactly as `_news_versions` is, so this
+    file keeps working whether or not charter is importable in its own process. The
+    disagreement that leaves — a topic here that the oracle does not serve — is what
+    `check_docs_corpus` is for.
+    """
+    return sorted(p.stem for p in DOCS_DIR.glob("*.md"))
+
+
+#: `docs list` and `docs show`, which need no plane and no clock. The `daily` fixture is here
+#: only because a scenario runs somewhere; nothing either command prints comes out of it.
+DOCS_SCENARIOS = [
+    Scenario(
+        name="docs-list-names-every-page-this-charter-ships",
+        plane="daily",
+        python=["docs", "list"],
+        pins_the_clock=False,
+        stderr_mask=DOCS_SOURCE_MASK,
+    ),
+    *[
+        Scenario(
+            # One per topic. A single page would prove the mechanism; one per page is what
+            # notices a page whose bytes agree and whose LOOKUP does not — a key built from a
+            # filename rather than a stem, or a name with a `-` or a `.` in it that some
+            # generator mangled on the way in.
+            name=f"docs-show-{topic}",
+            plane="daily",
+            python=["docs", "show", topic],
+            pins_the_clock=False,
+        )
+        for topic in _docs_topics()
+    ],
+    Scenario(
+        name="docs-show-refuses-a-topic-that-is-not-one-and-names-the-real-ones",
+        plane="daily",
+        # `persona` is a plausible typo for `personas`, and ADR 0009 says charter classifies
+        # rather than guessing: the refusal must name the topics, not resolve to the near one.
+        python=["docs", "show", "persona"],
+        pins_the_clock=False,
+        refusal="No charter documentation topic named 'persona'.",
+        same_stderr=True,
+    ),
+    Scenario(
+        # The one that is not a typo. `charter docs show ../../etc/passwd` must not be a file
+        # read wearing a documentation command; both implementations answer "that is not a
+        # topic" and neither opens anything.
+        name="docs-show-refuses-a-topic-that-is-a-path-out-of-the-pages",
+        plane="daily",
+        python=["docs", "show", "../../../../../../etc/passwd"],
+        pins_the_clock=False,
+        refusal="No charter documentation topic named",
+        same_stderr=True,
+    ),
+]
+
+
+# M2.12: what `charter version` means when the CLI is not a Python package
+# --------------------------------------------------------------------------------------------
+#
+# ADR 0030. charter's three rows are three facts about a `charter-cp` wheel; two of them have no
+# subject for a binary that ships inside the app, and the one number this binary carries of its
+# own (`charter-app 0.1.0`) counts a different thing from a pin. So the words differ by
+# decision, and what these scenarios compare is the half that must NOT: the **exit status**, in
+# each of the three states a script branches on.
+#
+# **A scenario whose stdout and stderr both carry a `_differs` note asserts less than most here,
+# and that is stated rather than hidden.** What is left is real — charter exits 0 with no pin, 0
+# when the pin is met and 1 on drift, and a wrapper reading `charter version` behaves the same
+# against either implementation — but it is one number, so the three states are all covered
+# rather than one standing in for the rest.
+#
+# **The pin that is MET is `0.62.1` because that is both numbers at once**, and the coincidence
+# is load-bearing enough to name: at the oracle's pinned commit `charter.__version__` and the
+# newest entry in the vendored news corpus are the same string, so one pin puts both
+# implementations in their "pin met" arm. They move together — the corpus and the oracle come
+# from one commit — but they are not the same field, and the day they part this scenario reports
+# an exit-status difference, which is the right place to find out.
+
+#: The number both implementations call "what is running here": `charter.__version__` on the
+#: Python side, the newest entry in the vendored corpus on charter-app's.
+PIN_BOTH_SIDES_MEET = "0.62.1"
+
+#: A release neither side is. Old enough that no future bump makes it accidentally current.
+PIN_NEITHER_SIDE_MEETS = "0.44.0"
+
+VERSION_ROWS_DIFFER = (
+    "charter prints `installed`, `locked` and `latest` — three facts about a charter-cp wheel. "
+    "Two have no subject for a binary that ships inside the app, so charter-app prints the "
+    "charter release its news corpus reaches, the build carrying it, and the pin (ADR 0030)."
+)
+VERSION_VERDICT_DIFFERS = (
+    "charter's verdict names a wheel and points at `charter version sync`, which cannot reach a "
+    "binary inside an app bundle; charter-app says what it brought and how to conform the PLANE. "
+    "It deliberately does NOT reuse `in sync with the lock`, which would claim a parity a "
+    "partial port does not have (ADR 0030)."
+)
+
+
+def _pinning(version: str):
+    """A plane whose `charter.toml` pins *version*, appended to the fixture's own manifest.
+
+    Appended rather than rewritten: the rest of the manifest decides the forge, the persona and
+    the memory share, and a scenario that replaced it would be comparing two commands on a
+    plane no fixture describes.
+    """
+
+    def setup(root: Path) -> None:
+        manifest = root / "charter.toml"
+        manifest.write_text(f'{manifest.read_text()}\n[charter]\nversion = "{version}"\n')
+
+    return setup
+
+
+VERSION_SCENARIOS = [
+    Scenario(
+        name="version-on-a-plane-that-pins-nothing-is-not-drift",
+        plane="daily",
+        python=["version"],
+        pins_the_clock=False,
+        stdout_differs=VERSION_ROWS_DIFFER,
+        stderr_differs=VERSION_VERDICT_DIFFERS,
+    ),
+    Scenario(
+        name="version-on-a-plane-pinning-what-both-sides-are-is-not-drift",
+        plane="daily",
+        setup=_pinning(PIN_BOTH_SIDES_MEET),
+        python=["version"],
+        pins_the_clock=False,
+        stdout_differs=VERSION_ROWS_DIFFER,
+        stderr_differs=VERSION_VERDICT_DIFFERS,
+    ),
+    Scenario(
+        # The one that must agree, and the reason the other two are here: an exit 1 that only
+        # one implementation gives turns a wrapper's `charter version || conform` into a no-op
+        # on the other.
+        #
+        # `refusal` rather than `stderr_differs`, and it says more than the note would: the
+        # harness treats a Python exit that a scenario has not declared as a defect in the
+        # scenario, and the substring it then requires of the RUST stderr is one both sides
+        # write. So what is compared here is that both implementations call this state drift
+        # and both name the pin — the sentences around that phrase are each their own.
+        name="version-on-a-plane-pinning-a-release-neither-side-is-exits-one",
+        plane="daily",
+        setup=_pinning(PIN_NEITHER_SIDE_MEETS),
+        python=["version"],
+        pins_the_clock=False,
+        stdout_differs=VERSION_ROWS_DIFFER,
+        refusal=f"drift: this control plane pins {PIN_NEITHER_SIDE_MEETS}",
+    ),
+]
+
+
 SCENARIOS = [
     *INIT_SCENARIOS,
     *LADDER_SCENARIOS,
@@ -3780,6 +4093,8 @@ SCENARIOS = [
     ),
     *SAVE_SCENARIOS,
     *WORKTREE_SCENARIOS,
+    *DOCS_SCENARIOS,
+    *VERSION_SCENARIOS,
 ]
 
 
@@ -4223,6 +4538,9 @@ def main() -> int:
     # Before the scenarios, and whichever of them were asked for: a corpus that has drifted makes
     # every `news --for` scenario report a difference in a rendered body, and this names the file.
     drifted = not check_corpus()
+    # The same, for the pages `docs show` prints: a scenario generated from the vendored
+    # directory cannot see a page that is no longer in it.
+    docs_drifted = not check_docs_corpus()
 
     failed = [
         s.name for s in wanted
@@ -4231,6 +4549,8 @@ def main() -> int:
     ]
     if drifted:
         failed.append("news-corpus")
+    if docs_drifted:
+        failed.append("docs-corpus")
     if args.time_preflight:
         print()
         doctor_scenarios.time_preflight(args.binary, args.time_preflight)
