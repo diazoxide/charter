@@ -114,13 +114,16 @@ impl Records {
         if !self.allowed.load(Ordering::SeqCst) {
             return;
         }
-        self.vouch();
         if let Err(why) = reopen::write(&self.root, record) {
             eprintln!(
                 "charter: what is open in {} was not recorded ({why})",
                 self.root.display()
             );
+            // Not vouched for: the fingerprint would then describe a record charter did not
+            // manage to write, and the point of it is that it describes what is there.
+            return;
         }
+        self.vouch();
     }
 
     /// Re-fingerprints the plane, because charter itself just changed what opening it would
@@ -292,7 +295,6 @@ impl Planes {
         }
         let held = Arc::new(self.hold(id.clone(), root));
         open.insert(id.clone(), Arc::clone(&held));
-        held.reopen(STARTING);
         id
     }
 
