@@ -20,6 +20,12 @@ pub fn py_strip(text: &str) -> &str {
     text.trim_matches(is_python_space)
 }
 
+/// `str.rstrip()` — what a table row is trimmed with, so a row whose last column is empty
+/// carries no trailing spaces into whatever reads it back.
+pub fn py_rstrip(text: &str) -> &str {
+    text.trim_end_matches(is_python_space)
+}
+
 /// The longest a memory title may be: it becomes a heading, an index row and part of a
 /// filename.
 pub const TITLE_MAX: usize = 72;
@@ -431,6 +437,43 @@ pub type Unread = Vec<(std::path::PathBuf, Option<i32>)>;
 /// The bound on one plane file charter reads whole (`contain.MAX_BYTES`). Set where
 /// nothing an editor produces can reach it, so it never fires on anything a person wrote.
 pub const MAX_BYTES: u64 = 1_048_576;
+
+/// How much of a path a sentence repeats back — `contain.PATH_DISPLAY_LIMIT`. A clipped
+/// path is one a reader cannot go to.
+pub const PATH_LIMIT: usize = 1024;
+
+/// What clears a path charter could not check — `workspace.uncheckable_fix`: a symlink loop
+/// names the link, because no permission bit is in its way; anything else is read as a
+/// refusal, which read access clears.
+pub fn uncheckable_fix(code: Option<i32>, path: &str, place: &str) -> String {
+    if crate::recall::is_loop(code) {
+        format!("fix the symlink loop at {path}")
+    } else {
+        format!("restoring read access to {place} clears this")
+    }
+}
+
+/// The one sentence for a path charter could not look at — `workspace.cannot_check`, with
+/// the full stop `say_unread` adds.
+///
+/// Named from the plane's root and made READABLE first. The path is often a filename a chat
+/// wrote: printed as it was, a newline in one writes a line of its own into whatever reads
+/// this, and an escape reaches the terminal (charter #1084).
+pub fn cannot_check(root: &std::path::Path, path: &std::path::Path, code: Option<i32>) -> String {
+    let shown = crate::shown::readable(&path.to_string_lossy(), PATH_LIMIT);
+    let named = crate::shown::readable(
+        &path
+            .strip_prefix(root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .into_owned(),
+        PATH_LIMIT,
+    );
+    format!(
+        "{named} cannot be checked — {}.",
+        uncheckable_fix(code, &shown, "it")
+    )
+}
 
 /// May charter READ `path` as one plane file? `contain.file_refusal`, answered as a yes.
 ///

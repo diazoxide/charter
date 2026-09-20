@@ -90,6 +90,34 @@ enum Command {
         now: Option<String>,
     },
 
+    /// Show the plane's workspaces and the cloned repos in the active one.
+    ///
+    /// The command an operator types when something has already gone wrong, so its output is
+    /// a contract: which plane answered, which rung chose the workspace, and for every clone
+    /// a branch and one of `clean`, `dirty` or `unknown` — never `clean` for a tree charter
+    /// could not read.
+    Status {
+        /// The workspace to detail (default: the active one).
+        #[arg(short = 'w', long = "workspace")]
+        workspace: Option<String>,
+        /// Detail every workspace.
+        #[arg(long)]
+        all: bool,
+    },
+
+    /// Regenerate this plane's `docs/topology.md` — and the README's persona roster block.
+    ///
+    /// Bare `charter docs` generates, as it did long before it grew subcommands: Makefiles in
+    /// the wild call it that way, and making the group require a subcommand would refuse a
+    /// command line planes already have.
+    ///
+    /// `docs list` and `docs show` read charter's OWN documentation and are not this binary's
+    /// — one command describes charter, the other describes your repos.
+    Docs {
+        #[command(subcommand)]
+        what: Option<DocsCommand>,
+    },
+
     /// Commit and push the control plane's own changes over its forge's HTTPS token.
     ///
     /// It stages EVERYTHING pending in the plane's tree, not only what you changed, and prints
@@ -271,6 +299,12 @@ fn place() -> Result<charter_core::plane::Place, String> {
 enum HarnessCommand {
     /// Every profile charter read, the file it came from, and why any was refused.
     List,
+}
+
+#[derive(Subcommand)]
+enum DocsCommand {
+    /// Regenerate `docs/topology.md` from the inventory, and the README's roster block.
+    Generate,
 }
 
 #[derive(Subcommand)]
@@ -809,21 +843,23 @@ fn plane_command(command: &Command) -> Option<ExitCode> {
     Some(ExitCode::from(code))
 }
 
-/// `discover`, `clone` and `sync`, or `None` for any other command.
+/// `discover`, `clone`, `sync`, `status` and `docs`, or `None` for any other command.
 fn repo_command(command: &Command) -> Option<ExitCode> {
     use charter_core::repocmd::{self, Say};
 
     let mut say = |line: Say| eprintln!("{line}");
     let here = match command {
-        Command::Discover { .. } | Command::Clone { .. } | Command::Sync { .. } => {
-            match Here::read() {
-                Ok(here) => here,
-                Err(why) => {
-                    eprintln!("charter: {why}");
-                    return Some(ExitCode::FAILURE);
-                }
+        Command::Discover { .. }
+        | Command::Clone { .. }
+        | Command::Sync { .. }
+        | Command::Status { .. }
+        | Command::Docs { .. } => match Here::read() {
+            Ok(here) => here,
+            Err(why) => {
+                eprintln!("charter: {why}");
+                return Some(ExitCode::FAILURE);
             }
-        }
+        },
         _ => return None,
     };
     let root = here.plane.root().to_path_buf();
@@ -891,6 +927,40 @@ fn repo_command(command: &Command) -> Option<ExitCode> {
             };
             repocmd::sync::sync(&root, scope, &mut say)
         }
+        Command::Status { workspace, all } => {
+            // Resolved ONCE, and the sentence naming the rung comes off the same answer: a
+            // header that named the workspace from one reading and the reason from another
+            // would explain it by naming a rung that did not decide it.
+            let asking = here.asking(workspace.as_deref(), here.workspace_env.as_deref());
+            let chosen = charter_core::active::workspace(&asking);
+            let via = charter_core::active::workspace_source(&here.ids, chosen.rung);
+            let mut out = |line: String| println!("{line}");
+            repocmd::status::status(
+                &repocmd::status::Request {
+                    root: &root,
+                    cwd: &here.cwd,
+                    active: &chosen.name,
+                    via: &via,
+                    all: *all,
+                },
+                &mut out,
+                &mut say,
+            )
+        }
+        // Bare `charter docs` and `charter docs generate` are the same command.
+        Command::Docs { what } => {
+            match what {
+                Some(DocsCommand::Generate) | None => {}
+            }
+            let cfg = match charter_core::forge::load_config(&root) {
+                Ok(cfg) => cfg,
+                Err(why) => {
+                    eprintln!("{}", Say::Plain(why));
+                    return Some(ExitCode::FAILURE);
+                }
+            };
+            repocmd::docs::docs(&root, &charter_core::forge::group_of(&cfg, 0), &mut say)
+        }
         _ => return None,
     };
     Some(ExitCode::from(code))
@@ -907,6 +977,8 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Discover { .. }
         | Command::Clone { .. }
         | Command::Sync { .. }
+        | Command::Status { .. }
+        | Command::Docs { .. }
         | Command::Doctor { .. }
         | Command::GlRefresh { .. }
         | Command::Statusline { .. }

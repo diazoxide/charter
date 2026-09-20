@@ -1,9 +1,11 @@
-//! The repo commands: `discover`, `clone` and `sync`.
+//! The repo commands: `discover`, `clone`, `sync`, `status` and `docs generate`.
 //!
-//! A port of `charter/commands.py`'s `cmd_discover`, `cmd_clone` and `cmd_sync`, and what they
-//! print. Each speaks through a [`Say`] sink rather than printing, so the binary prints a line
-//! the moment it is known — a clone is slow, and "Querying github org `acme` …" is worth
-//! nothing after the fact — while a test reads the same lines back as values.
+//! A port of `charter/commands.py`'s `cmd_discover`, `cmd_clone`, `cmd_sync`, `cmd_status` and
+//! `cmd_docs`, and what they print. Each speaks through a [`Say`] sink rather than printing, so
+//! the binary prints a line the moment it is known — a clone is slow, and "Querying github org
+//! `acme` …" is worth nothing after the fact — while a test reads the same lines back as
+//! values. `status` has a second sink for stdout, because its table IS its answer rather than a
+//! commentary on one.
 //!
 //! # Where this is stricter than Python, on purpose
 //!
@@ -22,11 +24,21 @@
 //! - **A repo name is a name**: letters, digits, `.`, `_`, `-`, starting with a letter or a
 //!   digit — the rule `repos::clones` already reads a workspace by. Python took any single
 //!   path segment, so `-rf` and `.github` cloned there and are refused here.
+//! - **`status` draws only the clones `repos::clones` will stand behind.** A clone whose
+//!   name is not a name, or whose `.git` is a symlink, is a row in Python's table and a
+//!   REFUSAL here — said on stderr, never dropped, because a row that quietly disappears
+//!   reads as "this workspace has one fewer repo".
+//! - **`docs generate` gates the two files it writes.** Python calls `write_text` on
+//!   `docs/topology.md` and `README.md` with no containment check at all, so a plane
+//!   carrying a committed `docs` or `README.md` symlink writes charter's generated content
+//!   through it, outside the plane. Here each is gated as itself and the refusal is said.
 
 use std::fmt;
 
 pub mod clone;
 pub mod discover;
+pub mod docs;
+pub mod status;
 mod submodules;
 pub mod sync;
 
