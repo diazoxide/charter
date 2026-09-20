@@ -59,12 +59,14 @@ pub const CACHE: &str = crate::cistate::CACHE;
 /// The spawn lock, beside the cache. `charter/glstate.py:_lock_file`.
 ///
 /// Its CONTENT is the pid of an in-flight refresh (empty when none) and its MTIME is when
-/// that last changed. Only the "none" half is written here: a refresh that has finished says
-/// so, which is what moves Python's cooldown from the spawn to the completion.
+/// that last changed. A refresh that has finished says so, which is what moves the cooldown
+/// from the spawn to the completion.
 ///
-/// **Nothing in the Rust charter reads it.** It is written because the Python status line on
-/// the same plane does, and a plane the two implementations leave in different states is a
-/// plane whose next render behaves differently depending on which charter last ran.
+/// Written here at the end of a refresh and, with a pid, by [`crate::glstate::maybe_spawn`];
+/// read by [`crate::glstate::in_flight`]. It is the same file the Python status line on the
+/// same plane reads and writes, and it means the same thing on both sides — a plane the two
+/// implementations leave in different states is a plane whose next render behaves differently
+/// depending on which charter last ran.
 pub const LOCK: &str = ".charter/cache/glstate.refreshing";
 
 /// What one clone's branch got: the entry written under its path.
@@ -449,12 +451,27 @@ fn save(plane: &Path, cache: &Map<String, Value>) -> io::Result<()> {
     )
 }
 
-/// Record that no refresh is in flight. `glstate._mark_done` → `_write_lock(None)`.
-fn mark_done(plane: &Path) {
+/// Record an in-flight refresh (`pid`), or that none is (`None`) — `glstate._write_lock`.
+///
+/// Bumps the mtime either way, which is the fact the cooldown is measured from: spawned, or
+/// finished. **Never raises**, as Python's does not — every caller is on a path that must not
+/// fail, and a lock that could not be written degrades to one more refresh, not to a refusal.
+///
+/// One writer for both halves, because the two are one file and the reader
+/// ([`crate::glstate::in_flight`]) reads them together. Only the "none" half had a caller
+/// until charter-app#69: a refresh that has finished says so, which is what moves the
+/// cooldown from the spawn to the completion.
+pub fn write_lock(plane: &Path, pid: Option<u32>) {
     let path = plane.join(LOCK);
     if private_dir(plane, path.parent().unwrap_or(plane)).is_ok() {
-        let _ = write_private(plane, &path, b"");
+        let content = pid.map(|pid| pid.to_string()).unwrap_or_default();
+        let _ = write_private(plane, &path, content.as_bytes());
     }
+}
+
+/// Record that no refresh is in flight. `glstate._mark_done` → `_write_lock(None)`.
+fn mark_done(plane: &Path) {
+    write_lock(plane, None);
 }
 
 /// Create `dir` and every level of it charter has to create, at 0700 —
