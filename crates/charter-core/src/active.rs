@@ -36,6 +36,20 @@
 //! `workspace-the-frames-launch-record-is-a-rung-in-python-and-not-here` — which FAILS the
 //! day the two stop differing, so the note cannot outlive the divergence it records.
 //!
+//! **What that costs, because a decision without its consequence is half a record.** The two
+//! can differ in exactly one state: a chat the tmux frame launched in which nobody has run
+//! `charter workspace use`, so the session pointer is absent and a frame record is present.
+//! There Python reads the launch workspace and this falls through to the terminal pointer and
+//! below — `workspace current` answers `default` while the frame's own panels still show the
+//! workspace they were launched for, a `ws remember` lands under `workspaces/default/`, and
+//! `recall` opens the session on another workspace's memory. And the rung it falls to is the
+//! one charter deliberately outranked: `terminal_id` inside a frame reads a pane charter
+//! created, or the terminal the whole frame inherited from, neither of which is the chat.
+//! One `charter workspace use` closes it for that chat, permanently, by writing the rung
+//! above. The whole of it — the ruling, the cost and the alternative not taken — is
+//! `docs/adr/0032-the-rust-charter-does-not-read-the-frames-launch-record.md` in
+//! `diazoxide/charter`, where every ADR from 0025 lives (charter-app#74).
+//!
 //! # The persona ladder
 //!
 //! `charter/persona.py:1379` (`_resolved`), seven rungs and then nothing:
