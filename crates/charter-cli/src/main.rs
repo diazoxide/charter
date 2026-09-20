@@ -751,17 +751,22 @@ fn instant(now: Option<&str>) -> Result<f64, String> {
 
 /// `save` and `git-policy`, or `None` for any other command.
 ///
-/// **These two resolve the plane the way Python's `config.ROOT` does**
-/// ([`charter_core::plane::command_root`]): on the plane the vault, the personas and the
-/// memory belong to, out of a linked worktree and outward through an enclosing plane's
-/// `workspaces/`. `save`'s two refusals — you are standing in a worktree, you are standing in
-/// a nested plane — only exist once that is the resolution, because they are about the caller
-/// standing somewhere other than the tree being committed.
+/// **They resolve the plane exactly as every other command does**
+/// ([`charter_core::plane::resolve`]): on the plane the vault, the personas and the memory
+/// belong to, out of a linked worktree and outward through an enclosing plane's `workspaces/`.
+/// `save`'s two refusals — you are standing in a worktree, you are standing in a nested plane
+/// — only exist once that is the resolution, because they are about the caller standing
+/// somewhere other than the tree being committed.
 ///
-/// **The gap between this and what every other command does is now one step wide**, and it
-/// was two: M2.9 gave `plane::find_root` the outward hop, so the read commands no longer stop
-/// at the nearest marker and act on a clone's own plane. What is left to these two is the
-/// worktree redirect.
+/// **There is no gap left to describe, and there were two.** M2.9 gave `plane::find_root` the
+/// outward hop, so the read commands stopped acting on a clone's own plane; M2.16 gave it the
+/// worktree redirect and deleted the second resolver these two used to ask, because a step
+/// only `save` takes is a step on which `charter save` and the command beside it name
+/// different planes in the same directory. Python resolves once, through
+/// `charter/root.py:find_root`, for every command it has.
+///
+/// What is still special here is only WHEN the plane is resolved: before the ladder, because
+/// these two want the plane and never the workspace or the persona.
 fn plane_command(command: &Command) -> Option<ExitCode> {
     use charter_core::repocmd::Say;
 
@@ -775,7 +780,7 @@ fn plane_command(command: &Command) -> Option<ExitCode> {
     };
     let root = match command {
         Command::Save { .. } | Command::GitPolicy { .. } => {
-            match charter_core::plane::command_root(&cwd) {
+            match charter_core::plane::resolve(&cwd) {
                 Ok(root) => root,
                 Err(why) => {
                     eprintln!("charter: {why}");
