@@ -18,7 +18,7 @@ export const commands = {
 	firstFrame: () => __TAURI_INVOKE<string | null>("first_frame"),
 	/**
 	 *  What this launch had to go on, and the plane it opened — or the fact that it opened none.
-	 *
+	 * 
 	 *  **Never an error.** The working directory is a HINT: it is resolved once, at startup, to
 	 *  decide which plane the first window opens, and after that a window's plane is explicit and
 	 *  the working directory is never consulted again. A launch that resolved no plane leaves the
@@ -28,7 +28,7 @@ export const commands = {
 	planeAtLaunch: () => __TAURI_INVOKE<Launch>("plane_at_launch"),
 	/**
 	 *  Every plane this process is holding, by id.
-	 *
+	 * 
 	 *  There can be none, and none is an ordinary state: it is what an app launched outside any
 	 *  plane comes up in, and what it returns to when the last project is closed.
 	 */
@@ -36,11 +36,11 @@ export const commands = {
 	/**
 	 *  Lets go of a plane: its record is written, its sessions are ended, and its hook socket is
 	 *  released.
-	 *
+	 * 
 	 *  **Nothing of the plane on disk goes.** Closing a project is the app letting go of it, and
 	 *  a plane closed here can be opened again — by this process or another — with everything
 	 *  still in it.
-	 *
+	 * 
 	 *  There is no `open_plane` beside this one, deliberately. Opening a plane the operator has
 	 *  not approved would run what its record names, and the gate for that is a separate piece of
 	 *  work; until it exists the only plane this process opens is the one its launch resolved.
@@ -215,13 +215,13 @@ export type ChatWorktree = {
 
 /**
  *  What a launch had to go on, and what came of it.
- *
+ * 
  *  **Three states, and none of them is an error.** The app has to come up holding no plane at
  *  all and stay useful — that is what an opener attaches to — and "there is no plane where you
  *  launched me" is a different thing to tell an operator from "you have not opened one yet".
  *  A window double-clicked from the dock has a working directory of `/` and is the second;
  *  `charter` run in a directory that is in no plane is the first.
- *
+ * 
  *  They are told apart by shape rather than by reading a sentence: `plane` set is a plane in
  *  hand, `from` set without it is a directory that is in no plane, and neither is a launch
  *  that was given nothing to go on.
@@ -247,7 +247,7 @@ export type Merged = {
 
 /**
  *  The event the window listens for. One chat, its state, whether it is asking for you.
- *
+ * 
  *  **The plane travels with it, and that is not decoration.** Every plane numbers its chats
  *  from one, so a window holding two of them would be told "session 3 is waiting" twice about
  *  two different chats. The pair is the identity; one half of it is a guess.
@@ -342,7 +342,7 @@ export type Piece = {
 
 /**
  *  Which plane something is acting for.
- *
+ * 
  *  It is the plane's root as the registry resolved it, and it is minted by [`Planes::open`]
  *  alone — a caller hands one back, it never spells one. Two spellings of one directory would
  *  otherwise be two entries in the registry holding two boards for one plane on disk, which
