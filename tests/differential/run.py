@@ -3081,6 +3081,106 @@ def _a_clone_charter_cannot_read(root: Path) -> None:
     (root / "workspaces" / "alpha" / "broken" / ".git").mkdir(parents=True)
 
 
+
+# M2.24/M2.25: a CHECKOUT inside a workspace
+# --------------------------------------------------------------------------------------------
+#
+# The fixture planes cannot carry one. Git will not track a path inside a `.git` directory, so
+# `generate.py` prunes every one of them — which is why `daily`'s `alpha/svc` and `alpha/tool`
+# are ordinary directories on disk and no scenario before this one ever reached the code that
+# wires a clone. M2.22 shipped a warning fired from a line nothing differential could see.
+#
+# So the checkout is made HERE, in a scenario's own setup, identically on both sides: `git
+# init` in place rather than a clone, because a clone records its origin's ABSOLUTE path and
+# that path is `python/…` on one side and `rust/…` on the other.
+
+
+def _a_checkout_inside_a_workspace(root: Path) -> None:
+    """A git checkout at `workspaces/beta/svc`, holding one commit and nothing of charter's.
+
+    `beta` and not `alpha`: `alpha` already holds directories called `svc` and `tool`, and the
+    scenario is about a workspace whose clone charter has never wired.
+    """
+    tree = root / "workspaces" / "beta" / "svc"
+    tree.mkdir(parents=True)
+    _git(root.parent, "init", "-q", "-b", "main", ".", cwd=tree)
+    (tree / "README.md").write_text("# svc\n")
+    _git(root.parent, "add", "-A", cwd=tree)
+    _git(root.parent, "commit", "-q", "-m", "one", cwd=tree)
+
+
+def _a_checkout_holding_a_settings_file_of_yours(root: Path) -> None:
+    """The same checkout, with a `.claude/settings.json` the operator wrote.
+
+    The one state where charter writes NOTHING into a checkout and hides nothing either:
+    naming that path in the block would hide their own untracked file from their own `git
+    status`, which is the failure the ownership rule exists to prevent.
+    """
+    _a_checkout_inside_a_workspace(root)
+    claude = root / "workspaces" / "beta" / "svc" / ".claude"
+    claude.mkdir()
+    (claude / "settings.json").write_text('{"mine": true}\n')
+
+
+#: The checkout's `.git`: an index carrying inode numbers and mtimes no two runs share. What
+#: matters in it — charter's block, and whether anything charter wrote shows in `git status` —
+#: is compared through `facts` instead.
+CHECKOUT_GIT = {
+    "workspaces/beta/svc/.git": "compared through `facts`: the index carries inodes and "
+                                "mtimes no two runs share"
+}
+
+
+def _checkout_facts(root: Path) -> str:
+    """charter's block in the checkout's `info/exclude`, and its `git status`.
+
+    The second half is the guarantee and not decoration: charter is a guest in that
+    repository, and a layer that showed up as untracked noise in the operator's `git status`
+    is the failure the block exists to prevent. Both sides must agree about both.
+
+    **A missing checkout is a failure of the scenario, not an answer.** Without this, a setup
+    that silently made nothing would compare `<none>` against `<none>` and report `ok` for any
+    implementation at all — the exact shape this suite has been caught by twice.
+    """
+    tree = root / "workspaces" / "beta" / "svc"
+    if not (tree / ".git").is_dir():
+        raise SystemExit(
+            "setup: there is no checkout at workspaces/beta/svc, so this scenario would "
+            "compare nothing about a checkout and report ok"
+        )
+    exclude = tree / ".git" / "info" / "exclude"
+    status = subprocess.run(
+        ["git", "-C", str(tree), "status", "--porcelain"], capture_output=True, text=True,
+        env={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "GIT_CONFIG_NOSYSTEM": "1"},
+    ).stdout
+    return (f"exclude:\n{exclude.read_text() if exclude.exists() else '<none>'}\n"
+            f"status:\n{status}")
+
+
+def _a_clone_in_alpha_on_a_branch_nothing_snapshotted(root: Path) -> None:
+    """A real clone in `alpha`, on `main`, that `alpha`'s committed manifest does not name.
+
+    What `fork`'s union is for (charter#81): a workspace with clones and no snapshot of them
+    inherited zero. It is also the only thing that drives the git verb per repo — a
+    `rev-parse` through the hardened runner — since a manifest row needs no git at all.
+    """
+    tree = root / "workspaces" / "alpha" / "svc2"
+    tree.mkdir(parents=True)
+    _git(root.parent, "init", "-q", "-b", "main", ".", cwd=tree)
+    (tree / "README.md").write_text("# svc2\n")
+    _git(root.parent, "add", "-A", cwd=tree)
+    _git(root.parent, "commit", "-q", "-m", "one", cwd=tree)
+
+
+#: `fork` writes nothing into `alpha`, so there is no `facts` to compare instead — what this
+#: clone is here for is entirely the branch name that reaches the fork's manifest, which the
+#: tree comparison reads out of `workspaces/gamma/workspace.json`.
+ALPHA_CLONE_GIT = {
+    "workspaces/alpha/svc2/.git": "read by `fork`, never written; the index carries inodes "
+                                  "and mtimes no two runs share"
+}
+
+
 M28_SCENARIOS = [
     # ---- charter handoff: every refusal in front of the open ----------------------------
     Scenario(
@@ -3456,6 +3556,129 @@ M28_SCENARIOS = [
         plane="daily",
         setup=_a_generated_file_the_plane_stopped_declaring,
         python=["workspace", "reinit", "--all"],
+        same_stderr=True,
+    ),
+    # ---- charter workspace reinit: the CHECKOUT inside a workspace (M2.24, M2.25) --------
+    #
+    # The scenario M2.22 said it could not write. Both sides must write the same layer into
+    # somebody else's repository, hide it in the same `info/exclude` block, and leave that
+    # repository's own `git status` empty.
+    Scenario(
+        name="workspace-reinit-wires-a-checkout-inside-the-workspace",
+        plane="daily",
+        setup=_a_checkout_inside_a_workspace,
+        python=["workspace", "reinit", "beta"],
+        facts=_checkout_facts,
+        ignore=CHECKOUT_GIT,
+        same_stderr=True,
+    ),
+    Scenario(
+        # The same wire reached through `--all`, which is what an operator runs after an
+        # upgrade — and the closing line's arithmetic over a workspace whose repairs are all
+        # inside a checkout.
+        name="workspace-reinit-all-wires-a-checkout-and-counts-its-rows-as-repairs",
+        plane="daily",
+        setup=_a_checkout_inside_a_workspace,
+        python=["workspace", "reinit", "--all"],
+        facts=_checkout_facts,
+        ignore=CHECKOUT_GIT,
+        same_stderr=True,
+    ),
+    Scenario(
+        # The ownership rule, in the one place it costs something: a checkout is somebody
+        # else's repository, so the file is left exactly as it is, NO block is written — a
+        # line for that path would hide their own untracked file from their own `git status`
+        # — and the advice is `git add -f`, never "move it aside".
+        name="workspace-reinit-leaves-a-settings-file-of-yours-in-a-checkout-and-says-how-to-commit-it",
+        plane="daily",
+        setup=_a_checkout_holding_a_settings_file_of_yours,
+        python=["workspace", "reinit", "beta"],
+        facts=_checkout_facts,
+        ignore=CHECKOUT_GIT,
+        same_stderr=True,
+    ),
+    Scenario(
+        # `use` runs `ensure`, and `ensure` scaffolds — so selecting a workspace is also where
+        # a checkout an older charter left picks up the layer. It says nothing about the
+        # repair, so the resulting plane IS the whole of the comparison here.
+        name="workspace-use-wires-a-checkout-inside-the-workspace-on-the-way-in",
+        plane="daily",
+        setup=_a_checkout_inside_a_workspace,
+        python=["workspace", "use", "beta"],
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        facts=_checkout_facts,
+        ignore={
+            **CHECKOUT_GIT,
+            f".charter/persona-state/trace/{FRESH_SESSION}.jsonl": (
+                "charter records every selection in its trace store; this binary writes no "
+                "trace at all, which is a whole store and not this command's to port"
+            ),
+        },
+        same_stderr=True,
+    ),
+    # ---- charter workspace fork ------------------------------------------------------------
+    Scenario(
+        name="workspace-fork-carries-the-charter-the-memory-and-the-open-todos",
+        plane="daily",
+        python=["workspace", "fork", "alpha", "gamma"],
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-fork-of-a-workspace-with-nothing-to-inherit",
+        plane="daily",
+        python=["workspace", "fork", "beta", "gamma"],
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-fork-live-shares-the-fork-from-birth",
+        plane="daily",
+        python=["workspace", "fork", "alpha", "gamma", "--live"],
+        same_stderr=True,
+    ),
+    Scenario(
+        # charter#81's union, and the git verb per repo the whole port is here for: `svc2` is
+        # a clone `alpha`'s manifest does not name, so its branch can only come from a
+        # `rev-parse` — and the fork has to say that the branch it inherited was never
+        # snapshotted.
+        name="workspace-fork-inherits-a-clone-the-manifest-never-recorded-and-says-where-its-branch-came-from",
+        plane="daily",
+        setup=_a_clone_in_alpha_on_a_branch_nothing_snapshotted,
+        python=["workspace", "fork", "alpha", "gamma"],
+        ignore=ALPHA_CLONE_GIT,
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-duplicate-is-the-same-verb-as-fork",
+        plane="daily",
+        python=["workspace", "duplicate", "beta", "gamma"],
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-fork-refuses-a-name-that-is-not-a-workspace-name",
+        plane="daily",
+        python=["workspace", "fork", "alpha", "../esc"],
+        refusal="invalid workspace name '../esc'",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-fork-refuses-a-workspace-forked-onto-its-own-name",
+        plane="daily",
+        python=["workspace", "fork", "alpha", "alpha"],
+        refusal="source and fork names are the same",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-fork-refuses-a-source-this-plane-does-not-have",
+        plane="daily",
+        python=["workspace", "fork", "nowhere", "gamma"],
+        refusal="no workspace 'nowhere'",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-fork-refuses-a-fork-name-that-is-already-a-workspace",
+        plane="daily",
+        python=["workspace", "fork", "alpha", "beta"],
+        refusal="already exists — pick another name or remove it first",
         same_stderr=True,
     ),
     # ---- charter persona default ---------------------------------------------------------

@@ -113,8 +113,15 @@ const TEMP_PATTERN: &str = ".charter-generated.*.tmp";
 /// What charter found, or did, at one generated path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
-    /// Charter wrote it on this pass.
-    Wrote,
+    /// Charter wrote it where there was nothing.
+    Created,
+    /// Charter's own file, brought up to what the plane says now.
+    ///
+    /// Told apart from [`Status::Created`] because `charter workspace reinit` says which one
+    /// happened, and charter's own report does: "wrote" and "refreshed" are different facts
+    /// about a checkout an operator is looking at, and one word for both cannot be compared
+    /// against the other implementation at all.
+    Refreshed,
     /// It was already there, with the content charter's record names.
     Current,
     /// Somebody else's file is at that path. Never rewritten.
@@ -144,11 +151,30 @@ pub enum Hidden {
     Blocked(String, String),
 }
 
+/// What happened to the block itself — charter's row for `.git/info/exclude`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Block {
+    /// The file had no block of charter's and now has one.
+    Created,
+    /// It had one, and the lines in it changed.
+    Refreshed,
+    /// It had one, and it already said what this wire needs.
+    Present,
+    /// No block was written and none was needed: charter owns nothing in this checkout and
+    /// is about to own nothing. A block naming only charter's own marker would be a write
+    /// into a repository charter has nothing in.
+    Untouched,
+}
+
 /// What one wire of a checkout did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Wired {
     pub rows: Vec<Row>,
     pub hidden: Hidden,
+    /// What happened to `.git/info/exclude`. charter reports it as a row of the checkout's
+    /// own beside the files, so a reader can tell "your files are hidden now" from "they
+    /// already were".
+    pub block: Block,
 }
 
 /// Whether a row is one that stops the layer being in force.
@@ -348,6 +374,7 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
         return Wired {
             rows: Vec::new(),
             hidden: Hidden::InPlace,
+            block: Block::Untouched,
         };
     }
     // A `.charter-generated` this repository COMMITS is the one case where charter cannot
@@ -368,6 +395,7 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
                      charter is not a guest."
                 ),
             ),
+            block: Block::Untouched,
         };
     }
     let record = marker_at(tree);
@@ -394,19 +422,25 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
         return Wired {
             rows,
             hidden: Hidden::InPlace,
+            block: Block::Untouched,
         };
     }
     hide.insert(MARKER.to_owned());
 
-    if let Err(why) = block(tree, &hide) {
-        return Wired {
-            rows: Vec::new(),
-            hidden: Hidden::Blocked(
-                why,
-                "Restore write access to that checkout's info/exclude and try again.".to_owned(),
-            ),
-        };
-    }
+    let hid = match block(tree, &hide) {
+        Ok(hid) => hid,
+        Err(why) => {
+            return Wired {
+                rows: Vec::new(),
+                hidden: Hidden::Blocked(
+                    why,
+                    "Restore write access to that checkout's info/exclude and try again."
+                        .to_owned(),
+                ),
+                block: Block::Untouched,
+            };
+        }
+    };
 
     let mut rows = Vec::new();
     let mut wrote: BTreeMap<String, String> = BTreeMap::new();
@@ -428,10 +462,14 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
             }
             // `row` already says foreign, which is the state no write changes.
             Plan::Foreign => {}
-            Plan::Write => match write_into(tree, &rel, &text) {
+            Plan::Create | Plan::Refresh => match write_into(tree, &rel, &text) {
                 Ok(()) => {
                     wrote.insert(rel, digest(&text));
-                    done.status = Status::Wrote;
+                    done.status = if what == Plan::Create {
+                        Status::Created
+                    } else {
+                        Status::Refreshed
+                    };
                 }
                 Err(why) => {
                     done.status = Status::Blocked;
@@ -459,6 +497,7 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
     Wired {
         rows,
         hidden: Hidden::InPlace,
+        block: hid,
     }
 }
 
@@ -491,8 +530,11 @@ fn row(rel: String) -> Row {
 /// What charter will do with one wanted path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Plan {
-    /// Not there, or there with the content charter's record names: charter's to write.
-    Write,
+    /// Not there at all: charter's to write.
+    Create,
+    /// There with the content charter's record names, and the plane has moved on: charter's
+    /// own file to bring up to date.
+    Refresh,
     Current,
     /// The harness's own edit of a file charter generated.
     Theirs,
@@ -507,7 +549,7 @@ fn planned(tree: &Path, rel: &str, text: &str, record: &BTreeMap<String, String>
         // from the rest: a path that is THERE and charter cannot read is not one charter may
         // replace, and reading a dangling link as "absent" would write through it.
         return if path.symlink_metadata().is_err() {
-            Plan::Write
+            Plan::Create
         } else {
             Plan::Foreign
         };
@@ -518,7 +560,7 @@ fn planned(tree: &Path, rel: &str, text: &str, record: &BTreeMap<String, String>
     match record.get(rel) {
         // Charter wrote it and nobody has touched it since: the plane moved, so charter
         // rewrites its own file.
-        Some(had) if *had == digest(&on_disk) => Plan::Write,
+        Some(had) if *had == digest(&on_disk) => Plan::Refresh,
         // A path the harness writes into itself, that charter's record still names.
         Some(_) if COWRITTEN.contains(&rel) => Plan::Theirs,
         _ => Plan::Foreign,
@@ -593,7 +635,7 @@ fn normalise(path: &Path) -> PathBuf {
 /// requirement: appending would duplicate every line on the second wire, and a wire runs on
 /// every launch, so the operator's `info/exclude` would grow without bound while their
 /// `git status` stayed clean.
-fn block(tree: &Path, rels: &BTreeSet<String>) -> Result<(), String> {
+fn block(tree: &Path, rels: &BTreeSet<String>) -> Result<Block, String> {
     let Some(path) = exclude_file(tree) else {
         return Err(format!(
             "{} has no git directory charter can find",
@@ -612,11 +654,21 @@ fn block(tree: &Path, rels: &BTreeSet<String>) -> Result<(), String> {
 
     let new = replace_block(&text, &rendered(&need));
     if new == text {
-        return Ok(());
+        return Ok(Block::Present);
     }
+    // Which of the two writes this is, read off the text BEFORE it changes: a block that was
+    // not there is `created` and one whose lines moved is `refreshed`, which is the word
+    // charter's own report uses and the only thing that tells an operator whether their
+    // files have just become hidden or already were.
+    let had = text.lines().any(|line| line == EXCLUDE_BEGIN);
     std::fs::create_dir_all(path.parent().expect("info/exclude has a parent"))
         .map_err(|e| e.to_string())?;
-    write_whole(&path, &new)
+    write_whole(&path, &new)?;
+    Ok(if had {
+        Block::Refreshed
+    } else {
+        Block::Created
+    })
 }
 
 /// What charter's block in `text` lists now — the temp pattern among them, in either

@@ -80,12 +80,34 @@ pub fn create(request: &Request, say: Sink) -> u8 {
                 let held = before.unwrap_or_else(|| "?".to_string());
                 say(Say::Fail(wscmd::select::locked_msg(name, &held)));
                 // charter says a SHORTER sentence — "Workspace 'x' was created." — when the
-                // lock is a chat's own launch lock, because inside a chat the refusal above
+                // lock is a chat's own LAUNCH lock, because inside a chat the refusal above
                 // has already named how to work there and "start a new session, or --force"
-                // would contradict it with the two routes that lock exists to replace. The
-                // frame's launch record is not a rung this binary reads (the differential
-                // says so by name), so there is no launch lock to recognise and this is the
-                // one sentence. It is the right one everywhere a chat is not what asked.
+                // would contradict it with the two routes that lock exists to replace
+                // (charter#936).
+                //
+                // **The longer sentence stays, and this is the whole reasoning** (M2.24).
+                // charter's `is_locked` has two sources and a chat's launch outranks the
+                // file: `launch_lock()` is `frame.state.own_workspace`, read out of
+                // `.charter/frame/<chat>/state.json`. ADR 0032 records that this binary
+                // does not read `.charter/frame/**` at all — `docs/plane-format.md` rules
+                // that directory the tmux frame's, and the app replaces that frame rather
+                // than inheriting its state — and the differential pins the absence by name
+                // (`workspace-the-frames-launch-record-is-a-rung-in-python-and-not-here`).
+                //
+                // So the gap is not a sentence. It is that a chat's launch lock is a lock
+                // state this binary cannot be IN: inside a chat the frame launched, where
+                // nobody has run `workspace use`, `create --use` does not reach this arm at
+                // all — it SUCCEEDS, because the only lock this binary can see is the file
+                // one and there is none. Printing charter's shorter sentence would mean
+                // wording a state that never arises here while the state itself stays
+                // undetected, which is worse than the gap: a reader would take the sentence
+                // for evidence the rung is read.
+                //
+                // Wherever this arm IS reached, the lock is the FILE — the one a new session
+                // does not carry and `--force` overwrites — so the longer sentence is exactly
+                // true there. Closing it by reading the frame is ruled out by ADR 0032; the
+                // cost is recorded there, with what an operator on a frame-driven plane
+                // actually sees, and it is that ADR's to reopen rather than this command's.
                 say(Say::Info(format!(
                     "Workspace '{name}' was created; start a new session to use it, or re-run \
                      with --force."

@@ -447,7 +447,7 @@ fn wire(root: &Path, ws: &str, say: Sink) {
         let wrote = wired
             .rows
             .iter()
-            .filter(|r| r.status == Status::Wrote)
+            .filter(|r| matches!(r.status, Status::Created | Status::Refreshed))
             .count();
         if wrote > 0 {
             // The files, and the exclude block that hides them: Python counts both.
