@@ -3271,6 +3271,100 @@ CHECKOUT_GIT = {
                                 "mtimes no two runs share"
 }
 
+#: A linked worktree's `.git` is a FILE holding `gitdir: <absolute path>`, which names
+#: `python/…` on one side and `rust/…` on the other. Its block — the clone's, which both read
+#: — is compared through `facts`.
+SIBLING_GIT = {
+    **CHECKOUT_GIT,
+    "workspaces/beta/svc-wt/.git": "a `gitdir:` pointer holding each side's own absolute path",
+}
+
+PIECE_GIT = {
+    **CHECKOUT_GIT,
+    "workspaces/beta/.worktrees/svc/p1/.git": "a `gitdir:` pointer holding each side's own "
+                                              "absolute path",
+}
+
+
+def _a_worktree_of_the_checkout(root: Path, branch: str = "side", at: str = "svc-wt") -> Path:
+    """A linked worktree of `workspaces/beta/svc`, inside the same workspace.
+
+    The whole point of `_shared_rels`: git treats `info/` as shared, so this worktree and the
+    clone read ONE `info/exclude` — the clone's — and a line either one writes into it hides
+    that path in BOTH.
+    """
+    _a_checkout_inside_a_workspace(root)
+    tree = root / "workspaces" / "beta" / "svc"
+    where = root.joinpath("workspaces", "beta", *at.split("/"))
+    where.parent.mkdir(parents=True, exist_ok=True)
+    _git(root.parent, "worktree", "add", "-q", "-b", branch, str(where), cwd=tree)
+    return where
+
+
+def _a_clone_and_a_worktree_of_it(root: Path) -> None:
+    _a_worktree_of_the_checkout(root)
+
+
+def _a_worktree_of_it_holding_a_settings_file_of_yours(root: Path) -> None:
+    """charter#1072: the sibling holds an untracked `.claude/settings.json` of the operator's,
+    so the line the clone's wire would add for ITS `.claude/settings.json` would hide theirs.
+
+    The line is left out, charter's own file is still written and shows in the clone's own
+    `git status`, and the row says whose file stopped it and what clears it.
+    """
+    where = _a_worktree_of_the_checkout(root)
+    (where / ".claude").mkdir()
+    (where / ".claude" / "settings.json").write_text('{"mine": true}\n')
+
+
+def _a_worktree_of_it_holding_your_machine_local_file(root: Path) -> None:
+    """The same, for the MACHINE-LOCAL file — the one case where charter withholds a write.
+
+    A file charter cannot hide is one `git add` from being committed into somebody else's
+    repository, so the shared settings and the mirrored agents are written and this one is
+    not. The plane declares machine-local rules here, because a plane with none generates no
+    such file and the state cannot be reached at all.
+    """
+    (root / ".claude" / "settings.local.json").write_text(
+        json.dumps({"permissions": {"deny": ["Bash(rm -rf /)"]}}, indent=2) + "\n"
+    )
+    where = _a_worktree_of_the_checkout(root)
+    (where / ".claude").mkdir()
+    (where / ".claude" / "settings.local.json").write_text('{"mine": true}\n')
+
+
+def _a_piece_under_the_workspaces_worktrees(root: Path) -> None:
+    """A PIECE at `workspaces/beta/.worktrees/svc/p1` — the layout `charter wt add` cuts.
+
+    `.worktrees` holds no `.git` of its own and the piece sits two levels below the
+    workspace, so nothing that walks the workspace's children finds it: it is reached only by
+    asking git to list the repository's worktrees.
+    """
+    _a_worktree_of_the_checkout(root, branch="p1", at=".worktrees/svc/p1")
+
+
+def _a_repository_whose_worktrees_git_cannot_list(root: Path) -> None:
+    """The clone, a worktree of it, and `.git/worktrees` unreadable (charter#1072).
+
+    Measured on git 2.50.1: `git worktree list` then lists the clone ALONE and exits 0, so
+    its answer is no evidence the list is whole — and the worktree it leaves out gets no
+    layer, no repair and, until this row existed, no mention.
+    """
+    _a_worktree_of_the_checkout(root)
+    os.chmod(root / "workspaces" / "beta" / "svc" / ".git" / "worktrees", 0)
+
+
+def _a_checkout_whose_root_refuses_its_record(root: Path) -> None:
+    """The checkout's ROOT refuses a write while `.git/info` still takes one — charter's
+    ruling H, in the one shape that reaches it.
+
+    The exclude block lands and the record cannot, so charter writes NOTHING: a file on disk
+    whose record the next launch cannot vouch for is a file whose exclude line that launch
+    drops, into somebody else's repository.
+    """
+    _a_checkout_inside_a_workspace(root)
+    os.chmod(root / "workspaces" / "beta" / "svc", 0o555)
+
 
 def _checkout_facts(root: Path) -> str:
     """charter's block in the checkout's `info/exclude`, and its `git status`.
@@ -3283,19 +3377,47 @@ def _checkout_facts(root: Path) -> str:
     that silently made nothing would compare `<none>` against `<none>` and report `ok` for any
     implementation at all — the exact shape this suite has been caught by twice.
     """
-    tree = root / "workspaces" / "beta" / "svc"
-    if not (tree / ".git").is_dir():
-        raise SystemExit(
-            "setup: there is no checkout at workspaces/beta/svc, so this scenario would "
-            "compare nothing about a checkout and report ok"
-        )
-    exclude = tree / ".git" / "info" / "exclude"
-    status = subprocess.run(
-        ["git", "-C", str(tree), "status", "--porcelain"], capture_output=True, text=True,
-        env={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "GIT_CONFIG_NOSYSTEM": "1"},
-    ).stdout
-    return (f"exclude:\n{exclude.read_text() if exclude.exists() else '<none>'}\n"
-            f"status:\n{status}")
+    return _guest_facts(root, ["svc"])
+
+
+def _guest_facts(root: Path, rels: list[str]) -> str:
+    """[`_checkout_facts`] for several guest trees at once — a clone, a worktree beside it,
+    and a piece under `.worktrees/`.
+
+    Each one's `git status` is compared, because the block is SHARED: a line the clone's wire
+    adds hides that path in every tree reading it, and a line one of them drops shows
+    charter's file in another's `git status`. Comparing only the clone would miss exactly the
+    failure `_shared_rels` exists to prevent.
+    """
+    out = []
+    for rel in rels:
+        tree = root.joinpath("workspaces", "beta", *rel.split("/"))
+        if not (tree / ".git").exists():
+            raise SystemExit(
+                f"setup: there is no checkout at workspaces/beta/{rel}, so this scenario "
+                "would compare nothing about it and report ok"
+            )
+        exclude = subprocess.run(
+            ["git", "-C", str(tree), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+            capture_output=True, text=True,
+            env={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "GIT_CONFIG_NOSYSTEM": "1"},
+        ).stdout.strip()
+        block = Path(exclude) / "info" / "exclude" if exclude else None
+        status = subprocess.run(
+            ["git", "-C", str(tree), "status", "--porcelain"], capture_output=True, text=True,
+            env={"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "GIT_CONFIG_NOSYSTEM": "1"},
+        ).stdout
+        text = block.read_text() if block and block.exists() else "<none>"
+        out.append(f"--- {rel}\nexclude:\n{text}\nstatus:\n{status}")
+    return "\n".join(out)
+
+
+def _clone_and_worktree_facts(root: Path) -> str:
+    return _guest_facts(root, ["svc", "svc-wt"])
+
+
+def _piece_facts(root: Path) -> str:
+    return _guest_facts(root, ["svc", ".worktrees/svc/p1"])
 
 
 def _a_clone_in_alpha_on_a_branch_nothing_snapshotted(root: Path) -> None:
@@ -3943,6 +4065,89 @@ M28_SCENARIOS = [
         plane="daily",
         python=["workspace", "fork", "alpha", "beta"],
         refusal="already exists — pick another name or remove it first",
+        same_stderr=True,
+    ),
+    # ---- the four row states only a CHECKOUT can reach (M2.26) ---------------------------
+    #
+    # All four rest on one piece of bookkeeping: `git worktree list` per repository, and then
+    # `git status` per path per other tree before a line is added or left out. Each scenario
+    # below makes a real repository in its own setup, because a fixture plane cannot carry
+    # one — git will not track a path inside a `.git` directory, so `generate.py` prunes every
+    # checkout.
+    Scenario(
+        # The shared block, with nothing of anybody's in the way: a clone and a linked
+        # worktree of it read ONE `info/exclude`, and what each wire writes into it has to
+        # hold what BOTH of them need. A second tree rewriting the block to its own list
+        # alone is how charter's own history dropped the line for `.claude/settings.json`
+        # into somebody else's repository.
+        name="workspace-reinit-wires-a-clone-and-a-worktree-of-it-through-one-shared-block",
+        plane="daily",
+        setup=_a_clone_and_a_worktree_of_it,
+        python=["workspace", "reinit", "beta"],
+        facts=_clone_and_worktree_facts,
+        ignore=SIBLING_GIT,
+        same_stderr=True,
+    ),
+    Scenario(
+        # `unhidden`, charter#1072. The line for charter's own `.claude/settings.json` is
+        # left OUT, because it would hide the operator's untracked file at that path in the
+        # sibling. charter's file is still written, and shows in this checkout's own `git
+        # status` — which `facts` compares, so a port that hid it anyway is red.
+        name="workspace-reinit-leaves-a-line-out-rather-than-hide-your-file-in-a-sibling-worktree",
+        plane="daily",
+        setup=_a_worktree_of_it_holding_a_settings_file_of_yours,
+        python=["workspace", "reinit", "beta"],
+        facts=_clone_and_worktree_facts,
+        ignore=SIBLING_GIT,
+        same_stderr=True,
+    ),
+    Scenario(
+        # `withheld`, the other half of charter#1072: a MACHINE-LOCAL file charter cannot
+        # hide is one `git add` from being committed into somebody else's repository, so it
+        # is not written at all — while the shared settings and the mirrored agents still
+        # are, and the plane's committed rules still reach the checkout.
+        name="workspace-reinit-withholds-a-machine-local-file-it-cannot-hide-and-writes-the-rest",
+        plane="daily",
+        setup=_a_worktree_of_it_holding_your_machine_local_file,
+        python=["workspace", "reinit", "beta"],
+        facts=_clone_and_worktree_facts,
+        ignore=SIBLING_GIT,
+        same_stderr=True,
+    ),
+    Scenario(
+        # The half the four rows came with, and the one an operator feels: a PIECE at
+        # `.worktrees/<repo>/<piece>` is where `charter wt add` tells a worker to start a
+        # session, and nothing that walks a workspace's children reaches it.
+        name="workspace-reinit-reaches-a-piece-under-the-workspaces-worktrees",
+        plane="daily",
+        setup=_a_piece_under_the_workspaces_worktrees,
+        python=["workspace", "reinit", "beta"],
+        facts=_piece_facts,
+        ignore=PIECE_GIT,
+        same_stderr=True,
+    ),
+    Scenario(
+        # `unlisted`. Measured on git 2.50.1, a git that cannot read `worktrees/` lists the
+        # clone alone and exits 0 — so the worktree it leaves out gets no layer, and passed
+        # over in silence `reinit` would say "nothing to do" over it.
+        name="workspace-reinit-names-a-repository-whose-worktrees-git-could-not-list",
+        plane="daily",
+        setup=_a_repository_whose_worktrees_git_cannot_list,
+        python=["workspace", "reinit", "beta"],
+        facts=_checkout_facts,
+        ignore=SIBLING_GIT,
+        same_stderr=True,
+    ),
+    Scenario(
+        # `unrecorded`, charter's ruling H: the block lands, the record cannot be published,
+        # and NOTHING is written — because a file whose record the next launch cannot vouch
+        # for is a file whose exclude line that launch drops.
+        name="workspace-reinit-writes-nothing-where-it-could-not-record-what-it-would-write",
+        plane="daily",
+        setup=_a_checkout_whose_root_refuses_its_record,
+        python=["workspace", "reinit", "beta"],
+        facts=_checkout_facts,
+        ignore=CHECKOUT_GIT,
         same_stderr=True,
     ),
     # ---- charter workspace restore, and `fork --restore` (M2.26) --------------------------

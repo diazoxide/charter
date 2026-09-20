@@ -1693,6 +1693,7 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Workspace(WorkspaceCommand::Snapshot { .. })
         | Command::Workspace(WorkspaceCommand::Create { .. })
         | Command::Workspace(WorkspaceCommand::Fork { .. })
+        | Command::Workspace(WorkspaceCommand::Restore { .. })
         | Command::Workspace(WorkspaceCommand::Reinit { .. })
         | Command::GitPolicy { .. } => {
             unreachable!("answered before run")

@@ -385,7 +385,8 @@ mod tests {
     /// git, for a test's own fixtures — never through the hardened runner, which is what is
     /// under test.
     fn git(dir: &Path, args: &[&str]) {
-        let out = Command::new("git")
+        let mut command = Command::new("git");
+        command
             .args(args)
             .current_dir(dir)
             .env_clear()
@@ -395,9 +396,8 @@ mod tests {
             .env("GIT_AUTHOR_NAME", "Fixture")
             .env("GIT_AUTHOR_EMAIL", "fixture@example.invalid")
             .env("GIT_COMMITTER_NAME", "Fixture")
-            .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid")
-            .output()
-            .expect("git runs");
+            .env("GIT_COMMITTER_EMAIL", "fixture@example.invalid");
+        let out = crate::forklock::output(&mut command).expect("git runs");
         assert!(
             out.status.success(),
             "git {args:?}: {}",
