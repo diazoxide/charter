@@ -1260,6 +1260,12 @@ mod tests {
                 env: [("PATH".to_owned(), "/usr/bin".to_owned())]
                     .into_iter()
                     .collect(),
+                starts: [(r#"{"program":"/bin/zsh"}"#.to_owned(), String::new())]
+                    .into_iter()
+                    .collect(),
+                profiles: [(r#"{"profile":"work"}"#.to_owned(), String::new())]
+                    .into_iter()
+                    .collect(),
             },
         );
         store.windows = vec![Window {
