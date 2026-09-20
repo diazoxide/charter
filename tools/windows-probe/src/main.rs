@@ -19,6 +19,13 @@
 //!    GROUP on unix. `portable-pty` spawns with `CreateProcessW` and no job object, and
 //!    `WinChild::kill` is `TerminateProcess` on the one process.
 //!
+//! A fourth thing turned up while asking those three, and it comes first because it blocks
+//! them: **ConPTY asks the terminal where the cursor is, and holds the program until it is
+//! told.** `portable-pty` opens the pseudo console with `PSUEDOCONSOLE_INHERIT_CURSOR`, and
+//! the run that found it saw exactly four bytes come out of the pty — `ESC[6n` — and then no
+//! `hello` and no exit, because `cmd.exe` had never been let go. A unix pty owes nothing at
+//! startup. See [`CURSOR_QUERY`].
+//!
 //! Every answer is printed and the probe always exits 0: this is evidence for the M4
 //! inventory, not a gate.
 //!
@@ -93,12 +100,63 @@ fn script(dir: &Path, name: &str, body: &str) -> String {
     name.to_owned()
 }
 
-/// Drains a reader into nothing, so no question is answered by a full pipe.
-fn drain(mut reader: Box<dyn Read + Send>) {
+/// The cursor-position report ConPTY asks for before it lets the program run, and the answer.
+///
+/// **This is what the second run found, and it changes every other question here.**
+/// `portable-pty` opens the pseudo console with `PSUEDOCONSOLE_INHERIT_CURSOR`, so conhost's
+/// first act is to write `ESC[6n` to the terminal and **hold the attached program until the
+/// terminal answers**. The run before this one saw exactly four bytes come out of the pty —
+/// `ESC[6n` — and no `hello` and no exit, because `cmd.exe` had not been let go. A unix pty
+/// owes nothing at startup; ConPTY does, and a session that does not pay it never starts.
+const CURSOR_QUERY: &[u8] = b"\x1b[6n";
+const CURSOR_ANSWER: &[u8] = b"\x1b[1;1R";
+
+/// Reads the terminal into `seen` and answers the cursor query the moment it appears.
+///
+/// `seen` is shared rather than returned at EOF, so a question that times out can still say
+/// what the terminal had said by then — which is how the query was found at all.
+fn read_and_answer(
+    mut reader: Box<dyn Read + Send>,
+    mut writer: Box<dyn std::io::Write + Send>,
+    seen: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+) -> mpsc::Receiver<Duration> {
+    let (say, heard) = mpsc::channel();
     std::thread::spawn(move || {
-        let mut sink = Vec::new();
-        let _ = reader.read_to_end(&mut sink);
+        let started = Instant::now();
+        let mut answered = false;
+        let mut chunk = [0u8; 4096];
+        loop {
+            match reader.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let mut all = seen.lock().unwrap();
+                    all.extend_from_slice(&chunk[..n]);
+                    if !answered && all.windows(CURSOR_QUERY.len()).any(|w| w == CURSOR_QUERY) {
+                        answered = true;
+                        let wrote = writer
+                            .write_all(CURSOR_ANSWER)
+                            .and_then(|()| writer.flush());
+                        println!(
+                            "cursor-query: answered after {:?} ({wrote:?})",
+                            started.elapsed()
+                        );
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        let _ = say.send(started.elapsed());
     });
+    heard
+}
+
+/// Reads and answers, throwing away what it read: for the questions that are not about output.
+fn drain(reader: Box<dyn Read + Send>, writer: Box<dyn std::io::Write + Send>) {
+    let _ = read_and_answer(
+        reader,
+        writer,
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+    );
 }
 
 /// Waits for the program to end, but never longer than [`PATIENCE`].
@@ -146,7 +204,10 @@ fn eof_when_the_program_exits(dir: &Path) {
     let bat = script(dir, "exit7.bat", "@echo off\necho hello\nexit 7\n");
 
     let pair = native_pty_system().openpty(size()).expect("a pty");
-    let mut reader = pair.master.try_clone_reader().expect("a reader");
+    let reader = pair.master.try_clone_reader().expect("a reader");
+    // Taken BEFORE the program starts, because the first thing owed on this platform is owed
+    // before the program has run a line.
+    let writer = pair.master.take_writer().expect("a writer");
 
     let mut command = CommandBuilder::new("cmd.exe");
     command.args(["/c", bat.as_str()]);
@@ -157,24 +218,11 @@ fn eof_when_the_program_exits(dir: &Path) {
 
     println!("pty-child-pid: {:?}", child.process_id());
 
-    // Shared, not only sent at EOF: the first run could not tell "the program never started"
-    // from "it started and never ended", because the only thing it reported about the output
-    // was a count it never got to print.
+    // Shared, not only sent at EOF: the run before this one could not tell "the program never
+    // started" from "it started and never ended", and what settled it was being able to print
+    // what the terminal had said by then.
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
-    let (say, heard) = mpsc::channel();
-    let writing = std::sync::Arc::clone(&seen);
-    std::thread::spawn(move || {
-        let started = Instant::now();
-        let mut chunk = [0u8; 4096];
-        loop {
-            match reader.read(&mut chunk) {
-                Ok(0) => break,
-                Ok(n) => writing.lock().unwrap().extend_from_slice(&chunk[..n]),
-                Err(_) => break,
-            }
-        }
-        let _ = say.send(started.elapsed());
-    });
+    let heard = read_and_answer(reader, writer, std::sync::Arc::clone(&seen));
 
     match ended(&mut child) {
         Some(code) => println!("exit-code: the program exited 7, and portable-pty reports {code}"),
@@ -204,7 +252,10 @@ fn an_exit_code_of_259(dir: &Path) {
     let bat = script(dir, "exit259.bat", "@echo off\nexit 259\n");
 
     let pair = native_pty_system().openpty(size()).expect("a pty");
-    drain(pair.master.try_clone_reader().expect("a reader"));
+    drain(
+        pair.master.try_clone_reader().expect("a reader"),
+        pair.master.take_writer().expect("a writer"),
+    );
 
     let mut command = CommandBuilder::new("cmd.exe");
     command.args(["/c", bat.as_str()]);
@@ -261,7 +312,10 @@ fn what_the_program_started(dir: &Path) {
     );
 
     let pair = native_pty_system().openpty(size()).expect("a pty");
-    drain(pair.master.try_clone_reader().expect("a reader"));
+    drain(
+        pair.master.try_clone_reader().expect("a reader"),
+        pair.master.take_writer().expect("a writer"),
+    );
 
     let mut command = CommandBuilder::new("cmd.exe");
     command.args(["/c", bat.as_str()]);

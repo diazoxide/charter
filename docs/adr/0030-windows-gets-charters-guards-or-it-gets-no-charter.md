@@ -233,11 +233,20 @@ which the module's own doc already says means **render**; `detach_self` gets
 not the same guarantee; and the two unix-only tests are marked as *missing on Windows*, not
 as not applying.
 
-**What is still not known.** `app/src-tauri` had begun compiling when the run aborted, and
-`charter-core`'s own test targets were scheduled but not proven either way — cargo stops
-handing out new units once one fails. The stand-in wall (charter-app#101) is therefore still
-un-counted. Each of these runs moves the frontier by one rung, and that is the shape of the
-remaining work rather than a surprise.
+**What is still not known, and how far the next rungs are.** `app/src-tauri` had begun
+compiling when the run aborted, and `charter-core`'s own test targets were scheduled but not
+proven either way — cargo stops handing out new units once one fails. Counted by hand, so the
+next two runs have something to be checked against rather than discovered:
+
+- **`charter-core`'s test targets: 14 of its 20 integration tests** reach for `stand_in::` or
+  `std::os::unix`, plus the `#[cfg(test)]` modules inside the source. This is the stand-in
+  wall (charter-app#101) and it is the big one.
+- **`app/src-tauri`: 12 sites across three files** — `chats.rs` (8), `panels.rs` (2, its own
+  inline stand-in, which is the duplication charter-app#81 already wanted removed) and
+  `sessions.rs` (2, one of them the `SHELL` fallback above).
+
+Each run moves the frontier by one rung. That is the shape of the remaining work rather than
+a surprise, and it is why the estimate below counts test infrastructure separately.
 
 **The `-c core.hooksPath=/dev/null` guard still bites.** Measured rather than assumed, and
 this is a refutation of a worry rather than a finding: without the flag the planted
@@ -263,18 +272,38 @@ invalidated.**
   not before. `Session::when_it_ends` is built on the opposite.
 - *Refuted.* Dropping a master did **not** block. `ClosePseudoConsole` returned at once in all
   three cases, which the reading had flagged as a hazard for the UI thread.
-- *Unanswered, and the probe says so.* The control — `cmd.exe /c exit7.bat`, which should end
-  at once with `7` — never read as ended either, so the `259` result ("still running after
-  ten seconds") is the same failure and not a second one. Question 3's grandchild wrote
-  nothing at all (`0 bytes` throughout), so whether a kill reaches descendants is not
-  answered. **The first hypothesis was wrong and is recorded as wrong:** an almost-empty
-  environment block would have explained it, but `CommandBuilder::new` calls `get_base_env()`
-  and inherits, so that is not it. What the run cannot distinguish is "the program never
-  started", "the program started and never ended" and "`WinChild::try_wait` cannot tell" —
-  `is_complete` returns `Ok(None)` both for a live process and for a failed
-  `GetExitCodeProcess`. The probe now prints the bytes the pty actually produced and runs the
-  same `.bat` through a plain `std::process::Command` as a baseline, which separates the
-  three. Until that run lands, the honest state of question 3 is *not answered*.
+- *Blocked, by a fourth thing nobody was looking for — and it is the most important sentence
+  in this ADR about sessions.* The exit code, the `259` case and the kill's reach were all
+  reported as "unanswered" in the first run. The second run, with a control outside the pty
+  and the bytes printed, says why in four bytes:
+
+  ```
+  no-pty-baseline: Some(7), stdout "hello", stderr ""
+  pty-child-pid: Some(3184)
+  exit-code: UNANSWERED — 10s and the program had not ended
+  pty-said-by-then: 4 bytes, "\u{1b}[6n"
+  ```
+
+  The same `.bat`, the same working directory, run **without** a pty, exits `7` and prints
+  `hello`. Run **through** ConPTY it produces `ESC[6n` — a cursor-position report request —
+  and then nothing: no `hello`, no exit, for as long as it is watched.
+
+  **ConPTY asks the terminal where the cursor is and holds the program until it is told.**
+  `portable-pty` opens the pseudo console with `PSUEDOCONSOLE_INHERIT_CURSOR`, and that is the
+  consequence. A unix pty owes nothing at startup; ConPTY owes an answer before the program
+  runs a single line, and a session that does not pay it never starts at all. Every other
+  question here was measuring that.
+
+  This is a real constraint on `Session::start` and not a probe artefact. charter's engine
+  does answer a DSR — `alacritty_terminal` raises it and `take_replies` carries it back — but
+  the **ordering** is new: on Windows the writer has to be taken and the reply path live
+  before `spawn_command`, because the first thing owed is owed before there is any output to
+  react to. The probe now answers the query and the next run is what says whether `259` and
+  the kill's reach are real findings or were only ever this one.
+
+  A hypothesis worth recording as **wrong**: an almost-empty environment block would also have
+  explained a program that never ran, but `CommandBuilder::new` calls `get_base_env()` and
+  inherits, so that was never it.
 
 ## The work, as issues
 
@@ -287,7 +316,7 @@ detail:
 | #96 | `segment_ok` accepts four kinds of name Windows resolves elsewhere | string rules, cheap |
 | #97 | every gate asks "is this a symlink", which misses most reparse tags | design |
 | #98 | the `0600`/`0700` on charter's own state silently vanishes | design |
-| #99 | ConPTY breaks the session lifecycle in three places | fix, sized |
+| #99 | ConPTY breaks the session lifecycle, and holds the program until the terminal answers `ESC[6n` | fix, sized |
 | #100 | charter cannot find or run git, and two more lookups share the bugs | fix, sized |
 | #101 | `crates/stand-in` is `cfg(unix)` end to end, so the tests cannot compile | rewrite |
 | #102 | `glstate::alive` and `news::alive` disagree off unix | decide once |
