@@ -168,6 +168,86 @@ fn the_four_bypasses_that_shipped_are_in_the_corpus_and_are_closed() {
             vec!["cat".to_string(), vault.to_string()],
         ],
     );
+
+    // ...and the second half of this test's name: each of those command lines is really IN the
+    // recording, so the wide test above is running them against the Python answer and not only
+    // against the expectations written here. Without this, a corpus edit could drop every row
+    // that matters and both tests would still pass.
+    let recorded: Vec<String> = corpus()
+        .iter()
+        .map(|row| row["cmd"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    for cmd in [
+        format!("cat \\) {vault}"),
+        format!("cat ')' {vault}"),
+        format!("cat '()' {vault}"),
+        format!("cat 2>&1 {vault}"),
+        format!("cat {{ {vault}"),
+        format!("{{ cat {vault}; }}"),
+        format!("( true );cat {vault}"),
+    ] {
+        assert!(
+            recorded.contains(&cmd),
+            "{cmd:?} is not in the recorded corpus, so nothing compares it to Python",
+        );
+    }
+}
+
+/// The two rules a PROOF ONLY run found the 64-row corpus could not see.
+///
+/// Dropping `Tok::bare` from [`shellseg::Tok::is_op`], and making the fallback's blank test
+/// `char::is_whitespace` instead of Python's, each changed **no answer** in the recording and
+/// only 236 and 40 of 200,000 in the fuzz. A rule whose evidence is 0.02% of a fuzz is a rule
+/// with no test on the day the fuzz is trimmed, so each gets a row in the corpus — asserted
+/// below — and an assertion here that names what it protects.
+#[test]
+fn a_quoted_group_word_and_a_line_of_separator_controls_are_the_two_thin_rules() {
+    let vault = ".charter/vaults/x.json";
+    let recorded: Vec<String> = corpus()
+        .iter()
+        .map(|row| row["cmd"].as_str().unwrap_or_default().to_owned())
+        .collect();
+
+    // `{` and `(` are boundaries only where the shell INTERPRETS them, and COMMAND POSITION is
+    // the one place where reading a quoted one as an operator changes the answer: the token is
+    // consumed as a group opener instead of standing in the segment as the word it is.
+    for cmd in [
+        format!("'(' cat {vault}"),
+        format!("'{{' cat {vault}"),
+        format!("\\( cat {vault}"),
+        format!("\\{{ cat {vault}"),
+    ] {
+        let word = if cmd.contains('(') { "(" } else { "{" };
+        assert_eq!(
+            shellseg::segment_argv(&cmd),
+            vec![vec![word.to_string(), "cat".to_string(), vault.to_string()]],
+            "{cmd}: a quoted group word stays a word",
+        );
+        assert!(
+            recorded.contains(&cmd),
+            "{cmd:?} is not in the recorded corpus"
+        );
+    }
+
+    // The fallback reads Python's blank set TWICE, and this is the shape that reaches the first
+    // of them: a line of nothing but separator controls, on a command the lexer cannot take
+    // apart, with the broken quote LAST so the newlines in front of it are still boundaries.
+    // `str::split_whitespace` would make that line a segment whose program is U+001C.
+    let cmd = format!("cat {vault}\n\u{1c}\necho \"");
+    let (segments, parsed) = shellseg::segment_argv_parsed(&cmd);
+    assert!(!parsed);
+    assert_eq!(
+        segments,
+        vec![
+            vec!["cat".to_string(), vault.to_string()],
+            vec!["echo".to_string(), "\"".to_string()],
+        ],
+        "a line of separator controls is blank to Python, so it is no command at all",
+    );
+    assert!(
+        recorded.contains(&cmd),
+        "{cmd:?} is not in the recorded corpus"
+    );
 }
 
 /// A substitution is BOTH: the command inside it runs, and its output is the enclosing command's

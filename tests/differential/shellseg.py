@@ -90,6 +90,14 @@ CURATED: list[str] = [
     rf"( cat {VAULT} )",
     rf"cat ( x {VAULT}",
     rf"cat ) x {VAULT}",
+    # ...and in COMMAND position, where a quoted `(`/`{` is the one place reading it as an
+    # operator changes the answer: the guard then loses the word the group's program stands
+    # behind. Added after a PROOF ONLY run measured that dropping `Tok::bare` from `is_op`
+    # changed no answer in the 64 rows here — only 236 of 200,000 in the fuzz.
+    rf"'(' cat {VAULT}",
+    rf"'{{' cat {VAULT}",
+    rf"\( cat {VAULT}",
+    rf"\{{ cat {VAULT}",
     # A substitution is an inner segment AND keeps the outer one accumulating.
     rf"cat $(echo {VAULT})",
     rf"echo $(cat {VAULT})",
@@ -138,6 +146,13 @@ CURATED: list[str] = [
     "\x1c",
     "echo\x1ca",
     f"echo \"\n\x1c\n\" ; cat {VAULT}",
+    # The blank test and `str.split` are two SEPARATE readings of that difference, and only
+    # this shape reaches the first: a line of nothing but separator controls, on a command the
+    # lexer cannot take apart, with the broken quote LAST so the newlines before it are still
+    # boundaries. Added after a PROOF ONLY run measured that making only the blank test
+    # `char::is_whitespace` changed no answer in the 64 rows here — 40 of 200,000 in the fuzz.
+    f"cat {VAULT}\n\x1c\necho \"",
+    f" \x1c\ncat {VAULT}\necho \"",
     # A tab and a carriage return are whitespace; a newline is an operator.
     "echo\ta\rb",
     "echo a\r\ncat b",
