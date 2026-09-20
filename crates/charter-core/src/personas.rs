@@ -206,7 +206,7 @@ pub fn frontmatter(text: &str) -> Vec<(String, String)> {
     let block = memstore::py_strip(&rest[..end]);
     crate::mdsection::split_lines(block)
         .into_iter()
-        .map_while(|line| {
+        .filter_map(|line| {
             let (key, value) = line.split_once(':')?;
             let key = memstore::py_strip(key);
             (!key.is_empty()).then(|| (key.to_string(), memstore::py_strip(value).to_string()))
