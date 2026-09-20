@@ -955,7 +955,10 @@ fn usable(raw: &str) -> Result<PathBuf, String> {
     }
     let path = PathBuf::from(raw);
     // M6
-    // M7
+    // M7 — `..` allowed through; `.` refused instead, so the import still bites.
+    if path.components().any(|part| part == Component::CurDir) {
+        return Err("walks up through '..', and charter's own paths never do".to_owned());
+    }
     Ok(path)
 }
 
@@ -1133,18 +1136,17 @@ impl From<&Store> for OnDisk {
                 // UTF-8. JSON holds a string, so a path that is not one cannot be written
                 // here honestly — and writing the lossy rendering would remember a path that
                 // is not the one that was opened, and later open it.
-                .filter_map(|entry| {
-                    Some(RecentOnDisk {
-                        plane: entry.plane.display().to_string(), // M8
-                        opened: entry.opened,
-                        trust: entry.trust.as_ref().map(|trust| TrustOnDisk {
-                            approved: trust.approved,
-                            plugins: trust.contributed.plugins.clone(),
-                            env: trust.contributed.env.clone(),
-                            starts: trust.contributed.starts.clone(),
-                            profiles: trust.contributed.profiles.clone(),
-                        }),
-                    })
+                .map(|entry| RecentOnDisk {
+                    // M8
+                    plane: entry.plane.to_string_lossy().into_owned(),
+                    opened: entry.opened,
+                    trust: entry.trust.as_ref().map(|trust| TrustOnDisk {
+                        approved: trust.approved,
+                        plugins: trust.contributed.plugins.clone(),
+                        env: trust.contributed.env.clone(),
+                        starts: trust.contributed.starts.clone(),
+                        profiles: trust.contributed.profiles.clone(),
+                    }),
                 })
                 .collect(),
             windows: store
