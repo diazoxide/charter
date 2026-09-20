@@ -130,6 +130,12 @@ export function Palette({
         // palette gets out of the way and the chat in front receives it. `⌘K`/`Ctrl-K` do
         // not hand anything back here — what a terminal makes of those is not this key's
         // question, and it is filed on its own.
+        //
+        // **A held key is not a second press.** A key held down repeats, and without this
+        // the palette would open, close, open, close under a resting finger, spraying
+        // `ESC O Q` at the chat as it went. `repeat` is the browser saying the operator has
+        // not let go, and it is checked on BOTH paths so neither half can flicker.
+        if (e.repeat) return;
         if (up.current) {
           if (e.key === PASS_THROUGH_KEY) handBack();
           return;

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { Palette, opensIt } from "./Palette";
 import type { Offer, Ran } from "./actions";
@@ -383,5 +383,36 @@ describe("the row Enter is aimed at", () => {
     await userEvent.keyboard("{ArrowDown}");
 
     expect(aimed()).toBe("Switch to tab 1");
+  });
+});
+
+describe("a key held down", () => {
+  const SENDS = ready("pane.sendkey", "Send F2 to the chat in front");
+
+  /** A keystroke the browser is repeating because the finger has not come off it. */
+  const held = (key: string) =>
+    window.dispatchEvent(new KeyboardEvent("keydown", { key, repeat: true, bubbles: true }));
+
+  it("does not flicker the palette or spray the key at the chat", async () => {
+    // Without this the repeats alternate: open, hand back, open, hand back, for as long as
+    // the finger rests on F2.
+    const onRun = vi.fn(ok);
+    render(<Palette offers={[...OFFERS, SENDS]} onRun={onRun} />);
+    await open();
+
+    held("F2");
+    held("F2");
+    held("F2");
+
+    expect(onRun).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("does not open it either, so a rested finger is one palette and not a stream", () => {
+    render(<Palette offers={[...OFFERS, SENDS]} onRun={ok} />);
+
+    act(() => void held("F2"));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });
