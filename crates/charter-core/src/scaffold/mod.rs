@@ -261,13 +261,7 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
         return run.outcome(1);
     }
 
-    if let Some(refusal) = repo_is_not_a_plane_yet(
-        root,
-        &InitArgs {
-            plane_is_this_repo: true,
-            ..args.clone()
-        },
-    ) {
+    if let Some(refusal) = repo_is_not_a_plane_yet(root, args) {
         return refusal;
     }
 
