@@ -358,6 +358,41 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
+    fn a_persona_memory_store_it_cannot_list_stops_the_write_and_is_named() {
+        // charter #1084: `Path.glob` answered `[]` for a directory it may not list, so a
+        // count nobody took went into a COMMITTED file as a zero. The roster is left exactly
+        // as it was, the directory is named, and the exit says the roster is stale.
+        use std::os::unix::fs::PermissionsExt;
+        let readme = format!("{}\nstale\n{}\n", roster::BEGIN, roster::END);
+        let dir = plane(Some(&readme));
+        let store = dir.path().join("personas/steward/memory");
+        std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let listable = std::fs::read_dir(&store).is_ok();
+        let (code, said) = run(dir.path());
+        // Restored before the assertions, so a failure still leaves a removable tree.
+        std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert!(
+            !listable,
+            "this test needs a process that cannot read a 000 directory; as root every \
+             directory is listable and it would pass without asking anything"
+        );
+        assert_eq!(code, 1, "the exit says the roster could not be refreshed");
+        assert!(
+            said.iter()
+                .any(|line| matches!(line, Say::Fail(f) if f.contains("cannot be checked"))),
+            "{said:?}"
+        );
+        assert!(
+            std::fs::read_to_string(dir.path().join("README.md"))
+                .unwrap()
+                .contains("stale"),
+            "the block charter could not count is the block it leaves alone"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn a_docs_directory_that_leads_out_of_the_plane_is_refused_not_followed() {
         // Python calls `Path.write_text` here with no containment check at all, so this
         // exact plane has it write charter's generated topology into a directory the plane
