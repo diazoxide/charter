@@ -48,8 +48,10 @@
 //! to re-open.
 //!
 //! **What is closed is the half charter owns alone.** [`no_link_on_the_way`] refuses *every*
-//! link on the way, last component included, and its only callers are the record and the
-//! socket under `.charter/app/` — the paths no Python charter writes. For those,
+//! link on the way, last component included, **and, since M3, a `..` that walks up out of the
+//! root** — which it did not, for the reason its own docstring now carries. Its sharpest
+//! callers are the record and the socket under `.charter/app/`, the paths no Python charter
+//! writes. For those,
 //! [`open_no_link`] and [`create_no_link`] make the kernel answer the link question at the
 //! instant of the open. It is the predicate those callers already declare, enforced
 //! atomically, with no Python behaviour to diverge from and no measurable cost (9.37 µs
@@ -220,7 +222,8 @@ mod tests {
     }
 }
 
-/// Refuses a path reached through a symlink, walking every component below `root`.
+/// Refuses a path that leaves `root`, or is reached through a symlink, walking every
+/// component below it.
 ///
 /// **One implementation, because two drift.** `reopen` needs it for the record it keeps under
 /// `.charter/app/`, and `hookwire` needs it for the socket it binds in the same directory —
@@ -237,6 +240,16 @@ mod tests {
 /// on the way has no honest use and there is nothing here to resolve. A component that does
 /// not exist yet is fine — charter is about to make it.
 ///
+/// **`..` is refused, and `strip_prefix` is the reason it has to be** (M3). That prefix test
+/// is LEXICAL, so `root/.charter/app/../../../../etc/passwd` strips cleanly and the walk
+/// then pushes the `..` literally and lets the KERNEL fold it — every component it stats is
+/// a real directory, none of them is a link, and the function answered `Ok` for a path
+/// nowhere near `root`. `worktree::confine` found that by measuring it
+/// (`workspaces/alpha/../../../../etc/passwd` passed) and put a `ParentDir` check in front
+/// of its own call; every other caller was safe only because it had validated its own
+/// segments first. A function whose name says containment may not depend on that. None of
+/// charter's own paths needs a `..`, so there is nothing to lose by refusing one here.
+///
 /// It is a `stat` and the caller's use is a path open, so a writer racing between the two
 /// still wins. That is structural, shared with every gate here, and belongs to one decision
 /// about `openat`/`O_NOFOLLOW` across the core rather than to this function.
@@ -249,6 +262,16 @@ pub fn no_link_on_the_way(root: &std::path::Path, path: &std::path::Path) -> std
     };
     let mut walked = root.to_path_buf();
     for step in below.components() {
+        if step == std::path::Component::ParentDir {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                format!(
+                    "{} walks up out of {}, and charter's own path never does",
+                    path.display(),
+                    root.display()
+                ),
+            ));
+        }
         walked.push(step);
         match std::fs::symlink_metadata(&walked) {
             Ok(found) if found.file_type().is_symlink() => {
@@ -502,6 +525,49 @@ mod nofollow_tests {
             !outside.path().join("reopen.json").exists(),
             "and nothing was created out there"
         );
+    }
+
+    #[test]
+    fn a_path_that_walks_up_out_of_the_root_is_refused_with_no_link_anywhere() {
+        // **No symlink in this test at all, and that is the point.** `strip_prefix` is
+        // lexical, so the `..` survived into the walk, `symlink_metadata` stat'd real
+        // directories the whole way down, and the function said `Ok` for `/etc/passwd`. The
+        // gate's name promises containment; before M3 it only refused links.
+        let dir = plane();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        // A real file outside the plane, reachable from inside it by name alone. Every
+        // directory on the way exists and none of them is a link, which is exactly why the
+        // old walk had nothing to object to.
+        let outside = tempfile::tempdir().unwrap();
+        let outside = std::fs::canonicalize(outside.path()).unwrap();
+        std::fs::write(outside.join("loot.json"), "{\"chats\":\"theirs\"}\n").unwrap();
+        let up = std::iter::repeat_n("..", root.components().count() + 2)
+            .collect::<Vec<_>>()
+            .join("/");
+        let out = root.join(format!(".charter/app/{up}{}/loot.json", outside.display()));
+
+        let refused = no_link_on_the_way(&root, &out).expect_err("a path that walks up");
+
+        assert_eq!(refused.kind(), std::io::ErrorKind::PermissionDenied);
+        // And through the pair, so neither the read nor the write ever happens.
+        assert!(open_no_link(&root, &out).is_err());
+        assert!(create_no_link(&root, &out).is_err());
+        assert_eq!(
+            std::fs::read_to_string(outside.join("loot.json")).unwrap(),
+            "{\"chats\":\"theirs\"}\n",
+            "and the file out there was neither read through nor written over"
+        );
+    }
+
+    #[test]
+    fn a_path_with_no_walk_up_in_it_is_still_allowed() {
+        // The guard against a refusal so blunt that charter's own paths stop working —
+        // every one of the eighteen callers passes a path built by joining plain names.
+        let dir = plane();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+
+        no_link_on_the_way(&root, &root.join(".charter/app/reopen.json"))
+            .expect("charter's own record is not a walk up");
     }
 }
 

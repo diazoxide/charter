@@ -545,7 +545,11 @@ pub fn read_files(
 }
 
 /// `FileNotFoundError` or `NotADirectoryError` — the two answers charter reads as "not there".
-fn is_absent(e: &std::io::Error) -> bool {
+///
+/// Shared, because "is this path gone" must have ONE answer across the core: read as gone, an
+/// EACCES or an EIO makes charter write where it cannot see, and every other errno proves
+/// nothing about the file.
+pub fn is_absent(e: &std::io::Error) -> bool {
     matches!(
         e.kind(),
         std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory

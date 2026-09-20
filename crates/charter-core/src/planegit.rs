@@ -980,10 +980,18 @@ fn commit_push(request: &Request, add_cmd: &[&str], say: Sink) -> u8 {
             );
         }
     }
-    let staged: Vec<String> = git::run(root, &["diff", "--cached", "--name-only"], git::READ)
+    // **`-z`, and the reason is the secret guard below** (M3). Without it git applies
+    // `core.quotePath`, which is on by default: a staged `personas/café/memory/note.md`
+    // comes back as `"personas/caf\303\251/memory/note.md"` — surrounding quotes and octal
+    // escapes included. The guard still SELECTS that row — the substring test sees
+    // `/memory/` — and then looks for a file under a name that does not exist, finds
+    // nothing, and lets the row through. A path with a `"`, a backslash, a newline or any
+    // byte over 0x7f walks past the guard that way. `-z` turns the quoting off and NUL is
+    // then the only separator, which is also the only one a filename cannot hold.
+    let staged: Vec<String> = git::run(root, &["diff", "--cached", "--name-only", "-z"], git::READ)
         .map(|r| {
             r.out
-                .lines()
+                .split('\0')
                 .filter(|l| !l.trim().is_empty())
                 .map(str::to_string)
                 .collect()
@@ -995,16 +1003,29 @@ fn commit_push(request: &Request, add_cmd: &[&str], say: Sink) -> u8 {
     // The secret guard: refuse if a staged memory/ref file looks like it holds a secret. A
     // memory is pushed to a shared repository, so a credential in one is disclosed the moment
     // the save lands.
+    //
+    // **It reads the STAGED BLOB, which is the thing about to be committed** (M3). Reading
+    // the working-tree file instead asked about bytes that need not be the bytes of the
+    // commit, and the gap is not theoretical — measured with git 2.50.1:
+    //
+    //     git add <memory file with the secret in it>
+    //     git update-index --skip-worktree <that file>     # `add -A` now skips it
+    //     printf 'clean\n' > <that file>
+    //
+    // leaves the secret in the index, `clean` on disk, the row still listed by
+    // `diff --cached --name-only`, and the guard reading `clean`. `git show :<path>` asks
+    // the index instead, so there is no second copy of the file to disagree with. It also
+    // answers for a row with no file on disk at all, which the working-tree read could only
+    // skip.
     let mut flagged: Vec<(String, &'static str)> = Vec::new();
     for path in &staged {
         if !(path.contains("/memory/") || path.contains("/refs/")) {
             continue;
         }
         let file = root.join(path);
-        // Stricter than Python, and the reason is charter #442's shape: a committed
-        // `memory/x -> /etc/passwd` makes the guard read a file outside the plane. Charter
-        // will not read through one, and a memory file it cannot read is not one it will
-        // commit unexamined.
+        // charter #442's shape, kept and asked first so its own sentence is the one a
+        // committed `memory/x -> /etc/passwd` gets: charter will not read through a link
+        // that leaves the plane, and a memory file it cannot read is not one it commits.
         if !crate::contain::within_plane(root, &file) {
             flagged.push((
                 path.clone(),
@@ -1012,10 +1033,47 @@ fn commit_push(request: &Request, add_cmd: &[&str], say: Sink) -> u8 {
             ));
             continue;
         }
-        if let Ok(text) = std::fs::read_to_string(&file)
-            && let Some(kind) = secretshape::secret_kind(&text)
-        {
-            flagged.push((path.clone(), kind));
+        // A link that lands back INSIDE the plane is refused too, and the blob is why: what
+        // a save commits for a link is the link — a blob holding the target's path — so
+        // scanning that blob would answer "no secret" about a file charter never read.
+        // Following it instead would be a guard whose answer is about bytes the commit does
+        // not carry, which is the whole defect this loop was changed to close.
+        if std::fs::symlink_metadata(&file).is_ok_and(|found| found.file_type().is_symlink()) {
+            flagged.push((
+                path.clone(),
+                "it is a link, and what a save commits for one is the link rather than the \
+                 text charter would have read",
+            ));
+            continue;
+        }
+        // `:<path>` is the index's own blob for that path, resolved from the top of the
+        // tree — which is what `--name-only` printed, and what `-C root` puts git in.
+        let staged_blob = format!(":{path}");
+        match git::run(root, &["show", &staged_blob], git::READ) {
+            Ok(run) if run.ok() => {
+                if let Some(kind) = secretshape::secret_kind(&run.out) {
+                    flagged.push((path.clone(), kind));
+                }
+            }
+            // A row charter could not read what is staged for is not one it commits
+            // unexamined — the same rule as the link above, one source along. Before this,
+            // an unreadable row fell through to no flag at all, which is the one direction
+            // a guard may not fail in.
+            //
+            // **No test reaches this arm, and that is measured rather than assumed.** The
+            // obvious way to make one — `update-index --cacheinfo` with a sha that is not
+            // in the object store — does not survive the `add -A` this command runs first:
+            // git stages the DELETION of a path with no file on disk, so the row is not
+            // listed at all. What is left that reaches here is a `git show` that fails for
+            // a reason a fixture cannot manufacture: a corrupt object store, the deadline,
+            // git gone from PATH mid-command. Deleting this arm therefore turns nothing
+            // red, and the next person to mutate it should know that before they conclude
+            // it is dead code.
+            _ => flagged.push((
+                path.clone(),
+                "charter could not read what is staged for it, so it will not commit it \
+                 unexamined",
+            )),
         }
     }
     if !flagged.is_empty() {

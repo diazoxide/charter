@@ -44,17 +44,53 @@ pub enum PlaneError {
 /// path with a link in it names a tree by a route `git` will not echo back, and `save` reports
 /// the tree it is about to commit.
 ///
-/// **One step of Python's walk is still not taken here.** When NO marker is found above
-/// `start`, Python asks a second time whether `start` sits in a linked worktree whose main
-/// tree has a plane above it — the case of a worktree cut from a branch that predates
-/// `charter.toml`, which is not tracked until someone commits it. That fallback needs its own
-/// scenarios and is not M2.16's; a worktree that carries the marker, which is every worktree
-/// of a committed plane, is answered above.
+/// **When nothing is marked above `start` at all, [`worktree_plane_above`] asks the second
+/// question Python asks**, and M2.23 is what brought it over.
 pub fn find_root(start: &Path) -> Result<PathBuf, PlaneError> {
     let here = start.canonicalize().unwrap_or_else(|_| start.to_path_buf());
-    marked_above(&here)
-        .map(|marked| outermost(&plane_of(marked)))
-        .ok_or_else(|| PlaneError::NotFound(start.to_path_buf()))
+    walk(&here).ok_or_else(|| PlaneError::NotFound(start.to_path_buf()))
+}
+
+/// The whole of `charter/root.py:find_root`'s walk, from an already-resolved directory: the
+/// marked ancestor if there is one, else the plane of the main tree this linked worktree was
+/// cut from.
+///
+/// **One function, because `find_root` and [`place`] are `find_root` and `find_root_or_cwd`
+/// in Python and Python writes the walk once.** They differ only in what they do with
+/// `None` — raise, or fall back to the working directory — and every time a step has been
+/// added to one of them and not the other, two commands standing in one directory have named
+/// two different planes (M2.9, then M2.16, then this).
+fn walk(here: &Path) -> Option<PathBuf> {
+    if let Some(marked) = marked_above(here) {
+        return Some(outermost(&plane_of(marked)));
+    }
+    worktree_plane_above(here)
+}
+
+/// `root.py:find_root`'s SECOND walk: this directory sits in a linked worktree whose plane
+/// lives in the repo it was cut from.
+///
+/// **[`plane_of`] cannot reach this case and that is the point.** It redirects a marker it
+/// FOUND, and there is often none to find: `charter init` writes `charter.toml` and never
+/// stages it, so a worktree cut from `main` does not contain one — the common shape, not the
+/// exotic one. A worktree branched from before the plane was committed has it too. Charter's
+/// own `enter:` line then landed a session in a plane-less directory — no personas, no vault,
+/// memory written where `git worktree remove --force` deletes it — while `doctor` reported
+/// everything green, because every surface it asked resolved to that same directory and found
+/// it internally consistent (charter's `root.py` comment, and M2.23 here).
+///
+/// **The main tree's PARENTS are walked too, deliberately.** A worktree cut from a fleet
+/// clone has its main tree at `workspaces/<ws>/<repo>`, so the plane is ABOVE the clone and
+/// not at it.
+///
+/// **The first linked worktree above `start` decides, and nothing below it is tried again.**
+/// That is Python's `break`: once a directory has been identified as a worktree, its main
+/// tree either has a plane or this is not a plane-less worktree landing at all. Walking on
+/// would let a worktree nested inside another worktree answer with the outer one's plane —
+/// an answer neither implementation has ever given.
+fn worktree_plane_above(here: &Path) -> Option<PathBuf> {
+    let main = here.ancestors().find_map(main_worktree_of)?;
+    marked_above(&main).map(|marked| outermost(&plane_of(marked)))
 }
 
 /// The nearest directory at or above `start` holding a `charter.toml`, or `None`.
@@ -108,12 +144,15 @@ pub struct Place {
 /// wherever the variable points. A stale `$CHARTER_ROOT` inherited from another shell would
 /// otherwise put a plane into a directory the operator is not standing in.
 ///
-/// The walk up from `cwd` is [`marked_above`] — the same one [`find_root`] takes, and asked
-/// through the same two steps: out of a linked worktree (`_plane_of`) and outward through an
-/// enclosing plane's `workspaces/` (`_outermost`). So a clone of a plane inside a workspace,
-/// and a worktree cut from a plane, both resolve to the plane that holds them — the answer
-/// every other charter command gives there. `init` used to be a third answer in the same
-/// directory (M2.16); `charter init` standing in a worktree of a plane now reports on the
+/// The walk up from `cwd` is [`walk`] — [`find_root`]'s own, and the whole of it: out of a
+/// linked worktree (`_plane_of`), outward through an enclosing plane's `workspaces/`
+/// (`_outermost`), and — when nothing above `cwd` is marked at all — the main tree this
+/// worktree was cut from ([`worktree_plane_above`]). So a clone of a plane inside a
+/// workspace, a worktree cut from a plane, and a worktree cut from a plane whose marker was
+/// never committed all resolve to the plane that holds them — the answer every other charter
+/// command gives there. `init` used to be a third answer in the same directory (M2.16), and
+/// in a plane-less worktree it scaffolded a SECOND plane into a tree `git worktree remove`
+/// deletes (M2.23); `charter init` standing in a worktree of a plane now reports on the
 /// plane, which is what `charter doctor` standing beside it reports on.
 pub fn place(cwd: &Path) -> Place {
     if let Some(named) = std::env::var_os("CHARTER_ROOT").filter(|v| !v.is_empty()) {
@@ -128,15 +167,15 @@ pub fn place(cwd: &Path) -> Place {
         }
     }
     let here = cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf());
-    if let Some(found) = marked_above(&here) {
-        return Place {
-            root: outermost(&plane_of(found)),
+    match walk(&here) {
+        Some(root) => Place {
+            root,
             is_plane: true,
-        };
-    }
-    Place {
-        root: here,
-        is_plane: false,
+        },
+        None => Place {
+            root: here,
+            is_plane: false,
+        },
     }
 }
 
@@ -372,6 +411,15 @@ mod tests {
     /// arithmetic on purpose ([`main_worktree_of`]) and a unit test that shells out to git
     /// would stop testing that. The differential scenarios run the real thing.
     fn worktree_of(main: &Path, name: &str, at: &Path) -> PathBuf {
+        let at = bare_worktree_of(main, name, at);
+        fs::write(at.join(MANIFEST), "").unwrap();
+        at
+    }
+
+    /// The same, with NO `charter.toml` checked out into it — the common shape, not the
+    /// exotic one: `charter init` writes the marker and never stages it, so a worktree cut
+    /// from `main` does not carry one.
+    fn bare_worktree_of(main: &Path, name: &str, at: &Path) -> PathBuf {
         fs::create_dir_all(main.join(".git/worktrees").join(name)).unwrap();
         fs::create_dir_all(at).unwrap();
         fs::write(
@@ -379,7 +427,6 @@ mod tests {
             format!("gitdir: {}/.git/worktrees/{name}\n", main.display()),
         )
         .unwrap();
-        fs::write(at.join(MANIFEST), "").unwrap();
         at.to_path_buf()
     }
 
@@ -494,5 +541,124 @@ mod tests {
             find_root(dir.path()),
             Err(PlaneError::NotFound(dir.path().to_path_buf()))
         );
+    }
+
+    // M2.23: the second walk. Nothing above the caller is marked at all, because the marker
+    // was never committed — so `plane_of` has no marker to redirect and the first walk is
+    // simply empty. What charter does here is ask whether this is a linked worktree whose
+    // plane is in the repo it was cut from.
+
+    #[test]
+    fn a_worktree_whose_plane_was_never_committed_resolves_to_the_plane_it_was_cut_from() {
+        // The failure this closes: `charter init` writes `charter.toml` and never stages it,
+        // so a worktree cut from `main` carries no marker. A session that followed charter's
+        // own `enter:` line landed in this directory with no personas, no vault, and its
+        // memory written where `git worktree remove --force` deletes it — while `doctor`
+        // reported green, because everything it asked resolved to this same directory.
+        let dir = tempfile::tempdir().unwrap();
+        let top = dir.path().canonicalize().unwrap();
+        let main = top.join("plane");
+        fs::create_dir_all(&main).unwrap();
+        fs::write(main.join(MANIFEST), "").unwrap();
+        let tree = bare_worktree_of(&main, "feature", &top.join("feature"));
+
+        assert!(
+            !tree.join(MANIFEST).exists(),
+            "the worktree must carry no marker, or this tests the FIRST walk"
+        );
+        assert_eq!(find_root(&tree), Ok(main.clone()));
+        assert_eq!(find_root(&tree.join("crates/src")), Ok(main.clone()));
+        // And `init`, which is `find_root_or_cwd` and takes the same walk in Python. Without
+        // it, `charter init` in this directory scaffolds a SECOND plane into the tree
+        // `git worktree remove` deletes, beside the one it was cut from.
+        assert_eq!(
+            place(&tree),
+            Place {
+                root: main,
+                is_plane: true
+            }
+        );
+    }
+
+    #[test]
+    fn a_worktree_of_a_clone_finds_the_plane_above_the_clone_and_not_the_clone() {
+        // Why the MAIN TREE'S PARENTS are walked and not just the main tree: a worktree cut
+        // from a fleet clone has its main tree at `workspaces/<ws>/<repo>`, so the plane is
+        // above the clone. Stopping at the main tree would answer `None` here and land the
+        // session in the plane-less directory this whole walk exists to avoid.
+        let dir = tempfile::tempdir().unwrap();
+        let top = dir.path().canonicalize().unwrap();
+        let plane = top.join("plane");
+        let clone = plane.join("workspaces/ide/acme");
+        fs::create_dir_all(&clone).unwrap();
+        fs::write(plane.join(MANIFEST), "").unwrap();
+        // OUTSIDE the plane: a worktree under it would be answered by the first walk, and
+        // this test would then say nothing about the second.
+        let tree = bare_worktree_of(&clone, "feature", &top.join("feature"));
+
+        assert_eq!(find_root(&tree), Ok(plane));
+    }
+
+    #[test]
+    fn a_worktree_whose_main_tree_has_no_plane_above_it_is_still_not_a_plane() {
+        // The walk answers with a plane or with nothing. A main tree that is not in a plane
+        // must not make one up out of the working directory.
+        let dir = tempfile::tempdir().unwrap();
+        let top = dir.path().canonicalize().unwrap();
+        let main = top.join("repo");
+        fs::create_dir_all(&main).unwrap();
+        let tree = bare_worktree_of(&main, "feature", &top.join("feature"));
+
+        assert_eq!(
+            find_root(&tree),
+            Err(PlaneError::NotFound(tree.clone())),
+            "a worktree of a plane-less repo is not in a plane"
+        );
+        assert_eq!(
+            place(&tree),
+            Place {
+                root: tree,
+                is_plane: false
+            }
+        );
+    }
+
+    #[test]
+    fn the_first_worktree_above_the_caller_decides_and_the_walk_stops_there() {
+        // Python's `break`. `outer` is a worktree of the plane; `inner`, inside it, is a
+        // worktree of an unrelated plane-less repo. Standing in `inner`, the answer is "no
+        // plane" — walking on would hand `inner` the plane behind a tree it is only
+        // physically inside of, which is an answer neither implementation has ever given.
+        let dir = tempfile::tempdir().unwrap();
+        let top = dir.path().canonicalize().unwrap();
+        let plane = top.join("plane");
+        fs::create_dir_all(&plane).unwrap();
+        fs::write(plane.join(MANIFEST), "").unwrap();
+        let other = top.join("other");
+        fs::create_dir_all(&other).unwrap();
+
+        let outer = bare_worktree_of(&plane, "outer", &top.join("outer"));
+        let inner = bare_worktree_of(&other, "inner", &outer.join("inner"));
+
+        assert_eq!(find_root(&outer), Ok(plane), "the outer one still answers");
+        assert_eq!(find_root(&inner), Err(PlaneError::NotFound(inner)));
+    }
+
+    #[test]
+    fn a_marker_above_the_caller_still_wins_over_the_worktree_walk() {
+        // The second walk is a FALLBACK and only that: Python reaches it only after the
+        // first walk found nothing. A worktree that sits inside a plane resolves through the
+        // marker above it, which is the walk `plane_of` and `outermost` are attached to.
+        let dir = tempfile::tempdir().unwrap();
+        let top = dir.path().canonicalize().unwrap();
+        let cut_from = top.join("repo");
+        fs::create_dir_all(&cut_from).unwrap();
+        fs::write(cut_from.join(MANIFEST), "").unwrap();
+        let holding = top.join("holding");
+        fs::create_dir_all(&holding).unwrap();
+        fs::write(holding.join(MANIFEST), "").unwrap();
+        let tree = bare_worktree_of(&cut_from, "feature", &holding.join("feature"));
+
+        assert_eq!(find_root(&tree), Ok(holding));
     }
 }

@@ -225,7 +225,7 @@ fn prune(root: &Path) {
 /// launched in: there it says a chat belongs to its workspace for life and names how to open
 /// one elsewhere. This charter holds no launch record (see the module header), so only this
 /// branch exists.
-fn locked_msg(target: &str, locked: &str) -> String {
+pub(crate) fn locked_msg(target: &str, locked: &str) -> String {
     format!(
         "Workspace is 🔒 locked to '{locked}' for this session — switching to '{target}' \
          mid-session is disabled (never mix workspaces). Start a new session to pick another, \
@@ -245,17 +245,23 @@ fn locked_msg(target: &str, locked: &str) -> String {
 /// always-present workspace a plane lands on when nobody chose, and the unknown-name guard
 /// refused it on every fresh plane.
 ///
-/// **`--create` is REFUSED by this charter rather than creating**, and that is the one
-/// divergence here: creating a workspace means scaffolding it, and `workspace create` has no
-/// port yet ([`crate::wscmd`]'s gap list). A `use --create` that made a bare directory would
-/// be the very state `workspace.ensure` exists to prevent — a workspace that exists and is
-/// not one — and the status line would flag it for reinit for ever.
+/// **`--create` scaffolds** since M2.22. It was refused for as long as the scaffold had no
+/// port, because a `use --create` that made a bare directory would be the very state
+/// `workspace.ensure` exists to prevent — a workspace that exists and is not one, flagged for
+/// reinit by the status line for ever. [`crate::wslayer::scaffold`] is that port, and it is
+/// the same call `workspace create` makes.
+///
+/// **`ensure` runs for an EXISTING workspace too**, exactly as Python's does. "The directory
+/// exists" and "the directory is a workspace" were two different states with nothing keeping
+/// them in step, so selecting one is also where a workspace made by an older charter picks up
+/// what this one writes.
 pub fn use_workspace(
     root: &Path,
     name: &str,
     ids: &Ids,
     create: bool,
     force: bool,
+    now: chrono::DateTime<chrono::Utc>,
     say: Sink,
 ) -> u8 {
     if !crate::contain::workspace_name_ok(name) {
@@ -269,25 +275,29 @@ pub fn use_workspace(
     let existing = plane.workspaces().unwrap_or_default();
     let always = crate::active::plane_default_workspace(root);
     let there = existing.iter().any(|n| n == name) || name == always;
-    if !there {
-        if !create {
-            say(Say::Fail(format!("no workspace named '{name}'.")));
-            let close = near(name, &existing);
-            if !close.is_empty() {
-                say(Say::Info(format!("  Did you mean: {}?", close.join(", "))));
-            } else if !existing.is_empty() {
-                say(Say::Info(format!("  Existing: {}", existing.join(", "))));
-            }
-            say(Say::Info(format!(
-                "  Create it: charter workspace use {name} --create"
-            )));
-            return 1;
+    // An unknown name is a QUESTION rather than an action, and `--create` is what turns it
+    // into one. The two conditions are one decision — "charter was not asked to make this" —
+    // so they read as one.
+    if !there && !create {
+        say(Say::Fail(format!("no workspace named '{name}'.")));
+        let close = near(name, &existing);
+        if !close.is_empty() {
+            say(Say::Info(format!("  Did you mean: {}?", close.join(", "))));
+        } else if !existing.is_empty() {
+            say(Say::Info(format!("  Existing: {}", existing.join(", "))));
         }
-        say(Say::Fail(format!(
-            "`use --create` makes a workspace, and this charter cannot scaffold one yet — \
-             nothing was created and nothing was selected. Create '{name}' with the Python \
-             charter's `charter workspace create {name}`, then select it here."
+        say(Say::Info(format!(
+            "  Create it: charter workspace use {name} --create"
         )));
+        return 1;
+    }
+
+    // Python's `workspace.ensure`, and it runs on BOTH paths: for a name `--create` is
+    // making, and for one that is already there. A workspace charter is about to lock a
+    // session to is one charter has just brought up to the layout it writes.
+    if let Err(why) = crate::wscmd::ensure::ensure(root, name, now, &crate::wscmd::ensure::author())
+    {
+        say(Say::Fail(why));
         return 1;
     }
 
@@ -319,7 +329,14 @@ pub fn use_workspace(
 ///   to read `--force`, which is what was asked: `--force` in a session that had never been
 ///   locked answered "re-locked to 'beta'" beside a lock that did not exist a moment earlier,
 ///   and forcing the workspace the lock already names moves nothing.
-fn announce(root: &Path, name: &str, scope: Scope, before: Option<&str>, ids: &Ids, say: Sink) {
+pub(crate) fn announce(
+    root: &Path,
+    name: &str,
+    scope: Scope,
+    before: Option<&str>,
+    ids: &Ids,
+    say: Sink,
+) {
     if scope == Scope::None {
         say(Say::Warn(format!(
             "Nothing was persisted: this process has no session id and no pane id, so there is \
@@ -392,7 +409,7 @@ fn lock_words(name: &str, locked: Option<&str>) -> String {
 /// that `' '` takes precedence sent the operator to a variable that was not deciding. The
 /// name is bounded to one line because it comes out of a shell, and a line separator in it
 /// would write a line of this output that charter did not.
-fn warn_env_override(name: &str, say: Sink) {
+pub(crate) fn warn_env_override(name: &str, say: Sink) {
     let env = std::env::var(crate::active::WORKSPACE_ENV).unwrap_or_default();
     let env = crate::memstore::py_strip(&env);
     if env.is_empty() || env == name {
@@ -718,7 +735,7 @@ mod tests {
         let ids = ids(Some("s1"), None);
 
         let (code, said) =
-            lines(|say| use_workspace(dir.path(), "fature-x", &ids, false, false, say));
+            lines(|say| use_workspace(dir.path(), "fature-x", &ids, false, false, stamp(), say));
         assert_eq!(code, 1);
         assert!(
             said[0].contains("no workspace named 'fature-x'"),
@@ -736,20 +753,55 @@ mod tests {
         let dir = plane();
         let ids = ids(Some("s1"), None);
         let (code, said) =
-            lines(|say| use_workspace(dir.path(), "default", &ids, false, false, say));
+            lines(|say| use_workspace(dir.path(), "default", &ids, false, false, stamp(), say));
         assert_eq!(code, 0, "{said:?}");
         assert_eq!(is_locked(dir.path(), &ids).as_deref(), Some("default"));
     }
 
+    /// The instant a scaffold stamps `workspace.json` with.
+    fn stamp() -> chrono::DateTime<chrono::Utc> {
+        "2026-05-04T11:32:17Z".parse().unwrap()
+    }
+
     #[test]
-    fn use_create_is_refused_rather_than_leaving_a_bare_directory() {
+    fn use_create_scaffolds_rather_than_leaving_a_bare_directory() {
         let dir = plane();
         let ids = ids(Some("s1"), None);
         let (code, said) =
-            lines(|say| use_workspace(dir.path(), "brand-new", &ids, true, false, say));
-        assert_eq!(code, 1);
-        assert!(said[0].contains("cannot scaffold one yet"), "{said:?}");
-        assert!(!dir.path().join("workspaces/brand-new").exists());
+            lines(|say| use_workspace(dir.path(), "brand-new", &ids, true, false, stamp(), say));
+        assert_eq!(code, 0, "{said:?}");
+        let made = dir.path().join("workspaces/brand-new");
+        // A bare directory is the state this refused for as long as there was no scaffold.
+        // What it must never be is a directory the status line then flags for ever.
+        for rel in [
+            "workspace.md",
+            "workspace.json",
+            "memory/MEMORY.md",
+            "refs/README.md",
+            ".charter-structure",
+        ] {
+            assert!(
+                made.join(rel).exists(),
+                "{rel} is missing from a fresh workspace"
+            );
+        }
+        assert!(!crate::wslayer::needs_reinit(&made));
+        assert_eq!(is_locked(dir.path(), &ids).as_deref(), Some("brand-new"));
+    }
+
+    #[test]
+    fn use_without_create_still_brings_an_existing_workspace_up_to_the_layout() {
+        let dir = plane();
+        // A directory that exists and is not a workspace — what an older charter left.
+        std::fs::create_dir_all(dir.path().join("workspaces/legacy")).unwrap();
+        let ids = ids(Some("s1"), None);
+        let (code, said) =
+            lines(|say| use_workspace(dir.path(), "legacy", &ids, false, false, stamp(), say));
+        assert_eq!(code, 0, "{said:?}");
+        assert!(dir.path().join("workspaces/legacy/workspace.md").exists());
+        assert!(!crate::wslayer::needs_reinit(
+            &dir.path().join("workspaces/legacy")
+        ));
     }
 
     #[test]
@@ -757,7 +809,7 @@ mod tests {
         let dir = plane();
         let ids = ids(Some("s1"), None);
         let (code, said) =
-            lines(|say| use_workspace(dir.path(), "../../esc", &ids, false, false, say));
+            lines(|say| use_workspace(dir.path(), "../../esc", &ids, false, false, stamp(), say));
         assert_eq!(code, 1);
         assert!(said[0].contains("invalid workspace name"), "{said:?}");
     }
