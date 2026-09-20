@@ -238,7 +238,9 @@ fn found(
             rows.push((rel.clone(), Found::Missing));
             continue;
         }
-        if contain::no_link_on_the_way(dir, path.parent().unwrap_or(dir)).is_err() {
+        if contain::no_link_on_the_way(dir, &path).is_err() {
+            // Charter neither reads through it — the digest on the far end is not evidence
+            // the file is charter's — nor writes through it.
             rows.push((rel.clone(), Found::Foreign));
             continue;
         }
@@ -280,10 +282,10 @@ fn unwanted(
     want_all: &BTreeMap<String, String>,
     record: &Record,
 ) -> Vec<String> {
-    let _held = layer::held(plane);
-    let mut _roots: BTreeSet<&str> = GENERATED_ROOTS.into_iter().collect();
+    let held = layer::held(plane);
+    let mut roots: BTreeSet<&str> = GENERATED_ROOTS.into_iter().collect();
     for rel in want_all.keys() {
-        _roots.insert(root_of(rel));
+        roots.insert(root_of(rel));
     }
     let mut out = Vec::new();
     // In the record's own path order, which `BTreeMap` fixes. A set's iteration order would
@@ -292,7 +294,16 @@ fn unwanted(
         if want_all.contains_key(rel) {
             continue;
         }
+        if held && rel.as_str() == layer::SETTINGS {
+            continue;
+        }
+        if !roots.contains(root_of(rel)) {
+            continue;
+        }
         let path = dir.join(rel);
+        if contain::no_link_on_the_way(dir, &path).is_err() {
+            continue;
+        }
         let Ok(have) = std::fs::read_to_string(&path) else {
             continue;
         };
@@ -408,6 +419,15 @@ fn withdraw(
 /// clone.
 pub fn wire(plane: &Path, dir: &Path) -> Vec<Row> {
     let want_all = want(plane);
+    if !writable_directory(plane, dir) {
+        // Writing the layer through a `workspaces/<ws>` that resolves out of the plane would
+        // land the whole thing outside. Refused as one decision, and no tree behind the link
+        // is descended.
+        return vec![Row {
+            rel: layer::MARKER.to_owned(),
+            did: Did::Blocked,
+        }];
+    }
     let mut record = layer::read_record(dir);
     let before = record.clone();
     let mut rows = withdraw(plane, dir, &want_all, &mut record);
@@ -558,7 +578,7 @@ pub fn structure_marker(dir: &Path) -> PathBuf {
 /// one is not charter's.
 pub fn stamp(dir: &Path) -> (u32, Option<Blocker>) {
     let marker = structure_marker(dir);
-    let Ok(file) = std::fs::File::open(&marker) else {
+    let Ok(file) = contain::open_no_link(dir, &marker) else {
         // Absent, a link (`O_NOFOLLOW`'s ELOOP), or unanswered.
         return (0, in_the_way(dir, &marker));
     };
@@ -659,7 +679,12 @@ pub fn in_the_way(base: &Path, p: &Path) -> Option<Blocker> {
             return None;
         };
         if n == last {
-            return None;
+            // The leaf. A link there is in the way wherever it points: no target makes a file
+            // link one charter writes through.
+            return link.then(|| Blocker {
+                path: p.to_path_buf(),
+                why: Why::IsALink,
+            });
         }
         let Ok(meta) = q.metadata() else {
             // The name is THERE — the `symlink_metadata` above answered for it — and resolves
