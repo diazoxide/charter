@@ -109,8 +109,8 @@ const WORDCHARS: &str = concat!(
 /// never reached the tokenizer, so the parsed and the unparseable paths cannot disagree about
 /// what a boundary is. The regex ends in the character class `[(){}]`, which is
 /// [`GROUPING_SPLIT`] here.
-const OPERATOR_ALTERNATION: [&str; 17] = [
-    "<<<", "<<", "<>", "<&", ">>", ">&", ">|", "<", ">", // the redirections, first
+const OPERATOR_ALTERNATION: [&str; 16] = [
+    "<<<", "<<", "<>", "<&", ">>", ">|", "<", ">", // the redirections, first
     "||", "&&", ";;", ";", "|&", "|", "&", "\n", // the control operators
 ];
 
@@ -169,7 +169,7 @@ impl Tok {
 
     /// True when the shell would interpret this token as one of `texts`.
     pub fn is_op(&self, texts: &[&str]) -> bool {
-        self.bare && texts.contains(&self.text.as_str())
+        texts.contains(&self.text.as_str())
     }
 
     /// True when the shell would interpret this token as any operator at all.
@@ -289,7 +289,7 @@ impl Lexer {
     /// too and swallows the rest of the line, so `echo hi#; cat <vault>` — which runs the `cat`
     /// in bash — lexed as a lone `echo hi` and every later command became invisible.
     fn commenters(&self) -> &'static str {
-        if self.state == St::Space { "#" } else { "" }
+        "#"
     }
 
     /// CPython's `shlex.read_token`, with `_ShellLexer`'s overrides folded in.
@@ -821,7 +821,7 @@ fn fallback_segments(cmd: &str) -> Vec<Vec<String>> {
         };
         start = cut + 1;
         // Python's `str.strip()`, which counts U+001C–U+001F as blank where Rust's does not.
-        if line.chars().all(is_python_space) {
+        if line.chars().all(char::is_whitespace) {
             continue;
         }
         match lex(&line) {
