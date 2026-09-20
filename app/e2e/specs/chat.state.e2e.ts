@@ -60,9 +60,15 @@ describe("what a chat is doing", () => {
   });
 
   it("shows the chat waiting on you once the harness's turn ends, and queues it", async () => {
-    // Nothing needs the operator while the turn is running.
-    await expect($('[aria-label="Needs you"]')).toHaveText(
-      expect.stringContaining("Nothing needs you"),
+    // Nothing has ASKED for the operator while the turn is running — and this run's profile
+    // is declared `codex`, so this chat is exactly the one charter-app#52 is about: it
+    // cannot say it has stopped mid-turn for an approval, and there is no signal for that
+    // which is not a hook deciding a permission. So the queue says what it knows and no
+    // more. It used to headline "Nothing needs you" over a hedge that contradicted it.
+    const running = await $('[aria-label="Needs you"]');
+    await expect(running).toHaveText(expect.stringContaining("Nothing has said it needs you"));
+    await expect(running).toHaveText(
+      expect.stringContaining("can be waiting on you without saying so"),
     );
 
     // Releasing the output is what lets the harness get to its `stop` hook.

@@ -32,8 +32,16 @@ export function ChatState({ state }: { state: State }) {
  * which is not the same thing. A relaunch that put twenty chats back must not fill this.
  *
  * And it names the chats it cannot vouch for. A harness that cannot report everything — a
- * Codex chat stopped mid-turn for an approval says nothing — can be waiting on you while
- * the queue is empty, so "Nothing needs you" is never said over the top of it alone.
+ * Codex chat stopped mid-turn for an approval says nothing (charter-app#52, and there is no
+ * way for it to say so that does not arm a hook which DECIDES a permission) — can be waiting
+ * on you while the queue is empty.
+ *
+ * **So the empty state says what is known and not more.** "Nothing needs you" is a claim
+ * about every chat on the plane; while a chat that cannot report one is open, what charter
+ * actually knows is that nothing has SAID so. The hedge used to sit in a second sentence
+ * under a headline that still claimed the certainty — a precise "this may be waiting and
+ * cannot say" beats a confident wrong state, and it cannot be built out of two sentences
+ * that disagree.
  */
 export function NeedsYou({
   queue,
@@ -57,10 +65,11 @@ export function NeedsYou({
     );
   if (queue.length === 0) {
     // Said rather than left blank: an empty queue is the good state, and a blank space does
-    // not tell anyone the app is watching.
+    // not tell anyone the app is watching. Which of the two sentences it is depends on
+    // whether every open chat can report — never both, because they are different claims.
     return (
       <div className="needs-you needs-you-empty" aria-label="Needs you">
-        <span>Nothing needs you</span>
+        <span>{quiet.length === 0 ? "Nothing needs you" : "Nothing has said it needs you"}</span>
         {unsaid}
       </div>
     );

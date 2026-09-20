@@ -21,8 +21,18 @@ describe("the needs-you queue", () => {
     render(<NeedsYou queue={[]} quiet={["ide.7"]} nameOf={nameOf} show={() => {}} />);
 
     const queue = screen.getByLabelText("Needs you");
-    expect(queue).toHaveTextContent("Nothing needs you");
     expect(queue).toHaveTextContent("ide.7 can be waiting on you without saying so.");
+  });
+
+  it("does not claim nothing needs you while a chat cannot say whether it does", () => {
+    // #52. The headline is a claim about every chat on the plane, and the hedge under it
+    // used to contradict it in the same breath. What charter knows is that nothing has
+    // SAID so, and that is all the empty state is allowed to say.
+    render(<NeedsYou queue={[]} quiet={["ide.7"]} nameOf={nameOf} show={() => {}} />);
+
+    const queue = screen.getByLabelText("Needs you");
+    expect(queue).toHaveTextContent("Nothing has said it needs you");
+    expect(queue.textContent).not.toContain("Nothing needs you");
   });
 
   it("counts several such chats rather than listing them all", () => {

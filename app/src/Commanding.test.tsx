@@ -409,3 +409,66 @@ describe("one list, two surfaces", () => {
     expect(commandsSent(fromThePalette.asked)).toEqual(askedByButton);
   });
 });
+
+/**
+ * The key the palette claimed, reaching the chat (charter-app#47).
+ *
+ * This is the only place the whole path is one thing: the keystroke, the catalogue's row,
+ * the window's dispatcher, the session it picks and the bytes it writes. `actions.test.ts`
+ * knows the row and `Palette.test.tsx` knows the chord; neither can tell whether what
+ * arrives at the core is `F2`.
+ */
+describe("handing F2 to the chat in front", () => {
+  /** What a terminal sends for an unmodified F2: SS3 Q. Spelled out here rather than
+   *  imported, so the test fails if the constant changes rather than changing with it. */
+  const F2_BYTES = "OQ";
+
+  it("writes what the pane's own terminal would have written, to the session in front", async () => {
+    const { asked } = core();
+    render(<App />);
+    await openAChat();
+
+    await palette("");
+    await userEvent.keyboard("{F2}");
+
+    expect(commandsSent(asked)).toEqual(
+      expect.arrayContaining([{ cmd: "send_input", args: { session: 1, text: F2_BYTES } }]),
+    );
+    expect(screen.queryByRole("dialog", { name: "Command palette" })).not.toBeInTheDocument();
+  });
+
+  it("is the same whether the chord or the row ran it", async () => {
+    // One mechanism with two doorways, which is the rule the bar's buttons follow too.
+    const byChord = core();
+    render(<App />);
+    await openAChat();
+    await palette("");
+    await userEvent.keyboard("{F2}");
+    const asChord = commandsSent(byChord.asked).filter(({ cmd }) => cmd === "send_input");
+
+    cleanup();
+    clearMocks();
+
+    const byRow = core();
+    render(<App />);
+    await openAChat();
+    await runFromPalette("Send F2");
+
+    expect(commandsSent(byRow.asked).filter(({ cmd }) => cmd === "send_input")).toEqual(asChord);
+  });
+
+  it("sends nothing and says why when no chat is in front", async () => {
+    const { asked } = core();
+    render(<App />);
+
+    await palette("");
+    await userEvent.keyboard("{F2}");
+
+    expect(commandsSent(asked).some(({ cmd }) => cmd === "send_input")).toBe(false);
+    // Said where the operator is looking, and not only on the row further down the list.
+    expect(document.querySelector(".held")?.textContent).toBe(
+      "No chat is in front, so there is nowhere to send it.",
+    );
+    expect(screen.getByRole("dialog", { name: "Command palette" })).toBeInTheDocument();
+  });
+});

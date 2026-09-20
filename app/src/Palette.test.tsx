@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { Palette, opensIt } from "./Palette";
 import type { Offer, Ran } from "./actions";
@@ -259,5 +259,160 @@ describe("the key that opens it", () => {
   it("is not F2 with a modifier on it, which is somebody else's binding", () => {
     expect(press({ key: "F2", ctrlKey: true })).toBe(false);
     expect(press({ key: "F2", shiftKey: true })).toBe(false);
+  });
+});
+
+/**
+ * The way out of the key the palette claimed (charter-app#47).
+ *
+ * `F2` is taken on the window, capture-phase, so a pane's terminal never sees it. tmux
+ * answers the same question with `send-prefix` — press the prefix twice and the second goes
+ * through — and so does this. What runs is the catalogue's own `pane.sendkey` row, which is
+ * what keeps the chord from becoming a second implementation of it.
+ */
+describe("handing F2 back to the chat", () => {
+  const SENDS = ready("pane.sendkey", "Send F2 to the chat in front");
+  const WITH_SEND: Offer[] = [...OFFERS, SENDS];
+
+  it("runs the row that sends it, and gets out of the way", async () => {
+    const onRun = vi.fn(ok);
+    render(<Palette offers={WITH_SEND} onRun={onRun} />);
+    await open();
+
+    await userEvent.keyboard("{F2}");
+
+    expect(onRun).toHaveBeenCalledWith(SENDS);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("says so the moment it opens, because a way out nobody can find is not one", async () => {
+    render(<Palette offers={WITH_SEND} onRun={ok} />);
+    await open();
+
+    expect(screen.getByText("Press F2 again to send F2 to the chat in front.")).toBeInTheDocument();
+  });
+
+  it("promises nothing when there is nowhere to send it", async () => {
+    const nowhere = [
+      ...OFFERS,
+      refused("pane.sendkey", "Send F2 to the chat in front", "No chat is in front."),
+    ];
+    render(<Palette offers={nowhere} onRun={ok} />);
+    await open();
+
+    expect(screen.queryByText(/Press F2 again/)).not.toBeInTheDocument();
+    // The row is still listed with its reason, which is where an operator asks about it.
+    expect(screen.getByText("No chat is in front.")).toBeInTheDocument();
+  });
+
+  it("stays open and says the reason rather than pretending, when the row cannot run", async () => {
+    const nowhere = [
+      ...OFFERS,
+      refused("pane.sendkey", "Send F2 to the chat in front", "No chat is in front."),
+    ];
+    const onRun = vi.fn(ok);
+    render(<Palette offers={nowhere} onRun={onRun} />);
+    await open();
+
+    await userEvent.keyboard("{F2}");
+
+    expect(onRun).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("does not hand anything back for Ctrl-K, whose own way out is filed separately", async () => {
+    // Scoped deliberately: `F2` is the key #47 is about, and what a terminal makes of
+    // `⌘K`/`Ctrl-K` is a different question with a different answer.
+    const onRun = vi.fn(ok);
+    render(<Palette offers={WITH_SEND} onRun={onRun} />);
+    await open();
+
+    await userEvent.keyboard("{Control>}k{/Control}");
+
+    expect(onRun).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+});
+
+/**
+ * The aim, kept on screen (charter-app#48).
+ *
+ * The list scrolls at 55vh and the catalogue is well past a hundred rows with fifty chats
+ * open, so past the first screenful the arrows were moving `aria-selected` onto a row nobody
+ * could see. jsdom has no layout and therefore no `scrollIntoView`, so the test plants one
+ * and watches for the call — which is the whole of what the component can be asked to do.
+ */
+describe("the row Enter is aimed at", () => {
+  const MANY: Offer[] = Array.from({ length: 60 }, (_, at) =>
+    ready(`tab.select:${at}`, `Switch to tab ${at}`),
+  );
+
+  function watchScrolling(): ReturnType<typeof vi.fn> {
+    const scrolled = vi.fn();
+    // Element.prototype, because the row is found by id after it is drawn.
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      writable: true,
+      value: scrolled,
+    });
+    return scrolled;
+  }
+
+  afterEach(() => {
+    delete (Element.prototype as unknown as { scrollIntoView?: unknown }).scrollIntoView;
+  });
+
+  it("is brought on screen when the arrows reach past what is visible", async () => {
+    const scrolled = watchScrolling();
+    render(<Palette offers={MANY} onRun={ok} />);
+    await open();
+    scrolled.mockClear();
+
+    await userEvent.keyboard("{ArrowDown}{ArrowDown}");
+
+    expect(scrolled).toHaveBeenCalledWith({ block: "nearest" });
+    expect(aimed()).toBe("Switch to tab 2");
+  });
+
+  it("is still drawn where there is no scrolling to be done", async () => {
+    // No `scrollIntoView` at all, which is jsdom's own state and a real webview's during a
+    // teardown. A palette that threw here would be unusable rather than merely unscrolled.
+    render(<Palette offers={MANY} onRun={ok} />);
+    await open();
+
+    await userEvent.keyboard("{ArrowDown}");
+
+    expect(aimed()).toBe("Switch to tab 1");
+  });
+});
+
+describe("a key held down", () => {
+  const SENDS = ready("pane.sendkey", "Send F2 to the chat in front");
+
+  /** A keystroke the browser is repeating because the finger has not come off it. */
+  const held = (key: string) =>
+    window.dispatchEvent(new KeyboardEvent("keydown", { key, repeat: true, bubbles: true }));
+
+  it("does not flicker the palette or spray the key at the chat", async () => {
+    // Without this the repeats alternate: open, hand back, open, hand back, for as long as
+    // the finger rests on F2.
+    const onRun = vi.fn(ok);
+    render(<Palette offers={[...OFFERS, SENDS]} onRun={onRun} />);
+    await open();
+
+    held("F2");
+    held("F2");
+    held("F2");
+
+    expect(onRun).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("does not open it either, so a rested finger is one palette and not a stream", () => {
+    render(<Palette offers={[...OFFERS, SENDS]} onRun={ok} />);
+
+    act(() => void held("F2"));
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 });

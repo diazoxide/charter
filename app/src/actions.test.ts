@@ -36,6 +36,10 @@ function doing(): Doing & { calls: string[] } {
       calls.push("mergeWorktree");
       return { ok: true as const };
     }),
+    sendKey: vi.fn(async (key: string) => {
+      calls.push(`sendKey:${key}`);
+      return { ok: true as const };
+    }),
     quit: note("quit"),
   };
 }
@@ -406,6 +410,7 @@ describe("carrying out a row", () => {
         "removeWorktree:false",
         "removeWorktree:true",
         "mergeWorktree",
+        "sendKey:F2",
         "quit",
       ]),
     );
@@ -426,5 +431,148 @@ describe("the catalogue as the tabs change", () => {
       "tab.close:1",
       "tab.close:2",
     ]);
+  });
+});
+
+/**
+ * The palette at the scale the limits are written for.
+ *
+ * charter-app#48 asked whether fifty chats' worth of browsable rows bury the verb the
+ * operator typed for, and asked for it to be MEASURED before anything was changed. It does,
+ * and these are the measurements, kept as assertions so the answer cannot quietly rot.
+ *
+ * What was measured, on the catalogue built below — fifty tabs, six workspaces, two chats in
+ * the queue, a worktree in front:
+ *
+ * | typed | `Remove this chat's worktree` was | is now |
+ * |-------|-----------------------------------|--------|
+ * | `re`  | 41st of 41                        | 2nd    |
+ * | `r`   | 86th of 87                        | 12th   |
+ *
+ * **And the frame's own remedy would not have moved either number.** The tmux frame kept
+ * workspaces out of its browsable list; the rows ahead of the verb under `re` are tabs and
+ * close-tab rows almost to the last one, and no version of this list has ever left the tabs
+ * out. That is why this is ranking and not filtering.
+ */
+describe("the palette at fifty chats", () => {
+  const WORKSPACES = ["ide", "charter", "release", "statusline", "forge", "reddit"];
+
+  /** Fifty chats named the way a plane names them: the workspace, then the chat. */
+  function fiftyChats(): Tabs {
+    let tabs = noTabs();
+    for (let i = 0; i < 50; i++) {
+      tabs = openTab(tabs, 100 + i, `${WORKSPACES[i % WORKSPACES.length]}.${i + 1}`);
+    }
+    return tabs;
+  }
+
+  const loaded = () =>
+    catalogue(
+      now({
+        tabs: fiftyChats(),
+        workspaces: WORKSPACES,
+        focused: "ide",
+        plane: "/plane",
+        worktree: PIECE,
+        needsYou: [103, 107],
+        nameOf: (session) => `chat ${session}`,
+      }),
+    );
+
+  it("puts the verb ahead of every name that merely shares its letters", () => {
+    // `re` is in `release`, in `reddit` and in `worktree`. Only one of those is a word
+    // charter chose; the rest are somebody's chat names.
+    const rows = narrow("re", loaded());
+
+    expect(rows.slice(0, 2).map((row) => row.title)).toEqual([
+      "Merge this chat's worktree into its clone",
+      "Remove this chat's worktree",
+    ]);
+    // Not a cap and not a filter: every name that matched is still listed, below.
+    expect(rows.some((row) => row.title === "Switch to tab release.3")).toBe(true);
+  });
+
+  it("leaves a name findable by its own name, which is what a name row is for", () => {
+    const rows = narrow("release.3", loaded());
+
+    expect(rows[0].title).toBe("Switch to tab release.3");
+  });
+
+  it("aims Enter at a verb rather than at a chat that happens to sort first", () => {
+    const rows = narrow("re", loaded());
+
+    expect(rows[aim(rows)].title).toBe("Merge this chat's worktree into its clone");
+  });
+
+  it("does not reorder anything when every row matched charter's own word", () => {
+    // `switch` is charter's word on fifty rows and nobody's name. The rule must be a
+    // partition and not a score: rows that all match the same way keep the catalogue's order.
+    const offers = loaded();
+    const selects = offers.filter((row) => row.id.startsWith("tab.select:"));
+
+    expect(narrow("switch", offers)).toEqual(selects);
+  });
+
+  it("still offers one row per chat and per workspace, browsable with nothing typed", () => {
+    // The count itself is the measurement #48 asked for, asserted rather than described: a
+    // row added without thinking about this is a failing test, not a surprise at fifty chats.
+    const offers = loaded();
+
+    expect(offers.filter((row) => row.id.startsWith("tab.select:"))).toHaveLength(50);
+    expect(offers.filter((row) => row.id.startsWith("tab.close:"))).toHaveLength(50);
+    expect(offers.filter((row) => row.id.startsWith("workspace.focus:"))).toHaveLength(6);
+    // 117 rows: 50 chats twice over, 6 workspaces, 2 in the queue, and the nine verbs.
+    expect(offers).toHaveLength(117);
+  });
+});
+
+describe("the key the palette claimed", () => {
+  it("offers a row that hands it to the chat in front", () => {
+    // charter-app#47: the palette takes F2 capture-phase, so a harness that binds F2 never
+    // sees it. The way out is a row like any other — browsable, typeable, and the same
+    // thing the second F2 runs.
+    const offers = catalogue(now({ tabs: openTab(noTabs(), 7, "one") }));
+
+    const row = by(offers, "pane.sendkey");
+    expect(row?.available).toBe(true);
+    expect(row?.title).toBe("Send F2 to the chat in front");
+    expect(row?.does).toEqual({ verb: "sendKey", key: "F2" });
+  });
+
+  it("is findable by the key's own name", () => {
+    const offers = catalogue(now({ tabs: openTab(noTabs(), 7, "one") }));
+
+    expect(narrow("F2", offers).map((row) => row.id)).toEqual(["pane.sendkey"]);
+  });
+
+  it("says why it cannot run rather than going missing when no chat is in front", () => {
+    const row = by(catalogue(now()), "pane.sendkey");
+
+    expect(row?.available).toBe(false);
+    expect(row?.reason).toBe("No chat is in front, so there is nowhere to send it.");
+  });
+});
+
+describe("what the queue's row claims", () => {
+  it("says nothing needs you when every open chat can say whether it does", () => {
+    expect(by(catalogue(now()), "needs.next")?.reason).toBe("Nothing needs you.");
+  });
+
+  it("does not claim it while a chat cannot say (charter-app#52)", () => {
+    // A Codex chat stopped mid-turn for an approval reports nothing, and there is no signal
+    // for it that is not a hook deciding a permission. So the row says what is known.
+    const reason = by(catalogue(now({ quiet: ["ide.7"] })), "needs.next")?.reason;
+
+    expect(reason).toBe(
+      "Nothing has said it needs you — and ide.7 can be waiting on you without saying so.",
+    );
+  });
+
+  it("counts them rather than listing them all", () => {
+    const reason = by(catalogue(now({ quiet: ["ide.7", "ide.8"] })), "needs.next")?.reason;
+
+    expect(reason).toBe(
+      "Nothing has said it needs you — and 2 chats can be waiting on you without saying so.",
+    );
   });
 });
