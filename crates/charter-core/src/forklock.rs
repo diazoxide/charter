@@ -50,8 +50,10 @@ static FORKING: RwLock<()> = RwLock::new(());
 /// Opens a terminal with every fork in this process held off until both of its ends are
 /// close-on-exec.
 ///
-/// `open` must do nothing but open the terminal. It runs with every other thread's spawn
-/// blocked, so anything else put in here is time the rest of charter spends waiting.
+/// `open` must do nothing but open the terminal, and **must never start a program**. It runs
+/// with every other thread's spawn blocked, so anything else put in here is time the rest of
+/// charter spends waiting — and a [`spawn`] inside it would ask this same lock for a read
+/// while this thread holds it for write, which [`RwLock`] answers by never returning.
 pub fn while_a_terminal_is_opened<T>(open: impl FnOnce() -> T) -> T {
     let _held = FORKING.write().unwrap_or_else(PoisonError::into_inner);
     open()
