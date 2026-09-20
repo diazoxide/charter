@@ -299,6 +299,59 @@ def _symlink_a_workspace_out_of_the_plane(root: Path) -> None:
         link.symlink_to(outside)
 
 
+def _a_workspace_layer_the_plane_has_moved_past(root: Path) -> None:
+    """`beta`'s generated settings as an OLDER charter left them, with a marker vouching for
+    exactly that text.
+
+    The `stale` row, which is the one a wire is allowed to overwrite: charter's own file, still
+    holding what charter's own record names, and the plane has since said something else. The
+    fixture's copy is already current, so the drift has to be planted.
+    """
+    ws = root / "workspaces" / "beta"
+    old = '{\n  "env": {\n    "CHARTER_HARNESS": "claude-code"\n  }\n}\n'
+    (ws / ".claude").mkdir(parents=True, exist_ok=True)
+    (ws / ".claude" / "settings.json").write_text(old)
+    (ws / ".charter-generated").write_text(
+        json.dumps(
+            {".claude/settings.json": hashlib.sha256(old.encode("utf-8")).hexdigest()}, indent=2
+        )
+        + "\n"
+    )
+
+
+def _a_settings_file_the_operator_wrote(root: Path) -> None:
+    """`beta`'s generated path, holding content no marker vouches for.
+
+    The `foreign` row — the one charter must never repair. Both implementations have to leave
+    the bytes alone AND say so, because a repair command that silently skips a file is one that
+    reports the plane current while the plane's rules are out of force in it.
+    """
+    ws = root / "workspaces" / "beta"
+    (ws / ".claude").mkdir(parents=True, exist_ok=True)
+    (ws / ".claude" / "settings.json").write_text("# mine, and charter never wrote it\n")
+
+
+def _a_workspace_missing_a_baseline_file(root: Path) -> None:
+    """`beta` without its `refs/README.md` — what a workspace an older charter made looks
+    like."""
+    (root / "workspaces" / "beta" / "refs" / "README.md").unlink()
+
+
+def _a_workspace_an_older_charter_stamped(root: Path) -> None:
+    """`beta` with the whole baseline and an older structure stamp: the version bump alone."""
+    (root / "workspaces" / "beta" / ".charter-structure").write_text("3\n")
+
+
+def _a_generated_file_the_plane_stopped_declaring(root: Path) -> None:
+    """The plane keeps no key that travels, so the file charter generated in each workspace is
+    one nothing generates any more — the `removed` row.
+
+    `hooks` stays, so the plane's settings still PARSE: a file charter cannot READ is the other
+    case entirely, and there charter keeps the last good copy rather than withdrawing it.
+    """
+    (root / ".claude" / "settings.json").write_text('{"hooks":{"PreToolUse":[]}}')
+
+
 # `--no-sync` on every Python write that takes it: `alpha` is a LIVE workspace, so Python
 # charter would reactively `git commit` (and try to push) what it just wrote. That is
 # workspace *syncing*, not a plane write, and it is not in M1.1 — so it is switched off rather
@@ -3087,6 +3140,125 @@ M28_SCENARIOS = [
         python=["workspace", "default", "../../esc"],
         pins_the_clock=False,
         refusal="is not a workspace name",
+        same_stderr=True,
+    ),
+    # ---- charter workspace create ---------------------------------------------------------
+    Scenario(
+        name="workspace-create-makes-the-baseline-and-wires-the-planes-layer-into-it",
+        plane="daily",
+        python=["workspace", "create", "gamma"],
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-create-records-the-vision-it-was-given",
+        plane="daily",
+        python=["workspace", "create", "gamma", "--vision", "Ship the importer"],
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-create-live-shares-the-new-workspace-from-birth",
+        plane="daily",
+        python=["workspace", "create", "gamma", "--live"],
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-create-on-a-workspace-that-is-already-there-changes-nothing",
+        plane="daily",
+        python=["workspace", "create", "alpha"],
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-create-refuses-a-name-that-is-not-a-workspace-name",
+        plane="daily",
+        python=["workspace", "create", "../esc"],
+        refusal="invalid workspace name",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-create-use-in-a-locked-session-creates-it-and-refuses-the-selection",
+        plane="daily",
+        python=["workspace", "create", "gamma", "--use"],
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-create-use-selects-the-workspace-it-just-made",
+        plane="daily",
+        python=["workspace", "create", "gamma", "--use"],
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        ignore={
+            f".charter/persona-state/trace/{FRESH_SESSION}.jsonl": (
+                "charter records every selection in its trace store; this binary writes no "
+                "trace at all, which is a whole store and not this command's to port"
+            )
+        },
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-use-create-scaffolds-rather-than-leaving-a-bare-directory",
+        plane="daily",
+        python=["workspace", "use", "gamma", "--create"],
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        ignore={
+            f".charter/persona-state/trace/{FRESH_SESSION}.jsonl": (
+                "charter records every selection in its trace store; this binary writes no "
+                "trace at all, which is a whole store and not this command's to port"
+            )
+        },
+        same_stderr=True,
+    ),
+    # ---- charter workspace reinit ---------------------------------------------------------
+    Scenario(
+        name="workspace-reinit-on-a-current-workspace-says-there-is-nothing-to-do",
+        plane="daily",
+        python=["workspace", "reinit", "alpha"],
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-reinit-refuses-a-workspace-this-plane-does-not-have",
+        plane="daily",
+        python=["workspace", "reinit", "nowhere"],
+        refusal="no workspace 'nowhere'",
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-reinit-all-on-a-current-plane-says-there-is-nothing-to-do",
+        plane="daily",
+        python=["workspace", "reinit", "--all"],
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-reinit-adds-a-baseline-file-an-older-charter-never-made",
+        plane="daily",
+        setup=_a_workspace_missing_a_baseline_file,
+        python=["workspace", "reinit", "beta"],
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-reinit-bumps-a-structure-stamp-an-older-charter-left",
+        plane="daily",
+        setup=_a_workspace_an_older_charter_stamped,
+        python=["workspace", "reinit", "beta"],
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-reinit-refreshes-a-layer-the-plane-has-moved-past",
+        plane="daily",
+        setup=_a_workspace_layer_the_plane_has_moved_past,
+        python=["workspace", "reinit", "beta"],
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-reinit-leaves-a-settings-file-charter-did-not-write-and-says-so",
+        plane="daily",
+        setup=_a_settings_file_the_operator_wrote,
+        python=["workspace", "reinit", "beta"],
+        same_stderr=True,
+    ),
+    Scenario(
+        name="workspace-reinit-withdraws-a-file-the-plane-no-longer-declares",
+        plane="daily",
+        setup=_a_generated_file_the_plane_stopped_declaring,
+        python=["workspace", "reinit", "--all"],
         same_stderr=True,
     ),
     # ---- charter persona default ---------------------------------------------------------

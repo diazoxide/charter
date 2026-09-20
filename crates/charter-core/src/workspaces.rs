@@ -463,6 +463,68 @@ impl Workspace {
         )
     }
 
+    /// Create the workspace's memory index when it has none — the per-file DB's `MEMORY.md`.
+    ///
+    /// A legacy `notes.md` is grandfathered into the index, so a pre-v2 workspace's memo
+    /// stays discoverable. `workspace.scaffold_memory`.
+    pub fn scaffold_memory(&self) -> io::Result<PathBuf> {
+        let dir = self.dir.join("memory");
+        self.writable(&dir)?;
+        let index = memstore::ensure_index(
+            &self.plane_root,
+            &dir,
+            &WS_MEMORY_HEADER.replace("{name}", &self.name),
+        )?;
+        if dir.join("notes.md").exists()
+            && memstore::readable_file(&self.plane_root, &index)
+            && !memstore::read_text(&index).is_some_and(|t| t.contains("(notes.md)"))
+        {
+            memstore::index_append(&self.plane_root, &index, "notes.md", "Task memo (legacy)")?;
+        }
+        Ok(index)
+    }
+
+    /// Create the workspace's manifest if it has none. Never touches one that is there.
+    ///
+    /// The file is committed *precisely so a teammate can restore someone else's workspace*,
+    /// so a workspace has one from birth rather than wherever somebody happened to run
+    /// `snapshot`.
+    ///
+    /// A new workspace's manifest says `repos: []`, which is a true and useful statement. A
+    /// workspace that already has clones records them as MEMBERSHIP — a name each, and
+    /// deliberately no branch: recording a branch here would record whatever happens to be
+    /// checked out at that instant, and a manifest branch carries `snapshot`'s enforce-push
+    /// promise, which a writer that runs without being asked cannot make.
+    ///
+    /// **Swallows its own failure**, like Python's: this runs from a launch path where
+    /// raising would cost the operator their tab, and a manifest that could not be written
+    /// leaves the workspace exactly as it was for `structure_status` to go on reporting.
+    pub fn scaffold_manifest(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+        author: &str,
+    ) -> io::Result<()> {
+        if self.manifest().1 != manifest::Ownership::Absent {
+            return Ok(());
+        }
+        let members: Vec<serde_json::Value> = crate::repos::clones(&self.plane_root, &self.name)
+            .map(|found| {
+                found
+                    .repos
+                    .iter()
+                    .map(|repo| serde_json::json!({"name": repo.name}))
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.write_manifest(&serde_json::json!({
+            "name": self.name,
+            "description": "",
+            "repos": members,
+            "updated_at": now.format("%Y-%m-%dT%H:%M:%S+00:00").to_string(),
+            "updated_by": author,
+        }))
+    }
+
     /// The open todos. There is no state field: a closed todo is a deleted file.
     pub fn todos(&self) -> io::Result<Vec<Entry>> {
         let dir = self.dir.join("todos");
