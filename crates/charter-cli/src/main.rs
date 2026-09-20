@@ -270,6 +270,18 @@ enum Command {
         bump: bool,
     },
 
+    /// Which charter this is, what this control plane pins, and whether they agree.
+    ///
+    /// Not charter's three rows, and ADR 0029 is why: two of them — the installed wheel and
+    /// the newest one on PyPI — have no subject for a binary that ships inside the app. What
+    /// this prints instead is the release this build's news corpus comes up to (the only
+    /// number on the same scale as the pin), the build carrying it, and the pin itself. The
+    /// EXIT STATUS is charter's: 0 with no pin, 0 when the pin is met, 1 on drift.
+    Version {
+        #[command(subcommand)]
+        what: Option<VersionCommand>,
+    },
+
     /// Open a chat in a workspace you name, already working on a brief you pass as a quoted
     /// heredoc on stdin. Your harness asks before it runs.
     ///
@@ -510,6 +522,31 @@ fn place() -> Result<charter_core::plane::Place, String> {
 enum HarnessCommand {
     /// Every profile charter read, the file it came from, and why any was refused.
     List,
+}
+
+/// The two `version` verbs that move a PUBLISHED `charter-cp` release.
+///
+/// Registered rather than left to clap so that each gets a sentence instead of a usage error
+/// — M2.21's rule, applied to the verbs beside it. Their flags are declared as charter
+/// declares them, because a script that passes `--cli` or `--push` must meet the refusal
+/// rather than the parser.
+#[derive(Subcommand)]
+enum VersionCommand {
+    /// Move THIS plane to the version it pins.
+    Sync {
+        /// Conform the machine-global `charter` binary instead.
+        #[arg(long)]
+        cli: bool,
+    },
+    /// Move the pin: install + verify the target, then write `charter.toml`.
+    Bump {
+        /// Version to pin (default: the latest published).
+        #[arg(long)]
+        to: Option<String>,
+        /// Also commit + push the lock.
+        #[arg(long)]
+        push: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1415,6 +1452,7 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Reinit
         | Command::News(_)
         | Command::Update { .. }
+        | Command::Version { .. }
         | Command::Discover { .. }
         | Command::Clone { .. }
         | Command::Sync { .. }
@@ -1703,6 +1741,22 @@ fn main() -> ExitCode {
                 when,
             );
             return ExitCode::SUCCESS;
+        }
+        // `charter version`, and it needs no plane: Python builds `config.ROOT` from
+        // `find_root_or_cwd`, so the command answers outside one and simply has no pin to
+        // report. What it answers, and why it is not Python's three rows, is ADR 0029.
+        Command::Version { what } => {
+            use charter_core::adopt;
+            return emit(&match what {
+                Some(VersionCommand::Sync { .. }) => adopt::version_move_refusal("sync"),
+                Some(VersionCommand::Bump { .. }) => adopt::version_move_refusal("bump"),
+                None => {
+                    let cwd =
+                        std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+                    let place = charter_core::plane::place(&cwd);
+                    adopt::version_report(place.is_plane.then_some(place.root.as_path()))
+                }
+            });
         }
         // `news` and `update` say several lines of their own on both streams and choose their
         // own exit status, exactly as `init` does.

@@ -3339,6 +3339,96 @@ DOCS_SCENARIOS = [
 ]
 
 
+# M2.12: what `charter version` means when the CLI is not a Python package
+# --------------------------------------------------------------------------------------------
+#
+# ADR 0029. charter's three rows are three facts about a `charter-cp` wheel; two of them have no
+# subject for a binary that ships inside the app, and the one number this binary carries of its
+# own (`charter-app 0.1.0`) counts a different thing from a pin. So the words differ by
+# decision, and what these scenarios compare is the half that must NOT: the **exit status**, in
+# each of the three states a script branches on.
+#
+# **A scenario whose stdout and stderr both carry a `_differs` note asserts less than most here,
+# and that is stated rather than hidden.** What is left is real — charter exits 0 with no pin, 0
+# when the pin is met and 1 on drift, and a wrapper reading `charter version` behaves the same
+# against either implementation — but it is one number, so the three states are all covered
+# rather than one standing in for the rest.
+#
+# **The pin that is MET is `0.62.1` because that is both numbers at once**, and the coincidence
+# is load-bearing enough to name: at the oracle's pinned commit `charter.__version__` and the
+# newest entry in the vendored news corpus are the same string, so one pin puts both
+# implementations in their "pin met" arm. They move together — the corpus and the oracle come
+# from one commit — but they are not the same field, and the day they part this scenario reports
+# an exit-status difference, which is the right place to find out.
+
+#: The number both implementations call "what is running here": `charter.__version__` on the
+#: Python side, the newest entry in the vendored corpus on charter-app's.
+PIN_BOTH_SIDES_MEET = "0.62.1"
+
+#: A release neither side is. Old enough that no future bump makes it accidentally current.
+PIN_NEITHER_SIDE_MEETS = "0.44.0"
+
+VERSION_ROWS_DIFFER = (
+    "charter prints `installed`, `locked` and `latest` — three facts about a charter-cp wheel. "
+    "Two have no subject for a binary that ships inside the app, so charter-app prints the "
+    "charter release its news corpus reaches, the build carrying it, and the pin (ADR 0029)."
+)
+VERSION_VERDICT_DIFFERS = (
+    "charter's verdict names a wheel and points at `charter version sync`, which cannot reach a "
+    "binary inside an app bundle; charter-app says what it brought and how to conform the PLANE. "
+    "It deliberately does NOT reuse `in sync with the lock`, which would claim a parity a "
+    "partial port does not have (ADR 0029)."
+)
+
+
+def _pinning(version: str):
+    """A plane whose `charter.toml` pins *version*, appended to the fixture's own manifest.
+
+    Appended rather than rewritten: the rest of the manifest decides the forge, the persona and
+    the memory share, and a scenario that replaced it would be comparing two commands on a
+    plane no fixture describes.
+    """
+
+    def setup(root: Path) -> None:
+        manifest = root / "charter.toml"
+        manifest.write_text(f'{manifest.read_text()}\n[charter]\nversion = "{version}"\n')
+
+    return setup
+
+
+VERSION_SCENARIOS = [
+    Scenario(
+        name="version-on-a-plane-that-pins-nothing-is-not-drift",
+        plane="daily",
+        python=["version"],
+        pins_the_clock=False,
+        stdout_differs=VERSION_ROWS_DIFFER,
+        stderr_differs=VERSION_VERDICT_DIFFERS,
+    ),
+    Scenario(
+        name="version-on-a-plane-pinning-what-both-sides-are-is-not-drift",
+        plane="daily",
+        setup=_pinning(PIN_BOTH_SIDES_MEET),
+        python=["version"],
+        pins_the_clock=False,
+        stdout_differs=VERSION_ROWS_DIFFER,
+        stderr_differs=VERSION_VERDICT_DIFFERS,
+    ),
+    Scenario(
+        # The one that must agree, and the reason the other two are here: an exit 1 that only
+        # one implementation gives turns a wrapper's `charter version || conform` into a no-op
+        # on the other.
+        name="version-on-a-plane-pinning-a-release-neither-side-is-exits-one",
+        plane="daily",
+        setup=_pinning(PIN_NEITHER_SIDE_MEETS),
+        python=["version"],
+        pins_the_clock=False,
+        stdout_differs=VERSION_ROWS_DIFFER,
+        stderr_differs=VERSION_VERDICT_DIFFERS,
+    ),
+]
+
+
 SCENARIOS = [
     *INIT_SCENARIOS,
     *LADDER_SCENARIOS,
@@ -3998,6 +4088,7 @@ SCENARIOS = [
     *SAVE_SCENARIOS,
     *WORKTREE_SCENARIOS,
     *DOCS_SCENARIOS,
+    *VERSION_SCENARIOS,
 ]
 
 
