@@ -16,6 +16,7 @@ pub mod profiletrust;
 pub mod pyjson;
 pub mod reopen;
 pub mod repos;
+pub mod scaffold;
 pub mod session;
 pub mod shown;
 pub mod start;

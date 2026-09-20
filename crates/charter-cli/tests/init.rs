@@ -1,0 +1,494 @@
+//! `charter init` and `charter reinit` write into a directory an operator points them at —
+//! possibly a repository with content they care about, possibly one somebody else committed.
+//!
+//! The contract is **additive and idempotent, and never touches existing content**, and each
+//! clause is pinned here against the binary itself, comparing whole trees rather than output:
+//!
+//! - a pre-existing file at every path `init` writes stays byte for byte;
+//! - a symlink at every one of those paths that leads out of the plane is written through
+//!   by nothing, and nothing outside changes — whether the link resolves or dangles;
+//! - a link that stays inside the plane is followed, as the Python charter follows it;
+//! - running it twice leaves the tree the first run left.
+//!
+//! The differential (`tests/differential/run.py`) compares the ordinary cases against the
+//! Python charter. These are the containment half, which is this binary's own contract.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+fn charter() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_charter"))
+}
+
+/// One directory to point `init` at, a directory beside it standing for everything outside
+/// the plane, and a home of its own so nothing reads the real `~/.claude`.
+struct Scene {
+    _tmp: tempfile::TempDir,
+    plane: PathBuf,
+    outside: PathBuf,
+    home: PathBuf,
+}
+
+impl Scene {
+    fn new() -> Self {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().canonicalize().unwrap();
+        let plane = base.join("plane");
+        let outside = base.join("outside");
+        let home = base.join("home");
+        for dir in [&plane, &outside, &home, &outside.join("dir")] {
+            std::fs::create_dir_all(dir).unwrap();
+        }
+        std::fs::write(outside.join("precious"), "PRECIOUS OPERATOR DATA\n").unwrap();
+        std::fs::write(outside.join("dir/keep"), "kept\n").unwrap();
+        Scene {
+            _tmp: tmp,
+            plane,
+            outside,
+            home,
+        }
+    }
+
+    fn run(&self, args: &[&str]) -> Output {
+        Command::new(charter())
+            .args(args)
+            .current_dir(&self.plane)
+            .env_remove("CHARTER_ROOT")
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .env_remove("XDG_CONFIG_HOME")
+            .env("HOME", &self.home)
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .expect("the binary runs")
+    }
+
+    fn init(&self) -> Output {
+        self.run(&["init", "--forge", "github", "--owner", "acme"])
+    }
+
+    fn write(&self, rel: &str, body: &str) {
+        let path = self.plane.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
+    fn link(&self, rel: &str, target: &Path) {
+        let path = self.plane.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(target, path).unwrap();
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum Node {
+    Dir,
+    File(Vec<u8>),
+    Link(PathBuf),
+}
+
+/// Every entry under `root` by path, WITHOUT following a link: a link is recorded as the
+/// link, so one that was written through or replaced shows up as a change.
+fn tree(root: &Path) -> BTreeMap<PathBuf, Node> {
+    let mut out = BTreeMap::new();
+    let mut todo = vec![root.to_path_buf()];
+    while let Some(dir) = todo.pop() {
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let rel = path.strip_prefix(root).unwrap().to_path_buf();
+            let meta = std::fs::symlink_metadata(&path).unwrap();
+            if meta.file_type().is_symlink() {
+                out.insert(rel, Node::Link(std::fs::read_link(&path).unwrap()));
+            } else if meta.is_dir() {
+                out.insert(rel, Node::Dir);
+                todo.push(path);
+            } else {
+                out.insert(rel, Node::File(std::fs::read(&path).unwrap()));
+            }
+        }
+    }
+    out
+}
+
+fn stderr(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+fn fixture(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/planes")
+        .join(name)
+}
+
+#[test]
+fn init_in_an_empty_directory_leaves_exactly_the_plane_the_python_charter_leaves() {
+    // `minimal` IS the Python charter's `init --forge github --owner acme`, byte for byte,
+    // plus the empty directories git cannot carry, recorded beside it.
+    let scene = Scene::new();
+    let out = scene.init();
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let mut want = tree(&fixture("minimal"));
+    for dir in std::fs::read_to_string(fixture("minimal.empty-dirs"))
+        .unwrap()
+        .split_whitespace()
+    {
+        want.insert(PathBuf::from(dir), Node::Dir);
+    }
+    assert_eq!(tree(&scene.plane), want);
+}
+
+#[test]
+fn running_init_twice_leaves_the_tree_the_first_run_left() {
+    let scene = Scene::new();
+    assert!(scene.init().status.success());
+    let first = tree(&scene.plane);
+
+    let again = scene.init();
+
+    assert!(again.status.success(), "{}", stderr(&again));
+    assert!(
+        stderr(&again).contains("nothing to do"),
+        "{}",
+        stderr(&again)
+    );
+    assert_eq!(tree(&scene.plane), first);
+}
+
+#[test]
+fn a_file_already_at_every_path_init_writes_is_left_byte_for_byte() {
+    // Everything `init` would write, already there in the operator's own words and layout:
+    // it has nothing to add, so it must change nothing at all.
+    let scene = Scene::new();
+    scene.write(
+        "charter.toml",
+        "# ours\nschema = 1\n\n[[forge]]\nkind = \"gitlab\"\n\n[persona]\ndefault = \"ops\"\n",
+    );
+    scene.write(
+        ".gitignore",
+        "dist/\n/workspaces/*/*\n!/workspaces/.gitkeep\n/.charter/\n\
+         /.claude/settings.local.json\n/charter.local.toml\n",
+    );
+    scene.write(
+        ".claude/settings.json",
+        "{\n    \"env\": {\"CHARTER_HARNESS\": \"claude-code\"},\n    \"permissions\": {\"ask\": \
+         [\"Bash(charter handoff *)\"]},\n    \"hooks\": {\"PreToolUse\": [{\"matcher\": \"Bash\", \
+         \"hooks\": [{\"type\": \"command\", \"command\": \"charter hook pretooluse\"}]}]}\n}",
+    );
+    scene.write(
+        "opencode.json",
+        "{\"permission\": {\"bash\": {\"charter handoff *\": \"ask\"}}}",
+    );
+    scene.write("personas/ops/persona.md", "---\nname: ops\n---\n");
+    scene.write("inventory/repos.json", "{}");
+    scene.write("workspaces/alpha/workspace.md", "# alpha\n");
+    let before = tree(&scene.plane);
+
+    let out = scene.init();
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(stderr(&out).contains("nothing to do"), "{}", stderr(&out));
+    assert_eq!(tree(&scene.plane), before);
+}
+
+#[test]
+fn what_init_adds_to_a_file_of_the_operators_keeps_every_byte_they_wrote() {
+    let scene = Scene::new();
+    let toml = "# ours\r\nschema = 1\r\n";
+    let ignore = "dist/\r\n# build output\r\n*.log";
+    scene.write("charter.toml", toml);
+    scene.write(".gitignore", ignore);
+    scene.write(
+        ".claude/settings.json",
+        "{\n    \"model\": \"opus\",\n    \"permissions\": {\"allow\": [\"Bash(ls *)\"]}\n}\n",
+    );
+
+    let out = scene.init();
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    let toml_now = std::fs::read_to_string(scene.plane.join("charter.toml")).unwrap();
+    assert!(toml_now.starts_with(toml), "{toml_now:?}");
+    let ignore_now = std::fs::read_to_string(scene.plane.join(".gitignore")).unwrap();
+    assert!(ignore_now.starts_with(ignore), "{ignore_now:?}");
+    let settings: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(scene.plane.join(".claude/settings.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(settings["model"], "opus");
+    assert_eq!(settings["permissions"]["allow"][0], "Bash(ls *)");
+}
+
+/// Every path `init` writes, and what a link planted there points at: a file for a file, a
+/// directory for a directory.
+const PATHS: [(&str, bool); 8] = [
+    ("charter.toml", false),
+    (".gitignore", false),
+    (".claude/settings.json", false),
+    ("opencode.json", false),
+    (".claude", true),
+    ("personas", true),
+    ("inventory", true),
+    ("workspaces", true),
+];
+
+#[test]
+fn a_link_out_of_the_plane_at_any_path_init_writes_is_written_through_by_nothing() {
+    for (rel, is_dir) in PATHS {
+        for dangling in [false, true] {
+            let scene = Scene::new();
+            let target = match (is_dir, dangling) {
+                (false, false) => scene.outside.join("precious"),
+                (false, true) => scene.outside.join("planted"),
+                (true, false) => scene.outside.join("dir"),
+                (true, true) => scene.outside.join("nodir"),
+            };
+            scene.link(rel, &target);
+            let outside = tree(&scene.outside);
+
+            let out = scene.init();
+
+            let what = format!("{rel} -> {} (dangling: {dangling})", target.display());
+            assert_eq!(out.status.code(), Some(1), "{what}: {}", stderr(&out));
+            assert!(
+                stderr(&out).contains("which is outside this plane"),
+                "{what}: {}",
+                stderr(&out)
+            );
+            assert_eq!(
+                tree(&scene.outside),
+                outside,
+                "{what}: something outside changed"
+            );
+            assert_eq!(
+                std::fs::read_link(scene.plane.join(rel)).ok(),
+                Some(target.clone()),
+                "{what}: the link itself was replaced"
+            );
+            // Additive: what the link does not block is still created.
+            if rel != "workspaces" {
+                assert!(scene.plane.join("workspaces").is_dir(), "{what}");
+            }
+            if rel != "charter.toml" {
+                assert!(scene.plane.join("charter.toml").is_file(), "{what}");
+            }
+        }
+    }
+}
+
+#[test]
+fn reinit_writes_through_no_link_out_of_the_plane_either() {
+    for rel in [
+        "personas",
+        "inventory",
+        "workspaces",
+        ".gitignore",
+        ".claude",
+    ] {
+        let scene = Scene::new();
+        assert!(scene.init().status.success());
+        let path = scene.plane.join(rel);
+        if path.is_dir() {
+            std::fs::remove_dir_all(&path).unwrap();
+        } else {
+            std::fs::remove_file(&path).unwrap();
+        }
+        let target = scene
+            .outside
+            .join(if rel.starts_with('.') && rel != ".claude" {
+                "precious"
+            } else {
+                "nodir"
+            });
+        scene.link(rel, &target);
+        let outside = tree(&scene.outside);
+
+        let out = scene.run(&["reinit"]);
+
+        assert_eq!(out.status.code(), Some(1), "{rel}: {}", stderr(&out));
+        assert_eq!(
+            tree(&scene.outside),
+            outside,
+            "{rel}: something outside changed"
+        );
+    }
+}
+
+#[test]
+fn a_link_that_stays_inside_the_plane_is_followed() {
+    let scene = Scene::new();
+    scene.write("team/gitignore", "node_modules/\n");
+    scene.link(".gitignore", Path::new("team/gitignore"));
+    std::fs::create_dir_all(scene.plane.join("team/roster")).unwrap();
+    scene.link("personas", Path::new("team/roster"));
+
+    let out = scene.init();
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    let ignore = std::fs::read_to_string(scene.plane.join("team/gitignore")).unwrap();
+    assert!(ignore.starts_with("node_modules/\n"), "{ignore:?}");
+    assert!(ignore.contains("!/workspaces/.gitkeep"), "{ignore:?}");
+    assert!(scene.plane.join("team/roster/steward/persona.md").is_file());
+    assert!(
+        std::fs::symlink_metadata(scene.plane.join(".gitignore"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+}
+
+#[test]
+fn a_link_into_the_planes_own_git_directory_is_not_followed() {
+    let scene = Scene::new();
+    let exclude = "# git ls-files --others --exclude-from=.git/info/exclude\n";
+    scene.write(".git/info/exclude", exclude);
+    scene.link(".gitignore", Path::new(".git/info/exclude"));
+
+    let out = scene.init();
+
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert_eq!(
+        std::fs::read_to_string(scene.plane.join(".git/info/exclude")).unwrap(),
+        exclude
+    );
+}
+
+#[test]
+fn a_file_where_a_directory_goes_is_named_and_left_alone_and_the_rest_is_created() {
+    let scene = Scene::new();
+    scene.write("personas", "not a directory\n");
+
+    let out = scene.init();
+
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("personas/ can't be created"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(
+        std::fs::read_to_string(scene.plane.join("personas")).unwrap(),
+        "not a directory\n"
+    );
+    assert!(scene.plane.join("inventory").is_dir());
+    assert!(scene.plane.join(".claude/settings.json").is_file());
+}
+
+#[test]
+fn a_link_inside_the_plane_that_leads_nowhere_is_a_blocker_not_a_crash() {
+    let scene = Scene::new();
+    scene.link("inventory", Path::new("elsewhere/inventory"));
+
+    let out = scene.init();
+
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("inventory/ can't be created"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(!scene.plane.join("elsewhere").exists());
+}
+
+#[test]
+fn a_settings_file_claude_code_cannot_read_is_left_byte_for_byte() {
+    let scene = Scene::new();
+    let body = "{\"cleanupPeriodDays\": NaN}\n";
+    scene.write(".claude/settings.json", body);
+
+    let out = scene.init();
+
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("left it completely untouched"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(
+        std::fs::read_to_string(scene.plane.join(".claude/settings.json")).unwrap(),
+        body
+    );
+    // All or nothing: the handoff rule is not left in force under opencode alone.
+    assert!(!scene.plane.join("opencode.json").exists());
+}
+
+#[test]
+fn a_plane_from_a_newer_charter_is_refused_before_anything_is_written() {
+    let scene = Scene::new();
+    scene.write("charter.toml", "schema = 2\n");
+    let before = tree(&scene.plane);
+
+    for command in [&["init"][..], &["reinit"][..]] {
+        let out = scene.run(command);
+        assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+        assert!(
+            stderr(&out).contains("declares schema 2"),
+            "{}",
+            stderr(&out)
+        );
+        assert_eq!(tree(&scene.plane), before);
+    }
+}
+
+#[test]
+fn no_front_door_scaffolds_no_persona_and_declares_none() {
+    let scene = Scene::new();
+
+    let out = scene.run(&["init", "--no-front-door"]);
+
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert!(!scene.plane.join("personas/steward").exists());
+    let toml = std::fs::read_to_string(scene.plane.join("charter.toml")).unwrap();
+    assert!(!toml.contains("[persona]"), "{toml}");
+}
+
+#[test]
+fn reinit_outside_a_plane_scaffolds_nothing() {
+    let scene = Scene::new();
+
+    let out = scene.run(&["reinit"]);
+
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("no control plane found"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(tree(&scene.plane).is_empty());
+}
+
+#[test]
+fn reinit_heals_a_missing_directory_and_then_has_nothing_to_do() {
+    let scene = Scene::new();
+    assert!(scene.init().status.success());
+    let whole = tree(&scene.plane);
+    std::fs::remove_dir(scene.plane.join("inventory")).unwrap();
+
+    let healed = scene.run(&["reinit"]);
+    assert!(healed.status.success(), "{}", stderr(&healed));
+    assert!(
+        stderr(&healed).contains("added inventory/"),
+        "{}",
+        stderr(&healed)
+    );
+    assert_eq!(tree(&scene.plane), whole);
+
+    let again = scene.run(&["reinit"]);
+    assert!(again.status.success(), "{}", stderr(&again));
+    assert!(stderr(&again).contains("Up to date"), "{}", stderr(&again));
+    assert_eq!(tree(&scene.plane), whole);
+}
+
+#[test]
+fn clone_this_repo_outside_a_repository_is_refused_and_the_plane_still_made() {
+    let scene = Scene::new();
+
+    let out = scene.run(&["init", "--clone-this-repo"]);
+
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    assert!(
+        stderr(&out).contains("there is no repo here to clone"),
+        "{}",
+        stderr(&out)
+    );
+    assert!(scene.plane.join("charter.toml").is_file());
+}
