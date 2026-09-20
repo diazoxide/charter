@@ -18,19 +18,26 @@
 //! | `workspace snapshot` | [`snapshot`] |
 //! | `workspace create` | [`create`] |
 //! | `workspace reinit` | [`reinit`] |
+//! | `workspace fork` / `duplicate` | [`fork`] |
 //!
 //! # What is NOT here, and what it would take
 //!
-//! - **`workspace fork`.** The scaffold it shares with `create` is ported
-//!   ([`crate::wslayer`]); what is not is `_carry` — copying a parent workspace's charter,
-//!   memory and manifest into the fork, and cutting each recorded repo's clone onto a branch
-//!   of its own. That is a git verb per repo, not a scaffold.
-//! - **A guest CHECKOUT inside a workspace.** [`reinit`] and [`create`] wire the workspace
-//!   DIRECTORY; a clone or a linked worktree under it is a git root of its own and needs
-//!   [`crate::guest`]'s half — the `.git/info/exclude` block and the four row states that
-//!   report on it (`unhidden`, `unlisted`, `unrecorded`, `withheld`), none of which has a
-//!   port. [`reinit`] names each such checkout rather than letting "up to date" stand over
-//!   one.
+//! - **`workspace fork --restore`.** The fork itself is ported ([`fork`]); what ends
+//!   charter's own is a call into `workspace restore`, which needs a `charter clone` per
+//!   missing repo AND a credentialed `git pull` per recorded branch. The clone half is
+//!   [`crate::repocmd::clone`] and the pull half is not ported, so the flag is accepted, the
+//!   fork is performed in full, and the line that would have been the restore says what did
+//!   not happen.
+//! - **The row vocabulary a guest CHECKOUT can reach that a clone cannot.** [`reinit`] and
+//!   [`create`] now wire the checkouts inside a workspace through [`crate::guest::wire`], so
+//!   the ordinary states — written, refreshed, present, somebody else's, refused — are
+//!   reported. Four of charter's are still absent, and each needs bookkeeping this port does
+//!   not have: `unlisted` and `unhidden` need `_shared_rels`, which asks git to list every
+//!   worktree of the checkout's repository and then asks `git status` per path per other
+//!   tree; `withheld` and `unrecorded` need the per-path withholding that goes with it.
+//!   [`crate::guest::wire`] is deliberately stronger there — it writes NOTHING when the
+//!   block cannot be written, where charter withholds only the machine-local file — so what
+//!   charter reports one path at a time this reports for the checkout as a whole.
 //! - **`workspace rename`/`mv`.** The move itself is three lines; what it cannot skip is
 //!   `git worktree repair` for every linked worktree of every clone that moved
 //!   (charter#963 — git calls a live worktree prunable after the move, and `gc` then deletes
@@ -56,6 +63,7 @@ use crate::repocmd::{Say, Sink};
 
 pub mod create;
 pub mod ensure;
+pub mod fork;
 pub mod live;
 pub mod reinit;
 pub mod remove;

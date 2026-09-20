@@ -683,6 +683,27 @@ enum WorkspaceCommand {
         #[arg(long, hide = true)]
         now: Option<String>,
     },
+    /// Fork a workspace: a new one pre-loaded with its charter, memory, todos and manifest.
+    ///
+    /// The clones are NOT copied — they are reconstructible. `--restore` is charter's way of
+    /// cloning them straight away; this binary does not restore from a manifest (see
+    /// `wscmd::fork`), performs the fork in full, and says so where the clone would be.
+    #[command(alias = "duplicate")]
+    Fork {
+        /// The workspace to fork from.
+        src: String,
+        /// The fork's name.
+        new: String,
+        /// Also clone the inherited repos now.
+        #[arg(long)]
+        restore: bool,
+        /// Make the fork LIVE (default LOCAL).
+        #[arg(long)]
+        live: bool,
+        /// Pin the clock the fork's manifest and note are stamped with, for tests only.
+        #[arg(long, hide = true)]
+        now: Option<String>,
+    },
     /// Bring a workspace's structure and charter's layer up to what this version writes.
     Reinit {
         /// The workspace (default: the active one).
@@ -1404,6 +1425,7 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
             | WorkspaceCommand::Default { .. }
             | WorkspaceCommand::Snapshot { .. }
             | WorkspaceCommand::Create { .. }
+            | WorkspaceCommand::Fork { .. }
             | WorkspaceCommand::Reinit { .. }
     ) {
         return None;
@@ -1466,6 +1488,28 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
                     repos,
                     now,
                     ids: &here.ids,
+                },
+                say,
+            )
+        }
+        WorkspaceCommand::Fork {
+            src,
+            new,
+            restore,
+            live,
+            now,
+        } => {
+            let Some(now) = pinned(now) else {
+                return Some(ExitCode::FAILURE);
+            };
+            wscmd::fork::fork(
+                &wscmd::fork::Request {
+                    root: &root,
+                    src,
+                    new,
+                    live: *live,
+                    restore: *restore,
+                    now,
                 },
                 say,
             )
@@ -1613,6 +1657,7 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Workspace(WorkspaceCommand::Default { .. })
         | Command::Workspace(WorkspaceCommand::Snapshot { .. })
         | Command::Workspace(WorkspaceCommand::Create { .. })
+        | Command::Workspace(WorkspaceCommand::Fork { .. })
         | Command::Workspace(WorkspaceCommand::Reinit { .. })
         | Command::GitPolicy { .. } => {
             unreachable!("answered before run")
