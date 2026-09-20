@@ -107,6 +107,47 @@ fn the_turns_tokens_are_recorded_when_the_line_is_drawn_too() {
 }
 
 #[test]
+fn the_footer_names_the_surfaces_it_does_not_draw() {
+    // The rule this build is held to: an omitted section is NAMED, never merely absent. An
+    // operator reads a footer to find out whether anything needs them, and one that can only
+    // ever say "nothing" is a footer that lies once a week — so the line below is what stands
+    // where the repo rows, the persona chips, the alerts and the session strip will be.
+    let (_keep, at) = plane();
+
+    let ran = statusline(&at, A_TURN, &[("COLUMNS", "80")]);
+
+    // charter's `render` ends on a newline and `print` adds the second one, so the footer is
+    // followed by a blank line. Copied deliberately: it is part of what the two implementations
+    // have to agree on for a byte-for-byte comparison to mean anything.
+    assert!(ran.out.ends_with("\n\n"), "{:?}", ran.out);
+    let lines: Vec<&str> = ran.out.trim_end_matches('\n').lines().collect();
+    assert_eq!(
+        lines.len(),
+        5,
+        "frame, row, rule, declaration, frame: {:?}",
+        ran.out
+    );
+    assert!(
+        lines[1].contains("default"),
+        "the workspace: {:?}",
+        lines[1]
+    );
+    assert!(
+        lines[2].contains('\u{251c}'),
+        "the zone rule: {:?}",
+        lines[2]
+    );
+    assert!(
+        lines[3].contains("not drawn by this build"),
+        "the declaration: {:?}",
+        lines[3]
+    );
+    // Every line is the same number of columns, borders included — the frame is a ruler.
+    let widths: Vec<usize> = lines.iter().map(|l| charter_core::tui::width(l)).collect();
+    assert!(widths.iter().all(|w| *w == 76), "{widths:?}");
+}
+
+#[test]
 fn a_session_with_no_app_listening_is_not_suppressed() {
     // A socket file left behind by an app that has gone. ADR 0019's frame asked "is the
     // launcher pid still running" for this exact case: without it, a crashed launcher blanks
