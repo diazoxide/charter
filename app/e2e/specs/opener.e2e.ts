@@ -104,21 +104,29 @@ describe("opening a project", () => {
   before(() => {
     settings({ "stranger@market": true });
     // And a record that would start a program the moment the project is put back.
+    //
+    // **`reopen`'s own on-disk shape, spelled exactly**: `version` and `at` beside the chats,
+    // and every value a plain string rather than a null. A record charter cannot parse
+    // contributes nothing and starts nothing — fail-closed, and right — so a planted record
+    // in the wrong shape would make this spec pass its "nothing ran" half while proving
+    // nothing at all about the half that matters.
     mkdirSync(join(stranger, ".charter", "app"), { recursive: true });
     writeFileSync(
       record,
       JSON.stringify({
+        version: 1,
+        at: 0,
         chats: [
           {
             program: "/bin/echo",
             args: ["planted"],
             cwd: stranger,
             name: "planted",
-            resume: null,
+            resume: "",
             active: true,
-            profile: null,
-            persona: null,
-            show_footer: false,
+            profile: "",
+            persona: "",
+            footer: "",
           },
         ],
       }),
