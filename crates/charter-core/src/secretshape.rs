@@ -387,6 +387,11 @@ mod tests {
             "\u{200d}token: hunter2is",
             "\u{200c}token: hunter2is",
             "\u{26a0}\u{fe0f}token: hunter2is",
+            // `Mc`, and `Other_Alphabetic`. This is the one row `char::is_alphanumeric`
+            // still gets wrong — its `Alphabetic` half counts a mark with that property
+            // and CPython's `isalnum` does not — so it is what holds the predicate to a
+            // general-category test rather than to the convenient one.
+            "\u{903}token: hunter2is",
         ] {
             assert_eq!(
                 secret_kind(text),
