@@ -6,14 +6,18 @@
 //! 0033 is the decision that a project IS a plane and that the app opens one; this module is
 //! the door.
 //!
-//! Three things live here and they are one story:
+//! Four things live here and they are one story:
 //!
 //! - **what to offer** — the planes this machine remembers ([`recent_planes`]), and the folder
 //!   picker for one it does not ([`pick_project`]);
 //! - **what to ask** — a plane the operator has not approved is not opened, it is *described*,
 //!   and the description is the dialog ([`Ask`]);
 //! - **what an answer buys** — [`approve_plane`] records the yes and opens the plane, and it
-//!   is the only way into `Planes`' second mint of `Approved`.
+//!   is the only way into `Planes`' second mint of `Approved`;
+//! - **what a window holds** — [`window_holds_planes`] takes the tab strip and writes it into
+//!   this machine's store, and [`planes_to_restore`] reads it back at the next cold launch
+//!   (ADR 0033, decision 28). The restore says *which* projects; every one of them is opened
+//!   through [`open_plane`] like any other, so it is not a way past the ask above.
 //!
 //! **Nothing here decides whether to ask.** `machine::Store::consent` decides, against the
 //! plane as it is on this disk at this instant, inside `Planes::open_if_approved`; this module
