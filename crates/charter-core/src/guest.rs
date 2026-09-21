@@ -1951,6 +1951,40 @@ mod tests {
     }
 
     #[test]
+    fn a_checkout_charter_is_leaving_keeps_no_line_for_a_file_of_its_own() {
+        // `leaving` is an unwire's, and it is the one branch of `shared_rels` no command
+        // reaches yet — [`crate::wscmd`]'s gap list names `unwire` as unported. It is tested
+        // here rather than left for the day it is, because a guard nothing drives is a guard
+        // nobody can tell from one that is wrong.
+        //
+        // The rule: a checkout charter is LEAVING keeps no line for a file of its own, even
+        // though the file is still there — the whole point of leaving is that the operator
+        // gets their `git status` back. A co-written file is the exception and is checked
+        // below: the harness saves into a file it finds already ignored without adding an
+        // ignore of its own, so its line stays.
+        let (_dir, plane, tree) = plane_with("svc");
+        let exclude = tree.join(".git").join("info").join("exclude");
+        std::fs::create_dir_all(tree.join(".claude")).unwrap();
+        std::fs::write(tree.join(SETTINGS), "{}\n").unwrap();
+        std::fs::write(tree.join(LOCAL_SETTINGS), "{}\n").unwrap();
+        let text = rendered(&[SETTINGS.to_owned(), LOCAL_SETTINGS.to_owned()]);
+
+        let staying = shared_rels(&plane, &tree, &[], &text, &exclude, false);
+        let going = shared_rels(&plane, &tree, &[], &text, &exclude, true);
+
+        assert_eq!(
+            staying.rels,
+            vec![SETTINGS.to_owned(), LOCAL_SETTINGS.to_owned()],
+            "both files are there, so both lines stay"
+        );
+        assert_eq!(
+            going.rels,
+            vec![LOCAL_SETTINGS.to_owned()],
+            "on the way out charter's own line goes and the co-written one stays"
+        );
+    }
+
+    #[test]
     fn a_line_kept_without_proof_is_named_where_a_reader_looks() {
         // charter's ruling G, second half: keep every line, and let the report say what could
         // not be accounted for. A block kept silently is a block nobody can tell from one
