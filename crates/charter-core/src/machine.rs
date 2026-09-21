@@ -155,6 +155,41 @@ pub const MOST_PINNED: usize = 32;
 /// file charter did not write.
 pub const MOST_PINNED_WORKSPACES: usize = 32;
 
+/// The two bounds, counted apart, in one place.
+///
+/// **Three callers and one rule.** The size of this file is decided three times — when an
+/// open puts a plane at the front ([`Store::trim`]), when the file is read back ([`load`])
+/// and when it is written out ([`OnDisk::from`]) — and a pinned entry has to be exempt from
+/// [`MOST_RECENTS`] in all three or a pin quietly stops working in whichever one was missed.
+/// Three implementations of one rule is the drift this module's own docstring is about.
+#[derive(Default)]
+struct Room {
+    unpinned: usize,
+    pinned: usize,
+}
+
+impl Room {
+    /// Whether one more entry of this kind fits, counting it in if it does.
+    fn fits(&mut self, pinned: bool) -> bool {
+        let (counted, most) = if pinned {
+            (&mut self.pinned, MOST_PINNED)
+        } else {
+            (&mut self.unpinned, MOST_RECENTS)
+        };
+        *counted += 1;
+        *counted <= most
+    }
+
+    /// Why one did not, in the words a dropped row carries.
+    fn why(pinned: bool) -> String {
+        if pinned {
+            format!("is past the {MOST_PINNED} projects charter pins")
+        } else {
+            format!("is past the {MOST_RECENTS} planes charter remembers")
+        }
+    }
+}
+
 /// The most a workspace name may be, in bytes.
 ///
 /// A workspace is a directory beside `charter.toml`, so this is the longest name the file
@@ -686,7 +721,8 @@ impl Store {
         self.trim();
     }
 
-    /// Drops the oldest **unpinned** entries past [`MOST_RECENTS`], keeping every pinned one.
+    /// Drops the oldest **unpinned** entries past [`MOST_RECENTS`], keeping every pinned one
+    /// up to [`MOST_PINNED`] ([`Room`]).
     ///
     /// **Not `truncate`, and charter ADR 0040 is why.** A pin is the only thing an operator
     /// can say to mean "not this one", so a pin that the sixty-fifth plane opened could
@@ -695,14 +731,8 @@ impl Store {
     /// refused rather than granted, because the alternative is an unbounded file read at a
     /// cold launch.
     fn trim(&mut self) {
-        let mut unpinned = 0;
-        self.recents.retain(|entry| {
-            if entry.pinned {
-                return true;
-            }
-            unpinned += 1;
-            unpinned <= MOST_RECENTS
-        });
+        let mut room = Room::default();
+        self.recents.retain(|entry| room.fits(entry.pinned));
     }
 
     /// Whether another plane may be pinned on this machine.
@@ -1234,10 +1264,8 @@ fn usable_workspace(name: &str) -> Result<(), String> {
 /// is read at a cold launch and one bad row must not be a lost list.
 fn load(doc: &serde_json::Value, dropped: &mut Vec<Dropped>) -> Store {
     let mut recents: Vec<Recent> = Vec::new();
-    // How many of each kind are in already, so the two bounds are counted separately: a
-    // pinned entry does not spend the recents bound, and cannot borrow past its own.
-    let mut unpinned = 0usize;
-    let mut pinned_so_far = 0usize;
+    // The two bounds, counted apart. One definition, in `Room`.
+    let mut room = Room::default();
     for raw in array(doc.get("recents")) {
         let named = raw
             .get("plane")
@@ -1270,21 +1298,12 @@ fn load(doc: &serde_json::Value, dropped: &mut Vec<Dropped>) -> Store {
             .get("pinned")
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
-        let over = if pinned {
-            (pinned_so_far >= MOST_PINNED)
-                .then(|| format!("is past the {MOST_PINNED} projects charter pins"))
-        } else {
-            (unpinned >= MOST_RECENTS)
-                .then(|| format!("is past the {MOST_RECENTS} planes charter remembers"))
-        };
-        if let Some(why) = over {
-            dropped.push(Dropped::Recent { plane: named, why });
+        if !room.fits(pinned) {
+            dropped.push(Dropped::Recent {
+                plane: named,
+                why: Room::why(pinned),
+            });
             continue;
-        }
-        if pinned {
-            pinned_so_far += 1;
-        } else {
-            unpinned += 1;
         }
         recents.push(Recent {
             plane,
@@ -1470,19 +1489,11 @@ impl From<&Store> for OnDisk {
             recents: store
                 .recents
                 .iter()
-                // **Both bounds, counted apart** — the same rule `Store::trim` and `load`
-                // keep, said a third time because this is the third place the file's size is
-                // decided and a `take(MOST_RECENTS)` here would drop a pinned project that
+                // **Both bounds, counted apart** — `Room`, the same rule `Store::trim` and
+                // `load` keep. A `take(MOST_RECENTS)` here would drop a pinned project that
                 // the other two deliberately kept.
-                .scan((0usize, 0usize), |(unpinned, pinned), entry| {
-                    let room = if entry.pinned {
-                        *pinned += 1;
-                        *pinned <= MOST_PINNED
-                    } else {
-                        *unpinned += 1;
-                        *unpinned <= MOST_RECENTS
-                    };
-                    Some(room.then_some(entry))
+                .scan(Room::default(), |room, entry| {
+                    Some(room.fits(entry.pinned).then_some(entry))
                 })
                 .flatten()
                 // `to_str` and never `display`, which SUBSTITUTES for a byte that is not
