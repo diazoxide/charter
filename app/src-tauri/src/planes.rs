@@ -474,6 +474,65 @@ impl Planes {
         }
     }
 
+    /// Writes down which projects each window is holding, so the next cold launch can put
+    /// them back (ADR 0033, spec decision 28).
+    ///
+    /// **Written whenever the arrangement changes, not only at the quit.** The record is the
+    /// same either way at a quit, and a charter that was killed — or a machine that lost
+    /// power — still comes back to the projects that were open. `RunEvent::Exit` was the
+    /// other candidate and it is the one that loses everything to a crash.
+    ///
+    /// **Ids are turned back into roots HERE**, through the registry, rather than by spelling
+    /// a `PlaneId` back into a path. The id is a `display()` of the root, which SUBSTITUTES
+    /// for a byte that is not UTF-8 — so a plane whose path is not UTF-8 would be written down
+    /// as a path that is not the one that is open, and then opened at the next launch.
+    ///
+    /// Never worth refusing anything over: an arrangement that could not be filed costs the
+    /// next launch its tabs, and there is nothing the operator could do about it here.
+    /// `Unsupported` is silent, because it is Windows having no store at all (ADR 0031) rather
+    /// than a fault.
+    pub fn remember_arrangement(&self, windows: &[Holding]) {
+        let Some(config) = self.config.as_deref() else {
+            return;
+        };
+        let arranged: Vec<machine::Window> = {
+            let open = self.map();
+            windows
+                .iter()
+                .filter_map(|holding| {
+                    let front = holding.front();
+                    let kept: Vec<(&PlaneId, PathBuf)> = holding
+                        .planes
+                        .iter()
+                        .filter_map(|id| Some((id, open.get(id)?.root.clone())))
+                        .collect();
+                    if kept.is_empty() {
+                        return None;
+                    }
+                    // The index is found again in the list that SURVIVED, never carried over
+                    // from the one that went in: a plane the registry has already let go of
+                    // shifts everything after it, and an `active` off by one is a window that
+                    // comes back on the wrong project.
+                    let active = front
+                        .and_then(|front| kept.iter().position(|(id, _)| *id == front))
+                        .unwrap_or(0);
+                    Some(machine::Window {
+                        planes: kept.into_iter().map(|(_, root)| root).collect(),
+                        active,
+                    })
+                })
+                .collect()
+        };
+        if let Err(why) = machine::update(config, move |store| store.windows = arranged)
+            && why.kind() != std::io::ErrorKind::Unsupported
+        {
+            eprintln!(
+                "charter: the projects this window holds were not written down ({why}); the \
+                 next launch will not put them back"
+            );
+        }
+    }
+
     /// Everything this machine remembers, with what it would not take back named.
     ///
     /// The store alone: whether each remembered path is still THERE is a `stat` per row and
@@ -695,7 +754,33 @@ fn now() -> u64 {
         .map_or(0, |since| since.as_secs())
 }
 
-/// Which plane each window has in front.
+/// What one window is holding: its projects as tabs, and which of them is in front.
+///
+/// **The tabs and the front one are one value, not two.** A window that told charter its front
+/// plane in one call and its tab strip in another would have two answers to "what is on
+/// screen" and nothing keeping them in step — which is the singleton `Plane` ADR 0033 had to
+/// undo, wearing a tab bar.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Holding {
+    /// Left to right, as the project tabs show them.
+    pub planes: Vec<PlaneId>,
+    /// Which tab is in front. `None` is the opener: the window holds projects the operator is
+    /// not looking at, or holds none at all.
+    pub active: Option<usize>,
+}
+
+impl Holding {
+    /// The plane the operator is actually looking at, if any.
+    ///
+    /// An `active` past the end reads as none rather than panicking or wrapping: it can only
+    /// arrive from a window that is mid-change, and "not looking" is the answer that sends a
+    /// notification rather than swallowing one.
+    pub fn front(&self) -> Option<&PlaneId> {
+        self.planes.get(self.active?)
+    }
+}
+
+/// What each window is holding, and which of its projects it has in front.
 ///
 /// **This is the map #111 named as missing, and the reason it was missing is the reason it is
 /// needed.** `already_looking_at` asks a chat's OWN plane whether that chat is in front,
@@ -705,21 +790,29 @@ fn now() -> u64 {
 /// suppressed. The window is the only thing that knows which plane it is drawing, so the
 /// window says.
 ///
+/// It is also what a cold launch restores from: the arrangement written into this machine's
+/// store is [`Self::arrangement`] and nothing else, so "what charter remembers about the
+/// window" and "what the window told charter" cannot disagree.
+///
 /// Keyed by window label rather than held as one value, because a second window is the shape
 /// this app is going to (ADR 0033) and a singleton here would be the singleton `Plane` that
 /// ADR 0033 had to undo, one layer up.
 #[derive(Default)]
-pub struct Showing(Mutex<HashMap<String, PlaneId>>);
+pub struct Showing(Mutex<HashMap<String, Holding>>);
 
 impl Showing {
-    /// A window says which plane it now has in front, or that it has none — an opener with
-    /// nothing open yet, or the last project closed.
-    pub fn in_window(&self, window: &str, plane: Option<PlaneId>) {
+    /// A window says what it is holding and which project it has in front.
+    ///
+    /// A window holding nothing is forgotten rather than recorded as empty: it is an opener
+    /// with nothing open, and an empty window in the arrangement would restore as nothing at
+    /// the next launch while still being a row charter had to write down.
+    pub fn in_window(&self, window: &str, holding: Holding) {
         let mut showing = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        match plane {
-            Some(plane) => showing.insert(window.to_owned(), plane),
-            None => showing.remove(window),
-        };
+        if holding.planes.is_empty() {
+            showing.remove(window);
+        } else {
+            showing.insert(window.to_owned(), holding);
+        }
     }
 
     /// Whether `window` has `plane` in front.
@@ -728,12 +821,127 @@ impl Showing {
     /// rather than suppressed. That is the cheap way round: a notification the operator did
     /// not need costs a glance, and one they needed and did not get costs a chat sitting
     /// unanswered.
+    ///
+    /// **A project the window HOLDS but is not looking at is not in front**, which is the
+    /// whole of what project tabs added to this question: fifty chats can be live in a tab
+    /// behind the one on screen, and a notification about one of them is exactly the
+    /// notification the operator needs.
     pub fn is_showing(&self, window: &str, plane: &PlaneId) -> bool {
         self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(window)
+            .and_then(Holding::front)
             == Some(plane)
+    }
+
+    /// Every window's arrangement, in a stable order.
+    ///
+    /// Ordered by window label rather than by whatever the map iterates, so that writing the
+    /// arrangement twice with nothing changed writes the same bytes twice.
+    pub fn arrangement(&self) -> Vec<Holding> {
+        let showing = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut labels: Vec<&String> = showing.keys().collect();
+        labels.sort();
+        labels
+            .into_iter()
+            .filter_map(|label| showing.get(label).cloned())
+            .collect()
+    }
+}
+
+/// Whether this launch puts back the window set charter remembers.
+///
+/// `--no-restore` starts clean (spec decision 28), and it exists for the launch after the one
+/// that restored something the operator did not want. It is read from the process's own
+/// arguments once, at startup, and never again: a second launch's arguments reach the running
+/// process through the single-instance plugin, and a `--no-restore` typed then would be about
+/// a restore that happened hours ago.
+pub struct Restoring(bool);
+
+/// The argument that starts clean. Spelled once, so the flag and the test for it are one word.
+pub const NO_RESTORE: &str = "--no-restore";
+
+impl Restoring {
+    /// What this launch's arguments say.
+    pub fn from_args(args: impl IntoIterator<Item = String>) -> Self {
+        Self(!args.into_iter().any(|arg| arg == NO_RESTORE))
+    }
+
+    pub fn wanted(&self) -> bool {
+        self.0
+    }
+}
+
+/// The window set a cold launch has to put back, and every project it would not take back.
+pub struct Restorable {
+    /// The projects to open again, left to right as the tabs were.
+    pub planes: Vec<PathBuf>,
+    /// Which of them was in front, as an index into `planes` **after** the drops — so a
+    /// window whose front project has gone comes back on one that is still there.
+    pub active: Option<usize>,
+    /// One line per project charter would not take back.
+    pub dropped: Vec<String>,
+}
+
+/// The arrangement charter remembered, checked against this disk.
+///
+/// **A project that has moved or is gone is dropped with a line saying so, never an error
+/// dialog** (ADR 0033). It is `put_back`'s rule for a chat whose profile has gone, and it is
+/// the same reason: a restore is a convenience, and a convenience that blocks the launch is
+/// worse than the thing it was restoring.
+///
+/// **Nothing here opens anything.** Opening a project starts the programs its record names, so
+/// it goes through the trust gate like every other open — this only says which projects to
+/// offer that gate. A restore that minted its own approval would be ADR 0035 turned off for
+/// every project the operator had ever had open at once.
+///
+/// **Every remembered window merges into one.** charter draws one OS window today; splitting a
+/// tab back out needs multi-window Tauri and is not here yet. Merging is the answer that keeps
+/// the operator's projects — dropping the second window's tabs would lose work to a limitation
+/// they never asked for.
+pub fn restorable(loaded: machine::Loaded) -> Restorable {
+    let mut planes: Vec<PathBuf> = Vec::new();
+    let mut active = None;
+    // What the store itself would not take back, already dropped with a reason by the read.
+    // Only the window rows: a remembered RECENT charter would not take back is the opener's
+    // news, and saying it twice on one launch is saying it twice.
+    let mut dropped: Vec<String> = loaded
+        .dropped
+        .iter()
+        .filter(|why| matches!(why, machine::Dropped::Window { .. }))
+        .map(ToString::to_string)
+        .collect();
+    for (which, window) in loaded.store.windows.into_iter().enumerate() {
+        let was_active = window.active;
+        for (at, plane) in window.planes.into_iter().enumerate() {
+            let shown = charter_core::shown::short(&plane.display().to_string());
+            if let Err(why) = machine::still_a_plane(&plane) {
+                dropped.push(format!("{shown} {why}"));
+                continue;
+            }
+            // One project is one tab. Two windows that both held it merge into one that
+            // holds it once, and a second tab on one plane would be a second `PlaneView`
+            // drawing one board.
+            if planes.contains(&plane) {
+                continue;
+            }
+            if which == 0 && at == was_active {
+                active = Some(planes.len());
+            }
+            planes.push(plane);
+        }
+    }
+    // A front tab that was dropped leaves the window on the first project that survived,
+    // rather than on none: the operator asked for these projects, and an opener in front of
+    // them is a screen they have to click past.
+    if active.is_none() && !planes.is_empty() {
+        active = Some(0);
+    }
+    Restorable {
+        planes,
+        active,
+        dropped,
     }
 }
 
@@ -1573,15 +1781,242 @@ mod tests {
         let two = planes.open(&a_plane(&dir.path().join("two")));
         let showing = Showing::default();
 
-        showing.in_window("main", Some(one.clone()));
+        showing.in_window(
+            "main",
+            Holding {
+                planes: vec![one.clone(), two.clone()],
+                active: Some(0),
+            },
+        );
 
         assert!(showing.is_showing("main", &one));
+        // **And this is what project tabs changed about the question.** The window HOLDS
+        // plane two — fifty chats of it can be live in the tab behind the one on screen —
+        // and a notification about one of them is exactly the notification the operator
+        // needs. "Open in this window" is not "in front".
         assert!(!showing.is_showing("main", &two));
         // And a window that has never said is not looking at anything, so nothing is
         // suppressed on the strength of silence.
         assert!(!showing.is_showing("second", &one));
         // The last project closed: the window is showing no plane at all.
-        showing.in_window("main", None);
+        showing.in_window("main", Holding::default());
         assert!(!showing.is_showing("main", &one));
+    }
+
+    #[test]
+    fn a_window_on_its_opener_is_looking_at_none_of_the_planes_it_holds() {
+        // The operator pressed `+` to open another project. Both projects are still held and
+        // still running; neither is on screen, so neither suppresses anything.
+        let dir = tempfile::tempdir().expect("a directory");
+        let planes = planes();
+        let one = planes.open(&a_plane(&dir.path().join("one")));
+        let two = planes.open(&a_plane(&dir.path().join("two")));
+        let showing = Showing::default();
+
+        showing.in_window(
+            "main",
+            Holding {
+                planes: vec![one.clone(), two.clone()],
+                active: None,
+            },
+        );
+
+        assert!(!showing.is_showing("main", &one));
+        assert!(!showing.is_showing("main", &two));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn what_a_window_holds_is_written_down_so_the_next_launch_can_put_it_back() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let one = a_plane(&dir.path().join("one"));
+        let two = a_plane(&dir.path().join("two"));
+        let planes = planes_keeping(&config);
+        let first = planes.open(&one);
+        let second = planes.open(&two);
+
+        planes.remember_arrangement(&[Holding {
+            planes: vec![first, second],
+            active: Some(1),
+        }]);
+
+        let back = restorable(machine::read(&config));
+        assert_eq!(
+            back.planes,
+            vec![
+                one.canonicalize().expect("one resolves"),
+                two.canonicalize().expect("two resolves")
+            ]
+        );
+        assert_eq!(back.active, Some(1), "the tab that was in front is not");
+        assert!(back.dropped.is_empty(), "{:?}", back.dropped);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_window_that_holds_nothing_writes_an_arrangement_with_nothing_in_it() {
+        // The operator closed the last project and quit. Coming back to the tabs they had
+        // just closed would be charter overruling them with a file.
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        let planes = planes_keeping(&config);
+        let plane = planes.open(&root);
+        planes.remember_arrangement(&[Holding {
+            planes: vec![plane],
+            active: Some(0),
+        }]);
+        assert_eq!(restorable(machine::read(&config)).planes.len(), 1);
+
+        planes.remember_arrangement(&[]);
+
+        assert!(restorable(machine::read(&config)).planes.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_plane_the_registry_has_let_go_of_takes_its_tab_out_and_the_front_one_moves_with_it() {
+        // The id is the only thing a window sends, and an id the process is no longer holding
+        // cannot be turned back into a root honestly. Finding the front tab again in the list
+        // that SURVIVED is how a window comes back on the project it was on.
+        //
+        // **Three projects, the first let go of, and the second in front.** Two would prove
+        // nothing: `machine::read` clamps an index past the end, so a carried-over `active`
+        // happens to land on the right project whenever the tab that went was before it and
+        // the front one was last. Here the clamp cannot save it — a carried-over `1` is `c`,
+        // and the operator was on `b`.
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let a = a_plane(&dir.path().join("a"));
+        let b = a_plane(&dir.path().join("b"));
+        let c = a_plane(&dir.path().join("c"));
+        let planes = planes_keeping(&config);
+        let first = planes.open(&a);
+        let second = planes.open(&b);
+        let third = planes.open(&c);
+        planes.close(&first).expect("the first project closes");
+
+        planes.remember_arrangement(&[Holding {
+            planes: vec![first, second, third],
+            active: Some(1),
+        }]);
+
+        let back = restorable(machine::read(&config));
+        assert_eq!(
+            back.planes,
+            vec![
+                b.canonicalize().expect("b resolves"),
+                c.canonicalize().expect("c resolves")
+            ]
+        );
+        assert_eq!(
+            back.active,
+            Some(0),
+            "the window came back on the wrong project"
+        );
+    }
+
+    #[test]
+    fn a_window_that_lets_go_of_its_last_project_stops_being_a_window_in_the_arrangement() {
+        // An empty window in the arrangement is a row charter writes down and then restores
+        // as nothing. It is also the shape that would make "the operator closed everything"
+        // and "there is a window here with nothing in it" indistinguishable.
+        let dir = tempfile::tempdir().expect("a directory");
+        let planes = planes();
+        let one = planes.open(&a_plane(&dir.path().join("one")));
+        let showing = Showing::default();
+        showing.in_window(
+            "main",
+            Holding {
+                planes: vec![one],
+                active: Some(0),
+            },
+        );
+        assert_eq!(showing.arrangement().len(), 1);
+
+        showing.in_window("main", Holding::default());
+
+        assert!(showing.arrangement().is_empty());
+    }
+
+    #[test]
+    fn a_remembered_project_that_has_gone_is_dropped_with_a_line_and_never_an_error() {
+        // ADR 0033: a restore is a convenience, and a convenience that blocks the launch is
+        // worse than the thing it was restoring. It is `put_back`'s rule for a chat whose
+        // profile has gone, one scope up.
+        let dir = tempfile::tempdir().expect("a directory");
+        let there = a_plane(&dir.path().join("there"));
+        let gone = dir.path().join("gone");
+        let store = machine::Store {
+            windows: vec![machine::Window {
+                planes: vec![gone.clone(), there.clone()],
+                active: 0,
+            }],
+            ..machine::Store::default()
+        };
+
+        let back = restorable(machine::Loaded {
+            store,
+            ..machine::Loaded::default()
+        });
+
+        assert_eq!(back.planes, vec![there]);
+        assert_eq!(back.dropped.len(), 1, "{:?}", back.dropped);
+        assert!(
+            back.dropped[0].contains("no longer there"),
+            "{:?}",
+            back.dropped
+        );
+        // The tab that was in front is the one that went, so the window comes back on the
+        // project that survived rather than on an opener in front of it.
+        assert_eq!(back.active, Some(0));
+    }
+
+    #[test]
+    fn every_remembered_window_merges_into_the_one_window_this_app_can_draw() {
+        // Splitting a tab back out into its own OS window needs multi-window Tauri and is not
+        // here yet. Dropping the second window's tabs would lose the operator projects to a
+        // limitation they never asked for, so they merge — and a project both windows held is
+        // one tab, because two tabs on one plane would be two views of one board.
+        let dir = tempfile::tempdir().expect("a directory");
+        let one = a_plane(&dir.path().join("one"));
+        let two = a_plane(&dir.path().join("two"));
+        let store = machine::Store {
+            windows: vec![
+                machine::Window {
+                    planes: vec![one.clone()],
+                    active: 0,
+                },
+                machine::Window {
+                    planes: vec![two.clone(), one.clone()],
+                    active: 0,
+                },
+            ],
+            ..machine::Store::default()
+        };
+
+        let back = restorable(machine::Loaded {
+            store,
+            ..machine::Loaded::default()
+        });
+
+        assert_eq!(back.planes, vec![one, two]);
+        assert_eq!(back.active, Some(0), "the first window's front tab is lost");
+    }
+
+    #[test]
+    fn a_launch_told_not_to_restore_is_told_by_its_own_arguments_and_nothing_else() {
+        assert!(Restoring::from_args(["charter-app".to_owned()]).wanted());
+        assert!(
+            !Restoring::from_args(["charter-app".to_owned(), NO_RESTORE.to_owned()]).wanted(),
+            "--no-restore was read as a request to restore"
+        );
+        // Not a prefix and not a substring: `--no-restore-really` is not this flag, and a
+        // window that treated it as one would silently throw away the operator's tabs.
+        assert!(
+            Restoring::from_args(["charter-app".to_owned(), "--no-restore-really".to_owned()])
+                .wanted()
+        );
     }
 }

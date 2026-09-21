@@ -15,21 +15,11 @@
 //! says why in full. A panel that fetched would put a forge token in the process that draws
 //! the window and hold that window for as long as `gh` takes.
 
-use std::path::PathBuf;
+use std::path::Path;
 
 use charter_core::cistate::{self, Reading};
 use charter_core::repos::{self, Head};
 use charter_core::workspaces::Plane;
-
-/// The plane this window is running in.
-///
-/// Resolved per call rather than held, for the reason the sidebar resolves it per call: the
-/// plane is a directory the operator also edits and another charter process writes.
-pub(crate) fn root() -> Result<PathBuf, String> {
-    let cwd = std::env::current_dir()
-        .map_err(|why| format!("cannot read the current directory: {why}"))?;
-    charter_core::plane::resolve(&cwd).map_err(|why| why.to_string())
-}
 
 /// One open todo. There is no state field: a closed todo is a deleted file (ADR 0004).
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
@@ -104,11 +94,16 @@ pub(crate) struct RepoStates {
     cache_refused: Option<String>,
 }
 
-/// The panels that need no git.
-pub(crate) fn of(workspace: &str) -> Result<Panels, String> {
-    let root = root()?;
-    let plane = Plane::open(&root);
-    let found = repos::clones(&root, workspace).map_err(|why| why.to_string())?;
+/// The panels that need no git, for one workspace of one project.
+///
+/// **The project is handed in, never resolved here.** This used to walk up from the process's
+/// working directory — the singleton resolver ADR 0034 was written to remove — which was
+/// already wrong the moment #121 let a window open a project the launch had not, and is
+/// plainly wrong now that a window holds several: the panels would have drawn the workspace of
+/// whichever project the process happened to start in, under the heading of the one on screen.
+pub(crate) fn of(root: &Path, workspace: &str) -> Result<Panels, String> {
+    let plane = Plane::open(root);
+    let found = repos::clones(root, workspace).map_err(|why| why.to_string())?;
     let here: Vec<String> = found.repos.iter().map(|repo| repo.name.clone()).collect();
     let absent = repos::declared(&plane, workspace)
         .into_iter()
@@ -140,24 +135,18 @@ pub(crate) fn of(workspace: &str) -> Result<Panels, String> {
     })
 }
 
-/// The panel that needs git. Call it off the thread that draws.
-pub(crate) fn repo_states(workspace: &str) -> Result<RepoStates, String> {
-    let root = root()?;
+/// The panel that needs git. Call it off the thread that draws, for one project's workspace.
+pub(crate) fn repo_states(root: &Path, workspace: &str) -> Result<RepoStates, String> {
     let binary = crate::charter_binary();
-    states_of(&root, workspace, binary.as_deref())
+    states_of(root, workspace, binary.as_deref())
 }
 
-/// [`repo_states`] against a plane and a `charter` said out loud rather than discovered.
+/// [`repo_states`] with the `charter` binary said out loud rather than discovered.
 ///
-/// Split so the refresh trigger below is a test's to drive: `root()` walks up from the
-/// process's working directory and `charter_binary` looks beside the running executable, and
-/// neither can be pointed anywhere by a test that may not touch the environment
+/// Split so the refresh trigger below is a test's to drive: `charter_binary` looks beside the
+/// running executable, and a test that may not touch the environment cannot point it anywhere
 /// (`std::env::set_var` is `unsafe`, and this workspace forbids that).
-fn states_of(
-    root: &std::path::Path,
-    workspace: &str,
-    binary: Option<&std::path::Path>,
-) -> Result<RepoStates, String> {
+fn states_of(root: &Path, workspace: &str, binary: Option<&Path>) -> Result<RepoStates, String> {
     let found = repos::clones(root, workspace).map_err(|why| why.to_string())?;
     // Read once for the whole listing, so every row ages against the same instant and a
     // refusal is reported once rather than on every row.
@@ -196,7 +185,7 @@ fn states_of(
 /// Silent where a refusal is routine — cooling down, already running, nothing stale — and out
 /// loud where it is not, because a CI column that never fills over a `charter` binary that
 /// went missing would otherwise look exactly like one nobody has refreshed.
-fn refresh_if_it_is_due(root: &std::path::Path, workspace: &str, binary: Option<&std::path::Path>) {
+fn refresh_if_it_is_due(root: &Path, workspace: &str, binary: Option<&Path>) {
     use charter_core::glstate::Refreshing;
 
     let Some(binary) = binary else {
@@ -288,7 +277,7 @@ fn one(repo: &repos::Repo, cache: Option<&cistate::Cache>) -> RepoState {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::path::Path;
+    use std::path::PathBuf;
 
     /// A plane with one workspace holding one clone, and nothing fetched for it.
     fn plane_with_a_clone() -> (tempfile::TempDir, PathBuf) {

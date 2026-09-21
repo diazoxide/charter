@@ -6,14 +6,18 @@
 //! 0033 is the decision that a project IS a plane and that the app opens one; this module is
 //! the door.
 //!
-//! Three things live here and they are one story:
+//! Four things live here and they are one story:
 //!
 //! - **what to offer** — the planes this machine remembers ([`recent_planes`]), and the folder
 //!   picker for one it does not ([`pick_project`]);
 //! - **what to ask** — a plane the operator has not approved is not opened, it is *described*,
 //!   and the description is the dialog ([`Ask`]);
 //! - **what an answer buys** — [`approve_plane`] records the yes and opens the plane, and it
-//!   is the only way into `Planes`' second mint of `Approved`.
+//!   is the only way into `Planes`' second mint of `Approved`;
+//! - **what a window holds** — [`window_holds_planes`] takes the tab strip and writes it into
+//!   this machine's store, and [`planes_to_restore`] reads it back at the next cold launch
+//!   (ADR 0033, decision 28). The restore says *which* projects; every one of them is opened
+//!   through [`open_plane`] like any other, so it is not a way past the ask above.
 //!
 //! **Nothing here decides whether to ask.** `machine::Store::consent` decides, against the
 //! plane as it is on this disk at this instant, inside `Planes::open_if_approved`; this module
@@ -26,7 +30,7 @@ use std::collections::BTreeMap;
 use charter_core::machine;
 use tauri_plugin_dialog::DialogExt;
 
-use crate::planes::{Asking, Opening, PlaneId, Planes, Showing};
+use crate::planes::{Asking, Holding, Opening, PlaneId, Planes, Restoring, Showing, restorable};
 
 /// What a plane would contribute, as the trust prompt draws it — **and the exact value the
 /// operator's approval is checked against.**
@@ -128,6 +132,36 @@ pub struct Recents {
     ///
     /// The app is a working app either way. It just opens every project by picking it.
     pub forgetful: Option<String>,
+}
+
+/// What a cold launch puts back: the projects that were open, and what it would not take back.
+///
+/// **A project that has moved or is gone is dropped with a line saying so, never an error
+/// dialog** (ADR 0033). The window draws those lines where the operator is standing, the way
+/// the opener draws a recents row that went.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub struct Restore {
+    /// The projects to open again, left to right as the tabs were.
+    pub planes: Vec<String>,
+    /// Which of them was in front, as an index into `planes` after the drops. Null when there
+    /// is nothing to put back.
+    pub active: Option<u32>,
+    /// One line per project charter would not take back.
+    pub dropped: Vec<String>,
+}
+
+/// What a window is holding, as it says so itself.
+///
+/// One struct rather than two arguments, so that the tabs and the tab in front cannot be sent
+/// separately and disagree — and because a `Vec<PlaneId>` keeps its own name here, where a
+/// plane inside an `Option` argument does not.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, specta::Type)]
+pub struct WindowTabs {
+    /// The projects this window holds, left to right as its tabs show them.
+    pub planes: Vec<PlaneId>,
+    /// Which tab is in front. Null is the opener — the window is holding projects the
+    /// operator is not looking at, or holding none at all.
+    pub active: Option<u32>,
 }
 
 /// The trust ask: what this plane will put in force, in the words the operator reads.
@@ -302,19 +336,81 @@ pub fn approve_plane(
     planes.approve_and_open(std::path::Path::new(&path), &contributes.into_core())
 }
 
-/// A window says which plane it now has in front, or that it has none.
+/// The projects a cold launch has to put back, and every one it would not take back.
 ///
-/// What it buys is one thing: a notification about a chat in a plane the operator is NOT
-/// looking at is sent rather than suppressed. See [`Showing`], where the gap this closes is
-/// written down.
+/// **Answered to the window rather than acted on here, and that is the whole shape of it.**
+/// Opening a project starts the programs its reopen record names, so every open goes through
+/// the trust gate — and the gate ends in a dialog, which only something with a window can
+/// carry through. A restore that opened these itself would be a third mint of `Approved`
+/// covering every project the operator had ever had open at once. So this says *which*, the
+/// window opens each one through `open_plane` like a recents row, and a project that has
+/// started doing more than what was approved is asked about exactly as it would have been.
+///
+/// **On a blocking thread**, for `recent_planes`' reason: every row costs a
+/// `symlink_metadata` and a `stat`, and a remembered project can be on a share that is not
+/// coming back.
 #[tauri::command]
 #[specta::specta]
-pub fn window_shows_plane(
+pub async fn planes_to_restore(
+    planes: tauri::State<'_, Planes>,
+    restoring: tauri::State<'_, Restoring>,
+) -> Result<Restore, String> {
+    // `--no-restore` starts clean (spec decision 28). Answered with nothing rather than with
+    // a reason: the operator asked for this, so there is no news in it.
+    if !restoring.wanted() {
+        return Ok(Restore {
+            planes: Vec::new(),
+            active: None,
+            dropped: Vec::new(),
+        });
+    }
+    // One gated open, no `stat` of anything it names: safe on the thread that asked.
+    let loaded = planes.remembered();
+    tauri::async_runtime::spawn_blocking(move || {
+        let back = restorable(loaded);
+        Restore {
+            planes: back
+                .planes
+                .iter()
+                .map(|plane| plane.display().to_string())
+                .collect(),
+            active: back.active.and_then(|at| u32::try_from(at).ok()),
+            dropped: back.dropped,
+        }
+    })
+    .await
+    .map_err(|err| format!("reading the projects this window had open did not finish: {err}"))
+}
+
+/// A window says what it is holding: its projects as tabs, and which one is in front.
+///
+/// Two things, in one call, because they are one fact. A notification about a chat in a
+/// project the operator is NOT looking at is sent rather than suppressed — see [`Showing`],
+/// where the gap this closes is written down — and the tab strip is written into this
+/// machine's store so the next cold launch puts it back (ADR 0033).
+///
+/// **The window says; nothing asks it.** The window is the only thing that knows what it
+/// draws, and a core that inferred the arrangement from its own registry would be answering
+/// "what is open in this process", which is a different question the moment a project is held
+/// but not on screen.
+#[tauri::command]
+#[specta::specta]
+pub fn window_holds_planes(
     window: tauri::Window,
     showing: tauri::State<'_, Showing>,
-    plane: Option<PlaneId>,
+    planes: tauri::State<'_, Planes>,
+    held: WindowTabs,
 ) {
-    showing.in_window(window.label(), plane);
+    showing.in_window(
+        window.label(),
+        Holding {
+            planes: held.planes,
+            active: held.active.map(|at| at as usize),
+        },
+    );
+    // Every window's, not this one's: the store holds the arrangement of the whole app, and
+    // writing one window's tabs over it would forget the others.
+    planes.remember_arrangement(&showing.arrangement());
 }
 
 #[cfg(test)]

@@ -40,8 +40,10 @@ function doing(): Doing & { calls: string[] } {
       calls.push(`sendKey:${key}`);
       return { ok: true as const };
     }),
-    closeProject: vi.fn(async () => {
-      calls.push("closeProject");
+    openProject: note("openProject"),
+    selectProject: note("selectProject"),
+    closeProject: vi.fn(async (plane: string) => {
+      calls.push(`closeProject:${plane}`);
       return { ok: true as const };
     }),
     quit: note("quit"),
@@ -391,6 +393,10 @@ describe("carrying out a row", () => {
         workspaces: ["alpha", "beta"],
         focused: "alpha",
         plane: "/plane",
+        projects: [
+          { plane: "/plane", name: "plane" },
+          { plane: "/other", name: "other" },
+        ],
         worktree: PIECE,
         refusal: "something was in the way",
         needsYou: [8],
@@ -415,7 +421,10 @@ describe("carrying out a row", () => {
         "removeWorktree:true",
         "mergeWorktree",
         "sendKey:F2",
-        "closeProject",
+        "openProject",
+        "selectProject:/other",
+        "closeProject:/plane",
+        "closeProject:/other",
         "quit",
       ]),
     );

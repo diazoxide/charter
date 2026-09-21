@@ -28,7 +28,7 @@ use tauri_specta::{Builder, collect_commands};
 
 use hooks::Moved;
 use lifecycle::Quitting;
-use planes::{Launch, PlaneId, Planes, Showing};
+use planes::{Launch, PlaneId, Planes, Restoring, Showing};
 
 /// The `charter` binary a hook runs, or none when the app cannot find one.
 ///
@@ -128,7 +128,11 @@ fn already_looking_at(app: &tauri::AppHandle, moved: &Moved) -> bool {
 pub(crate) const SECOND_LAUNCH: &str = "open-plane";
 
 /// A second launch arrived: its directory goes to the window, which takes it through the same
-/// opener every other path uses.
+/// opener every other path uses and opens it **as another project tab**.
+///
+/// Until tabs existed the window could only say so on screen — it already held a project, and
+/// a second one had nowhere to go. That was the last of ADR 0033's "hands its plane to the
+/// process already running" still unspent.
 ///
 /// A directory charter cannot say anything about is not sent. The second process has already
 /// exited by then, so there is nobody to tell and nothing on screen would explain a message
@@ -349,10 +353,19 @@ fn plane_sidebar(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Sid
 /// listing and a few small files. The panels paint the moment a workspace is focused, and
 /// the part that has to run git arrives after — one command would make the todo list wait
 /// for a status read on every clone.
+///
+/// **It names its plane**, like every other command here. It used to resolve one out of the
+/// process's working directory — `plane::resolve`, the singleton ADR 0034 removed — so a
+/// window showing a project the launch had not opened drew the workspaces of the one it had.
+/// A workspace name means nothing without its project; two projects can both have an `alpha`.
 #[tauri::command]
 #[specta::specta]
-fn workspace_panels(workspace: String) -> Result<panels::Panels, String> {
-    panels::of(&workspace)
+fn workspace_panels(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+) -> Result<panels::Panels, String> {
+    panels::of(planes.held(&plane)?.root(), &workspace)
 }
 
 /// What git says about each of the focused workspace's clones, and what the forge cache
@@ -364,8 +377,16 @@ fn workspace_panels(workspace: String) -> Result<panels::Panels, String> {
 /// `.charter/cache/glstate.json`, which charter-app reads and never writes.
 #[tauri::command]
 #[specta::specta]
-async fn workspace_repos(workspace: String) -> Result<panels::RepoStates, String> {
-    tauri::async_runtime::spawn_blocking(move || panels::repo_states(&workspace))
+async fn workspace_repos(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+) -> Result<panels::RepoStates, String> {
+    // Resolved on the thread that asked, so the blocking half carries a path and not a
+    // registry handle — and so a plane that is not open refuses here rather than inside a
+    // thread whose failure would read as "reading the repos did not finish".
+    let root = planes.held(&plane)?.root().to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || panels::repo_states(&root, &workspace))
         .await
         .map_err(|err| format!("reading the workspace's repos did not finish: {err}"))?
 }
@@ -865,7 +886,8 @@ fn commands() -> Builder<tauri::Wry> {
         opener::pick_project,
         opener::open_plane,
         opener::approve_plane,
-        opener::window_shows_plane,
+        opener::planes_to_restore,
+        opener::window_holds_planes,
         open_session,
         close_session,
         send_input,
@@ -989,9 +1011,15 @@ pub fn run() {
                 panics::keep_in(&logs);
             }
             app.manage(Quitting::default());
-            // Which plane each window has in front. Empty until a window says, and an empty
-            // answer means "not looking", so a notification is sent rather than suppressed.
+            // What each window is holding, and which of its projects it has in front. Empty
+            // until a window says, and an empty answer means "not looking", so a notification
+            // is sent rather than suppressed.
             app.manage(Showing::default());
+            // Whether this launch puts the last quit's window set back. Read from THIS
+            // process's arguments, once: a second launch's `--no-restore` would be about a
+            // restore that happened hours ago, so the single-instance closure never reaches
+            // this.
+            app.manage(Restoring::from_args(std::env::args()));
 
             // Which `charter` a hook runs. Without one, nothing is armed and every chat
             // reads `unknown` — never a hook pointed at a path that is not there. It is a

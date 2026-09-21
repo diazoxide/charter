@@ -57,6 +57,10 @@ function core(panels: PanelsModel | Error = PANELS, repos: Partial<RepoStates> =
   });
 }
 
+/** The project these panels are for. A workspace name is only half an answer: two
+ *  projects can both have an `alpha`, so every ask carries the project it is about. */
+const PLANE = "/home/dev/plane";
+
 const row = (name: string) => screen.findByTestId(`repo-${name}`);
 const ci = (name: string) => screen.findByTestId(`ci-${name}`);
 
@@ -69,7 +73,7 @@ describe("Panels", () => {
       return new Promise(() => {});
     });
 
-    render(<Panels workspace="alpha" />);
+    render(<Panels plane={PLANE} workspace="alpha" />);
 
     expect(await screen.findByText("Review the rollout plan")).toBeInTheDocument();
     expect(within(await screen.findByTestId("panel-personas")).getByText(/steward/)).toBeVisible();
@@ -79,7 +83,7 @@ describe("Panels", () => {
   it("says which persona a chat started here would adopt", async () => {
     core();
 
-    render(<Panels workspace="alpha" />);
+    render(<Panels plane={PLANE} workspace="alpha" />);
 
     const personas = await screen.findByTestId("panel-personas");
     await waitFor(() => expect(personas).toHaveTextContent("steward · default"));
@@ -95,7 +99,7 @@ describe("Panels", () => {
       ],
     });
 
-    render(<Panels workspace="alpha" />);
+    render(<Panels plane={PLANE} workspace="alpha" />);
 
     const svc = await row("svc");
     await waitFor(() => expect(svc).toHaveTextContent("main"));
@@ -119,7 +123,7 @@ describe("Panels", () => {
       ],
     });
 
-    render(<Panels workspace="alpha" />);
+    render(<Panels plane={PLANE} workspace="alpha" />);
 
     const svc = await row("svc");
     await waitFor(() => expect(svc).toHaveTextContent("could not read"));
@@ -132,7 +136,7 @@ describe("Panels", () => {
   it("says a branch has no commits yet rather than drawing it like any other", async () => {
     core(PANELS, { repos: [repo("svc", { unborn: true })] });
 
-    render(<Panels workspace="alpha" />);
+    render(<Panels plane={PLANE} workspace="alpha" />);
 
     await waitFor(async () => expect(await row("svc")).toHaveTextContent("no commits yet"));
   });
@@ -140,7 +144,7 @@ describe("Panels", () => {
   it("names the commit a detached checkout sits on", async () => {
     core(PANELS, { repos: [repo("svc", { branch: null, detached: "1a2b3c4" })] });
 
-    render(<Panels workspace="alpha" />);
+    render(<Panels plane={PLANE} workspace="alpha" />);
 
     await waitFor(async () => expect(await row("svc")).toHaveTextContent("detached at 1a2b3c4"));
   });
@@ -162,7 +166,7 @@ describe("Panels", () => {
       ],
     });
 
-    render(<Panels workspace="alpha" />);
+    render(<Panels plane={PLANE} workspace="alpha" />);
 
     const cell = await ci("svc");
     await waitFor(() => expect(cell).toHaveTextContent("failed"));
@@ -177,7 +181,7 @@ describe("Panels", () => {
       repos: [repo("svc", { not_fetched: "the last fetch was for a different branch" })],
     });
 
-    render(<Panels workspace="alpha" />);
+    render(<Panels plane={PLANE} workspace="alpha" />);
 
     const cell = await ci("svc");
     await waitFor(() => expect(cell).toHaveTextContent("not fetched"));
@@ -187,7 +191,7 @@ describe("Panels", () => {
   it("tells a fetch that named no pipeline from no fetch at all", async () => {
     core(PANELS, { repos: [repo("svc", { fetched_seconds_ago: 30, not_fetched: null })] });
 
-    render(<Panels workspace="alpha" />);
+    render(<Panels plane={PLANE} workspace="alpha" />);
 
     const cell = await ci("svc");
     await waitFor(() => expect(cell).toHaveTextContent("no pipeline recorded"));
@@ -197,7 +201,7 @@ describe("Panels", () => {
   it("says the app reads CI state and does not fetch it", async () => {
     core();
 
-    render(<Panels workspace="alpha" />);
+    render(<Panels plane={PLANE} workspace="alpha" />);
 
     expect(
       await within(await screen.findByTestId("panel-ci")).findByText(/never fetches/),
@@ -209,7 +213,7 @@ describe("Panels", () => {
       cache_refused: "/p/.charter/cache/glstate.json is reached through a symlink",
     });
 
-    render(<Panels workspace="alpha" />);
+    render(<Panels plane={PLANE} workspace="alpha" />);
 
     const panel = await screen.findByTestId("panel-ci");
     await waitFor(() => expect(within(panel).getByRole("alert")).toHaveTextContent("symlink"));
@@ -226,7 +230,7 @@ describe("Panels", () => {
       refused: [["alias", "'alias' is reached through a symlink, and a worktree path may not be"]],
     });
 
-    render(<Panels workspace="alpha" />);
+    render(<Panels plane={PLANE} workspace="alpha" />);
 
     const panel = await screen.findByTestId("panel-repos");
     await waitFor(() => expect(within(panel).getByRole("alert")).toHaveTextContent("alias"));
@@ -235,7 +239,7 @@ describe("Panels", () => {
   it("shows a repo the manifest names that nobody has cloned", async () => {
     core({ ...PANELS, repos: ["svc"], absent: ["later"] });
 
-    render(<Panels workspace="alpha" />);
+    render(<Panels plane={PLANE} workspace="alpha" />);
 
     await waitFor(async () => expect(await row("later")).toHaveTextContent("not cloned here"));
   });
@@ -243,7 +247,7 @@ describe("Panels", () => {
   it("says why the todos could not be read rather than showing none", async () => {
     core({ ...PANELS, todos: [], todos_refused: "todos/ resolves outside the plane" });
 
-    render(<Panels workspace="alpha" />);
+    render(<Panels plane={PLANE} workspace="alpha" />);
 
     const panel = await screen.findByTestId("panel-todos");
     await waitFor(() => expect(within(panel).getByRole("alert")).toHaveTextContent("outside"));
@@ -252,7 +256,7 @@ describe("Panels", () => {
   it("says when the core refused the workspace outright", async () => {
     core(new Error("no workspace 'ghost'"));
 
-    render(<Panels workspace="ghost" />);
+    render(<Panels plane={PLANE} workspace="ghost" />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("ghost");
   });
@@ -260,7 +264,7 @@ describe("Panels", () => {
   it("draws nothing about a workspace when none is focused", async () => {
     core();
 
-    render(<Panels workspace={undefined} />);
+    render(<Panels plane={PLANE} workspace={undefined} />);
 
     expect(await screen.findByText("No workspace focused.")).toBeInTheDocument();
   });
@@ -277,7 +281,7 @@ describe("Panels", () => {
       return { workspace: "alpha", repos: [], cache_refused: "the cache was not read" };
     });
 
-    render(<Panels workspace="alpha" />);
+    render(<Panels plane={PLANE} workspace="alpha" />);
 
     await waitFor(() =>
       expect(screen.getByTestId("panel-ci")).toHaveTextContent("the cache was not read"),

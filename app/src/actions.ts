@@ -73,9 +73,15 @@ export type Does =
   | { verb: "showChat"; session: number }
   | { verb: "removeWorktree"; force: boolean }
   | { verb: "mergeWorktree" }
-  /** Lets go of the project this window is showing, which ends its chats and shows the
-   *  opener again. Nothing of the project on disk goes. */
-  | { verb: "closeProject" }
+  /** Shows the opener, so another project can be opened into this window beside the ones it
+   *  already holds. It opens nothing by itself — the trust gate is the opener's (ADR 0035). */
+  | { verb: "openProject" }
+  /** Brings a project this window already holds to the front. Nothing is opened, nothing is
+   *  closed, and the project that was in front keeps every chat it had running. */
+  | { verb: "selectProject"; plane: string }
+  /** Lets go of one project, which ends its chats and takes its tab out. Nothing of the
+   *  project on disk goes. */
+  | { verb: "closeProject"; plane: string }
   | { verb: "quit" }
   /** A row that cannot run. It still carries a `Does`, so "what it would do" and "whether it
    *  can" stay separate questions — and `perform` refuses it rather than guessing. */
@@ -123,6 +129,15 @@ export type Now = {
   worktree?: ChatWorktree;
   /** The plane's root. Every worktree command needs it, and there may not be one. */
   plane?: string;
+  /**
+   * Every project this window holds, left to right as the project tabs show them.
+   *
+   * A window can hold several (ADR 0033), and switching between them is navigation rather
+   * than a state change: the project left behind keeps every chat it had running. The rows
+   * are here for the same reason the tab rows are — a way to reach a project without a
+   * pointer, and at eight projects the palette is faster than the strip.
+   */
+  projects?: readonly Project[];
   /** A refusal `worktree.remove` gave and the operator has not answered yet. */
   refusal?: string;
   /** The chats asking for you, oldest first. */
@@ -147,9 +162,63 @@ export type Doing = {
   removeWorktree: (force: boolean) => Promise<Ran>;
   mergeWorktree: () => Promise<Ran>;
   sendKey: (key: string) => Promise<Ran>;
-  closeProject: () => Promise<Ran>;
+  openProject: () => void;
+  selectProject: (plane: string) => void;
+  closeProject: (plane: string) => Promise<Ran>;
   quit: () => void;
 };
+
+/** One project a window holds, as the strip and the palette both name it. */
+export type Project = {
+  /** Its root, which is its id everywhere else in the app. */
+  plane: string;
+  /** What to call it on a tab — the directory's own name. */
+  name: string;
+};
+
+/**
+ * Every row about the projects a window holds.
+ *
+ * **Exported because the project strip draws these rows and so does the palette**, and the
+ * rule this module opens with says there is one place an action is written down. `catalogue`
+ * splices them into its two sections — switching is navigation and goes above the line,
+ * letting go of a project ends its chats and goes below — and the strip looks them up by the
+ * index of the project they belong to. `switchTo` and `close` are therefore in `projects`'
+ * own order, one row each, always.
+ */
+export function projectRows(
+  projects: readonly Project[],
+  /** The project in front, when one is. */
+  front: string | undefined,
+): { open: Offer; switchTo: Offer[]; close: Offer[] } {
+  return {
+    // Always available, and available with no project open too: it is how a window with
+    // nothing in it gets its first one, and how a window with eight gets a ninth.
+    open: can("project.open", "Open a project…", { verb: "openProject" }),
+    switchTo: projects.map((project) => {
+      const title = `Switch to project ${project.name}`;
+      // The project in front has a row that says so and cannot run — the same rule the tab
+      // strip follows, and for the same reason: a strip that lists eight and a palette that
+      // lists seven is the second answer this module exists to not have.
+      return project.plane === front
+        ? cannot(`project.select:${project.plane}`, title, "It is already in front.", project.name)
+        : can(
+            `project.select:${project.plane}`,
+            title,
+            { verb: "selectProject", plane: project.plane },
+            project.name,
+          );
+    }),
+    close: projects.map((project) =>
+      can(
+        `project.close:${project.plane}`,
+        `Close project ${project.name}`,
+        { verb: "closeProject", plane: project.plane },
+        project.name,
+      ),
+    ),
+  };
+}
 
 /** Nothing happened worth saying, which is the ordinary answer. */
 const DID: Ran = { ok: true };
@@ -253,6 +322,13 @@ export function catalogue(now: Now): Offer[] {
     );
   }
 
+  // The projects this window holds. Switching between them is navigation and not a state
+  // change — the project left behind keeps every chat it had running — so these sit up here
+  // with the tabs and the workspaces. Letting go of one is below the line, with the tab
+  // closes it is the bigger version of.
+  const projects = projectRows(now.projects ?? [], now.plane);
+  offers.push(projects.open, ...projects.switchTo);
+
   // The worktree of the chat in front. Merging is not destructive — it is fast-forward only
   // and never pushes — so it sits above the line; removing is below it.
   const why = whyNoWorktree(now, front !== undefined);
@@ -300,14 +376,13 @@ export function catalogue(now: Now): Offer[] {
 
   // Destructive, and therefore here: letting go of a project ends every chat in it. Nothing
   // of the project on disk goes — what is open is written into it first, and it opens again
-  // with everything still in it (ADR 0033). The row exists so the opener is reachable from a
-  // window that already has a project, which is the only way back to it.
-  const closeProject = "Close this project";
-  offers.push(
-    now.plane === undefined
-      ? cannot("project.close", closeProject, "No project is open, so there is none to close.")
-      : can("project.close", closeProject, { verb: "closeProject" }),
-  );
+  // with everything still in it (ADR 0033).
+  //
+  // **One row per project, never a "close the one in front"**, which is `tab.close:<id>`'s
+  // shape one scope up. A window holding eight projects has eight things to let go of, and a
+  // row that acts on whichever happens to be on screen is a destructive action whose target
+  // the operator has to work out from somewhere else on the page.
+  offers.push(...projects.close);
 
   offers.push(can("charter.quit", "Quit charter", { verb: "quit" }));
 
@@ -357,8 +432,14 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return doing.mergeWorktree();
     case "sendKey":
       return doing.sendKey(does.key);
+    case "openProject":
+      doing.openProject();
+      return DID;
+    case "selectProject":
+      doing.selectProject(does.plane);
+      return DID;
     case "closeProject":
-      return doing.closeProject();
+      return doing.closeProject(does.plane);
     case "quit":
       doing.quit();
       return DID;
