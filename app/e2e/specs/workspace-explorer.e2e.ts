@@ -10,6 +10,13 @@ import { pressAndStart } from "../opening.js";
  * listing every workspace with its vision text, which is the duplication ADR 0038 removed —
  * the strip above is the axis, and the workspace assertions that still matter moved to the
  * strip's own queries below.
+ *
+ * **Its name is why it runs last, and that is deliberate.** WebdriverIO's Tauri service keeps
+ * ONE app process for the whole run, so a spec that starts chats leaves them for every spec
+ * after it — and `lifecycle.e2e.ts` counts what a relaunch puts back. `sidebar.e2e.ts` sorted
+ * after every other spec in `wdio.conf.ts`'s glob, which is the only reason its two chats were
+ * never counted by anything; calling this file `explorer.e2e.ts` sorted it FIRST and turned
+ * lifecycle's "2 sessions" into 4, measured on both platforms. The name keeps the position.
  */
 
 /** The workspaces the strip is listing, in order (charter ADR 0036).
@@ -43,13 +50,24 @@ async function untilListed(expected: string[]): Promise<void> {
 }
 
 /**
+ * Puts the window on `alpha`, which is the workspace most of the assertions are about.
+ *
+ * Focused rather than assumed, for the reason in this file's own docstring: one app process
+ * serves the whole run, so what this spec finds depends on what ran before it.
+ */
+async function onAlpha(): Promise<void> {
+  await untilListed(["alpha", "beta"]);
+  await focus("alpha");
+}
+
+/**
  * Focuses a workspace from the strip, which is the axis.
  *
  * By the tab's own `.workspace-name` and not by `button=<name>`: a strip tab carries counts
  * beside its name, the explorer carries a workspace row of its own, and a text match across
  * the window would pick whichever came first.
  */
-export async function focus(workspace: string): Promise<void> {
+async function focus(workspace: string): Promise<void> {
   const tabs = await $$('[role="tablist"][aria-label="Workspaces"] [role="tab"]').getElements();
   for (const tab of tabs) {
     if ((await tab.$(".workspace-name").getText()) === workspace) {
@@ -62,15 +80,14 @@ export async function focus(workspace: string): Promise<void> {
 
 describe("the explorer", () => {
   it("lists the focused workspace's clones", async () => {
-    await untilListed(["alpha", "beta"]);
+    await onAlpha();
 
-    // `alpha` is focused at the start — it is the first workspace on the plane.
     await $('[data-testid="clone-svc"]').waitForExist({ timeout: 20_000 });
     await expect(await $('[data-testid="clone-tool"]')).toBeExisting();
   });
 
   it("lists the worktrees cut off a clone, with the branch each is on", async () => {
-    await untilListed(["alpha", "beta"]);
+    await onAlpha();
 
     const cut = await $('[data-testid="piece-svc-fix-login"]');
     await cut.waitForExist({ timeout: 20_000 });
@@ -80,7 +97,7 @@ describe("the explorer", () => {
   it("says a worktree carries no charter layer before a chat is started in it", async () => {
     // The fixture's piece is cut with plain git, which is exactly the tree a chat would run
     // in with none of the plane's ask/deny rules, no persona agents and no $CHARTER_HARNESS.
-    await untilListed(["alpha", "beta"]);
+    await onAlpha();
 
     const cut = await $('[data-testid="piece-svc-fix-login"]');
     await cut.waitForExist({ timeout: 20_000 });
@@ -88,7 +105,7 @@ describe("the explorer", () => {
   });
 
   it("says a clone has no worktrees rather than drawing nothing under it", async () => {
-    await untilListed(["alpha", "beta"]);
+    await onAlpha();
 
     const tool = await $('[data-testid="clone-tool"]');
     await browser.waitUntil(async () => (await tool.getText()).includes("No worktrees"), {
@@ -100,7 +117,7 @@ describe("the explorer", () => {
   it("does not list every workspace, because the strip above already answers that", async () => {
     // charter ADR 0038, and the reason this region was rewritten: the old sidebar drew every
     // workspace with its vision text under the strip that had just been made the axis.
-    await untilListed(["alpha", "beta"]);
+    await onAlpha();
     await $('[data-testid="clone-svc"]').waitForExist({ timeout: 20_000 });
 
     const explorer = await $('[data-testid="explorer"]');
@@ -119,7 +136,7 @@ describe("the explorer", () => {
   });
 
   it("follows the focus to another workspace", async () => {
-    await untilListed(["alpha", "beta"]);
+    await onAlpha();
 
     await focus("beta");
 
@@ -135,8 +152,7 @@ describe("the explorer", () => {
   });
 
   it("files a chat under the workspace it was started in", async () => {
-    await untilListed(["alpha", "beta"]);
-    await focus("alpha");
+    await onAlpha();
     await $('[data-testid="clone-svc"]').waitForExist({ timeout: 20_000 });
 
     await pressAndStart("New tab");

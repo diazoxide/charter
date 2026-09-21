@@ -44,6 +44,19 @@ async function focus(workspace: string): Promise<void> {
   throw new Error(`no ${workspace} on the workspace strip`);
 }
 
+/**
+ * Puts the window on `alpha`, which is the workspace every assertion below is about.
+ *
+ * **Focused rather than assumed.** `alpha` is what a launch opens on, but one app process
+ * serves the whole scenario run and any spec before this one may have left the window
+ * somewhere else — which is exactly what happened: five of these went red for 30 s each
+ * against a `beta` that holds no repos at all, on both platforms.
+ */
+async function onAlpha(): Promise<void> {
+  await untilTheStripIsRead();
+  await focus("alpha");
+}
+
 /** Waits until the plane has been read, so a workspace can be focused. */
 async function untilTheStripIsRead(): Promise<void> {
   await browser.waitUntil(
@@ -61,15 +74,14 @@ async function untilTheStripIsRead(): Promise<void> {
 
 describe("the bottom bar", () => {
   it("lists the focused workspace's repos with the branch each is on", async () => {
-    await untilTheStripIsRead();
+    await onAlpha();
 
-    // `alpha` is focused at the start — it is the first workspace on the plane.
     await untilSays("repo-svc", "main");
     await expect(await $('[data-testid="repo-tool"]')).toHaveText(expect.stringContaining("main"));
   });
 
   it("says which repo has something uncommitted and which has not", async () => {
-    await untilTheStripIsRead();
+    await onAlpha();
 
     // The fixture leaves one untracked file in `tool` and nothing in `svc`.
     await untilSays("repo-tool", "untracked");
@@ -77,7 +89,7 @@ describe("the bottom bar", () => {
   });
 
   it("counts the worktrees cut off each clone", async () => {
-    await untilTheStripIsRead();
+    await onAlpha();
 
     await untilSays("worktrees-svc", "1 worktree");
     // Cut with plain git, so no charter layer — counted here, named on the explorer's row.
@@ -86,7 +98,7 @@ describe("the bottom bar", () => {
   });
 
   it("shows the CI state the forge cache holds, and says how old it is", async () => {
-    await untilTheStripIsRead();
+    await onAlpha();
 
     await untilSays("ci-svc", "failed");
     await untilSays("ci-svc", "#41");
@@ -94,7 +106,7 @@ describe("the bottom bar", () => {
   });
 
   it("says a repo nobody has fetched is not fetched, rather than leaving it blank", async () => {
-    await untilTheStripIsRead();
+    await onAlpha();
 
     // `tool` has no entry in the cache at all. A blank cell would read as green.
     await untilSays("ci-tool", "not fetched");
@@ -107,7 +119,7 @@ describe("the bottom bar", () => {
   });
 
   it("follows the focus to another workspace", async () => {
-    await untilTheStripIsRead();
+    await onAlpha();
 
     await focus("beta");
 
@@ -121,7 +133,7 @@ describe("the bottom bar", () => {
   it("has nothing in it to press, because the bottom is what is true and not what you do", async () => {
     // charter ADR 0038's reading — *"the bottom is where you read what is true and do not
     // touch it"* — as far as a test can hold it.
-    await untilTheStripIsRead();
+    await onAlpha();
     await untilSays("repo-svc", "main");
 
     const bar = await $('[data-testid="bottom-bar"]');
@@ -133,7 +145,7 @@ describe("the bottom bar", () => {
 
 describe("the right-hand region", () => {
   it("shows the focused workspace's open todos and the plane's personas", async () => {
-    await untilTheStripIsRead();
+    await onAlpha();
 
     await untilSays("panel-todos", "Review the rollout plan");
     await untilSays("panel-personas", "steward");
@@ -160,7 +172,7 @@ describe("the right-hand region", () => {
   });
 
   it("no longer holds the repos or the CI, which went to the bottom bar", async () => {
-    await untilTheStripIsRead();
+    await onAlpha();
     await untilSays("repo-svc", "main");
 
     const panels = await $('[data-testid="panels"]');
