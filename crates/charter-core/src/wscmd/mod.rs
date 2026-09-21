@@ -23,16 +23,16 @@
 //!
 //! # What is NOT here, and what it would take
 //!
-//! - **The row vocabulary a guest CHECKOUT can reach that a clone cannot.** [`reinit`] and
-//!   [`create`] now wire the checkouts inside a workspace through [`crate::guest::wire`], so
-//!   the ordinary states — written, refreshed, present, somebody else's, refused — are
-//!   reported. Four of charter's are still absent, and each needs bookkeeping this port does
-//!   not have: `unlisted` and `unhidden` need `_shared_rels`, which asks git to list every
-//!   worktree of the checkout's repository and then asks `git status` per path per other
-//!   tree; `withheld` and `unrecorded` need the per-path withholding that goes with it.
-//!   [`crate::guest::wire`] is deliberately stronger there — it writes NOTHING when the
-//!   block cannot be written, where charter withholds only the machine-local file — so what
-//!   charter reports one path at a time this reports for the checkout as a whole.
+//! - **A checkout's layer read WITHOUT writing it.** [`reinit`] wires every checkout and
+//!   piece and reports all of charter's row states ([`crate::wslayer::Did`]), but the
+//!   read-only half — charter's `guest_layer`, which derives `withheld`, `unaccounted` and
+//!   `unrecorded` without writing — is not ported, because nothing in this binary reads a
+//!   workspace's layer without writing it. [`crate::wslayer::status`] says what it would cost
+//!   when something does.
+//! - **A withdrawal inside a CHECKOUT.** [`crate::wslayer::wire`] removes a file the plane
+//!   stopped declaring from the workspace directory; [`crate::guest::wire`] does not do the
+//!   same inside a checkout, so such a file stays (hidden, and its line kept) until an
+//!   unwire. charter removes it there too.
 //! - **`workspace rename`/`mv`.** The move itself is three lines; what it cannot skip is
 //!   `git worktree repair` for every linked worktree of every clone that moved
 //!   (charter#963 — git calls a live worktree prunable after the move, and `gc` then deletes

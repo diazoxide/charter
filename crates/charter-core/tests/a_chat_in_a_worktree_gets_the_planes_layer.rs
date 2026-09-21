@@ -177,33 +177,79 @@ fn the_block_goes_in_the_exclude_the_clone_reads_and_not_the_worktrees_own() {
 fn a_line_a_sibling_needs_is_never_taken_away_by_the_next_piece() {
     // One exclude, several trees. A piece that rewrote the block to its own list alone dropped
     // the line for charter's `.claude/settings.json` — the plane's rules and `env` — into
-    // somebody else's repository. The red light for a mutation that replaces `already()`'s
-    // union with the new list.
+    // somebody else's repository.
+    //
+    // **The line's PATH has to be there**, which is `_shared_rels`' whole rule since M2.26: a
+    // line leaves only on certainty, and it stays while its path is found in any checkout
+    // charter wires that reads this exclude. A line for a path nobody has is one charter is
+    // right to drop, so planting the line alone would test the opposite of the rule.
     let f = layered_plane("thing");
-    cut(&f, "first");
+    let first = cut(&f, "first");
+    let only_the_first = "/.claude/agents/only-the-first.md";
+    std::fs::write(
+        first.path.join(".claude/agents/only-the-first.md"),
+        "# an agent only the first piece has\n",
+    )
+    .unwrap();
     let common = f.clone.join(".git/info/exclude");
-    // A line only the first piece could have needed, written into the shared block by hand.
     let text = std::fs::read_to_string(&common).unwrap();
     std::fs::write(
         &common,
         text.replace(
             "/.charter-generated\n",
-            "/.claude/agents/only-the-first.md\n/.charter-generated\n",
+            &format!("{only_the_first}\n/.charter-generated\n"),
         ),
     )
     .unwrap();
 
-    cut(&f, "second");
+    let second = cut(&f, "second");
 
     let after = std::fs::read_to_string(&common).unwrap();
     assert!(
-        after.contains("/.claude/agents/only-the-first.md"),
+        after.contains(only_the_first),
         "a sibling's line survives the next piece's wire: {after}"
     );
     assert_eq!(
         after.matches("# >>> charter").count(),
         1,
         "and there is still exactly one block: {after}"
+    );
+    assert_eq!(
+        f.status(&first.path),
+        "",
+        "and the sibling's own file is still hidden where it lives"
+    );
+    assert_eq!(f.status(&second.path), "");
+}
+
+#[test]
+fn a_line_for_a_path_no_checkout_has_any_more_is_let_go() {
+    // The other half of the same rule, and the one that stops a shared block growing for
+    // ever. A file charter generated and the plane stopped declaring is removed from every
+    // tree; its line then names a path nobody has, and charter proves that before dropping
+    // it — `_exists` is False in each checkout charter wires, never "the record no longer
+    // says so", which is the test four of charter's own review rounds got wrong.
+    let f = layered_plane("thing");
+    let piece = cut(&f, "piece");
+    let common = f.clone.join(".git/info/exclude");
+    let gone = "/.claude/agents/nobody-has-this.md";
+    let text = std::fs::read_to_string(&common).unwrap();
+    std::fs::write(
+        &common,
+        text.replace(
+            "/.charter-generated\n",
+            &format!("{gone}\n/.charter-generated\n"),
+        ),
+    )
+    .unwrap();
+
+    guest::wire(&f.plane, &piece.path);
+
+    let after = std::fs::read_to_string(&common).unwrap();
+    assert!(!after.contains(gone), "{after}");
+    assert!(
+        after.contains("/.claude/settings.json"),
+        "and the lines whose files ARE there are untouched: {after}"
     );
 }
 
@@ -384,19 +430,28 @@ fn a_record_naming_a_path_outside_the_checkout_is_dropped_whole() {
 
     guest::wire(&f.plane, &added.path);
 
-    let record = std::fs::read_to_string(added.path.join(".charter-generated")).unwrap();
-    assert!(
-        !record.contains("outside.json"),
-        "charter wrote a fresh record and carried none of that one across: {record}"
-    );
     let block = exclude_of(&added.path);
     assert!(
         !block.contains("outside.json"),
-        "and no line for it reached the exclude: {block}"
+        "no line for it reached the exclude: {block}"
     );
     assert!(
         !f.plane.parent().unwrap().join("outside.json").exists(),
         "and nothing was written out there"
+    );
+    // **charter does not rewrite that file, and neither does this** — measured against the
+    // oracle on 2026-09-21: with every wanted path already current and the record read as
+    // `{}`, the record charter would publish is the record it read, so nothing is published
+    // and the operator's own bytes stay exactly where they are. Until M2.26 this port
+    // republished on every wire and overwrote it, which no differential scenario reached.
+    // What the rule is actually FOR is the two assertions above: a trusted
+    // `../../../outside.json` is charter putting a pattern about somebody else's tree into
+    // somebody else's repository.
+    assert!(
+        std::fs::read_to_string(added.path.join(".charter-generated"))
+            .unwrap()
+            .contains("outside.json"),
+        "charter leaves a file it does not trust exactly as it found it"
     );
 }
 

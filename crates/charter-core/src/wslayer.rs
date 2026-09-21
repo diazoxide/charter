@@ -36,13 +36,28 @@
 //!
 //! # The checkouts under it are wired here too
 //!
-//! [`wire`] descends into every checkout [`checkouts`] finds and hands each to
-//! [`crate::guest::wire`], whose rows come back labelled `<checkout>/<path>` — charter's
-//! `checkout_label`. That is charter's own shape: its `wire_harnesses` materialises the
-//! workspace directory and then extends with each guest tree's rows, so `reinit` is the
-//! repair for a clone made by an older charter as well as for the directory around it.
-//! [`Did`] therefore covers both targets; the table on [`Did`] says which of charter's
-//! states each one can reach and which are still absent.
+//! [`wire`] descends into every checkout [`guest_trees`] finds and hands each to
+//! [`crate::guest::wire`], whose rows come back labelled by [`checkout_label`]. That is
+//! charter's own shape: its `wire_harnesses` materialises the workspace directory and then
+//! extends with each guest tree's rows, so `reinit` is the repair for a clone made by an
+//! older charter as well as for the directory around it. [`Did`] therefore covers both
+//! targets.
+//!
+//! **Every checkout, which is not the same as every child.** A PIECE lives at
+//! `.worktrees/<repo>/<piece>`, two levels below the workspace and under a directory with no
+//! `.git` of its own, so nothing that walks the workspace's children finds it — it is reached
+//! only by asking git to list the repository's worktrees
+//! ([`crate::worktree::listing`]). Until M2.26 every piece `charter wt add` cut — the
+//! directory it tells a worker to start a session in — got no layer from a launch, no
+//! `reinit` repair and no row.
+//!
+//! # Where this is stronger than charter, and where it deliberately is not
+//!
+//! A checkout whose exclude block charter cannot write AT ALL gets no files here, where
+//! charter writes the shared settings and the mirrored agents unhidden — [`crate::guest::wire`]
+//! argues that one. A line the block leaves out over an untracked file of the operator's in
+//! a sibling checkout is NOT that case, and is ported exactly: [`Did::Unhidden`] beside a
+//! [`Did::Withheld`] machine-local file, with charter's own shared file written.
 //!
 //! # Deliberate divergences from the Python, both in the refusing direction
 //!

@@ -1765,11 +1765,16 @@ mod tests {
         let exclude = tree.join(".git").join("info").join("exclude");
         std::fs::create_dir_all(tree.join(".claude")).unwrap();
         std::fs::write(tree.join(SETTINGS), "{}\n").unwrap();
+        std::fs::write(tree.join(MARKER), "{}\n").unwrap();
         let text = rendered(&[SETTINGS.to_owned(), MARKER.to_owned()]);
 
         let lines = shared_rels(&plane, &tree, &[], &text, &exclude, false);
 
         assert_eq!(lines.rels, vec![SETTINGS.to_owned(), MARKER.to_owned()]);
+        assert!(
+            !lines.rels.contains(&TEMP_PATTERN.to_owned()),
+            "an empty ask adds no temp glob: {lines:?}"
+        );
     }
 
     #[test]

@@ -691,27 +691,68 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_machine_local_file_the_harness_rewrote_is_kept_and_never_merged_into() {
-        // The one status only a CHECKOUT reaches: `.claude/settings.local.json` is the one
-        // path the harness writes into too — "Yes, and don't ask again" lands there — and a
-        // workspace directory never wants it, because Claude Code already reads the plane's
-        // copy at the git root.
-        let dir = plane();
+    /// A plane declaring machine-local rules, a workspace `gamma`, and a checkout in it that
+    /// charter has already wired — the only shape the co-written path is reachable from.
+    fn a_wired_checkout(dir: &Path) -> std::path::PathBuf {
         std::fs::write(
-            dir.path().join(".claude/settings.local.json"),
+            dir.join(".claude/settings.local.json"),
             r#"{"permissions":{"deny":["Bash(rm -rf *)"]}}"#,
         )
         .unwrap();
-        made(dir.path(), "gamma");
-        let clone = dir.path().join("workspaces/gamma/svc");
+        made(dir, "gamma");
+        let clone = dir.join("workspaces/gamma/svc");
         std::fs::create_dir_all(clone.join(".git")).unwrap();
-        run(dir.path(), Scope::One("gamma"));
+        run(dir, Scope::One("gamma"));
         let local = clone.join(".claude/settings.local.json");
         assert!(local.exists(), "charter writes it in a checkout");
-        // The harness saves its own approval into it.
+        local
+    }
+
+    #[test]
+    fn a_machine_local_file_the_harness_added_to_is_current_and_reinit_says_nothing() {
+        // `.claude/settings.local.json` is the one path the harness writes into too — "Yes,
+        // and don't ask again" lands there — and a workspace directory never wants it,
+        // because Claude Code already reads the plane's copy at the git root.
+        //
+        // **charter's `harness-edited`, and this port called it `harness-behind` until
+        // M2.26.** charter's last write IS what the plane wants now, so every rule charter
+        // mirrored is still in the file and the harness only added to it: nothing is wrong,
+        // and `reinit` says nothing. Measured against the oracle, which answers "Up to date
+        // (structure v5) — nothing to do" here.
+        let dir = plane();
+        let local = a_wired_checkout(dir.path());
         let theirs = "{\"permissions\":{\"allow\":[\"Bash(ls)\"]}}\n";
         std::fs::write(&local, theirs).unwrap();
+
+        let (_code, lines) = run(dir.path(), Scope::One("gamma"));
+
+        assert!(
+            lines.iter().any(|l| l.contains("nothing to do")),
+            "{lines:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&local).unwrap(),
+            theirs,
+            "deleting it to get charter's copy back destroys the harness's approvals"
+        );
+    }
+
+    #[test]
+    fn a_machine_local_file_the_harness_rewrote_is_kept_and_never_merged_into() {
+        // The other half, and the one that IS a finding: once the plane has moved on since
+        // charter's last write, the file the harness keeps no longer holds the plane's
+        // machine-local rules — and charter will not merge into it, so they are not in force
+        // there and `reinit` says so. Telling the two apart is the whole of the split:
+        // reported for both, an operator learns nothing from either.
+        let dir = plane();
+        let local = a_wired_checkout(dir.path());
+        std::fs::write(&local, "{\"permissions\":{\"allow\":[\"Bash(ls)\"]}}\n").unwrap();
+        run(dir.path(), Scope::One("gamma"));
+        std::fs::write(
+            dir.path().join(".claude/settings.local.json"),
+            r#"{"permissions":{"deny":["Bash(rm -rf *)","Bash(curl *)"]}}"#,
+        )
+        .unwrap();
 
         let (_code, lines) = run(dir.path(), Scope::One("gamma"));
 
@@ -721,11 +762,6 @@ mod tests {
                  write"
             )),
             "{lines:?}"
-        );
-        assert_eq!(
-            std::fs::read_to_string(&local).unwrap(),
-            theirs,
-            "deleting it to get charter's copy back destroys the harness's approvals"
         );
         assert!(
             !lines.iter().any(|l| l.contains("nothing to do")),
