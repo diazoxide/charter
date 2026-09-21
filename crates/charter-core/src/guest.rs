@@ -774,7 +774,13 @@ fn planned(tree: &Path, rel: &str, text: &str, record: &layer::Record) -> Plan {
 /// `<root>/.git` is a DIRECTORY in a clone and a FILE reading `gitdir: <path>` in a linked
 /// worktree. Treating the second as a directory does not fail loudly — `create_dir_all` would
 /// happily make `.git/info/` beside the `.git` file's parent, and git reads none of it.
-fn git_dir(root: &Path) -> Option<PathBuf> {
+///
+/// **Public because it is what makes a directory a CHECKOUT**, and charter asks exactly this
+/// of every workspace child (`_children`): a `.git` file whose `gitdir:` charter cannot reach
+/// is not a checkout, so it is passed over rather than reported as one charter failed to
+/// wire. Measured on the differential: a linked worktree whose admin directory is unreadable
+/// was reported `blocked` here and passed over by charter, one row apart.
+pub fn git_dir(root: &Path) -> Option<PathBuf> {
     let dot = root.join(".git");
     if dot.is_dir() {
         return Some(dot);

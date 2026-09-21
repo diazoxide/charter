@@ -756,7 +756,7 @@ pub fn checkout_row(dir: &Path, rel: &str) -> Option<(PathBuf, String)> {
         return Some((tree, parts[3..].join("/")));
     }
     let (head, inner) = rel.split_once('/')?;
-    (!inner.is_empty() && dir.join(head).join(".git").exists())
+    (!inner.is_empty() && crate::guest::git_dir(&dir.join(head)).is_some())
         .then(|| (dir.join(head), inner.to_string()))
 }
 
@@ -792,6 +792,12 @@ pub fn guest_trees(dir: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
 /// `.git` is a DIRECTORY in a clone and a FILE reading `gitdir: <path>` in a linked worktree,
 /// and both count: this asks "where would a chat's cwd be cut off from the plane's layer",
 /// and a worktree's root is a git boundary exactly as a clone's is.
+///
+/// **Asked through [`crate::guest::git_dir`], never as "is there a `.git` here".** A linked
+/// worktree's `.git` is a FILE naming its admin directory, and one charter cannot reach — an
+/// unreadable `worktrees/`, a `gitdir:` that points nowhere — is not a checkout charter can
+/// wire. Measured on the differential: with `worktrees/` at mode 000 the shallower test
+/// reported that worktree `blocked` where charter passes over it.
 pub fn checkouts(dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
@@ -799,7 +805,7 @@ pub fn checkouts(dir: &Path) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.join(".git").exists())
+        .filter(|p| crate::guest::git_dir(p).is_some())
         .collect();
     out.sort();
     out
@@ -851,8 +857,8 @@ fn pieces(dir: &Path, children: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
             };
             // No `prunable` or `bare` test: a worktree git calls prunable has no `.git` that
             // points anywhere, and a bare repository's entry is a git directory with none, so
-            // the `.git` test answers both.
-            if !at.join(".git").exists() {
+            // `git_dir` answers both.
+            if crate::guest::git_dir(&at).is_none() {
                 continue;
             }
             // Keyed by where it LANDS, because two checkouts of one repository — a clone and
