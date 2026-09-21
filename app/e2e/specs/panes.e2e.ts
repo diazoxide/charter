@@ -158,8 +158,29 @@ describe("the window", () => {
     expect(counted).toBeLessThan(before.length);
 
     await more.click();
-    const rows = [...(await $$('[role="menuitem"]').getElements())];
-    expect(rows.length).toBe(counted);
+    // **Waited for, not read once.** The menu is a Radix portal: it is mounted on the open,
+    // in a later frame than the click, so a `$$` taken straight after the click finds an
+    // empty document and reports it as "the menu listed nothing". Measured on this spec's
+    // first CI run, which is how this comment came to exist.
+    const rowsNow = async () => [...(await $$('[role="menuitem"]').getElements())];
+    let found = 0;
+    try {
+      await browser.waitUntil(
+        async () => {
+          found = (await rowsNow()).length;
+          return found === counted;
+        },
+        { timeout: 10_000 },
+      );
+    } catch {
+      // Which of the two things went wrong, said in the failure: a menu that never opened is
+      // a different defect from a menu that opened listing the wrong tabs.
+      const menus = (await $$('[role="menu"]').getElements()).length;
+      throw new Error(
+        `the button said ${counted} tabs; ${menus} menu(s) opened and ${found} rows were listed`,
+      );
+    }
+    const rows = await rowsNow();
 
     // The row's own name, so the assertion is about the tab this went to and not about
     // whichever tab happens to be first.
