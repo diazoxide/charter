@@ -130,6 +130,58 @@ describe("the window", () => {
     await until(pane, "you said: with fifty sessions running");
   });
 
+  /**
+   * The show-more menu, against a real layout (charter ADR 0039).
+   *
+   * **This is the only place the measurement itself is under test.** What does not fit is a
+   * property of the strip's width, the tabs in it and where it is scrolled to, and jsdom
+   * gives every element a zero-sized box — so the unit tests drive an observer of their own
+   * and this is what says the real one answers anything at all. It runs straight after the
+   * fifty-session test, which is the state that makes the question real.
+   */
+  it("says how many tabs it is not showing, and gets to one of them", async () => {
+    const before = await tabNames();
+    expect(before.length).toBeGreaterThan(40);
+
+    // On the bar, and by what it SAYS rather than by its class: the accessible name is the
+    // whole of what an operator gets from it before they open it.
+    const more = await $('.bar button[aria-label^="Show "]');
+    await more.waitForExist({
+      timeout: 10_000,
+      timeoutMsg: "fifty tabs did not overflow the strip, so nothing said there were more",
+    });
+    const said = await more.getAttribute("aria-label");
+    const counted = Number(/^Show (\d+) tabs? /.exec(said ?? "")?.[1]);
+    expect(counted).toBeGreaterThan(0);
+    // Some tabs ARE on the strip: a button claiming every tab is hidden would mean the
+    // measurement found nothing rather than that it measured.
+    expect(counted).toBeLessThan(before.length);
+
+    await more.click();
+    const rows = [...(await $$('[role="menuitem"]').getElements())];
+    expect(rows.length).toBe(counted);
+
+    // The row's own name, so the assertion is about the tab this went to and not about
+    // whichever tab happens to be first.
+    const going = (await rows[0].$(".tab-name").getText()).trim();
+    await rows[0].click();
+
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(
+          () =>
+            document
+              .querySelector(
+                '[role="tablist"][aria-label="Tabs"] [role="tab"][aria-selected="true"]',
+              )
+              ?.querySelector(".tab-name")?.textContent ?? "",
+        )) === going,
+      { timeout: 10_000, timeoutMsg: `the menu did not bring ${going} to the front` },
+    );
+    // **And the strip did not move.** The menu sorts by activity; the strip never does.
+    expect(await tabNames()).toEqual(before);
+  });
+
   it("ends a session when its tab closes", async () => {
     const running = harnessesRunning();
     const names = await tabNames();

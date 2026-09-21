@@ -8,6 +8,7 @@ import {
   useState,
 } from "react";
 import { Group, Panel, Separator } from "react-resizable-panels";
+import * as Menu from "@radix-ui/react-dropdown-menu";
 import {
   commands,
   type ChatWorktree,
@@ -32,6 +33,7 @@ import { StartChat } from "./StartChat";
 import { SessionPane } from "./SessionPane";
 import { Sidebar } from "./Sidebar";
 import {
+  byLastActivity,
   closeFocusedPane,
   closeTab,
   focusPane,
@@ -45,12 +47,14 @@ import {
   workspaceOf,
   type Direction,
   type FiledIn,
+  type LastMoved,
   type Layout,
   type Tabs,
 } from "./tabs";
 import { ChatState, NeedsYou } from "./NeedsYou";
 import { Panels } from "./Panels";
-import { quietOnes, stateOf, useChatStates } from "./chatState";
+import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
+import { TAB_ATTRIBUTE, useOffscreen } from "./offscreen";
 import type { Ending } from "./QuitWarning";
 
 /**
@@ -360,6 +364,48 @@ export function PlaneView({
   const shown = useMemo(
     () => (sidebar === undefined ? tabs.order : tabsIn(tabs, focused, filedIn)),
     [filedIn, focused, sidebar, tabs],
+  );
+
+  /**
+   * The tabs the strip is not showing all of, and the element that scrolls them.
+   *
+   * Measured rather than derived — see `offscreen.ts`. Nothing is taken out of the strip:
+   * these tabs are scrolled past, and every one of them keeps its place, its close button
+   * and its tab stop.
+   */
+  const { strip, offscreen } = useOffscreen(shown);
+
+  /**
+   * When each chat last moved, as the CORE counts it (ADR 0039).
+   *
+   * The window cannot work this out: the strip is an opening order and the needs-you queue
+   * is oldest-first, and neither is "when did this chat last do something". The count comes
+   * down on `chat-moved` and in the first snapshot, so two windows on one plane agree and a
+   * relaunch does not invent an order out of whatever it happened to draw first.
+   */
+  const lastMoved = useCallback<LastMoved>((session) => movedAt(states, session), [states]);
+
+  /**
+   * What the show-more menu lists: the tabs that are not wholly on screen, **most recently
+   * moved first** — and nothing else.
+   *
+   * Intersected with `shown` rather than trusted: a measurement is one frame behind a tab
+   * closing, so an id that has just gone would otherwise be looked up in `tabs.byId` and
+   * found missing.
+   *
+   * **The menu is not a find surface** (ADR 0039). It lists what the strip is hiding, not
+   * every chat: the palette lists every chat with a search and a ranking over it, it is
+   * better at finding than any menu will be, and a menu built as a second one of those is a
+   * menu that should not have been built.
+   */
+  const notShowing = useMemo(
+    () =>
+      byLastActivity(
+        offscreen.filter((id) => shown.includes(id)),
+        tabs,
+        lastMoved,
+      ),
+    [lastMoved, offscreen, shown, tabs],
   );
 
   // The tab that was in front on this strip, remembered so that coming back to a workspace
@@ -914,9 +960,12 @@ export function PlaneView({
             sessions-under-a-workspace was. Named, because the projects and the workspaces
             above are tablists too and a query for `role="tab"` across the whole window
             would mix all three. */}
-        <div className="tabs" role="tablist" aria-label="Tabs">
+        <div className="tabs" role="tablist" aria-label="Tabs" ref={strip}>
           {shown.map((id) => (
-            <span className="tab" key={id}>
+            /* `data-tab` is how `offscreen.ts` finds a tab without knowing this markup.
+               The whole tab is measured, `×` included: a tab whose close button is over the
+               edge is one an operator cannot finish using. */
+            <span className="tab" key={id} {...{ [TAB_ATTRIBUTE]: id }}>
               <button
                 role="tab"
                 aria-selected={id === tabs.inFront}
@@ -938,6 +987,17 @@ export function PlaneView({
               <Closer offer={by(`tab.close:${id}`)} onPress={press} />
             </span>
           ))}
+        </div>
+        {/* The affordance that says the strip is not showing everything (ADR 0039). It is
+            the first thing on the strip that says how many tabs there are past the edge —
+            a scroller never did, which is the premise ADR 0036 was missing. It is absent
+            when nothing is hidden, because then there is nothing for it to say.
+
+            **Outside the scroller, beside the `+` and for the same reason.** A control that
+            appears exactly when the strip is full must not live inside the thing that is
+            full (charter-app#130/#131). */}
+        <div className="more">
+          <ShowMore hidden={notShowing} tabs={tabs} states={states} offerFor={by} onPress={press} />
         </div>
         {/* **Outside the strip that scrolls.** It used to be the strip's last child, so at
             fifty chats the way to open the fifty-first was to scroll right to find it — the
@@ -1088,6 +1148,82 @@ export function Doer({ offer, onPress }: { offer?: Offer; onPress: (offer: Offer
     >
       {offer.title}
     </button>
+  );
+}
+
+/**
+ * The show-more menu: the tabs the strip is not showing, most recently moved first.
+ *
+ * **It is not a find surface, and if it is built as one it should not have been built**
+ * (ADR 0039). The palette lists every chat with a search and a ranking over it and is better
+ * at finding than any menu will be. This lists what the strip is hiding and nothing else, so
+ * that the strip has an affordance saying there is more — which a scrollbar never was.
+ *
+ * **Sorted by last activity — here, and nowhere else.** The strip's own order never moves
+ * (`tabs.ts`), because a tab that moves under the cursor breaks aiming. A menu is a list you
+ * read rather than a surface you aim at, and the boundary between the two rules is exactly
+ * whether the thing moves under your hand.
+ *
+ * **Only rows that bring a tab forward.** Every row is the catalogue's `tab.select:<id>`,
+ * which is the same row the tab itself is and the same row the palette lists. Nothing
+ * destructive is in here: a tab's `×` sits under the pointer on a surface the operator chose
+ * to open, and a menu that pops up under the cursor with `End chat` in it is charter-app#130's
+ * defect with a mouse attached.
+ *
+ * Radix's menu (ADR 0037, `docs/ui-primitives.md`), so the keyboard is the primitive's and not
+ * a fifth hand-written `ArrowDown`.
+ */
+export function ShowMore({
+  hidden,
+  tabs,
+  states,
+  offerFor,
+  onPress,
+}: {
+  /** The tabs to list, already in the order they are listed in. */
+  hidden: readonly number[];
+  tabs: Tabs;
+  states: ChatStates;
+  /** The catalogue, by row id. There is one list of actions and this reads it. */
+  offerFor: (id: string) => Offer | undefined;
+  onPress: (offer: Offer) => void;
+}) {
+  // Nothing is hidden, so there is nothing to say there is more OF.
+  if (hidden.length === 0) return null;
+  const many = hidden.length === 1 ? "1 tab" : `${hidden.length} tabs`;
+  return (
+    // **Not modal.** A modal Radix surface marks the rest of the window `aria-hidden` (which
+    // `docs/ui-primitives.md` records the dialogs doing), and this is a menu on a strip, not
+    // a question that has to be answered before the window can be used again. A click outside
+    // closes it, which is what every menu on every platform does — the dialogs' opposite rule
+    // is about a surface that would lose an answer, and there is no answer to lose here.
+    <Menu.Root modal={false}>
+      <Menu.Trigger asChild>
+        <button className="show-more" aria-label={`Show ${many} the strip is not showing`}>
+          {hidden.length} more
+        </button>
+      </Menu.Trigger>
+      <Menu.Portal>
+        <Menu.Content className="more-menu" align="end" sideOffset={4} collisionPadding={8}>
+          {hidden.map((id) => {
+            const offer = offerFor(`tab.select:${id}`);
+            if (!offer) return null;
+            return (
+              <Menu.Item
+                key={id}
+                className="more-tab"
+                disabled={!offer.available}
+                title={offer.reason || undefined}
+                onSelect={() => onPress(offer)}
+              >
+                <span className="tab-name">{tabs.byId[id].name}</span>
+                <ChatState state={stateOf(states, panesOf(tabs, id)[0]?.session ?? -1)} />
+              </Menu.Item>
+            );
+          })}
+        </Menu.Content>
+      </Menu.Portal>
+    </Menu.Root>
   );
 }
 

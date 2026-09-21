@@ -1,13 +1,20 @@
 import { describe, expect, it } from "vitest";
 
-import { moved, nothingKnown, quietOnes, stateOf, underneath } from "./chatState";
+import { moved, movedAt, nothingKnown, quietOnes, stateOf, underneath } from "./chatState";
 import type { Moved, OpenChat } from "./bindings";
 
 /** One plane, because these are about the reducer and not about telling planes apart. */
 const PLANE = "/home/dev/plane";
 
-function doing(session: number, state: string, queue: number[] = []): Moved {
-  return { plane: PLANE, session, state, needs_you: queue.includes(session), queue };
+function doing(session: number, state: string, queue: number[] = [], movedAt = 0): Moved {
+  return {
+    plane: PLANE,
+    session,
+    state,
+    needs_you: queue.includes(session),
+    queue,
+    moved_at: movedAt,
+  };
 }
 
 describe("what the window keeps about the chats", () => {
@@ -95,5 +102,36 @@ describe("the chats that can be waiting on you without saying so", () => {
     const states = moved(nothingKnown, doing(7, "running"));
 
     expect(quietOnes([open(7, CODEX)], states)).toEqual(["ide.7"]);
+  });
+});
+
+describe("when each chat last moved", () => {
+  it("knows nothing about a chat it has not heard of", () => {
+    // `0` sorts last in the overflow menu, which is what "nothing has told me" should do.
+    expect(movedAt(nothingKnown, 7)).toBe(0);
+  });
+
+  it("takes the count only for the chat the event is about", () => {
+    // The count is per chat, unlike the queue, which travels whole. Folding it over the map
+    // would stamp this chat's number onto every other and make every tab read as having
+    // just moved — which is the overflow menu in an arbitrary order.
+    const after = moved(
+      moved(nothingKnown, doing(7, "running", [], 4)),
+      doing(9, "running", [], 5),
+    );
+
+    expect(movedAt(after, 7)).toBe(4);
+    expect(movedAt(after, 9)).toBe(5);
+  });
+
+  it("does not let the first answer overwrite a count an event already brought", () => {
+    // The same race `bySession` has: `chatStates()` is asked once at startup and a hook can
+    // fire while it is in flight. The older answer must not put a chat back down the menu.
+    const heard = moved(nothingKnown, doing(7, "waiting", [7], 9));
+
+    const after = underneath(heard, [doing(7, "running", [], 2), doing(8, "running", [], 3)]);
+
+    expect(movedAt(after, 7)).toBe(9);
+    expect(movedAt(after, 8)).toBe(3);
   });
 });

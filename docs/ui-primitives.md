@@ -58,8 +58,21 @@ to add to it.
 ## What is already converted
 
 `StartChat`, `QuitWarning`, `ApprovePlane` and `Palette` — every modal surface the window has.
-The terminal panes are xterm.js and are not a candidate. The strips are about to change and
-were deliberately left alone.
+The terminal panes are xterm.js and are not a candidate.
+
+And the chat strip's **show-more menu** (`@radix-ui/react-dropdown-menu`, charter ADR 0039),
+which is the first surface built under this rule rather than converted to it. Two decisions it
+does NOT share with the four dialogs, both because it is a menu and not a question:
+
+- **It is not modal** (`modal={false}`). A modal Radix surface marks everything outside itself
+  `aria-hidden`, which is right for a dialog that must be answered and wrong for a menu on a
+  strip — the rest of the window stays reachable, to a screen reader and to a scenario spec.
+- **A click outside closes it.** The dialogs prevent `onInteractOutside` because a click outside
+  would answer a question by accident. A menu has no answer to lose, and every menu on every
+  platform closes this way.
+
+Its measurement of what does not fit lives in `app/src/offscreen.ts` and is
+`IntersectionObserver`, not a scroll handler reading fifty rects.
 
 Two decisions those four share, taken once so they do not have to be taken again per dialog:
 
@@ -80,6 +93,14 @@ container, both below `document`, so React's handler moves the focus before Radi
 runs. Every `RadioGroup.Item` in `StartChat` therefore carries its own `onFocus` that picks it.
 The reasoning and the measurement are in that file; the guard is the test named "moves between
 harnesses with the arrow keys".
+
+**The arrow-key defect is the radio group's, not every primitive's — measured, not assumed.**
+The menu added under ADR 0039 was expected to need the same `onFocus` repair and does not: its
+roving focus is an `onKeyDown` on the content element rather than a `keydown` listener on
+`document`, so React's delegated listeners being below `document` never comes into it. The guard
+is `Strip.test.tsx`'s "moves between its rows with the arrow keys", which was written to fail and
+passed first time. The rule the next primitive inherits is therefore **check, per primitive**:
+the question is where Radix listens, and only a primitive that listens on `document` has this.
 
 **A modal dialog really is modal, and the tests notice.** Radix marks everything outside the
 open dialog `aria-hidden`, so a `getByRole` for anything behind it finds nothing, and a scenario

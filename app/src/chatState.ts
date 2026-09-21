@@ -19,13 +19,35 @@ export type ChatStates = {
   readonly bySession: Readonly<Record<number, State>>;
   /** Every chat asking for you, oldest first. This is the needs-you queue. */
   readonly needsYou: readonly number[];
+  /**
+   * When each chat last moved, as the core's own count — bigger is more recent.
+   *
+   * **The core's number, never one this window made up.** Charter ADR 0039 sorts the chat
+   * strip's overflow menu by last activity and nothing in the window knows that fact: the
+   * strip is an opening order and the queue is oldest-first. A count taken here would
+   * restart at every launch and two windows on one plane would disagree about it, so it
+   * comes down on `chat-moved` and in the first snapshot (`Moved.moved_at`).
+   *
+   * A session that is not here has never been heard from, and reads `0`.
+   */
+  readonly movedAt: Readonly<Record<number, number>>;
 };
 
-export const nothingKnown: ChatStates = { bySession: {}, needsYou: [] };
+export const nothingKnown: ChatStates = { bySession: {}, needsYou: [], movedAt: {} };
 
 /** The state of one chat, which is `unknown` until something says otherwise. */
 export function stateOf(states: ChatStates, session: number): State {
   return states.bySession[session] ?? "unknown";
+}
+
+/**
+ * When a chat last moved, as the core counts moves on its plane. Bigger is more recent.
+ *
+ * `0` for a chat nothing has been heard about — which sorts last, and is honest: a window
+ * that has been told nothing about a chat knows nothing about when it last did something.
+ */
+export function movedAt(states: ChatStates, session: number): number {
+  return states.movedAt[session] ?? 0;
 }
 
 /**
@@ -52,6 +74,10 @@ export function moved(states: ChatStates, move: Moved): ChatStates {
     // of edges: a window that missed one event would otherwise keep a chat in the queue, or
     // out of it, for as long as the app ran.
     needsYou: move.queue,
+    // **Only the chat this event is about.** The count is per-chat and the event carries
+    // one chat's, so folding it over the whole map would be writing this chat's number onto
+    // every other chat — every tab would then read as having moved at once.
+    movedAt: { ...states.movedAt, [move.session]: move.moved_at },
   };
 }
 
@@ -174,11 +200,17 @@ export function useChatStates(plane: PlaneId | undefined): ChatStates {
 export function underneath(states: ChatStates, known: readonly Moved[]): ChatStates {
   const heard = Object.keys(states.bySession).length > 0;
   const bySession = { ...states.bySession };
+  // Under whatever has already arrived here too, and per session for the same reason: an
+  // event that landed while the snapshot was in flight is the newer fact about ITS chat,
+  // and says nothing about any other.
+  const movedAt = { ...states.movedAt };
   for (const one of known) {
     if (!(one.session in bySession)) bySession[one.session] = one.state as State;
+    if (!(one.session in movedAt)) movedAt[one.session] = one.moved_at;
   }
   return {
     bySession,
     needsYou: heard ? states.needsYou : (known[known.length - 1]?.queue ?? []),
+    movedAt,
   };
 }

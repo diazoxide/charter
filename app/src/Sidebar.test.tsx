@@ -133,7 +133,7 @@ describe("Sidebar", () => {
     // else (spec decision 3).
     render(
       <Sidebar
-        states={{ bySession: { 1: "running", 2: "waiting" }, needsYou: [2] }}
+        states={{ bySession: { 1: "running", 2: "waiting" }, needsYou: [2], movedAt: {} }}
         sidebar={model}
         focused="alpha"
         onFocus={() => {}}

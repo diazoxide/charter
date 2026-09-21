@@ -27,6 +27,22 @@ pub struct Moved {
     /// Every chat asking for you, so the queue is never assembled from a series of events
     /// the window might have missed one of.
     pub queue: Vec<u32>,
+    /// When this chat last moved, as a count of moves on its plane's board — bigger is
+    /// more recent. `charter_core::state::Board::moved_at` is the whole definition.
+    ///
+    /// **The window cannot work this out for itself, which is why it rides an event that
+    /// already fires.** Charter ADR 0039 sorts the chat strip's overflow menu by last
+    /// activity, and nothing in the window knows when a chat did anything: the strip is
+    /// `tabs.order`, which is an opening order, and the needs-you queue is oldest-first,
+    /// which is a different fact. An order computed in the window would also restart at
+    /// every launch and disagree between two windows on one plane, where this one is the
+    /// board's and the board is the plane's.
+    ///
+    /// A count rather than a clock, and a `u32` rather than a `u64`: both are argued where
+    /// the field is produced, and the second is not negotiable here — `specta` refuses to
+    /// export a `u64` and the app panics at startup in a debug build when one is reached
+    /// for.
+    pub moved_at: u32,
 }
 
 /// The board, the socket, and the thread reading it — one plane's whole side of the channel.
@@ -240,6 +256,7 @@ fn seen_by(board: &Board, plane: &PlaneId, session: u32) -> Moved {
         state: word(board.state(session)),
         needs_you: queue.contains(&session),
         queue,
+        moved_at: board.moved_at(session),
     }
 }
 
