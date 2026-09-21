@@ -689,11 +689,22 @@ enum WorkspaceCommand {
         #[arg(long, hide = true)]
         now: Option<String>,
     },
+    /// Rebuild a workspace from its manifest — clone repos + checkout branches.
+    Restore {
+        /// The workspace to rebuild.
+        name: String,
+        /// Don't clone now; clone each repo when you enter it.
+        #[arg(long = "on-demand")]
+        on_demand: bool,
+        /// Pin the clock a membership record is stamped with, for tests only.
+        #[arg(long, hide = true)]
+        now: Option<String>,
+    },
     /// Fork a workspace: a new one pre-loaded with its charter, memory, todos and manifest.
     ///
-    /// The clones are NOT copied — they are reconstructible. `--restore` is charter's way of
-    /// cloning them straight away; this binary does not restore from a manifest (see
-    /// `wscmd::fork`), performs the fork in full, and says so where the clone would be.
+    /// The clones are NOT copied — they are reconstructible. `--restore` clones them straight
+    /// away, which since M2.26 is the whole restore: `charter clone` per missing repo, then
+    /// the recorded branch checked out and pulled.
     #[command(alias = "duplicate")]
     Fork {
         /// The workspace to fork from.
@@ -1432,6 +1443,7 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
             | WorkspaceCommand::Snapshot { .. }
             | WorkspaceCommand::Create { .. }
             | WorkspaceCommand::Fork { .. }
+            | WorkspaceCommand::Restore { .. }
             | WorkspaceCommand::Reinit { .. }
     ) {
         return None;
@@ -1494,6 +1506,24 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
                     repos,
                     now,
                     ids: &here.ids,
+                },
+                say,
+            )
+        }
+        WorkspaceCommand::Restore {
+            name,
+            on_demand,
+            now,
+        } => {
+            let Some(now) = pinned(now) else {
+                return Some(ExitCode::FAILURE);
+            };
+            wscmd::restore::restore(
+                &wscmd::restore::Request {
+                    root: &root,
+                    ws: name,
+                    on_demand: *on_demand,
+                    now,
                 },
                 say,
             )
@@ -1664,6 +1694,7 @@ fn run(command: Command) -> Result<u8, String> {
         | Command::Workspace(WorkspaceCommand::Snapshot { .. })
         | Command::Workspace(WorkspaceCommand::Create { .. })
         | Command::Workspace(WorkspaceCommand::Fork { .. })
+        | Command::Workspace(WorkspaceCommand::Restore { .. })
         | Command::Workspace(WorkspaceCommand::Reinit { .. })
         | Command::GitPolicy { .. } => {
             unreachable!("answered before run")

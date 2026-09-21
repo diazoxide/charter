@@ -424,7 +424,19 @@ pub fn write_into(base: &Path, rel: &str, text: &str) -> Result<(), String> {
 /// The temp is `.charter-generated.<pid>.<rand>.tmp` — beside the target, so the rename is a
 /// rename, and private to this writer.
 pub fn write_whole(path: &Path, text: &str) -> Result<(), String> {
-    let parent = path.parent().ok_or_else(|| "no parent".to_owned())?;
+    write_whole_io(path, text).map_err(|e| e.to_string())
+}
+
+/// [`write_whole`], keeping the errno.
+///
+/// Two spellings of one write, because one caller needs what the other throws away: charter
+/// words what clears a record it could not publish **by the errno it failed with** — a full
+/// disk and a read-only mount are not "restore write access" — and an `io::Error` rendered to
+/// a string has already lost the number that decides which sentence to print.
+pub fn write_whole_io(path: &Path, text: &str) -> std::io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("no parent"))?;
     let tmp = parent.join(format!(
         "{MARKER}.{}.{}.tmp",
         std::process::id(),
@@ -441,7 +453,7 @@ pub fn write_whole(path: &Path, text: &str) -> Result<(), String> {
         Ok(()) => Ok(()),
         Err(e) => {
             let _ = std::fs::remove_file(&tmp);
-            Err(e.to_string())
+            Err(e)
         }
     }
 }
@@ -451,6 +463,11 @@ pub fn write_whole(path: &Path, text: &str) -> Result<(), String> {
 /// Whole, for [`write_whole`]'s reason: truncated in place, a launch reading this marker while
 /// another wire wrote it could read a prefix or nothing.
 pub fn publish(base: &Path, record: &Record) -> Result<(), String> {
+    publish_io(base, record).map_err(|e| e.to_string())
+}
+
+/// [`publish`], keeping the errno — see [`write_whole_io`] for why one caller needs it.
+pub fn publish_io(base: &Path, record: &Record) -> std::io::Result<()> {
     let path = base.join(MARKER);
     if record.is_empty() {
         // `remove_file` never follows a symlink, so a hostile marker LINK is removed at the
@@ -458,13 +475,15 @@ pub fn publish(base: &Path, record: &Record) -> Result<(), String> {
         return match std::fs::remove_file(&path) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e.to_string()),
+            Err(e) => Err(e),
         };
     }
     if contain::no_link_on_the_way(base, &path).is_err() {
-        return Err("the record is reached through a symlink".to_owned());
+        return Err(std::io::Error::other(
+            "the record is reached through a symlink",
+        ));
     }
-    write_whole(&path, &crate::pyjson::dumps_indent2(&record.document()))
+    write_whole_io(&path, &crate::pyjson::dumps_indent2(&record.document()))
 }
 
 /// Remove `dir` and its parents up to (never including) `stop`, while they are empty AND
@@ -489,7 +508,12 @@ pub fn prune_empty(mut dir: PathBuf, stop: &Path) {
 
 /// Whether `path` resolves strictly inside `base` — never `base` itself, which is what stops
 /// [`prune_empty`] at the root it is pruning under.
-fn inside(base: &Path, path: &Path) -> bool {
+///
+/// charter's `_inside`, and the test [`crate::guest`] asks of a generated path BEFORE it
+/// reads one: a committed `.claude` that is a directory link out of the checkout would
+/// otherwise have its far end read as charter's own file, and the row would say the plane's
+/// rules are in force through a link charter will not write through.
+pub(crate) fn inside(base: &Path, path: &Path) -> bool {
     let (Some(root), Some(here)) = (contain::resolved(base), contain::resolved(path)) else {
         return false;
     };
