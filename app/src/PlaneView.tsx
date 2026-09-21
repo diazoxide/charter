@@ -1188,6 +1188,18 @@ export function ShowMore({
   offerFor: (id: string) => Offer | undefined;
   onPress: (offer: Offer) => void;
 }) {
+  /**
+   * Whether the menu is up.
+   *
+   * **Held here rather than left to Radix, and the reason is measured.** Radix opens a menu
+   * on `pointerdown`, which is right for a mouse and is not what every way of pressing a
+   * button produces: the WebView the scenario tests drive answers a click with no pointer
+   * event at all, so the menu never opened and the run reported "0 menus opened" on both
+   * platforms. A control an automated press cannot open is one some input method cannot
+   * open. So the trigger's `pointerdown` is refused — `composeEventHandlers` skips Radix's
+   * own handler once the event is prevented — and the click is what toggles it.
+   */
+  const [open, setOpen] = useState(false);
   // Nothing is hidden, so there is nothing to say there is more OF.
   if (hidden.length === 0) return null;
   const many = hidden.length === 1 ? "1 tab" : `${hidden.length} tabs`;
@@ -1197,9 +1209,14 @@ export function ShowMore({
     // a question that has to be answered before the window can be used again. A click outside
     // closes it, which is what every menu on every platform does — the dialogs' opposite rule
     // is about a surface that would lose an answer, and there is no answer to lose here.
-    <Menu.Root modal={false}>
+    <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
       <Menu.Trigger asChild>
-        <button className="show-more" aria-label={`Show ${many} the strip is not showing`}>
+        <button
+          className="show-more"
+          aria-label={`Show ${many} the strip is not showing`}
+          onPointerDown={(event) => event.preventDefault()}
+          onClick={() => setOpen((up) => !up)}
+        >
           {hidden.length} more
         </button>
       </Menu.Trigger>

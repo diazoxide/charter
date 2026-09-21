@@ -14,11 +14,18 @@
  * up a scroll, a resize of the window, a resize of the strip and a tab appearing or going,
  * with nothing here listening for any of them.
  *
- * **`threshold: 1` — a tab you can see only half of is one the menu offers.** The menu's job
- * is the shortest path to a tab the strip is not showing, and half a tab is a tab that cannot
- * be read and can barely be aimed at. The cost is stated where it bites: a window narrower
- * than one tab puts every tab in the menu, which is a degenerate width and still leaves
- * everything reachable.
+ * **A tab you can see only half of is one the menu offers.** The menu's job is the shortest
+ * path to a tab the strip is not showing, and half a tab is a tab that cannot be read and can
+ * barely be aimed at. The cost is stated where it bites: a window narrower than one tab puts
+ * every tab in the menu, which is a degenerate width and still leaves everything reachable.
+ *
+ * **The threshold is [`WHOLLY`] and not `1`, and that is measured rather than cautious.** A
+ * threshold of exactly 1 asks for an intersection ratio of exactly 1.0, and a ratio is
+ * computed from rectangles the engine lays out in fractions of a pixel: a tab that is wholly
+ * on screen routinely measures 0.9999 and is then reported as not intersecting. The scenario
+ * run on macOS measured every one of forty-nine visible tabs as hidden for exactly that
+ * reason, while the same build on Linux measured three of fifty-one as visible — same code,
+ * same threshold, different rounding.
  *
  * **Nothing is ever removed from the DOM by this.** The tabs it names are scrolled out of
  * view, not unmounted: they keep their place in the strip, their `role="tab"`, their close
@@ -32,6 +39,17 @@ import { useEffect, useState } from "react";
 /** The attribute a strip marks each tab with, so this can find them without knowing the DOM
  *  around them. Its value is the tab's id. */
 export const TAB_ATTRIBUTE = "data-tab";
+
+/**
+ * How much of a tab has to be inside the strip for it to count as shown.
+ *
+ * Not `1`. See this module's own docstring: an intersection ratio comes off rectangles laid
+ * out in fractions of a pixel, and a whole tab measures 0.9999 often enough that a threshold
+ * of 1 reported every visible tab as hidden on one of the two platforms the scenario tests
+ * run on. The slack is a hundredth of a tab, which is never the difference between a tab an
+ * operator can read and one they cannot.
+ */
+const WHOLLY = 0.99;
 
 /** One empty answer, reused, so a strip with nothing hidden does not re-render on every
  *  measurement that finds nothing hidden. */
@@ -79,7 +97,7 @@ export function useOffscreen(shown: readonly number[]): Offscreen {
         const found = shown.filter((id) => hidden.has(id));
         setOffscreen((was) => (same(was, found) ? was : found.length === 0 ? NOTHING : found));
       },
-      { root: strip, threshold: 1 },
+      { root: strip, threshold: WHOLLY },
     );
     for (const tab of strip.querySelectorAll(`[${TAB_ATTRIBUTE}]`)) watching.observe(tab);
     return () => {
