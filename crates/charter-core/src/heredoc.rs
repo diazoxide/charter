@@ -1175,7 +1175,13 @@ pub fn heredoc_strip_plan(line: &Line) -> Option<Vec<PlanEntry>> {
                 || commit_message_on_stdin(argv)
                 || gh_body_on_stdin(argv);
             for _ in 0..*hc {
-                let m = &headers[k];
+                // In range because the count guard above proved it: the innermost loop runs
+                // `sum(hcounts)` times in total, and that sum is `headers.len()`. Spelled as a
+                // named expectation rather than an index, so a future edit that breaks the
+                // invariant says which invariant it broke.
+                let m = headers
+                    .get(k)
+                    .expect("the count guard above makes k < headers.len()");
                 let quoted = m.quote.is_some();
                 // A brief is data for the same reason a reader's body is, and by a different
                 // route: nobody runs it, because it is charter's stdin.
