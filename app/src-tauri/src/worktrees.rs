@@ -139,7 +139,13 @@ pub fn worktree_remove(
     piece: String,
     force: bool,
 ) -> Result<(), String> {
-    remove_piece(planes.held(&plane)?.root(), &workspace, &repo, &piece, force)
+    remove_piece(
+        planes.held(&plane)?.root(),
+        &workspace,
+        &repo,
+        &piece,
+        force,
+    )
 }
 
 /// The removal itself, against a root the registry has already vouched for.
