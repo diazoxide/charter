@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen, within } from "@testing-library/react";
+import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
@@ -469,7 +469,16 @@ describe("being asked to quit", () => {
     await screen.findByText(/No sessions/);
     // And settled: the window asks its plane first and what it has open second, so "no tabs"
     // is only "nothing to end" once that second answer is back.
-    await vi.waitFor(() => expect(of("chats_that_would_not_start", asked)).toHaveLength(1));
+    //
+    // **Testing Library's `waitFor` and not `vi.waitFor`, and that is the whole of it.**
+    // `PlaneView` sets `settled` and asks `chats_that_would_not_start` in the same block, so
+    // the ask is recorded synchronously while the state is only queued — and the window reads
+    // `settled` through a ref a layout effect fills, which is a commit away. `vi.waitFor` knows
+    // nothing about React and could return in that gap, and then a quit arriving one line later
+    // was answered by an unsettled window: it warned, correctly, about a project that had not
+    // finished saying what it held. This one polls inside `act`, so React has committed by the
+    // time it returns and the precondition this test names is actually true.
+    await waitFor(() => expect(of("chats_that_would_not_start", asked)).toHaveLength(1));
 
     const listen = of("plugin:event|listen", asked).find(
       (one) => (one.args as { event: string }).event === "quit-asked",

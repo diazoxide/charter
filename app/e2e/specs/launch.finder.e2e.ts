@@ -1,6 +1,6 @@
 import { browser, expect, $, $$ } from "@wdio/globals";
 import { READY } from "../harness.js";
-import { pickAndStart, pressOnly } from "../opening.js";
+import { harnessRowsDrawn, pickAndStart, pressOnly } from "../opening.js";
 
 /**
  * A chat started on a BUILT-IN profile, in an app launched the way Finder launches one.
@@ -33,7 +33,7 @@ describe("an app opened from Finder", () => {
     const before = (await $$('[data-testid="pane"]').getElements()).length;
 
     await pressOnly("New tab");
-    await (await $('input[type="radio"][name="profile"]')).waitForExist({ timeout: 20_000 });
+    await harnessRowsDrawn();
     await (await $("label*=claude")).click();
     await pickAndStart();
 

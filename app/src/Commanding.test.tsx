@@ -252,15 +252,17 @@ describe("the palette reaching what the window can do", () => {
     expect(screen.getAllByTestId("pane").map((pane) => pane.textContent)).toEqual(["session 1"]);
   });
 
-  it("switches workspace, which is what the panels follow", async () => {
+  it("switches workspace, which is what the regions follow", async () => {
     core();
     render(<App />);
     await screen.findByTestId("panels");
-    expect(await screen.findByLabelText("Workspace alpha")).toBeInTheDocument();
+    // The right-hand region names the workspace whose todos and personas it is drawing
+    // (charter ADR 0038 renamed it: it is what is asking for you, not the workspace).
+    expect(await screen.findByLabelText("Attention · alpha")).toBeInTheDocument();
 
     await runFromPalette("focus workspace beta");
 
-    expect(await screen.findByLabelText("Workspace beta")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Attention · beta")).toBeInTheDocument();
   });
 
   it("closes a chat", async () => {

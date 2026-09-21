@@ -1,6 +1,6 @@
 import { browser, expect, $, $$ } from "@wdio/globals";
 import { READY } from "../harness.js";
-import { pickAndStart, pressOnly } from "../opening.js";
+import { harnessRowsDrawn, pickAndStart, pressOnly } from "../opening.js";
 
 /**
  * Picking a harness profile and a persona, against the real app in a copy of the `daily`
@@ -45,10 +45,9 @@ describe("starting a chat", () => {
     // The file is gitignored, so an edit to it leaves no diff for a reviewer to catch —
     // which is why the ask is about the words that are about to run, not the profile's name.
     await pressOnly("New tab");
-    // By role, not by tag: the rows are Radix radios, which are `<button role="radio">`
-    // (`docs/ui-primitives.md`). The label is a real `<label for>` tied to one of them, so
-    // clicking the words picks the row — which is the association that was missing.
-    await $('[role="radio"]').waitForExist({ timeout: 20_000 });
+    // The label is a real `<label for>` tied to the row's control, so clicking the words picks
+    // the row — which is the association that was missing.
+    await harnessRowsDrawn();
     await (await $("label*=needs-approval")).click();
 
     await expect(dialog()).toHaveText(expect.stringContaining("claude-stand-in"));
@@ -64,18 +63,21 @@ describe("starting a chat", () => {
     });
   });
 
-  it("names the profile and the persona on the chat in the sidebar", async () => {
+  it("names the profile and the persona on the chat in the explorer", async () => {
     // The profile AND its kind. The kind is the one the profile declares, not one read off
     // the program's name — the program here is `claude-stand-in`, a wrapper, and
     // `Harness::of_command` answers `None` for one exactly as it does for a shell.
-    const sidebar = await $('nav[aria-label="Workspaces"]');
-    await sidebar.waitForDisplayed({ timeout: 20_000 });
+    //
+    // In the explorer since charter ADR 0038: the chats are listed under the spot each one
+    // works in, and the left region is `nav[aria-label="Explorer"]`.
+    const explorer = await $('nav[aria-label="Explorer"]');
+    await explorer.waitForDisplayed({ timeout: 20_000 });
 
     let said = "";
     await browser
       .waitUntil(
         async () => {
-          said = await sidebar.getText();
+          said = await explorer.getText();
           return said.includes("needs-approval") && said.includes("(claude)");
         },
         {
@@ -83,19 +85,19 @@ describe("starting a chat", () => {
           interval: 250,
           // What it actually said, so a failure here is one somebody can act on rather than
           // one they have to reproduce.
-          timeoutMsg: "the sidebar never named the profile the chat started on",
+          timeoutMsg: "the explorer never named the profile the chat started on",
         },
       )
       .catch((why: unknown) => {
         // What it actually said, so a failure here is one somebody can act on rather than one
         // they have to reproduce.
-        throw new Error(`${String(why)} — the sidebar said: ${said}`);
+        throw new Error(`${String(why)} — the explorer said: ${said}`);
       });
   });
 
   it("does not ask again for a profile it has already run, exactly as it stands", async () => {
     await pressOnly("New tab");
-    await $('[role="radio"]').waitForExist({ timeout: 20_000 });
+    await harnessRowsDrawn();
     await (await $("label*=needs-approval")).click();
 
     await expect($("button=Start")).toBeDisplayed();

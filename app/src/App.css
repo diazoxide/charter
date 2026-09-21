@@ -225,8 +225,8 @@ body {
 
 /* The tabs are the one thing on the bar that gives way: they shrink and scroll, and
    everything else keeps its width. A strip that could not shrink pushed the splits, the
-   queue and the plane's path off the window at about thirty chats. It does not GROW, so a
-   window with two chats looks as it always did. */
+   region buttons and the plane's path off the window at about thirty chats. It does not
+   GROW, so a window with two chats looks as it always did. */
 .tabs {
   flex: 0 1 auto;
 }
@@ -234,7 +234,7 @@ body {
 .bar > .adding,
 .bar > .more,
 .bar > .doing,
-.bar > .needs-you,
+.bar > .regions-doing,
 .bar > .plane {
   flex: none;
 }
@@ -406,80 +406,251 @@ body {
   padding: 2px 4px;
 }
 
-/* The window below the bar: the sidebar, then the panes. */
+/* The window below the bar, when there is no project in it: the opener, full width. The
+   four regions have their own layout below. */
 .body {
   display: flex;
   flex: 1;
   min-height: 0;
 }
 
-.sidebar {
-  flex: 0 0 15rem;
-  overflow-y: auto;
-  padding: 0.5rem;
+/* **The four regions** (charter ADR 0038). The outer group stacks the upper half over the
+   bottom bar; the inner one puts the explorer, the panes and the right-hand side in a row.
+   Every boundary is a `[data-separator]`, which is the same handle the pane splits use. */
+.regions {
+  flex: 1;
+  min-height: 0;
+}
+
+/* `react-resizable-panels` draws a panel as a box with the class on an inner div, and that
+   inner div is what has to fill the box. */
+.region-upper,
+.region-row,
+.region-centre,
+.region-explorer,
+.region-aside,
+.region-bottom {
+  height: 100%;
+  min-height: 0;
+}
+
+.region-explorer {
   border-right: 1px solid var(--edge, #3a3a3a);
+}
+
+.region-aside {
+  border-left: 1px solid var(--edge, #3a3a3a);
+}
+
+.region-bottom {
+  border-top: 1px solid var(--edge, #3a3a3a);
+  background: #131313;
+}
+
+/* The buttons that put a region away and bring it back. Quiet, because they are about the
+   window and not about the plane. */
+.regions-doing {
+  display: flex;
+  gap: 0.2rem;
+  align-items: center;
+}
+
+.region-toggle[aria-pressed="false"] {
+  opacity: 0.45;
+}
+
+.region-toggle[aria-pressed="true"] {
+  border-bottom: 1px solid var(--lit);
+}
+
+/* The left region: the repo and worktree explorer, which is the selector WITHIN a workspace
+   (charter ADR 0038). */
+.explorer {
+  padding: 0.5rem;
   font-size: 0.85rem;
 }
 
-.sidebar .workspaces,
-.sidebar .chats,
-.sidebar .todos,
-.sidebar .unfiled ul {
+.explorer .pieces,
+.explorer .here,
+.explorer .absent ul {
   list-style: none;
   margin: 0;
   padding: 0;
 }
 
-.sidebar .workspace {
-  margin-bottom: 0.75rem;
+.explorer .pieces {
+  padding-inline-start: 0.6rem;
 }
 
-.sidebar .workspace > button {
-  font-weight: 600;
+/* A spot is what the next chat starts in. The current one is marked with more than colour —
+   a bar down its inline start and its own weight — because "where will this chat open" is
+   the one thing in this region that must never be read wrong. */
+.explorer .spot {
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
   width: 100%;
   text-align: left;
+  padding: 0.15rem 0.3rem;
+  border: none;
+  border-inline-start: 2px solid transparent;
+  border-radius: 2px;
+  color: inherit;
+  background: none;
+  font: inherit;
+  cursor: default;
 }
 
-.sidebar .workspace > button.on {
-  text-decoration: underline;
+.explorer .spot:hover {
+  background: #202020;
 }
 
-.sidebar .vision,
-.sidebar .none {
-  margin: 0.15rem 0;
+.explorer .spot[aria-current="true"] {
+  border-inline-start-color: var(--lit);
+  background: #1f2a2f;
+  font-weight: 600;
+}
+
+.explorer .spot-what {
+  font-size: 0.75rem;
+  opacity: 0.6;
+}
+
+.explorer .clone > summary {
+  display: flex;
+  gap: 0.4rem;
+  align-items: baseline;
+  cursor: pointer;
+  padding: 0.25rem 0.3rem;
+  margin-top: 0.35rem;
+  border-top: 1px solid var(--edge, #3a3a3a);
+}
+
+.explorer .repo {
+  font-weight: 600;
+}
+
+.explorer .piece-count {
+  font-size: 0.75rem;
+  opacity: 0.6;
+}
+
+/* The chats already running at a spot: a button each, which brings that chat forward. */
+.explorer .here {
+  padding-inline-start: 1rem;
+}
+
+.explorer .chat {
+  display: inline-flex;
+  gap: 0.3rem;
+  align-items: center;
+  padding: 0.05rem 0.2rem;
+  border: none;
+  border-radius: 2px;
+  color: inherit;
+  background: none;
+  font: inherit;
+  font-size: 0.8rem;
+  opacity: 0.85;
+  cursor: default;
+}
+
+.explorer .chat:hover {
+  background: #202020;
+  opacity: 1;
+}
+
+.explorer .none,
+.explorer .pending {
+  margin: 0.1rem 0 0.1rem 0.6rem;
+  opacity: 0.6;
+}
+
+.explorer h2 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.7;
+  margin: 0.75rem 0 0.25rem;
+}
+
+.explorer .absent {
+  border-top: 1px solid var(--edge, #3a3a3a);
+  margin-top: 0.5rem;
+  padding-top: 0.25rem;
   opacity: 0.7;
 }
 
-.sidebar .chats li,
-.sidebar .todos li {
-  padding-left: 0.6rem;
-}
-
-.sidebar .cwd {
-  display: block;
-  overflow-wrap: anywhere;
-  opacity: 0.6;
+.explorer .trouble {
+  color: #f85149;
+  margin: 0.25rem 0;
 }
 
 /* What a chat's harness cannot tell charter (#27). Read as a note on the chat, never as
    trouble: nothing is wrong, the harness is different. */
-.sidebar .unreported {
-  margin: 0.1rem 0 0;
-  font-size: 0.85em;
+.explorer .unreported {
+  margin: 0.1rem 0 0 1rem;
+  font-size: 0.8em;
   font-style: italic;
   opacity: 0.7;
 }
 
-.sidebar .focused,
-.sidebar .unfiled {
-  border-top: 1px solid var(--edge, #3a3a3a);
-  margin-top: 0.5rem;
-  padding-top: 0.5rem;
+/* The bottom region: what the focused workspace's repos are doing. Nothing in it can be
+   pressed, which is the half of ADR 0038's reading a test can hold. */
+.state-bar {
+  padding: 0.35rem 0.6rem;
+  font-size: 0.8rem;
 }
 
-.sidebar h2 {
-  font-size: 0.85rem;
-  margin: 0 0 0.25rem;
+.state-bar .repo-states {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.state-bar .repo-row {
+  padding: 0.1rem 0;
+  overflow-wrap: anywhere;
+}
+
+.state-bar .repo {
+  font-weight: 600;
+}
+
+.state-bar .absent,
+.state-bar .none,
+.state-bar .pending,
+.state-bar .note,
+.state-bar .stamp {
+  opacity: 0.6;
+}
+
+.state-bar .note {
+  font-size: 0.75rem;
+  margin: 0.35rem 0 0;
+}
+
+.state-bar .unreadable {
+  color: #f0883e;
+}
+
+/* Never colour alone: the state's own word is the text of the cell. */
+.state-bar .ci-success {
+  color: #3fb950;
+}
+
+.state-bar .ci-failed {
+  color: #f85149;
+}
+
+.state-bar .ci-running,
+.state-bar .ci-pending {
+  color: #d29922;
+}
+
+.state-bar .trouble {
+  color: #f85149;
+  margin: 0.25rem 0;
 }
 
 /* What a chat that was put back says about itself: resumed, or new and why. */
@@ -786,17 +957,37 @@ body {
   border-radius: 2px;
 }
 
+/* The needs-you queue, now in the right region rather than on the bar (charter ADR 0038).
+   A column, because it has a side to itself and a queue that has to work at fifty chats was
+   sharing one line with six other things. */
 .needs-you {
   display: flex;
-  align-items: center;
-  gap: 0.4rem;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--edge, #3a3a3a);
 }
 .needs-you ul {
   display: flex;
-  gap: 0.3rem;
+  flex-direction: column;
+  gap: 0.15rem;
   margin: 0;
   padding: 0;
   list-style: none;
+}
+.needs-you li button {
+  width: 100%;
+  text-align: left;
+  padding: 0.1rem 0.3rem;
+  border: none;
+  border-radius: 2px;
+  color: inherit;
+  background: #202020;
+  font: inherit;
+  cursor: default;
+}
+.needs-you li button:hover {
+  background: #2a2a2a;
 }
 .needs-you-count {
   font-weight: 600;
@@ -846,13 +1037,10 @@ body {
   padding-inline-start: 1.1rem;
 }
 
-/* The right-hand panels: what the focused workspace holds. Read-only, so there is nothing
-   in here to press — every row is text. */
+/* The right region: what is asking for you (charter ADR 0038) — the needs-you queue, the
+   alerts sentence, the workspace's todos and the plane's personas. */
 .panels {
-  flex: 0 0 19rem;
-  overflow-y: auto;
   padding: 0.5rem;
-  border-left: 1px solid var(--edge, #3a3a3a);
   font-size: 0.85rem;
 }
 .panels h2 {
@@ -1133,4 +1321,10 @@ body {
 
 .warning .value {
   opacity: 0.6;
+}
+
+/* A region that is put away keeps its handle in the group — `PlaneView`'s `Region` says why —
+   and the handle goes to nothing so there is no line to drag and nothing to hit. */
+[data-separator].edge-gone {
+  display: none;
 }
