@@ -513,9 +513,11 @@ impl Planes {
                     // from the one that went in: a plane the registry has already let go of
                     // shifts everything after it, and an `active` off by one is a window that
                     // comes back on the wrong project.
-                    let active = front
-                        .and_then(|front| kept.iter().position(|(id, _)| *id == front))
-                        .unwrap_or(0);
+                    let active = if front.is_some() {
+                        holding.active.unwrap_or(0)
+                    } else {
+                        0
+                    };
                     Some(machine::Window {
                         planes: kept.into_iter().map(|(_, root)| root).collect(),
                         active,
@@ -523,7 +525,7 @@ impl Planes {
                 })
                 .collect()
         };
-        if let Err(why) = machine::update(config, move |store| store.windows = arranged)
+        if let Err(why) = machine::update(config, move |store| store.windows.extend(arranged))
             && why.kind() != std::io::ErrorKind::Unsupported
         {
             eprintln!(
@@ -808,11 +810,7 @@ impl Showing {
     /// the next launch while still being a row charter had to write down.
     pub fn in_window(&self, window: &str, holding: Holding) {
         let mut showing = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        if holding.planes.is_empty() {
-            showing.remove(window);
-        } else {
-            showing.insert(window.to_owned(), holding);
-        }
+        showing.insert(window.to_owned(), holding);
     }
 
     /// Whether `window` has `plane` in front.
@@ -831,8 +829,7 @@ impl Showing {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(window)
-            .and_then(Holding::front)
-            == Some(plane)
+            .is_some_and(|holding| holding.planes.contains(plane))
     }
 
     /// Every window's arrangement, in a stable order.
@@ -865,7 +862,7 @@ pub const NO_RESTORE: &str = "--no-restore";
 impl Restoring {
     /// What this launch's arguments say.
     pub fn from_args(args: impl IntoIterator<Item = String>) -> Self {
-        Self(!args.into_iter().any(|arg| arg == NO_RESTORE))
+        Self(!args.into_iter().any(|arg| arg.starts_with(NO_RESTORE)))
     }
 
     pub fn wanted(&self) -> bool {
@@ -918,14 +915,10 @@ pub fn restorable(loaded: machine::Loaded) -> Restorable {
             let shown = charter_core::shown::short(&plane.display().to_string());
             if let Err(why) = machine::still_a_plane(&plane) {
                 dropped.push(format!("{shown} {why}"));
-                continue;
             }
             // One project is one tab. Two windows that both held it merge into one that
             // holds it once, and a second tab on one plane would be a second `PlaneView`
             // drawing one board.
-            if planes.contains(&plane) {
-                continue;
-            }
             if which == 0 && at == was_active {
                 active = Some(planes.len());
             }
