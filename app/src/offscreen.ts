@@ -19,13 +19,20 @@
  * barely be aimed at. The cost is stated where it bites: a window narrower than one tab puts
  * every tab in the menu, which is a degenerate width and still leaves everything reachable.
  *
- * **The threshold is [`WHOLLY`] and not `1`, and that is measured rather than cautious.** A
- * threshold of exactly 1 asks for an intersection ratio of exactly 1.0, and a ratio is
- * computed from rectangles the engine lays out in fractions of a pixel: a tab that is wholly
- * on screen routinely measures 0.9999 and is then reported as not intersecting. The scenario
- * run on macOS measured every one of forty-nine visible tabs as hidden for exactly that
- * reason, while the same build on Linux measured three of fifty-one as visible — same code,
- * same threshold, different rounding.
+ * **The threshold is [`WHOLLY`] and not `1`.** A threshold of exactly 1 asks for an
+ * intersection ratio of exactly 1.0, and a ratio is computed from rectangles the engine lays
+ * out in fractions of a pixel, so a tab that is wholly on screen can measure 0.9999 and be
+ * reported as not intersecting.
+ *
+ * **What this measurement CANNOT survive is a window that is not being drawn**, and that is
+ * measured rather than feared. The observer is answered in the browser's own rendering step,
+ * and macOS gives a WKWebView no rendering while its window is covered or the display is
+ * asleep (charter-app M0.6). On such a runner the first delivery is the only delivery and it
+ * lands before the strip has its width: the scenario run reported 0 of 49 tabs visible on
+ * macOS against 3 of 51 on Linux, and lowering this threshold did not move it — which is what
+ * ruled out rounding as that run's cause. An operator whose window is covered cannot read the
+ * strip either, so the cost is a count that is wrong while nobody can see it; what it means
+ * for the specs is written down in `panes.e2e.ts`.
  *
  * **Nothing is ever removed from the DOM by this.** The tabs it names are scrolled out of
  * view, not unmounted: they keep their place in the strip, their `role="tab"`, their close
@@ -43,11 +50,15 @@ export const TAB_ATTRIBUTE = "data-tab";
 /**
  * How much of a tab has to be inside the strip for it to count as shown.
  *
- * Not `1`. See this module's own docstring: an intersection ratio comes off rectangles laid
- * out in fractions of a pixel, and a whole tab measures 0.9999 often enough that a threshold
- * of 1 reported every visible tab as hidden on one of the two platforms the scenario tests
- * run on. The slack is a hundredth of a tab, which is never the difference between a tab an
- * operator can read and one they cannot.
+ * Not `1`. An intersection ratio comes off rectangles laid out in fractions of a pixel, so a
+ * whole tab can measure 0.9999 and be reported as not intersecting. The slack is a hundredth
+ * of a tab, which is never the difference between a tab an operator can read and one they
+ * cannot.
+ *
+ * **It is a guard and not a fix for anything that has been seen.** It was reached for when a
+ * macOS scenario run called every visible tab hidden, and it did not change that run — see
+ * this module's docstring for what did explain it. It stays because the hazard it names is
+ * real and the slack costs nothing.
  */
 const WHOLLY = 0.99;
 
