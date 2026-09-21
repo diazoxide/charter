@@ -79,7 +79,7 @@ describe("fifty sessions, forty-nine of them streaming", () => {
 
       // Every tab closed, so the next load starts from none.
       await browser.execute(() => {
-        for (const close of [...document.querySelectorAll('button[aria-label^="Close tab"]')]) {
+        for (const close of [...document.querySelectorAll('button[aria-label^="End chat"]')]) {
           (close as HTMLElement).click();
         }
       });

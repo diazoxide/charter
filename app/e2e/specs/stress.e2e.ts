@@ -84,22 +84,51 @@ function theApp(): number {
 async function closeButtons(): Promise<WebdriverIO.Element[]> {
   return [
     ...(await $$(
-      '[role="tablist"][aria-label="Tabs"] button[aria-label^="Close tab "]',
+      '[role="tablist"][aria-label="Tabs"] button[aria-label^="End chat "]',
     ).getElements()),
   ];
 }
 
-/** Closes every tab, last first, and waits for every session's program to be gone. */
-async function closeEveryTab(): Promise<void> {
-  // Bounded, so a close that never takes shows up as a failure and not as a hang.
-  for (let pressed = 0; pressed < 4 * TABS; pressed++) {
-    const buttons = await closeButtons();
-    if (buttons.length === 0) {
-      break;
+/** The workspaces on the strip above the tabs (charter ADR 0036). */
+async function workspaceTabs(): Promise<WebdriverIO.Element[]> {
+  return [...(await $$('[role="tablist"][aria-label="Workspaces"] [role="tab"]').getElements())];
+}
+
+/** Focuses a workspace by the name on its strip tab. */
+async function focusWorkspace(name: string): Promise<boolean> {
+  for (const tab of await workspaceTabs()) {
+    if ((await tab.$(".workspace-name").getText()) === name) {
+      await tab.click();
+      return true;
     }
-    await buttons[buttons.length - 1].click();
   }
-  expect(await closeButtons()).toHaveLength(0);
+  return false;
+}
+
+/**
+ * Closes every tab, last first, and waits for every session's program to be gone.
+ *
+ * **Every workspace's**, not the focused one's. The chat strip shows one workspace's chats
+ * (ADR 0036), and one app process serves the whole run — so a chat another spec left in
+ * another workspace is a live harness this spec would otherwise count as a leak.
+ */
+async function closeEveryTab(): Promise<void> {
+  const names: string[] = [];
+  for (const tab of await workspaceTabs()) names.push(await tab.$(".workspace-name").getText());
+  for (const name of names.length > 0 ? names : [""]) {
+    if (name !== "" && !(await focusWorkspace(name))) continue;
+    // Bounded, so a close that never takes shows up as a failure and not as a hang.
+    for (let pressed = 0; pressed < 4 * TABS; pressed++) {
+      const buttons = await closeButtons();
+      if (buttons.length === 0) {
+        break;
+      }
+      await buttons[buttons.length - 1].click();
+    }
+    expect(await closeButtons()).toHaveLength(0);
+  }
+  // On a known workspace, so the fifty this spec is about all land on one strip.
+  if (names[0] !== undefined) await focusWorkspace(names[0]);
   await browser.waitUntil(async () => harnessesRunning() === 0, {
     timeout: 60_000,
     interval: 250,

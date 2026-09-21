@@ -50,7 +50,14 @@ const model: SidebarModel = {
   ],
 };
 
-const names = () => screen.getAllByRole("tab").map((el) => el.textContent);
+/** The workspaces it lists. Buttons and not tabs: the workspace STRIP is the tablist that
+ *  says which workspace the window is on (ADR 0036), and a second tablist for the same axis
+ *  would be a second answer to the same question. */
+const names = () =>
+  screen
+    .getAllByRole("button")
+    .filter((el) => el.parentElement?.className === "workspace")
+    .map((el) => el.textContent);
 
 describe("Sidebar", () => {
   it("lists every workspace on the plane", () => {
@@ -115,7 +122,7 @@ describe("Sidebar", () => {
       />,
     );
 
-    await userEvent.click(screen.getByRole("tab", { name: "beta" }));
+    await userEvent.click(screen.getByRole("button", { name: "beta" }));
 
     expect(focused).toEqual(["beta"]);
   });

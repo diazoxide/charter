@@ -6,10 +6,16 @@ import { pressAndStart } from "../opening.js";
  * plane the Python charter itself wrote. Nothing here is stubbed: the app reads the files.
  */
 
-/** The workspaces the sidebar is listing, in order. */
+/** The workspaces the strip is listing, in order (charter ADR 0036).
+ *
+ *  The names alone: a strip tab also says how many chats are in a workspace that is not on
+ *  screen, and WebdriverIO's Tauri service keeps ONE app process for the whole run, so a
+ *  chat another spec started would otherwise land in this list. */
 async function listed(): Promise<string[]> {
-  const tabs = await $$('[role="tablist"][aria-label="Workspaces"] [role="tab"]').getElements();
-  return Promise.all([...tabs].map((tab) => tab.getText()));
+  const names = await $$(
+    '[role="tablist"][aria-label="Workspaces"] [role="tab"] .workspace-name',
+  ).getElements();
+  return Promise.all([...names].map((name) => name.getText()));
 }
 
 /** Waits until the sidebar has read the plane, and says what it found if it never does. */
@@ -85,4 +91,46 @@ describe("the sidebar", () => {
     await expect(alpha).toHaveText(expect.stringContaining("1"));
     await expect(await $('[data-testid="unfiled"]')).not.toBeExisting();
   });
+
+  it("shows one workspace's chats on the strip, and keeps the others running", async () => {
+    // The axis the tmux frame had and the port lost (charter ADR 0036): a top-level tab
+    // there was a WORKSPACE and the sessions lived under it. Here the chat strip shows the
+    // focused workspace's chats — and a glance at another workspace ends nothing, which is
+    // the same guarantee a project behind another one has (#125).
+    await untilListed(["alpha", "beta"]);
+    await press("beta");
+    await pressAndStart("New tab");
+
+    const started = await tabInFront();
+    expect(started).not.toBe("");
+
+    await press("alpha");
+
+    expect(await chatTabs()).not.toContain(started);
+
+    await press("beta");
+
+    // Still there, still running: nothing was torn down by looking away.
+    await browser.waitUntil(async () => (await chatTabs()).includes(started), {
+      timeout: 20_000,
+      timeoutMsg: `the chat ${started} did not come back when its workspace was focused again`,
+    });
+  });
 });
+
+/** The chats on the strip, which is the focused workspace's and no other's. */
+async function chatTabs(): Promise<string[]> {
+  const names = await $$(
+    '[role="tablist"][aria-label="Tabs"] [role="tab"] .tab-name',
+  ).getElements();
+  return Promise.all([...names].map((name) => name.getText()));
+}
+
+/** What the tab in front is called. */
+async function tabInFront(): Promise<string> {
+  const name = await $(
+    '[role="tablist"][aria-label="Tabs"] [role="tab"][aria-selected="true"] .tab-name',
+  );
+  await name.waitForExist({ timeout: 20_000 });
+  return name.getText();
+}

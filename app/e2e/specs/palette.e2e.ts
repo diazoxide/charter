@@ -101,7 +101,7 @@ describe("the command palette", () => {
   // assertion fails on a session it never typed into. A first run proved it.
   after(async () => {
     for (const name of (await tabNames()).filter((tab) => !wereAlreadyOpen.includes(tab))) {
-      await pressOnly(`Close tab ${name}`);
+      await pressOnly(`End chat ${name}`);
     }
     await browser.waitUntil(
       async () => (await tabNames()).every((tab) => wereAlreadyOpen.includes(tab)),

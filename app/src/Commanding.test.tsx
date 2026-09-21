@@ -197,8 +197,8 @@ describe("the palette reaching what the window can do", () => {
         "New tab",
         "Split right",
         "Split down",
-        "Close pane",
-        "Close tab 1",
+        "End this pane's chat",
+        "End chat 1 steward",
         "Focus workspace beta",
         "Merge this chat's worktree into its clone",
         "Remove this chat's worktree",
@@ -234,7 +234,7 @@ describe("the palette reaching what the window can do", () => {
     expect(await screen.findByRole("dialog", { name: /Start a chat/i })).toBeInTheDocument();
     expect(asked.map(({ cmd }) => cmd)).not.toContain("start_chat");
     await userEvent.click(await screen.findByRole("button", { name: "Start" }));
-    expect(tabNames()).toEqual(["1"]);
+    expect(tabNames()).toEqual(["1 steward"]);
   });
 
   it("switches tab", async () => {
@@ -265,7 +265,7 @@ describe("the palette reaching what the window can do", () => {
     render(<App />);
     await openAChat();
 
-    await runFromPalette("close tab 1");
+    await runFromPalette("end chat 1 steward");
 
     expect(screen.queryAllByTestId("pane")).toEqual([]);
     expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
@@ -280,7 +280,7 @@ describe("the palette reaching what the window can do", () => {
     await userEvent.click(screen.getByRole("button", { name: "Split down" }));
     await userEvent.click(await screen.findByRole("button", { name: "Start" }));
 
-    await runFromPalette("close pane");
+    await runFromPalette("end this pane");
 
     expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
       { plane: "/home/dev/plane", session: 2 },
@@ -387,7 +387,13 @@ describe("one list, two surfaces", () => {
     const rows = rowTitles();
 
     await userEvent.keyboard("{Escape}");
-    for (const words of ["New tab", "Split right", "Split down", "Close pane", "Close tab 1"]) {
+    for (const words of [
+      "New tab",
+      "Split right",
+      "Split down",
+      "End this pane's chat",
+      "End chat 1 steward",
+    ]) {
       expect(rows).toContain(words);
       expect(screen.getByRole("button", { name: words })).toBeInTheDocument();
     }

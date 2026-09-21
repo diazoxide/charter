@@ -200,7 +200,7 @@ export function harnesses(): { running: number; cpuPercent: number } {
  */
 export async function closeEverything(): Promise<void> {
   await browser.execute(() => {
-    for (const close of [...document.querySelectorAll('button[aria-label^="Close tab"]')]) {
+    for (const close of [...document.querySelectorAll('button[aria-label^="End chat"]')]) {
       (close as HTMLElement).click();
     }
   });

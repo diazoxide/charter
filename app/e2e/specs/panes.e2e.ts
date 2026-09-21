@@ -135,7 +135,7 @@ describe("the window", () => {
     const names = await tabNames();
     const closing = names[names.length - 1];
 
-    await press(`Close tab ${closing}`);
+    await press(`End chat ${closing}`);
 
     await browser.waitUntil(async () => harnessesRunning() === running - 1, {
       timeout: 15_000,

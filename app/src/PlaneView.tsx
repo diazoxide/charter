@@ -18,6 +18,8 @@ import {
 } from "./bindings";
 import {
   catalogue,
+  OUTSIDE,
+  OUTSIDE_TITLE,
   perform,
   PASS_THROUGH_BYTES,
   PASS_THROUGH_KEY,
@@ -37,8 +39,12 @@ import {
   openTab,
   panesOf,
   selectTab,
+  showWorkspace,
   splitFocusedPane,
+  tabsIn,
+  workspaceOf,
   type Direction,
+  type FiledIn,
   type Layout,
   type Tabs,
 } from "./tabs";
@@ -133,6 +139,22 @@ export function PlaneView({
    *  tabs" is "not yet", which is not the same thing as "nothing is running" — and a quit
    *  decides on it. */
   const [settled, setSettled] = useState(false);
+  /**
+   * Where charter has just put a chat, until the plane says the same thing.
+   *
+   * The plane is what files a chat under a workspace — the directory it works in — and the
+   * sidebar is read fresh off the disk a tick after a chat starts. For that one tick charter
+   * knows perfectly well where it put the chat, because it chose the directory. Without this
+   * the tab would be missing from its own strip for a frame, on the strip the operator is
+   * looking at, which is the tab going missing.
+   *
+   * Written in the same handler that starts the chat, so the render that first draws the tab
+   * already knows where it is filed — React puts both in one flush.
+   */
+  const [startedIn, setStartedIn] = useState<Record<number, string>>({});
+  /** The tab that was in front on each workspace's strip, so coming back to a workspace
+   *  comes back to the chat that was on screen there rather than to its first. */
+  const lastFront = useRef<Record<string, number>>({});
 
   // The arrangement as it is right now, so that what a button does is decided here and not
   // inside a state update. React may run an update again, and a session must not be opened or
@@ -181,7 +203,12 @@ export function PlaneView({
         const open = answer.status === "ok" ? (answer.data ?? []) : [];
         if (open.length === 0) return;
         setReopened(open);
-        const drawn = open.reduce((tabs, chat) => openTab(tabs, chat.session, chat.name), noTabs());
+        // The persona comes with the chat, so a tab put back reads `3 steward` from its first
+        // frame rather than reading `3` until the sidebar has been read (charter-app#130).
+        const drawn = open.reduce(
+          (tabs, chat) => openTab(tabs, chat.session, chat.name, chat.persona),
+          noTabs(),
+        );
         const front = open.findIndex((chat) => chat.in_front);
         change(() => (front < 0 ? drawn : selectTab(drawn, drawn.order[front])));
       })
@@ -209,22 +236,94 @@ export function PlaneView({
           return;
         }
         setSidebar(next);
-        // Focus follows the plane rather than being guessed: the first workspace, until
-        // somebody picks another and while that one still exists.
+        // Focus follows the plane rather than being guessed: whichever workspace was picked,
+        // while it still exists — and otherwise **the workspace of the chat in front**,
+        // because the strip below shows that workspace's chats and a strip that opened on
+        // another one would be hiding the chat the operator is looking at (ADR 0036). Only
+        // then the first workspace, which is what a launch with nothing open lands on.
+        const here = (session: number) =>
+          next.workspaces.find((ws) => ws.chats.some((chat) => chat.session === session))?.name ??
+          (next.unfiled.some((chat) => chat.session === session)
+            ? OUTSIDE
+            : (startedIn[session] ?? OUTSIDE));
+        const front = now.current.inFront;
+        const session = front === undefined ? undefined : panesOf(now.current, front)[0]?.session;
+        const ofFront = session === undefined ? undefined : here(session);
+        const stands = (name: string) =>
+          name === OUTSIDE
+            ? next.unfiled.length > 0 || ofFront === OUTSIDE
+            : next.workspaces.some((ws) => ws.name === name);
         setFocused((current) =>
-          current && next.workspaces.some((ws) => ws.name === current)
+          current !== undefined && stands(current)
             ? current
-            : next.workspaces[0]?.name,
+            : (ofFront ?? next.workspaces[0]?.name),
         );
       })
       // A window with no readable plane still runs its panes; the header already says so.
       .catch(() => setSidebar(undefined));
-  }, [plane, tabs]);
+  }, [plane, startedIn, tabs]);
 
   // Where a chat starts: the focused workspace's directory, so the sidebar can file it under
   // that workspace. Nothing on the plane records a chat, so where it works is the only thing
   // relating the two. Null — the operator's home — until a plane is read.
   const startIn = sidebar?.workspaces.find((ws) => ws.name === focused)?.path ?? null;
+
+  /**
+   * Which workspace each chat is filed under — the strip its tab appears on.
+   *
+   * **The plane's answer**, through the sidebar the core reads off it: what relates a chat to
+   * a workspace is the directory it works in, and nothing on the plane records a chat. What
+   * charter has just started is laid under that, for the one tick before the plane has been
+   * read again.
+   *
+   * A chat working in no workspace is `OUTSIDE`, which is a strip of its own. The sidebar has
+   * always shown those rather than dropping them, and a strip per workspace has to have
+   * somewhere to put them or they become unreachable.
+   */
+  const filedIn = useCallback<FiledIn>(
+    (session) => {
+      const workspace = sidebar?.workspaces.find((ws) =>
+        ws.chats.some((chat) => chat.session === session),
+      );
+      if (workspace) return workspace.name;
+      if (sidebar?.unfiled.some((chat) => chat.session === session)) return OUTSIDE;
+      return startedIn[session] ?? OUTSIDE;
+    },
+    [sidebar, startedIn],
+  );
+
+  /** The workspaces the strip shows: this project's, plus the one for chats outside them all
+   *  when there are any. In the plane's own order, which is the sidebar's. */
+  const strips = useMemo(() => {
+    if (sidebar === undefined) return [];
+    const names = sidebar.workspaces.map((ws) => ws.name);
+    const stray =
+      sidebar.unfiled.length > 0 ||
+      tabs.order.some((id) => workspaceOf(tabs, id, filedIn) === OUTSIDE);
+    return stray ? [...names, OUTSIDE] : names;
+  }, [filedIn, sidebar, tabs]);
+
+  /**
+   * The chats the strip shows: the focused workspace's.
+   *
+   * **Every one of them while charter has not read the plane yet.** With no sidebar there is
+   * nothing that knows which workspace a chat is in, and a strip that showed none of them
+   * would be hiding chats that are running — which is worse than a strip that shows them all
+   * for the moment before the answer arrives.
+   */
+  const shown = useMemo(
+    () => (sidebar === undefined ? tabs.order : tabsIn(tabs, focused, filedIn)),
+    [filedIn, focused, sidebar, tabs],
+  );
+
+  // The tab that was in front on this strip, remembered so that coming back to a workspace
+  // comes back to the chat that was on screen there.
+  useEffect(() => {
+    const front = tabs.inFront;
+    if (front === undefined || sidebar === undefined) return;
+    const workspace = workspaceOf(tabs, front, filedIn);
+    if (workspace !== undefined) lastFront.current[workspace] = front;
+  }, [filedIn, sidebar, tabs]);
 
   /** Asks which profile and which persona. It starts nothing by itself. */
   const ask = useCallback(
@@ -251,9 +350,12 @@ export function PlaneView({
       const where = picking?.where;
       if (where === undefined) return;
       const inFrontTab = now.current.inFront;
+      // The tab's CHAT name, not the sentence the tab bar draws: the core is being told what
+      // this chat is called, and a split's chat is called what the tab's chat is called. The
+      // persona the tab also shows is the operator's, not part of the chat's name.
       const name =
         "split" in where && inFrontTab !== undefined
-          ? now.current.byId[inFrontTab].name
+          ? now.current.byId[inFrontTab].chat
           : String(now.current.named.tabs + 1);
       const started = await commands
         .startChat(
@@ -278,8 +380,13 @@ export function PlaneView({
       // Software went into somebody's config folder, so it is said.
       setWired(started.data.wired ?? undefined);
       const session = started.data.session;
+      // Where charter put it, written down before the tab is drawn: the plane will say the
+      // same thing a tick later, and until it does this is what keeps the tab on the strip
+      // the operator is looking at.
+      const filed = startIn === null ? OUTSIDE : (focused ?? OUTSIDE);
+      setStartedIn((was) => ({ ...was, [session]: filed }));
       if ("tab" in where) {
-        change((tabs) => openTab(tabs, session, name));
+        change((tabs) => openTab(tabs, session, name, persona));
         return;
       }
       const before = now.current;
@@ -289,7 +396,7 @@ export function PlaneView({
         void commands.closeSession(plane, session);
       }
     },
-    [change, picking, plane, startIn],
+    [change, focused, picking, plane, startIn],
   );
 
   /** The approval IS this click. After it, the whole chain of checks runs again from the
@@ -319,17 +426,34 @@ export function PlaneView({
     const tab =
       now.current.inFront === undefined ? undefined : now.current.byId[now.current.inFront];
     const going = tab && panesOf(now.current, tab.id).find((pane) => pane.pane === tab.focused);
-    change(closeFocusedPane);
+    change((tabs) => closeFocusedPane(tabs, filedIn));
     if (going) void commands.closeSession(plane, going.session);
-  }, [change, plane]);
+  }, [change, filedIn, plane]);
 
   const close = useCallback(
     (id: number) => {
       const ending = panesOf(now.current, id);
-      change((tabs) => closeTab(tabs, id));
+      change((tabs) => closeTab(tabs, id, filedIn));
       for (const pane of ending) void commands.closeSession(plane, pane.session);
     },
-    [change, plane],
+    [change, filedIn, plane],
+  );
+
+  /**
+   * Brings a tab to the front — **and the workspace it is on with it**.
+   *
+   * The strip shows one workspace's chats, so bringing a chat forward from somewhere else
+   * has to move the operator to where that chat lives; otherwise the pane would show a chat
+   * whose tab is on a strip that is not drawn. Everything that shows a chat comes through
+   * here: the strip itself, the palette's `Switch to tab` rows and the needs-you queue.
+   */
+  const bringToFront = useCallback(
+    (id: number) => {
+      change((tabs) => selectTab(tabs, id));
+      const workspace = sidebar === undefined ? undefined : workspaceOf(now.current, id, filedIn);
+      if (workspace !== undefined) setFocused(workspace);
+    },
+    [change, filedIn, sidebar],
   );
 
   /** Brings the tab holding a chat to the front. The queue and the palette both use it. */
@@ -338,9 +462,26 @@ export function PlaneView({
       const tab = now.current.order.find((id) =>
         panesOf(now.current, id).some((pane) => pane.session === session),
       );
-      if (tab !== undefined) change((tabs) => selectTab(tabs, tab));
+      if (tab !== undefined) bringToFront(tab);
     },
-    [change],
+    [bringToFront],
+  );
+
+  /**
+   * Focuses a workspace: the strip below it shows that workspace's chats, and one of them
+   * comes to the front — the one that was in front there last, or its first.
+   *
+   * **A workspace with no chats puts nothing in front.** Leaving another workspace's chat on
+   * screen under this workspace's empty strip would be the app showing a chat the strip says
+   * is not there. Nothing is ended and nothing is torn down: every chat in every workspace
+   * keeps running, exactly as a project behind another one does (#125).
+   */
+  const focusWorkspace = useCallback(
+    (workspace: string) => {
+      setFocused(workspace);
+      change((tabs) => showWorkspace(tabs, workspace, filedIn, lastFront.current[workspace]));
+    },
+    [change, filedIn],
   );
 
   /** What a chat is called here: the tab holding it, or its session number. */
@@ -351,8 +492,6 @@ export function PlaneView({
         .map((id) => tabs.byId[id].name)[0] ?? String(session),
     [tabs],
   );
-
-  const bringToFront = useCallback((id: number) => change((tabs) => selectTab(tabs, id)), [change]);
 
   const frontTab = tabs.inFront === undefined ? undefined : tabs.byId[tabs.inFront];
   // The session the next worktree question is about: the chat in the pane that has the
@@ -466,7 +605,7 @@ export function PlaneView({
       closePane,
       closeTab: close,
       selectTab: bringToFront,
-      focusWorkspace: setFocused,
+      focusWorkspace,
       showChat,
       removeWorktree,
       mergeWorktree,
@@ -480,6 +619,7 @@ export function PlaneView({
       bringToFront,
       close,
       closePane,
+      focusWorkspace,
       mergeWorktree,
       newTab,
       removeWorktree,
@@ -525,7 +665,7 @@ export function PlaneView({
         ? []
         : catalogue({
             tabs,
-            workspaces: sidebar?.workspaces.map((ws) => ws.name) ?? [],
+            workspaces: strips,
             focused,
             worktree,
             plane,
@@ -546,8 +686,8 @@ export function PlaneView({
       projects,
       quiet,
       report,
-      sidebar,
       states.needsYou,
+      strips,
       tabs,
       worktree,
     ],
@@ -581,6 +721,22 @@ export function PlaneView({
     },
     [run],
   );
+
+  /**
+   * Keeps the tab in front on screen when the strip is wider than the window.
+   *
+   * The strip scrolls rather than growing past the window edge (charter-app#130), and a chat
+   * is brought forward from surfaces that are not the strip at all — the palette, the
+   * needs-you queue, a close taking the tab beside it. So the selected tab comes to the
+   * operator rather than the operator having to find it.
+   *
+   * A callback ref, so it runs on the element that IS selected whenever that changes, with
+   * nothing having to work out which one that is. `scrollIntoView` is called through `?.`
+   * because jsdom does not implement it, and a window must not come down over a nicety.
+   */
+  const intoView = useCallback((tab: HTMLButtonElement | null) => {
+    tab?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+  }, []);
 
   // The chats still open, in the order the tab bar shows them: what a quit would end, with
   // what each one is doing already resolved. The state has to be looked up HERE, because a
@@ -634,15 +790,72 @@ export function PlaneView({
 
   return (
     <>
+      {/* The workspaces of this project, as the second of the three strips (ADR 0036). It is
+          the axis the tmux frame had and the port lost: a top-level tab there was a
+          WORKSPACE and the sessions lived under it, and transposing the app onto projects
+          left the workspace as a heading in the sidebar that nothing selected.
+          One tablist for the axis, and it is this one — the sidebar lists the same
+          workspaces, but as a listing of what each holds rather than as a second answer to
+          "which workspace am I in". */}
+      {strips.length > 0 && (
+        <nav className="workspaces-strip" role="tablist" aria-label="Workspaces">
+          {strips.map((workspace) => {
+            const offer = by(`workspace.focus:${workspace}`);
+            const waiting = states.needsYou.filter(
+              (session) => filedIn(session) === workspace,
+            ).length;
+            const here = tabsIn(tabs, workspace, filedIn).length;
+            return (
+              <button
+                key={workspace}
+                role="tab"
+                aria-selected={workspace === focused}
+                title={offer?.title}
+                onClick={() => {
+                  if (offer?.available) press(offer);
+                }}
+              >
+                <span className="workspace-name">
+                  {workspace === OUTSIDE ? OUTSIDE_TITLE : workspace}
+                </span>
+                {/* How many chats are open over there. With the strip below showing one
+                    workspace's chats, this is the answer to "where are the other forty". */}
+                {here > 0 && (
+                  <span className="workspace-count" aria-label={`${here} chats`}>
+                    {here}
+                  </span>
+                )}
+                {/* And how many of them are asking for you. Scoping the chats to a workspace
+                    would otherwise hide a chat that needs you behind a strip nobody is
+                    looking at — the same hole the project tabs close one scope up. */}
+                {waiting > 0 && (
+                  <span
+                    className="workspace-needs"
+                    aria-label={`${waiting} chats need you in ${
+                      workspace === OUTSIDE ? OUTSIDE_TITLE : workspace
+                    }`}
+                  >
+                    {waiting}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
+      )}
+
       <header className="bar">
-        {/* Named, because the sidebar lists workspaces as a tablist too and a query for
-            `role="tab"` across the whole window would mix the two. */}
+        {/* The chats of the FOCUSED WORKSPACE (ADR 0036), which is what the tmux frame's
+            sessions-under-a-workspace was. Named, because the projects and the workspaces
+            above are tablists too and a query for `role="tab"` across the whole window
+            would mix all three. */}
         <div className="tabs" role="tablist" aria-label="Tabs">
-          {tabs.order.map((id) => (
+          {shown.map((id) => (
             <span className="tab" key={id}>
               <button
                 role="tab"
                 aria-selected={id === tabs.inFront}
+                ref={id === tabs.inFront ? intoView : undefined}
                 // The catalogue's row, not a second copy of it. The tab already in front
                 // has a row that says so and cannot run — a tab is never disabled, because
                 // the selected tab is the one a keyboard has to be able to land on.
@@ -713,7 +926,7 @@ export function PlaneView({
 
       <div className="body">
         {sidebar && (
-          <Sidebar sidebar={sidebar} states={states} focused={focused} onFocus={setFocused} />
+          <Sidebar sidebar={sidebar} states={states} focused={focused} onFocus={focusWorkspace} />
         )}
         <div className="panes">
           {frontTab ? (
@@ -723,14 +936,23 @@ export function PlaneView({
               focused={frontTab.focused}
               onFocus={(pane) => change((tabs) => focusPane(tabs, pane))}
             />
+          ) : tabs.order.length > 0 ? (
+            // Chats are running — just not in the workspace being looked at. Saying "no
+            // sessions" here would be charter telling the operator that what it is still
+            // drawing on the strip above does not exist.
+            <p className="empty">
+              No chats in this workspace. Open one with New tab, or pick a workspace above.
+            </p>
           ) : (
             <p className="empty">No sessions. Open one with New tab.</p>
           )}
         </div>
         {/* The right-hand side, which reads the plane for whichever workspace is focused.
             Its own component with its own state: it asks the core twice — once for what the
-            plane holds and once for what git says — and neither ask belongs up here. */}
-        <Panels plane={plane} workspace={focused} />
+            plane holds and once for what git says — and neither ask belongs up here.
+            Nothing is asked for the chats outside every workspace: that strip is not a
+            workspace on the plane, so there is no directory for the panels to read. */}
+        <Panels plane={plane} workspace={focused === OUTSIDE ? undefined : focused} />
       </div>
 
       {picking && (
@@ -790,7 +1012,7 @@ export function Doer({ offer, onPress }: { offer?: Offer; onPress: (offer: Offer
   return (
     <button
       disabled={!offer.available}
-      title={offer.reason || undefined}
+      title={offer.reason || offer.note || undefined}
       onClick={() => onPress(offer)}
     >
       {offer.title}
@@ -799,11 +1021,21 @@ export function Doer({ offer, onPress }: { offer?: Offer; onPress: (offer: Offer
 }
 
 /** A tab's close button. The same row the palette lists, drawn as the `×` a pointer wants —
- *  so the accessible name is the catalogue's words and the glyph is only the glyph. */
+ *  so the accessible name is the catalogue's words and the glyph is only the glyph.
+ *
+ *  **The words are the whole guard** (charter-app#130). This `×` ends a chat: it calls
+ *  `close_session`, which ends the program and takes the chat off the board. The glyph reads
+ *  as "hide this tab" and there is no undo, so the name a screen reader and a keyboard get is
+ *  `End chat 3 steward`, and the tooltip a pointer gets says what that costs. */
 export function Closer({ offer, onPress }: { offer?: Offer; onPress: (offer: Offer) => void }) {
   if (!offer) return null;
   return (
-    <button aria-label={offer.title} onClick={() => onPress(offer)}>
+    <button
+      className="closer"
+      aria-label={offer.title}
+      title={offer.note ? `${offer.title} — ${offer.note}` : offer.title}
+      onClick={() => onPress(offer)}
+    >
       ×
     </button>
   );

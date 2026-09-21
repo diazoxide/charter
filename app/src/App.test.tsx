@@ -259,7 +259,7 @@ describe("App", () => {
     await openAChat();
 
     expect(await screen.findByTestId("pane")).toHaveTextContent("session 1");
-    expect(tabs()).toEqual(["1"]);
+    expect(tabs()).toEqual(["1 steward"]);
     // `start_chat` and not `open_session`: a chat now starts on the profile that was
     // picked, and the command that opens a bare shell is not in this path at all.
     const started = asked.find(({ cmd }) => cmd === "start_chat");
@@ -283,7 +283,7 @@ describe("App", () => {
 
     await openAChat();
 
-    expect(tabs()).toEqual(["1", "2"]);
+    expect(tabs()).toEqual(["1 steward", "2 steward"]);
     expect(panes()).toEqual(["session 2"]);
   });
 
@@ -306,7 +306,7 @@ describe("App", () => {
     await openAChat();
     await splitInto("Split right");
 
-    await userEvent.click(screen.getByRole("button", { name: "Close tab 1" }));
+    await userEvent.click(screen.getByRole("button", { name: "End chat 1 steward" }));
 
     expect(screen.queryAllByTestId("pane")).toEqual([]);
     // The plane travels with the session, because a session number alone names a chat in
@@ -323,7 +323,7 @@ describe("App", () => {
     await openAChat();
     await splitInto("Split down");
 
-    await userEvent.click(screen.getByRole("button", { name: "Close pane" }));
+    await userEvent.click(screen.getByRole("button", { name: "End this pane's chat" }));
 
     expect(panes()).toEqual(["session 1"]);
     expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
@@ -356,7 +356,7 @@ describe("App", () => {
     await openAChat();
 
     await splitInto("Split right");
-    await userEvent.click(screen.getByRole("button", { name: "Close tab 1" }));
+    await userEvent.click(screen.getByRole("button", { name: "End chat 1 steward" }));
     letTheSecondSessionStart();
 
     await vi.waitFor(() =>
