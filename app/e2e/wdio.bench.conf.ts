@@ -1,11 +1,5 @@
 import process from "node:process";
-import {
-  anEmptyRecord,
-  built,
-  copyFixturePlane,
-  declareAProfile,
-  theRunsEnvironment,
-} from "./harness.js";
+import { anEmptyRecord, built, copyFixturePlane, theRunsEnvironment } from "./harness.js";
 import { config as scenarios } from "./wdio.conf.js";
 import { writeBenchShell } from "./load.js";
 
@@ -29,13 +23,16 @@ const app = built(process.platform === "win32" ? "charter-app.exe" : "charter-ap
  * writing its own into that plane's reopen record and its trust into that machine's store.
  * That is charter-app#129 in the file that has it worst.
  *
- * A profile is declared here too, because the benchmark presses "New tab" like any operator
- * and no harness starts until one is picked (ADR 0022) — until now it was picking from
- * whatever the resolved plane happened to declare.
+ * **No profile is declared in it, and that is the point rather than an omission.** The
+ * benchmark's `next pane` job presses "New tab" and waits for a pane; it cannot answer a
+ * picker, and it never had to, because a plane that declares no harness opens the pane
+ * straight onto `$SHELL`. `tests/fixtures/planes/daily` carries no `charter.local.toml`, so
+ * the copy is that plane — which is also what the app was measuring before, by accident, and
+ * what the 49 chats in charter-app#129's record look like: `profile: ""`, every `program`
+ * the harness the run put in `$SHELL`.
  */
 const plane = copyFixturePlane();
 const shell = writeBenchShell(built("fake-harness"));
-declareAProfile(plane, shell);
 
 export const config: WebdriverIO.Config = {
   ...scenarios,
