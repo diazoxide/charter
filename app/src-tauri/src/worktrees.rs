@@ -14,6 +14,8 @@ use std::path::{Path, PathBuf};
 
 use charter_core::worktree;
 
+use crate::planes::{PlaneId, Planes};
+
 /// One piece, as the window shows it.
 #[derive(Debug, serde::Serialize, specta::Type)]
 pub struct Piece {
@@ -86,10 +88,26 @@ pub fn worktree_of_chat(cwd: String) -> Result<Option<ChatWorktree>, String> {
 }
 
 /// This workspace's pieces for one repo.
+// **It names its plane, and the registry vouches for it** (charter-app#127). It used to take
+// the root as a `String` and hand it straight to the core, so whatever could reach the command
+// chose which directory git ran in. A `PlaneId` has no constructor outside `planes.rs` — a
+// caller hands one back, it never spells one — and `held` refuses one this window never
+// opened. Not a doc comment, because the generated bindings carry those and this is about the
+// Rust.
 #[tauri::command]
 #[specta::specta]
-pub fn worktree_list(plane: String, workspace: String, repo: String) -> Result<Vec<Piece>, String> {
-    worktree::list(Path::new(&plane), &workspace, &repo)
+pub fn worktree_list(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+    repo: String,
+) -> Result<Vec<Piece>, String> {
+    pieces_of(planes.held(&plane)?.root(), &workspace, &repo)
+}
+
+/// The listing itself, against a root the registry has already vouched for.
+fn pieces_of(plane: &Path, workspace: &str, repo: &str) -> Result<Vec<Piece>, String> {
+    worktree::list(plane, workspace, repo)
         .map(|pieces| {
             pieces
                 .into_iter()
@@ -109,16 +127,36 @@ pub fn worktree_list(plane: String, workspace: String, repo: String) -> Result<V
 ///
 /// `force` is the operator saying to discard work the guards found — it is never passed on
 /// their behalf, and the window asks for it only after showing them what the refusal said.
+// Its plane is a `PlaneId` the registry vouches for, like every other command's
+// (charter-app#127); see `worktree_list` above. Not a doc comment, for the reason given there.
 #[tauri::command]
 #[specta::specta]
 pub fn worktree_remove(
-    plane: String,
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
     workspace: String,
     repo: String,
     piece: String,
     force: bool,
 ) -> Result<(), String> {
-    worktree::remove(Path::new(&plane), &workspace, &repo, &piece, force, false)
+    remove_piece(
+        planes.held(&plane)?.root(),
+        &workspace,
+        &repo,
+        &piece,
+        force,
+    )
+}
+
+/// The removal itself, against a root the registry has already vouched for.
+fn remove_piece(
+    plane: &Path,
+    workspace: &str,
+    repo: &str,
+    piece: &str,
+    force: bool,
+) -> Result<(), String> {
+    worktree::remove(plane, workspace, repo, piece, force, false)
         .map(|_| ())
         .map_err(|refusal| refusal.to_string())
 }
@@ -132,15 +170,23 @@ pub struct Merged {
 }
 
 /// Land a piece in its clone, fast-forward only. Never pushes.
+// Its plane is a `PlaneId` the registry vouches for, like every other command's
+// (charter-app#127); see `worktree_list` above. Not a doc comment, for the reason given there.
 #[tauri::command]
 #[specta::specta]
 pub fn worktree_merge(
-    plane: String,
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
     workspace: String,
     repo: String,
     piece: String,
 ) -> Result<Merged, String> {
-    worktree::merge(Path::new(&plane), &workspace, &repo, &piece)
+    merge_piece(planes.held(&plane)?.root(), &workspace, &repo, &piece)
+}
+
+/// The merge itself, against a root the registry has already vouched for.
+fn merge_piece(plane: &Path, workspace: &str, repo: &str, piece: &str) -> Result<Merged, String> {
+    worktree::merge(plane, workspace, repo, piece)
         .map(|m| Merged {
             branch: m.branch,
             was: m.was,
@@ -254,14 +300,8 @@ mod tests {
         let added = worktree::add(&root, "alpha", "thing", "piece", None).unwrap();
         std::fs::write(added.path.join("wip.txt"), "unsaved\n").unwrap();
 
-        let through = worktree_remove(
-            root.display().to_string(),
-            "alpha".into(),
-            "thing".into(),
-            "piece".into(),
-            false,
-        )
-        .expect_err("a dirty piece is refused");
+        let through = remove_piece(&root, "alpha", "thing", "piece", false)
+            .expect_err("a dirty piece is refused");
         let core = worktree::remove(&root, "alpha", "thing", "piece", false, false)
             .expect_err("the same refusal")
             .to_string();
@@ -277,14 +317,8 @@ mod tests {
         let added = worktree::add(&root, "alpha", "thing", "piece", None).unwrap();
         std::fs::write(added.path.join("wip.txt"), "unsaved\n").unwrap();
 
-        worktree_remove(
-            root.display().to_string(),
-            "alpha".into(),
-            "thing".into(),
-            "piece".into(),
-            true,
-        )
-        .expect("the operator said to discard it");
+        remove_piece(&root, "alpha", "thing", "piece", true)
+            .expect("the operator said to discard it");
 
         assert!(!added.path.exists());
     }

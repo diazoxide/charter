@@ -4,6 +4,7 @@ import {
   built,
   cloneTheFixtureRepos,
   copyFixturePlane,
+  cutAFixturePiece,
   declareAProfile,
   theRunsEnvironment,
   writeForgeCache,
@@ -36,6 +37,9 @@ declareAProfile(plane, writeShell(built("fake-harness")));
 // directory — so the copy this run works on gets real clones, and the forge cache a
 // refresher would have left. Neither is the app's doing: the app only reads them.
 cloneTheFixtureRepos(plane);
+// And one real piece cut off `svc`, because the explorer's whole content is the pieces a
+// workspace holds and a plane with none of them cannot tell an empty listing from a drawn one.
+cutAFixturePiece(plane);
 writeForgeCache(plane);
 
 export const config: WebdriverIO.Config = {
