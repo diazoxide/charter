@@ -86,3 +86,26 @@ open dialog `aria-hidden`, so a `getByRole` for anything behind it finds nothing
 spec cannot click a tab while a picker is up. That is the app behaving correctly. When a test
 breaks on it, the test was reaching for something an operator could not have reached — fix the
 test to take a route that exists.
+
+## The four regions added no primitive, which is the rule working
+
+charter ADR 0038 split the window into four regions, and the whole layout came out of what was
+already here — a fact worth recording, because "a layout change" is the sort of ticket a
+component library gets added on.
+
+- **`react-resizable-panels` draws all four**, as this file already said it would. Every
+  boundary is the same `Separator` the pane splits use, so a region's handle and a split's
+  handle behave the same way and are styled once.
+- **Putting a region away is the library's `collapse()`/`expand()`, not a conditional
+  `<Panel>`.** Taking a panel out of a live group throws from a document listener where no
+  `try` can reach it — *"Panel constraints not found for index 3"* — because a separator
+  recalculates its aria values against a constraint list the panel has just left.
+  `PlaneView`'s `Region` holds the reasoning. What the constraints are is written once and
+  never changed; only the collapse moves.
+- **The explorer's repo groups are `<details>`**, per the rule above: the browser has a
+  collapsible, and `@radix-ui/react-collapsible` is not installed because nothing needs it.
+- **Picking a spot in the explorer is `aria-current`, not `aria-selected`.** `aria-selected`
+  belongs to the three tablists that are the axis (ADR 0036); this is the current item of a
+  list. Radix has no tree or listbox primitive, and native buttons are not hand-rolled markup.
+- **The region buttons are `aria-pressed` toggles**, which is what the platform has for a
+  control that is on or off.

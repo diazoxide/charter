@@ -44,7 +44,7 @@ async function planeRoot(): Promise<string> {
   return (await said.getText()).trim();
 }
 
-/** The names on the tab strip. Scoped to that tablist: the sidebar is a tablist too. */
+/** The names on the tab strip. Scoped to that tablist: the workspace strip is one too. */
 async function tabNames(): Promise<string[]> {
   return browser.execute(() =>
     [

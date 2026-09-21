@@ -373,6 +373,23 @@ export function cloneTheFixtureRepos(plane: string, workspace = "alpha"): void {
 }
 
 /**
+ * Cut one real piece off the fixture's `svc` clone, where charter keeps them.
+ *
+ * `workspaces/<ws>/.worktrees/<repo>/<piece>` is the only place `worktree::list` looks — it
+ * filters git's own listing down to registrations under that root, so a tree cut anywhere
+ * else is not this workspace's and is not shown. Cut here with plain git and NOT by charter,
+ * which is what makes it read `unwired`: the explorer has to say so before a chat is started
+ * in a tree that would run with none of the plane's ask/deny rules.
+ */
+export function cutAFixturePiece(plane: string, workspace = "alpha"): void {
+  const repo = join(plane, "workspaces", workspace, "svc");
+  if (!existsSync(repo)) return;
+  const at = join(plane, "workspaces", workspace, ".worktrees", "svc", "fix-login");
+  mkdirSync(join(plane, "workspaces", workspace, ".worktrees", "svc"), { recursive: true });
+  git(repo, ["worktree", "add", "-q", "-b", "fix-login", at]);
+}
+
+/**
  * The forge cache a refresher would have left behind, keyed the way it keys it: by the
  * checkout's path, written out.
  *

@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Group, Panel, Separator } from "react-resizable-panels";
+import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels";
 import {
   commands,
   type ChatWorktree,
@@ -30,7 +30,10 @@ import {
 } from "./actions";
 import { StartChat } from "./StartChat";
 import { SessionPane } from "./SessionPane";
-import { Sidebar } from "./Sidebar";
+import { Explorer, type Spot } from "./Explorer";
+import { BottomBar } from "./BottomBar";
+import { useWorkspaceState } from "./workspaceState";
+import { REGION_NAMES, useRegions, type Region } from "./regions";
 import {
   closeFocusedPane,
   closeTab,
@@ -48,7 +51,7 @@ import {
   type Layout,
   type Tabs,
 } from "./tabs";
-import { ChatState, NeedsYou } from "./NeedsYou";
+import { ChatState } from "./NeedsYou";
 import { Panels } from "./Panels";
 import { quietOnes, stateOf, useChatStates } from "./chatState";
 import type { Ending } from "./QuitWarning";
@@ -136,7 +139,7 @@ export function PlaneView({
   const [wouldNotStart, setWouldNotStart] = useState<[string, string][]>([]);
   /** What the core last said about where a chat is working, and which directory it was
    *  asked about — so an answer about the chat that WAS in front is never drawn under the
-   *  one that is now. `Panels` keys its answers the same way, for the same reason. */
+   *  one that is now. `workspaceState` keys its answers the same way, for the same reason. */
   const [located, setLocated] = useState<{ cwd: string; piece?: ChatWorktree }>();
   /** Bumped when something changed the answer, so it is asked again rather than guessed. */
   const [relocate, setRelocate] = useState(0);
@@ -179,6 +182,17 @@ export function PlaneView({
   /** The tab that was in front on each workspace's strip, so coming back to a workspace
    *  comes back to the chat that was on screen there rather than to its first. */
   const lastFront = useRef<Record<string, number>>({});
+  /**
+   * The spot the explorer has picked, and the workspace it was picked in.
+   *
+   * Both together, so that moving to another workspace goes back to that workspace's own
+   * directory rather than leaving the next chat pointed at a piece of the workspace the
+   * operator has just left. Derived below rather than cleared in an effect: a `setState`
+   * from inside an effect is a second render, and the answer is already here.
+   */
+  const [pickedSpot, setPickedSpot] = useState<{ workspace: string; spot: Spot }>();
+  /** Which of the four regions are drawn, and how the operator says otherwise (ADR 0038). */
+  const { shown: regions, toggle: toggleRegion } = useRegions();
 
   // The arrangement as it is right now, so that what a button does is decided here and not
   // inside a state update. React may run an update again, and a session must not be opened or
@@ -333,10 +347,46 @@ export function PlaneView({
     return workspaceOf(tabs, tabs.inFront, filedIn) ?? picked;
   }, [filedIn, picked, sidebar, tabs]);
 
-  // Where a chat starts: the focused workspace's directory, so the sidebar can file it under
-  // that workspace. Nothing on the plane records a chat, so where it works is the only thing
-  // relating the two. Null — the operator's home — until a plane is read.
-  const startIn = sidebar?.workspaces.find((ws) => ws.name === focused)?.path ?? null;
+  /** The workspace whose repos and worktrees the three regions read. The strip for chats
+   *  outside every workspace is not a workspace on the plane, so there is no directory to
+   *  read and every region says so rather than drawing another workspace's answer. */
+  const ofWorkspace = focused === OUTSIDE ? undefined : focused;
+  const workspaceState = useWorkspaceState(plane, ofWorkspace);
+
+  /**
+   * The piece the explorer has picked, when it is still a piece of the workspace on screen.
+   *
+   * Two things can make a pick stop standing, and they are different. Moving to another
+   * workspace only SETS IT ASIDE — coming back brings it with you, the way coming back to a
+   * workspace comes back to the tab that was in front there. A piece that is gone from the
+   * listing is another matter: the worktree was removed while it was picked, and pointing the
+   * next chat at a directory that is not there would make the operator read a refusal charter
+   * could see coming. A listing that has not arrived yet is not evidence of either, so the
+   * pick stands until git has answered.
+   */
+  const spot = useMemo(() => {
+    if (pickedSpot === undefined || pickedSpot.workspace !== ofWorkspace) return undefined;
+    const listed = workspaceState.pieces[pickedSpot.spot.repo];
+    if (listed !== undefined && !listed.some((one) => one.piece === pickedSpot.spot.piece))
+      return undefined;
+    return pickedSpot.spot;
+  }, [ofWorkspace, pickedSpot, workspaceState.pieces]);
+
+  // Where a chat starts: **the spot the explorer picked**, and the focused workspace's own
+  // directory when nothing is picked — so the sidebar can file it under that workspace.
+  // Nothing on the plane records a chat, so where it works is the only thing relating the
+  // two, and a piece of a workspace is still in that workspace. Null — the operator's
+  // home — until a plane is read.
+  const startIn = spot?.path ?? sidebar?.workspaces.find((ws) => ws.name === focused)?.path ?? null;
+
+  /** What the explorer picks, remembered against the workspace it was picked in. */
+  const pickSpot = useCallback(
+    (next: Spot | undefined) => {
+      if (ofWorkspace === undefined) return;
+      setPickedSpot(next === undefined ? undefined : { workspace: ofWorkspace, spot: next });
+    },
+    [ofWorkspace],
+  );
 
   /** The workspaces the strip shows: this project's, plus the one for chats outside them all
    *  when there are any. In the plane's own order, which is the sidebar's. */
@@ -696,6 +746,14 @@ export function PlaneView({
     [sidebar, states],
   );
 
+  /** The chats working in the focused workspace, which is what the explorer files under the
+   *  spots they are working at. The plane's own answer, like everything else about where a
+   *  chat is: nothing on the plane records a chat, so the directory it works in is it. */
+  const workspaceChats = useMemo(
+    () => sidebar?.workspaces.find((ws) => ws.name === ofWorkspace)?.chats ?? [],
+    [ofWorkspace, sidebar],
+  );
+
   /**
    * Every action this project's window can do, in one list.
    *
@@ -951,7 +1009,20 @@ export function PlaneView({
           <Doer offer={by("pane.split.down")} onPress={press} />
           <Doer offer={by("pane.close")} onPress={press} />
         </div>
-        <NeedsYou queue={states.needsYou} quiet={quiet} nameOf={nameOf} show={showChat} />
+        {/* Which regions are drawn (ADR 0038). Here rather than in each region, because a
+            region that is not drawn has nowhere to put its own way back. `aria-pressed`
+            and not a label that flips between "Show" and "Hide": the name of the thing is
+            what a person looks for, and the state is what the attribute is for. */}
+        <div className="regions-doing">
+          {(["explorer", "aside", "bottom"] as const).map((region) => (
+            <RegionToggle
+              key={region}
+              region={region}
+              shown={regions[region]}
+              onToggle={toggleRegion}
+            />
+          ))}
+        </div>
         <span className="plane">
           <code>{plane}</code>
         </span>
@@ -995,36 +1066,67 @@ export function PlaneView({
         </p>
       ))}
 
-      <div className="body">
-        {sidebar && (
-          <Sidebar sidebar={sidebar} states={states} focused={focused} onFocus={focusWorkspace} />
-        )}
-        <div className="panes">
-          {frontTab ? (
-            <LayoutPanes
-              plane={plane}
-              layout={frontTab.layout}
-              focused={frontTab.focused}
-              onFocus={(pane) => change((tabs) => focusPane(tabs, pane))}
-            />
-          ) : tabs.order.length > 0 ? (
-            // Chats are running — just not in the workspace being looked at. Saying "no
-            // sessions" here would be charter telling the operator that what it is still
-            // drawing on the strip above does not exist.
-            <p className="empty">
-              No chats in this workspace. Open one with New tab, or pick a workspace above.
-            </p>
-          ) : (
-            <p className="empty">No sessions. Open one with New tab.</p>
-          )}
-        </div>
-        {/* The right-hand side, which reads the plane for whichever workspace is focused.
-            Its own component with its own state: it asks the core twice — once for what the
-            plane holds and once for what git says — and neither ask belongs up here.
-            Nothing is asked for the chats outside every workspace: that strip is not a
-            workspace on the plane, so there is no directory for the panels to read. */}
-        <Panels plane={plane} workspace={focused === OUTSIDE ? undefined : focused} />
-      </div>
+      {/* **The four regions** (charter ADR 0038): the explorer on the left, the panes in the
+          middle, what is asking for you on the right, and what the repos are doing along the
+          bottom. Every one of them resizes, and each of the three around the centre can be
+          put away — the centre cannot, because the terminal panes are the product.
+
+          One workspace answer for all three (`useWorkspaceState`), not one per region: they
+          draw the same workspace, and `workspace_repos` runs `git status` per clone. */}
+      <Group className="regions" orientation="vertical">
+        <Panel id="region-upper" className="region-upper" minSize="30%">
+          <Group className="region-row" orientation="horizontal">
+            <Region id="region-explorer" shown={regions.explorer} size="16%" least="8%">
+              <Explorer
+                workspace={ofWorkspace}
+                state={workspaceState}
+                chats={workspaceChats}
+                states={states}
+                spot={spot}
+                onPick={pickSpot}
+                onShowChat={showChat}
+              />
+            </Region>
+            <Edge shown={regions.explorer} />
+            <Panel id="region-centre" className="region-centre" minSize="20%">
+              <div className="panes">
+                {frontTab ? (
+                  <LayoutPanes
+                    plane={plane}
+                    layout={frontTab.layout}
+                    focused={frontTab.focused}
+                    onFocus={(pane) => change((tabs) => focusPane(tabs, pane))}
+                  />
+                ) : tabs.order.length > 0 ? (
+                  // Chats are running — just not in the workspace being looked at. Saying
+                  // "no sessions" here would be charter telling the operator that what it is
+                  // still drawing on the strip above does not exist.
+                  <p className="empty">
+                    No chats in this workspace. Open one with New tab, or pick a workspace above.
+                  </p>
+                ) : (
+                  <p className="empty">No sessions. Open one with New tab.</p>
+                )}
+              </div>
+            </Panel>
+            <Edge shown={regions.aside} />
+            <Region id="region-aside" shown={regions.aside} size="20%" least="10%">
+              <Panels
+                workspace={ofWorkspace}
+                state={workspaceState}
+                queue={states.needsYou}
+                quiet={quiet}
+                nameOf={nameOf}
+                showChat={showChat}
+              />
+            </Region>
+          </Group>
+        </Panel>
+        <Edge shown={regions.bottom} />
+        <Region id="region-bottom" shown={regions.bottom} size="16%" least="6%" most="50%">
+          <BottomBar workspace={ofWorkspace} state={workspaceState} />
+        </Region>
+      </Group>
 
       {picking && (
         <StartChat
@@ -1087,6 +1189,112 @@ export function Doer({ offer, onPress }: { offer?: Offer; onPress: (offer: Offer
       onClick={() => onPress(offer)}
     >
       {offer.title}
+    </button>
+  );
+}
+
+/**
+ * One of the three regions around the centre: resizable, and put away without going away.
+ *
+ * **The panel stays mounted with constraints that never change; the library collapses it.**
+ * That is the whole reason this component exists, and neither obvious alternative works.
+ * Rendering the `Panel` and its `Separator` conditionally throws — `react-resizable-panels`
+ * recalculates a separator's aria values against the group's constraint list, and taking a
+ * panel out from under a live separator leaves it indexing past the end
+ * (*"Panel constraints not found for index 3"*), from a document listener where no `try` of
+ * ours can reach it. Clamping the panel's `minSize`/`maxSize` to zero instead throws the same
+ * way, because changing a constraint re-registers the panel and a recalculation lands in the
+ * gap. So the constraints are written once and `collapse()`/`expand()` — the library's own
+ * way of doing this — is what moves it.
+ *
+ * **Its content is unmounted all the same**, which is the part that has to be true for more
+ * than tidiness: a region squeezed to zero pixels with its markup still in the document is
+ * still in the tab order and still read out in full by a screen reader, so "put away" would
+ * mean "invisible and in the way". Nothing in a region is state worth keeping across that —
+ * what they draw is read fresh from the plane every time a workspace is focused, because the
+ * plane is a directory the operator also edits by hand.
+ */
+function Region({
+  id,
+  shown,
+  size,
+  least,
+  most = "45%",
+  children,
+}: {
+  id: string;
+  shown: boolean;
+  /** How big it is when nothing has been dragged. */
+  size: string;
+  /** How small a drag may make it before it is unreadable. */
+  least: string;
+  /** How much of the window it may take. */
+  most?: string;
+  children: React.ReactNode;
+}) {
+  const panel = usePanelRef();
+  useEffect(() => {
+    if (shown) panel.current?.expand();
+    else panel.current?.collapse();
+  }, [panel, shown]);
+  return (
+    <Panel
+      id={id}
+      className={id}
+      panelRef={panel}
+      // **Every one of these is constant for the life of the group, and that is the point.**
+      // See this component's docstring: changing a panel's constraints re-registers it, and a
+      // separator that recalculates in between indexes past the end of the constraint list.
+      collapsible
+      collapsedSize="0%"
+      defaultSize={size}
+      minSize={least}
+      maxSize={most}
+    >
+      {shown ? children : null}
+    </Panel>
+  );
+}
+
+/** The handle between a region and the centre. It stays in the group when its region is put
+ *  away — see `Region` for why — and draws nothing, so there is no line to drag. */
+function Edge({ shown }: { shown: boolean }) {
+  return <Separator className={shown ? undefined : "edge-gone"} />;
+}
+
+/**
+ * The button that puts a region away and brings it back (charter ADR 0038).
+ *
+ * **Not a row of the catalogue**, deliberately, and this is the one place in this bar where
+ * that is true. The catalogue is what a project can DO — open a chat, split a pane, remove a
+ * worktree — and every one of its rows is also a palette row, because the palette is the
+ * primary input. Whether the operator has the explorer on screen is not a thing to do to the
+ * plane; it is how this window is laid out, it is remembered in `localStorage` and not on the
+ * plane, and a palette full of "Explorer", "Attention", "State" would be three rows of noise
+ * in front of a hundred real ones at ADR 0026's limits.
+ */
+function RegionToggle({
+  region,
+  shown,
+  onToggle,
+}: {
+  region: Region;
+  shown: boolean;
+  onToggle: (region: Region) => void;
+}) {
+  return (
+    <button
+      type="button"
+      className="region-toggle"
+      aria-pressed={shown}
+      title={
+        shown
+          ? `Put the ${REGION_NAMES[region]} region away`
+          : `Bring the ${REGION_NAMES[region]} region back`
+      }
+      onClick={() => onToggle(region)}
+    >
+      {REGION_NAMES[region]}
     </button>
   );
 }

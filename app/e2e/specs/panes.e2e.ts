@@ -67,7 +67,7 @@ async function type(pane: Pane, text: string): Promise<void> {
 
 /** What the tab bar shows, left to right. Each tab is named by its number.
  *
- *  Scoped to the tab strip by name: the sidebar lists workspaces as tabs too, so a
+ *  Scoped to the tab strip by name: the workspaces are a tablist too, so a
  *  document-wide `[role="tab"]` would mix a workspace in among them. */
 async function tabNames(): Promise<string[]> {
   return browser.execute(() =>

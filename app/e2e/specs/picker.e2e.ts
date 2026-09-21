@@ -64,18 +64,21 @@ describe("starting a chat", () => {
     });
   });
 
-  it("names the profile and the persona on the chat in the sidebar", async () => {
+  it("names the profile and the persona on the chat in the explorer", async () => {
     // The profile AND its kind. The kind is the one the profile declares, not one read off
     // the program's name — the program here is `claude-stand-in`, a wrapper, and
     // `Harness::of_command` answers `None` for one exactly as it does for a shell.
-    const sidebar = await $('nav[aria-label="Workspaces"]');
-    await sidebar.waitForDisplayed({ timeout: 20_000 });
+    //
+    // In the explorer since charter ADR 0038: the chats are listed under the spot each one
+    // works in, and the left region is `nav[aria-label="Explorer"]`.
+    const explorer = await $('nav[aria-label="Explorer"]');
+    await explorer.waitForDisplayed({ timeout: 20_000 });
 
     let said = "";
     await browser
       .waitUntil(
         async () => {
-          said = await sidebar.getText();
+          said = await explorer.getText();
           return said.includes("needs-approval") && said.includes("(claude)");
         },
         {
@@ -83,13 +86,13 @@ describe("starting a chat", () => {
           interval: 250,
           // What it actually said, so a failure here is one somebody can act on rather than
           // one they have to reproduce.
-          timeoutMsg: "the sidebar never named the profile the chat started on",
+          timeoutMsg: "the explorer never named the profile the chat started on",
         },
       )
       .catch((why: unknown) => {
         // What it actually said, so a failure here is one somebody can act on rather than one
         // they have to reproduce.
-        throw new Error(`${String(why)} — the sidebar said: ${said}`);
+        throw new Error(`${String(why)} — the explorer said: ${said}`);
       });
   });
 
