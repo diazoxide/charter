@@ -8,16 +8,59 @@
 //! holds the line and the differential job — which fuzzes 200,000 generated cases against the
 //! live oracle — is the wider net rather than the only one.
 //!
-//! Six answers are compared per case, and they are compared SEPARATELY so a failure names which
-//! function moved: `unbacktick`, `quote_map`, `splice_continuations`, `lex` (tokens with their
-//! `bare` flag and their character offsets, or the error), `split_punctuation` (the same, after a
-//! glued run is broken apart — the only place a split piece's OFFSETS are visible) and
-//! `segment_argv_parsed`.
+//! Every answer is compared per case, and they are compared SEPARATELY so a failure names which
+//! function moved. Stage 1's six: `unbacktick`, `quote_map`, `splice_continuations`, `lex`
+//! (tokens with their `bare` flag and their character offsets, or the error), `split_punctuation`
+//! (the same, after a glued run is broken apart — the only place a split piece's OFFSETS are
+//! visible) and `segment_argv_parsed`. Stage 2 adds the heredoc layout — `desugar_ansi_c`,
+//! `posix_split`, `shell_quote`, `heredoc_openers`, `heredoc_header`, `line_pipelines`,
+//! `compound_holds_executor`, `segments_of`, `heredoc_strip_plan`, `brief_heredocs`,
+//! `crowded_substitutions`, `comment_index`, `ends_in_line_continuation`, `pipeline_continues`,
+//! `line_runs_text`, `heredoc_opener_words`, `opener_program`, `pipeline_slice`,
+//! `heredoc_could_run`, `heredoc_layout`, `strip_reader_heredocs` — and the wrapper/env split:
+//! `split_env_chdir`, `commit_message_on_stdin`, `gh_body_on_stdin`, `redirect_reads`,
+//! `git_globals`, `wrapper_option`, `flag_name_value`, `is_executor`.
+//!
+//! **Every `pub` item of the three modules is in that list**, deliberately: stage 1's one real
+//! harness defect was a field nobody diffed, and it was found by mutation rather than by reading.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
+use charter_core::heredoc::{self, Header, Line};
 use charter_core::shellseg::{self, LexError, Tok};
+use charter_core::shellwrap;
 use serde_json::Value;
+
+/// Must stay in step with `PROBE_WRAPPERS` in `tests/differential/shellseg.py`, which is what
+/// recorded the rows this replays.
+const PROBE_WRAPPERS: [&str; 8] = [
+    "env", "sudo", "xargs", "stdbuf", "timeout", "doas", "exec", "nonesuch",
+];
+
+/// `PROBE_SPELLINGS` in the harness.
+const PROBE_SPELLINGS: [&str; 5] = ["-S", "--split-string", "-C", "--chdir", "-u"];
+
+/// `PROBE_TOKENS` in the harness.
+const PROBE_TOKENS: usize = 6;
+
+/// `PROBE_OPTIONS` in the harness: `wrapper_option` and `flag_name_value` are reached only from
+/// `split_env_chdir`'s option branch, so only option-shaped words are put to them.
+const PROBE_OPTIONS: usize = 4;
+
+fn header_json(h: Option<Header>) -> Value {
+    match h {
+        None => Value::Null,
+        Some(h) => serde_json::json!([h.delim, h.expands, h.dash, h.end]),
+    }
+}
+
+/// Python's `sorted(set)`, which is what the harness recorded for a set-valued answer.
+fn sorted(set: HashSet<usize>) -> Value {
+    let mut v: Vec<usize> = set.into_iter().collect();
+    v.sort_unstable();
+    serde_json::json!(v)
+}
 
 fn corpus() -> Vec<Value> {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -49,7 +92,7 @@ fn said(err: LexError) -> &'static str {
 fn the_recorded_python_answer_is_the_answer_this_module_gives() {
     let rows = corpus();
     assert!(
-        rows.len() >= 60,
+        rows.len() >= 170,
         "the corpus is the evidence; {} rows is not it",
         rows.len()
     );
@@ -100,7 +143,251 @@ fn the_recorded_python_answer_is_the_answer_this_module_gives() {
             }
         }
         let (segments, parsed) = shellseg::segment_argv_parsed(cmd);
-        check("seg", &row["seg"], serde_json::json!([segments, parsed]));
+        check(
+            "seg",
+            &row["seg"],
+            serde_json::json!([segments.clone(), parsed]),
+        );
+
+        // ---- stage 2: the heredoc layout and the wrapper/env split, each compared APART.
+        //
+        // A port that got `heredoc_could_run` wrong and `heredoc_layout` right by luck fails on
+        // `hcr` and says which. That is the rule stage 1 set, and the reason `sp` exists at all.
+        let line = Line::of(cmd);
+        let openers = heredoc::heredoc_openers(&line);
+        let starts: Vec<usize> = openers.iter().map(|m| m.start).collect();
+        let words: Vec<Option<Vec<String>>> = starts
+            .iter()
+            .map(|&s| heredoc::heredoc_opener_words(&line, s))
+            .collect();
+        let chars: Vec<char> = cmd.chars().collect();
+        let at_shift: Vec<usize> = (0..chars.len().saturating_sub(1))
+            .filter(|&i| chars[i] == '<' && chars[i + 1] == '<')
+            .collect();
+        let probe: Vec<String> = shellseg::py_split(cmd)
+            .into_iter()
+            .take(PROBE_TOKENS)
+            .collect();
+        let opts: Vec<String> = shellseg::py_split(cmd)
+            .into_iter()
+            .filter(|w| w.starts_with('-') && w.chars().count() > 1)
+            .take(PROBE_OPTIONS)
+            .collect();
+
+        check(
+            "dac",
+            &row["dac"],
+            Value::String(heredoc::desugar_ansi_c(&line)),
+        );
+        check(
+            "psp",
+            &row["psp"],
+            match shellseg::posix_split(cmd) {
+                Ok(w) => serde_json::json!({ "toks": w }),
+                Err(err) => serde_json::json!({ "err": said(err) }),
+            },
+        );
+        check("sq", &row["sq"], Value::String(shellseg::shell_quote(cmd)));
+        check(
+            "ho",
+            &row["ho"],
+            openers
+                .iter()
+                .map(|m| serde_json::json!([m.start, m.end, m.delim, m.dash, m.backslash, m.quote]))
+                .collect(),
+        );
+        check(
+            "hh",
+            &row["hh"],
+            at_shift
+                .iter()
+                .map(|&i| serde_json::json!([i, header_json(heredoc::heredoc_header(&line, i))]))
+                .collect(),
+        );
+        check(
+            "lp",
+            &row["lp"],
+            match heredoc::line_pipelines(&line) {
+                None => Value::Null,
+                Some(ps) => ps
+                    .into_iter()
+                    .map(|p| serde_json::json!([p.argvs, p.executor, p.hcounts]))
+                    .collect(),
+            },
+        );
+        check(
+            "hsp",
+            &row["hsp"],
+            match heredoc::heredoc_strip_plan(&line) {
+                None => Value::Null,
+                Some(plan) => plan
+                    .into_iter()
+                    .map(|e| {
+                        serde_json::json!([e.delim, e.drop, header_json(e.header), e.executor])
+                    })
+                    .collect(),
+            },
+        );
+        check("bh", &row["bh"], sorted(heredoc::brief_heredocs(&line)));
+        check(
+            "cs",
+            &row["cs"],
+            sorted(heredoc::crowded_substitutions(&line)),
+        );
+        check("ci", &row["ci"], heredoc::comment_index(&line).into());
+        check(
+            "elc",
+            &row["elc"],
+            heredoc::ends_in_line_continuation(cmd).into(),
+        );
+        check("pc", &row["pc"], heredoc::pipeline_continues(cmd).into());
+        check("lrt", &row["lrt"], heredoc::line_runs_text(cmd).into());
+        check(
+            "how",
+            &row["how"],
+            starts
+                .iter()
+                .zip(words.iter())
+                .map(|(s, w)| serde_json::json!([s, w]))
+                .collect(),
+        );
+        check(
+            "op",
+            &row["op"],
+            starts
+                .iter()
+                .zip(words.iter())
+                .map(|(s, w)| serde_json::json!([s, heredoc::opener_program(w.as_deref())]))
+                .collect(),
+        );
+        check(
+            "ps",
+            &row["ps"],
+            starts
+                .iter()
+                .map(|&s| serde_json::json!([s, heredoc::pipeline_slice(&line, s)]))
+                .collect(),
+        );
+        check(
+            "hcr",
+            &row["hcr"],
+            starts
+                .iter()
+                .map(|&s| serde_json::json!([s, heredoc::heredoc_could_run(&line, s)]))
+                .collect(),
+        );
+        check(
+            "hl",
+            &row["hl"],
+            heredoc::heredoc_layout(cmd)
+                .into_iter()
+                .map(|l| serde_json::json!([l.text, l.body, l.drop, l.executed]))
+                .collect(),
+        );
+        check(
+            "srh",
+            &row["srh"],
+            Value::String(heredoc::strip_reader_heredocs(cmd)),
+        );
+        check(
+            "sec",
+            &row["sec"],
+            segments
+                .iter()
+                .map(|seg| {
+                    let it = shellwrap::split_env_chdir(seg.as_slice());
+                    serde_json::json!([it.prog, it.env, it.argv, it.chdir, it.reads])
+                })
+                .collect(),
+        );
+        check(
+            "cms",
+            &row["cms"],
+            segments
+                .iter()
+                .map(|s| Value::Bool(heredoc::commit_message_on_stdin(s.as_slice())))
+                .collect(),
+        );
+        check(
+            "ghb",
+            &row["ghb"],
+            segments
+                .iter()
+                .map(|s| Value::Bool(heredoc::gh_body_on_stdin(s.as_slice())))
+                .collect(),
+        );
+        check(
+            "rr",
+            &row["rr"],
+            segments
+                .iter()
+                .map(|s| serde_json::json!(shellwrap::redirect_reads(s.as_slice())))
+                .collect(),
+        );
+        check(
+            "gg",
+            &row["gg"],
+            segments
+                .iter()
+                .map(|s| {
+                    let (globals, rest) = shellwrap::git_globals(s.as_slice());
+                    serde_json::json!([globals, rest])
+                })
+                .collect(),
+        );
+        check(
+            "wo",
+            &row["wo"],
+            PROBE_WRAPPERS
+                .iter()
+                .flat_map(|base| {
+                    opts.iter().map(move |tok| {
+                        let o = shellwrap::wrapper_option(base, tok);
+                        serde_json::json!([base, tok, o.name, o.value, o.wants_next, o.placed])
+                    })
+                })
+                .collect(),
+        );
+        check(
+            "fnv",
+            &row["fnv"],
+            opts.iter()
+                .map(|tok| {
+                    let (name, value) = shellwrap::flag_name_value(tok, &PROBE_SPELLINGS);
+                    serde_json::json!([tok, name, value])
+                })
+                .collect(),
+        );
+        check(
+            "ie",
+            &row["ie"],
+            probe
+                .iter()
+                .map(|tok| serde_json::json!([tok, heredoc::is_executor(tok)]))
+                .collect(),
+        );
+        // `che` and `so` are only recorded when the line lexed; the corpus carries `null`
+        // otherwise, and so does this.
+        let (che, so) = match shellseg::lex(cmd) {
+            Ok(toks) => {
+                let split = shellseg::split_punctuation(toks);
+                (
+                    Value::Bool(heredoc::compound_holds_executor(&split)),
+                    heredoc::segments_of(&split)
+                        .into_iter()
+                        .map(|(seg, before)| {
+                            serde_json::json!([
+                                seg.iter().map(|t| t.text.clone()).collect::<Vec<_>>(),
+                                before
+                            ])
+                        })
+                        .collect(),
+                )
+            }
+            Err(_) => (Value::Null, Value::Null),
+        };
+        check("che", &row["che"], che);
+        check("so", &row["so"], so);
     }
     assert!(
         wrong.is_empty(),
@@ -409,5 +696,161 @@ fn the_fallbacks_blank_set_is_pythons() {
             "x".to_string(),
         ]],
         "U+001C is a separator to Python, not a word",
+    );
+}
+
+/// Stage 2's four clauses, each asserted by NAME so that a corpus edit which drops the row fails
+/// rather than silently narrowing the evidence.
+///
+/// A body is stdin DATA only when a QUOTED heredoc feeds a READER whose PIPELINE runs no
+/// EXECUTOR. Each clause is a defect the Python docstrings say shipped, and each is one
+/// character of difference away from a body the guard stops reading.
+#[test]
+fn a_body_comes_out_only_when_it_is_quoted_data_a_reader_holds() {
+    let vault = ".charter/vaults/x.json";
+    let recorded: Vec<String> = corpus()
+        .iter()
+        .map(|row| row["cmd"].as_str().unwrap_or_default().to_owned())
+        .collect();
+    let mut wanted: Vec<String> = Vec::new();
+    let mut drops = |cmd: String, yes: bool, why: &str| {
+        let stripped = heredoc::strip_reader_heredocs(&cmd);
+        assert_eq!(
+            stripped != cmd,
+            yes,
+            "{cmd:?}: {why}\n  stripped to {stripped:?}"
+        );
+        wanted.push(cmd);
+    };
+
+    // quoted + reader + no executor: the body is a document, and reading it as commands is what
+    // refused a document DESCRIBING charter's own layout as a READ of it (#258).
+    drops(
+        format!("cat <<'DOC'\n{vault}\nDOC"),
+        true,
+        "a quoted reader body is data",
+    );
+    // ...behind a wrapper too: `split_env` names the program, not `env`.
+    drops(
+        format!("env cat <<'DOC'\n{vault}\nDOC"),
+        true,
+        "a reader behind a wrapper is still a reader",
+    );
+    // UNQUOTED: it expands before the reader sees it, so a `$( … )` in it RUNS.
+    drops(
+        format!("cat <<DOC\n$(cat {vault})\nDOC"),
+        false,
+        "an unquoted body expands",
+    );
+    // an EXECUTOR in the pipeline — the five spellings #973 measured, of which only the pipe
+    // hands the body on, and all five of which the old pre-pass dropped.
+    drops(
+        format!("cat <<'A' | bash\n{vault}\nA"),
+        false,
+        "a shell downstream in the PIPELINE runs the body",
+    );
+    drops(
+        format!("cat x && bash <<'A'\ncat {vault}\nA"),
+        false,
+        "the executor OPENS this one",
+    );
+
+    // Bash's terminator is not the regex's. `<<EO'F'` ends at `EOF`; dropping on the regex's
+    // `EO` finds no terminator, runs to the end of the input, and takes the `cat` after it.
+    let cmd = format!("cat <<EO'F'\nbody\nEOF\ncat {vault}");
+    let kept = heredoc::strip_reader_heredocs(&cmd);
+    assert!(
+        kept.contains(&format!("cat {vault}")),
+        "{cmd:?}: the command AFTER the heredoc must survive the drop, got {kept:?}",
+    );
+    wanted.push(cmd);
+
+    // An unterminated body is never dropped, whoever opened it: "no terminator" is what every
+    // delimiter disagreement in this walk looks like, and keeping it only shows the guard more.
+    let cmd = format!("cat <<'A'\n{vault}");
+    assert_eq!(
+        heredoc::strip_reader_heredocs(&cmd),
+        cmd,
+        "an unterminated body is kept",
+    );
+    wanted.push(cmd);
+
+    for cmd in wanted {
+        assert!(
+            recorded.contains(&cmd),
+            "{cmd:?} is not in the recorded corpus, so nothing compares it to Python",
+        );
+    }
+}
+
+/// The program is not token 0, and the three things in front of it are each a measured vault
+/// read: an assignment, a redirection, and the wrapper run with its option grammar.
+#[test]
+fn the_wrapper_run_comes_off_before_the_program_is_named() {
+    let vault = ".charter/vaults/x.json";
+    let argv = |cmd: &str| {
+        shellseg::segment_argv(cmd)
+            .into_iter()
+            .next()
+            .unwrap_or_default()
+    };
+
+    // `env cat <vault>` — verified live — printed a vault while token 0 said `env`.
+    assert_eq!(
+        shellwrap::split_env_chdir(&argv(&format!("env cat {vault}"))).prog,
+        "cat"
+    );
+    // `env -i` takes NOTHING; a flat value table would consume the `cat` here.
+    assert_eq!(
+        shellwrap::split_env_chdir(&argv(&format!("env -i cat {vault}"))).prog,
+        "cat"
+    );
+    // ...while `stdbuf -i` DOES take one, which is why the tables are per wrapper.
+    assert_eq!(
+        shellwrap::split_env_chdir(&argv(&format!("stdbuf -i0 cat {vault}"))).prog,
+        "cat"
+    );
+    // A short option is its LETTER, not its position: `-iC<dir>` is `-i -C <dir>`.
+    let bundled = shellwrap::split_env_chdir(&argv("env -iC.charter/vaults cat x.json"));
+    assert_eq!(bundled.prog, "cat");
+    assert_eq!(
+        bundled.chdir, ".charter/vaults",
+        "the chdir VALUE comes back out"
+    );
+    // The glued short form is read before the long form's `=`, or `-Sfoo=1` splits at the
+    // packed value's own `=` and `1` becomes the program.
+    assert_eq!(
+        shellwrap::split_env_chdir(&argv(&format!("env -Sfoo=1 cat {vault}"))).prog,
+        "cat"
+    );
+    // A letter this grammar cannot place leaves the program UNTRUSTED and reports the rest of
+    // the segment as files this command may open — the rule that keeps a short table a false
+    // negative instead of a bypass.
+    let unplaced = shellwrap::split_env_chdir(&argv(&format!("env -q cat {vault}")));
+    assert!(
+        unplaced.reads.contains(&vault.to_string()),
+        "an unplaceable option makes the rest of the segment reachable, got {:?}",
+        unplaced.reads,
+    );
+    // `env`'s operand scan is `strchr(arg, '=')`, not the shell's identifier rule.
+    assert_eq!(
+        shellwrap::split_env_chdir(&argv(&format!("env a-b=1 cat {vault}"))).prog,
+        "cat"
+    );
+    // ...and `doas`'s is not, because its usage carries no assignment operand.
+    assert_eq!(
+        shellwrap::split_env_chdir(&argv(&format!("doas a-b=1 cat {vault}"))).prog,
+        "a-b=1"
+    );
+    // A redirection in front of the command is neither the program nor its operand, and the
+    // SHELL is what opens the path.
+    let redirected = shellwrap::split_env_chdir(&argv(&format!("< {vault} cat")));
+    assert_eq!(redirected.prog, "cat");
+    assert_eq!(redirected.reads, vec![vault.to_string()]);
+    // An assignment keeps flowing across a wrapper — the form that walked past the
+    // one-credential guard while the unwrapped one was denied.
+    assert_eq!(
+        shellwrap::split_env_chdir(&argv("env GIT_SSH_COMMAND=/tmp/k git push")).env,
+        vec!["GIT_SSH_COMMAND=/tmp/k".to_string()],
     );
 }

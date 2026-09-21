@@ -52,6 +52,14 @@
 //! `tests/the_shell_is_read_the_way_python_reads_it.rs` replays with no Python present so the
 //! ordinary `cargo test` job holds the line too. Nothing in either is written by hand: a rule
 //! this module gets wrong changes an answer the Python already gave.
+//!
+//! # What stage 2 added here
+//!
+//! [`Quoting`] (the memoisation the oracle gets from `lru_cache`), [`posix_split`] and
+//! [`shell_quote`] (CPython's `shlex.split`/`shlex.quote`, which `_split_env_chdir` and
+//! `_desugar_ansi_c` call), and [`Tok::is_control_op`]/[`Tok::is_grouping`]. Everything else in
+//! this file is stage 1 unchanged: the lexer now reads its three tables off a `Cfg` so the two
+//! `shlex` configurations the oracle uses are one state machine rather than two.
 
 use crate::memstore::is_python_space;
 
@@ -178,6 +186,68 @@ impl Tok {
             && (CONTROL_OPERATORS.contains(&self.text.as_str())
                 || GROUPING.contains(&self.text.as_str()))
     }
+
+    /// True when the shell would interpret this token as a CONTROL operator — one that ends a
+    /// separately-executed command. `_Tok.is_op(*_CONTROL_OPERATORS)` in the oracle.
+    pub fn is_control_op(&self) -> bool {
+        self.is_op(&CONTROL_OPERATORS)
+    }
+
+    /// True when the shell would interpret this token as a grouping token.
+    pub fn is_grouping(&self) -> bool {
+        self.is_op(&GROUPING)
+    }
+}
+
+/// `_quote_map`'s answer for one line, computed ONCE.
+///
+/// The Python is `@functools.lru_cache(maxsize=512)`, and that cache is not decoration: the
+/// callers above this module ask `_inside_quotes(line, i)` **per position**, and each of those
+/// calls is an O(n) walk of the whole line. Uncached that is O(n²) per line, and
+/// `_heredoc_opener_words`, `_crowded_substitutions` and `_pipeline_slice` each run one of those
+/// walks. Rust has no decorator to inherit, so the memoisation is structural instead: the map is
+/// built once per line and handed to everything that reads it, which is a cache that cannot
+/// miss and needs no size.
+#[derive(Clone, Debug)]
+pub struct Quoting {
+    flags: Vec<bool>,
+}
+
+impl Quoting {
+    /// [`quote_map`] for `line`, kept for as long as the caller reads it.
+    pub fn of(line: &str) -> Self {
+        Self {
+            flags: quote_map(line),
+        }
+    }
+
+    /// `_inside_quotes`: whether offset `at` sits inside quotes.
+    ///
+    /// Python's `flags[at] if 0 <= at < len(flags) else flags[-1]`, and the `else` is reachable
+    /// in both directions: a negative offset and an offset past the end both answer with the
+    /// state at END of input. The map has one more entry than the line has characters, so
+    /// `at == line.chars().count()` is an ordinary in-range read of that same last entry.
+    pub fn inside(&self, at: isize) -> bool {
+        // `(0..n).contains(&at)` rather than `at >= 0 && at < n`: the same test, written the way
+        // clippy asks for it.
+        let n = self.flags.len() as isize;
+        if (0..n).contains(&at) {
+            self.flags[at as usize]
+        } else {
+            self.at_end()
+        }
+    }
+
+    /// The state at end of input — whether a quote is still open.
+    pub fn at_end(&self) -> bool {
+        // `quote_map` always returns `n + 1` entries, so there is always a last one.
+        *self.flags.last().unwrap_or(&false)
+    }
+
+    /// The raw flags, one per character plus the end.
+    pub fn flags(&self) -> &[bool] {
+        &self.flags
+    }
 }
 
 /// What `shlex` raises, and the only thing [`lex`] can fail with. `_segment_argv_parsed` owns
@@ -232,8 +302,51 @@ impl NewlineKeepingStream {
     }
 }
 
+/// The three `shlex.shlex` tables this module instantiates in two different ways.
+///
+/// One state machine, two configurations, because the oracle uses two: `_ShellLexer` for a
+/// command line, and CPython's own `shlex.split` inside `_split_env_chdir` for `env -S`'s packed
+/// string. Writing the second as a second machine is how two readings of one construct come to
+/// disagree — the mistake this whole area keeps paying for — so it is the same code with a
+/// different table.
+#[derive(Clone, Copy)]
+struct Cfg {
+    /// What is dropped between tokens.
+    whitespace: &'static str,
+    /// What is emitted as a glued RUN. Empty for `shlex.split`, which has no punctuation
+    /// characters at all, so its lexer never reaches the punctuation state.
+    punctuation: &'static str,
+    /// Whether `#` begins a comment. `shlex.split(s)` is `comments=False`, so its `commenters`
+    /// is empty and its `readline` is never reached.
+    comments: bool,
+}
+
+/// `_ShellLexer`: what a charter command line is read with.
+const SHELL_CFG: Cfg = Cfg {
+    whitespace: WHITESPACE,
+    punctuation: PUNCTUATION_CHARS,
+    comments: true,
+};
+
+/// CPython's `shlex.split(s)`: `posix=True`, `whitespace_split=True`, `comments=False`, and no
+/// `punctuation_chars`, which leaves `whitespace` at `shlex`'s default — the newline INCLUDED,
+/// unlike the command-line reading above.
+///
+/// `wordchars` differs too (CPython only adds `~-./*?=` and removes the punctuation when
+/// `punctuation_chars` is truthy), and the difference is inert for the same reason
+/// [`WORDCHARS`] is inert here at all: under `whitespace_split` both arms that consult it reach
+/// the same state as the arm that would otherwise catch the character, and with no punctuation
+/// characters the disjunct `whitespace_split and nextchar not in punctuation_chars` is simply
+/// true. So one table serves both.
+const SPLIT_CFG: Cfg = Cfg {
+    whitespace: " \t\r\n",
+    punctuation: "",
+    comments: false,
+};
+
 /// `shlex.shlex` in posix mode, plus the three things `_ShellLexer` changes about it.
 struct Lexer {
+    cfg: Cfg,
     instream: NewlineKeepingStream,
     state: St,
     token: Vec<char>,
@@ -244,8 +357,9 @@ struct Lexer {
 }
 
 impl Lexer {
-    fn new(cmd: &str) -> Self {
+    fn new(cmd: &str, cfg: Cfg) -> Self {
         Self {
+            cfg,
             instream: NewlineKeepingStream {
                 s: cmd.chars().collect(),
                 i: 0,
@@ -289,7 +403,11 @@ impl Lexer {
     /// too and swallows the rest of the line, so `echo hi#; cat <vault>` — which runs the `cat`
     /// in bash — lexed as a lone `echo hi` and every later command became invisible.
     fn commenters(&self) -> &'static str {
-        if self.state == St::Space { "#" } else { "" }
+        if self.cfg.comments && self.state == St::Space {
+            "#"
+        } else {
+            ""
+        }
     }
 
     /// CPython's `shlex.read_token`, with `_ShellLexer`'s overrides folded in.
@@ -314,7 +432,7 @@ impl Lexer {
                         self.set_state(St::Eof);
                         break;
                     };
-                    if WHITESPACE.contains(c) {
+                    if self.cfg.whitespace.contains(c) {
                         if !self.token.is_empty() || quoted {
                             break;
                         }
@@ -327,7 +445,7 @@ impl Lexer {
                     } else if WORDCHARS.contains(c) {
                         self.token = vec![c];
                         self.set_state(St::Word);
-                    } else if PUNCTUATION_CHARS.contains(c) {
+                    } else if self.cfg.punctuation.contains(c) {
                         self.token = vec![c];
                         self.set_state(St::Punct);
                     } else if QUOTES.contains(c) {
@@ -373,7 +491,7 @@ impl Lexer {
                         self.set_state(St::Eof);
                         break;
                     };
-                    if WHITESPACE.contains(c) {
+                    if self.cfg.whitespace.contains(c) {
                         self.set_state(St::Space);
                         if !self.token.is_empty() || quoted {
                             break;
@@ -390,10 +508,10 @@ impl Lexer {
                         }
                         continue;
                     } else if self.state == St::Punct {
-                        if PUNCTUATION_CHARS.contains(c) {
+                        if self.cfg.punctuation.contains(c) {
                             self.token.push(c);
                         } else {
-                            if !WHITESPACE.contains(c) {
+                            if !self.cfg.whitespace.contains(c) {
                                 self.pushback_chars.push(c);
                             }
                             self.set_state(St::Space);
@@ -406,7 +524,7 @@ impl Lexer {
                         self.set_state(St::Esc(c));
                     } else if WORDCHARS.contains(c)
                         || QUOTES.contains(c)
-                        || !PUNCTUATION_CHARS.contains(c)
+                        || !self.cfg.punctuation.contains(c)
                     {
                         self.token.push(c);
                     } else {
@@ -431,7 +549,7 @@ impl Lexer {
 
 /// `cmd` as [`Tok`]s, or the error `shlex` raises on genuinely unbalanced quoting.
 pub fn lex(cmd: &str) -> Result<Vec<Tok>, LexError> {
-    let mut lexer = Lexer::new(cmd);
+    let mut lexer = Lexer::new(cmd, SHELL_CFG);
     let mut out = Vec::new();
     loop {
         match lexer.read_token()? {
@@ -440,6 +558,55 @@ pub fn lex(cmd: &str) -> Result<Vec<Tok>, LexError> {
             Some(text) => out.push(Tok::new(text, lexer.bare, lexer.start, lexer.end)),
         }
     }
+}
+
+/// CPython's `shlex.split(s)` — **not** [`lex`].
+///
+/// `_split_env_chdir` calls it on the string `env -S` packs a whole command into, and it is a
+/// different reading from a command line's: no punctuation characters (so `;` is an ordinary
+/// word character rather than an operator), no comments, and a newline is plain whitespace.
+/// Only the texts come back; `bare` and the offsets mean nothing on this path and the oracle
+/// discards them too.
+pub fn posix_split(s: &str) -> Result<Vec<String>, LexError> {
+    let mut lexer = Lexer::new(s, SPLIT_CFG);
+    let mut out = Vec::new();
+    loop {
+        match lexer.read_token()? {
+            None => return Ok(out),
+            Some(text) => out.push(text),
+        }
+    }
+}
+
+/// The characters `shlex.quote` leaves alone: `[\w@%+=:,./-]` under `re.ASCII`, so `\w` is
+/// exactly ASCII alphanumerics and `_` — a Unicode letter is NOT safe and gets quoted.
+fn quote_safe(c: char) -> bool {
+    c.is_ascii_alphanumeric() || "_@%+=:,./-".contains(c)
+}
+
+/// CPython's `shlex.quote`: `s` as one shell word.
+///
+/// `_desugar_ansi_c` rewrites a decoded `$'…'` through this, which is what restores the token
+/// boundary bash sees. The empty string becomes `''`, a string of only safe characters is
+/// returned untouched, and anything else is single-quoted with each `'` spelled `'"'"'`.
+pub fn shell_quote(s: &str) -> String {
+    if s.is_empty() {
+        return "''".to_string();
+    }
+    if s.chars().all(quote_safe) {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for c in s.chars() {
+        if c == '\'' {
+            out.push_str("'\"'\"'");
+        } else {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+    out
 }
 
 /// `cmd` with backtick substitutions rewritten as `$( … )` — the same construct.
@@ -833,7 +1000,7 @@ fn fallback_segments(cmd: &str) -> Vec<Vec<String>> {
 }
 
 /// Python's `str.split()` with no argument: split on RUNS of Python whitespace, no empty pieces.
-fn py_split(text: &str) -> Vec<String> {
+pub fn py_split(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut cur = String::new();
     for c in text.chars() {
