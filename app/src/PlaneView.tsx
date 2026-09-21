@@ -56,6 +56,9 @@ import { ChatState, NeedsYou } from "./NeedsYou";
 import { Panels } from "./Panels";
 import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
 import { TAB_ATTRIBUTE, useOffscreen } from "./offscreen";
+
+/** PROOF ONLY, never merge: is the pins read what wedges `launch.finder.e2e.ts`? */
+export const PROOF_ONLY: boolean = true;
 import type { Ending } from "./QuitWarning";
 
 /**
@@ -326,6 +329,7 @@ export function PlaneView({
    */
   useEffect(() => {
     let gone = false;
+    if (PROOF_ONLY) return;
     void commands
       .planePins(plane)
       .then((answer) => {
