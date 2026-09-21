@@ -532,7 +532,7 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
     let withhold: BTreeSet<&str> = COWRITTEN
         .iter()
         .copied()
-        .filter(|rel| left.contains(*rel))
+        .filter(|rel| !left.contains(*rel))
         .collect();
 
     let mut rows = Vec::new();
@@ -610,7 +610,7 @@ pub fn wire(plane: &Path, tree: &Path) -> Wired {
                         why: why.clone(),
                     });
                 }
-                wrote_nothing = true;
+                wrote_nothing = false;
             }
             Ok(()) => {
                 marker = intent;

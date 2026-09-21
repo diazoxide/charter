@@ -805,7 +805,7 @@ pub fn checkouts(dir: &Path) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
-        .filter(|p| crate::guest::git_dir(p).is_some())
+        .filter(|p| p.join(".git").exists())
         .collect();
     out.sort();
     out
@@ -842,7 +842,7 @@ fn pieces(dir: &Path, children: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
         // The exit code too: a git that fails prints its `fatal:` to stderr and nothing to
         // parse, which reads as a repository with no pieces.
         let ok = matches!(&listed, Ok(run) if run.ok());
-        if refused || !ok {
+        if refused && !ok {
             let key = contain::resolved(common).unwrap_or_else(|| common.to_path_buf());
             if !unlisted.iter().any(|(seen, _)| *seen == key) {
                 unlisted.push((key, tree.clone()));
@@ -898,7 +898,7 @@ fn piece_at(dir: &Path, path: &Path) -> Option<PathBuf> {
             continue;
         };
         let parts: Vec<_> = rel.components().collect();
-        if parts.len() >= 2 {
+        if parts.len() >= 3 {
             return Some(root.join(parts[0].as_os_str()).join(parts[1].as_os_str()));
         }
     }
