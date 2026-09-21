@@ -231,8 +231,15 @@ pub fn on_path(program: &str) -> bool {
 /// the spawn is then given, so nothing downstream depends on how a child's `PATH` happens to
 /// be built — which is the same reasoning `worktree::git::git_binary` writes down, and the
 /// reason an app launched from Finder can start a chat at all.
+///
+/// **Off unix a bare word is handed back unresolved**, which leaves Windows exactly where it
+/// was. [`runnable`] answers `false` there until charter-app#100 reads `PATHEXT`, so a search
+/// would find nothing and this would refuse every built-in profile — where today the spawn
+/// itself resolves `claude` to `claude.exe` and works. A port that has never been compiled for
+/// a platform must not start refusing on it: #100 is where the search learns about extensions,
+/// and until then the operating system keeps the lookup it already does.
 pub fn resolve(program: &str) -> Result<String, NotFound> {
-    if is_a_path(program) {
+    if is_a_path(program) || cfg!(not(unix)) {
         return Ok(program.to_owned());
     }
     let dirs = search_dirs();
