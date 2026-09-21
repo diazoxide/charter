@@ -339,6 +339,11 @@ impl Planes {
         // in front of chats that are already running, about a grant that is already in force,
         // and answering it would reach [`Self::minted`] — see the guard there for what that
         // would have cost.
+        let id = PlaneId::of(&root);
+        if self.held(&id).is_ok() {
+            self.remember(&root);
+            return Ok(Opening::Open(id));
+        }
         let contributes = machine::Contribution::of(&root);
         let consent = self.consent_to(&root, &contributes);
         if consent.must_ask() {
@@ -374,7 +379,13 @@ impl Planes {
     ) -> Result<PlaneId, String> {
         let root = plane_at(root)?;
         let now = machine::Contribution::of(&root);
-        let _ = shown;
+        if &now != shown {
+            return Err(format!(
+                "{} changed while you were reading it, so nothing was approved and nothing was \
+                 opened. Open it again to see what it contributes now.",
+                charter_core::shown::short(&root.display().to_string())
+            ));
+        }
         self.record_approval(&root, now);
         Ok(self.minted(&root))
     }
@@ -397,9 +408,10 @@ impl Planes {
     /// both callers pass, rather than at each of them.
     fn minted(&self, root: &Path) -> PlaneId {
         let already = self.held(&PlaneId::of(root)).is_ok();
-        let _ = already;
         let id = self.open(root);
-        self.reopen(&id, &Approved(()));
+        if !already {
+            self.reopen(&id, &Approved(()));
+        }
         id
     }
 
