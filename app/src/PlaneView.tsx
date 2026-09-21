@@ -109,7 +109,15 @@ export function PlaneView({
   const states = useChatStates(plane);
   const [trouble, setTrouble] = useState<string>();
   const [sidebar, setSidebar] = useState<SidebarModel>();
-  const [focused, setFocused] = useState<string>();
+  /**
+   * The workspace the operator last PICKED, which is not always the one drawn.
+   *
+   * `focused` below is the one drawn, and it is derived from this and from the tab in front —
+   * see it for why. This is only half the answer, so nothing outside those few lines reads
+   * it: a workspace with no chats has nothing in front to be derived from, and this is what
+   * keeps the window on it.
+   */
+  const [picked, setPicked] = useState<string>();
   /** The chats the core put back at this launch, so a pane can say which came back how. */
   const [reopened, setReopened] = useState<OpenChat[]>([]);
   /** The picker, when a new chat has been asked for, and what to do with the session it
@@ -150,6 +158,22 @@ export function PlaneView({
    *
    * Written in the same handler that starts the chat, so the render that first draws the tab
    * already knows where it is filed — React puts both in one flush.
+   *
+   * **Nothing prunes it, and that is safe because a session number is never reused** — which
+   * #133 asked to be verified rather than assumed, since a reused number would hand a dead
+   * chat's workspace to a live one. It was verified in the core, and it rests on three
+   * things together, not on the counter alone:
+   *
+   * - `Sessions::open` takes the number from `opened.fetch_add(1)`, an `AtomicU32` that is
+   *   only ever incremented and never stored to. There is no reset path.
+   * - That counter belongs to the plane's `Held`, which `Planes::open` mints once per plane
+   *   and `Planes::close` removes whole. Re-opening a plane makes a new one counting from 1.
+   * - And this component is mounted `key={plane}`, so a plane that was closed and opened
+   *   again is a new `PlaneView` with an empty map. The counter and the map restart together.
+   *
+   * So the map only grows with chats STARTED from this window in one project's lifetime — an
+   * entry is a number and a workspace name — and no entry it holds can ever be asked about
+   * by a different chat.
    */
   const [startedIn, setStartedIn] = useState<Record<number, string>>({});
   /** The tab that was in front on each workspace's strip, so coming back to a workspace
@@ -253,7 +277,7 @@ export function PlaneView({
           name === OUTSIDE
             ? next.unfiled.length > 0 || ofFront === OUTSIDE
             : next.workspaces.some((ws) => ws.name === name);
-        setFocused((current) =>
+        setPicked((current) =>
           current !== undefined && stands(current)
             ? current
             : (ofFront ?? next.workspaces[0]?.name),
@@ -262,11 +286,6 @@ export function PlaneView({
       // A window with no readable plane still runs its panes; the header already says so.
       .catch(() => setSidebar(undefined));
   }, [plane, startedIn, tabs]);
-
-  // Where a chat starts: the focused workspace's directory, so the sidebar can file it under
-  // that workspace. Nothing on the plane records a chat, so where it works is the only thing
-  // relating the two. Null — the operator's home — until a plane is read.
-  const startIn = sidebar?.workspaces.find((ws) => ws.name === focused)?.path ?? null;
 
   /**
    * Which workspace each chat is filed under — the strip its tab appears on.
@@ -291,6 +310,33 @@ export function PlaneView({
     },
     [sidebar, startedIn],
   );
+
+  /**
+   * The workspace the strip DRAWS, and the one axis rule: **the tab in front is on it.**
+   *
+   * Derived rather than maintained. Until #133 this held because `bringToFront`,
+   * `focusWorkspace`, `closeTab`, `openTab` and the sidebar-read's focus rule each kept it —
+   * five handlers agreeing, with no single place that re-establishes it, so a sixth that
+   * forgot would break the axis silently and a reviewer of #131 said exactly that.
+   *
+   * It was already broken without a sixth handler. **Nothing on the plane records a chat**:
+   * which workspace it is in is decided by the directory it works in, so a workspace added on
+   * disk moves chats between strips with no handler involved at all. The window then drew the
+   * strip the last handler had left it on, with the front chat's pane under a strip that did
+   * not list it.
+   *
+   * So the front tab decides, and `picked` answers only when there is no front tab — which is
+   * the workspace holding no chats, the one case the axis cannot be read off a tab.
+   */
+  const focused = useMemo(() => {
+    if (sidebar === undefined || tabs.inFront === undefined) return picked;
+    return workspaceOf(tabs, tabs.inFront, filedIn) ?? picked;
+  }, [filedIn, picked, sidebar, tabs]);
+
+  // Where a chat starts: the focused workspace's directory, so the sidebar can file it under
+  // that workspace. Nothing on the plane records a chat, so where it works is the only thing
+  // relating the two. Null — the operator's home — until a plane is read.
+  const startIn = sidebar?.workspaces.find((ws) => ws.name === focused)?.path ?? null;
 
   /** The workspaces the strip shows: this project's, plus the one for chats outside them all
    *  when there are any. In the plane's own order, which is the sidebar's. */
@@ -446,12 +492,17 @@ export function PlaneView({
    * has to move the operator to where that chat lives; otherwise the pane would show a chat
    * whose tab is on a strip that is not drawn. Everything that shows a chat comes through
    * here: the strip itself, the palette's `Switch to tab` rows and the needs-you queue.
+   *
+   * **The strip no longer depends on this line getting it right** — `focused` derives it from
+   * the tab in front. What `picked` is for is the moment AFTER this chat's tab closes and
+   * there is no front tab left to read the axis off: the window stays in the workspace the
+   * operator was in rather than jumping back to wherever they last pressed a strip.
    */
   const bringToFront = useCallback(
     (id: number) => {
       change((tabs) => selectTab(tabs, id));
       const workspace = sidebar === undefined ? undefined : workspaceOf(now.current, id, filedIn);
-      if (workspace !== undefined) setFocused(workspace);
+      if (workspace !== undefined) setPicked(workspace);
     },
     [change, filedIn, sidebar],
   );
@@ -478,7 +529,7 @@ export function PlaneView({
    */
   const focusWorkspace = useCallback(
     (workspace: string) => {
-      setFocused(workspace);
+      setPicked(workspace);
       change((tabs) => showWorkspace(tabs, workspace, filedIn, lastFront.current[workspace]));
     },
     [change, filedIn],
@@ -803,6 +854,16 @@ export function PlaneView({
           sidebar by it. The tablist is what this is. */}
       {strips.length > 0 && (
         <div className="workspaces-strip" role="tablist" aria-label="Workspaces">
+          {/* Counted here in the render body, once per workspace, and DELIBERATELY not
+              memoised. It looks quadratic and it is — ten workspaces × fifty tabs × a scan of
+              the sidebar — so charter-app#133 measured it at the limits before touching it:
+              **0.022 ms at ADR 0026's ten workspaces and fifty chats**, against a 16.7 ms
+              frame, and half a percent of the re-render it sits in. A memo over `tabs` would
+              save that 22 µs on the one event it was proposed for — `chat-moved` changes
+              neither `tabs` nor `sidebar`, so the memo would hit every time — and be paid for
+              on every event that does change them. The measurement is kept as assertions in
+              `tabs.test.ts`, "the workspace strip at fifty chats", where a third nested scan
+              fails a test instead of being a surprise. */}
           {strips.map((workspace) => {
             const offer = by(`workspace.focus:${workspace}`);
             const waiting = states.needsYou.filter(

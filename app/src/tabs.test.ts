@@ -252,3 +252,113 @@ describe("tabs and their panes", () => {
     expect(splitFocusedPane(noTabs(), "row", 11)).toEqual(noTabs());
   });
 });
+
+/**
+ * The workspace strip's per-workspace counts, at the scale the limits are written for.
+ *
+ * charter-app#133 asked for this to be MEASURED before anything was changed. Its author's own
+ * review of #131 named it as the reviewer's first target: `tabsIn` is called once per
+ * workspace inside the render body, unmemoised, and every call scans every tab, and every tab
+ * asks `filedIn`, which scans the sidebar. Ten workspaces × fifty tabs × a fifty-chat scan was
+ * called "~25k comparisons on every `chat-moved` event", and `chat-moved` arrives on every
+ * hook report from every chat.
+ *
+ * **Measured, on the shape below and on the machine CI runs on:**
+ *
+ * | workspaces × chats | the strip's counts | the whole window, per `chat-moved` (jsdom) |
+ * |--------------------|--------------------|--------------------------------------------|
+ * | 10 × 50 (ADR 0026) | **0.022 ms**       | 4.4 ms                                     |
+ * | 10 × 50, all fifty asking | 0.041 ms    | —                                          |
+ * | 10 × 100           | 0.071 ms           | —                                          |
+ * | 20 × 200           | 0.43 ms            | —                                          |
+ * | 50 × 500           | 6.2 ms             | —                                          |
+ *
+ * **Nothing was changed, and no `useMemo` was added.** At the limit the loop is 22 µs: one
+ * eight-hundredth of a 16.7 ms frame, and half a percent of the re-render it sits inside. A
+ * memo would save 22 µs and cost a dependency array over `tabs`, which `chat-moved` does not
+ * even change — so the memo would hit on exactly the event it was proposed for and be paid
+ * for on every other one. CLAUDE.md is explicit: optimise only against the spec's limits.
+ *
+ * The growth is real and it is quadratic — 50 × 500 is 6.2 ms — but that is ten times the
+ * product's scale on both axes at once. What follows is the measurement kept as an assertion,
+ * the way #104 kept the palette's: a MILLISECOND assertion would be flaky on a shared runner,
+ * so what is pinned is the work itself. A third nested scan moves these numbers and fails
+ * here, rather than being a surprise at fifty chats.
+ */
+describe("the workspace strip at fifty chats (charter-app#133)", () => {
+  const WORKSPACES = 10;
+  const CHATS = 50;
+
+  /** A plane the size of ADR 0026's limits: fifty chats spread over ten workspaces. */
+  function plane() {
+    const names = Array.from({ length: WORKSPACES }, (_, w) => `ws-${w}`);
+    const where = new Map<number, string>();
+    let tabs = noTabs();
+    for (let i = 0; i < CHATS; i++) {
+      where.set(100 + i, names[i % WORKSPACES]);
+      tabs = openTab(tabs, 100 + i, `${names[i % WORKSPACES]}.${i + 1}`);
+    }
+    return { names, where, tabs };
+  }
+
+  /** `PlaneView`'s `filedIn`, which scans the sidebar's chats — and counts what it touched. */
+  function counting(where: Map<number, string>) {
+    const count = { calls: 0, comparisons: 0 };
+    const chats = [...where.entries()];
+    const filedIn: FiledIn = (session) => {
+      count.calls += 1;
+      for (const [known, workspace] of chats) {
+        count.comparisons += 1;
+        if (known === session) return workspace;
+      }
+      return "Outside every workspace";
+    };
+    return { count, filedIn };
+  }
+
+  /** What the render body does for the strip, and nothing else: per workspace, how many chats
+   *  are open there and how many of them are asking for you. */
+  function strip(tabs: Tabs, names: string[], filedIn: FiledIn, needsYou: number[]) {
+    return names.map((workspace) => ({
+      here: tabsIn(tabs, workspace, filedIn).length,
+      waiting: needsYou.filter((session) => filedIn(session) === workspace).length,
+    }));
+  }
+
+  it("counts every chat once per workspace, and the counts are the ones drawn", () => {
+    const { names, where, tabs } = plane();
+    const { filedIn } = counting(where);
+
+    const drawn = strip(tabs, names, filedIn, [100, 105]);
+
+    expect(drawn.map((one) => one.here)).toEqual(Array.from({ length: WORKSPACES }, () => 5));
+    // Chat 100 is in `ws-0` and chat 105 in `ws-5`, so one mark each and none anywhere else.
+    expect(drawn.map((one) => one.waiting)).toEqual([1, 0, 0, 0, 0, 1, 0, 0, 0, 0]);
+  });
+
+  it("costs one sidebar scan per tab per workspace, which is what #133 asked for in numbers", () => {
+    const { names, where, tabs } = plane();
+    const { count, filedIn } = counting(where);
+
+    strip(tabs, names, filedIn, []);
+
+    // 10 workspaces × 50 tabs. This is the loop the review called quadratic, and it is.
+    expect(count.calls).toBe(WORKSPACES * CHATS);
+    // And each call walks the sidebar as far as the chat it is asking about, which averages
+    // half of it: 12,750 comparisons, not the 25,000 the review feared. **At 0.022 ms it
+    // needs no memo.** What this pins is that nothing has added a third nesting since.
+    expect(count.comparisons).toBe(12_750);
+  });
+
+  it("asks nothing extra of the workspaces a chat is not in", () => {
+    // The needs-you mark is the other per-workspace scan, and it is over the QUEUE, not over
+    // the chats: fifty chats all asking at once is fifty calls per workspace, not 2,500.
+    const { names, where, tabs } = plane();
+    const { count, filedIn } = counting(where);
+    const everyone = [...where.keys()];
+
+    strip(tabs, names, filedIn, everyone);
+
+    expect(count.calls).toBe(WORKSPACES * CHATS + WORKSPACES * everyone.length);
+  });
+});
