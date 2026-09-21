@@ -159,7 +159,14 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
     let harness = Harness::of_kind(&profile.kind);
     let (added, session, how) = arguments(harness, profile, start);
     let home = profiles::home().unwrap_or_else(|| PathBuf::from("~"));
-    let mut argv = profiles::expanded_command(profile, &home);
+    // Resolved HERE, in charter's own process, and the absolute path is what the terminal is
+    // given (charter-app#134). A bare word handed to a pty is resolved against whatever
+    // `PATH` the app itself was started with — which for a Finder-launched `.app` is
+    // `/usr/bin:/bin:/usr/sbin:/sbin` and holds no harness. A Codex profile reaches this
+    // without ever having been spawned (its wiring check reads a file), so this is the only
+    // place that answer can be given for it at all.
+    let mut argv = crate::programs::resolve_argv(&profiles::expanded_command(profile, &home))
+        .map_err(|gone| format!("{} Nothing was started.", gone.said()))?;
     let program = argv.remove(0);
     // Charter's words first and the profile's own arguments after them, which is the order
     // the Python launcher uses. It is not cosmetic: Codex resumes through a SUBCOMMAND, and

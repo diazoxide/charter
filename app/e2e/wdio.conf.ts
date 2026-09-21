@@ -50,8 +50,13 @@ export const config: WebdriverIO.Config = {
   // on four of five attempts from an unrelated branch. As a REQUIRED check it stopped being
   // evidence and became a gate that blocks every merge, including fixes for the very bug it
   // watches for. `STRESS=1` includes it; its own CI job runs it and is allowed to fail.
+  // The Finder-launch spec runs separately too (`wdio.finder.conf.ts`), and for the reason
+  // charter-app#134 hid for as long as it did: it is about the ENVIRONMENT the app is started
+  // with, and one run is one environment. Running it here would give it CI's own `PATH` and it
+  // would pass without asking anything.
   exclude: [
     "./specs/**/*.state.e2e.ts",
+    "./specs/**/*.finder.e2e.ts",
     ...(process.env.STRESS === "1" ? [] : ["./specs/stress.e2e.ts"]),
   ],
   maxInstances: 1,
