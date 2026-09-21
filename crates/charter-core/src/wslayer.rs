@@ -282,6 +282,13 @@ fn writable_directory(plane: &Path, dir: &Path) -> bool {
 /// them, shared by the pieces and the exclude block through
 /// [`crate::worktree::listing::answers`].
 ///
+/// **Measured** on an ubuntu CI runner: [`guest_trees`] over a workspace whose checkouts
+/// have no linked worktrees is **20.4 µs**; with three linked worktrees it is **10.5 ms**,
+/// one spawn; and a whole [`wire`] of that workspace — the directory, the clone and three
+/// pieces, each with its block and its `git status` questions — is **55.3 ms**. The first
+/// number is the one that matters for a hook, and the second is six times the whole 1.7 ms
+/// budget, so a descent is launch-path work and not hook-path work.
+///
 /// So this is a gap with a price on it rather than a decision to descend or not: the day
 /// `doctor` reads a workspace's layer, it descends, opens an `answers` block, and pays one
 /// listing per repository with worktrees. Porting it now would add the read-only half of

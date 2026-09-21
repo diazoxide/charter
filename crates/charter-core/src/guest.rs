@@ -426,14 +426,30 @@ pub fn tracked(tree: &Path, rel: &str) -> bool {
 ///
 /// # Where this is stricter than charter, and why it stays that way
 ///
-/// **A block charter could not write at all means nothing is written here.** charter withholds
-/// only the machine-local file in that case and writes the shared settings and the mirrored
-/// agents anyway — unhidden, in somebody else's `git status`, which is the noise the block
-/// exists to prevent. The two are coherent in different directions and both are defensible:
-/// charter keeps the plane's rules in force at the cost of the noise; this refuses the write
-/// AND [`crate::wiring`] refuses the chat, so nothing runs without the rules and nothing is
-/// left showing. It is the refusing direction, it is declared as a divergence in the
-/// differential, and it is a decision rather than an omission.
+/// **A block charter could not write at all means nothing is written here.** charter
+/// withholds only the machine-local file in that case and writes the shared settings and the
+/// mirrored agents anyway. Measured against the pinned oracle, that is not a theoretical
+/// difference: `workspace reinit` over a checkout whose `.git/info` is mode `0o500` exits 0
+/// and leaves
+///
+/// ```text
+/// $ git -C workspaces/beta/svc status --porcelain
+/// ?? .charter-generated
+/// ?? .claude/
+/// ```
+///
+/// — charter's own files showing in somebody else's repository, which is the noise the block
+/// exists to prevent. This writes nothing, reports the checkout blocked, and
+/// [`crate::wiring`] refuses the chat, so nothing runs without the plane's rules and nothing
+/// is left showing.
+///
+/// Both are coherent, in opposite directions, and the trade — a usable worktree with noise
+/// against a clean repository and a refusal — is an ADR's to make. **There is no such record
+/// yet, so this is NOT declared as a `Divergence` in the differential**: that instrument
+/// refuses a `why` that cites no ADR and no spec decision, and inventing one would be the
+/// difference-with-no-author it exists to prevent. charter-app#124 is the issue to close it;
+/// until then the behaviour is held by this crate's own tests alone, and nothing would notice
+/// if charter's half changed.
 ///
 /// **A line left out over a file of yours is NOT that case**, and since M2.26 it is ported
 /// exactly (charter#1072). Nothing has failed there: a sibling checkout reading the same
@@ -1931,6 +1947,38 @@ mod tests {
         assert_eq!(
             planned(&tree, SETTINGS, "{}\n", &layer::Record::new()),
             Plan::Foreign
+        );
+    }
+
+    #[test]
+    fn a_line_kept_without_proof_is_named_where_a_reader_looks() {
+        // charter's ruling G, second half: keep every line, and let the report say what could
+        // not be accounted for. A block kept silently is a block nobody can tell from one
+        // that is right — which is the only thing standing between "charter still hides this"
+        // and "charter has forgotten why".
+        use std::os::unix::fs::PermissionsExt;
+
+        let (_dir, plane, tree) = plane_with("svc");
+        let exclude = tree.join(".git").join("info").join("exclude");
+        // The block names a path charter owns nothing at any more, and the path cannot be
+        // checked: not proved gone, so the line stays — and says why.
+        std::fs::write(
+            &exclude,
+            rendered(&[SETTINGS.to_owned(), MARKER.to_owned()]),
+        )
+        .unwrap();
+        let claude = tree.join(".claude");
+        std::fs::create_dir_all(&claude).unwrap();
+        std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let said = unaccounted(&plane, &tree);
+        std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(said.len(), 1, "{said:?}");
+        assert!(said[0].contains(SETTINGS), "{said:?}");
+        assert!(
+            said[0].contains("restoring read access clears this"),
+            "{said:?}"
         );
     }
 
