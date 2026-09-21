@@ -736,10 +736,15 @@ fn planned(tree: &Path, rel: &str, text: &str, record: &layer::Record) -> Plan {
     // "not there", and charter would then WRITE over a path it was not allowed to look at.
     // Only ENOENT and ENOTDIR prove a path gone; a dangling link is THERE, and reading it as
     // absent would write through it.
-    if crate::worktree::listing::exists(&path) != Some(true) {
+    if crate::worktree::listing::exists(&path) == Some(false) {
         return Plan::Create;
     }
-    // PROOF ONLY: the containment test that belongs here is deleted.
+    if !layer::inside(tree, &path) {
+        // A committed link whose target, or whose parent, leaves the checkout. Charter
+        // neither reads through it — the digest on the far end is not evidence the file is
+        // charter's — nor writes through it. `foreign` is the state left exactly as it is.
+        return Plan::Foreign;
+    }
     let Ok(on_disk) = std::fs::read_to_string(&path) else {
         return Plan::Unreadable;
     };
@@ -756,9 +761,9 @@ fn planned(tree: &Path, rel: &str, text: &str, record: &layer::Record) -> Plan {
         // among it: read as current, an approval the harness saved over an interrupted write
         // would settle a file that never received the plane's new `deny`.
         return if record.settled(rel) == Some(digest(text).as_str()) {
-            Plan::Theirs
-        } else {
             Plan::HarnessEdited
+        } else {
+            Plan::Theirs
         };
     }
     Plan::Foreign
@@ -1267,7 +1272,7 @@ fn shared_rels(
             } else {
                 listing::exists(&t.join(&rel))
             };
-            if there != Some(false) {
+            if there == Some(false) {
                 continue;
             }
             if there.is_none() {
@@ -1380,7 +1385,7 @@ fn yours_untracked(t: &Path, rel: &str) -> bool {
     }
     // One `git status` per path per block: a launch wires every checkout twice over, and each
     // pass would ask again.
-    crate::worktree::listing::untracked(t, rel, || path_state(t, rel) != State::Committable)
+    crate::worktree::listing::untracked(t, rel, || path_state(t, rel) == State::Committable)
 }
 
 /// Whether a file matching [`TEMP_PATTERN`] sits in any of `dirs` — `None` when one of them
