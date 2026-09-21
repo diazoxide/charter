@@ -15,15 +15,7 @@ import { ApprovePlane } from "./ApprovePlane";
 import { Opener } from "./Opener";
 import { Palette } from "./Palette";
 import { QuitWarning, type Ending } from "./QuitWarning";
-import {
-  Closer,
-  Doer,
-  Pin,
-  PlaneView,
-  PROOF_ONLY,
-  type PlaneReport,
-  type WindowDoing,
-} from "./PlaneView";
+import { Closer, Doer, Pin, PlaneView, type PlaneReport, type WindowDoing } from "./PlaneView";
 import { noTabs } from "./tabs";
 
 /**
@@ -117,7 +109,6 @@ function App() {
   // that file in the app.
   useEffect(() => {
     let gone = false;
-    if (PROOF_ONLY) return;
     for (const plane of planes) {
       void commands
         .planePins(plane)
