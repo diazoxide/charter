@@ -1,6 +1,6 @@
 import { browser, expect, $, $$ } from "@wdio/globals";
 import { READY } from "../harness.js";
-import { pickAndStart, pressOnly } from "../opening.js";
+import { harnessRowsDrawn, pickAndStart, pressOnly } from "../opening.js";
 
 /**
  * Picking a harness profile and a persona, against the real app in a copy of the `daily`
@@ -45,10 +45,9 @@ describe("starting a chat", () => {
     // The file is gitignored, so an edit to it leaves no diff for a reviewer to catch —
     // which is why the ask is about the words that are about to run, not the profile's name.
     await pressOnly("New tab");
-    // By role, not by tag: the rows are Radix radios, which are `<button role="radio">`
-    // (`docs/ui-primitives.md`). The label is a real `<label for>` tied to one of them, so
-    // clicking the words picks the row — which is the association that was missing.
-    await $('[role="radio"]').waitForExist({ timeout: 20_000 });
+    // The label is a real `<label for>` tied to the row's control, so clicking the words picks
+    // the row — which is the association that was missing.
+    await harnessRowsDrawn();
     await (await $("label*=needs-approval")).click();
 
     await expect(dialog()).toHaveText(expect.stringContaining("claude-stand-in"));
@@ -95,7 +94,7 @@ describe("starting a chat", () => {
 
   it("does not ask again for a profile it has already run, exactly as it stands", async () => {
     await pressOnly("New tab");
-    await $('[role="radio"]').waitForExist({ timeout: 20_000 });
+    await harnessRowsDrawn();
     await (await $("label*=needs-approval")).click();
 
     await expect($("button=Start")).toBeDisplayed();

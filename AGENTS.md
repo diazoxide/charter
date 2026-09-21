@@ -27,5 +27,16 @@ Run what CI runs before pushing (commands in `README.md`). Clippy runs with `-D 
 Tests describe behaviour in their names. A test is only trusted once it has been seen to fail
 for the right reason.
 
+Two that have each cost a red `main`:
+
+- **In a React test, a precondition waits with Testing Library's `waitFor`, not `vi.waitFor`.**
+  Only the first polls inside `act`, so only the first guarantees React has committed what the
+  next line reads. `vi.waitFor` is fine for a closing assertion about something outside React,
+  such as which commands the core was sent.
+- **A scenario spec asks for a control by its `role`, never by its tag.** `input[type="radio"]`
+  is a fact about the markup; `[role="radio"]` is the thing the operator and the screen reader
+  get, and it survives whatever draws it. `e2e/opening.ts` holds the picker's selectors so
+  there is one copy to change.
+
 Mutation testing runs nightly on `charter-core` only (`.github/workflows/mutants.yml`) and never
 gates a PR.
