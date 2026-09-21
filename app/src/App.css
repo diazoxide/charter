@@ -431,16 +431,22 @@ body {
   opacity: 0.8;
 }
 
-/* Quitting asks first, over everything, because it ends every session. */
+/* Quitting asks first, over everything, because it ends every session.
+
+   **The scrim and the surface are siblings**, not a box inside a box. Radix portals
+   `Dialog.Overlay` and `Dialog.Content` next to each other (`docs/ui-primitives.md`), so the
+   centring that used to be `place-items` on the scrim is now on the surface itself. */
 .asking {
   position: fixed;
   inset: 0;
-  display: grid;
-  place-items: center;
   background: rgb(0 0 0 / 55%);
 }
 
 .warning {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   max-width: 34rem;
   max-height: 80vh;
   overflow: auto;
@@ -483,6 +489,128 @@ body {
   white-space: nowrap;
 }
 
+/* What a new chat is asked: the harness, the persona, the footer (ADR 0022, charter ADR 0029).
+
+   **This is the rule that was missing.** The rows were five bare `<span>`s in one `<label>`
+   with nothing laying them out, so they ran together — `claudeclaudeclaudebuilt-indefault` on
+   screen, and the same run of words as the row's accessible name. A row is now a grid: the
+   control, the name it is labelled by, and underneath them the detail that describes it. */
+.choices {
+  margin: 0 0 1rem;
+  padding: 0.1rem 0.75rem 0.35rem;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+}
+
+.choices-name {
+  margin: 0 0 0.3rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.6;
+}
+
+.choice {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.5rem;
+  align-items: baseline;
+  padding: 0.35rem 0;
+}
+
+.choice + .choice {
+  border-top: 1px solid var(--edge);
+}
+
+/* The detail sits under the name, in the name's column: it is what the name means, and a row
+   that put it beside the name went off the side of the dialog on any real command line. */
+.choice .meta {
+  grid-column: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.5rem;
+  align-items: baseline;
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
+
+.choice .meta code {
+  overflow-wrap: anywhere;
+}
+
+/* The one thing in the row that names it, and the thing the whole row is clickable through:
+   a `<label for>` on a `<button>` forwards its click to the control it names. */
+.choice label {
+  cursor: pointer;
+  font-weight: 500;
+}
+
+/* The picker is the longest of these surfaces — three groups, a list of refusals and a
+   command line per row — so it is given room the others do not need. */
+.starting {
+  width: min(38rem, 92vw);
+  max-width: none;
+}
+
+/* The mark a radio row and a checkbox row carry. The primitives draw a `<button>` and leave
+   the look to us, which is the point of them — so the look is charter's own, and it is the
+   same 0.85rem square the rest of the window's marks are. */
+.dot,
+.box {
+  display: grid;
+  place-items: center;
+  width: 0.85rem;
+  height: 0.85rem;
+  padding: 0;
+  border: 1px solid var(--edge);
+  background: #101010;
+  color: var(--lit);
+  cursor: pointer;
+  /* On the text's first line, whatever the row's detail does below it. */
+  align-self: start;
+  translate: 0 0.25rem;
+}
+
+.dot {
+  border-radius: 50%;
+}
+
+.box {
+  border-radius: 3px;
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+.dot[data-state="checked"],
+.box[data-state="checked"] {
+  border-color: var(--lit);
+}
+
+.dot-mark {
+  display: block;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: var(--lit);
+}
+
+/* Focus is drawn, and drawn on the control rather than only implied by the row. A keyboard
+   is the way this dialog is meant to be answered, and macOS hides the ring on buttons in a
+   webview unless it is asked for. */
+.dot:focus-visible,
+.box:focus-visible {
+  outline: 2px solid var(--lit);
+  outline-offset: 2px;
+}
+
+/* A profile charter has not recorded running, marked in its own row and not only in the
+   sentence below the list. */
+.choice .needs-approval {
+  color: var(--stop);
+  opacity: 1;
+}
+
 /* The sentence that says what charter does not know. It is not a warning to be styled away. */
 .honest {
   margin: 0 0 1rem;
@@ -494,6 +622,39 @@ body {
   display: flex;
   gap: 0.5rem;
   justify-content: flex-end;
+}
+
+/* The buttons a dialog is answered with, drawn the way the bar's are. They were the browser's
+   own — light grey chrome on a dark window — so `ends-it`'s red sat on a background it was
+   never picked against, and a disabled Start was a greyed light button rather than a visibly
+   unavailable one. */
+.answer button,
+.warning .doing button {
+  color: var(--ink);
+  background: #222;
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  padding: 0.25rem 0.7rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.answer button:hover:not(:disabled),
+.warning .doing button:hover:not(:disabled) {
+  background: var(--edge);
+}
+
+/* Unavailable, and said by more than a shade: the cursor stops offering it too. */
+.answer button:disabled,
+.warning .doing button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.answer button:focus-visible,
+.warning .doing button:focus-visible {
+  outline: 2px solid var(--lit);
+  outline-offset: 2px;
 }
 
 /* The answer that ends everything is marked, and it is not the one Return finds. */
@@ -563,6 +724,39 @@ body {
   font-weight: 600;
 }
 
+/* A refusal, and the command a profile has never run: the two things in a dialog that have to
+   be read before it is answered. `.honest` fades what charter is being honest about; these are
+   not that, so the fade comes off and the words are marked as the answer to something the
+   operator just did. */
+.warning .honest.mid-turn,
+.warning .honest.approve {
+  padding: 0.4rem 0.6rem;
+  border-inline-start: 2px solid var(--stop);
+  border-radius: 2px;
+  background: rgb(192 92 92 / 12%);
+  opacity: 1;
+}
+
+.warning .honest.approve code {
+  overflow-wrap: anywhere;
+}
+
+/* The profiles charter will not use. Closed by default, and a summary that looks pressable. */
+.refused {
+  margin: 0 0 1rem;
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+.refused summary {
+  cursor: pointer;
+}
+
+.refused ul {
+  margin: 0.35rem 0 0;
+  padding-inline-start: 1.1rem;
+}
+
 /* The right-hand panels: what the focused workspace holds. Read-only, so there is nothing
    in here to press — every row is text. */
 .panels {
@@ -622,13 +816,13 @@ body {
 
 /* The command palette: the primary input (spec decision 1). It sits over everything on the
    same overlay the quit warning and the picker use, because it is modal for the same
-   reason — one surface, one question, one key that always leaves. */
-.palette-over {
-  align-items: start;
-  padding-top: 8vh;
-}
+   reason — one surface, one question, one key that always leaves.
 
+   High on the window rather than centred on it, which is where every palette an operator has
+   used before sits. `.warning` centres both ways; this overrides the vertical half. */
 .palette {
+  top: 8vh;
+  transform: translateX(-50%);
   width: min(42rem, 92vw);
   max-width: none;
   display: flex;

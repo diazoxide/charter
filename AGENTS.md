@@ -18,6 +18,8 @@ charter repo (linked from `README.md`). ADR 0025 there holds the reasons.
 - **The plane on disk has the Python charter's format.** Never change it here without the
   plane-format spec changing first.
 - **No `unsafe`** (`unsafe_code = "forbid"` workspace-wide).
+- **UI is built from Radix primitives, never hand-rolled markup**, and never behind a wrapper
+  layer of our own. `docs/ui-primitives.md` says which, why, and what it costs.
 
 ## Checks
 

@@ -1,5 +1,18 @@
-import { useEffect, useState } from "react";
+import { useRef, useState } from "react";
+import * as Checkbox from "@radix-ui/react-checkbox";
+import * as Dialog from "@radix-ui/react-dialog";
+import * as RadioGroup from "@radix-ui/react-radio-group";
 import type { ProfileRow, StartOptions } from "./bindings";
+
+/**
+ * The value that stands for "no persona at all".
+ *
+ * A radio group's values are strings and one of them has to mean nothing. The empty string is
+ * the one value no persona can have — a persona is a directory under `personas/`, and a
+ * directory has a name — so it cannot collide with a real row the way a sentinel like
+ * `__none__` could.
+ */
+const NO_PERSONA = "";
 
 /**
  * What a new chat asks before anything runs.
@@ -27,6 +40,28 @@ import type { ProfileRow, StartOptions } from "./bindings";
  * It is asked at the start rather than offered as a switch on a running pane because that
  * command inherits the environment its harness was exec'd with: a toggle on a live chat would
  * appear to work and would not.
+ *
+ * **Every control here is a Radix primitive** (`docs/ui-primitives.md`). It was hand-rolled
+ * markup, and the hand-rolling is what broke it: five spans in one `<label>` with no rule to
+ * lay them out ran together into `claudeclaudeclaudebuilt-indefault`, and the accessible name
+ * of every row was that same run of words. A row's name is now its name, the rest of the row
+ * describes it, and the layout is a grid rather than whatever the spans fell into.
+ *
+ * **Every radio row picks itself on focus, and that is not decoration.** A radio group's pick
+ * follows the keyboard — an arrow moves to the next row AND chooses it, which is what the
+ * native inputs here did for nothing. Radix means to do it too: `RadioGroupItem` selects on
+ * focus while an arrow key is down, and it learns that an arrow key is down from a `keydown`
+ * listener it adds to `document`. It never learns it here, and the reason is not this app's.
+ * React attaches its delegated listeners to the root container and to each portal container,
+ * both of which are BELOW `document`, so one arrow press runs `document` capture, then React's
+ * handler — which moves the focus — and only then `document` bubble, where Radix would have
+ * set its flag. Measured rather than assumed: the three listeners were logged in that order,
+ * the focus moved to the next row, and `onValueChange` was never called. Nothing about jsdom
+ * causes it; the same nesting holds in the webview. Focus can only arrive at a row here by
+ * arrow or by pointer — a roving tabindex is entered at the row that is already checked, so
+ * tabbing in picks what was already picked — which makes "focused" and "picked" the same thing
+ * for this control rather than a second behaviour. "moves between harnesses with the arrow
+ * keys" goes red the moment an `onFocus` comes off a row.
  */
 export function StartChat({
   options,
@@ -61,171 +96,239 @@ export function StartChat({
   // ticked would be one.
   const [showFooter, setShowFooter] = useState(false);
   const picked = options.profiles.find((p) => p.name === profile);
-
-  // Escape starts nothing. Listened for on the window rather than the dialog, so it answers
-  // wherever focus happens to be inside it.
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
-    };
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  }, [onCancel]);
+  // Cancel, so the dialog can put the keyboard on it itself. React's `autoFocus` and the
+  // focus trap's own opening move both aim at mount, and which of them lands last is not
+  // something to leave to ordering: the trap is told to do nothing and this is focused here.
+  const cancel = useRef<HTMLButtonElement>(null);
 
   return (
-    <div className="asking">
-      <div
-        className="warning starting"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="start-chat"
-      >
-        <h2 id="start-chat">Start a chat</h2>
+    // Escape starts nothing, and it is the dialog's own Escape rather than a listener on the
+    // window: focus is trapped inside, so "wherever focus happens to be inside it" is now a
+    // property of the surface rather than a thing this component has to arrange.
+    <Dialog.Root
+      open
+      onOpenChange={(open) => {
+        if (!open) onCancel();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="asking" />
+        <Dialog.Content
+          className="warning starting"
+          aria-labelledby="start-chat"
+          aria-describedby={undefined}
+          // A click outside answers nothing — Cancel and Escape are the two ways out, as they
+          // have always been. Turned off explicitly rather than left to the default, so a
+          // reviewer sees it was decided rather than inherited.
+          onInteractOutside={(e) => e.preventDefault()}
+          onOpenAutoFocus={(e) => {
+            // Cancel, and not the first thing in tab order: starting a chat runs a command
+            // with nothing between the key and the exec, so it is never what a stray Return
+            // key finds.
+            e.preventDefault();
+            cancel.current?.focus();
+          }}
+        >
+          <Dialog.Title id="start-chat">Start a chat</Dialog.Title>
 
-        {options.ignore_fix && (
-          <p className="honest mid-turn" role="alert">
-            git would carry <code>charter.local.toml</code>, so every profile it declares is refused
-            until that is fixed: <code>{options.ignore_fix}</code>
-          </p>
-        )}
-        {options.declares_none && !options.ignore_fix && (
-          <p className="honest">
-            {/* Said rather than shown as an empty list: a plane that declares nothing is the
+          {options.ignore_fix && (
+            <p className="honest mid-turn" role="alert">
+              git would carry <code>charter.local.toml</code>, so every profile it declares is
+              refused until that is fixed: <code>{options.ignore_fix}</code>
+            </p>
+          )}
+          {options.declares_none && !options.ignore_fix && (
+            <p className="honest">
+              {/* Said rather than shown as an empty list: a plane that declares nothing is the
                 ordinary first state, not a fault, and the built-ins below still start. */}
-            This plane declares no profiles of its own, so these are charter&apos;s built-ins.
-            Declare your own in <code>charter.local.toml</code>, which stays on this machine.
-          </p>
-        )}
+              This plane declares no profiles of its own, so these are charter&apos;s built-ins.
+              Declare your own in <code>charter.local.toml</code>, which stays on this machine.
+            </p>
+          )}
 
-        <fieldset className="profiles">
-          <legend>Harness</legend>
-          {options.profiles.map((row) => (
-            <Row key={row.name} row={row} picked={row.name === profile} onPick={setProfile} />
-          ))}
-        </fieldset>
+          {/* The group is the radio group itself, named by the heading above it. Not a
+              `<fieldset>` around it: the primitive's rows are buttons rather than inputs, so
+              a fieldset would add nothing but a second group with the same name in it. */}
+          <h3 className="choices-name" id="pick-harness">
+            Harness
+          </h3>
+          <RadioGroup.Root
+            className="choices profiles"
+            name="profile"
+            value={profile ?? ""}
+            onValueChange={setProfile}
+            aria-labelledby="pick-harness"
+          >
+            {options.profiles.map((row) => (
+              <Row key={row.name} row={row} onPick={setProfile} />
+            ))}
+          </RadioGroup.Root>
 
-        <fieldset className="personas">
-          <legend>Persona</legend>
-          <label>
-            <input
-              type="radio"
-              name="persona"
-              checked={persona === null}
-              onChange={() => setPersona(null)}
-            />
-            <span className="who">none</span>
-          </label>
-          {options.personas.map((who) => (
-            <label key={who}>
-              <input
-                type="radio"
-                name="persona"
-                checked={persona === who}
-                onChange={() => setPersona(who)}
-              />
-              <span className="who">{who}</span>
-              {who === options.persona && <span className="what">plane default</span>}
-            </label>
-          ))}
-        </fieldset>
+          <h3 className="choices-name" id="pick-persona">
+            Persona
+          </h3>
+          <RadioGroup.Root
+            className="choices personas"
+            name="persona"
+            value={persona ?? NO_PERSONA}
+            onValueChange={(value) => setPersona(value === NO_PERSONA ? null : value)}
+            aria-labelledby="pick-persona"
+          >
+            <div className="choice">
+              <RadioGroup.Item
+                className="dot"
+                value={NO_PERSONA}
+                id="persona-none"
+                onFocus={() => setPersona(null)}
+              >
+                <RadioGroup.Indicator className="dot-mark" />
+              </RadioGroup.Item>
+              <label className="who" htmlFor="persona-none">
+                none
+              </label>
+            </div>
+            {options.personas.map((who) => (
+              <div className="choice" key={who}>
+                <RadioGroup.Item
+                  className="dot"
+                  value={who}
+                  id={`persona-${who}`}
+                  onFocus={() => setPersona(who)}
+                  aria-describedby={who === options.persona ? `persona-${who}-default` : undefined}
+                >
+                  <RadioGroup.Indicator className="dot-mark" />
+                </RadioGroup.Item>
+                <label className="who" htmlFor={`persona-${who}`}>
+                  {who}
+                </label>
+                {who === options.persona && (
+                  <span className="meta" id={`persona-${who}-default`}>
+                    <span className="what">plane default</span>
+                  </span>
+                )}
+              </div>
+            ))}
+          </RadioGroup.Root>
 
-        <fieldset className="surface">
-          <legend>Footer</legend>
-          <label>
-            <input
-              type="checkbox"
-              name="pane-footer"
-              checked={showFooter}
-              onChange={(e) => setShowFooter(e.target.checked)}
-            />
-            <span className="who">draw charter&apos;s footer in this chat</span>
-            {/* Said rather than left to be discovered. The reason for the default and the
+          <h3 className="choices-name">Footer</h3>
+          <div className="choices surface">
+            <div className="choice">
+              <Checkbox.Root
+                className="box"
+                name="pane-footer"
+                id="pane-footer"
+                checked={showFooter}
+                onCheckedChange={(checked) => setShowFooter(checked === true)}
+                aria-describedby="pane-footer-why"
+              >
+                <Checkbox.Indicator className="box-mark">✓</Checkbox.Indicator>
+              </Checkbox.Root>
+              <label className="who" htmlFor="pane-footer">
+                draw charter&apos;s footer in this chat
+              </label>
+              {/* Said rather than left to be discovered. The reason for the default and the
                 reason against it both belong on screen: the panels repeat most of what the
                 footer says, and the footer says it about THIS chat's own workspace. */}
-            <span className="what">
-              blank by default, because the panels already draw the plane. The footer says which
-              workspace this chat is on, which the panels say only for the focused one. This chat
-              only, and only from its next start.
-            </span>
-          </label>
-        </fieldset>
+              <span className="meta" id="pane-footer-why">
+                <span className="what">
+                  blank by default, because the panels already draw the plane. The footer says which
+                  workspace this chat is on, which the panels say only for the focused one. This
+                  chat only, and only from its next start.
+                </span>
+              </span>
+            </div>
+          </div>
 
-        {options.refused.length > 0 && (
-          <details className="refused">
-            {/* A missing profile is a row that is not in the list — easy to miss in a way a
+          {options.refused.length > 0 && (
+            <details className="refused">
+              {/* A missing profile is a row that is not in the list — easy to miss in a way a
                 missing panel is not — so the ones charter will not use say why. */}
-            <summary>{options.refused.length} refused</summary>
-            <ul>
-              {options.refused.map(([name, why]) => (
-                <li key={name}>
-                  <span className="who">{name}</span> {why}
-                </li>
-              ))}
-            </ul>
-          </details>
-        )}
-
-        {picked?.approval && (
-          <p className="honest approve" role="alert">
-            charter has not run this profile{" "}
-            {picked.approval === "new" ? "before" : "as it now stands"}. It would run:{" "}
-            <code>{picked.shown}</code>
-          </p>
-        )}
-        {trouble && (
-          <p className="honest mid-turn" role="alert">
-            {trouble}
-          </p>
-        )}
-
-        <div className="answer">
-          {/* Cancel first and focused: starting a chat runs a command with nothing between
-              the key and the exec, so it is never what a stray Return key finds. */}
-          <button autoFocus onClick={onCancel}>
-            Cancel
-          </button>
-          {picked?.approval ? (
-            <button
-              className="ends-it"
-              onClick={() => onApprove(picked.name, persona, showFooter, picked.shown)}
-              disabled={!picked}
-            >
-              Approve and start
-            </button>
-          ) : (
-            <button
-              onClick={() => profile && onStart(profile, persona, showFooter)}
-              disabled={!profile}
-            >
-              Start
-            </button>
+              <summary>{options.refused.length} refused</summary>
+              <ul>
+                {options.refused.map(([name, why]) => (
+                  <li key={name}>
+                    <span className="who">{name}</span> {why}
+                  </li>
+                ))}
+              </ul>
+            </details>
           )}
-        </div>
-      </div>
-    </div>
+
+          {picked?.approval && (
+            <p className="honest approve" role="alert">
+              charter has not run this profile{" "}
+              {picked.approval === "new" ? "before" : "as it now stands"}. It would run:{" "}
+              <code>{picked.shown}</code>
+            </p>
+          )}
+          {trouble && (
+            <p className="honest mid-turn" role="alert">
+              {trouble}
+            </p>
+          )}
+
+          <div className="answer">
+            {/* Cancel first and focused: see `onOpenAutoFocus` above. */}
+            <button ref={cancel} onClick={onCancel}>
+              Cancel
+            </button>
+            {picked?.approval ? (
+              <button
+                className="ends-it"
+                onClick={() => onApprove(picked.name, persona, showFooter, picked.shown)}
+                disabled={!picked}
+              >
+                Approve and start
+              </button>
+            ) : (
+              <button
+                onClick={() => profile && onStart(profile, persona, showFooter)}
+                disabled={!profile}
+              >
+                Start
+              </button>
+            )}
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
-function Row({
-  row,
-  picked,
-  onPick,
-}: {
-  row: ProfileRow;
-  picked: boolean;
-  onPick: (name: string) => void;
-}) {
+/**
+ * One harness profile, as a row of the group.
+ *
+ * **Its accessible name is the profile's name and nothing else.** Everything else the row
+ * shows — what kind of harness it is, the command line, where it was declared, whether it is
+ * the default, whether it needs approving — describes that name rather than joining it, so a
+ * screen reader announces "work, radio" and then the detail, instead of reading a run-on of
+ * every column in the row.
+ */
+function Row({ row, onPick }: { row: ProfileRow; onPick: (name: string) => void }) {
+  const id = `profile-${row.name}`;
   return (
-    <label>
-      <input type="radio" name="profile" checked={picked} onChange={() => onPick(row.name)} />
-      <span className="who">{row.name}</span>
-      <span className="what">{row.kind}</span>
-      {/* Already contained by the core: a profile is a file a chat can write, and a control
+    <div className="choice">
+      <RadioGroup.Item
+        className="dot"
+        value={row.name}
+        id={id}
+        onFocus={() => onPick(row.name)}
+        aria-describedby={`${id}-meta`}
+      >
+        <RadioGroup.Indicator className="dot-mark" />
+      </RadioGroup.Item>
+      <label className="who" htmlFor={id}>
+        {row.name}
+      </label>
+      <span className="meta" id={`${id}-meta`}>
+        <span className="what">{row.kind}</span>
+        {/* Already contained by the core: a profile is a file a chat can write, and a control
           byte in a command must never redraw this row. */}
-      <code className="where">{row.shown}</code>
-      <span className="from">{row.source}</span>
-      {row.is_default && <span className="what">default</span>}
-      {row.approval && <span className="what needs-approval">{row.approval}</span>}
-    </label>
+        <code className="where">{row.shown}</code>
+        <span className="from">{row.source}</span>
+        {row.is_default && <span className="what">default</span>}
+        {row.approval && <span className="what needs-approval">{row.approval}</span>}
+      </span>
+    </div>
   );
 }
