@@ -356,6 +356,11 @@ describe("App", () => {
     await openAChat();
 
     await splitInto("Split right");
+    // The picker is still up while the split's harness starts, and it is modal: the tab strip
+    // behind it is inert and out of the accessibility tree, so an operator reaches the tab's
+    // `×` the only way there is — by leaving the picker first. Escape does not call the start
+    // back; it is already in flight, which is exactly the race this test is about.
+    await userEvent.keyboard("{Escape}");
     await userEvent.click(screen.getByRole("button", { name: "End chat 1 steward" }));
     letTheSecondSessionStart();
 

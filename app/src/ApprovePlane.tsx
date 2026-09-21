@@ -1,3 +1,5 @@
+import { useRef } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import type { Ask } from "./bindings";
 
 /**
@@ -20,6 +22,15 @@ import type { Ask } from "./bindings";
  * words for them (`machine::Change`) rather than a second description written here. Which
  * changes re-ask and which are only reported is `machine::Consent`'s decision and is taken
  * before this is drawn: a dialog that is up is a dialog that has to be answered.
+ *
+ * A Radix dialog (`docs/ui-primitives.md`). "Has to be answered" was a claim about how it was
+ * drawn; with the primitive it is a property of the surface — the window behind it is inert,
+ * and the keyboard cannot reach past it to open the project some other way.
+ *
+ * **Escape answers it now, and did not before.** A modal with no way out on the keyboard is
+ * the one thing a modal must not be, and the answer Escape gives is the same as Cancel's:
+ * nothing is approved, nothing is opened, and the next ask is a first ask again. A click
+ * outside is not an answer and does not close it — missing a dialog is not a decision.
  */
 export function ApprovePlane({
   ask,
@@ -38,109 +49,130 @@ export function ApprovePlane({
     contributes.env.length === 0 &&
     contributes.starts.length === 0 &&
     contributes.profiles.length === 0;
+  // Cancel, focused by the dialog itself rather than by tab order: opening a project puts
+  // what this lists in force, and it is never what a stray Return key finds.
+  const cancel = useRef<HTMLButtonElement>(null);
   return (
-    <div className="asking">
-      <div className="warning" role="dialog" aria-modal="true" aria-labelledby="approve-plane">
-        <h2 id="approve-plane">
-          {ask.first ? "Open this project?" : "This project has changed since you approved it"}
-        </h2>
-        {/* The root charter resolved, not the directory that was handed in: a picker pointed
+    <Dialog.Root
+      open
+      onOpenChange={(open) => {
+        if (!open) onCancel();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="asking" />
+        <Dialog.Content
+          className="warning"
+          aria-labelledby="approve-plane"
+          // A click outside answers nothing: a dialog that is up is a dialog that has to be
+          // answered, and dismissing it by missing it is not an answer.
+          onInteractOutside={(e) => e.preventDefault()}
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            cancel.current?.focus();
+          }}
+        >
+          <Dialog.Title id="approve-plane">
+            {ask.first ? "Open this project?" : "This project has changed since you approved it"}
+          </Dialog.Title>
+          {/* The root charter resolved, not the directory that was handed in: a picker pointed
             at a subfolder opens the project above it, and approving a directory you did not
             choose is the failure this dialog exists to prevent, arrived at from the friendly
             end. */}
-        <p className="where">
-          <code>{ask.path}</code>
-        </p>
-
-        {ask.changes.length > 0 && (
-          <>
-            <h3>What changed</h3>
-            <ul className="changes">
-              {ask.changes.map((change) => (
-                <li key={change}>{change}</li>
-              ))}
-            </ul>
-          </>
-        )}
-
-        <h3>{ask.first ? "What this project contributes" : "What it contributes now"}</h3>
-        {nothing && (
-          <p className="came-back">
-            Nothing charter can enumerate: it enables no plugins, sets no environment, and its
-            record names no chat to start.
+          <p className="where">
+            <code>{ask.path}</code>
           </p>
-        )}
-        {contributes.plugins.length > 0 && (
-          <section>
-            <h4>Plugins it enables in every chat</h4>
-            <ul className="contributes">
-              {contributes.plugins.map(([name, how]) => (
-                <li key={name}>
-                  <code>{name}</code>
-                  {how && <span className="value"> {how}</span>}
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-        {contributes.env.length > 0 && (
-          <section>
-            {/* Values and not only names: an `env` whose PATH gains a directory is a different
+
+          {ask.changes.length > 0 && (
+            <>
+              <h3>What changed</h3>
+              <ul className="changes">
+                {ask.changes.map((change) => (
+                  <li key={change}>{change}</li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          <h3>{ask.first ? "What this project contributes" : "What it contributes now"}</h3>
+          {nothing && (
+            <p className="came-back">
+              Nothing charter can enumerate: it enables no plugins, sets no environment, and its
+              record names no chat to start.
+            </p>
+          )}
+          {contributes.plugins.length > 0 && (
+            <section>
+              <h4>Plugins it enables in every chat</h4>
+              <ul className="contributes">
+                {contributes.plugins.map(([name, how]) => (
+                  <li key={name}>
+                    <code>{name}</code>
+                    {how && <span className="value"> {how}</span>}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {contributes.env.length > 0 && (
+            <section>
+              {/* Values and not only names: an `env` whose PATH gains a directory is a different
                 grant from the one that was approved, and a list of names could not show it. */}
-            <h4>Environment it sets on every harness</h4>
-            <ul className="contributes">
-              {contributes.env.map(([name, value]) => (
-                <li key={name}>
-                  <code>
-                    {name}={value}
-                  </code>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-        {contributes.starts.length > 0 && (
-          <section>
-            <h4>Programs opening it would start</h4>
-            <ul className="contributes">
-              {contributes.starts.map(([what]) => (
-                <li key={what}>
-                  <code>{what}</code>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
-        {contributes.profiles.length > 0 && (
-          <section>
-            {/* Drawn, and deliberately drawn apart from the list above. The record chooses
+              <h4>Environment it sets on every harness</h4>
+              <ul className="contributes">
+                {contributes.env.map(([name, value]) => (
+                  <li key={name}>
+                    <code>
+                      {name}={value}
+                    </code>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {contributes.starts.length > 0 && (
+            <section>
+              <h4>Programs opening it would start</h4>
+              <ul className="contributes">
+                {contributes.starts.map(([what]) => (
+                  <li key={what}>
+                    <code>{what}</code>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+          {contributes.profiles.length > 0 && (
+            <section>
+              {/* Drawn, and deliberately drawn apart from the list above. The record chooses
                 which of THIS machine's own harness profiles runs and never what it runs, and
                 `profiletrust` shows a new or changed command line before it runs. */}
-            <h4>Chats it would start on your own harness profiles</h4>
-            <ul className="contributes">
-              {contributes.profiles.map(([what]) => (
-                <li key={what}>
-                  <code>{what}</code>
-                </li>
-              ))}
-            </ul>
-          </section>
-        )}
+              <h4>Chats it would start on your own harness profiles</h4>
+              <ul className="contributes">
+                {contributes.profiles.map(([what]) => (
+                  <li key={what}>
+                    <code>{what}</code>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
 
-        <p className="came-back">
-          charter can only list what it can read. A project&rsquo;s persona charters, memory and
-          todos are text a model will read and act on, and charter makes no judgement about them.
-        </p>
+          <p className="came-back">
+            charter can only list what it can read. A project&rsquo;s persona charters, memory and
+            todos are text a model will read and act on, and charter makes no judgement about them.
+          </p>
 
-        <div className="doing">
-          <button type="button" onClick={() => onApprove(ask)}>
-            {ask.first ? "Open project" : "Open it anyway"}
-          </button>
-          <button type="button" onClick={onCancel}>
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
+          <div className="doing">
+            <button type="button" onClick={() => onApprove(ask)}>
+              {ask.first ? "Open project" : "Open it anyway"}
+            </button>
+            <button type="button" ref={cancel} onClick={onCancel}>
+              Cancel
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

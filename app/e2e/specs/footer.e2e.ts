@@ -74,11 +74,14 @@ async function startAChat(plane: string, showTheFooter: boolean): Promise<void> 
   const before = Object.keys(markers(plane)).length;
   await pressOnly("New tab");
   await dialog().waitForDisplayed({ timeout: 20_000 });
-  await $('input[type="radio"][name="profile"]').waitForExist({ timeout: 20_000 });
+  // By role, not by tag. The picker's controls are Radix primitives, which draw a `<button>`
+  // carrying the role rather than an `<input>` — the role is what the operator's screen reader
+  // and this spec are both actually asking about (`docs/ui-primitives.md`).
+  await $('[role="radio"]').waitForExist({ timeout: 20_000 });
 
-  const box = await $('input[type="checkbox"][name="pane-footer"]');
+  const box = await $('[role="checkbox"]');
   await box.waitForExist({ timeout: 20_000 });
-  expect(await box.isSelected()).toBe(false);
+  expect(await box.getAttribute("aria-checked")).toBe("false");
   if (showTheFooter) await box.click();
 
   // Whichever button is there: the approval is recorded per profile and these specs share

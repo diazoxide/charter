@@ -226,6 +226,95 @@ describe("the picker a chat starts from", () => {
     });
   });
 
+  describe("the markup underneath it", () => {
+    // The dialog the operator opened read `claudeclaudeclaudebuilt-indefault`: five spans in
+    // one `<label>`, with no rule laying them out and no association between the words and
+    // the control. These pin what replaced it (`docs/ui-primitives.md`), and they are the
+    // tests a hand-rolled version cannot pass.
+
+    const WORK: StartOptions = options({
+      profiles: [
+        {
+          name: "work",
+          kind: "claude",
+          shown: "CLAUDE_CONFIG_DIR=~/.claude-work claude --model opus",
+          source: "charter.local.toml",
+          is_default: true,
+          approval: null,
+        },
+        {
+          name: "plain",
+          kind: "claude",
+          shown: "claude",
+          source: "built-in",
+          is_default: false,
+          approval: null,
+        },
+      ],
+    });
+
+    it("calls a row by its profile's name and not by every column in it", () => {
+      // `name: "work"` is exact. It was `workclaudeCLAUDE_CONFIG_DIR=…charter.local.tomldefault`
+      // — the whole row run together, which is what both a screen reader and the screen got.
+      show(WORK);
+
+      expect(screen.getByRole("radio", { name: "work" })).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: "plain" })).toBeInTheDocument();
+    });
+
+    it("keeps the command line on the row as its description, not folded into its name", () => {
+      // The words that are about to run still have to be readable beside the row that runs
+      // them — moving them out of the name must not move them off the screen.
+      show(WORK);
+
+      expect(screen.getByRole("radio", { name: "work" })).toHaveAccessibleDescription(
+        /CLAUDE_CONFIG_DIR=~\/\.claude-work claude --model opus/,
+      );
+      expect(
+        screen.getByText("CLAUDE_CONFIG_DIR=~/.claude-work claude --model opus"),
+      ).toBeInTheDocument();
+    });
+
+    it("picks the row the label was clicked on, because the label is tied to the control", () => {
+      // The association is the whole point: the words were beside the control and named
+      // nothing, so clicking them did nothing.
+      const { onStart, user } = show(WORK);
+
+      return user
+        .click(screen.getByText("plain"))
+        .then(() => user.click(screen.getByRole("button", { name: "Start" })))
+        .then(() => {
+          expect(onStart).toHaveBeenCalledWith("plain", "steward", false);
+        });
+    });
+
+    it("moves between harnesses with the arrow keys, as one group and not five stops", async () => {
+      const { onStart, user } = show(WORK);
+
+      await user.click(screen.getByRole("radio", { name: "work" }));
+      await user.keyboard("{ArrowDown}");
+      await user.click(screen.getByRole("button", { name: "Start" }));
+
+      expect(onStart).toHaveBeenCalledWith("plain", "steward", false);
+    });
+
+    it("hides the window behind it from the keyboard and from the accessibility tree", () => {
+      // Modal was a word in an attribute and a grey overlay. Nothing enforced it: the tab
+      // strip behind the picker was reachable by Tab and listed by every role query, and one
+      // of this repo's own tests was ending a chat through it while a chat was starting.
+      const onStart = vi.fn();
+      render(
+        <>
+          <button>a tab behind it</button>
+          <StartChat options={options()} onStart={onStart} onApprove={vi.fn()} onCancel={vi.fn()} />
+        </>,
+      );
+
+      expect(screen.queryByRole("button", { name: "a tab behind it" })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    });
+  });
+
   it("never preselects a persona it does not draw a row for", async () => {
     // The core filters `[persona] default` against the personas the plane has, so this
     // should be unreachable from the app. Pinned anyway: if it ever arrives, the picker

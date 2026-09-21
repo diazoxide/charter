@@ -1,3 +1,5 @@
+import { useRef } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import { ChatState } from "./NeedsYou";
 import { type State } from "./chatState";
 
@@ -35,6 +37,14 @@ export type Ending = {
  * process holds them all — a warning that counted only what was on screen would be a warning
  * that understated what it was about to end by however many projects the operator had merged
  * into the window.
+ *
+ * A Radix dialog (`docs/ui-primitives.md`), which is what makes "over everything" true rather
+ * than drawn: the rest of the window is inert and out of the accessibility tree while it is up,
+ * and the keyboard cannot leave it for a pane behind it.
+ *
+ * **Escape answers it now, and did not before.** It answers what Cancel answers — nothing is
+ * ended, and the core is told, so the next quit warns again rather than going straight out. A
+ * click outside answers nothing at all.
  */
 export function QuitWarning({
   chats,
@@ -50,56 +60,75 @@ export function QuitWarning({
   // Only when there is more than one: naming the project on every row of a window holding one
   // is a column that says the same thing all the way down.
   const several = new Set(chats.map((chat) => chat.project ?? "")).size > 1;
+  // Cancel, focused by the dialog itself rather than by `autoFocus`: see `StartChat`.
+  const cancel = useRef<HTMLButtonElement>(null);
   return (
-    <div className="asking">
-      <div className="warning" role="dialog" aria-modal="true" aria-labelledby="quit-warning">
-        <h2 id="quit-warning">
-          {chats.length === 1
-            ? "1 session will be ended"
-            : `${chats.length} sessions will be ended`}
-        </h2>
-        <ul className="ending">
-          {chats.map((chat) => (
-            <li key={chat.key}>
-              <span className="what">{chat.harness ?? "shell"}</span>
-              <span className="who">{chat.name}</span>
-              <ChatState state={chat.state} />
-              {several && chat.project && <code className="where">{chat.project}</code>}
-              {chat.cwd && <code className="where">{chat.cwd}</code>}
-            </li>
-          ))}
-        </ul>
-        {running.length > 0 && (
-          <p className="honest mid-turn" role="alert">
-            {running.length === 1
-              ? `${running[0].name} is mid-turn and will be interrupted.`
-              : `${running.length} sessions are mid-turn and will be interrupted.`}
-          </p>
-        )}
-        {unknown.length > 0 && (
-          <p className="honest">
-            {/* Named, not counted into the reassuring number. A harness that reports nothing
+    <Dialog.Root
+      open
+      onOpenChange={(open) => {
+        if (!open) onCancel();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="asking" />
+        <Dialog.Content
+          className="warning"
+          aria-labelledby="quit-warning"
+          // A click outside answers nothing. Cancel and Escape are the two ways out.
+          onInteractOutside={(e) => e.preventDefault()}
+          onOpenAutoFocus={(e) => {
+            e.preventDefault();
+            cancel.current?.focus();
+          }}
+        >
+          <Dialog.Title id="quit-warning">
+            {chats.length === 1
+              ? "1 session will be ended"
+              : `${chats.length} sessions will be ended`}
+          </Dialog.Title>
+          <ul className="ending">
+            {chats.map((chat) => (
+              <li key={chat.key}>
+                <span className="what">{chat.harness ?? "shell"}</span>
+                <span className="who">{chat.name}</span>
+                <ChatState state={chat.state} />
+                {several && chat.project && <code className="where">{chat.project}</code>}
+                {chat.cwd && <code className="where">{chat.cwd}</code>}
+              </li>
+            ))}
+          </ul>
+          {running.length > 0 && (
+            <p className="honest mid-turn" role="alert">
+              {running.length === 1
+                ? `${running[0].name} is mid-turn and will be interrupted.`
+                : `${running.length} sessions are mid-turn and will be interrupted.`}
+            </p>
+          )}
+          {unknown.length > 0 && (
+            <p className="honest">
+              {/* Named, not counted into the reassuring number. A harness that reports nothing
                 could be mid-turn and charter would never know — saying "nothing is running"
                 over the top of it would be the app claiming something it cannot see. */}
-            {unknown.length === 1
-              ? `${unknown[0].name} reports no state, so charter cannot tell whether it is mid-turn.`
-              : `${unknown.length} sessions report no state, so charter cannot tell whether they are mid-turn.`}
-          </p>
-        )}
-        {running.length === 0 && unknown.length === 0 && (
-          <p className="honest">No session is mid-turn.</p>
-        )}
-        <div className="answer">
-          {/* Cancel first, and focused: the destructive answer is never the one a stray
+              {unknown.length === 1
+                ? `${unknown[0].name} reports no state, so charter cannot tell whether it is mid-turn.`
+                : `${unknown.length} sessions report no state, so charter cannot tell whether they are mid-turn.`}
+            </p>
+          )}
+          {running.length === 0 && unknown.length === 0 && (
+            <p className="honest">No session is mid-turn.</p>
+          )}
+          <div className="answer">
+            {/* Cancel first, and focused: the destructive answer is never the one a stray
               Return key finds. */}
-          <button autoFocus onClick={onCancel}>
-            Cancel
-          </button>
-          <button className="ends-it" onClick={onQuit}>
-            Quit charter
-          </button>
-        </div>
-      </div>
-    </div>
+            <button ref={cancel} onClick={onCancel}>
+              Cancel
+            </button>
+            <button className="ends-it" onClick={onQuit}>
+              Quit charter
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }

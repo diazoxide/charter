@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import * as Dialog from "@radix-ui/react-dialog";
 import { aim, narrow, PASS_THROUGH_ID, PASS_THROUGH_KEY, type Offer, type Ran } from "./actions";
 
 /**
@@ -74,12 +75,24 @@ export function Palette({
     setAt(undefined);
     setHeld(undefined);
     onOpened?.(false);
-    // Back to the terminal, the tab or the panel the operator was in. A pane's keyboard
-    // lives in xterm's own textarea, which is an ordinary focusable element — so this is the
-    // one line that makes the palette something an operator can open mid-sentence.
+    // The keyboard goes back in `giveTheKeyboardBack` and not here: this runs while the
+    // surface is still up and still trapping focus, so a `focus()` from here is pulled
+    // straight back inside and then dropped on the floor when the surface unmounts.
+  }, [onOpened]);
+
+  /**
+   * Back to the terminal, the tab or the panel the operator was in.
+   *
+   * A pane's keyboard lives in xterm's own textarea, which is an ordinary focusable element —
+   * so this is the one function that makes the palette something an operator can open
+   * mid-sentence. It runs as the dialog's closing move (`onCloseAutoFocus`), which is after
+   * the focus trap has let go; Radix would otherwise restore the focus itself, to the same
+   * element, without the check that the element is still on the page.
+   */
+  const giveTheKeyboardBack = useCallback(() => {
     const back = came.current;
     if (back instanceof HTMLElement && back.isConnected) back.focus();
-  }, [onOpened]);
+  }, []);
 
   /**
    * Runs a row and leaves if it ran. What Enter does, what a click does, and what the second
@@ -197,103 +210,139 @@ export function Palette({
   const handsBack = offers.some((row) => row.id === PASS_THROUGH_ID && row.available);
 
   return (
-    <div className="asking palette-over">
-      <div className="warning palette" role="dialog" aria-modal="true" aria-label="Command palette">
-        <label className="palette-ask" htmlFor="palette-query">
-          Run an action
-        </label>
-        <input
-          id="palette-query"
-          ref={box}
-          className="palette-query"
-          type="text"
-          role="combobox"
-          autoComplete="off"
-          aria-expanded="true"
-          aria-controls="palette-rows"
-          aria-activedescendant={
-            aimed >= 0 && rows[aimed] ? `palette-row-${rows[aimed].id}` : undefined
-          }
-          placeholder="Type to narrow"
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            // The aim goes back to `aim` on every keystroke: a row the arrows reached under
-            // the last query is not the row that survived this one.
-            setAt(undefined);
-            setHeld(undefined);
+    // A Radix dialog (`docs/ui-primitives.md`). What it adds over the markup that was here is
+    // the trap: the box took the keyboard on opening and nothing held it there, so focus could
+    // leave for a pane behind the overlay while the palette was still up and modal.
+    //
+    // **Its Escape stays on the window, deliberately.** Radix listens on the document in the
+    // capture phase; this listener is on the window in the capture phase, so it runs first and
+    // stops the event — which is the point, because the same listener is what claims `F2` and
+    // hands `F2` back, and those two answers have to be decided in one place. Radix's own
+    // Escape is wired to the same `close` for the case where the window listener is not the
+    // one that sees it.
+    <Dialog.Root
+      open
+      onOpenChange={(up) => {
+        if (!up) close();
+      }}
+    >
+      <Dialog.Portal>
+        <Dialog.Overlay className="asking" />
+        <Dialog.Content
+          className="warning palette"
+          aria-label="Command palette"
+          // A click outside answers nothing, which is how every surface in this app has always
+          // behaved: the way out is Escape or a row. Turned off explicitly rather than left to
+          // the default, so a reviewer sees it was decided.
+          onInteractOutside={(e) => e.preventDefault()}
+          onOpenAutoFocus={(e) => {
+            // The box, so the first thing typed narrows. Radix would otherwise aim at the
+            // first tabbable thing in the content, which is the box today and need not stay
+            // so.
+            e.preventDefault();
+            box.current?.focus();
           }}
-          onKeyDown={(e) => {
-            // Escape is not here: it is on the window, so it leaves from anywhere.
-            if (e.key === "ArrowDown") {
-              e.preventDefault();
-              move(1);
-            } else if (e.key === "ArrowUp") {
-              e.preventDefault();
-              move(-1);
-            } else if (e.key === "Enter") {
-              e.preventDefault();
-              const row = aimed >= 0 ? rows[aimed] : undefined;
-              if (row) runOffer(row);
+          onCloseAutoFocus={(e) => {
+            e.preventDefault();
+            giveTheKeyboardBack();
+          }}
+        >
+          <label className="palette-ask" htmlFor="palette-query">
+            Run an action
+          </label>
+          <input
+            id="palette-query"
+            ref={box}
+            className="palette-query"
+            type="text"
+            role="combobox"
+            autoComplete="off"
+            aria-expanded="true"
+            aria-controls="palette-rows"
+            aria-activedescendant={
+              aimed >= 0 && rows[aimed] ? `palette-row-${rows[aimed].id}` : undefined
             }
-          }}
-        />
+            placeholder="Type to narrow"
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              // The aim goes back to `aim` on every keystroke: a row the arrows reached under
+              // the last query is not the row that survived this one.
+              setAt(undefined);
+              setHeld(undefined);
+            }}
+            onKeyDown={(e) => {
+              // Escape is not here: it is on the window, so it leaves from anywhere.
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                move(1);
+              } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                move(-1);
+              } else if (e.key === "Enter") {
+                e.preventDefault();
+                const row = aimed >= 0 ? rows[aimed] : undefined;
+                if (row) runOffer(row);
+              }
+            }}
+          />
 
-        {handsBack && (
-          <p className="palette-through">
-            Press {PASS_THROUGH_KEY} again to send {PASS_THROUGH_KEY} to the chat in front.
-          </p>
-        )}
+          {handsBack && (
+            <p className="palette-through">
+              Press {PASS_THROUGH_KEY} again to send {PASS_THROUGH_KEY} to the chat in front.
+            </p>
+          )}
 
-        {/* The core's sentence, unchanged, beside the rows. A refusal is an alert because it
+          {/* The core's sentence, unchanged, beside the rows. A refusal is an alert because it
             is the answer to something the operator just did; a report is a status. */}
-        {showing && (
-          <p
-            className={showing.refused ? "refusal said" : "said"}
-            role={showing.refused ? "alert" : "status"}
-          >
-            {showing.words}
-          </p>
-        )}
-        {held && (
-          <p className="held" role="status">
-            {held}
-          </p>
-        )}
+          {showing && (
+            <p
+              className={showing.refused ? "refusal said" : "said"}
+              role={showing.refused ? "alert" : "status"}
+            >
+              {showing.words}
+            </p>
+          )}
+          {held && (
+            <p className="held" role="status">
+              {held}
+            </p>
+          )}
 
-        {rows.length === 0 ? (
-          <p className="none" role="status">
-            No action matches what you typed.
-          </p>
-        ) : (
-          <ul id="palette-rows" className="palette-rows" role="listbox" aria-label="Actions">
-            {rows.map((row, index) => (
-              <li
-                key={row.id}
-                id={`palette-row-${row.id}`}
-                role="option"
-                aria-selected={index === aimed}
-                aria-disabled={row.available ? undefined : true}
-                className={
-                  (index === aimed ? "palette-row aimed" : "palette-row") +
-                  (row.available ? "" : " refused")
-                }
-                onClick={() => runOffer(row)}
-              >
-                <span className="palette-title">{row.title}</span>
-                {/* The reason, as words. Dimming is decoration; this is the meaning, and it
+          {rows.length === 0 ? (
+            <p className="none" role="status">
+              No action matches what you typed.
+            </p>
+          ) : (
+            <ul id="palette-rows" className="palette-rows" role="listbox" aria-label="Actions">
+              {rows.map((row, index) => (
+                <li
+                  key={row.id}
+                  id={`palette-row-${row.id}`}
+                  role="option"
+                  aria-selected={index === aimed}
+                  aria-disabled={row.available ? undefined : true}
+                  className={
+                    (index === aimed ? "palette-row aimed" : "palette-row") +
+                    (row.available ? "" : " refused")
+                  }
+                  onClick={() => runOffer(row)}
+                >
+                  <span className="palette-title">{row.title}</span>
+                  {/* The reason, as words. Dimming is decoration; this is the meaning, and it
                     is what a screen reader and a monochrome display both get. */}
-                {!row.available && <span className="palette-why">{row.reason}</span>}
-                {/* What a row that CAN run costs, where its title cannot fit it: ending a
+                  {!row.available && <span className="palette-why">{row.reason}</span>}
+                  {/* What a row that CAN run costs, where its title cannot fit it: ending a
                     chat ends the program it runs, and nothing said so (charter-app#130).
                     In the same slot as the reason, because a row has one or the other. */}
-                {row.available && row.note && <span className="palette-why">{row.note}</span>}
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-    </div>
+                  {row.available && row.note && <span className="palette-why">{row.note}</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
