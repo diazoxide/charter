@@ -1,11 +1,11 @@
 import process from "node:process";
 import {
-  aConfigHomeOfItsOwn,
   anEmptyRecord,
   built,
   cloneTheFixtureRepos,
   copyFixturePlane,
   declareAProfile,
+  theRunsEnvironment,
   writeForgeCache,
   writeShell,
 } from "./harness.js";
@@ -37,9 +37,6 @@ declareAProfile(plane, writeShell(built("fake-harness")));
 // refresher would have left. Neither is the app's doing: the app only reads them.
 cloneTheFixtureRepos(plane);
 writeForgeCache(plane);
-// charter's machine store, isolated to this run. It decides what the app remembers and what
-// it trusts, so a run that shared the runner's own would pass once and then stop asking.
-const configHome = aConfigHomeOfItsOwn();
 
 export const config: WebdriverIO.Config = {
   runner: "local",
@@ -85,12 +82,14 @@ export const config: WebdriverIO.Config = {
         captureFrontendLogs: true,
         // Every session the app opens is the fake harness, because that is the shell it finds.
         // A panic that ends the app is written where a failed run keeps it (charter-app#16).
-        env: {
+        //
+        // The plane, this run's own machine store and the fence come from one place
+        // (`theRunsEnvironment`), because a launcher that pins two of the three reads exactly
+        // like one that pins all three — and that is how charter-app#129 stayed invisible.
+        env: theRunsEnvironment(plane, {
           SHELL: writeShell(built("fake-harness")),
-          CHARTER_ROOT: plane,
           CHARTER_PANIC_LOG: PANIC_LOG,
-          CHARTER_CONFIG_HOME: configHome,
-        },
+        }),
       },
     ],
   ],

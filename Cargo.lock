@@ -653,6 +653,7 @@ name = "charter-core"
 version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
+ "charter-core",
  "chrono",
  "dirs",
  "memchr",

@@ -1,10 +1,10 @@
 import { config as base } from "./wdio.conf.js";
 import {
-  aConfigHomeOfItsOwn,
   anEmptyRecord,
   built,
   copyFixturePlane,
   declareAProfile,
+  theRunsEnvironment,
   writeReportingShell,
 } from "./harness.js";
 import { PANIC_LOG } from "./processes.js";
@@ -47,13 +47,12 @@ export const config: WebdriverIO.Config = {
         captureFrontendLogs: true,
         // Its own machine store as well as its own plane: this run writes to both, and
         // sharing either with the base run or with the runner's home is a test that passes
-        // once (see `aConfigHomeOfItsOwn`).
-        env: {
+        // once (see `aConfigHomeOfItsOwn`). `theRunsEnvironment` gives it both, and the
+        // fence that makes forgetting either of them a dead app rather than a poisoned plane.
+        env: theRunsEnvironment(plane, {
           SHELL: harness,
-          CHARTER_ROOT: plane,
           CHARTER_PANIC_LOG: PANIC_LOG,
-          CHARTER_CONFIG_HOME: aConfigHomeOfItsOwn(),
-        },
+        }),
       },
     ],
   ],

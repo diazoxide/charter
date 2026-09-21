@@ -60,11 +60,20 @@ pub fn find_root(start: &Path) -> Result<PathBuf, PlaneError> {
 /// `None` — raise, or fall back to the working directory — and every time a step has been
 /// added to one of them and not the other, two commands standing in one directory have named
 /// two different planes (M2.9, then M2.16, then this).
+/// **The fence is held here and not in [`find_root`] and [`place`] separately**, for the
+/// reason this function exists at all: two copies of the walk are two answers, and two
+/// copies of the guard on the walk would be one guarded answer and one unguarded one. This
+/// is the single line at which a directory becomes "the plane this process acts on", so it
+/// is the single line a fenced build has to survive (charter-app#129).
 fn walk(here: &Path) -> Option<PathBuf> {
-    if let Some(marked) = marked_above(here) {
-        return Some(outermost(&plane_of(marked)));
+    let found = match marked_above(here) {
+        Some(marked) => Some(outermost(&plane_of(marked))),
+        None => worktree_plane_above(here),
+    };
+    if let Some(root) = &found {
+        crate::fence::hold(crate::fence::Act::Resolve, root);
     }
-    worktree_plane_above(here)
+    found
 }
 
 /// `root.py:find_root`'s SECOND walk: this directory sits in a linked worktree whose plane
@@ -122,7 +131,14 @@ fn marked_above(start: &Path) -> Option<&Path> {
 /// the same directory and compare both answers against Python's.
 pub fn resolve(start: &Path) -> Result<PathBuf, PlaneError> {
     match std::env::var_os("CHARTER_ROOT") {
-        Some(root) if !root.is_empty() => Ok(PathBuf::from(root)),
+        Some(root) if !root.is_empty() => {
+            let root = PathBuf::from(root);
+            // The variable is a pin, not an exemption: a fenced build that is pointed at a
+            // plane outside its fence is a run acting on somebody else's plane just as
+            // surely as one that walked to it (charter-app#129).
+            crate::fence::hold(crate::fence::Act::Resolve, &root);
+            Ok(root)
+        }
         _ => find_root(start),
     }
 }

@@ -32,7 +32,19 @@ toml = { version = "0.9", features = ["preserve_order"] }
 unicode-normalization = "0.1.25"
 uuid = { version = "1.26.1", features = ["v4"] }
 
+[features]
+# The plane fence (`src/fence.rs`): a build that carries it dies rather than act on a plane
+# outside the tree the run was given. **Only a test build turns it on** — every crate in this
+# workspace enables it from `[dev-dependencies]`, so `cargo test` has it and no
+# `cargo build --release` does — and the app's own `e2e` feature turns it on for the binary
+# the scenario tests drive (charter-app#129).
+fenced = []
+
 [dev-dependencies]
+# This crate, fenced, so charter-core's OWN tests run under the guard as well. A
+# dev-dependency on itself is how a crate turns a feature on for its tests and only its
+# tests; without it the fence would be a rule every crate but this one had to keep.
+charter-core = { path = ".", features = ["fenced"] }
 proptest = "1"
 serde_json = { workspace = true }
 # A test that writes a program and then runs it goes through this and nothing else
