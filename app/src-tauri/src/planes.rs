@@ -426,8 +426,7 @@ impl Planes {
         let Some(config) = self.config.as_deref() else {
             return machine::Consent::New;
         };
-        let _ = machine::read(config).store.consent(root, contributes);
-        machine::Consent::Unchanged
+        machine::read(config).store.consent(root, contributes)
     }
 
     /// Puts `root` at the front of this machine's list of planes.
@@ -730,13 +729,11 @@ impl Showing {
     /// not need costs a glance, and one they needed and did not get costs a chat sitting
     /// unanswered.
     pub fn is_showing(&self, window: &str, plane: &PlaneId) -> bool {
-        let _ = self
-            .0
+        self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .get(window)
-            == Some(plane);
-        true
+            == Some(plane)
     }
 }
 
