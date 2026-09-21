@@ -502,7 +502,9 @@ body {
   border-radius: 6px;
 }
 
-.choices-name {
+/* Two classes deep on purpose: `.warning h3` is the trust prompt's section heading, it is
+   further down this file, and at equal weight it would win. */
+.warning .choices-name {
   margin: 0 0 0.3rem;
   font-size: 0.75rem;
   font-weight: 600;
@@ -524,7 +526,11 @@ body {
 }
 
 /* The detail sits under the name, in the name's column: it is what the name means, and a row
-   that put it beside the name went off the side of the dialog on any real command line. */
+   that put it beside the name went off the side of the dialog on any real command line.
+
+   Quieted with `color` and not `opacity`, so the one mark in it that is NOT quiet — a profile
+   charter has never run — can say so. Opacity applies to the whole subtree and no child can
+   undo it. */
 .choice .meta {
   grid-column: 2;
   display: flex;
@@ -532,11 +538,7 @@ body {
   gap: 0.15rem 0.5rem;
   align-items: baseline;
   font-size: 0.8rem;
-  opacity: 0.7;
-}
-
-.choice .meta code {
-  overflow-wrap: anywhere;
+  color: #999;
 }
 
 /* The one thing in the row that names it, and the thing the whole row is clickable through:
@@ -604,11 +606,19 @@ body {
   outline-offset: 2px;
 }
 
+/* The words that are about to run. They are the one thing in the detail that is not detail —
+   the whole ask about an unapproved profile is about them — so they are not faded with the
+   rest of the row. `.warning .where` dims every path in these dialogs; this is three deep to
+   outrank it. */
+.choice .meta .where {
+  color: #c8c8c8;
+  opacity: 1;
+}
+
 /* A profile charter has not recorded running, marked in its own row and not only in the
    sentence below the list. */
 .choice .needs-approval {
   color: var(--stop);
-  opacity: 1;
 }
 
 /* The sentence that says what charter does not know. It is not a warning to be styled away. */
