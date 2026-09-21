@@ -408,6 +408,24 @@ describe("being asked to quit", () => {
     expect(of("quit_cancelled", asked)).toHaveLength(1);
   });
 
+  it("takes Escape for the same answer as Cancel, and ends nothing", async () => {
+    // The warning is a real modal now (`docs/ui-primitives.md`), and a modal with no way out
+    // on the keyboard is the one thing a modal must not be. Escape gives the answer Cancel
+    // gives — including telling the core, so the next Cmd-Q warns again rather than going
+    // straight out.
+    const { asked, askToQuit } = core([chat({ session: 7 })]);
+    render(<App />);
+    await vi.waitFor(() => expect(tabs()).toHaveLength(1));
+    await askToQuit();
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(of("quit", asked)).toEqual([]);
+    expect(of("close_session", asked)).toEqual([]);
+    expect(of("quit_cancelled", asked)).toHaveLength(1);
+  });
+
   it("warns rather than quitting while it is still finding out what is open", async () => {
     // A launch answers `opened_chats` after the window is already interactive. Quitting on
     // "no tabs yet" would end fifty chats the window had not drawn.

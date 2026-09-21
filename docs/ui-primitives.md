@@ -61,6 +61,16 @@ to add to it.
 The terminal panes are xterm.js and are not a candidate. The strips are about to change and
 were deliberately left alone.
 
+Two decisions those four share, taken once so they do not have to be taken again per dialog:
+
+- **A click outside answers nothing.** `onInteractOutside` is prevented on all four, which is
+  how every surface in this window has always behaved. It is written out rather than left to
+  the default so it reads as a decision.
+- **Escape answers, with the non-destructive answer.** The picker and the palette always did;
+  the quit warning and the trust prompt did not, and a modal with no keyboard way out is the
+  one thing a modal must not be. In both, Escape is exactly Cancel — nothing is ended, nothing
+  is approved, and the core is told so the next ask is a first ask again.
+
 ## Two things learned converting them, which will catch the next person
 
 **A radio group's pick does not follow the arrow keys on its own.** Radix selects an item on

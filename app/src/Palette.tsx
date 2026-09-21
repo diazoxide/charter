@@ -227,11 +227,10 @@ export function Palette({
       }}
     >
       <Dialog.Portal>
-        <Dialog.Overlay className="asking palette-over" />
+        <Dialog.Overlay className="asking" />
         <Dialog.Content
           className="warning palette"
           aria-label="Command palette"
-          aria-describedby={undefined}
           // A click outside answers nothing, which is how every surface in this app has always
           // behaved: the way out is Escape or a row. Turned off explicitly rather than left to
           // the default, so a reviewer sees it was decided.

@@ -26,6 +26,11 @@ import type { Ask } from "./bindings";
  * A Radix dialog (`docs/ui-primitives.md`). "Has to be answered" was a claim about how it was
  * drawn; with the primitive it is a property of the surface — the window behind it is inert,
  * and the keyboard cannot reach past it to open the project some other way.
+ *
+ * **Escape answers it now, and did not before.** A modal with no way out on the keyboard is
+ * the one thing a modal must not be, and the answer Escape gives is the same as Cancel's:
+ * nothing is approved, nothing is opened, and the next ask is a first ask again. A click
+ * outside is not an answer and does not close it — missing a dialog is not a decision.
  */
 export function ApprovePlane({
   ask,
@@ -59,7 +64,6 @@ export function ApprovePlane({
         <Dialog.Content
           className="warning"
           aria-labelledby="approve-plane"
-          aria-describedby={undefined}
           // A click outside answers nothing: a dialog that is up is a dialog that has to be
           // answered, and dismissing it by missing it is not an answer.
           onInteractOutside={(e) => e.preventDefault()}

@@ -116,7 +116,6 @@ export function StartChat({
         <Dialog.Content
           className="warning starting"
           aria-labelledby="start-chat"
-          aria-describedby={undefined}
           // A click outside answers nothing — Cancel and Escape are the two ways out, as they
           // have always been. Turned off explicitly rather than left to the default, so a
           // reviewer sees it was decided rather than inherited.

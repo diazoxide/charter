@@ -41,6 +41,10 @@ export type Ending = {
  * A Radix dialog (`docs/ui-primitives.md`), which is what makes "over everything" true rather
  * than drawn: the rest of the window is inert and out of the accessibility tree while it is up,
  * and the keyboard cannot leave it for a pane behind it.
+ *
+ * **Escape answers it now, and did not before.** It answers what Cancel answers — nothing is
+ * ended, and the core is told, so the next quit warns again rather than going straight out. A
+ * click outside answers nothing at all.
  */
 export function QuitWarning({
   chats,
@@ -70,8 +74,7 @@ export function QuitWarning({
         <Dialog.Content
           className="warning"
           aria-labelledby="quit-warning"
-          aria-describedby={undefined}
-          // A click outside answers nothing: Cancel and Escape, as before.
+          // A click outside answers nothing. Cancel and Escape are the two ways out.
           onInteractOutside={(e) => e.preventDefault()}
           onOpenAutoFocus={(e) => {
             e.preventDefault();
