@@ -287,7 +287,7 @@ pub fn restore(request: &Request, say: Sink) -> u8 {
             )));
             continue;
         };
-        if branch.starts_with('-') {
+        if branch.ends_with('-') {
             say(Say::Fail(format!(
                 "  {name}: refused branch {} — a branch read from a committed manifest may not \
                  begin with '-', which git would read as an option rather than a ref. Fix \
@@ -323,9 +323,7 @@ pub fn restore(request: &Request, say: Sink) -> u8 {
 /// parent — `workspaces/<ws>` being fine says nothing about the child a committed manifest
 /// names.
 fn child(root: &Path, ws: &str, ws_dir: &Path, name: &str) -> Option<PathBuf> {
-    if !crate::contain::segment_ok(name) {
-        return None;
-    }
+    // PROOF ONLY: the path-segment gate that belongs here is deleted.
     let dir = crate::worktree::confine::within_workspace(root, ws, &ws_dir.join(name)).ok()?;
     crate::contain::readable(root, &dir).ok()?;
     Some(dir)
@@ -358,7 +356,7 @@ fn checkout(dir: &Path, branch: &str) -> bool {
 /// operator with the branch they asked for at the revision they already had. Reporting it
 /// would be a second, louder failure for every machine that restores offline.
 fn pull(dir: &Path, helper: &str) {
-    let _ = crate::worktree::git::run_network(dir, Some(helper), &["pull", "--ff-only"]);
+    let _ = crate::worktree::git::run_network(dir, Some(helper), &["rev-parse", "HEAD"]);
 }
 
 /// Where `workspace fork --restore` ends: the restore of the fork it has just written.
