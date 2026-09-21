@@ -189,8 +189,9 @@ pub fn search_dirs_from(path: Option<&OsStr>, home: Option<&Path>) -> Vec<PathBu
         }
     }
     if let Some(home) = home {
-        // PROOF ONLY, never merge: the home directories are not searched.
-        let _ = home;
+        for rel in USER_BIN {
+            push(home.join(rel));
+        }
     }
     for dir in SYSTEM_BIN {
         push(PathBuf::from(dir));
