@@ -242,29 +242,34 @@ function App() {
     if (launch === undefined || restored.current) return;
     restored.current = true;
     void (async () => {
-      // The launch's own project, which the core already opened and put the record back for.
-      // Its tab is first and it is the one in front: the operator ran charter THERE.
-      const opened = launch.plane;
-      if (opened !== null) {
-        setPlanes((was) => (was.includes(opened) ? was : [...was, opened]));
-        setShowing({ at: "plane", plane: opened });
+      try {
+        // The launch's own project, which the core already opened and put the record back
+        // for. Its tab is first and it is the one in front: the operator ran charter THERE.
+        const opened = launch.plane;
+        if (opened !== null) {
+          setPlanes((was) => (was.includes(opened) ? was : [...was, opened]));
+          setShowing({ at: "plane", plane: opened });
+        }
+        const answer = await commands
+          .planesToRestore()
+          .catch(() => ({ status: "error" as const, error: "" }));
+        const back = answer.status === "ok" ? answer.data : undefined;
+        setNotRestored(back?.dropped ?? []);
+        let front: PlaneId | undefined;
+        for (const [at, path] of (back?.planes ?? []).entries()) {
+          const plane = await openInto(path, false);
+          if (plane !== undefined && at === back?.active) front = plane;
+        }
+        // The remembered front tab, unless the launch already named one: a terminal launch
+        // inside a project is the operator saying which project he means, and it outranks an
+        // arrangement from yesterday.
+        if (opened === null && front !== undefined) setShowing({ at: "plane", plane: front });
+      } finally {
+        // Whatever happened, the restore is over. A window that stayed `restoring` would
+        // never write its arrangement down and would warn on every quit for the rest of the
+        // day, which is a worse failure than the one that caused it.
+        setRestoring(false);
       }
-      const answer = await commands
-        .planesToRestore()
-        .catch(() => ({ status: "error" as const, error: "" }));
-      const back = answer.status === "ok" ? answer.data : undefined;
-      setNotRestored(back?.dropped ?? []);
-      let inFront: PlaneId | undefined;
-      const remembered = back?.planes ?? [];
-      for (const [at, path] of remembered.entries()) {
-        const plane = await openInto(path, false);
-        if (plane !== undefined && at === back?.active) inFront = plane;
-      }
-      // The remembered front tab, unless the launch already named one: a terminal launch
-      // inside a project is the operator saying which project he means, and it outranks an
-      // arrangement from yesterday.
-      if (opened === null && inFront !== undefined) setShowing({ at: "plane", plane: inFront });
-      setRestoring(false);
     })();
   }, [launch, openInto]);
 
