@@ -261,7 +261,7 @@ describe("a window holding more than one project", () => {
 
     // Project ONE's chat 1, while project TWO is on screen. Both projects have a chat 1, so
     // a window that ignored the plane on the event would mark the wrong tab.
-    move({ plane: ONE, session: 1, state: "waiting", needs_you: true, queue: [1] });
+    move({ plane: ONE, session: 1, state: "waiting", needs_you: true, queue: [1], moved_at: 1 });
 
     await vi.waitFor(() =>
       expect(projectTab("one").querySelector(".project-needs")?.textContent).toBe("1"),

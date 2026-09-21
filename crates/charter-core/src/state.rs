@@ -285,10 +285,14 @@ impl Default for Chat {
 #[derive(Debug, Default)]
 pub struct Board {
     chats: std::collections::BTreeMap<u32, Tracked>,
+    /// How many times anything on this board has moved. See [`Board::moved_at`].
+    moves: u32,
 }
 
 #[derive(Debug)]
 struct Tracked {
+    /// The board's count at the last move a reader could see. See [`Board::moved_at`].
+    moved_at: u32,
     chat: Chat,
     /// The conversation this chat holds, where charter knows it.
     ///
@@ -457,9 +461,11 @@ impl Board {
         harness: Option<crate::harness::Harness>,
         conversation: Option<String>,
     ) {
+        let moved_at = self.moved();
         self.chats.insert(
             number,
             Tracked {
+                moved_at,
                 chat: Chat::new(),
                 conversation,
                 pid: None,
@@ -515,14 +521,78 @@ impl Board {
         if !tracked.take(report) {
             return false;
         }
-        tracked.chat.reported_from(report.event, report.detail)
+        let changed = tracked.chat.reported_from(report.event, report.detail);
+        self.stamp(report.chat, changed)
     }
 
     /// The chat's program exited. Answers whether anything a reader can see changed.
     pub fn exited(&mut self, number: u32, code: Option<i32>) -> bool {
-        self.chats
+        let changed = self
+            .chats
             .get_mut(&number)
-            .is_some_and(|tracked| tracked.chat.exited(code))
+            .is_some_and(|tracked| tracked.chat.exited(code));
+        self.stamp(number, changed)
+    }
+
+    /// When this chat last moved, as a count of moves on this board — bigger is more recent.
+    ///
+    /// **A count and not a clock, deliberately.** The only thing anything asks of it is an
+    /// order: charter ADR 0039 puts the chat strip's overflow menu in last-activity order,
+    /// and an order is all that needs. Three things follow from choosing the weaker fact:
+    ///
+    /// * There is no clock to disagree with. Two chats that moved in the same millisecond
+    ///   still have an order, and nothing depends on the machine's time going forwards.
+    /// * It is a `u32`, which is what can cross the app's boundary. `specta` refuses to
+    ///   export a `u64` and the app panics at startup in a debug build when one is reached
+    ///   for, so the obvious spelling of a wall-clock stamp is one this codebase cannot
+    ///   carry.
+    /// * A number that cannot be rendered as a date will not be drawn as one. "3 minutes
+    ///   ago" is a claim this board cannot make — a hook fires when a turn moves, not on a
+    ///   timer — and a field that could be formatted that way is one that eventually would
+    ///   be.
+    ///
+    /// **It advances only when a reader would see a difference**, which is the same
+    /// condition [`Board::reported`] and [`Board::exited`] already answer. A hook that
+    /// fires and changes nothing pushes no event to any window, so a stamp that moved on it
+    /// would be one no window could ever learn — and making every hook an event is the cost
+    /// ADR 0039 names as the one not to pay ("a field on an event that already fires is
+    /// cheap; a new event is not").
+    ///
+    /// **The cost of that, stated:** a long turn that fires fifty hooks and stays `running`
+    /// throughout moved once, when it started running. The order is "which chat's state
+    /// changed most recently", not "which chat is busiest", and those differ for exactly
+    /// that chat.
+    ///
+    /// A chat the board does not have reads `0`. Every chat it does have has moved at least
+    /// once, because opening it is a move — so `0` means "not on this board", and a reader
+    /// sorting on it puts such a chat last.
+    pub fn moved_at(&self, number: u32) -> u32 {
+        self.chats
+            .get(&number)
+            .map_or(0, |tracked| tracked.moved_at)
+    }
+
+    /// Stamps `number` with a fresh move when `changed`, and answers `changed` unaltered.
+    fn stamp(&mut self, number: u32, changed: bool) -> bool {
+        if changed {
+            let moved_at = self.moved();
+            if let Some(tracked) = self.chats.get_mut(&number) {
+                tracked.moved_at = moved_at;
+            }
+        }
+        changed
+    }
+
+    /// The next move's count.
+    ///
+    /// Saturating rather than wrapping: at four billion moves the order stops improving,
+    /// which is a menu in the wrong order, where a wrap would put the newest chat first at
+    /// the top of the list one move and last the next. Nothing reaches it — a hook event a
+    /// second for a century is three billion — and the arithmetic is written down anyway
+    /// because `u32` is a boundary this file chose rather than one it was given.
+    fn moved(&mut self) -> u32 {
+        self.moves = self.moves.saturating_add(1);
+        self.moves
     }
 
     /// What this chat is doing. A chat the app does not have is [`State::Unknown`], which is
@@ -1311,5 +1381,90 @@ mod tests {
 
         assert_eq!(board.state(7), State::Failed);
         assert!(board.needs_you().is_empty());
+    }
+
+    // ----- when a chat last moved (charter ADR 0039) -----
+
+    #[test]
+    fn the_chat_that_moved_last_has_the_highest_count() {
+        // The whole of what the overflow menu asks: an order over the chats, newest first.
+        let mut board = Board::new();
+        claude_chat(&mut board, 1, Some(A));
+        claude_chat(&mut board, 2, Some(A));
+
+        board.reported(&report(1, Event::UserPromptSubmit, Some(A)));
+        board.reported(&report(2, Event::UserPromptSubmit, Some(A)));
+        board.reported(&report(1, Event::Stop, Some(A)));
+
+        assert!(
+            board.moved_at(1) > board.moved_at(2),
+            "chat 1 moved last and reads {} against {}",
+            board.moved_at(1),
+            board.moved_at(2)
+        );
+    }
+
+    #[test]
+    fn opening_a_chat_is_the_first_thing_that_moves_it() {
+        // Otherwise every chat put back at a launch reads 0 and the menu's order is the
+        // strip's, which is the thing it exists not to be. The chats also have to differ
+        // from each other: they were put back one after another.
+        let mut board = Board::new();
+
+        claude_chat(&mut board, 1, Some(A));
+        claude_chat(&mut board, 2, Some(A));
+
+        assert!(board.moved_at(1) > 0);
+        assert!(board.moved_at(2) > board.moved_at(1));
+    }
+
+    #[test]
+    fn a_report_that_changes_nothing_a_reader_sees_does_not_move_the_chat() {
+        // The stamp rides `chat-moved`, which is pushed only when a reader would see a
+        // difference. A stamp that advanced here would be one no window could ever learn,
+        // and making every hook an event is the cost ADR 0039 names as the one not to pay.
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        let running = board.moved_at(7);
+
+        assert!(!board.reported(&report(7, Event::UserPromptSubmit, Some(A))));
+
+        assert_eq!(board.moved_at(7), running);
+    }
+
+    #[test]
+    fn a_report_that_is_not_this_chats_harness_does_not_move_the_chat() {
+        // ADR 0024's C5, asked of the stamp: a `claude` running inside chat 7's own shell
+        // must not be able to float that chat to the top of the menu either.
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        let running = board.moved_at(7);
+
+        assert!(!board.reported(&from_pid(7, Event::Stop, Some(NESTED), CLAUDE + 1)));
+
+        assert_eq!(board.moved_at(7), running);
+    }
+
+    #[test]
+    fn a_program_that_exits_moves_its_chat() {
+        // An exit is the one move no hook reports, and a chat that just failed is exactly
+        // what an operator is looking for in the menu.
+        let mut board = Board::new();
+        claude_chat(&mut board, 1, Some(A));
+        claude_chat(&mut board, 2, Some(A));
+        board.reported(&report(2, Event::UserPromptSubmit, Some(A)));
+
+        assert!(board.exited(1, Some(1)));
+
+        assert!(board.moved_at(1) > board.moved_at(2));
+    }
+
+    #[test]
+    fn a_chat_the_board_does_not_have_moved_at_nothing() {
+        let board = Board::new();
+
+        assert_eq!(board.moved_at(7), 0);
     }
 }

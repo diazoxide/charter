@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  byLastActivity,
   closeFocusedPane,
   closeTab,
   focusPane,
@@ -8,6 +9,7 @@ import {
   panesOf,
   selectTab,
   showWorkspace,
+  movedAt,
   splitFocusedPane,
   tabsIn,
   visibleSessions,
@@ -360,5 +362,83 @@ describe("the workspace strip at fifty chats (charter-app#133)", () => {
     strip(tabs, names, filedIn, everyone);
 
     expect(count.calls).toBe(WORKSPACES * CHATS + WORKSPACES * everyone.length);
+  });
+});
+
+describe("the order of the strip and the order of the menu", () => {
+  /** Four tabs, opened in order: 1, 2, 3, 4. */
+  function fourTabs(): Tabs {
+    return [11, 22, 33, 44].reduce((tabs, session) => openTab(tabs, session), noTabs());
+  }
+
+  /** When each chat last moved, as the core counts it. Anything not named has never moved. */
+  const moves =
+    (when: Record<number, number>) =>
+    (session: number): number =>
+      when[session] ?? 0;
+
+  it("appends a new tab and never puts it anywhere else", () => {
+    // ADR 0039 ratifies what the code already does, and this is the guard on it. The change
+    // it exists to refuse is small, helpful-looking, and will be proposed the first time
+    // somebody has fifty tabs and cannot find one.
+    const tabs = fourTabs();
+
+    expect(tabs.order).toEqual([1, 2, 3, 4]);
+    expect(openTab(tabs, 55).order).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("does not move a tab when its chat is the busiest thing on the plane", () => {
+    // The whole of the fixed-order rule: activity is an input to the MENU and to nothing on
+    // the strip. There is no call here that could move it, and that is the assertion.
+    const tabs = fourTabs();
+
+    const busy = moves({ 11: 99 });
+
+    expect(tabsIn(tabs, "alpha", oneWorkspace)).toEqual([1, 2, 3, 4]);
+    expect(movedAt(tabs, 1, busy)).toBe(99);
+  });
+
+  it("lists what it is given most recently moved first", () => {
+    const tabs = fourTabs();
+
+    expect(byLastActivity([1, 2, 3, 4], tabs, moves({ 11: 3, 22: 1, 33: 4, 44: 2 }))).toEqual([
+      3, 1, 4, 2,
+    ]);
+  });
+
+  it("keeps the order it was given where nothing tells them apart", () => {
+    // At a launch every tab reads 0. A menu that shuffled them would be a list whose rows
+    // move between two openings for no reason the operator can see.
+    const tabs = fourTabs();
+
+    expect(byLastActivity([1, 2, 3, 4], tabs, moves({}))).toEqual([1, 2, 3, 4]);
+    expect(byLastActivity([1, 2, 3, 4], tabs, moves({ 11: 5, 33: 5 }))).toEqual([1, 3, 2, 4]);
+  });
+
+  it("puts a chat nothing has been heard about last", () => {
+    // `0` is "never heard from", which is honest and is not "moved at the beginning of time
+    // and therefore first".
+    const tabs = fourTabs();
+
+    expect(byLastActivity([1, 2], tabs, moves({ 22: 1 }))).toEqual([2, 1]);
+  });
+
+  it("takes a split tab's most recent pane, not its first", () => {
+    // A tab holds one chat until it is split, and then it holds two. The tab last moved when
+    // the later of them did — a tab whose second pane is working is not an idle tab.
+    const tabs = splitFocusedPane(openTab(noTabs(), 11), "row", 22);
+
+    expect(movedAt(tabs, 1, moves({ 11: 1, 22: 7 }))).toBe(7);
+    expect(movedAt(tabs, 1, moves({ 11: 7, 22: 1 }))).toBe(7);
+  });
+
+  it("leaves the list it was given alone", () => {
+    // It is handed the strip's own order, which nothing may re-sort in place.
+    const tabs = fourTabs();
+    const strip = [1, 2, 3, 4];
+
+    byLastActivity(strip, tabs, moves({ 44: 9 }));
+
+    expect(strip).toEqual([1, 2, 3, 4]);
   });
 });

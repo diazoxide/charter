@@ -267,7 +267,7 @@ function stateShown(name: string): string | null | undefined {
 describe("what the window is told about the chats", () => {
   /** A move, as the core pushes it: one chat, in one plane. */
   function moving(plane: string, session: number, state: string, queue: number[] = []): Moved {
-    return { plane, session, state, needs_you: queue.includes(session), queue };
+    return { plane, session, state, needs_you: queue.includes(session), queue, moved_at: 1 };
   }
 
   it("takes a move in the plane it is showing", async () => {
@@ -327,6 +327,7 @@ describe("being asked to quit", () => {
       state,
       needs_you: needsYou,
       queue: needsYou ? [session] : [],
+      moved_at: 1,
     };
   }
 

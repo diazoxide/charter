@@ -9,6 +9,18 @@
  * not a field on the tab: which workspace a chat is in is the plane's answer, read off the
  * sidebar, so the functions that need it take a `FiledIn` and ask.
  *
+ * **`order` is fixed, and that is now a decision rather than an accident** (ADR 0039). A tab
+ * is appended when it opens, taken out when it closes, and nothing else ever touches its
+ * place. A tab that moves under the cursor breaks aiming: an operator going back to the chat
+ * that was third from the left goes there with their hand, not by reading, and a strip that
+ * re-sorted on activity would turn every click into a read. This is what browsers do, and it
+ * is the one interaction convention in this window every user already has.
+ *
+ * The one place activity DOES order anything is the overflow menu — `byLastActivity` below,
+ * and nowhere else. The rule and its opposite are the same rule from two sides: the menu is a
+ * list you read, the strip is a surface you aim at, and the boundary is whether the thing
+ * moves under your hand.
+ *
  * Everything here is a plain value, so the window's whole arrangement is one state to test.
  */
 
@@ -125,6 +137,38 @@ export function workspaceOf(tabs: Tabs, id: number, filedIn: FiledIn): string | 
 /** The tabs on one workspace's strip, left to right. */
 export function tabsIn(tabs: Tabs, workspace: string | undefined, filedIn: FiledIn): number[] {
   return tabs.order.filter((id) => workspaceOf(tabs, id, filedIn) === workspace);
+}
+
+/**
+ * When a chat last moved, as the core counts moves on its plane. Bigger is more recent.
+ *
+ * A function rather than a field, for the same reason `FiledIn` is: the count is the core's,
+ * it arrives on `chat-moved`, and a copy on the tab would be a second answer that nothing
+ * invalidates when the next event lands.
+ */
+export type LastMoved = (session: number) => number;
+
+/** When a TAB last moved: the most recent of the chats in its panes. */
+export function movedAt(tabs: Tabs, id: number, lastMoved: LastMoved): number {
+  return panesOf(tabs, id).reduce((most, pane) => Math.max(most, lastMoved(pane.session)), 0);
+}
+
+/**
+ * `ids` most recently moved first — the order the overflow menu lists them in (ADR 0039).
+ *
+ * **Ties keep the order they came in**, which is the strip's, because `Array.sort` is stable
+ * in every engine this app runs on. That matters more than it looks: a chat nothing has been
+ * heard about reads `0`, so at a launch every tab ties and the menu is the strip's order
+ * rather than a shuffle. A menu whose rows moved between two openings for no reason the
+ * operator can see is the aiming defect ADR 0039 refuses, re-introduced in the one surface
+ * that was allowed to sort.
+ *
+ * It answers a new array and never touches `tabs.order`. The strip's order is fixed.
+ */
+export function byLastActivity(ids: readonly number[], tabs: Tabs, lastMoved: LastMoved): number[] {
+  return [...ids].sort(
+    (one, other) => movedAt(tabs, other, lastMoved) - movedAt(tabs, one, lastMoved),
+  );
 }
 
 /**

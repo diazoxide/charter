@@ -130,6 +130,87 @@ describe("the window", () => {
     await until(pane, "you said: with fifty sessions running");
   });
 
+  /**
+   * The show-more menu, against a real layout (charter ADR 0039).
+   *
+   * **This is the only place the measurement itself is under test.** What does not fit is a
+   * property of the strip's width, the tabs in it and where it is scrolled to, and jsdom
+   * gives every element a zero-sized box — so the unit tests drive an observer of their own
+   * and this is what says the real one answers anything at all. It runs straight after the
+   * fifty-session test, which is the state that makes the question real.
+   */
+  it("says how many tabs it is not showing, and gets to one of them", async () => {
+    const before = await tabNames();
+    expect(before.length).toBeGreaterThan(40);
+
+    // On the bar, and by what it SAYS rather than by its class: the accessible name is the
+    // whole of what an operator gets from it before they open it.
+    const more = await $('.bar button[aria-label^="Show "]');
+    await more.waitForExist({
+      timeout: 10_000,
+      timeoutMsg: "fifty tabs did not overflow the strip, so nothing said there were more",
+    });
+    const said = await more.getAttribute("aria-label");
+    const counted = Number(/^Show (\d+) tabs? /.exec(said ?? "")?.[1]);
+    expect(counted).toBeGreaterThan(0);
+    expect(counted).toBeLessThanOrEqual(before.length);
+    // **And deliberately no assertion that some tabs ARE on the strip**, which is what this
+    // line tried to say for two runs. An `IntersectionObserver` is answered in the browser's
+    // own rendering step, and macOS gives a WKWebView no rendering at all while its window
+    // is covered or the display is asleep — measured in charter-app M0.6 and again here:
+    // Linux reported 3 of 51 tabs visible and macOS reported 0 of 49, same build, same
+    // commit. On a runner that stops rendering, the first delivery is the only delivery and
+    // it lands before the strip has its width. So what this spec holds is what does not
+    // depend on the window still being drawn — that the measurement produced a count, that
+    // the menu lists exactly that many, that a row reaches its tab, and that the strip did
+    // not move. Which tabs are visible is not a question a covered window can be asked.
+
+    await more.click();
+    // **Waited for, not read once.** The menu is a Radix portal: it is mounted on the open,
+    // in a later frame than the click, so a `$$` taken straight after the click finds an
+    // empty document and reports it as "the menu listed nothing". Measured on this spec's
+    // first CI run, which is how this comment came to exist.
+    const rowsNow = async () => [...(await $$('[role="menuitem"]').getElements())];
+    let found = 0;
+    try {
+      await browser.waitUntil(
+        async () => {
+          found = (await rowsNow()).length;
+          return found === counted;
+        },
+        { timeout: 10_000 },
+      );
+    } catch {
+      // Which of the two things went wrong, said in the failure: a menu that never opened is
+      // a different defect from a menu that opened listing the wrong tabs.
+      const menus = (await $$('[role="menu"]').getElements()).length;
+      throw new Error(
+        `the button said ${counted} tabs; ${menus} menu(s) opened and ${found} rows were listed`,
+      );
+    }
+    const rows = await rowsNow();
+
+    // The row's own name, so the assertion is about the tab this went to and not about
+    // whichever tab happens to be first.
+    const going = (await rows[0].$(".tab-name").getText()).trim();
+    await rows[0].click();
+
+    await browser.waitUntil(
+      async () =>
+        (await browser.execute(
+          () =>
+            document
+              .querySelector(
+                '[role="tablist"][aria-label="Tabs"] [role="tab"][aria-selected="true"]',
+              )
+              ?.querySelector(".tab-name")?.textContent ?? "",
+        )) === going,
+      { timeout: 10_000, timeoutMsg: `the menu did not bring ${going} to the front` },
+    );
+    // **And the strip did not move.** The menu sorts by activity; the strip never does.
+    expect(await tabNames()).toEqual(before);
+  });
+
   it("ends a session when its tab closes", async () => {
     const running = harnessesRunning();
     const names = await tabNames();

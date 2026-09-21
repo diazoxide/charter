@@ -114,11 +114,24 @@ body {
    does not fit can be reached, and `flex: none` on the items so they keep their width
    instead of being squeezed to nothing.
 
-   **A scrollbar and not an overflow menu**, deliberately. The palette already lists every
-   chat by name with a search over it (#48), and the sidebar lists every workspace's chats; a
-   menu here would be a third answer to "which chats are there" beside two that already
-   exist, which is the drift `actions.ts` exists to prevent. What the strip owes the operator
-   is that nothing in it is unreachable, and that the selected tab is on screen — which
+   **A scrollbar AND an overflow menu, which reverses half of what stood here** (ADR 0039).
+   What this comment used to say is that a menu would be a third answer to "which chats are
+   there" beside the palette and the sidebar's listing. ADR 0038 takes the sidebar's listing
+   away, and — the part that was wrong on its own terms — a scroller was never an answer to
+   that question at all. It answers "can I reach the ones I cannot see", and only if you
+   already know to look: the tabs past the edge are not merely un-clicked, they are
+   un-enumerated, and nothing on the strip said how many there were.
+
+   **So the two are kept, because they do two jobs, and the reasons they are not one job
+   twice are worth writing down.** The scroller is what makes every tab REACHABLE — in the
+   DOM, in the tab order, with its own close button — and the chat strip is not allowed to
+   have an unreachable tab, which is the whole of charter-app#130. The menu is the affordance
+   that says there is more, and the short path to it (`.show-more`, `PlaneView`). Collapsing
+   the strip's tail into the menu instead would make the menu the ONLY way to a tab, which is
+   an aiming surface turned into a reading surface, and would put a wanted control inside the
+   thing that hides controls — #130's actual defect, in different clothes.
+
+   The strip also still owes the operator that the selected tab is on screen, which
    `PlaneView`'s `intoView` does on every change of front, from whichever surface asked. */
 .projects,
 .workspaces-strip,
@@ -219,15 +232,67 @@ body {
 }
 
 .bar > .adding,
+.bar > .more,
 .bar > .doing,
 .bar > .regions-doing,
 .bar > .plane {
   flex: none;
 }
 
-/* `+` sits against the tabs it adds to, not a whole gap away from them. */
+/* `+` and the show-more button sit against the tabs they belong to, not a whole gap away.
+   Both are outside the scroller and neither may ever shrink: they are the two controls that
+   matter most exactly when the strip is full. */
+.bar > .more,
 .bar > .adding {
   margin-left: -0.75rem;
+}
+
+/* The show-more button. It exists only while something is hidden, so it is drawn as a count
+   rather than as a permanent control — an operator who never overflows the strip never sees
+   it, and one who does reads how many tabs are past the edge without opening anything. */
+.show-more {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The menu itself. Radix ships no CSS — every primitive is an unstyled element — so this is
+   the whole of how it is drawn, and `[data-state]` is what it hangs off. */
+.more-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 12rem;
+  /* Past about twenty hidden tabs the menu would run off the window; it scrolls instead, and
+     the palette remains the surface for finding one by name. */
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 0.3rem;
+  background: #1c1c1c;
+  border: 1px solid var(--edge);
+  border-radius: 6px;
+  box-shadow: 0 0.5rem 1.5rem #0009;
+  z-index: 10;
+}
+
+.more-tab {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  padding: 0.25rem 0.45rem;
+  border-radius: 4px;
+  color: var(--ink);
+  cursor: pointer;
+  /* Radix gives a menu item its own roving focus and no outline of its own. */
+  outline: none;
+}
+
+.more-tab[data-highlighted] {
+  background: #2b3338;
+}
+
+.more-tab[data-disabled] {
+  opacity: 0.45;
+  cursor: default;
 }
 
 /* **The `×` is inline with the title, on one line** (charter-app#130). It was drawn below it,
