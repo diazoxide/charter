@@ -57,8 +57,24 @@ function chat(one: Partial<OpenChat> & { session: number; name: string }): OpenC
   };
 }
 
+/**
+ * What the core says a project's plane holds.
+ *
+ * **Both projects have an `alpha`**, and that is the point rather than laziness: a workspace
+ * name is half an answer, and the panels used to resolve their project out of the process's
+ * working directory. A fixture where only one project had the name could not tell a panel
+ * asking about the right project from one asking about the only project that had it.
+ */
 function sidebarOf(root: string) {
-  return { root, workspaces: [], personas: [], persona: null, unfiled: [] };
+  return {
+    root,
+    workspaces: [
+      { name: "alpha", path: `${root}/workspaces/alpha`, vision: "Ship it", todos: [], chats: [] },
+    ],
+    personas: [],
+    persona: null,
+    unfiled: [],
+  };
 }
 
 /**
@@ -251,6 +267,29 @@ describe("a window holding more than one project", () => {
       expect(projectTab("one").querySelector(".project-needs")?.textContent).toBe("1"),
     );
     expect(projectTab("two").querySelector(".project-needs")).toBeNull();
+  });
+
+  it("asks about the workspace of the project in front, and not of the one it launched in", async () => {
+    // The last two commands that resolved a plane out of `current_dir()`. A window showing a
+    // project the launch had not opened drew the launch's `alpha` under this project's
+    // heading — already wrong when #121 let a window open a second project, and plainly
+    // wrong now that a window holds both at once.
+    const { asked } = core({ launch: ONE });
+    render(<App />);
+    await vi.waitFor(() => expect(asked.some((one) => one.cmd === "workspace_panels")).toBe(true));
+
+    await userEvent.click(screen.getByRole("button", { name: "Open a project…" }));
+    await openByPath(TWO);
+    await vi.waitFor(() => expect(projectTabs()).toEqual(["one", "two*"]));
+
+    for (const cmd of ["workspace_panels", "workspace_repos"]) {
+      await vi.waitFor(() =>
+        expect(asked.filter((one) => one.cmd === cmd).pop()?.args).toEqual({
+          plane: TWO,
+          workspace: "alpha",
+        }),
+      );
+    }
   });
 
   it("closes one project without disturbing the other", async () => {

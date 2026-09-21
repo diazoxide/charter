@@ -730,7 +730,7 @@ export function PlaneView({
         {/* The right-hand side, which reads the plane for whichever workspace is focused.
             Its own component with its own state: it asks the core twice — once for what the
             plane holds and once for what git says — and neither ask belongs up here. */}
-        <Panels workspace={focused} />
+        <Panels plane={plane} workspace={focused} />
       </div>
 
       {picking && (

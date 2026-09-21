@@ -197,8 +197,13 @@ export const commands = {
 	 *  listing and a few small files. The panels paint the moment a workspace is focused, and
 	 *  the part that has to run git arrives after — one command would make the todo list wait
 	 *  for a status read on every clone.
+	 * 
+	 *  **It names its plane**, like every other command here. It used to resolve one out of the
+	 *  process's working directory — `plane::resolve`, the singleton ADR 0034 removed — so a
+	 *  window showing a project the launch had not opened drew the workspaces of the one it had.
+	 *  A workspace name means nothing without its project; two projects can both have an `alpha`.
 	 */
-	workspacePanels: (workspace: string) => typedError<Panels, string>(__TAURI_INVOKE("workspace_panels", { workspace })),
+	workspacePanels: (plane: PlaneId, workspace: string) => typedError<Panels, string>(__TAURI_INVOKE("workspace_panels", { plane, workspace })),
 	/**
 	 *  What git says about each of the focused workspace's clones, and what the forge cache
 	 *  last recorded for the branch each is on.
@@ -208,7 +213,7 @@ export const commands = {
 	 *  switch is allowed. **Nothing here crosses a network** — the forge state comes out of
 	 *  `.charter/cache/glstate.json`, which charter-app reads and never writes.
 	 */
-	workspaceRepos: (workspace: string) => typedError<RepoStates, string>(__TAURI_INVOKE("workspace_repos", { workspace })),
+	workspaceRepos: (plane: PlaneId, workspace: string) => typedError<RepoStates, string>(__TAURI_INVOKE("workspace_repos", { plane, workspace })),
 	/**
 	 *  What the picker draws: every profile this machine has, every one charter will not use,
 	 *  and the plane's personas.

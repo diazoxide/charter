@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { commands, type Panels as PanelsModel, type RepoState, type RepoStates } from "./bindings";
+import {
+  commands,
+  type PlaneId,
+  type Panels as PanelsModel,
+  type RepoState,
+  type RepoStates,
+} from "./bindings";
 
 /**
  * The right-hand side: the focused workspace's repos, their branches, its CI, its todos and
@@ -12,8 +18,17 @@ import { commands, type Panels as PanelsModel, type RepoState, type RepoStates }
  * `.charter/cache/glstate.json`; charter-app reads that file and never fetches. A cell with
  * nothing to show says why, because a blank one reads as "green" to a person in a hurry.
  */
-export function Panels({ workspace }: { workspace: string | undefined }) {
-  const { panels, repos, trouble, reading } = useWorkspace(workspace);
+export function Panels({
+  plane,
+  workspace,
+}: {
+  /** Which project's workspace this is. A workspace name means nothing without it — two
+   *  projects can both have an `alpha`, and the core used to answer with whichever project
+   *  the process happened to start in. */
+  plane: PlaneId;
+  workspace: string | undefined;
+}) {
+  const { panels, repos, trouble, reading } = useWorkspace(plane, workspace);
 
   if (workspace === undefined) {
     return (
@@ -243,7 +258,7 @@ type Answer = {
  *  workspace, so nothing left over from the last one is ever drawn under this one's heading.
  *  Nothing is reset when the focus changes, because clearing state from inside an effect is
  *  a render the window does not need; the stale answer is simply not this workspace's. */
-function useWorkspace(workspace: string | undefined) {
+function useWorkspace(plane: PlaneId, workspace: string | undefined) {
   const [answer, setAnswer] = useState<Answer>();
 
   useEffect(() => {
@@ -260,7 +275,7 @@ function useWorkspace(workspace: string | undefined) {
     };
 
     void commands
-      .workspacePanels(workspace)
+      .workspacePanels(plane, workspace)
       .then((said) => {
         if (gone) return;
         if (said.status === "error") {
@@ -276,7 +291,7 @@ function useWorkspace(workspace: string | undefined) {
       });
 
     void commands
-      .workspaceRepos(workspace)
+      .workspaceRepos(plane, workspace)
       .then((said) => {
         if (gone) return;
         if (said.status === "error") {
@@ -292,7 +307,7 @@ function useWorkspace(workspace: string | undefined) {
     return () => {
       gone = true;
     };
-  }, [workspace]);
+  }, [plane, workspace]);
 
   const mine = answer?.workspace === workspace ? answer : undefined;
   return {
