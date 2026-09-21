@@ -7,6 +7,7 @@ import {
   copyFixturePlane,
   theRunsEnvironment,
   writeAHarnessOnlyAShellWouldFind,
+  writeShell,
 } from "./harness.js";
 import { PANIC_LOG } from "./processes.js";
 
@@ -33,7 +34,12 @@ const plane = copyFixturePlane();
 // No `declareAProfile`: the profile under test is charter's own built-in, and declaring one
 // would hand the app an absolute path and test nothing. What the plane gets instead is a
 // `$HOME` with the harness in it — installed, findable by a shell, invisible to `PATH`.
-const home = writeAHarnessOnlyAShellWouldFind(built("fake-harness"));
+// `writeShell` and not `built("fake-harness")`: the fake harness only prints the sentinel a
+// spec waits for when it is given `--synthetic/--sentinel/--interactive`, and that argument
+// list lives in one place. The profile's program drops its own arguments (charter puts
+// `--session-id`/`--name` on a Claude Code line), so the flags have to be inside what it
+// execs.
+const home = writeAHarnessOnlyAShellWouldFind(writeShell(built("fake-harness")));
 
 export const config: WebdriverIO.Config = {
   ...base,
