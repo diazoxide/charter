@@ -196,6 +196,14 @@ pub fn realpath(filename: &str) -> String {
                     }
                     Some(None) => {
                         // Seen but unresolved: this is a loop. Non-strict keeps the path.
+                        //
+                        // **The differential cannot check this arm**, and that is a fact about
+                        // the oracle rather than about the rule: on CPython 3.11 and 3.12
+                        // `Path.resolve()` raises a `RuntimeError` for a loop and
+                        // `_walk_into_guarded_state` catches only `OSError`, so the Python has
+                        // no answer to record (charter#1166). The fixture plane therefore plants
+                        // no loop, and `a_symlink_loop_is_an_answer_and_not_a_hang` below is
+                        // what holds this line — mutated to `path.clone()` and watched go red.
                         path = newpath;
                         continue;
                     }
@@ -644,6 +652,36 @@ mod tests {
         ] {
             assert_eq!(join(a, b), want, "join({a:?}, {b:?})");
         }
+    }
+
+    /// A symlink LOOP is answered rather than raised — and the differential cannot check that,
+    /// so it is checked here.
+    ///
+    /// `_walk_into_guarded_state` resolves with `Path.resolve()`, and on CPython 3.11 and 3.12
+    /// `pathlib`'s `check_eloop` turns the kernel's `ELOOP` into a **`RuntimeError`**, which its
+    /// `except OSError` does not catch: the oracle raises out of `pretooluse`, and a crashed
+    /// `pretooluse` exits 1, which a harness reads as *allow* (charter#1166). CPython 3.14
+    /// returns the path, as `os.path.realpath(strict=False)` does on all three, and that is what
+    /// this port does — the fail-CLOSED direction, since an answer can be refused and a crash
+    /// cannot. A differential cannot arbitrate an input one side has no answer for, so the
+    /// fixture plane plants no loop and this test does.
+    #[test]
+    fn a_symlink_loop_is_an_answer_and_not_a_hang() {
+        let tmp = tempfile::tempdir().expect("a temporary directory");
+        let root = tmp.path().canonicalize().expect("the root resolves");
+        // A self-referential link, and a two-step cycle, which are the two shapes a filesystem
+        // can hold.
+        std::os::unix::fs::symlink("lp", root.join("lp")).expect("symlink");
+        std::os::unix::fs::symlink("b", root.join("a")).expect("symlink");
+        std::os::unix::fs::symlink("a", root.join("b")).expect("symlink");
+        for name in ["lp", "a", "b"] {
+            let asked = root.join(name).to_string_lossy().into_owned();
+            let got = realpath(&asked);
+            assert_eq!(got, asked, "a loop resolves to the path that closed it");
+        }
+        // ...and a loop in the MIDDLE of a path still answers, with the rest appended.
+        let deep = root.join("lp").join("x").to_string_lossy().into_owned();
+        assert_eq!(realpath(&deep), deep);
     }
 
     proptest! {

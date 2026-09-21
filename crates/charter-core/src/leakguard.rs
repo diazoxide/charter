@@ -65,14 +65,17 @@
 //! * **charter#1165** — `_excluded_names` reads `rg`'s `--glob`/`-g`/`--iglob` as an exclusion
 //!   whatever the value says, and for that tool a value WITHOUT a leading `!` is an inclusion.
 //!   See [`excluded_names`].
-//! * **charter#1166** — an operand holding a NUL makes `Path.resolve()` raise `ValueError`,
-//!   which `_walk_into_guarded_state`'s `except OSError` does not catch, so `pretooluse` exits
-//!   1 and the tool RUNS. This port **does not** reproduce that one: `std::fs` answers with an
-//!   error rather than raising, so [`walk_into_guarded_state`] treats the path as unreadable and
-//!   carries on. It is the only place the two implementations are known to differ, it is the
-//!   fail-CLOSED direction, and the differential cannot arbitrate it — a NUL in the alphabet
-//!   would crash the oracle rather than measure it, which is why the harness leaves it out and
-//!   says so.
+//! * **charter#1166** — `_walk_into_guarded_state` resolves with `Path.resolve()` and guards it
+//!   with `except OSError`, which is not every exception that call raises. An operand holding a
+//!   **NUL** raises `ValueError`; a **symlink loop** raises `RuntimeError` on CPython 3.11 and
+//!   3.12 (3.14 returns the path). Either leaves `pretooluse`, which then exits 1 — and a
+//!   PreToolUse hook that exits anything but 2 is read as a non-blocking error, so the tool
+//!   RUNS. This port **does not** reproduce that one: `std::fs` answers with an error rather
+//!   than raising, so [`crate::pypath::realpath`] returns a path and
+//!   [`walk_into_guarded_state`] carries on. It is the only place the two implementations are
+//!   known to differ, it is the fail-CLOSED direction, and the differential cannot arbitrate it
+//!   — an input the oracle crashes on has no answer to record — so the fixture plane plants
+//!   neither, and `pypath`'s own unit test pins what this implementation does.
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;

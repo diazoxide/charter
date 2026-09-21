@@ -52,7 +52,7 @@ const PROBE_OPERANDS: [&str; 46] = [
     "here",
     "up",
     "tostate",
-    "loop",
+    "hop1",
     "dangling",
     "",
     "x",

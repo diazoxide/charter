@@ -149,16 +149,29 @@ def build_fixture() -> None:
     (ROOT / "sub" / "deep").mkdir(parents=True, exist_ok=True)
     (ROOT / "sub" / "deep" / "b.txt").write_text("b\n", encoding="utf-8")
     # The symlinks `realpath` is measured on: one to the cwd, one to the parent, one into the
-    # state directory, one loop and one dangling. Each is a spelling of an ancestor that the
+    # state directory, a chain and one dangling. Each is a spelling of an ancestor that the
     # guard has to resolve rather than read.
     #
     # `absvaults` is ABSOLUTE on purpose: an absolute symlink target RESETS the resolved path to
     # `/` in CPython's `realpath`, and with only relative links in the fixture a port that
     # skipped that reset changed no answer — a mutation that came back inert because the
     # evidence had no case, not because the rule had no effect.
+    #
+    # **There is deliberately NO LOOPING LINK**, and the reason is a finding rather than a
+    # tidy-up. `_walk_into_guarded_state` resolves with `Path.resolve()`, and on CPython 3.11 and
+    # 3.12 `pathlib`'s `check_eloop` turns the kernel's `ELOOP` into a **`RuntimeError`** — which
+    # `except OSError` does not catch, so the ORACLE raises out of `pretooluse` (charter#1166;
+    # 3.14 returns the path, as `os.path.realpath` does on all three). A differential cannot
+    # arbitrate an input one side has no answer for, and CI's interpreter is 3.12. The Rust's own
+    # behaviour there is pinned by a unit test in `pypath` instead.
+    #
+    # `hop1 → hop2 → hop3 → .charter` and `alsostate → .charter` keep the two things the loop was
+    # there for: a link whose target is itself a link (so `realpath` really re-enters), and two
+    # links onto one target (so the `seen` cache is hit rather than only filled).
     for link, target in (("here", "."), ("up", ".."), ("tostate", ".charter"),
-                         ("loop", "loop"), ("dangling", "nowhere"),
-                         ("absvaults", str(STATE / "vaults"))):
+                         ("dangling", "nowhere"), ("absvaults", str(STATE / "vaults")),
+                         ("hop3", ".charter"), ("hop2", "hop3"), ("hop1", "hop2"),
+                         ("alsostate", ".charter")):
         p = ROOT / link
         if not p.is_symlink():
             p.symlink_to(target)
@@ -559,7 +572,7 @@ CURATED: list[str] = [
     "grep -rn TOKEN here",
     "grep -rn TOKEN tostate",
     "grep -rn TOKEN dangling",
-    "grep -rn TOKEN loop",
+    "grep -rn TOKEN hop1",
     "grep -rn TOKEN up/",
     "env -C sub grep -rn TOKEN .",
     "grep -rn TOKEN .charter",
@@ -726,7 +739,7 @@ WALK_EXCLUDES = ["", " --exclude-dir=.charter", " --exclude-dir='.char*'", " --e
 WALK_WHERE = ["", "cd sub && ", "cd .charter && ", "pushd docs && ", "env -C sub ",
               "sudo --chdir=/tmp ", "cd / && ", "cd .. && ", "cd here && "]
 WALK_OPERANDS = ["", " .", " ..", " sub", " docs", " here", " up", " tostate", " .charter",
-                 " .charter/vaults", " /", " dangling", " loop", " ./sub/../.charter", " ''",
+                 " .charter/vaults", " /", " dangling", " hop1", " alsostate", " ./sub/../.charter", " ''",
                  " absvaults", " here/absvaults", " rich"]
 
 #: The reader grammar — the other half of `_leak_reason`, which decides on the TEXT of an
@@ -797,7 +810,7 @@ def a_case(rng: random.Random) -> str:
 #: Operands for `names_a_vault_path`, `normpath`, `realpath`, `join` and `gh_at_path`.
 PROBE_OPERANDS = [
     VAULT, ".charter", ".charter/", ".charterx", ".edm/vaults", ".", "..", "/", "//", "///x",
-    "sub", "docs", "here", "up", "tostate", "loop", "dangling", "", "x", "a/b/../vaults",
+    "sub", "docs", "here", "up", "tostate", "hop1", "dangling", "", "x", "a/b/../vaults",
     ".charter//vaults", ".charter/./vaults", ".charter/vaults/../..", ".CHARTER/VAULTS/x",
     ".charter/actİve-persona", ".charter/fıngerprint.key", "body=@notes.md",
     "body=@-", "body=x=@notes.md", "body", "=@x", "sub/../..", "/a/b/../..", "../..",

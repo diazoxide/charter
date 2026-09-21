@@ -61,16 +61,24 @@ fn build_fixture(root: &Path) {
     }
     w(root.join("docs").join("a.md"), "a\n");
     w(root.join("sub").join("deep").join("b.txt"), "b\n");
-    // The symlinks `realpath` is measured on: the cwd, the parent, the state directory, a loop
+    // The symlinks `realpath` is measured on: the cwd, the parent, the state directory, a chain
     // and a dangling name. Each is a spelling of an ancestor the guard has to resolve — and
     // `absvaults` is ABSOLUTE, because an absolute target is the one shape that makes CPython's
     // `realpath` reset its resolved path to `/`.
+    //
+    // No looping link, deliberately: on CPython 3.11 and 3.12 `Path.resolve()` raises a
+    // `RuntimeError` for one and `_walk_into_guarded_state` catches only `OSError`, so the
+    // ORACLE has no answer to record (charter#1166). `pypath`'s own unit test pins what this
+    // implementation does there.
     for (link, target) in [
         ("here", ".".to_string()),
         ("up", "..".to_string()),
         ("tostate", ".charter".to_string()),
-        ("loop", "loop".to_string()),
         ("dangling", "nowhere".to_string()),
+        ("hop3", ".charter".to_string()),
+        ("hop2", "hop3".to_string()),
+        ("hop1", "hop2".to_string()),
+        ("alsostate", ".charter".to_string()),
         (
             "absvaults",
             state.join("vaults").to_string_lossy().into_owned(),
