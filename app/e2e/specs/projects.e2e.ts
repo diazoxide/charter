@@ -96,6 +96,30 @@ async function stripBecomes(want: { path: string | null; front: boolean }[]): Pr
   });
 }
 
+/**
+ * Waits until the store holds `want` as the window set, and answers with the whole of it.
+ *
+ * **Waited for rather than asked once.** The window says what it holds by an `invoke` nothing
+ * awaits — it is bookkeeping, not an action — so a read taken the instant a click settles is
+ * a read taken before the write. `opener.e2e.ts` waits for the same class of reason.
+ */
+async function remembers(
+  want: string[],
+): Promise<{ planes: string[]; active: number | null; dropped: string[] }> {
+  let back = { planes: [] as string[], active: null as number | null, dropped: [] as string[] };
+  await browser.waitUntil(
+    async () => {
+      back = await ask("planes_to_restore");
+      return JSON.stringify(back.planes) === JSON.stringify(want);
+    },
+    {
+      timeout: 30_000,
+      timeoutMsg: `charter never came to remember ${JSON.stringify(want)}`,
+    },
+  );
+  return back;
+}
+
 /** Waits until the project in front shows `many` chat tabs. */
 async function chatTabsBecome(many: number): Promise<void> {
   let saw = -1;
@@ -207,11 +231,8 @@ describe("a window holding more than one project", function () {
     // The other end of decision 28, which is as far as one app process reaches: the window
     // said what it holds, the real machine store took it, and the core reads it back in the
     // order the tabs are in.
-    const back = await ask<{ planes: string[]; active: number | null; dropped: string[] }>(
-      "planes_to_restore",
-    );
+    const back = await remembers([first, second]);
 
-    expect(back.planes).toEqual([first, second]);
     expect(back.active).toBe(0);
     expect(back.dropped).toEqual([]);
   });
@@ -224,6 +245,6 @@ describe("a window holding more than one project", function () {
     expect(await ask<number[]>("running_sessions", { plane: first })).toEqual(running);
     // And what it writes down follows, so the next launch does not put back a project the
     // operator closed.
-    expect((await ask<{ planes: string[] }>("planes_to_restore")).planes).toEqual([first]);
+    await remembers([first]);
   });
 });
