@@ -117,10 +117,9 @@ pub fn fence() -> Vec<PathBuf> {
 /// An empty fence admits nothing. That is what `$CHARTER_PLANE_FENCE=":"` deserves —
 /// somebody meant to name a tree and named none — and it fails closed.
 pub fn inside(root: &Path, fence: &[PathBuf]) -> bool {
-    // PROOF ONLY, never merge — charter-app#129's guard, mutated so that every plane reads as
-    // inside the fence and `hold` never refuses.
-    let _ = (root, fence);
-    true
+    let resolved = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let root = resolved(root);
+    fence.iter().any(|entry| root.starts_with(resolved(entry)))
 }
 
 /// What the process says on its way out.
