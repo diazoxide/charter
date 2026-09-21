@@ -41,8 +41,25 @@ export const READY = "session ready";
  *
  * Made once per launcher process, and `wdio.state.conf.ts` and `wdio.bench.conf.ts` spread
  * `wdio.conf.ts`, so all three share it — which is what makes it the fence for all of them.
+ *
+ * **It has to survive the fork, and that is why it goes through the environment.**
+ * WebdriverIO runs each spec file in a worker process, and a worker imports this module
+ * again: a plain `mkdtempSync` here would give the worker a SECOND tree, so a plane a spec
+ * copies for itself — `opener.e2e.ts`'s stranger, `projects.e2e.ts`'s second project — would
+ * land outside the fence the launcher gave the app, and the app would die opening the very
+ * plane the spec made for it. The variable is inherited by the fork, so both halves of the
+ * run name one tree. A worker that somehow did not inherit it makes its own and the app
+ * refuses: wrong, but loudly and in the run that is wrong, which is the whole point.
  */
-export const THE_RUNS_TREE = mkdtempSync(join(tmpdir(), "charter-scenario-run-"));
+function theRunsTree(): string {
+  const shared = process.env.CHARTER_SCENARIO_RUN;
+  if (shared) return shared;
+  const made = mkdtempSync(join(tmpdir(), "charter-scenario-run-"));
+  process.env.CHARTER_SCENARIO_RUN = made;
+  return made;
+}
+
+export const THE_RUNS_TREE = theRunsTree();
 
 /**
  * The environment a charter process this run starts is given: the plane it means, a machine

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -79,6 +80,40 @@ describe("every launcher starts the app inside a plane the run made", () => {
       expect(inside(env.CHARTER_CONFIG_HOME, env.CHARTER_PLANE_FENCE)).toBe(true);
     },
   );
+
+  it("a spec's own fixture plane lands inside the fence the launcher gave the app", async () => {
+    // `opener.e2e.ts` and `projects.e2e.ts` copy a plane from inside a WORKER process, and
+    // WebdriverIO forks one per spec file. A run tree made with a plain `mkdtempSync` at
+    // import time would therefore be a different directory in the worker from the one in the
+    // launcher, and the app — fenced to the launcher's — would die opening the very plane
+    // the spec made for it. The environment is what survives the fork, so the tree is
+    // published there and taken from there.
+    const { THE_RUNS_TREE, copyFixturePlane, aConfigHomeOfItsOwn } = await import(
+      join(here, "harness.js")
+    );
+
+    expect(
+      process.env.CHARTER_SCENARIO_RUN,
+      "the run tree is not published to the environment, so a worker would make its own",
+    ).toBe(THE_RUNS_TREE);
+    expect(inside(copyFixturePlane(), THE_RUNS_TREE)).toBe(true);
+    expect(inside(aConfigHomeOfItsOwn(), THE_RUNS_TREE)).toBe(true);
+
+    // And the other half of it, in a real child process, because publishing the variable and
+    // reading it back are two edits and only one of them is visible from in here.
+    const child = execFileSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "-e",
+        `import(${JSON.stringify(join(here, "harness.ts"))}).then((m) => console.log(m.THE_RUNS_TREE))`,
+      ],
+      { encoding: "utf8", env: { ...process.env, CHARTER_SCENARIO_RUN: THE_RUNS_TREE } },
+    ).trim();
+
+    expect(child, "a forked worker made a run tree of its own").toBe(THE_RUNS_TREE);
+  });
 
   it("the app the scenario tests drive is built with the fence compiled into it", () => {
     // `e2e` is the feature the scenario build turns on (`tauri.e2e.conf.json`), and it is
