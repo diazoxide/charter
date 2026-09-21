@@ -151,6 +151,17 @@ body {
   flex: none;
 }
 
+/* **The `+` never scrolls out of reach.** On the chat strip it is out of the scroller
+   altogether (`.adding`, in `PlaneView`). The projects strip cannot move its own without
+   moving what `projects.e2e.ts` reaches it by, so it is stuck to the right-hand edge
+   instead, with the strip's background behind it so tabs pass underneath. */
+.projects > button:last-child {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  box-shadow: -0.5rem 0 0.5rem #131313;
+}
+
 .projects button {
   color: var(--ink);
   background: #222;
@@ -192,23 +203,31 @@ body {
 
 .tabs,
 .doing,
+.adding,
 .tab {
   display: flex;
   gap: 0.25rem;
   align-items: center;
 }
 
-/* The tabs take what is left and scroll; everything else on the bar keeps its width. A
-   strip that could not shrink pushed the splits, the queue and the plane's path off the
-   window at about thirty chats. */
+/* The tabs are the one thing on the bar that gives way: they shrink and scroll, and
+   everything else keeps its width. A strip that could not shrink pushed the splits, the
+   queue and the plane's path off the window at about thirty chats. It does not GROW, so a
+   window with two chats looks as it always did. */
 .tabs {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
 }
 
+.bar > .adding,
 .bar > .doing,
 .bar > .needs-you,
 .bar > .plane {
   flex: none;
+}
+
+/* `+` sits against the tabs it adds to, not a whole gap away from them. */
+.bar > .adding {
+  margin-left: -0.75rem;
 }
 
 /* **The `×` is inline with the title, on one line** (charter-app#130). It was drawn below it,

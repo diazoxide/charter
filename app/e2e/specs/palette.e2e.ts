@@ -186,7 +186,7 @@ describe("the command palette", () => {
     // with it — which is what makes this checkable without counting panes across tabs.
     const before = await tabNames();
     await openPalette();
-    await typeIntoPalette("close pane");
+    await typeIntoPalette("end this pane");
 
     await browser.keys(["Enter"]);
 

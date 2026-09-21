@@ -797,8 +797,12 @@ export function PlaneView({
           One tablist for the axis, and it is this one — the sidebar lists the same
           workspaces, but as a listing of what each holds rather than as a second answer to
           "which workspace am I in". */}
+      {/* A `div` and not a `nav`, deliberately: the sidebar is already
+          `nav[aria-label="Workspaces"]`, and a second landmark by that name is two answers
+          to one query — for a screen reader and for every scenario spec that reaches the
+          sidebar by it. The tablist is what this is. */}
       {strips.length > 0 && (
-        <nav className="workspaces-strip" role="tablist" aria-label="Workspaces">
+        <div className="workspaces-strip" role="tablist" aria-label="Workspaces">
           {strips.map((workspace) => {
             const offer = by(`workspace.focus:${workspace}`);
             const waiting = states.needsYou.filter(
@@ -841,7 +845,7 @@ export function PlaneView({
               </button>
             );
           })}
-        </nav>
+        </div>
       )}
 
       <header className="bar">
@@ -873,6 +877,12 @@ export function PlaneView({
               <Closer offer={by(`tab.close:${id}`)} onPress={press} />
             </span>
           ))}
+        </div>
+        {/* **Outside the strip that scrolls.** It used to be the strip's last child, so at
+            fifty chats the way to open the fifty-first was to scroll right to find it — the
+            same defect as an unreachable tab, on the one control that is always wanted
+            (charter-app#130). */}
+        <div className="adding">
           <Doer offer={by("chat.new")} onPress={press} />
         </div>
         <div className="doing">
