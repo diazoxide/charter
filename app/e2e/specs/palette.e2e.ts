@@ -59,7 +59,7 @@ async function arrangement(): Promise<string[]> {
   );
 }
 
-/** The names on the tab strip, left to right. Scoped to that tablist: the sidebar lists
+/** The names on the tab strip, left to right. Scoped to that tablist: the strip above lists
  *  workspaces as a tablist too, and a query across the window would mix the two. */
 async function tabNames(): Promise<string[]> {
   return browser.execute(() =>

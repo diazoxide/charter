@@ -1,13 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
-import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen, within } from "@testing-library/react";
+import { userEvent } from "@testing-library/user-event";
 import { Panels } from "./Panels";
-import type { Panels as PanelsModel, RepoState, RepoStates } from "./bindings";
+import type { Panels as PanelsModel } from "./bindings";
+import type { WorkspaceState } from "./workspaceState";
 
-afterEach(() => {
-  cleanup();
-  clearMocks();
-});
+afterEach(cleanup);
 
 const PANELS: PanelsModel = {
   workspace: "alpha",
@@ -22,271 +20,158 @@ const PANELS: PanelsModel = {
   persona: "steward",
 };
 
-function repo(name: string, on: Partial<RepoState> = {}): RepoState {
+function state(on: Partial<WorkspaceState> = {}): WorkspaceState {
   return {
-    name,
-    branch: "main",
-    unborn: false,
-    detached: null,
-    upstream: null,
-    ahead: 0,
-    behind: 0,
-    tracked: 0,
-    untracked: 0,
-    unreadable: null,
-    ci: null,
-    change: null,
-    sigil: null,
-    fetched_seconds_ago: null,
-    not_fetched: "nothing has fetched this checkout",
+    panels: PANELS,
+    repos: { workspace: "alpha", repos: [], cache_refused: null },
+    pieces: {},
+    piecesRefused: {},
+    reading: false,
     ...on,
   };
 }
 
-/** Answers both panel commands, with whatever this test wants them to say. */
-function core(panels: PanelsModel | Error = PANELS, repos: Partial<RepoStates> = {}) {
-  mockIPC((cmd) => {
-    if (cmd === "workspace_panels") {
-      if (panels instanceof Error) throw panels;
-      return panels;
-    }
-    if (cmd === "workspace_repos") {
-      return { workspace: "alpha", repos: [], cache_refused: null, ...repos };
-    }
-    return null;
-  });
+function draw(
+  on: {
+    workspace?: string;
+    state?: WorkspaceState;
+    queue?: number[];
+    quiet?: string[];
+    showChat?: (session: number) => void;
+  } = {},
+) {
+  render(
+    <Panels
+      workspace={"workspace" in on ? on.workspace : "alpha"}
+      state={on.state ?? state()}
+      queue={on.queue ?? []}
+      quiet={on.quiet ?? []}
+      nameOf={(session) => `ide.${session}`}
+      showChat={on.showChat ?? (() => {})}
+    />,
+  );
 }
 
-/** The project these panels are for. A workspace name is only half an answer: two
- *  projects can both have an `alpha`, so every ask carries the project it is about. */
-const PLANE = "/home/dev/plane";
+describe("the right-hand region", () => {
+  it("holds the needs-you queue, which used to share a line with six other things", () => {
+    // charter ADR 0038 moved it here off `<header className="bar">`. The queue itself was
+    // already built; where it is was the decision.
+    draw({ queue: [3, 7] });
 
-const row = (name: string) => screen.findByTestId(`repo-${name}`);
-const ci = (name: string) => screen.findByTestId(`ci-${name}`);
-
-describe("Panels", () => {
-  it("draws the plane's own answer without waiting for git", async () => {
-    // The two asks are separate so that the todo list is not behind `git status` on every
-    // clone. Here the repo answer never arrives at all, and the rest still draws.
-    mockIPC((cmd) => {
-      if (cmd === "workspace_panels") return PANELS;
-      return new Promise(() => {});
-    });
-
-    render(<Panels plane={PLANE} workspace="alpha" />);
-
-    expect(await screen.findByText("Review the rollout plan")).toBeInTheDocument();
-    expect(within(await screen.findByTestId("panel-personas")).getByText(/steward/)).toBeVisible();
-    expect(await row("svc")).toHaveTextContent("reading…");
+    const queue = within(screen.getByTestId("panels")).getByLabelText("Needs you");
+    expect(queue).toHaveTextContent("2 need you");
+    expect(within(queue).getByRole("button", { name: "ide.3" })).toBeInTheDocument();
   });
 
-  it("says which persona a chat started here would adopt", async () => {
-    core();
+  it("brings a chat forward from the queue", async () => {
+    const showChat = vi.fn();
+    draw({ queue: [7], showChat });
 
-    render(<Panels plane={PLANE} workspace="alpha" />);
+    await userEvent.click(screen.getByRole("button", { name: "ide.7" }));
 
-    const personas = await screen.findByTestId("panel-personas");
-    await waitFor(() => expect(personas).toHaveTextContent("steward · default"));
-    expect(personas).toHaveTextContent("devops");
+    expect(showChat).toHaveBeenCalledWith(7);
+  });
+
+  it("draws the queue even when no workspace is focused, because it is not the workspace's", () => {
+    // A chat asking for you in a workspace nobody is looking at is exactly the one that must
+    // not be hidden — the same hole the project tabs close one scope up.
+    draw({ workspace: undefined, queue: [3] });
+
+    expect(screen.getByLabelText("Needs you")).toHaveTextContent("1 need you");
+  });
+
+  it("is named for what it is, and not a second answer to which workspace this is", () => {
+    // Two `nav[aria-label="Workspaces"]` broke a spec once. The strip is the axis and keeps
+    // that name; this region is what is asking for you.
+    draw();
+
+    expect(screen.getByTestId("panels")).toHaveAttribute("aria-label", "Attention · alpha");
+  });
+
+  // ---------------------------------------------------------------------------------------
+  // Alerts, which have a region and nothing to draw
+  // ---------------------------------------------------------------------------------------
+
+  it("says the alert row is not ported rather than showing an empty alert area", () => {
+    // charter ADR 0038 assigns alerts here and there is no source: `_alerts` lives in
+    // `charter/statusline.py` and nothing ports it. An empty area under the heading would
+    // claim charter had looked — the same lie `footer.rs` refuses to tell.
+    draw();
+
+    const alerts = screen.getByTestId("panel-alerts");
+    expect(alerts).toHaveTextContent("Not drawn by this build");
+    expect(alerts).not.toHaveTextContent("No alerts");
+  });
+
+  it("invents no alert state even when everything else has been read", () => {
+    draw({ state: state() });
+
+    expect(screen.getByTestId("panel-alerts")).toHaveTextContent(
+      /cannot tell you whether anything is alerting/,
+    );
+  });
+
+  // ---------------------------------------------------------------------------------------
+  // Todos and personas, which stayed
+  // ---------------------------------------------------------------------------------------
+
+  it("shows the focused workspace's open todos", () => {
+    draw();
+
+    expect(screen.getByTestId("panel-todos")).toHaveTextContent("Review the rollout plan");
+  });
+
+  it("says which persona a chat started here would adopt", () => {
+    draw();
+
+    const personas = screen.getByTestId("panel-personas");
+    expect(personas).toHaveTextContent("steward · default");
     expect(within(personas).getByText("devops")).not.toHaveTextContent("default");
   });
 
-  it("shows each repo's branch, how far it is from its upstream, and what is uncommitted", async () => {
-    core(PANELS, {
-      repos: [
-        repo("svc", { upstream: "origin/main", ahead: 2, behind: 1, tracked: 3, untracked: 1 }),
-        repo("tool"),
-      ],
+  it("says why the todos could not be read rather than showing none", () => {
+    draw({
+      state: state({
+        panels: { ...PANELS, todos: [], todos_refused: "todos/ resolves outside the plane" },
+      }),
     });
 
-    render(<Panels plane={PLANE} workspace="alpha" />);
-
-    const svc = await row("svc");
-    await waitFor(() => expect(svc).toHaveTextContent("main"));
-    expect(svc).toHaveTextContent("origin/main");
-    expect(svc).toHaveTextContent("2 ahead, 1 behind");
-    expect(svc).toHaveTextContent("3 changed, 1 untracked");
-    expect(await row("tool")).toHaveTextContent("clean");
-  });
-
-  it("never draws a tree charter could not read as clean", async () => {
-    // The whole reason the core has a third state. "Clean" here is a lie that reads as
-    // "nothing to do", which is exactly the wrong thing to tell someone in a hurry.
-    core(PANELS, {
-      repos: [
-        repo("svc", {
-          branch: null,
-          unreadable:
-            "charter could not read the working tree at /p/svc — fatal: not a git repository. " +
-            "That is not the same as it being clean",
-        }),
-      ],
-    });
-
-    render(<Panels plane={PLANE} workspace="alpha" />);
-
-    const svc = await row("svc");
-    await waitFor(() => expect(svc).toHaveTextContent("could not read"));
-    // No dirt cell at all — not "clean", and not a count either, because every number on a
-    // row charter could not read would be one it made up.
-    expect(svc.querySelector(".dirt")).toBeNull();
-    expect(within(svc).getByRole("alert")).toBeInTheDocument();
-  });
-
-  it("says a branch has no commits yet rather than drawing it like any other", async () => {
-    core(PANELS, { repos: [repo("svc", { unborn: true })] });
-
-    render(<Panels plane={PLANE} workspace="alpha" />);
-
-    await waitFor(async () => expect(await row("svc")).toHaveTextContent("no commits yet"));
-  });
-
-  it("names the commit a detached checkout sits on", async () => {
-    core(PANELS, { repos: [repo("svc", { branch: null, detached: "1a2b3c4" })] });
-
-    render(<Panels plane={PLANE} workspace="alpha" />);
-
-    await waitFor(async () => expect(await row("svc")).toHaveTextContent("detached at 1a2b3c4"));
-  });
-
-  // -------------------------------------------------------------------------------------
-  // CI, which is read and never fetched
-  // -------------------------------------------------------------------------------------
-
-  it("shows the CI state the cache holds, with the change and how old the answer is", async () => {
-    core(PANELS, {
-      repos: [
-        repo("svc", {
-          ci: "failed",
-          change: 41,
-          sigil: "#",
-          fetched_seconds_ago: 120,
-          not_fetched: null,
-        }),
-      ],
-    });
-
-    render(<Panels plane={PLANE} workspace="alpha" />);
-
-    const cell = await ci("svc");
-    await waitFor(() => expect(cell).toHaveTextContent("failed"));
-    expect(cell).toHaveTextContent("#41");
-    // The age is part of the claim: a two-hour-old "success" is not the same as a fresh one.
-    expect(cell).toHaveTextContent("2m ago");
-  });
-
-  it("says why there is no CI state rather than leaving the cell blank", async () => {
-    // A blank cell reads as "fine". The reason is the whole point of the row.
-    core(PANELS, {
-      repos: [repo("svc", { not_fetched: "the last fetch was for a different branch" })],
-    });
-
-    render(<Panels plane={PLANE} workspace="alpha" />);
-
-    const cell = await ci("svc");
-    await waitFor(() => expect(cell).toHaveTextContent("not fetched"));
-    expect(cell).toHaveTextContent("different branch");
-  });
-
-  it("tells a fetch that named no pipeline from no fetch at all", async () => {
-    core(PANELS, { repos: [repo("svc", { fetched_seconds_ago: 30, not_fetched: null })] });
-
-    render(<Panels plane={PLANE} workspace="alpha" />);
-
-    const cell = await ci("svc");
-    await waitFor(() => expect(cell).toHaveTextContent("no pipeline recorded"));
-    expect(cell).not.toHaveTextContent("not fetched");
-  });
-
-  it("says the app reads CI state and does not fetch it", async () => {
-    core();
-
-    render(<Panels plane={PLANE} workspace="alpha" />);
-
-    expect(
-      await within(await screen.findByTestId("panel-ci")).findByText(/never fetches/),
-    ).toBeVisible();
-  });
-
-  it("shows a forge cache charter refused, once for the listing", async () => {
-    core(PANELS, {
-      cache_refused: "/p/.charter/cache/glstate.json is reached through a symlink",
-    });
-
-    render(<Panels plane={PLANE} workspace="alpha" />);
-
-    const panel = await screen.findByTestId("panel-ci");
-    await waitFor(() => expect(within(panel).getByRole("alert")).toHaveTextContent("symlink"));
-  });
-
-  // -------------------------------------------------------------------------------------
-  // Refusals, which are shown
-  // -------------------------------------------------------------------------------------
-
-  it("shows what charter would not read instead of a workspace with fewer repos in it", async () => {
-    core({
-      ...PANELS,
-      repos: ["svc"],
-      refused: [["alias", "'alias' is reached through a symlink, and a worktree path may not be"]],
-    });
-
-    render(<Panels plane={PLANE} workspace="alpha" />);
-
-    const panel = await screen.findByTestId("panel-repos");
-    await waitFor(() => expect(within(panel).getByRole("alert")).toHaveTextContent("alias"));
-  });
-
-  it("shows a repo the manifest names that nobody has cloned", async () => {
-    core({ ...PANELS, repos: ["svc"], absent: ["later"] });
-
-    render(<Panels plane={PLANE} workspace="alpha" />);
-
-    await waitFor(async () => expect(await row("later")).toHaveTextContent("not cloned here"));
-  });
-
-  it("says why the todos could not be read rather than showing none", async () => {
-    core({ ...PANELS, todos: [], todos_refused: "todos/ resolves outside the plane" });
-
-    render(<Panels plane={PLANE} workspace="alpha" />);
-
-    const panel = await screen.findByTestId("panel-todos");
-    await waitFor(() => expect(within(panel).getByRole("alert")).toHaveTextContent("outside"));
-  });
-
-  it("says when the core refused the workspace outright", async () => {
-    core(new Error("no workspace 'ghost'"));
-
-    render(<Panels plane={PLANE} workspace="ghost" />);
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("ghost");
-  });
-
-  it("draws nothing about a workspace when none is focused", async () => {
-    core();
-
-    render(<Panels plane={PLANE} workspace={undefined} />);
-
-    expect(await screen.findByText("No workspace focused.")).toBeInTheDocument();
-  });
-
-  it("throws away an answer that arrives for a workspace no longer focused", async () => {
-    // The panels are re-asked on every focus change, and the answers race. One that names a
-    // different workspace is another workspace's, and drawing it would put beta's repos
-    // under alpha's heading.
-    mockIPC((cmd) => {
-      if (cmd === "workspace_panels") return { ...PANELS, workspace: "beta", repos: ["other"] };
-      // This one IS alpha's, and it is what the test waits on: once it has been drawn, the
-      // other answer has certainly arrived too, so what follows is about it being dropped
-      // and not about it being slow.
-      return { workspace: "alpha", repos: [], cache_refused: "the cache was not read" };
-    });
-
-    render(<Panels plane={PLANE} workspace="alpha" />);
-
-    await waitFor(() =>
-      expect(screen.getByTestId("panel-ci")).toHaveTextContent("the cache was not read"),
+    expect(within(screen.getByTestId("panel-todos")).getByRole("alert")).toHaveTextContent(
+      "outside",
     );
-    expect(screen.queryByTestId("repo-other")).not.toBeInTheDocument();
-    expect(screen.getByTestId("panel-repos")).toHaveTextContent("Reading the plane…");
+  });
+
+  it("says the plane is still being read rather than saying there is nothing to do", () => {
+    draw({ state: state({ panels: undefined }) });
+
+    expect(screen.getByTestId("panel-todos")).toHaveTextContent("Reading the plane…");
+  });
+
+  it("says when the core refused the workspace outright", () => {
+    draw({
+      workspace: "ghost",
+      state: state({ panels: undefined, trouble: "no workspace 'ghost'" }),
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent("ghost");
+  });
+
+  it("draws no workspace answers when none is focused", () => {
+    draw({ workspace: undefined });
+
+    expect(screen.getByText("No workspace focused.")).toBeInTheDocument();
+    expect(screen.queryByTestId("panel-todos")).not.toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------------------------------
+  // What moved out (charter ADR 0038)
+  // ---------------------------------------------------------------------------------------
+
+  it("no longer draws repos or CI, which are state and went to the bottom bar", () => {
+    draw();
+
+    expect(screen.queryByTestId("panel-repos")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("panel-ci")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("repo-svc")).not.toBeInTheDocument();
   });
 });

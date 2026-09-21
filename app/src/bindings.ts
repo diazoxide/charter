@@ -268,16 +268,16 @@ export const commands = {
 	stale: boolean,
 } | null, string>(__TAURI_INVOKE("worktree_of_chat", { cwd })),
 	/**  This workspace's pieces for one repo. */
-	worktreeList: (plane: string, workspace: string, repo: string) => typedError<Piece[], string>(__TAURI_INVOKE("worktree_list", { plane, workspace, repo })),
+	worktreeList: (plane: PlaneId, workspace: string, repo: string) => typedError<Piece[], string>(__TAURI_INVOKE("worktree_list", { plane, workspace, repo })),
 	/**
 	 *  Remove a piece. The refusal is the core's sentence, unchanged.
 	 * 
 	 *  `force` is the operator saying to discard work the guards found — it is never passed on
 	 *  their behalf, and the window asks for it only after showing them what the refusal said.
 	 */
-	worktreeRemove: (plane: string, workspace: string, repo: string, piece: string, force: boolean) => typedError<null, string>(__TAURI_INVOKE("worktree_remove", { plane, workspace, repo, piece, force })),
+	worktreeRemove: (plane: PlaneId, workspace: string, repo: string, piece: string, force: boolean) => typedError<null, string>(__TAURI_INVOKE("worktree_remove", { plane, workspace, repo, piece, force })),
 	/**  Land a piece in its clone, fast-forward only. Never pushes. */
-	worktreeMerge: (plane: string, workspace: string, repo: string, piece: string) => typedError<Merged, string>(__TAURI_INVOKE("worktree_merge", { plane, workspace, repo, piece })),
+	worktreeMerge: (plane: PlaneId, workspace: string, repo: string, piece: string) => typedError<Merged, string>(__TAURI_INVOKE("worktree_merge", { plane, workspace, repo, piece })),
 };
 
 /* Types */
