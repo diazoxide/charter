@@ -1443,6 +1443,7 @@ fn workspace_command(command: &Command) -> Option<ExitCode> {
             | WorkspaceCommand::Snapshot { .. }
             | WorkspaceCommand::Create { .. }
             | WorkspaceCommand::Fork { .. }
+            | WorkspaceCommand::Restore { .. }
             | WorkspaceCommand::Reinit { .. }
     ) {
         return None;

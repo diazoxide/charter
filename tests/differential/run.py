@@ -3286,6 +3286,16 @@ PIECE_GIT = {
 }
 
 
+#: The two plane copies live in directories named after their side, so a sentence that names
+#: a checkout by its ABSOLUTE path — which charter's `unhidden` and `unlisted` both do, because
+#: the path it names is git's own spelling of another tree — differs by that prefix and by
+#: nothing else. Everything below the root is still compared byte for byte, which is where the
+#: checkout, the file and the exclude that hides it are.
+PLANE_COPY_MASK = [
+    (r"\S*/(?:python|rust)/plane", "the two plane copies are in differently named directories"),
+]
+
+
 def _a_worktree_of_the_checkout(root: Path, branch: str = "side", at: str = "svc-wt") -> Path:
     """A linked worktree of `workspaces/beta/svc`, inside the same workspace.
 
@@ -3352,6 +3362,34 @@ def _a_repository_whose_worktrees_git_cannot_list(root: Path) -> None:
     """
     _a_worktree_of_the_checkout(root)
     os.chmod(root / "workspaces" / "beta" / "svc" / ".git" / "worktrees", 0)
+
+
+#: charter keeps the errno a record publish failed with in its own state directory, under a
+#: name that is the sha256 of the checkout's ABSOLUTE path — which is each side's own
+#: directory, so the two notes are two filenames. What is IN them is the whole of what either
+#: implementation decided, and `_unrecorded_facts` compares that.
+UNRECORDED_NOTE = {
+    ".charter/unrecorded": "keyed by sha256 of the checkout's own absolute path, which names "
+                           "each side's directory; the note's CONTENT is compared through "
+                           "`facts`",
+}
+
+
+def _unrecorded_facts(root: Path) -> str:
+    """The checkout's own facts, plus every failed-publish note charter kept, by content.
+
+    **A missing note is a failure of the scenario**: without a note neither side decided
+    anything, and comparing "nothing" against "nothing" reports ok for an implementation that
+    never reached the rule.
+    """
+    notes = sorted((root / ".charter" / "unrecorded").glob("*.json"))
+    if not notes:
+        raise SystemExit(
+            "setup: no record-publish failure was kept, so this scenario would compare "
+            "nothing about `unrecorded` and report ok"
+        )
+    kept = "\n".join(note.read_text() for note in notes)
+    return f"{_checkout_facts(root)}\nunrecorded:\n{kept}"
 
 
 def _a_checkout_whose_root_refuses_its_record(root: Path) -> None:
@@ -4099,6 +4137,7 @@ M28_SCENARIOS = [
         python=["workspace", "reinit", "beta"],
         facts=_clone_and_worktree_facts,
         ignore=SIBLING_GIT,
+        stderr_mask=PLANE_COPY_MASK,
         same_stderr=True,
     ),
     Scenario(
@@ -4112,6 +4151,7 @@ M28_SCENARIOS = [
         python=["workspace", "reinit", "beta"],
         facts=_clone_and_worktree_facts,
         ignore=SIBLING_GIT,
+        stderr_mask=PLANE_COPY_MASK,
         same_stderr=True,
     ),
     Scenario(
@@ -4136,6 +4176,7 @@ M28_SCENARIOS = [
         python=["workspace", "reinit", "beta"],
         facts=_checkout_facts,
         ignore=SIBLING_GIT,
+        stderr_mask=PLANE_COPY_MASK,
         same_stderr=True,
     ),
     Scenario(
@@ -4146,8 +4187,8 @@ M28_SCENARIOS = [
         plane="daily",
         setup=_a_checkout_whose_root_refuses_its_record,
         python=["workspace", "reinit", "beta"],
-        facts=_checkout_facts,
-        ignore=CHECKOUT_GIT,
+        facts=_unrecorded_facts,
+        ignore={**CHECKOUT_GIT, **UNRECORDED_NOTE},
         same_stderr=True,
     ),
     # ---- charter workspace restore, and `fork --restore` (M2.26) --------------------------
