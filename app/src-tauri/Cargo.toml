@@ -47,7 +47,7 @@ workspace = true
 # starts this binary from a checkout that sits inside the operator's own plane, so a config
 # that forgets to pin `$CHARTER_ROOT` resolves that plane and records into it — which is
 # charter-app#129. A fenced app dies at the first touch instead of quietly succeeding.
-e2e = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver", "charter-core/fenced"]
+e2e = ["dep:tauri-plugin-wdio", "dep:tauri-plugin-wdio-webdriver"]
 
 [dev-dependencies]
 # Fenced for `cargo test --workspace`, which is the invocation that compiles and runs this

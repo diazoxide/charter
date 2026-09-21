@@ -55,7 +55,7 @@ export const config: WebdriverIO.Config = {
         appBinaryPath: app,
         captureBackendLogs: true,
         captureFrontendLogs: false,
-        env: theRunsEnvironment(plane, { SHELL: shell }),
+        env: { SHELL: shell },
       },
     ],
   ],
