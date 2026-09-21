@@ -305,7 +305,7 @@ fn the_recorded_python_answer_is_the_answer_this_module_gives() {
             &row["cms"],
             segments
                 .iter()
-                .map(|s| heredoc::commit_message_on_stdin(s.as_slice()).into())
+                .map(|s| Value::Bool(heredoc::commit_message_on_stdin(s.as_slice())))
                 .collect(),
         );
         check(
@@ -313,7 +313,7 @@ fn the_recorded_python_answer_is_the_answer_this_module_gives() {
             &row["ghb"],
             segments
                 .iter()
-                .map(|s| heredoc::gh_body_on_stdin(s.as_slice()).into())
+                .map(|s| Value::Bool(heredoc::gh_body_on_stdin(s.as_slice())))
                 .collect(),
         );
         check(

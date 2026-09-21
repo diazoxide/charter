@@ -163,8 +163,11 @@ const WRAPPER_VALUE_FLAGS: [(&str, &[&str]); 11] = [
 ///
 /// getopt bundles short options, so `-iC<dir>` is `-i -C <dir>` and the chdir flag is not the
 /// first thing in its own token. **The value table is consulted FIRST for every letter**, so a
-/// letter in both would behave as value-taking — the fail-closed way round. The Python holds the
-/// two disjoint per wrapper with a test, so that ordering is deliberately not load-bearing.
+/// letter in both would behave as value-taking — the fail-closed way round. That ordering is
+/// deliberately **not** load-bearing and is checked rather than trusted: the two tables are
+/// disjoint for every wrapper that appears in both (swept here, zero overlaps), no no-value table
+/// holds a `-`, and no value table holds a bare `--`. Those three are what would make the order,
+/// and [`wrapper_option`]'s comment about a long option needing no branch, start mattering again.
 const WRAPPER_NOVALUE_LETTERS: [(&str, &str); 10] = [
     ("env", "0iv"), // BSD: `env [-0iv] [-C workdir] [-P utilpath] [-S string]`
     ("sudo", "ABbEeHiKklNnPSsVv"),
@@ -337,9 +340,14 @@ pub fn redirect_reads(toks: &[String]) -> Vec<String> {
 /// everything glued after it, `=` included, so `-Sfoo=1` packs `foo=1`, while
 /// `--split-string=foo=1` splits at its FIRST `=` and packs the same thing. Reading the `=` rule
 /// first split the glued form at the packed value's OWN `=`: `env -Sfoo=1 cat <vault>` came back
-/// with `1` as the program and printed the vault. The two rules are now DISJOINT as well as
-/// ordered — a glued short form never starts with `--`, and the `=` rule requires it — so the
-/// ordering cannot silently come back.
+/// with `1` as the program and printed the vault.
+///
+/// **What is load-bearing is the DISJOINTNESS, not the order, and that was measured rather than
+/// assumed.** A glued short form never starts with `--`, and the `=` rule requires it, so the two
+/// arms cannot both match one token: swapping them changes **no answer** over 3,000 fuzz cases
+/// and none of the recorded corpus. Dropping the `--` requirement *and* putting the `=` rule
+/// first — which is the #547 shape — changes 21. The Python's own comment reads as though the
+/// ordering were the repair; the ordering is a consequence, and this is the fact that holds.
 pub fn flag_name_value(tok: &str, spellings: &[&str]) -> (String, String) {
     let glued = spellings.iter().find(|f| {
         !f.starts_with("--") && tok.starts_with(**f) && tok.chars().count() > f.chars().count()
@@ -624,5 +632,65 @@ pub fn split_env_chdir(toks: &[String]) -> Invocation {
         argv,
         chdir,
         reads,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The three facts that make [`wrapper_option`]'s two written-down inert branches inert.
+    ///
+    /// Asserted rather than assumed, because an unpinned reason is how dead code comes back to
+    /// life: a letter in BOTH tables would make the order the walk consults them in load-bearing,
+    /// a `-` in a no-value table would give `--nonesuch` a path through the letter walk instead
+    /// of ending it unplaced on its first step, and a bare `--` in a value table would make the
+    /// `tok == "--"` early return a behaviour change rather than a shortcut.
+    #[test]
+    fn the_two_letter_tables_cannot_disagree() {
+        for (base, novalue) in WRAPPER_NOVALUE_LETTERS {
+            let mut takes: Vec<&str> = table(&WRAPPER_VALUE_FLAGS, base).unwrap_or(&[]).to_vec();
+            if base == "env" {
+                takes.extend_from_slice(&SPLIT_STRING_FLAGS);
+            }
+            for ch in novalue.chars() {
+                let letter = format!("-{ch}");
+                assert!(
+                    !takes.contains(&letter.as_str()),
+                    "{base}: `{letter}` is in BOTH tables, so which is read first decides",
+                );
+            }
+            assert!(
+                !novalue.contains('-'),
+                "{base}: a `-` here gives a long option a path through the letter walk",
+            );
+        }
+        for (base, takes) in WRAPPER_VALUE_FLAGS {
+            assert!(
+                !takes.contains(&"--"),
+                "{base}: a bare `--` here makes the end-of-options early return load-bearing",
+            );
+        }
+    }
+
+    /// `git_globals` stops where git stops: at the first token that is not an option.
+    ///
+    /// `-C` means "change directory" in `git -C <dir> switch neu` and `--force-create` in
+    /// `git switch -C neu`. Stripping it from anywhere read the second as the first, and the
+    /// guard stood aside while git created a branch at the plane root.
+    #[test]
+    fn git_stops_reading_its_own_globals_at_the_first_non_option() {
+        let argv: Vec<String> = ["git", "-C", "/tmp", "switch", "-C", "neu"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let (globals, rest) = git_globals(&argv);
+        assert_eq!(globals, vec!["-C".to_string(), "/tmp".to_string()]);
+        assert_eq!(
+            rest,
+            vec!["switch".to_string(), "-C".to_string(), "neu".to_string()],
+        );
+        // and the empty argv, which Python's `args[1:]` clamps rather than raising
+        assert_eq!(git_globals(&[]), (Vec::new(), Vec::new()));
     }
 }
