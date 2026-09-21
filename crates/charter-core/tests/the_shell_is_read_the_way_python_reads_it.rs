@@ -193,7 +193,7 @@ fn the_recorded_python_answer_is_the_answer_this_module_gives() {
             &row["ho"],
             openers
                 .iter()
-                .map(|m| serde_json::json!([m.start, m.delim, m.dash, m.backslash, m.quote]))
+                .map(|m| serde_json::json!([m.start, m.end, m.delim, m.dash, m.backslash, m.quote]))
                 .collect(),
         );
         check(

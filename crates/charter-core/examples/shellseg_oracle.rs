@@ -144,7 +144,7 @@ fn read_it(cmd: &str) -> Value {
         "dac": heredoc::desugar_ansi_c(&line),
         "psp": psp,
         "sq": shellseg::shell_quote(cmd),
-        "ho": openers.iter().map(|m| json!([m.start, m.delim, m.dash, m.backslash, m.quote]))
+        "ho": openers.iter().map(|m| json!([m.start, m.end, m.delim, m.dash, m.backslash, m.quote]))
             .collect::<Vec<_>>(),
         "hh": at_shift.iter()
             .map(|&i| json!([i, header_json(heredoc::heredoc_header(&line, i))]))

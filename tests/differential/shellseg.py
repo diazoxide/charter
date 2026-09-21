@@ -480,8 +480,14 @@ def header_of(line: str, at: int):
 
 
 def opener_rows(line: str) -> list:
-    """`_heredoc_openers`, as JSON: the offset and every group the regex captured."""
-    return [[m.start(), m.group("delim"), bool(m.group("dash")),
+    """`_heredoc_openers`, as JSON: BOTH offsets and every group the regex captured.
+
+    `m.end()` is here because nothing else in this harness reads it — it is visible in neither
+    the plan nor the layout — and "the field nobody diffs" is the one real harness defect stage 1
+    found, by mutation rather than by reading. The Rust hand-writes this pattern, so where it
+    ENDS is a claim about where `finditer` resumes and what the next opener is.
+    """
+    return [[m.start(), m.end(), m.group("delim"), bool(m.group("dash")),
              bool(m.group("bs")), m.group("q") or None]
             for m in hooks._heredoc_openers(line)]
 
