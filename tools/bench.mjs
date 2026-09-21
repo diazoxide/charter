@@ -136,6 +136,14 @@ function activate(pid) {
 }
 
 /**
+ * A machine store for the cold-start arm. It holds which projects this machine remembers and
+ * which the operator has approved (ADR 0034), and the app writes it on every launch — so a
+ * benchmark left to the runner's own would put its throwaway planes into the operator's
+ * `~/.config/charter`, and would measure a store the operator's real use keeps growing.
+ */
+const COLD_START_CONFIG_HOME = join(tmpdir(), "charter-bench-cold-start-config");
+
+/**
  * A plane for cold start to launch in, holding a record of `chats` chats to put back.
  *
  * With none it is a plain directory with a `charter.toml`, which is the empty-plane case.
@@ -173,7 +181,21 @@ async function coldStart(chats = 0) {
   const samples = [];
   for (let n = 0; n < Number(options["cold-starts"]); n++) {
     const from = performance.now();
-    const app = spawn(SHIPPED, [], { cwd, env: { ...process.env, CHARTER_BENCH_LOG: "1" } });
+    // The plane is PINNED, not left to `cwd` (charter-app#129). charter puts `$CHARTER_ROOT`
+    // into every chat it starts and the variable beats the walk, so a benchmark run from
+    // inside a charter chat measured the app against the OPERATOR'S plane — reading its
+    // reopen record, which is a list of programs the app then starts, and writing its own
+    // back. The fence is what makes a future edit that drops this line a dead app.
+    const app = spawn(SHIPPED, [], {
+      cwd,
+      env: {
+        ...process.env,
+        CHARTER_BENCH_LOG: "1",
+        CHARTER_ROOT: cwd,
+        CHARTER_PLANE_FENCE: tmpdir(),
+        CHARTER_CONFIG_HOME: COLD_START_CONFIG_HOME,
+      },
+    });
     // A window that comes up behind another draws no frame at all, so it would never reach
     // the frame this is timing. It is brought forward until it has, as launching it from the
     // dock would: the time that takes is part of the measurement.
@@ -261,6 +283,11 @@ async function rustHookCall() {
       CHARTER_HOOK_SOCKET: socket,
       CHARTER_CHAT: "7",
       CLAUDE_CODE_SESSION_ID: conversation,
+      // This arm deliberately runs in no plane at all, and an INHERITED `$CHARTER_ROOT`
+      // would silently give it one — charter puts that variable into every chat it starts,
+      // so running the benchmark from inside a chat measured a hook against the operator's
+      // own plane (charter-app#129). Empty is how charter spells "unset".
+      CHARTER_ROOT: "",
     },
   };
   const rust = join(RELEASE, "charter");
@@ -289,6 +316,10 @@ async function rustHookCall() {
 function hookCall() {
   const plane = join(tmpdir(), "charter-bench-plane");
   cpSync(join(ROOT, "tests", "fixtures", "planes", "daily"), plane, { recursive: true, force: true });
+  // PINNED, and not left to `cwd`: `$CHARTER_ROOT` beats the walk, charter puts it into every
+  // chat it starts, and a benchmark run from inside a chat therefore measured the operator's
+  // own plane rather than this copy of the fixture (charter-app#129).
+  const env = { ...process.env, CHARTER_ROOT: plane };
   const out = {};
   const python = text("charter", ["--version"]);
   if (python) {
@@ -301,10 +332,10 @@ function hookCall() {
       tool_input: { command: "ls" },
     });
     const version = python.match(/charter (\S+?)(\+|\s|$)/)?.[1] ?? "0";
-    timed("charter", ["hook", "pretooluse", "--plugin-version", version], { cwd: plane, input }, 3);
+    timed("charter", ["hook", "pretooluse", "--plugin-version", version], { cwd: plane, input, env }, 3);
     out.pythonCharterPretooluse = {
       version: python,
-      ...timed("charter", ["hook", "pretooluse", "--plugin-version", version], { cwd: plane, input }, 30),
+      ...timed("charter", ["hook", "pretooluse", "--plugin-version", version], { cwd: plane, input, env }, 30),
     };
     // The LIKE-FOR-LIKE row, and the one the Rust number should be read against. ADR 0026
     // measured `pretooluse`, which is the guard and does much more work — quoting it beside
@@ -318,18 +349,18 @@ function hookCall() {
       hook_event_name: "Stop",
       stop_hook_active: false,
     });
-    timed("charter", ["hook", "stop", "--plugin-version", version], { cwd: plane, input: stopInput }, 3);
+    timed("charter", ["hook", "stop", "--plugin-version", version], { cwd: plane, input: stopInput, env }, 3);
     out.pythonCharterStop = {
       version: python,
-      ...timed("charter", ["hook", "stop", "--plugin-version", version], { cwd: plane, input: stopInput }, 30),
+      ...timed("charter", ["hook", "stop", "--plugin-version", version], { cwd: plane, input: stopInput, env }, 30),
     };
   } else {
     out.pythonCharterPretooluse = "no `charter` on PATH";
     out.pythonCharterStop = "no `charter` on PATH";
   }
   const rust = join(RELEASE, "charter");
-  timed(rust, ["root"], { cwd: plane }, 3);
-  out.rustCharterStart = { command: "charter root", ...timed(rust, ["root"], { cwd: plane }, 30) };
+  timed(rust, ["root"], { cwd: plane, env }, 3);
+  out.rustCharterStart = { command: "charter root", ...timed(rust, ["root"], { cwd: plane, env }, 30) };
   return out;
 }
 

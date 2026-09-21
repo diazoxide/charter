@@ -286,6 +286,13 @@ impl Planes {
         // Resolved once, here. Everything below — the socket, the record, the registry key —
         // is this one spelling of the plane, so nothing downstream has to resolve anything.
         let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        // **The app's own line of the fence** (charter-app#129). Every per-plane thing this
+        // app holds — the board, the chats, the hook socket in `.charter/app/`, the machine
+        // store entry made a line below — hangs off this call and off no other, because a
+        // `PlaneId` is minted here alone. So a fenced build that must not touch a plane has
+        // exactly one place to say so, and a caller that reached a root some other way than
+        // `plane::resolve` is held all the same.
+        charter_core::fence::hold(charter_core::fence::Act::Open, &root);
         let id = PlaneId::of(&root);
         // Remembered HERE, and therefore under the spelling the line above settled on. Done
         // in the caller instead, it would be done against whatever path that caller happened

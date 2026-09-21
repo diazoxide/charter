@@ -130,11 +130,20 @@ pub const HOME_VAR: &str = "CHARTER_CONFIG_HOME";
 /// standard answer, it is already in this workspace's lockfile (Tauri depends on it), and it
 /// knows the cases a hand-rolled `$HOME` does not.
 pub fn config_root() -> Option<PathBuf> {
-    rooted(
+    let found = rooted(
         std::env::var_os(HOME_VAR),
         std::env::var_os("XDG_CONFIG_HOME"),
         dirs::home_dir(),
-    )
+    );
+    // The store is the OTHER thing a run reaches past its own fixture into, and it is not in
+    // a plane: a launcher that pinned `$CHARTER_ROOT` and forgot `$CHARTER_CONFIG_HOME` wrote
+    // its throwaway projects and their trust into the operator's `~/.config/charter`, which
+    // is where charter decides what it may open without asking. `wdio.bench.conf.ts` did
+    // exactly that. So a fenced build is held here too (charter-app#129).
+    if let Some(root) = &found {
+        crate::fence::hold(crate::fence::Act::Store, root);
+    }
+    found
 }
 
 /// [`config_root`]'s ladder, with the three answers handed in.

@@ -30,6 +30,13 @@ const CONVERSATION = "11111111-2222-4333-8444-555555555555";
  */
 const PATIENCE = 90_000;
 
+/**
+ * A machine store of this run's own. The store holds which projects this machine remembers
+ * and which the operator has approved (ADR 0034); left alone, this script would write its
+ * throwaway planes into the operator's `~/.config/charter`.
+ */
+const CONFIG_HOME = mkdtempSync(join(tmpdir(), "charter-relaunch-config-"));
+
 if (!existsSync(APP)) {
   console.error(`no app at ${APP} — build it first (npx tauri build --debug --no-bundle)`);
   process.exit(1);
@@ -75,10 +82,24 @@ function aClaude(where, argvFile) {
 async function theAppRuns(plane, done) {
   // `CHARTER_LAUNCH_LOG` makes the app say how far up it got. A launch that never reaches
   // its first chat says nothing at all otherwise, which cost three round trips of guessing.
+  //
+  // **The plane is PINNED and not left to the working directory** (charter-app#129). This
+  // spread the environment and set `cwd`, which reads as enough and is not: charter puts
+  // `$CHARTER_ROOT` into every chat it starts, so running this from inside a charter chat
+  // inherited that chat's plane — and `$CHARTER_ROOT` beats the walk. The app would then
+  // read and rewrite the operator's reopen record, which is a list of programs it starts.
+  // The fence says which planes this run may touch at all; the store and the panic log keep
+  // the rest of the run off the operator's own.
   const app = spawn(APP, [], {
     cwd: plane,
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env, CHARTER_LAUNCH_LOG: "1" },
+    env: {
+      ...process.env,
+      CHARTER_LAUNCH_LOG: "1",
+      CHARTER_ROOT: plane,
+      CHARTER_PLANE_FENCE: tmpdir(),
+      CHARTER_CONFIG_HOME: CONFIG_HOME,
+    },
   });
   let output = "";
   app.stdout.on("data", (chunk) => (output += chunk));

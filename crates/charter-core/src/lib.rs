@@ -9,6 +9,7 @@ pub mod dispatch;
 pub mod docsrc;
 pub mod doctor;
 pub mod engine;
+pub mod fence;
 pub mod footer;
 pub mod forge;
 pub mod forklock;

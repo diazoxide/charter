@@ -22,8 +22,53 @@ import process from "node:process";
  */
 export const READY = "session ready";
 
+/**
+ * The one directory this run makes anything in — every fixture plane, every config home,
+ * every stand-in shell — and the fence every charter process the run starts is held to.
+ *
+ * **charter-app#129 is why it is one directory and not several.** This repository is checked
+ * out at `workspaces/ide/charter-app`, inside the operator's own control plane, so an app
+ * started here with nothing pinned walks up and finds THAT plane: a scenario run wrote 49 of
+ * its own chats into `/Users/aharon/IdeaProjects/charter/.charter/app/reopen.json`, and the
+ * operator found them by opening charter. The record is an execution input (ADR 0035), so
+ * that is a test suite leaving programs behind in a real plane, not only a mess.
+ *
+ * Pinning `$CHARTER_ROOT` is how a run *avoids* that, and it is not enough on its own: a
+ * config that stops pinning it goes green and poisons a plane. So every process also carries
+ * `$CHARTER_PLANE_FENCE` pointing here, and the binary the scenario tests drive is built with
+ * the fence in it (`e2e` turns on `charter-core/fenced`). A run that resolves any plane this
+ * tree does not hold dies naming it, in the job that broke it.
+ *
+ * Made once per launcher process, and `wdio.state.conf.ts` and `wdio.bench.conf.ts` spread
+ * `wdio.conf.ts`, so all three share it — which is what makes it the fence for all of them.
+ */
+export const THE_RUNS_TREE = mkdtempSync(join(tmpdir(), "charter-scenario-run-"));
+
+/**
+ * The environment a charter process this run starts is given: the plane it means, a machine
+ * store of its own, and the fence.
+ *
+ * **The three go together, and that is why they are one function.** `CHARTER_ROOT` says
+ * which plane; `CHARTER_CONFIG_HOME` keeps this run's approvals and recents out of the
+ * runner's own (see `aConfigHomeOfItsOwn`); `CHARTER_PLANE_FENCE` is what turns "the config
+ * forgot one of them" from a silent write into a dead app. A launcher that set two of the
+ * three used to typecheck, lint and pass — `wdio.bench.conf.ts` set neither of the first two
+ * for months.
+ */
+export function theRunsEnvironment(
+  plane: string,
+  extra: Record<string, string> = {},
+): Record<string, string> {
+  return {
+    CHARTER_ROOT: plane,
+    CHARTER_CONFIG_HOME: aConfigHomeOfItsOwn(),
+    CHARTER_PLANE_FENCE: THE_RUNS_TREE,
+    ...extra,
+  };
+}
+
 export function writeShell(fakeHarness: string): string {
-  const where = join(tmpdir(), "charter-scenario");
+  const where = join(THE_RUNS_TREE, "shells");
   mkdirSync(where, { recursive: true });
   const shell = join(where, "harness-as-a-shell");
   writeFileSync(
@@ -53,7 +98,7 @@ export function writeShell(fakeHarness: string): string {
  * and fires `stop` once the output is done.
  */
 export function writeReportingShell(fakeHarness: string, charter: string): string {
-  const where = join(tmpdir(), "charter-scenario");
+  const where = join(THE_RUNS_TREE, "shells");
   mkdirSync(where, { recursive: true });
   const shell = join(where, "reporting-harness-as-a-shell");
   writeFileSync(
@@ -101,7 +146,9 @@ export function built(name: string): string {
  */
 export function copyFixturePlane(name = "daily"): string {
   const from = join(import.meta.dirname, "..", "..", "tests", "fixtures", "planes", name);
-  const to = mkdtempSync(join(tmpdir(), `charter-scenario-plane-${name}-`));
+  // Inside `THE_RUNS_TREE`, which is the fence: a plane this function made is a plane the
+  // run may act on, and there is no other kind (charter-app#129).
+  const to = mkdtempSync(join(THE_RUNS_TREE, `plane-${name}-`));
   const root = join(to, name);
   cpSync(from, root, { recursive: true });
   // Directories the fixture cannot carry, because git will not track an empty one. The
@@ -345,5 +392,5 @@ export function anEmptyRecord(plane: string): void {
  * variable exists, and it is `report.py:consent_path`'s reason, unchanged.
  */
 export function aConfigHomeOfItsOwn(): string {
-  return mkdtempSync(join(tmpdir(), "charter-scenario-config-"));
+  return mkdtempSync(join(THE_RUNS_TREE, "config-"));
 }

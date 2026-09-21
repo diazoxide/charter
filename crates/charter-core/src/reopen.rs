@@ -262,6 +262,11 @@ pub(crate) fn refuse_unusable(file: &Path, found: &std::fs::Metadata) -> std::io
 /// The file is written beside itself and renamed over, so a launch that reads it never sees
 /// half of one — the app can be killed at any moment, and quitting is exactly when it is.
 pub fn write(plane_root: &Path, record: &Record) -> std::io::Result<()> {
+    // Belt as well as braces. A root gets here from [`crate::plane::resolve`], which a
+    // fenced build has already held — but also from a caller that was handed one, and this
+    // file is the exact thing charter-app#129 damaged. The place where the record is written
+    // is worth guarding on its own account, whatever route the root took to reach it.
+    crate::fence::hold(crate::fence::Act::Write, plane_root);
     let file = path(plane_root);
     no_link_on_the_way(plane_root, &file)?;
     let dir = file.parent().expect("the record's path has a directory");
@@ -311,6 +316,11 @@ fn read(plane_root: &Path) -> Record {
 /// otherwise render identically, and the operator would read "nothing to reopen" and conclude
 /// their chats were never recorded rather than that a committed file is defective.
 pub fn read_or_refusal(plane_root: &Path) -> Result<Record, std::io::Error> {
+    // Reading is guarded as well as writing, and the reason is the whole of ADR 0035: this
+    // file says what to RUN. A test that reads a real plane's record starts the operator's
+    // programs — which is what the reproduction for charter-app#129 did, from a checkout
+    // one directory inside a plane: "1 of 1 chats back", in a plane the run never made.
+    crate::fence::hold(crate::fence::Act::Read, plane_root);
     let file = path(plane_root);
     // A record reached through a link is not this plane's record, and what it holds is a
     // command line this launch would run — so the walk AND the open both answer, and the
