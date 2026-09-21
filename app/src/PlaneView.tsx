@@ -49,6 +49,7 @@ import {
   type FiledIn,
   type LastMoved,
   type Layout,
+  type Pinned,
   type Tabs,
 } from "./tabs";
 import { ChatState, NeedsYou } from "./NeedsYou";
@@ -91,6 +92,7 @@ export function PlaneView({
   plane,
   inFront,
   projects,
+  pinnedProjects,
   window: windowDoes,
   onReport,
 }: {
@@ -99,6 +101,9 @@ export function PlaneView({
   inFront: boolean;
   /** Every project this window holds, for the rows that switch between them. */
   projects: readonly Project[];
+  /** Which of them this operator has pinned, by root. The window holds it, because the
+   *  project strip is the window's; this project's catalogue lists the rows. */
+  pinnedProjects: readonly string[];
   /** What the WINDOW does, which this project asks for rather than doing itself: opening
    *  another project, switching to one, letting one go, and quitting. */
   window: WindowDoing;
@@ -144,6 +149,9 @@ export function PlaneView({
   const [located, setLocated] = useState<{ cwd: string; piece?: ChatWorktree }>();
   /** Bumped when something changed the answer, so it is asked again rather than guessed. */
   const [relocate, setRelocate] = useState(0);
+  /** The same, for the pins: a pin is written by the core, so the window asks what the core
+   *  now says rather than assuming its own write landed as it expected. */
+  const [pinning, setPinning] = useState(0);
   /** What the last action answered: one line, or a refusal in the words it came in. The
    *  window draws it, beside the palette that shares it. */
   const [report, setReport] = useState<{ from: string; refused: boolean; words: string }>();
@@ -183,6 +191,21 @@ export function PlaneView({
   /** The tab that was in front on each workspace's strip, so coming back to a workspace
    *  comes back to the chat that was on screen there rather than to its first. */
   const lastFront = useRef<Record<string, number>>({});
+  /**
+   * What this operator has pinned in this project (charter ADR 0039).
+   *
+   * **Two states and not one, because they are two stores** (ADR 0040). The workspaces come
+   * from the machine store, which is where an arrangement of things the store already names
+   * belongs; the chats come from the plane's own `.charter/app/reopen.json`, because ADR 0034
+   * forbids a chat's name outside a plane. A design that held one "pins" object would be the
+   * design ADR 0039 predicted would discover this in review.
+   */
+  const [pinnedWorkspaces, setPinnedWorkspaces] = useState<string[]>([]);
+  /** Pins that no longer name a workspace on the plane, said rather than drawn. */
+  const [danglingPins, setDanglingPins] = useState<string[]>([]);
+  /** The chats this operator has pinned, by session. Seeded from the record the core put
+   *  back, and kept current by the one handler that writes it. */
+  const [pinnedChats, setPinnedChats] = useState<number[]>([]);
 
   // The arrangement as it is right now, so that what a button does is decided here and not
   // inside a state update. React may run an update again, and a session must not be opened or
@@ -231,6 +254,8 @@ export function PlaneView({
         const open = answer.status === "ok" ? (answer.data ?? []) : [];
         if (open.length === 0) return;
         setReopened(open);
+        // A pinned chat comes back pinned: the pin rides the record it came back from.
+        setPinnedChats(open.filter((chat) => chat.pinned).map((chat) => chat.session));
         // The persona comes with the chat, so a tab put back reads `3 steward` from its first
         // frame rather than reading `3` until the sidebar has been read (charter-app#130).
         const drawn = open.reduce(
@@ -292,6 +317,36 @@ export function PlaneView({
   }, [plane, startedIn, tabs]);
 
   /**
+   * What the machine store says this operator has pinned here, and what it says is gone.
+   *
+   * Asked again whenever the plane is read again, for the same reason the sidebar is: which
+   * workspaces exist is the plane's answer, and a pin that no longer names one has to stop
+   * being drawn the moment the plane stops having it. `pinning` is bumped by a pin, so the
+   * answer is the store's rather than this window's guess about the store.
+   */
+  useEffect(() => {
+    let gone = false;
+    void commands
+      .planePins(plane)
+      .then((answer) => {
+        if (gone || answer.status !== "ok") return;
+        // **Held to the shape, not merely to `ok`** — the same rule the sidebar's read
+        // states. An `ok` answer with no body, or with a body of another shape, would put
+        // `undefined` where a list belongs and take the strip down on the next render. A
+        // window must not go blank because one command answered oddly.
+        const said = answer.data as Partial<typeof answer.data> | null | undefined;
+        setPinnedWorkspaces(Array.isArray(said?.workspaces) ? said.workspaces : []);
+        setDanglingPins(Array.isArray(said?.missing) ? said.missing : []);
+      })
+      // A window that cannot ask draws nothing pinned, which is the plane's own order — the
+      // arrangement an operator who has pinned nothing already has.
+      .catch(() => undefined);
+    return () => {
+      gone = true;
+    };
+  }, [pinning, plane, sidebar]);
+
+  /**
    * Which workspace each chat is filed under — the strip its tab appears on.
    *
    * **The plane's answer**, through the sidebar the core reads off it: what relates a chat to
@@ -313,6 +368,15 @@ export function PlaneView({
       return startedIn[session] ?? OUTSIDE;
     },
     [sidebar, startedIn],
+  );
+
+  /** Whether a tab is pinned: its own chat is, which is its first pane's. */
+  const isPinned = useCallback<Pinned>(
+    (id) => {
+      const session = panesOf(tabs, id)[0]?.session;
+      return session !== undefined && pinnedChats.includes(session);
+    },
+    [pinnedChats, tabs],
   );
 
   /**
@@ -350,8 +414,15 @@ export function PlaneView({
     const stray =
       sidebar.unfiled.length > 0 ||
       tabs.order.some((id) => workspaceOf(tabs, id, filedIn) === OUTSIDE);
-    return stray ? [...names, OUTSIDE] : names;
-  }, [filedIn, sidebar, tabs]);
+    const all = stray ? [...names, OUTSIDE] : names;
+    // **Pinned first, and the plane's own order inside each group** (ADR 0039). A pin says
+    // WHICH workspaces come first, never in what order they do — so two operators who pin
+    // the same two see the same arrangement, which is the plane's.
+    return [
+      ...all.filter((name) => pinnedWorkspaces.includes(name)),
+      ...all.filter((name) => !pinnedWorkspaces.includes(name)),
+    ];
+  }, [filedIn, pinnedWorkspaces, sidebar, tabs]);
 
   /**
    * The chats the strip shows: the focused workspace's.
@@ -362,8 +433,8 @@ export function PlaneView({
    * for the moment before the answer arrives.
    */
   const shown = useMemo(
-    () => (sidebar === undefined ? tabs.order : tabsIn(tabs, focused, filedIn)),
-    [filedIn, focused, sidebar, tabs],
+    () => (sidebar === undefined ? tabs.order : tabsIn(tabs, focused, filedIn, isPinned)),
+    [filedIn, focused, isPinned, sidebar, tabs],
   );
 
   /**
@@ -518,17 +589,17 @@ export function PlaneView({
     const tab =
       now.current.inFront === undefined ? undefined : now.current.byId[now.current.inFront];
     const going = tab && panesOf(now.current, tab.id).find((pane) => pane.pane === tab.focused);
-    change((tabs) => closeFocusedPane(tabs, filedIn));
+    change((tabs) => closeFocusedPane(tabs, filedIn, isPinned));
     if (going) void commands.closeSession(plane, going.session);
-  }, [change, filedIn, plane]);
+  }, [change, filedIn, isPinned, plane]);
 
   const close = useCallback(
     (id: number) => {
       const ending = panesOf(now.current, id);
-      change((tabs) => closeTab(tabs, id, filedIn));
+      change((tabs) => closeTab(tabs, id, filedIn, isPinned));
       for (const pane of ending) void commands.closeSession(plane, pane.session);
     },
-    [change, filedIn, plane],
+    [change, filedIn, isPinned, plane],
   );
 
   /**
@@ -576,9 +647,11 @@ export function PlaneView({
   const focusWorkspace = useCallback(
     (workspace: string) => {
       setPicked(workspace);
-      change((tabs) => showWorkspace(tabs, workspace, filedIn, lastFront.current[workspace]));
+      change((tabs) =>
+        showWorkspace(tabs, workspace, filedIn, lastFront.current[workspace], isPinned),
+      );
     },
-    [change, filedIn],
+    [change, filedIn, isPinned],
   );
 
   /** What a chat is called here: the tab holding it, or its session number. */
@@ -695,6 +768,50 @@ export function PlaneView({
     [frontSession, plane],
   );
 
+  /**
+   * Pins or unpins one chat.
+   *
+   * **The core's write is what makes it true**, and this waits for it: the pin is written
+   * into the plane's own record, and a mark drawn before that landed would be a pin the next
+   * launch does not have. The core's refusal travels back whole for the same reason a
+   * worktree removal's does.
+   */
+  const pinTab = useCallback(
+    async (id: number, pinned: boolean): Promise<Ran> => {
+      const session = panesOf(now.current, id)[0]?.session;
+      if (session === undefined) return { ok: false, refused: "That tab has no chat to pin." };
+      const said = await commands
+        .pinChat(plane, session, pinned)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (said.status === "error") return { ok: false, refused: said.error };
+      setPinnedChats((was) =>
+        pinned
+          ? was.includes(session)
+            ? was
+            : [...was, session]
+          : was.filter((one) => one !== session),
+      );
+      // Nothing is said: the mark appearing on the tab is the answer, and a banner after
+      // every pin is noise about something the operator can already see.
+      return { ok: true };
+    },
+    [plane],
+  );
+
+  /** Pins or unpins one workspace. It goes in the machine store, so what the store now says
+   *  is asked again rather than assumed — `pinning` is what asks. */
+  const pinWorkspace = useCallback(
+    async (workspace: string, pinned: boolean): Promise<Ran> => {
+      const said = await commands
+        .pinWorkspace(plane, workspace, pinned)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (said.status === "error") return { ok: false, refused: said.error };
+      setPinning((asked) => asked + 1);
+      return { ok: true };
+    },
+    [plane],
+  );
+
   const doing = useMemo<Doing>(
     () => ({
       newChat: newTab,
@@ -702,6 +819,9 @@ export function PlaneView({
       closePane,
       closeTab: close,
       selectTab: bringToFront,
+      pinTab,
+      pinWorkspace,
+      pinProject: windowDoes.pinProject,
       focusWorkspace,
       showChat,
       removeWorktree,
@@ -719,6 +839,8 @@ export function PlaneView({
       focusWorkspace,
       mergeWorktree,
       newTab,
+      pinTab,
+      pinWorkspace,
       removeWorktree,
       sendKey,
       showChat,
@@ -774,11 +896,17 @@ export function PlaneView({
             needsYou: states.needsYou,
             quiet,
             nameOf,
+            // The projects' pins are the WINDOW's, and travel down with the projects: a
+            // project that is not in front draws nothing, so its pin cannot be held here.
+            pinned: { chats: pinnedChats, workspaces: pinnedWorkspaces, projects: pinnedProjects },
           }),
     [
       focused,
       inFront,
       nameOf,
+      pinnedChats,
+      pinnedProjects,
+      pinnedWorkspaces,
       plane,
       projects,
       quiet,
@@ -929,6 +1057,7 @@ export function PlaneView({
                 <span className="workspace-name">
                   {workspace === OUTSIDE ? OUTSIDE_TITLE : workspace}
                 </span>
+                <Pin held={pinnedWorkspaces.includes(workspace)} what="workspace" />
                 {/* How many chats are open over there. With the strip below showing one
                     workspace's chats, this is the answer to "where are the other forty". */}
                 {here > 0 && (
@@ -979,6 +1108,7 @@ export function PlaneView({
                 }}
               >
                 <span className="tab-name">{tabs.byId[id].name}</span>
+                <Pin held={isPinned(id)} what="chat" />
                 {/* The first pane's session is the tab's own chat. Its own element, so what
                     a tab IS stays separate from what it is DOING — a tab whose text changed
                     every time a turn began would be unreadable, and untestable. */}
@@ -1045,6 +1175,19 @@ export function PlaneView({
       {frontChat?.fresh && frontChat.harness && (
         <p className="came-back">
           <strong>{frontChat.name}</strong> came back as a new chat: {frontChat.fresh}
+        </p>
+      )}
+
+      {/* A pin that no longer names a workspace. **Said and never drawn**: a strip that
+          showed it would be offering a workspace the plane does not have, and a pin that
+          vanished with no word is an arrangement the operator will make again and lose
+          again. It is news rather than a fault, so it is not an alert. */}
+      {danglingPins.length > 0 && (
+        <p className="came-back" role="status">
+          {danglingPins.length === 1
+            ? `The pinned workspace ${danglingPins[0]} is not on this plane any more.`
+            : `${danglingPins.length} pinned workspaces are not on this plane any more: ${danglingPins.join(", ")}.`}{" "}
+          Unpin from the palette, or put the workspace back.
         </p>
       )}
 
@@ -1127,6 +1270,9 @@ export type WindowDoing = {
   openProject: () => void;
   selectProject: (plane: string) => void;
   closeProject: (plane: string) => Promise<Ran>;
+  /** Pinning a PROJECT is the window's, because the project strip is: a project that is not
+   *  in front draws nothing, and its pin still has to be on that strip (charter ADR 0039). */
+  pinProject: (plane: string, pinned: boolean) => Promise<Ran>;
   quit: () => void;
 };
 
@@ -1241,6 +1387,34 @@ export function ShowMore({
         </Menu.Content>
       </Menu.Portal>
     </Menu.Root>
+  );
+}
+
+/**
+ * The mark on something the operator pinned (charter ADR 0039).
+ *
+ * **A mark and not a button, and that is the whole of pinning's surface on a strip.** A `📌`
+ * control on every tab is fifty more controls on the one strip that already broke at fifty
+ * (charter-app#130), and a pin is a deliberate, occasional act — which is what the palette is
+ * for. So the rows live in `actions.ts` like every other action, the palette is where they
+ * are run, and this says which things carry one.
+ *
+ * It is inside the tab's own button, so it can never be a second thing to click by accident
+ * and there is no interactive element inside an interactive element for a screen reader to
+ * have to explain. The glyph is decorative; `aria-label` is what carries the meaning, the
+ * same split `ChatState` makes.
+ */
+export function Pin({ held, what }: { held: boolean; what: string }) {
+  if (!held) return null;
+  return (
+    <span
+      className="pinned"
+      role="img"
+      aria-label={`pinned ${what}`}
+      title={`Pinned. Unpin it from the palette — yours, on this machine only.`}
+    >
+      ●
+    </span>
   );
 }
 

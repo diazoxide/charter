@@ -114,17 +114,26 @@ export function openTab(
  * on another strip would move the operator to a workspace they did not ask for — and leave
  * the strip they are looking at with no selected tab. A plane charter has not read yet files
  * every chat the same way, and then this is the old rule exactly: the tab to the left.
+ *
+ * **"Beside" means beside ON THE STRIP**, which is why this takes `pinned` too: a pin draws a
+ * tab first, and an operator closing the third tab means the tab they can see to its left,
+ * not the one that happens to be before it in the order the chats were opened.
  */
-export function closeTab(tabs: Tabs, id: number, filedIn: FiledIn): Tabs {
+export function closeTab(
+  tabs: Tabs,
+  id: number,
+  filedIn: FiledIn,
+  pinned: Pinned = nothingPinned,
+): Tabs {
   if (!(id in tabs.byId)) return tabs;
-  const at = tabs.order.indexOf(id);
+  const workspace = workspaceOf(tabs, id, filedIn);
+  const strip = tabsIn(tabs, workspace, filedIn, pinned);
+  const at = strip.indexOf(id);
   const order = tabs.order.filter((tab) => tab !== id);
   const byId = Object.fromEntries(order.map((tab) => [tab, tabs.byId[tab]]));
   if (tabs.inFront !== id) return { ...tabs, byId, order };
-  const workspace = workspaceOf(tabs, id, filedIn);
-  const beside = order.filter((tab) => workspaceOf(tabs, tab, filedIn) === workspace);
-  const before = beside.filter((tab) => tabs.order.indexOf(tab) < at);
-  const inFront = before.length > 0 ? before[before.length - 1] : beside[0];
+  const beside = strip.filter((tab) => tab !== id);
+  const inFront = at > 0 ? strip[at - 1] : beside[0];
   return { ...tabs, byId, order, inFront };
 }
 
@@ -134,9 +143,45 @@ export function workspaceOf(tabs: Tabs, id: number, filedIn: FiledIn): string | 
   return session === undefined ? undefined : filedIn(session);
 }
 
-/** The tabs on one workspace's strip, left to right. */
-export function tabsIn(tabs: Tabs, workspace: string | undefined, filedIn: FiledIn): number[] {
-  return tabs.order.filter((id) => workspaceOf(tabs, id, filedIn) === workspace);
+/**
+ * Whether a tab is pinned, which is a fact about the operator and not about the chat.
+ *
+ * A function rather than a field, for the same reasons `FiledIn` and `LastMoved` are: it is
+ * answered somewhere else — the plane's own app record, through the core (ADR 0040) — and a
+ * copy on the tab would be a second answer nothing invalidates.
+ */
+export type Pinned = (id: number) => boolean;
+
+/** Nothing pinned, which is what every caller that does not care about pins passes. */
+export const nothingPinned: Pinned = () => false;
+
+/**
+ * The tabs on one workspace's strip, left to right — **pinned ones first** (ADR 0039).
+ *
+ * **This is not the strip re-ordering itself.** The rule ADR 0039 fixed is that a tab does not
+ * MOVE under the cursor: an operator going back to the chat that was third from the left goes
+ * there with their hand, and a strip that re-sorted on activity would turn every click into a
+ * read. A pin is the opposite of that — it is the operator putting a tab where they want it,
+ * once, deliberately, and it is what pinning means in every browser that has it. Nothing
+ * moves that the operator did not move.
+ *
+ * Within each group the order is `tabs.order`'s, which is the order the chats were opened and
+ * is never touched. Pinning two tabs does not sort them against each other.
+ *
+ * **And this is the whole of what a pin does to the overflow**, which ADR 0039 left open: a
+ * pinned tab is first, so it is the last thing the strip scrolls away, and it needs no
+ * exemption of its own. An exemption — a tab held out of the scroller — would be a second
+ * mechanism deciding what is on screen, and the one thing the strip owes is that nothing in
+ * it is unreachable.
+ */
+export function tabsIn(
+  tabs: Tabs,
+  workspace: string | undefined,
+  filedIn: FiledIn,
+  pinned: Pinned = nothingPinned,
+): number[] {
+  const here = tabs.order.filter((id) => workspaceOf(tabs, id, filedIn) === workspace);
+  return [...here.filter(pinned), ...here.filter((id) => !pinned(id))];
 }
 
 /**
@@ -184,8 +229,11 @@ export function showWorkspace(
   workspace: string | undefined,
   filedIn: FiledIn,
   prefer?: number,
+  pinned: Pinned = nothingPinned,
 ): Tabs {
-  const here = tabsIn(tabs, workspace, filedIn);
+  // The strip's order, so "its first" is the tab the operator can see first — which is a
+  // pinned one where there is one.
+  const here = tabsIn(tabs, workspace, filedIn, pinned);
   if (here.length === 0) return { ...tabs, inFront: undefined };
   return { ...tabs, inFront: prefer !== undefined && here.includes(prefer) ? prefer : here[0] };
 }
@@ -222,11 +270,15 @@ export function splitFocusedPane(tabs: Tabs, direction: Direction, session: numb
  * Closes the focused pane. What shared its split takes the split's place; when it was the
  * tab's only pane, the tab closes with it.
  */
-export function closeFocusedPane(tabs: Tabs, filedIn: FiledIn): Tabs {
+export function closeFocusedPane(
+  tabs: Tabs,
+  filedIn: FiledIn,
+  pinned: Pinned = nothingPinned,
+): Tabs {
   const tab = frontTab(tabs);
   if (!tab) return tabs;
   const left = without(tab.layout, tab.focused);
-  if (!left) return closeTab(tabs, tab.id, filedIn);
+  if (!left) return closeTab(tabs, tab.id, filedIn, pinned);
   const focused = panes(left)[0].pane;
   return { ...tabs, byId: { ...tabs.byId, [tab.id]: { ...tab, layout: left, focused } } };
 }

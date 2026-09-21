@@ -107,6 +107,7 @@ function chat(session: number): OpenChat {
     profile: null,
     persona: null,
     unreported: null,
+    pinned: false,
   };
 }
 

@@ -80,6 +80,7 @@ fn one_chat() -> Record {
             profile: None,
             persona: None,
             show_footer: false,
+            pinned: false,
         }],
     }
 }

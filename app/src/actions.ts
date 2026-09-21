@@ -85,6 +85,14 @@ export type Does =
   | { verb: "closePane" }
   | { verb: "closeTab"; tab: number }
   | { verb: "selectTab"; tab: number }
+  /** Pins or unpins a chat, a workspace or a project (charter ADR 0039).
+   *
+   *  Three verbs and not one, because they are three stores: a project's pin and a
+   *  workspace's go in the machine store and a chat's goes in the plane's own app record
+   *  (ADR 0040). A design that treated "pin" as one thing would discover that in review. */
+  | { verb: "pinTab"; tab: number; pinned: boolean }
+  | { verb: "pinWorkspace"; workspace: string; pinned: boolean }
+  | { verb: "pinProject"; plane: string; pinned: boolean }
   | { verb: "focusWorkspace"; workspace: string }
   | { verb: "showChat"; session: number }
   | { verb: "removeWorktree"; force: boolean }
@@ -167,6 +175,18 @@ export type Now = {
   refusal?: string;
   /** The chats asking for you, oldest first. */
   needsYou: readonly number[];
+  /**
+   * What this operator has pinned (charter ADR 0039).
+   *
+   * Three lists rather than a flag on each thing, because a pin is not a property of the
+   * chat, the workspace or the plane — it is the operator's arrangement of them, held
+   * somewhere else entirely (ADR 0040), and a copy on the thing would be a second answer.
+   */
+  pinned?: {
+    readonly chats: readonly number[];
+    readonly workspaces: readonly string[];
+    readonly projects: readonly string[];
+  };
   /** The chats that can be waiting on you without saying so, by name — a Codex chat stopped
    *  mid-turn for an approval says nothing (charter-app#52). The row for the queue reads it,
    *  so a palette that says "Nothing needs you." is never saying more than charter knows. */
@@ -182,6 +202,12 @@ export type Doing = {
   closePane: () => void;
   closeTab: (tab: number) => void;
   selectTab: (tab: number) => void;
+  /** Each answers a `Ran`, because a pin can be refused: the stores are bounded, and
+   *  "charter pins at most 32 projects — unpin one first" is a sentence the operator can act
+   *  on and must therefore reach them. */
+  pinTab: (tab: number, pinned: boolean) => Promise<Ran>;
+  pinWorkspace: (workspace: string, pinned: boolean) => Promise<Ran>;
+  pinProject: (plane: string, pinned: boolean) => Promise<Ran>;
   focusWorkspace: (workspace: string) => void;
   showChat: (session: number) => void;
   removeWorktree: (force: boolean) => Promise<Ran>;
@@ -215,7 +241,9 @@ export function projectRows(
   projects: readonly Project[],
   /** The project in front, when one is. */
   front: string | undefined,
-): { open: Offer; switchTo: Offer[]; close: Offer[] } {
+  /** The projects this operator has pinned, by root. */
+  pinned: readonly string[] = [],
+): { open: Offer; switchTo: Offer[]; pin: Offer[]; close: Offer[] } {
   return {
     // Always available, and available with no project open too: it is how a window with
     // nothing in it gets its first one, and how a window with eight gets a ninth.
@@ -233,6 +261,20 @@ export function projectRows(
             { verb: "selectProject", plane: project.plane },
             project.name,
           );
+    }),
+    pin: projects.map((project) => {
+      const held = pinned.includes(project.plane);
+      return {
+        ...can(
+          `project.pin:${project.plane}`,
+          `${held ? "Unpin" : "Pin"} project ${project.name}`,
+          { verb: "pinProject", plane: project.plane, pinned: !held },
+          project.name,
+        ),
+        // One thing a project's pin does that the other two do not, so it is said here and
+        // not in `PIN_NOTE`: charter remembers 64 planes, and a pinned one is kept past that.
+        note: held ? UNPIN_NOTE : `${PIN_NOTE} Keeps it in the opener's list.`,
+      };
     }),
     close: projects.map((project) => ({
       ...can(
@@ -258,8 +300,26 @@ export function projectRows(
  */
 export const ENDS_IT = "Ends the program it runs. There is no undo.";
 
+/**
+ * What a pin does, said on the row that does it.
+ *
+ * Both halves matter and neither is obvious from the word "pin": **where** it is kept, because
+ * charter's founding rule is that the plane is the state and this is one of the few things
+ * that is not; and **who** it is for, because an operator who thinks a pin travels with the
+ * clone will arrange a plane for a team that never sees it.
+ */
+export const PIN_NOTE = "Draws it first on its strip. Yours, on this machine only.";
+
+/** And the same said the other way, so unpinning is not a row with no consequence on it. */
+export const UNPIN_NOTE = "Puts it back in the plane's own order.";
+
 /** Nothing happened worth saying, which is the ordinary answer. */
 const DID: Ran = { ok: true };
+
+/** Whether one of the operator's pins names this thing. */
+function isPinned<T>(held: readonly T[], one: T): boolean {
+  return held.includes(one);
+}
 
 /** An offer that can run, spelled once so `reason` cannot drift from `available`. */
 function can(id: string, title: string, does: Does, name?: string): Offer {
@@ -336,6 +396,8 @@ export function catalogue(now: Now): Offer[] {
     );
   }
 
+  const pinned = now.pinned ?? { chats: [], workspaces: [], projects: [] };
+
   for (const tab of now.tabs.order) {
     const name = now.tabs.byId[tab].name;
     const title = `Switch to tab ${name}`;
@@ -344,6 +406,24 @@ export function catalogue(now: Now): Offer[] {
         ? cannot(`tab.select:${tab}`, title, "It is already in front.", name)
         : can(`tab.select:${tab}`, title, { verb: "selectTab", tab }, name),
     );
+  }
+
+  // **Pinning is here and not on the tab**, which is the whole of its surface. A `📌` on
+  // fifty tabs is fifty more controls on the one strip that already breaks at fifty, and a
+  // pin is a deliberate, occasional act — which is what the palette is for. What a pinned
+  // thing gets on its strip is a mark, and pressing the mark runs this same row.
+  for (const tab of now.tabs.order) {
+    const name = now.tabs.byId[tab].name;
+    const held = isPinned(pinned.chats, tab);
+    offers.push({
+      ...can(
+        `tab.pin:${tab}`,
+        `${held ? "Unpin" : "Pin"} chat ${name}`,
+        { verb: "pinTab", tab, pinned: !held },
+        name,
+      ),
+      note: held ? UNPIN_NOTE : PIN_NOTE,
+    });
   }
 
   // The workspaces of this project, which is the axis the tmux frame had and the port lost
@@ -359,14 +439,27 @@ export function catalogue(now: Now): Offer[] {
         ? cannot(`workspace.focus:${workspace}`, title, "It is already focused.", name)
         : can(`workspace.focus:${workspace}`, title, { verb: "focusWorkspace", workspace }, name),
     );
+    // Not for the strip of chats outside every workspace: it is not a workspace on the plane
+    // and there is nothing on disk for a pin to name.
+    if (workspace === OUTSIDE) continue;
+    const held = isPinned(pinned.workspaces, workspace);
+    offers.push({
+      ...can(
+        `workspace.pin:${workspace}`,
+        `${held ? "Unpin" : "Pin"} workspace ${workspace}`,
+        { verb: "pinWorkspace", workspace, pinned: !held },
+        workspace,
+      ),
+      note: held ? UNPIN_NOTE : PIN_NOTE,
+    });
   }
 
   // The projects this window holds. Switching between them is navigation and not a state
   // change — the project left behind keeps every chat it had running — so these sit up here
   // with the tabs and the workspaces. Letting go of one is below the line, with the tab
   // closes it is the bigger version of.
-  const projects = projectRows(now.projects ?? [], now.plane);
-  offers.push(projects.open, ...projects.switchTo);
+  const projects = projectRows(now.projects ?? [], now.plane, pinned.projects);
+  offers.push(projects.open, ...projects.switchTo, ...projects.pin);
 
   // The worktree of the chat in front. Merging is not destructive — it is fast-forward only
   // and never pushes — so it sits above the line; removing is below it.
@@ -473,6 +566,12 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "selectTab":
       doing.selectTab(does.tab);
       return DID;
+    case "pinTab":
+      return doing.pinTab(does.tab, does.pinned);
+    case "pinWorkspace":
+      return doing.pinWorkspace(does.workspace, does.pinned);
+    case "pinProject":
+      return doing.pinProject(does.plane, does.pinned);
     case "focusWorkspace":
       doing.focusWorkspace(does.workspace);
       return DID;

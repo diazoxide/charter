@@ -20,6 +20,7 @@ function chat(session: number, name: string, cwd: string, on: Partial<OpenChat> 
     profile: null,
     persona: null,
     unreported: null,
+    pinned: false,
     ...on,
   };
 }

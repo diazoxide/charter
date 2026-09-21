@@ -38,6 +38,9 @@ pub struct Open {
     /// that could not be resumed — the difference is only interesting at a relaunch, which
     /// is where the UI says it.
     pub how: Reopened,
+    /// Whether the operator pinned it (charter ADR 0039). It rides the record, so a pinned
+    /// chat comes back pinned; see [`charter_core::reopen::Chat::pinned`].
+    pub pinned: bool,
 }
 
 /// The most chats one record may start at a launch. The product's scale is fifty (the
@@ -339,6 +342,31 @@ impl Chats {
         *lock(&self.front)
     }
 
+    /// Pins or unpins one chat, and writes the record so the pin outlives the app.
+    ///
+    /// **A chat charter does not have open cannot be pinned**, and the answer says so rather
+    /// than inventing an entry: a pin is an arrangement of what is there, and the record is
+    /// the only thing that says a chat exists at all (charter ADR 0040). It follows that a
+    /// pinned chat that does not come back at a launch takes its pin with it, which is the
+    /// dangling-pin question answered by there being nowhere for one to dangle.
+    ///
+    /// Nothing is written when nothing changed, for the reason `bring_to_front` gives: the
+    /// record is rewritten on every write, and a write is a fingerprint the machine store
+    /// then has to vouch for.
+    pub fn pin(&self, session: u32, pinned: bool) -> Result<(), String> {
+        let mut open = lock(&self.open);
+        let Some(one) = open.get_mut(&session) else {
+            return Err(format!("charter has no chat {session} open to pin."));
+        };
+        if one.chat.pinned == pinned {
+            return Ok(());
+        }
+        one.chat.pinned = pinned;
+        drop(open);
+        self.write_it_down();
+        Ok(())
+    }
+
     /// Says which chat is in front, so the record knows which one to bring back in front.
     pub fn bring_to_front(&self, session: Option<u32>) {
         let changed = std::mem::replace(&mut *lock(&self.front), session) != session;
@@ -372,6 +400,7 @@ impl Chats {
                     persona: chat.persona.clone(),
                     in_front: front == Some(session),
                     how: running.how.clone(),
+                    pinned: chat.pinned,
                 })
             })
             .collect()
@@ -522,6 +551,7 @@ mod tests {
                     profile: None,
                     persona: None,
                     show_footer: false,
+                    pinned: false,
                 },
                 Size {
                     columns: 80,
@@ -582,6 +612,7 @@ mod tests {
                     profile: None,
                     persona: None,
                     show_footer: false,
+                    pinned: false,
                 },
                 Size {
                     columns: 80,
@@ -627,6 +658,7 @@ mod tests {
                 profile: None,
                 persona: None,
                 show_footer: false,
+                pinned: false,
             },
             Size {
                 columns: 80,
@@ -673,6 +705,7 @@ mod tests {
                     profile: None,
                     persona: None,
                     show_footer: false,
+                    pinned: false,
                 },
                 Size {
                     columns: 80,
@@ -732,6 +765,7 @@ mod tests {
             profile: None,
             persona: None,
             show_footer: false,
+            pinned: false,
         }
     }
 
@@ -1265,6 +1299,72 @@ mod tests {
         assert_eq!(again.chats[0].resume, Some(SessionId::new(ID).unwrap()));
     }
 
+    // ----- a pinned chat (charter ADR 0039, stored per ADR 0040) -----
+
+    #[test]
+    fn a_pin_is_written_into_the_record_so_it_outlives_the_app() {
+        // The record is the only thing that says a chat exists at all, which is why the pin
+        // is kept there and not in the machine store: a pin cannot outlive its chat.
+        let dir = tempfile::tempdir().unwrap();
+        let chats = Chats::new();
+        let session = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .unwrap();
+
+        chats.pin(session, true).expect("the chat is open");
+
+        assert!(chats.record().chats[0].pinned);
+        let _ = chats.close(session);
+    }
+
+    #[test]
+    fn a_pin_can_be_taken_off_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let chats = Chats::new();
+        let session = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .unwrap();
+        chats.pin(session, true).unwrap();
+
+        chats.pin(session, false).unwrap();
+
+        assert!(!chats.record().chats[0].pinned);
+        let _ = chats.close(session);
+    }
+
+    #[test]
+    fn a_chat_charter_does_not_have_open_cannot_be_pinned() {
+        // A pin is an arrangement of what is there. Inventing an entry to hold one would put
+        // a chat in the record that no start ever put there.
+        let chats = Chats::new();
+
+        assert!(chats.pin(7, true).is_err());
+        assert_eq!(chats.record(), Record::default());
+    }
+
+    #[test]
+    fn pinning_what_is_already_pinned_writes_nothing() {
+        // The record is rewritten on every write and every write is a fingerprint the
+        // machine store then has to vouch for — `bring_to_front` skips a no-op for the same
+        // reason, and a pin pressed twice must not cost two writes.
+        let dir = tempfile::tempdir().unwrap();
+        let written = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counting = std::sync::Arc::clone(&written);
+        let chats = Chats::recorded_by(Box::new(move |_| {
+            counting.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+        let session = chats
+            .start(&chat(&a_claude(dir.path()), "ide.7", None), SIZE)
+            .unwrap();
+        chats.pin(session, true).unwrap();
+        let after_one = written.load(std::sync::atomic::Ordering::SeqCst);
+
+        chats.pin(session, true).unwrap();
+
+        assert_eq!(written.load(std::sync::atomic::Ordering::SeqCst), after_one);
+        let _ = chats.close(session);
+    }
+
     #[test]
     fn ending_every_chat_leaves_nothing_to_record() {
         let dir = tempfile::tempdir().unwrap();
@@ -1299,6 +1399,7 @@ mod tests {
             profile: Some("claude-work".to_owned()),
             persona: Some("steward".to_owned()),
             show_footer: true,
+            pinned: false,
         };
 
         let session = chats
@@ -1336,6 +1437,7 @@ mod tests {
             profile: Some("claude-work".to_owned()),
             persona: None,
             show_footer: false,
+            pinned: false,
         };
         assert_eq!(
             chat.harness(),
@@ -1400,6 +1502,7 @@ mod tests {
             profile: Some("claude-work".to_owned()),
             persona: Some("steward".to_owned()),
             show_footer: false,
+            pinned: false,
         };
         assert_eq!(
             chat.harness(),

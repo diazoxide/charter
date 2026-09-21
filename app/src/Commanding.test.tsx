@@ -154,6 +154,9 @@ const tabNames = () =>
 const WATCHING = new Set([
   "plane_at_launch",
   "plane_sidebar",
+  // What the machine store says is pinned here. Asked off the sidebar's answer, so where it
+  // lands in a sequence is about how many awaits the chain took (charter ADR 0039).
+  "plane_pins",
   "opened_chats",
   "chats_that_would_not_start",
   "chat_states",

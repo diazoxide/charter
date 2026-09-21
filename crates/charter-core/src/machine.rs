@@ -14,13 +14,23 @@
 //! a Reporter with several planes would be asked repeatedly until the safeguard became a
 //! reflex."* charter-app also already writes its panic log to Tauri's `app_log_dir()`.
 //!
-//! **Three things, and nothing else:**
+//! **Four things, and nothing else:**
 //!
 //! - **the planes recently opened**, so the opener has something to offer;
 //! - **whether the operator approved each one**, and *what it would do when opened* at the
 //!   moment they said yes ([`Contribution`]);
 //! - **which planes were open in which windows at the last quit**, so a cold launch restores
-//!   the window set.
+//!   the window set;
+//! - **how the operator arranged what this file already names** — which of those planes are
+//!   pinned, and which workspaces inside them ([`Recent::pinned`],
+//!   [`Recent::pinned_workspaces`]).
+//!
+//! **The fourth was three until charter ADR 0040, and the count is load-bearing.** That
+//! record is the amendment: the operator ruled on 2026-09-22 that a pin is how one operator
+//! likes their window rather than a fact about the plane, so it cannot be committed to
+//! `charter.toml`, where it would arrive with every clone and put somebody else's workspace
+//! first on a strip its operator never arranged. The whole value of "and nothing else" is
+//! that the fourth had to be argued for; if it can be appended to, it is not a limit.
 //!
 //! **Never plane content.** A chat, a memory, a workspace, a persona, a profile: all of those
 //! belong to a plane and stay in it. Each plane's own `.charter/app/reopen.json` still
@@ -28,6 +38,18 @@
 //! "which planes were open" here, "what was open inside one" there. What this module does read
 //! from that record is a **fingerprint**, because it is an execution input; see
 //! [`Contribution`].
+//!
+//! **A pinned workspace's name does not breach that, and the distinction is the one the rule
+//! was making.** What is forbidden is a *copy* of an answer the plane already gives, because a
+//! copy is a second answer that nothing invalidates when the plane changes underneath it. A
+//! pin is not a copy: the plane answers "which workspaces exist", and the pin answers "which
+//! of them this operator wants first", which the plane does not answer and must not. The name
+//! is a **reference** into the plane — the same kind of thing as the plane paths this file has
+//! always held, and held to the same rule, which is that a reference is checked when it is
+//! read and one that no longer resolves is dropped with a reason. **A chat pin is not here**,
+//! for the reason stated above in as many words: a chat is numbered per plane, and its number
+//! means nothing outside the plane that issued it. That one lives in the plane's own
+//! `.charter/app/reopen.json`.
 //!
 //! # Where it lives
 //!
@@ -104,13 +126,41 @@ pub const VERSION: u32 = 1;
 /// finishes, exactly as it is for [`crate::reopen`]'s record.
 pub const MAX_BYTES: u64 = 1 << 20;
 
-/// How many planes are remembered. The list is bounded because the file is read at every
-/// launch and nothing else prunes it.
+/// How many **unpinned** planes are remembered. The list is bounded because the file is read
+/// at every launch and nothing else prunes it.
 ///
 /// **Falling off the end forgets the approval too**, because the approval is a field of the
 /// entry (see [`Recent`]). That direction is the safe one: the plane is asked about again the
 /// next time it is opened.
+///
+/// **A pinned plane does not count against it** (charter ADR 0040). Losing a pinned project to
+/// the sixty-fifth plane opened would make pinning meaningless on exactly the machine that
+/// most needs it — the one with a lot of planes — and pinning is the only thing an operator
+/// can say to mean "not this one". [`MOST_PINNED`] is what keeps the file bounded all the
+/// same.
 pub const MOST_RECENTS: usize = 64;
+
+/// How many planes may be pinned, on top of [`MOST_RECENTS`].
+///
+/// A pin exempts an entry from the recents bound, so without a bound of its own the file would
+/// have none — and it is read whole at a cold launch, before there is a window. The operator
+/// can only pin a plane they have opened, so reaching this by hand takes thirty-two deliberate
+/// acts; a file that claims more was not written by charter.
+pub const MOST_PINNED: usize = 32;
+
+/// How many workspaces may be pinned inside one plane.
+///
+/// The same reason as [`MOST_PINNED`], one scope down: the strip a pin orders holds ten
+/// workspaces at ADR 0026's limits, and a plane claiming a thousand pinned workspaces is a
+/// file charter did not write.
+pub const MOST_PINNED_WORKSPACES: usize = 32;
+
+/// The most a workspace name may be, in bytes.
+///
+/// A workspace is a directory beside `charter.toml`, so this is the longest name the file
+/// systems charter runs on will give one. It is a bound on what is read back, not a rule about
+/// what a workspace may be called.
+const LONGEST_WORKSPACE_NAME: usize = 255;
 
 /// The environment variable that moves charter's config home, and **only** charter's.
 ///
@@ -568,6 +618,24 @@ pub struct Recent {
     /// plane forgets its approval with it, which is both the simple implementation and the
     /// safe direction: the plane is asked about again.
     pub trust: Option<Trust>,
+    /// Whether the operator pinned this project (charter ADR 0039, stored per ADR 0040).
+    ///
+    /// A field of the entry for the same reason the approval is: forgetting a plane forgets
+    /// its pin, and there is never a second list of pins to go stale against this one. It is
+    /// also what exempts the entry from [`MOST_RECENTS`].
+    pub pinned: bool,
+    /// The workspaces inside this plane the operator pinned, by name.
+    ///
+    /// **References into the plane, never a copy of what the plane says.** The plane is what
+    /// says which workspaces exist and in what order; this says which of them this operator
+    /// wants first, which is a fact about the operator and false inside any one plane. A name
+    /// here that no longer names a workspace is a dangling reference and reads as one — see
+    /// [`Store::pinned_workspaces`].
+    ///
+    /// A set, because a pin has no order of its own: the order a pinned workspace is drawn in
+    /// is the plane's own, filtered. Two operators who pin the same two workspaces see them in
+    /// the same order, which is the plane's.
+    pub pinned_workspaces: std::collections::BTreeSet<String>,
 }
 
 /// One window, and the planes it had open as tabs.
@@ -610,10 +678,125 @@ impl Store {
                 plane: plane.to_path_buf(),
                 opened: when,
                 trust: None,
+                pinned: false,
+                pinned_workspaces: std::collections::BTreeSet::new(),
             },
         };
         self.recents.insert(0, entry);
-        self.recents.truncate(MOST_RECENTS);
+        self.trim();
+    }
+
+    /// Drops the oldest **unpinned** entries past [`MOST_RECENTS`], keeping every pinned one.
+    ///
+    /// **Not `truncate`, and charter ADR 0040 is why.** A pin is the only thing an operator
+    /// can say to mean "not this one", so a pin that the sixty-fifth plane opened could
+    /// silently undo would be a feature that stops working on the machine it is for.
+    /// [`MOST_PINNED`] is what keeps the file bounded in its place; a pin beyond that is
+    /// refused rather than granted, because the alternative is an unbounded file read at a
+    /// cold launch.
+    fn trim(&mut self) {
+        let mut unpinned = 0;
+        self.recents.retain(|entry| {
+            if entry.pinned {
+                return true;
+            }
+            unpinned += 1;
+            unpinned <= MOST_RECENTS
+        });
+    }
+
+    /// Whether another plane may be pinned on this machine.
+    pub fn room_to_pin(&self) -> bool {
+        self.recents.iter().filter(|entry| entry.pinned).count() < MOST_PINNED
+    }
+
+    /// Pins or unpins a project, answering whether anything changed.
+    ///
+    /// **A plane charter does not already remember cannot be pinned**, and that is the rule
+    /// rather than an omission: this file's own test is that deleting it costs the operator
+    /// their arrangement and nothing else, and an entry that exists only to hold a pin would
+    /// be a plane path in the store that no open ever put there.
+    pub fn pin(&mut self, plane: &Path, pinned: bool) -> Result<bool, String> {
+        if pinned && !self.room_to_pin() && !self.recent(plane).is_some_and(|one| one.pinned) {
+            return Err(format!(
+                "charter pins at most {MOST_PINNED} projects on one machine. Unpin one first."
+            ));
+        }
+        let Some(entry) = self.recents.iter_mut().find(|one| one.plane == plane) else {
+            return Err(
+                "charter does not remember that project, so there is nothing to pin.".to_owned(),
+            );
+        };
+        let moved = entry.pinned != pinned;
+        entry.pinned = pinned;
+        // Unpinning puts the entry back under the recents bound, where it may now be past it.
+        if moved && !pinned {
+            self.trim();
+        }
+        Ok(moved)
+    }
+
+    /// Pins or unpins a workspace inside a plane, answering whether anything changed.
+    ///
+    /// The name is held to being a plain directory name here as well as on the way back in
+    /// ([`usable_workspace`]): a pin written with a `/` in it would be a path, and a path in
+    /// this field is the beginning of a second kind of thing living in it.
+    pub fn pin_workspace(
+        &mut self,
+        plane: &Path,
+        workspace: &str,
+        pinned: bool,
+    ) -> Result<bool, String> {
+        usable_workspace(workspace)?;
+        let Some(entry) = self.recents.iter_mut().find(|one| one.plane == plane) else {
+            return Err(
+                "charter does not remember that project, so there is nothing to pin in.".to_owned(),
+            );
+        };
+        if pinned {
+            if entry.pinned_workspaces.contains(workspace) {
+                return Ok(false);
+            }
+            if entry.pinned_workspaces.len() >= MOST_PINNED_WORKSPACES {
+                return Err(format!(
+                    "charter pins at most {MOST_PINNED_WORKSPACES} workspaces in one project. \
+                     Unpin one first."
+                ));
+            }
+            entry.pinned_workspaces.insert(workspace.to_owned());
+            return Ok(true);
+        }
+        Ok(entry.pinned_workspaces.remove(workspace))
+    }
+
+    /// The workspaces pinned in `plane` that **still exist**, and the pins that no longer name
+    /// one.
+    ///
+    /// **A dangling pin is named, never drawn.** A workspace renamed or removed on disk leaves
+    /// a pin with nothing under it, and a window that drew it would be offering a workspace
+    /// the plane does not have — the same hazard ADR 0034 already names for a trust entry
+    /// keyed on a path, one level down. `there` is the plane's own list, so the answer is in
+    /// the plane's order and never in the pin set's.
+    pub fn pinned_workspaces<'a>(
+        &self,
+        plane: &Path,
+        there: &[&'a str],
+    ) -> (Vec<&'a str>, Vec<String>) {
+        let Some(entry) = self.recent(plane) else {
+            return (Vec::new(), Vec::new());
+        };
+        let kept = there
+            .iter()
+            .copied()
+            .filter(|name| entry.pinned_workspaces.contains(*name))
+            .collect();
+        let gone = entry
+            .pinned_workspaces
+            .iter()
+            .filter(|name| !there.contains(&name.as_str()))
+            .cloned()
+            .collect();
+        (kept, gone)
     }
 
     /// Record that the operator approved `plane` while it contributed `contributed`.
@@ -697,6 +880,8 @@ pub enum Dropped {
     Recent { plane: String, why: String },
     /// One window, or one tab in one.
     Window { plane: String, why: String },
+    /// One pinned workspace, inside a plane that was itself taken.
+    Pin { workspace: String, why: String },
 }
 
 impl std::fmt::Display for Dropped {
@@ -705,6 +890,7 @@ impl std::fmt::Display for Dropped {
             Self::TheStore(why) => write!(f, "charter's machine store {why}"),
             Self::Recent { plane, why } => write!(f, "the remembered plane '{plane}' {why}"),
             Self::Window { plane, why } => write!(f, "the open plane '{plane}' {why}"),
+            Self::Pin { workspace, why } => write!(f, "the pinned workspace '{workspace}' {why}"),
         }
     }
 }
@@ -1012,6 +1198,35 @@ fn usable(raw: &str) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// A pinned workspace's name held to being a plain directory name, or why it is not one.
+///
+/// **A name and never a path.** A workspace is a directory beside `charter.toml` and nothing
+/// in this file ever joins this string onto anything — but a separator, a `..` or a NUL in it
+/// is the shape of a value that a later reader would join, and the cheapest place to refuse
+/// that is where it comes off the disk. The same check runs on the way in
+/// ([`Store::pin_workspace`]) so that a name charter would not read back is never written.
+fn usable_workspace(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("is empty, and a workspace has a name".to_owned());
+    }
+    if name.len() > LONGEST_WORKSPACE_NAME {
+        return Err(format!(
+            "is {} bytes, and a workspace's name is never longer than {LONGEST_WORKSPACE_NAME}",
+            name.len()
+        ));
+    }
+    if name.contains('\0') {
+        return Err("holds a NUL, which no name on a file system does".to_owned());
+    }
+    if name.contains('/') || name.contains('\\') {
+        return Err("is a path and not a name, and charter pins a workspace by name".to_owned());
+    }
+    if name == "." || name == ".." {
+        return Err("names a directory rather than a workspace in one".to_owned());
+    }
+    Ok(())
+}
+
 /// The file's contents held to what a store may be, with every refusal recorded.
 ///
 /// Every value is asked about rather than assumed: a `recents` that is a number, an entry
@@ -1019,6 +1234,10 @@ fn usable(raw: &str) -> Result<PathBuf, String> {
 /// is read at a cold launch and one bad row must not be a lost list.
 fn load(doc: &serde_json::Value, dropped: &mut Vec<Dropped>) -> Store {
     let mut recents: Vec<Recent> = Vec::new();
+    // How many of each kind are in already, so the two bounds are counted separately: a
+    // pinned entry does not spend the recents bound, and cannot borrow past its own.
+    let mut unpinned = 0usize;
+    let mut pinned_so_far = 0usize;
     for raw in array(doc.get("recents")) {
         let named = raw
             .get("plane")
@@ -1044,12 +1263,28 @@ fn load(doc: &serde_json::Value, dropped: &mut Vec<Dropped>) -> Store {
             });
             continue;
         }
-        if recents.len() >= MOST_RECENTS {
-            dropped.push(Dropped::Recent {
-                plane: named,
-                why: format!("is past the {MOST_RECENTS} planes charter remembers"),
-            });
+        // A `pinned` that is not a boolean is not a pin. That direction is the safe one: the
+        // entry then spends the recents bound like any other and can fall off the end, which
+        // costs an arrangement rather than letting a malformed file grow the file's bound.
+        let pinned = raw
+            .get("pinned")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        let over = if pinned {
+            (pinned_so_far >= MOST_PINNED)
+                .then(|| format!("is past the {MOST_PINNED} projects charter pins"))
+        } else {
+            (unpinned >= MOST_RECENTS)
+                .then(|| format!("is past the {MOST_RECENTS} planes charter remembers"))
+        };
+        if let Some(why) = over {
+            dropped.push(Dropped::Recent { plane: named, why });
             continue;
+        }
+        if pinned {
+            pinned_so_far += 1;
+        } else {
+            unpinned += 1;
         }
         recents.push(Recent {
             plane,
@@ -1057,6 +1292,8 @@ fn load(doc: &serde_json::Value, dropped: &mut Vec<Dropped>) -> Store {
             // A `trust` that is not one is NO trust, so the plane is asked about again.
             // There is no shape of malformed approval that it is safe to read as a yes.
             trust: raw.get("trust").and_then(trust_of),
+            pinned,
+            pinned_workspaces: pinned_workspaces_of(raw.get("pinnedWorkspaces"), dropped),
         });
     }
 
@@ -1083,6 +1320,44 @@ fn load(doc: &serde_json::Value, dropped: &mut Vec<Dropped>) -> Store {
     }
 
     Store { recents, windows }
+}
+
+/// The pinned workspace names off one entry, with every refusal recorded.
+///
+/// A name charter would not write is dropped rather than raised, exactly as a remembered plane
+/// is: a pin is an arrangement, and losing one costs the operator a click.
+fn pinned_workspaces_of(
+    raw: Option<&serde_json::Value>,
+    dropped: &mut Vec<Dropped>,
+) -> std::collections::BTreeSet<String> {
+    let mut kept = std::collections::BTreeSet::new();
+    for value in array(raw) {
+        let Some(name) = value.as_str() else {
+            dropped.push(Dropped::Pin {
+                workspace: String::new(),
+                why: "is not a name charter wrote".to_owned(),
+            });
+            continue;
+        };
+        if let Err(why) = usable_workspace(name) {
+            dropped.push(Dropped::Pin {
+                workspace: name.to_owned(),
+                why,
+            });
+            continue;
+        }
+        if kept.len() >= MOST_PINNED_WORKSPACES {
+            dropped.push(Dropped::Pin {
+                workspace: name.to_owned(),
+                why: format!(
+                    "is past the {MOST_PINNED_WORKSPACES} workspaces charter pins in one project"
+                ),
+            });
+            continue;
+        }
+        kept.insert(name.to_owned());
+    }
+    kept
 }
 
 /// One approval off the file, or `None` for anything that is not one.
@@ -1153,6 +1428,14 @@ struct RecentOnDisk {
     opened: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     trust: Option<TrustOnDisk>,
+    /// Left out when it is false, and the empty set left out when it is empty, so a store
+    /// with nothing pinned is byte for byte the store charter wrote before pins existed. An
+    /// older charter reading this file ignores both fields; this one reads their absence as
+    /// "nothing was pinned", which is what was true.
+    #[serde(skip_serializing_if = "is_false")]
+    pinned: bool,
+    #[serde(rename = "pinnedWorkspaces", skip_serializing_if = "Vec::is_empty")]
+    pinned_workspaces: Vec<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -1162,6 +1445,12 @@ struct TrustOnDisk {
     env: BTreeMap<String, String>,
     starts: BTreeMap<String, String>,
     profiles: BTreeMap<String, String>,
+}
+
+/// Whether a flag is at its default, so the file leaves it out. Spelled here rather than as
+/// `std::ops::Not::not`, which serde resolves through the reference impl and reads as a puzzle.
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(serde::Serialize)]
@@ -1181,7 +1470,21 @@ impl From<&Store> for OnDisk {
             recents: store
                 .recents
                 .iter()
-                .take(MOST_RECENTS)
+                // **Both bounds, counted apart** — the same rule `Store::trim` and `load`
+                // keep, said a third time because this is the third place the file's size is
+                // decided and a `take(MOST_RECENTS)` here would drop a pinned project that
+                // the other two deliberately kept.
+                .scan((0usize, 0usize), |(unpinned, pinned), entry| {
+                    let room = if entry.pinned {
+                        *pinned += 1;
+                        *pinned <= MOST_PINNED
+                    } else {
+                        *unpinned += 1;
+                        *unpinned <= MOST_RECENTS
+                    };
+                    Some(room.then_some(entry))
+                })
+                .flatten()
                 // `to_str` and never `display`, which SUBSTITUTES for a byte that is not
                 // UTF-8. JSON holds a string, so a path that is not one cannot be written
                 // here honestly — and writing the lossy rendering would remember a path that
@@ -1190,6 +1493,13 @@ impl From<&Store> for OnDisk {
                     Some(RecentOnDisk {
                         plane: entry.plane.to_str()?.to_owned(),
                         opened: entry.opened,
+                        pinned: entry.pinned,
+                        pinned_workspaces: entry
+                            .pinned_workspaces
+                            .iter()
+                            .take(MOST_PINNED_WORKSPACES)
+                            .cloned()
+                            .collect(),
                         trust: entry.trust.as_ref().map(|trust| TrustOnDisk {
                             approved: trust.approved,
                             plugins: trust.contributed.plugins.clone(),
@@ -1413,6 +1723,7 @@ mod tests {
             profile: profile.map(str::to_owned),
             persona: None,
             show_footer: false,
+            pinned: false,
         }
     }
 
@@ -2129,6 +2440,300 @@ mod tests {
 
         assert_eq!(back.store.recents.len(), MOST_RECENTS);
         assert_eq!(back.dropped.len(), 5);
+    }
+
+    // ------------------------------------------------- pins (charter ADR 0039, 0040)
+
+    /// A store remembering `planes`, in the order they were opened.
+    fn remembering(planes: &[&str]) -> Store {
+        let mut store = Store::default();
+        for (n, plane) in planes.iter().enumerate() {
+            store.remember(Path::new(plane), n as u64);
+        }
+        store
+    }
+
+    #[test]
+    fn a_pin_is_kept_on_the_plane_it_is_about() {
+        let mut store = remembering(&["/planes/a", "/planes/b"]);
+
+        assert_eq!(store.pin(Path::new("/planes/a"), true), Ok(true));
+
+        assert!(store.recent(Path::new("/planes/a")).unwrap().pinned);
+        assert!(!store.recent(Path::new("/planes/b")).unwrap().pinned);
+    }
+
+    #[test]
+    fn pinning_what_is_already_pinned_changes_nothing() {
+        let mut store = remembering(&["/planes/a"]);
+        store.pin(Path::new("/planes/a"), true).unwrap();
+
+        assert_eq!(store.pin(Path::new("/planes/a"), true), Ok(false));
+    }
+
+    #[test]
+    fn a_plane_charter_does_not_remember_cannot_be_pinned() {
+        // An entry that existed only to hold a pin would be a plane path in this file that no
+        // open ever put there, which is a different kind of thing from the list this file is.
+        let mut store = remembering(&["/planes/a"]);
+
+        assert!(store.pin(Path::new("/planes/elsewhere"), true).is_err());
+        assert_eq!(store.recents.len(), 1);
+    }
+
+    #[test]
+    fn a_pinned_project_does_not_fall_off_the_end_of_the_recents() {
+        // charter ADR 0040: a pin is the only thing an operator can say to mean "not this
+        // one", so the sixty-fifth plane opened must not silently undo it.
+        let mut store = remembering(&["/planes/kept"]);
+        store.pin(Path::new("/planes/kept"), true).unwrap();
+
+        for n in 0..MOST_RECENTS + 10 {
+            store.remember(&PathBuf::from(format!("/planes/{n}")), 100 + n as u64);
+        }
+
+        assert!(store.recent(Path::new("/planes/kept")).is_some());
+        assert_eq!(store.recents.len(), MOST_RECENTS + 1);
+    }
+
+    #[test]
+    fn unpinning_lets_a_plane_past_the_bound_go() {
+        let mut store = remembering(&["/planes/kept"]);
+        store.pin(Path::new("/planes/kept"), true).unwrap();
+        for n in 0..MOST_RECENTS + 10 {
+            store.remember(&PathBuf::from(format!("/planes/{n}")), 100 + n as u64);
+        }
+
+        store.pin(Path::new("/planes/kept"), false).unwrap();
+
+        assert!(store.recent(Path::new("/planes/kept")).is_none());
+        assert_eq!(store.recents.len(), MOST_RECENTS);
+    }
+
+    #[test]
+    fn there_is_a_bound_on_the_pins_as_well() {
+        // The pin exempts an entry from the recents bound, so without one of its own the file
+        // would have none — and it is read whole at a cold launch.
+        let planes: Vec<String> = (0..MOST_PINNED + 1)
+            .map(|n| format!("/planes/{n}"))
+            .collect();
+        let mut store = remembering(&planes.iter().map(String::as_str).collect::<Vec<_>>());
+
+        for plane in planes.iter().take(MOST_PINNED) {
+            assert_eq!(store.pin(Path::new(plane), true), Ok(true));
+        }
+
+        assert!(store.pin(Path::new(&planes[MOST_PINNED]), true).is_err());
+    }
+
+    #[test]
+    fn a_workspace_pin_is_a_name_and_never_a_path() {
+        let mut store = remembering(&["/planes/a"]);
+
+        assert!(
+            store
+                .pin_workspace(Path::new("/planes/a"), "ide", true)
+                .is_ok()
+        );
+        for refused in ["", "..", ".", "a/b", "a\\b", "a\0b"] {
+            assert!(
+                store
+                    .pin_workspace(Path::new("/planes/a"), refused, true)
+                    .is_err(),
+                "{refused:?} was taken as a workspace name"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pinned_workspace_that_is_no_longer_there_is_named_rather_than_drawn() {
+        // The hazard ADR 0034 names for a trust entry keyed on a path, one scope down: a
+        // reference that no longer resolves must not become something charter offers.
+        let mut store = remembering(&["/planes/a"]);
+        store
+            .pin_workspace(Path::new("/planes/a"), "ide", true)
+            .unwrap();
+        store
+            .pin_workspace(Path::new("/planes/a"), "gone", true)
+            .unwrap();
+
+        let (kept, missing) = store.pinned_workspaces(Path::new("/planes/a"), &["fleet", "ide"]);
+
+        assert_eq!(kept, ["ide"]);
+        assert_eq!(missing, ["gone"]);
+    }
+
+    #[test]
+    fn pinned_workspaces_come_back_in_the_planes_own_order() {
+        // A pin says WHICH workspaces come first, never in what order they do. The order is
+        // the plane's, so two operators who pin the same two see the same arrangement.
+        let mut store = remembering(&["/planes/a"]);
+        for name in ["zeta", "alpha"] {
+            store
+                .pin_workspace(Path::new("/planes/a"), name, true)
+                .unwrap();
+        }
+
+        let (kept, _) = store.pinned_workspaces(Path::new("/planes/a"), &["zeta", "beta", "alpha"]);
+
+        assert_eq!(kept, ["zeta", "alpha"]);
+    }
+
+    #[test]
+    fn a_store_with_nothing_pinned_is_the_file_charter_wrote_before_pins_existed() {
+        // The fields are left out at their defaults, so an older charter reading this file
+        // sees exactly what it used to and this one reads their absence as "nothing pinned".
+        let machine = machine();
+        let mut store = Store::default();
+        store.remember(Path::new("/planes/a"), 7);
+
+        write(machine.path(), &store).unwrap();
+
+        let text = std::fs::read_to_string(file(machine.path())).unwrap();
+        assert!(!text.contains("pinned"), "{text}");
+    }
+
+    #[test]
+    fn a_pin_survives_being_written_and_read_back() {
+        let machine = machine();
+        let mut store = Store::default();
+        store.remember(Path::new("/planes/a"), 7);
+        store.pin(Path::new("/planes/a"), true).unwrap();
+        store
+            .pin_workspace(Path::new("/planes/a"), "ide", true)
+            .unwrap();
+
+        write(machine.path(), &store).unwrap();
+        let back = read(machine.path());
+
+        let entry = back.store.recent(Path::new("/planes/a")).unwrap();
+        assert!(entry.pinned);
+        assert_eq!(
+            entry.pinned_workspaces.iter().collect::<Vec<_>>(),
+            [&"ide".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_pinned_workspace_charter_would_not_write_is_dropped_with_its_reason() {
+        let machine = machine();
+        std::fs::create_dir_all(dir(machine.path())).unwrap();
+        std::fs::write(
+            file(machine.path()),
+            br#"{"version":1,"at":0,"recents":[
+                 {"plane":"/planes/a","opened":1,
+                  "pinnedWorkspaces":["ide","../elsewhere","a/b",7]}]}"#,
+        )
+        .unwrap();
+
+        let back = read(machine.path());
+
+        let entry = back.store.recent(Path::new("/planes/a")).unwrap();
+        assert_eq!(
+            entry.pinned_workspaces.iter().collect::<Vec<_>>(),
+            [&"ide".to_owned()]
+        );
+        assert_eq!(
+            back.dropped
+                .iter()
+                .filter(|why| matches!(why, Dropped::Pin { .. }))
+                .count(),
+            3
+        );
+    }
+
+    #[test]
+    fn a_pin_that_is_not_a_boolean_is_not_a_pin() {
+        // The safe direction: the entry then spends the recents bound like any other, so a
+        // malformed file cannot grow the bound on a file read at a cold launch.
+        let machine = machine();
+        std::fs::create_dir_all(dir(machine.path())).unwrap();
+        std::fs::write(
+            file(machine.path()),
+            br#"{"version":1,"at":0,"recents":[{"plane":"/planes/a","opened":1,"pinned":"yes"}]}"#,
+        )
+        .unwrap();
+
+        let back = read(machine.path());
+
+        assert!(!back.store.recent(Path::new("/planes/a")).unwrap().pinned);
+    }
+
+    #[test]
+    fn a_file_claiming_more_pins_than_charter_keeps_is_cut_to_the_bound() {
+        let machine = machine();
+        std::fs::create_dir_all(dir(machine.path())).unwrap();
+        let rows: Vec<String> = (0..MOST_PINNED + 5)
+            .map(|n| format!(r#"{{"plane":"/planes/{n}","opened":{n},"pinned":true}}"#))
+            .collect();
+        std::fs::write(
+            file(machine.path()),
+            format!(r#"{{"version":1,"at":0,"recents":[{}]}}"#, rows.join(",")),
+        )
+        .unwrap();
+
+        let back = read(machine.path());
+
+        assert_eq!(back.store.recents.len(), MOST_PINNED);
+        assert_eq!(back.dropped.len(), 5);
+    }
+
+    #[test]
+    fn a_pinned_plane_read_back_does_not_spend_the_recents_bound() {
+        // The mirror of the write-side rule: the two bounds are counted apart in all three
+        // places the file's size is decided, and a file that held both must come back whole.
+        let machine = machine();
+        std::fs::create_dir_all(dir(machine.path())).unwrap();
+        let mut rows: Vec<String> = (0..MOST_RECENTS)
+            .map(|n| format!(r#"{{"plane":"/planes/{n}","opened":{n}}}"#))
+            .collect();
+        rows.push(r#"{"plane":"/planes/kept","opened":1,"pinned":true}"#.to_owned());
+        std::fs::write(
+            file(machine.path()),
+            format!(r#"{{"version":1,"at":0,"recents":[{}]}}"#, rows.join(",")),
+        )
+        .unwrap();
+
+        let back = read(machine.path());
+
+        assert!(back.store.recent(Path::new("/planes/kept")).is_some());
+        assert_eq!(back.store.recents.len(), MOST_RECENTS + 1);
+        assert!(back.dropped.is_empty());
+    }
+
+    #[test]
+    fn forgetting_a_plane_forgets_its_pins_with_it() {
+        // The same rule the approval follows: one entry, so there is never a second list of
+        // pins to go stale against the list of planes.
+        let mut store = remembering(&["/planes/a"]);
+        store.pin(Path::new("/planes/a"), true).unwrap();
+        store
+            .pin_workspace(Path::new("/planes/a"), "ide", true)
+            .unwrap();
+
+        store.forget(Path::new("/planes/a"));
+        store.remember(Path::new("/planes/a"), 9);
+
+        let entry = store.recent(Path::new("/planes/a")).unwrap();
+        assert!(!entry.pinned);
+        assert!(entry.pinned_workspaces.is_empty());
+    }
+
+    #[test]
+    fn opening_a_pinned_plane_again_keeps_its_pins() {
+        // `remember` rebuilds the entry, and an open is not an unpin any more than it is an
+        // approval.
+        let mut store = remembering(&["/planes/a"]);
+        store.pin(Path::new("/planes/a"), true).unwrap();
+        store
+            .pin_workspace(Path::new("/planes/a"), "ide", true)
+            .unwrap();
+
+        store.remember(Path::new("/planes/a"), 99);
+
+        let entry = store.recent(Path::new("/planes/a")).unwrap();
+        assert!(entry.pinned);
+        assert!(entry.pinned_workspaces.contains("ide"));
     }
 
     // ---------------------------------------------------------------- the disk question

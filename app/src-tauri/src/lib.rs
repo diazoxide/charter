@@ -257,6 +257,9 @@ struct OpenChat {
     persona: Option<String>,
     /// What its harness cannot tell charter, said on the chat — none where it tells all.
     unreported: Option<String>,
+    /// Whether the operator pinned it (charter ADR 0039). It rides the plane's own app
+    /// record, so a pinned chat comes back pinned at the next launch.
+    pinned: bool,
 }
 
 /// One workspace as the sidebar draws it: what it is for, what it still means to do, and the
@@ -587,6 +590,9 @@ fn start_chat(
         profile: Some(profile),
         persona,
         show_footer,
+        // A chat is pinned by the operator afterwards, never at its start: a tab that
+        // arrived already pinned would be an arrangement nobody made.
+        pinned: false,
     };
     let session = held
         .chats()
@@ -636,6 +642,7 @@ fn open_session(
         // And it is not on a harness either, so there is no footer to keep or blank: this
         // path builds no charter environment at all (`Chats::start` passes an empty one).
         show_footer: false,
+        pinned: false,
     };
     // The board already knows about it: `Chats` announces a chat BEFORE its program starts,
     // so its very first hook lands somewhere. Registering it here would be too late.
@@ -700,6 +707,91 @@ fn chat_in_front(
     Ok(())
 }
 
+/// What the operator has pinned in one project (charter ADR 0039, stored per ADR 0040).
+///
+/// The project's own pin and its pinned workspaces come from the machine store; a pinned
+/// CHAT is not here, because a chat pin rides that chat's own record and reaches the window
+/// on `OpenChat::pinned` with the chat it is about.
+#[derive(serde::Serialize, specta::Type)]
+struct Pins {
+    /// Whether this project itself is pinned.
+    project: bool,
+    /// Its pinned workspaces that still exist, in the plane's own order.
+    ///
+    /// The plane's order and never the pin's: a pin says WHICH workspaces come first, not in
+    /// what order they do, so two operators who pin the same two see the same arrangement.
+    workspaces: Vec<String>,
+    /// Pins that no longer name a workspace on the plane — renamed, or removed.
+    ///
+    /// **Named rather than dropped silently**, and never drawn as a workspace: a window that
+    /// drew one would be offering a workspace the plane does not have. This is ADR 0034's
+    /// own hazard for a trust entry keyed on a path, one scope down.
+    missing: Vec<String>,
+}
+
+/// What this operator has pinned in this project.
+#[tauri::command]
+#[specta::specta]
+fn plane_pins(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<Pins, String> {
+    let held = planes.held(&plane)?;
+    let root = held.root().to_path_buf();
+    // The plane's own list, read off the disk the same way the sidebar is: what workspaces
+    // exist is the plane's answer and never the store's, so a pin is only ever matched
+    // against it.
+    let there = charter_core::workspaces::Plane::open(&root)
+        .workspaces()
+        .unwrap_or_default();
+    let names: Vec<&str> = there.iter().map(String::as_str).collect();
+    let store = planes.remembered().store;
+    let (kept, missing) = store.pinned_workspaces(&root, &names);
+    Ok(Pins {
+        project: store.recent(&root).is_some_and(|entry| entry.pinned),
+        workspaces: kept.into_iter().map(str::to_owned).collect(),
+        missing,
+    })
+}
+
+/// Pins or unpins the project itself.
+#[tauri::command]
+#[specta::specta]
+fn pin_project(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    pinned: bool,
+) -> Result<(), String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    planes.pin(&root, None, pinned)
+}
+
+/// Pins or unpins one workspace inside a project.
+#[tauri::command]
+#[specta::specta]
+fn pin_workspace(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    workspace: String,
+    pinned: bool,
+) -> Result<(), String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    planes.pin(&root, Some(&workspace), pinned)
+}
+
+/// Pins or unpins one chat.
+///
+/// Its own command rather than a third case of the two above, because it is written
+/// somewhere else entirely: a chat pin goes in the plane's own `.charter/app/reopen.json`
+/// and never in the machine store, which ADR 0034 forbids holding a chat's name.
+#[tauri::command]
+#[specta::specta]
+fn pin_chat(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    session: u32,
+    pinned: bool,
+) -> Result<(), String> {
+    planes.held(&plane)?.chats().pin(session, pinned)
+}
+
 /// Asks the app to quit, the way the menu's Quit and the tray's do.
 ///
 /// It is the same function they call, so what this goes through is the real path: the ask
@@ -753,6 +845,7 @@ impl From<chats::Open> for OpenChat {
             profile: open.profile,
             persona: open.persona,
             in_front: open.in_front,
+            pinned: open.pinned,
             resumed: match &open.how {
                 Reopened::Resumed(id) => Some(id.to_string()),
                 Reopened::Fresh(_) => None,
@@ -899,6 +992,10 @@ fn commands() -> Builder<tauri::Wry> {
         opened_chats,
         chats_that_would_not_start,
         chat_in_front,
+        plane_pins,
+        pin_project,
+        pin_workspace,
+        pin_chat,
         ask_to_quit,
         quit,
         quit_cancelled,
