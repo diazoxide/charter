@@ -168,7 +168,11 @@ describe("the four regions", () => {
     // sidebar was the second one; the explorer is not.
     core();
     render(<App />);
-    await screen.findByLabelText("Explorer");
+    // The strip itself, and not the explorer: the explorer draws as soon as the project does,
+    // and the strip only once the plane has been read — so waiting on the explorer would ask
+    // this question before the thing it is about exists.
+    await screen.findByRole("tablist", { name: "Workspaces" });
+    await screen.findByTestId("clone-svc");
 
     expect(screen.getAllByLabelText("Workspaces")).toHaveLength(1);
     expect(screen.getByLabelText("Workspaces")).toHaveAttribute("role", "tablist");
