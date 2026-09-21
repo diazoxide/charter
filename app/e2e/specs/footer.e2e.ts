@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { browser, expect, $ } from "@wdio/globals";
 import { READY } from "../harness.js";
-import { pressOnly } from "../opening.js";
+import { harnessRowsDrawn, pressOnly } from "../opening.js";
 
 /**
  * Charter's footer inside a chat's pane, per chat, against the real app (charter ADR 0029).
@@ -74,11 +74,12 @@ async function startAChat(plane: string, showTheFooter: boolean): Promise<void> 
   const before = Object.keys(markers(plane)).length;
   await pressOnly("New tab");
   await dialog().waitForDisplayed({ timeout: 20_000 });
-  // By role, not by tag. The picker's controls are Radix primitives, which draw a `<button>`
-  // carrying the role rather than an `<input>` — the role is what the operator's screen reader
-  // and this spec are both actually asking about (`docs/ui-primitives.md`).
-  await $('[role="radio"]').waitForExist({ timeout: 20_000 });
+  await harnessRowsDrawn();
 
+  // By role, not by tag: the box is a Radix checkbox, which is a `<button>` carrying the role
+  // rather than an `<input>` (`docs/ui-primitives.md`). `isSelected()` reads a DOM property
+  // only a real input has and would answer `false` for a ticked one, so the state is read from
+  // `aria-checked` — which is what the operator's screen reader is told either way.
   const box = await $('[role="checkbox"]');
   await box.waitForExist({ timeout: 20_000 });
   expect(await box.getAttribute("aria-checked")).toBe("false");
