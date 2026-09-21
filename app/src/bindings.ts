@@ -90,13 +90,35 @@ export const commands = {
 	 */
 	approvePlane: (path: string, contributes: PlaneContribution) => typedError<PlaneId, string>(__TAURI_INVOKE("approve_plane", { path, contributes })),
 	/**
-	 *  A window says which plane it now has in front, or that it has none.
+	 *  The projects a cold launch has to put back, and every one it would not take back.
 	 * 
-	 *  What it buys is one thing: a notification about a chat in a plane the operator is NOT
-	 *  looking at is sent rather than suppressed. See [`Showing`], where the gap this closes is
-	 *  written down.
+	 *  **Answered to the window rather than acted on here, and that is the whole shape of it.**
+	 *  Opening a project starts the programs its reopen record names, so every open goes through
+	 *  the trust gate — and the gate ends in a dialog, which only something with a window can
+	 *  carry through. A restore that opened these itself would be a third mint of `Approved`
+	 *  covering every project the operator had ever had open at once. So this says *which*, the
+	 *  window opens each one through `open_plane` like a recents row, and a project that has
+	 *  started doing more than what was approved is asked about exactly as it would have been.
+	 * 
+	 *  **On a blocking thread**, for `recent_planes`' reason: every row costs a
+	 *  `symlink_metadata` and a `stat`, and a remembered project can be on a share that is not
+	 *  coming back.
 	 */
-	windowShowsPlane: (plane: string | null) => __TAURI_INVOKE<void>("window_shows_plane", { plane }),
+	planesToRestore: () => typedError<Restore, string>(__TAURI_INVOKE("planes_to_restore")),
+	/**
+	 *  A window says what it is holding: its projects as tabs, and which one is in front.
+	 * 
+	 *  Two things, in one call, because they are one fact. A notification about a chat in a
+	 *  project the operator is NOT looking at is sent rather than suppressed — see [`Showing`],
+	 *  where the gap this closes is written down — and the tab strip is written into this
+	 *  machine's store so the next cold launch puts it back (ADR 0033).
+	 * 
+	 *  **The window says; nothing asks it.** The window is the only thing that knows what it
+	 *  draws, and a core that inferred the arrangement from its own registry would be answering
+	 *  "what is open in this process", which is a different question the moment a project is held
+	 *  but not on screen.
+	 */
+	windowHoldsPlanes: (held: WindowTabs) => __TAURI_INVOKE<void>("window_holds_planes", { held }),
 	/**
 	 *  Starts a session, and remembers it as a chat so a quit can write it down. No program is
 	 *  the operator's shell.
@@ -602,6 +624,25 @@ export type RepoStates = {
 };
 
 /**
+ *  What a cold launch puts back: the projects that were open, and what it would not take back.
+ * 
+ *  **A project that has moved or is gone is dropped with a line saying so, never an error
+ *  dialog** (ADR 0033). The window draws those lines where the operator is standing, the way
+ *  the opener draws a recents row that went.
+ */
+export type Restore = {
+	/**  The projects to open again, left to right as the tabs were. */
+	planes: string[],
+	/**
+	 *  Which of them was in front, as an index into `planes` after the drops. Null when there
+	 *  is nothing to put back.
+	 */
+	active: number | null,
+	/**  One line per project charter would not take back. */
+	dropped: string[],
+};
+
+/**
  *  The whole left-hand side: every workspace with its chats, and the focused workspace's
  *  persona and todos.
  */
@@ -670,6 +711,23 @@ export type Watching = {
 	columns: number,
 	rows: number,
 	scrollback: number,
+};
+
+/**
+ *  What a window is holding, as it says so itself.
+ * 
+ *  One struct rather than two arguments, so that the tabs and the tab in front cannot be sent
+ *  separately and disagree — and because a `Vec<PlaneId>` keeps its own name here, where a
+ *  plane inside an `Option` argument does not.
+ */
+export type WindowTabs = {
+	/**  The projects this window holds, left to right as its tabs show them. */
+	planes: PlaneId[],
+	/**
+	 *  Which tab is in front. Null is the opener — the window is holding projects the
+	 *  operator is not looking at, or holding none at all.
+	 */
+	active: number | null,
 };
 
 /* Tauri Specta runtime */

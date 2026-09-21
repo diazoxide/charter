@@ -306,8 +306,9 @@ describe("the opener", () => {
     render(<App />);
     const person = userEvent.setup();
     await screen.findByText("/home/dev/plane");
-    // Through the catalogue, which is where every button in this window comes from.
-    await person.click(await screen.findByRole("button", { name: "Close this project" }));
+    // The `×` on the project's own tab, which IS the catalogue's row — one per project, the
+    // way a chat tab's close is one per tab.
+    await person.click(await screen.findByRole("button", { name: "Close project plane" }));
 
     expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(
       "You have not opened a project yet",
@@ -364,7 +365,7 @@ describe("the opener", () => {
     await vi.waitFor(() =>
       expect(screen.getByRole("img", { name: "waiting on you" })).toBeInTheDocument(),
     );
-    await person.click(await screen.findByRole("button", { name: "Close this project" }));
+    await person.click(await screen.findByRole("button", { name: "Close project one" }));
     await openByPath("/home/dev/two");
 
     await vi.waitFor(() => expect(screen.getByText("/home/dev/two")).toBeInTheDocument());
@@ -411,7 +412,7 @@ describe("the opener", () => {
     await vi.waitFor(() =>
       expect(screen.getByRole("img", { name: "waiting on you" })).toBeInTheDocument(),
     );
-    await person.click(await screen.findByRole("button", { name: "Close this project" }));
+    await person.click(await screen.findByRole("button", { name: "Close project one" }));
     await openByPath("/home/dev/two");
 
     await vi.waitFor(() =>
@@ -419,10 +420,11 @@ describe("the opener", () => {
     );
   });
 
-  it("tells the core which project this window has in front", async () => {
+  it("tells the core what it holds and which project it has in front", async () => {
     // The half charter-app#111 named as missing: every project numbers its chats from one,
     // so a window showing B would otherwise suppress a notification for A's chat 3 on the
-    // strength of A's own answer.
+    // strength of A's own answer. It is one call because it is one fact — and the tab strip
+    // it carries is what the next cold launch puts back (ADR 0033).
     const { asked } = core((cmd) => {
       if (cmd === "plane_at_launch")
         return { plane: "/home/dev/plane", from: "/home/dev/plane", why: null };
@@ -431,11 +433,11 @@ describe("the opener", () => {
 
     render(<App />);
 
-    // The LAST thing it said, not the first: a window says "no project" before the core has
+    // The LAST thing it said, not the first: a window says nothing before the core has
     // answered which one the launch opened, and the answer that matters is the current one.
     await vi.waitFor(() =>
-      expect(asked.filter((one) => one.cmd === "window_shows_plane").pop()?.args).toEqual({
-        plane: "/home/dev/plane",
+      expect(asked.filter((one) => one.cmd === "window_holds_planes").pop()?.args).toEqual({
+        held: { planes: ["/home/dev/plane"], active: 0 },
       }),
     );
   });

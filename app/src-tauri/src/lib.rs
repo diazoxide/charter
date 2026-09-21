@@ -28,7 +28,7 @@ use tauri_specta::{Builder, collect_commands};
 
 use hooks::Moved;
 use lifecycle::Quitting;
-use planes::{Launch, PlaneId, Planes, Showing};
+use planes::{Launch, PlaneId, Planes, Restoring, Showing};
 
 /// The `charter` binary a hook runs, or none when the app cannot find one.
 ///
@@ -128,7 +128,11 @@ fn already_looking_at(app: &tauri::AppHandle, moved: &Moved) -> bool {
 pub(crate) const SECOND_LAUNCH: &str = "open-plane";
 
 /// A second launch arrived: its directory goes to the window, which takes it through the same
-/// opener every other path uses.
+/// opener every other path uses and opens it **as another project tab**.
+///
+/// Until tabs existed the window could only say so on screen — it already held a project, and
+/// a second one had nowhere to go. That was the last of ADR 0033's "hands its plane to the
+/// process already running" still unspent.
 ///
 /// A directory charter cannot say anything about is not sent. The second process has already
 /// exited by then, so there is nobody to tell and nothing on screen would explain a message
@@ -865,7 +869,8 @@ fn commands() -> Builder<tauri::Wry> {
         opener::pick_project,
         opener::open_plane,
         opener::approve_plane,
-        opener::window_shows_plane,
+        opener::planes_to_restore,
+        opener::window_holds_planes,
         open_session,
         close_session,
         send_input,
@@ -989,9 +994,15 @@ pub fn run() {
                 panics::keep_in(&logs);
             }
             app.manage(Quitting::default());
-            // Which plane each window has in front. Empty until a window says, and an empty
-            // answer means "not looking", so a notification is sent rather than suppressed.
+            // What each window is holding, and which of its projects it has in front. Empty
+            // until a window says, and an empty answer means "not looking", so a notification
+            // is sent rather than suppressed.
             app.manage(Showing::default());
+            // Whether this launch puts the last quit's window set back. Read from THIS
+            // process's arguments, once: a second launch's `--no-restore` would be about a
+            // restore that happened hours ago, so the single-instance closure never reaches
+            // this.
+            app.manage(Restoring::from_args(std::env::args()));
 
             // Which `charter` a hook runs. Without one, nothing is armed and every chat
             // reads `unknown` — never a hook pointed at a path that is not there. It is a

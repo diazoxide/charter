@@ -24,6 +24,7 @@ import { commands, type Recents } from "./bindings";
 export function Opener({
   here,
   reason,
+  adding,
   onOpen,
   trouble,
 }: {
@@ -31,6 +32,14 @@ export function Opener({
   here: boolean;
   /** Why no project was opened, in the resolver's own words. */
   reason: string;
+  /**
+   * Whether this window already holds projects, so this is a ninth rather than a first.
+   *
+   * Then neither sentence above is the right one: nothing went wrong and nothing is missing —
+   * the operator pressed `+` on a window full of projects. Saying "you have not opened a
+   * project yet" to somebody looking at eight of them is the app not knowing where it is.
+   */
+  adding?: boolean;
   /** Asks the core to open this path. It answers, or asks the operator first. */
   onOpen: (path: string) => void;
   /** Why the last attempt opened nothing. */
@@ -70,7 +79,15 @@ export function Opener({
 
   return (
     <section className="opener" aria-labelledby="opener-heading">
-      {here ? (
+      {adding ? (
+        <>
+          <h1 id="opener-heading">Open another project</h1>
+          <p className="came-back" role="status">
+            It opens as another tab in this window, beside the ones already here. Every project
+            keeps its own chats — nothing running in them stops.
+          </p>
+        </>
+      ) : here ? (
         <>
           <h1 id="opener-heading">charter found no project here</h1>
           {/* The resolver's own words. An operator who ran `charter` in a directory asked a
@@ -126,11 +143,14 @@ export function Opener({
         </p>
       )}
 
-      {recents && recents.planes.length > 0 && (
+      {/* `?.` on the list as well as on the answer: a core that answered oddly — the shape
+          changed, a command stubbed out — must cost this screen its recent list and not its
+          picker. The opener is the one screen an operator with no project can reach. */}
+      {(recents?.planes?.length ?? 0) > 0 && (
         <>
           <h2>Recent projects</h2>
           <ul className="recents">
-            {recents.planes.map((plane) => (
+            {recents?.planes?.map((plane) => (
               <li key={plane.path}>
                 <button type="button" onClick={() => onOpen(plane.path)}>
                   <span className="tab-name">{plane.name}</span>
@@ -147,7 +167,7 @@ export function Opener({
 
       {/* A project that has moved or gone is dropped with a line saying so, never an error
           dialog (ADR 0034): the record is a convenience and the project is the truth. */}
-      {recents?.dropped.map((line) => (
+      {recents?.dropped?.map((line) => (
         <p className="came-back" role="status" key={line}>
           {line}
         </p>

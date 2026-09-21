@@ -1,6 +1,26 @@
-import type { OpenChat } from "./bindings";
 import { ChatState } from "./NeedsYou";
-import { type ChatStates, stateOf } from "./chatState";
+import { type State } from "./chatState";
+
+/**
+ * One chat a quit is about to end, whichever project it is in.
+ *
+ * **Its state travels with it, already looked up.** A session number names a chat only inside
+ * its own project — every project numbers its chats from one — so a dialog handed one
+ * `ChatStates` and a flat list of sessions would paint project A's `running` onto project B's
+ * chat 1 and tell the operator that a chat nobody is running is mid-turn. The pair is the
+ * identity, and resolving it here would mean this component holding a map per project for no
+ * reason: the window already has both halves.
+ */
+export type Ending = {
+  /** Unique across projects, because a session number is not. */
+  key: string;
+  /** Which project it is in, drawn when the window holds more than one. */
+  project?: string;
+  name: string;
+  harness: string | null;
+  cwd: string | null;
+  state: State;
+};
 
 /**
  * What quitting asks before it ends anything.
@@ -10,20 +30,26 @@ import { type ChatStates, stateOf } from "./chatState";
  * (spec decision 3), and the ones that still cannot are named rather than lumped in with the
  * rest. Nothing here is guessed from a session's output, which is the one thing the app never
  * does (ADR 0018).
+ *
+ * **Every project the window holds, not the one in front.** Quit ends the process, and the
+ * process holds them all — a warning that counted only what was on screen would be a warning
+ * that understated what it was about to end by however many projects the operator had merged
+ * into the window.
  */
 export function QuitWarning({
   chats,
-  states,
   onQuit,
   onCancel,
 }: {
-  chats: OpenChat[];
-  states: ChatStates;
+  chats: readonly Ending[];
   onQuit: () => void;
   onCancel: () => void;
 }) {
-  const running = chats.filter((chat) => stateOf(states, chat.session) === "running");
-  const unknown = chats.filter((chat) => stateOf(states, chat.session) === "unknown");
+  const running = chats.filter((chat) => chat.state === "running");
+  const unknown = chats.filter((chat) => chat.state === "unknown");
+  // Only when there is more than one: naming the project on every row of a window holding one
+  // is a column that says the same thing all the way down.
+  const several = new Set(chats.map((chat) => chat.project ?? "")).size > 1;
   return (
     <div className="asking">
       <div className="warning" role="dialog" aria-modal="true" aria-labelledby="quit-warning">
@@ -34,10 +60,11 @@ export function QuitWarning({
         </h2>
         <ul className="ending">
           {chats.map((chat) => (
-            <li key={chat.session}>
+            <li key={chat.key}>
               <span className="what">{chat.harness ?? "shell"}</span>
               <span className="who">{chat.name}</span>
-              <ChatState state={stateOf(states, chat.session)} />
+              <ChatState state={chat.state} />
+              {several && chat.project && <code className="where">{chat.project}</code>}
               {chat.cwd && <code className="where">{chat.cwd}</code>}
             </li>
           ))}

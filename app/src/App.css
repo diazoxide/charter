@@ -34,6 +34,56 @@ body {
   overflow: hidden;
 }
 
+/* The projects this window holds, above everything one of them draws (ADR 0033). Darker
+   than the chat tabs under it, so which strip is which is readable at a glance rather than
+   by reading the names. */
+.projects {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+  padding: 0.3rem 0.6rem;
+  background: #131313;
+  border-bottom: 1px solid var(--edge);
+  overflow-x: auto;
+}
+
+.project {
+  display: flex;
+  gap: 0.2rem;
+  align-items: center;
+}
+
+.projects button {
+  color: var(--ink);
+  background: #222;
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  padding: 0.2rem 0.5rem;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.projects button:hover:not(:disabled) {
+  border-color: var(--lit);
+}
+
+.projects [role="tab"][aria-selected="true"] {
+  border-color: var(--lit);
+  background: #2b3338;
+}
+
+/* How many chats are waiting for you in a project that is NOT on screen. It is the reason a
+   project behind the one in front keeps listening rather than being torn down. */
+.project-needs {
+  margin-left: 0.35rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--stop);
+  color: #fff;
+  font-size: 0.85em;
+}
+
 .bar {
   display: flex;
   gap: 1rem;

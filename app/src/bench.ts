@@ -131,16 +131,25 @@ function button(name: string): HTMLElement {
   return found;
 }
 
+/** The CHAT tabs, and only those.
+ *
+ *  Scoped, because there are three tablists in this window now: the projects above the bar
+ *  (ADR 0033), the chat tabs in it, and the workspaces in the sidebar. A bench that read
+ *  `[role="tab"]` off the document measured whichever came first in the DOM, which since
+ *  project tabs landed is a project. */
+const TABS = '[role="tablist"][aria-label="Tabs"]';
+
 /** The name of the tab in front. */
 function selectedTab(): string | undefined {
   return (
-    document.querySelector('[role="tab"][aria-selected="true"]')?.textContent?.trim() ?? undefined
+    document.querySelector(`${TABS} [role="tab"][aria-selected="true"]`)?.textContent?.trim() ??
+    undefined
   );
 }
 
 /** The tab button a person would read as `name`. */
 function tabButton(name: string): HTMLElement {
-  const found = [...document.querySelectorAll('[role="tab"]')].find(
+  const found = [...document.querySelectorAll(`${TABS} [role="tab"]`)].find(
     (one) => one.textContent?.trim() === name,
   );
   if (!found) throw new Error(`no tab called ${name}`);
