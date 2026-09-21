@@ -77,7 +77,7 @@ function chat(session: number, name: string, cwd: string | null, on: Partial<Ope
  * workspace, and it does it by `cwd`. The mock does the same rather than being told where a
  * chat belongs — otherwise these tests would be asserting against their own bookkeeping.
  */
-function core(opened: ReturnType<typeof chat>[] = []) {
+function core(opened: ReturnType<typeof chat>[] = [], waiting: number[] = []) {
   const asked: { cmd: string; args: Record<string, unknown> }[] = [];
   const chats = [...opened];
   let next = Math.max(0, ...chats.map((one) => one.session));
@@ -121,7 +121,8 @@ function core(opened: ReturnType<typeof chat>[] = []) {
         ],
       };
     if (cmd === "start_options") return START_OPTIONS;
-    if (cmd === "chat_states") return [];
+    if (cmd === "chat_states")
+      return waiting.map((session) => ({ session, state: "waiting", queue: waiting }));
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "running_sessions") return [];
     return null;
@@ -295,6 +296,25 @@ describe("the workspace strip", () => {
       .find((tab) => tab.querySelector(".workspace-name")?.textContent === "beta");
 
     expect(beta?.querySelector(".workspace-count")?.textContent).toBe("2");
+  });
+
+  it("says on a workspace tab that a chat over there is asking for you", async () => {
+    // The hole scoping the chats opens, and the one thing that must not be lost. It is the
+    // same mark a project tab carries one scope up, for the same reason: a chat waiting on
+    // the operator behind a strip nobody is looking at is a chat they never come back to.
+    core([chat(5, "5", BETA)], [5]);
+    render(<App />);
+    await vi.waitFor(() => expect(strip()).toEqual(["alpha", "beta"]));
+
+    const tabs = within(screen.getByRole("tablist", { name: "Workspaces" })).getAllByRole("tab");
+    const beta = tabs.find((tab) => tab.querySelector(".workspace-name")?.textContent === "beta");
+    const alpha = tabs.find((tab) => tab.querySelector(".workspace-name")?.textContent === "alpha");
+
+    await vi.waitFor(() => expect(beta?.querySelector(".workspace-needs")?.textContent).toBe("1"));
+    expect(within(beta as HTMLElement).getByLabelText("1 chats need you in beta")).toBeTruthy();
+    // And not on a workspace where nothing is waiting: a mark on everything is a mark on
+    // nothing.
+    expect(alpha?.querySelector(".workspace-needs")).toBeNull();
   });
 });
 
