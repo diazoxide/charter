@@ -44,13 +44,122 @@ body {
   padding: 0.3rem 0.6rem;
   background: #131313;
   border-bottom: 1px solid var(--edge);
-  overflow-x: auto;
 }
 
 .project {
   display: flex;
   gap: 0.2rem;
   align-items: center;
+}
+
+/* The workspaces of the project in front: the middle of the three strips (ADR 0036). Lighter
+   than the projects above it and darker than the chats below, so which strip is which is
+   readable at a glance rather than by reading the names. */
+.workspaces-strip {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+  padding: 0.25rem 0.6rem;
+  background: #171717;
+  border-bottom: 1px solid var(--edge);
+}
+
+.workspaces-strip button {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  color: var(--ink);
+  background: #222;
+  border: 1px solid var(--edge);
+  border-radius: 4px;
+  padding: 0.15rem 0.5rem;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.workspaces-strip button:hover:not(:disabled) {
+  border-color: var(--lit);
+}
+
+.workspaces-strip [role="tab"][aria-selected="true"] {
+  border-color: var(--lit);
+  background: #2b3338;
+}
+
+/* How many chats are open in a workspace that is not the one on screen. With the chat strip
+   showing one workspace's chats, this is the answer to "where are the other forty". */
+.workspace-count {
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: #333;
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+
+/* And how many of them are asking for you, which is the hole scoping the chats would
+   otherwise open. The same mark the project tabs carry one scope up. */
+.workspace-needs {
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--stop);
+  color: #fff;
+  font-size: 0.85em;
+}
+
+/* **Every strip scrolls rather than growing past the window edge** (charter-app#130). At
+   fifty chats the tab strip filled the window and the last tabs were simply unreachable: no
+   scroll, no menu, nothing. Three rules make that impossible to come back —
+   `min-width: 0` so a strip may shrink inside its flex parent, `overflow-x: auto` so what
+   does not fit can be reached, and `flex: none` on the items so they keep their width
+   instead of being squeezed to nothing.
+
+   **A scrollbar and not an overflow menu**, deliberately. The palette already lists every
+   chat by name with a search over it (#48), and the sidebar lists every workspace's chats; a
+   menu here would be a third answer to "which chats are there" beside two that already
+   exist, which is the drift `actions.ts` exists to prevent. What the strip owes the operator
+   is that nothing in it is unreachable, and that the selected tab is on screen — which
+   `PlaneView`'s `intoView` does on every change of front, from whichever surface asked. */
+.projects,
+.workspaces-strip,
+.tabs {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  flex-wrap: nowrap;
+  scrollbar-width: thin;
+}
+
+.projects::-webkit-scrollbar,
+.workspaces-strip::-webkit-scrollbar,
+.tabs::-webkit-scrollbar {
+  height: 5px;
+}
+
+.projects::-webkit-scrollbar-thumb,
+.workspaces-strip::-webkit-scrollbar-thumb,
+.tabs::-webkit-scrollbar-thumb {
+  background: #3f3f3f;
+  border-radius: 999px;
+}
+
+.project,
+.tab,
+.projects > button,
+.workspaces-strip > button,
+.tabs > button {
+  flex: none;
+}
+
+/* **The `+` never scrolls out of reach.** On the chat strip it is out of the scroller
+   altogether (`.adding`, in `PlaneView`). The projects strip cannot move its own without
+   moving what `projects.e2e.ts` reaches it by, so it is stuck to the right-hand edge
+   instead, with the strip's background behind it so tabs pass underneath. */
+.projects > button:last-child {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  box-shadow: -0.5rem 0 0.5rem #131313;
 }
 
 .projects button {
@@ -94,10 +203,51 @@ body {
 
 .tabs,
 .doing,
+.adding,
 .tab {
   display: flex;
   gap: 0.25rem;
   align-items: center;
+}
+
+/* The tabs are the one thing on the bar that gives way: they shrink and scroll, and
+   everything else keeps its width. A strip that could not shrink pushed the splits, the
+   queue and the plane's path off the window at about thirty chats. It does not GROW, so a
+   window with two chats looks as it always did. */
+.tabs {
+  flex: 0 1 auto;
+}
+
+.bar > .adding,
+.bar > .doing,
+.bar > .needs-you,
+.bar > .plane {
+  flex: none;
+}
+
+/* `+` sits against the tabs it adds to, not a whole gap away from them. */
+.bar > .adding {
+  margin-left: -0.75rem;
+}
+
+/* **The `×` is inline with the title, on one line** (charter-app#130). It was drawn below it,
+   which made the strip two rows tall and made the close read as a control of its own rather
+   than as part of the tab. A tab is one row: nothing in it wraps, and neither the name nor
+   the `×` is allowed to be squeezed to nothing. */
+.tab button {
+  white-space: nowrap;
+}
+
+.tab .closer {
+  flex: none;
+  padding: 0.2rem 0.35rem;
+  line-height: 1;
+}
+
+.tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 14rem;
 }
 
 .bar button {
@@ -205,13 +355,13 @@ body {
   margin-bottom: 0.75rem;
 }
 
-.sidebar [role="tab"] {
+.sidebar .workspace > button {
   font-weight: 600;
   width: 100%;
   text-align: left;
 }
 
-.sidebar [role="tab"][aria-selected="true"] {
+.sidebar .workspace > button.on {
   text-decoration: underline;
 }
 

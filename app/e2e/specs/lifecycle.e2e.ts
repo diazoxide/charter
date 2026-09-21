@@ -108,7 +108,7 @@ describe("the window over a day", () => {
 
   after(async () => {
     // Left as found: the next spec file shares this app process.
-    for (const name of await tabNames()) await press(`Close tab ${name}`);
+    for (const name of await tabNames()) await press(`End chat ${name}`);
     await browser.waitUntil(async () => (await tabNames()).length === 0, {
       timeout: 15_000,
       timeoutMsg: "the tabs this spec opened were still there",

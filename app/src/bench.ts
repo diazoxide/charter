@@ -134,7 +134,7 @@ function button(name: string): HTMLElement {
 /** The CHAT tabs, and only those.
  *
  *  Scoped, because there are three tablists in this window now: the projects above the bar
- *  (ADR 0033), the chat tabs in it, and the workspaces in the sidebar. A bench that read
+ *  (ADR 0033), the workspaces under them (ADR 0036), and the chat tabs in it. A bench that read
  *  `[role="tab"]` off the document measured whichever came first in the DOM, which since
  *  project tabs landed is a project. */
 const TABS = '[role="tablist"][aria-label="Tabs"]';

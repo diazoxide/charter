@@ -32,14 +32,21 @@ async function press(name: string): Promise<void> {
   await button.click();
 }
 
-/** Waits until the sidebar has read the plane, so a workspace can be focused. */
+/** Waits until the plane has been read, so a workspace can be focused.
+ *
+ *  The names alone off the workspace strip: a strip tab also carries how many chats are in a
+ *  workspace, and one app process serves the whole run. */
 async function untilTheSidebarIsRead(): Promise<void> {
   await browser.waitUntil(
     async () => {
-      const tabs = await $$('[role="tablist"][aria-label="Workspaces"] [role="tab"]').getElements();
-      return (await Promise.all([...tabs].map((tab) => tab.getText()))).join(",") === "alpha,beta";
+      const names = await $$(
+        '[role="tablist"][aria-label="Workspaces"] [role="tab"] .workspace-name',
+      ).getElements();
+      return (
+        (await Promise.all([...names].map((name) => name.getText()))).join(",") === "alpha,beta"
+      );
     },
-    { timeout: 30_000, interval: 250, timeoutMsg: "the sidebar never listed the fixture plane" },
+    { timeout: 30_000, interval: 250, timeoutMsg: "the strip never listed the fixture plane" },
   );
 }
 

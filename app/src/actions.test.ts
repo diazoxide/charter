@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   aim,
   catalogue,
+  ENDS_IT,
   matches,
   narrow,
+  OUTSIDE,
   perform,
   type Doing,
   type Now,
@@ -163,6 +165,44 @@ describe("the one list of actions", () => {
 
     expect(by(offers, "workspace.focus:beta")?.reason).toBe("It is already focused.");
     expect(by(offers, "workspace.focus:alpha")?.title).toBe("Focus workspace alpha");
+  });
+
+  it("gives the strip for chats outside every workspace words of its own", () => {
+    // Its name is a sentinel that cannot be a directory, so the row cannot be built the way
+    // the others are — and `Focus workspace outside/every/workspace` is not a sentence.
+    const offers = catalogue(now({ workspaces: ["alpha", OUTSIDE] }));
+
+    expect(by(offers, `workspace.focus:${OUTSIDE}`)?.title).toBe(
+      "Focus the chats outside every workspace",
+    );
+    expect(by(offers, `workspace.focus:${OUTSIDE}`)?.name).toBeUndefined();
+  });
+
+  it("says on the row that ends a chat what ending it costs", () => {
+    // charter-app#130. The row is `End chat`, not `Close tab`: it calls `close_session`,
+    // which ends the program. Nothing said so, and the `×` read as "hide this tab".
+    const offers = catalogue(now({ tabs: openTab(noTabs(), 7, "3", "steward") }));
+
+    expect(by(offers, "tab.close:1")?.title).toBe("End chat 3 steward");
+    expect(by(offers, "tab.close:1")?.note).toBe(ENDS_IT);
+    // And not on rows that only navigate: a note on everything is a note on nothing.
+    expect(by(offers, "tab.select:1")?.note).toBeUndefined();
+    expect(by(offers, "chat.new")?.note).toBeUndefined();
+  });
+
+  it("says the same of the pane close, which ends a chat too", () => {
+    const offers = catalogue(now({ tabs: openTab(noTabs(), 7, "3") }));
+
+    expect(by(offers, "pane.close")?.title).toBe("End this pane's chat");
+    expect(by(offers, "pane.close")?.note).toBe(ENDS_IT);
+  });
+
+  it("says on letting go of a project what goes with it and what does not", () => {
+    const offers = catalogue(now({ projects: [{ plane: "/p/one", name: "one" }] }));
+
+    expect(by(offers, "project.close:/p/one")?.note).toBe(
+      "Ends every chat in it. Nothing of the project on disk goes.",
+    );
   });
 
   it("says nothing needs you rather than leaving the queue's row out", () => {

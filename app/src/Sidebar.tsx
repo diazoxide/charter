@@ -7,7 +7,14 @@ import { type ChatStates, stateOf } from "./chatState";
  *  A chat here is the app's own — `.charter/frame/` belongs to the tmux frame and the app
  *  stays out of it (`docs/plane-format.md`), so nothing on the plane records a chat. What
  *  ties one to a workspace is the directory it works in, and a chat working outside every
- *  workspace is shown rather than dropped. */
+ *  workspace is shown rather than dropped.
+ *
+ *  **This is a listing, not the axis.** The workspace strip above is the tablist that says
+ *  which workspace the window is on (ADR 0036); what this side shows is every workspace and
+ *  what each one holds, including the chats the strip is not drawing because they are in
+ *  another workspace. A second tablist for the same axis would be a second answer to "which
+ *  workspace am I in", which is the drift `actions.ts` exists to prevent — so the names here
+ *  are buttons that focus a workspace, and nothing here claims to be the selection. */
 export function Sidebar({
   sidebar,
   states,
@@ -23,10 +30,14 @@ export function Sidebar({
   const inFront = sidebar.workspaces.find((ws) => ws.name === focused);
   return (
     <nav className="sidebar" aria-label="Workspaces">
-      <ul className="workspaces" role="tablist" aria-label="Workspaces" aria-orientation="vertical">
+      <ul className="workspaces">
         {sidebar.workspaces.map((ws) => (
           <li className="workspace" key={ws.name} data-testid={`workspace-${ws.name}`}>
-            <button role="tab" aria-selected={ws.name === focused} onClick={() => onFocus(ws.name)}>
+            <button
+              className={ws.name === focused ? "on" : undefined}
+              aria-current={ws.name === focused ? "true" : undefined}
+              onClick={() => onFocus(ws.name)}
+            >
               {ws.name}
             </button>
             <p className="vision">{ws.vision || "No vision yet"}</p>

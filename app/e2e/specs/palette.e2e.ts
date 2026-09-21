@@ -101,7 +101,7 @@ describe("the command palette", () => {
   // assertion fails on a session it never typed into. A first run proved it.
   after(async () => {
     for (const name of (await tabNames()).filter((tab) => !wereAlreadyOpen.includes(tab))) {
-      await pressOnly(`Close tab ${name}`);
+      await pressOnly(`End chat ${name}`);
     }
     await browser.waitUntil(
       async () => (await tabNames()).every((tab) => wereAlreadyOpen.includes(tab)),
@@ -186,7 +186,7 @@ describe("the command palette", () => {
     // with it — which is what makes this checkable without counting panes across tabs.
     const before = await tabNames();
     await openPalette();
-    await typeIntoPalette("close pane");
+    await typeIntoPalette("end this pane");
 
     await browser.keys(["Enter"]);
 

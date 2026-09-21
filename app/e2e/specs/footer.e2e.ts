@@ -112,7 +112,7 @@ describe("charter's footer inside a chat", () => {
 
   after(async () => {
     for (const name of (await tabNames()).filter((tab) => !wereAlreadyOpen.includes(tab))) {
-      await pressOnly(`Close tab ${name}`);
+      await pressOnly(`End chat ${name}`);
     }
     await browser.waitUntil(
       async () => (await tabNames()).every((tab) => wereAlreadyOpen.includes(tab)),

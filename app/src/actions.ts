@@ -60,6 +60,22 @@ export const PASS_THROUGH_ID = "pane.sendkey";
  */
 export const PASS_THROUGH_BYTES = "\u001bOQ";
 
+/**
+ * The strip a chat working outside every workspace appears on.
+ *
+ * The sidebar has always shown those chats rather than dropping them, and a strip that shows
+ * one workspace's chats has to have somewhere to put them or they become unreachable — which
+ * is the defect being fixed, not one to introduce (charter-app#130).
+ *
+ * Slashes, because this stands where a workspace name stands and a workspace name is a
+ * directory name: no directory can contain one, so it can never collide with a real
+ * workspace. It never reaches the operator — `catalogue` gives its row its own words.
+ */
+export const OUTSIDE = "outside/every/workspace";
+
+/** What the strip and the palette call that one. */
+export const OUTSIDE_TITLE = "Outside every workspace";
+
 /** What a row does, as a value the window can carry out. */
 export type Does =
   | { verb: "chat.new" }
@@ -116,6 +132,15 @@ export type Offer = {
    * somebody's name — which at fifty chats is the whole difference (charter-app#48).
    */
   name?: string;
+  /**
+   * What this row does that its title cannot fit, for a row whose consequence is worth a
+   * second sentence. Drawn beside the row in the palette, and as the tooltip of a button that
+   * is only a glyph.
+   *
+   * It is not a `reason`: a reason is why a row CANNOT run, and is non-empty exactly when
+   * `available` is false. A note is about a row that can.
+   */
+  note?: string;
 };
 
 /** The window as it now stands: everything an offer's availability is decided from. */
@@ -209,16 +234,29 @@ export function projectRows(
             project.name,
           );
     }),
-    close: projects.map((project) =>
-      can(
+    close: projects.map((project) => ({
+      ...can(
         `project.close:${project.plane}`,
         `Close project ${project.name}`,
         { verb: "closeProject", plane: project.plane },
         project.name,
       ),
-    ),
+      // Its `×` is the same glyph as a tab's and it does more, so it says so too. Both halves
+      // matter: what goes is every chat, and what does NOT go is anything on disk.
+      note: "Ends every chat in it. Nothing of the project on disk goes.",
+    })),
   };
 }
+
+/**
+ * What ending a chat costs, said on the row that does it (charter-app#130).
+ *
+ * The `×` on a tab has always called `close_session`, which ends the program and takes the
+ * chat off the board. That is the right behaviour and it is not changing. What was missing is
+ * anybody saying so: the glyph reads as "hide this tab", and at fifty tabs with no undo the
+ * operator tidying up was ending fifty live harnesses on that reading.
+ */
+export const ENDS_IT = "Ends the program it runs. There is no undo.";
 
 /** Nothing happened worth saying, which is the ordinary answer. */
 const DID: Ran = { ok: true };
@@ -308,17 +346,18 @@ export function catalogue(now: Now): Offer[] {
     );
   }
 
+  // The workspaces of this project, which is the axis the tmux frame had and the port lost
+  // (ADR 0036). These rows are the workspace strip as well as palette rows — one place the
+  // words and the availability are written down, the same rule the tab strip follows.
   for (const workspace of now.workspaces) {
-    const title = `Focus workspace ${workspace}`;
+    const [title, name] =
+      workspace === OUTSIDE
+        ? [`Focus the chats ${OUTSIDE_TITLE.toLowerCase()}`, undefined]
+        : [`Focus workspace ${workspace}`, workspace];
     offers.push(
       workspace === now.focused
-        ? cannot(`workspace.focus:${workspace}`, title, "It is already focused.", workspace)
-        : can(
-            `workspace.focus:${workspace}`,
-            title,
-            { verb: "focusWorkspace", workspace },
-            workspace,
-          ),
+        ? cannot(`workspace.focus:${workspace}`, title, "It is already focused.", name)
+        : can(`workspace.focus:${workspace}`, title, { verb: "focusWorkspace", workspace }, name),
     );
   }
 
@@ -341,15 +380,29 @@ export function catalogue(now: Now): Offer[] {
 
   // ----- destructive, and therefore last -----
 
+  // A pane's close ends its chat exactly as a tab's does, so it says the same thing.
   offers.push(
     front
-      ? can("pane.close", "Close pane", { verb: "closePane" })
-      : cannot("pane.close", "Close pane", "No chat is in front, so there is no pane to close."),
+      ? { ...can("pane.close", "End this pane's chat", { verb: "closePane" }), note: ENDS_IT }
+      : cannot(
+          "pane.close",
+          "End this pane's chat",
+          "No chat is in front, so there is no pane to close.",
+        ),
   );
 
+  // **`End`, not `Close`** (charter-app#130). Closing a tab calls `close_session`, which ends
+  // the program and takes the chat off the board — correct, and what the `×` has always done.
+  // But `Close tab 3` reads as "hide this", and an operator tidying fifty tabs with no undo
+  // was ending fifty live harnesses on that reading. The words are the fix: the row says what
+  // it does, and every surface draws these words — the palette row, the `×`'s accessible name
+  // and its tooltip are all this one string.
   for (const tab of now.tabs.order) {
     const name = now.tabs.byId[tab].name;
-    offers.push(can(`tab.close:${tab}`, `Close tab ${name}`, { verb: "closeTab", tab }, name));
+    offers.push({
+      ...can(`tab.close:${tab}`, `End chat ${name}`, { verb: "closeTab", tab }, name),
+      note: ENDS_IT,
+    });
   }
 
   const remove = "Remove this chat's worktree";

@@ -178,7 +178,7 @@ describe("a window holding more than one project", function () {
       await ask("close_plane", { plane });
     }
     if (!mine) return;
-    const closer = await $(`${TABS} button[aria-label^="Close tab "]`);
+    const closer = await $(`${TABS} button[aria-label^="End chat "]`);
     if (await closer.isExisting()) await closer.click();
   });
 

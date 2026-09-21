@@ -284,6 +284,10 @@ export function Palette({
                 {/* The reason, as words. Dimming is decoration; this is the meaning, and it
                     is what a screen reader and a monochrome display both get. */}
                 {!row.available && <span className="palette-why">{row.reason}</span>}
+                {/* What a row that CAN run costs, where its title cannot fit it: ending a
+                    chat ends the program it runs, and nothing said so (charter-app#130).
+                    In the same slot as the reason, because a row has one or the other. */}
+                {row.available && row.note && <span className="palette-why">{row.note}</span>}
               </li>
             ))}
           </ul>
