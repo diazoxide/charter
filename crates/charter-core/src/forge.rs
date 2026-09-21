@@ -486,37 +486,23 @@ pub fn resolve_host(url: &str, root: &Path) -> Option<Forge> {
 pub struct ForgeError(pub String);
 
 /// The forge CLI `name`, as an absolute path — the operator's `PATH` first (see the module
-/// docs for why), then the fixed directories git is looked for in.
-pub fn find_cli(name: &str) -> Option<PathBuf> {
-    let from_path = std::env::var_os("PATH")
-        .map(|p| std::env::split_paths(&p).collect::<Vec<_>>())
-        .unwrap_or_default();
-    from_path
-        .into_iter()
-        .chain(git::GIT_DIRS.iter().map(PathBuf::from))
-        .filter(|dir| dir.is_absolute())
-        .map(|dir| dir.join(name))
-        .find(|candidate| is_executable(candidate))
-}
-
-#[cfg(unix)]
-fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-}
-
-/// Off unix, nothing is executable yet — and that is a refusal, not a degradation.
+/// docs for why), then the fixed directories [`crate::programs`] searches.
 ///
-/// **Deliberately `false` and not `metadata(path).is_file()`.** There is no executable bit on
-/// Windows: what makes a file runnable is its extension, against `PATHEXT`, and `find_cli`
-/// above joins the bare name (`gh`, `glab`) with no extension at all. Answering "it is a
-/// file" would make every file on `PATH` a forge CLI — which is the mistake
-/// `doctor::profiles::on_path` already makes, and charter-app#100 is where both are fixed
-/// together. Until then charter finds no forge CLI here and says so, which costs a feature
-/// rather than handing `git` a credential helper it picked by accident.
-#[cfg(not(unix))]
-fn is_executable(_path: &Path) -> bool {
-    false
+/// **The search moved to `programs` and the answer widened with it (charter-app#134).** It
+/// used to be `PATH` then `git::GIT_DIRS`, which on an app launched from Finder is
+/// `/usr/bin:/bin:/usr/sbin:/sbin` plus four system directories — so a `gh` installed in
+/// `~/.local/bin`, exactly where charter-app#134's `claude` was, was invisible and
+/// [`helper_for`] fell back to a bare `gh` in a credential helper. The directories added are
+/// all under the operator's own `$HOME`, plus Homebrew's; anyone who can write a program into
+/// one of them can already write the shell profile that puts it on `PATH`.
+///
+/// **This does not touch charter-app#100 and makes it smaller.** `programs::runnable` is now
+/// the single place that answers "could this process run that file", for this, for the
+/// doctor's listing and for a harness — so teaching Windows about `PATHEXT` is one function
+/// rather than three. Off unix it still answers `false`, which is what keeps a bare `gh` out
+/// of a credential helper today.
+pub fn find_cli(name: &str) -> Option<PathBuf> {
+    crate::programs::find(name, &crate::programs::search_dirs())
 }
 
 /// The credential helper a NETWORK git call is given for `forge`: its CLI, pinned by
@@ -535,6 +521,11 @@ pub fn helper_for(forge: &Forge) -> String {
 }
 
 /// What the CLI child is given: its credential environment, and nothing else of charter's.
+///
+/// **Unchanged by charter-app#134, deliberately.** `find_cli` above now looks in more places;
+/// what the child is then handed is still the directory that search landed in plus
+/// `git::GIT_DIRS`, and never this process's own `PATH`. Widening a lookup is not the same act
+/// as widening what the program found can reach.
 fn cli_env(cli_dir: Option<&Path>) -> Vec<(String, String)> {
     let mut dirs: Vec<String> = Vec::new();
     if let Some(dir) = cli_dir {

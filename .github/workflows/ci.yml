@@ -250,6 +250,17 @@ jobs:
         run: xvfb-run -a npm run e2e:state
         if: runner.os == 'Linux'
         working-directory: app
+      # The app started the way an operator starts it — from Finder, with the `PATH` Finder
+      # gives — on charter's own built-in profile. Its own run, because it is the app's
+      # ENVIRONMENT that is under test and one run is one environment (charter-app#134).
+      - name: A chat on a built-in profile, from a Finder launch
+        run: npm run e2e:finder
+        if: runner.os == 'macOS'
+        working-directory: app
+      - name: A chat on a built-in profile, from a Finder launch
+        run: xvfb-run -a npm run e2e:finder
+        if: runner.os == 'Linux'
+        working-directory: app
       # The app ended and started again, which no scenario spec can do: WebdriverIO's service
       # keeps one app process for a whole run, so a spec that quits takes the run with it.
       - name: Reopening what was open, across a real relaunch

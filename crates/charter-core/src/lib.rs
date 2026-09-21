@@ -37,6 +37,7 @@ pub mod plane;
 pub mod planegit;
 pub mod profiles;
 pub mod profiletrust;
+pub mod programs;
 pub mod pyjson;
 pub mod pypath;
 pub mod pyrepr;

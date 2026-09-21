@@ -84,6 +84,34 @@ export function theRunsEnvironment(
   };
 }
 
+/**
+ * Exactly the `PATH` macOS gives an app opened from Finder, and nothing else.
+ *
+ * `launchd` starts a GUI process; no login shell is involved, so none of the directories an
+ * operator's shell adds are there. charter-app#134 is what that costs.
+ */
+export const A_FINDER_LAUNCHS_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
+
+/**
+ * A `$HOME` holding a `claude` where Claude Code's own installer puts it — `~/.local/bin` —
+ * and nowhere that `A_FINDER_LAUNCHS_PATH` can see.
+ *
+ * **This is charter-app#134's whole shape** (`wdio.finder.conf.ts`). The operator's harness
+ * was installed, findable by their shell, and invisible to the app, so a double-clicked
+ * charter refused every chat on a built-in profile. The program is the same wrapper
+ * `declareAProfile` writes — it answers `claude plugin list --json` as a wired Claude Code
+ * does and then runs the fake harness — but it is reached by its BARE NAME out of the
+ * registry, which is the part no other scenario exercises.
+ */
+export function writeAHarnessOnlyAShellWouldFind(fakeHarness: string): string {
+  const home = mkdtempSync(join(THE_RUNS_TREE, "finder-home-"));
+  const bin = join(home, ".local", "bin");
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "claude"), theProfilesProgram(fakeHarness));
+  chmodSync(join(bin, "claude"), 0o755);
+  return home;
+}
+
 export function writeShell(fakeHarness: string): string {
   const where = join(THE_RUNS_TREE, "shells");
   mkdirSync(where, { recursive: true });
@@ -213,41 +241,7 @@ export function declareAProfile(plane: string, program: string, kind = "claude")
   // stops at the plugin table. So a plane that declares one writes that home.
   const env: Record<string, string> = kind === "codex" ? { CODEX_HOME: writeCodexHome(plane) } : {};
   const wrapper = join(plane, "claude-stand-in");
-  writeFileSync(
-    wrapper,
-    [
-      "#!/bin/sh",
-      "# Written by the scenario tests: a profile's command, which charter probes first.",
-      'if [ "$1" = "plugin" ]; then',
-      '  echo \'[{"id":"charter@charter","scope":"user","enabled":true}]\'',
-      "  exit 0",
-      "fi",
-      "# What the chat's environment says about charter's footer (charter ADR 0029), written",
-      "# down where a scenario can read it. `charter statusline` is Claude Code's `statusLine`",
-      "# command and inherits this environment; the fake harness runs no such command, so this",
-      "# file is how a scenario sees what a real one would have been started with. The chat's",
-      "# own number keys it, so two chats in one run never write over each other.",
-      `if [ -n "\${CHARTER_ROOT:-}" ] && [ -n "\${CHARTER_CHAT:-}" ]; then`,
-      '  mkdir -p "$CHARTER_ROOT/.charter/scenario"',
-      "  printf '%s' \"${CHARTER_FOOTER:-}\" \\",
-      '    > "$CHARTER_ROOT/.charter/scenario/footer-$CHARTER_CHAT"',
-      "fi",
-      "# Charter starts a Claude Code chat under an id it chose (`--session-id <uuid>`),",
-      "# and a report counts as that chat's harness speaking only if it names the SAME",
-      "# id (ADR 0024). A real Claude Code reports the id it was given; this stand-in has",
-      "# to as well, so it reads the flag off its own command line and puts it where a",
-      "# hook looks. Everything else is dropped, which is what a wrapper profile does.",
-      "while [ $# -gt 0 ]; do",
-      '  if [ "$1" = "--session-id" ]; then',
-      "    CLAUDE_CODE_SESSION_ID=$2",
-      "    export CLAUDE_CODE_SESSION_ID",
-      "  fi",
-      "  shift",
-      "done",
-      `exec ${JSON.stringify(program)}`,
-      "",
-    ].join("\n"),
-  );
+  writeFileSync(wrapper, theProfilesProgram(program));
   chmodSync(wrapper, 0o755);
   writeFileSync(
     join(plane, "charter.local.toml"),
@@ -267,6 +261,50 @@ export function declareAProfile(plane: string, program: string, kind = "claude")
       "",
     ].join("\n"),
   );
+}
+
+/**
+ * The shell script a profile's command points at: a wired Claude Code's answer to the wiring
+ * probe, then `program`.
+ *
+ * Its own function because two callers write it — `declareAProfile` puts it in the plane as a
+ * declared profile's absolute command, and `writeAHarnessOnlyAShellWouldFind` puts the same
+ * bytes in a `$HOME/.local/bin/claude` that only a search finds. One copy, or the two drift
+ * and the second one stops standing in for the first.
+ */
+function theProfilesProgram(program: string): string {
+  return [
+    "#!/bin/sh",
+    "# Written by the scenario tests: a profile's command, which charter probes first.",
+    'if [ "$1" = "plugin" ]; then',
+    '  echo \'[{"id":"charter@charter","scope":"user","enabled":true}]\'',
+    "  exit 0",
+    "fi",
+    "# What the chat's environment says about charter's footer (charter ADR 0029), written",
+    "# down where a scenario can read it. `charter statusline` is Claude Code's `statusLine`",
+    "# command and inherits this environment; the fake harness runs no such command, so this",
+    "# file is how a scenario sees what a real one would have been started with. The chat's",
+    "# own number keys it, so two chats in one run never write over each other.",
+    `if [ -n "\${CHARTER_ROOT:-}" ] && [ -n "\${CHARTER_CHAT:-}" ]; then`,
+    '  mkdir -p "$CHARTER_ROOT/.charter/scenario"',
+    "  printf '%s' \"${CHARTER_FOOTER:-}\" \\",
+    '    > "$CHARTER_ROOT/.charter/scenario/footer-$CHARTER_CHAT"',
+    "fi",
+    "# Charter starts a Claude Code chat under an id it chose (`--session-id <uuid>`),",
+    "# and a report counts as that chat's harness speaking only if it names the SAME",
+    "# id (ADR 0024). A real Claude Code reports the id it was given; this stand-in has",
+    "# to as well, so it reads the flag off its own command line and puts it where a",
+    "# hook looks. Everything else is dropped, which is what a wrapper profile does.",
+    "while [ $# -gt 0 ]; do",
+    '  if [ "$1" = "--session-id" ]; then',
+    "    CLAUDE_CODE_SESSION_ID=$2",
+    "    export CLAUDE_CODE_SESSION_ID",
+    "  fi",
+    "  shift",
+    "done",
+    `exec ${JSON.stringify(program)}`,
+    "",
+  ].join("\n");
 }
 
 /** A profile's `env` table, or nothing when it sets none. */

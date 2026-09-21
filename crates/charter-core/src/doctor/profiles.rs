@@ -85,34 +85,24 @@ fn row_name(p: &Profile) -> String {
     )
 }
 
-/// `shutil.which`: is `program` a file this process could run, found as the shell would.
-fn on_path(program: &str) -> bool {
-    fn runnable(p: &Path) -> bool {
-        let Ok(meta) = std::fs::metadata(p) else {
-            return false;
-        };
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            meta.is_file() && meta.permissions().mode() & 0o111 != 0
-        }
-        #[cfg(not(unix))]
-        {
-            meta.is_file()
-        }
-    }
-    if program.contains('/') {
-        return runnable(Path::new(program));
-    }
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    std::env::split_paths(&path).any(|dir| runnable(&dir.join(program)))
-}
-
 /// Every profile a selector would show, in `charter harness list`'s order — `wiring.listed`.
 ///
 /// Declared profiles always: one whose program is not installed is still somebody's
 /// declaration, and this is where they find out. A built-in only when its program is
 /// installed: a row about a harness this machine does not have is one nobody can act on.
+///
+/// **"Installed" is [`crate::programs::on_path`], which is `shutil.which` WIDENED**, and the
+/// one place this port deliberately answers a wider question than Python's. Python's
+/// `wiring.listed` asks `shutil.which`, which reads `$PATH` and nothing else; this asks
+/// `$PATH` first and then the fixed user-bin directories charter searches everywhere else
+/// (charter-app#134). Keeping Python's answer here would split the app in two: a built-in
+/// `claude` that starts a chat perfectly well, and a `charter doctor` that reports no such
+/// profile because the harness is in `~/.local/bin`. One idea of which profiles exist, or the
+/// report and the launch disagree about the operator's own machine.
+///
+/// The differential does not see the difference: it runs with `HOME` pointed at a scratch
+/// directory, so every home-relative directory is empty, and no harness is installed
+/// machine-wide on the runner.
 fn listed(root: &Path) -> Vec<Profile> {
     let order: Vec<String> = profiles::builtins().into_iter().map(|p| p.name).collect();
     let home = profiles::home().unwrap_or_else(|| std::path::PathBuf::from("~"));
@@ -123,7 +113,7 @@ fn listed(root: &Path) -> Vec<Profile> {
             p.source != Source::BuiltIn
                 || profiles::expanded_command(p, &home)
                     .first()
-                    .is_some_and(|program| on_path(program))
+                    .is_some_and(|program| crate::programs::on_path(program))
         })
         .cloned()
         .collect();

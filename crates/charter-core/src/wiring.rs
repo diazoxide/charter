@@ -141,6 +141,40 @@ fn install_fix(p: &Profile) -> String {
     format!("charter harness install {}", whole(&p.name))
 }
 
+/// `p`'s command with its program resolved to an absolute path — or the whole `Unknown`
+/// answer for a harness charter cannot find at all.
+///
+/// **charter-app#134.** A built-in profile's command is a bare word out of the registry
+/// (`claude`, `codex`), and a `.app` launched from Finder is given
+/// `PATH=/usr/bin:/bin:/usr/sbin:/sbin` — so on a machine whose `claude` lives in
+/// `~/.local/bin`, where its own installer puts it, the probe could not spawn and every chat
+/// on that profile was refused. [`crate::programs`] carries the search and the argument for
+/// it.
+///
+/// It is an **Unknown and not an Unwired**, and that is the whole ordering of this module:
+/// charter did not look inside any config folder, so it knows nothing about whether the guard
+/// is installed there. An Unwired would be installed over — `claude plugin install` run
+/// against a binary charter cannot find — and would print "not wired" about a folder that may
+/// be perfectly wired.
+///
+/// The **fix is not `charter harness install`**: that command runs the same missing binary and
+/// would fail the same way, and a refusal whose fix loops back into itself is worse than none.
+fn found(p: &Profile, home: &Path) -> Result<Vec<String>, Wiring> {
+    let argv = profiles::expanded_command(p, home);
+    // `said` escapes every value that came from outside charter and leaves its own sentence
+    // alone; `whole` over the whole thing would escape the sentence's own punctuation too.
+    crate::programs::resolve_argv(&argv).map_err(|gone| Wiring {
+        state: State::Unknown,
+        detail: gone.said(),
+        fix: format!(
+            "give profile {} an absolute command in charter.local.toml: \
+             command = [\"/full/path/to/{}\"]",
+            whole(&p.name),
+            whole(&gone.program)
+        ),
+    })
+}
+
 /// The environment `p`'s command is exec'd with — **and the one a probe runs under**.
 ///
 /// One function, so a probe can never ask about a session nobody is about to start. The
@@ -350,13 +384,21 @@ fn claude(p: &Profile, cwd: &Path, root: &Path) -> Wiring {
         whole(&cwd.display().to_string())
     );
     let home = profiles::home().unwrap_or_else(|| PathBuf::from("~"));
-    let mut argv = profiles::expanded_command(p, &home);
+    // Resolved before anything is asked, so "charter cannot find the harness" is its own
+    // answer and not a spawn failure wearing the config folder's name (charter-app#134).
+    let mut argv = match found(p, &home) {
+        Ok(argv) => argv,
+        Err(unknown) => return unknown,
+    };
     argv.extend(["plugin".to_owned(), "list".to_owned(), "--json".to_owned()]);
 
     let Some(text) = run(&argv, cwd, &env, PROBE_TIMEOUT) else {
         return Wiring {
             state: State::Unknown,
-            detail: format!("claude plugin list --json could not be read in {where_}"),
+            detail: format!(
+                "{} plugin list --json could not be read in {where_}",
+                whole(&argv[0])
+            ),
             fix: install_fix(p),
         };
     };
@@ -366,7 +408,10 @@ fn claude(p: &Profile, cwd: &Path, root: &Path) -> Wiring {
     else {
         return Wiring {
             state: State::Unknown,
-            detail: format!("claude plugin list --json could not be read in {where_}"),
+            detail: format!(
+                "{} plugin list --json could not be read in {where_}",
+                whole(&argv[0])
+            ),
             fix: install_fix(p),
         };
     };
@@ -687,7 +732,18 @@ pub fn install(p: &Profile, root: &Path) -> Vec<Step> {
     }
     let env = environment(p, root);
     let home = profiles::home().unwrap_or_else(|| PathBuf::from("~"));
-    let base = profiles::expanded_command(p, &home);
+    // The same resolution the probe uses, so an install cannot spawn a binary the probe
+    // could not — and a harness charter cannot find is one step that FAILED, with the
+    // directories it searched, rather than two steps that each say nothing.
+    let base = match found(p, &home) {
+        Ok(argv) => argv,
+        Err(gone) => {
+            return vec![Step {
+                status: "failed".to_owned(),
+                detail: gone.detail,
+            }];
+        }
+    };
     let steps: [(&str, Vec<String>); 2] = [
         (
             "added",
