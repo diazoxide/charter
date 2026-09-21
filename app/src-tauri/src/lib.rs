@@ -4,6 +4,7 @@
 mod chats;
 mod hooks;
 mod lifecycle;
+mod opener;
 mod panels;
 mod panics;
 mod planes;
@@ -27,7 +28,7 @@ use tauri_specta::{Builder, collect_commands};
 
 use hooks::Moved;
 use lifecycle::Quitting;
-use planes::{Launch, PlaneId, Planes};
+use planes::{Launch, PlaneId, Planes, Showing};
 
 /// The `charter` binary a hook runs, or none when the app cannot find one.
 ///
@@ -85,25 +86,58 @@ fn chat_called(app: &tauri::AppHandle, moved: &Moved) -> Option<String> {
 
 /// Whether the operator is already looking at this chat.
 ///
-/// **It asks the chat's OWN plane which of its chats is in front**, because every plane
-/// numbers its chats from one and "is session 3 in front" has as many answers as there are
-/// planes open. What it cannot yet ask is which plane the window is showing — there is one
-/// window and no window-to-plane map until the opener lands — so with two planes open this
-/// can still suppress a notification for a chat in the plane that is NOT on screen. It errs
-/// the cheap way round elsewhere, and that gap is named rather than papered over.
+/// **Three questions, and all three have to be yes.** The window is on screen and has the
+/// keyboard; the window has THIS chat's plane in front; and that plane has this chat in front.
+///
+/// The middle one is the half #111 named as the opener's to close, and it was not pedantry:
+/// every plane numbers its chats from one, so "is session 3 in front" has as many answers as
+/// there are planes open, and a window showing plane B would have suppressed a notification
+/// for plane A's chat 3 on the strength of plane A's own answer. The window is the only thing
+/// that knows which plane it draws, so the window says (`window_shows_plane`), and
+/// [`Showing`] is where it is kept.
+///
+/// Every unanswered question reads as "not looking", so a notification is sent rather than
+/// suppressed. That is the cheap way round: one the operator did not need costs a glance, and
+/// one they needed and did not get costs a chat sitting unanswered.
 fn already_looking_at(app: &tauri::AppHandle, moved: &Moved) -> bool {
     let Some(window) = app.get_webview_window("main") else {
         return false;
     };
-    // A window that cannot say is treated as not being looked at: a notification the
-    // operator did not need costs a glance, and one they needed and did not get costs a chat
-    // sitting unanswered.
     if !window.is_visible().unwrap_or(false) || !window.is_focused().unwrap_or(false) {
+        return false;
+    }
+    if !app
+        .try_state::<Showing>()
+        .is_some_and(|showing| showing.is_showing(window.label(), &moved.plane))
+    {
         return false;
     }
     app.try_state::<Planes>()
         .and_then(|planes| planes.held(&moved.plane).ok())
         .is_some_and(|held| held.chats().front() == Some(moved.session))
+}
+
+/// The event a second launch sends the window: the directory it was run in, for the window to
+/// open as a project.
+///
+/// The window and not the core, deliberately. Opening a plane is gated (ADR 0035) and the gate
+/// ends in a dialog, so the one caller that can carry it through is the one with a window.
+/// This handler resolving the plane and opening it here would be the second resolver and the
+/// second gate — the `resolve`-against-`command_root` split that cost M2.16 a day, and the
+/// `plane_root`-against-`find_root` split ADR 0034 was written to close.
+pub(crate) const SECOND_LAUNCH: &str = "open-plane";
+
+/// A second launch arrived: its directory goes to the window, which takes it through the same
+/// opener every other path uses.
+///
+/// A directory charter cannot say anything about is not sent. The second process has already
+/// exited by then, so there is nobody to tell and nothing on screen would explain a message
+/// about a directory the operator is no longer standing in.
+fn second_launch(app: &tauri::AppHandle, cwd: &str) {
+    if cwd.is_empty() {
+        return;
+    }
+    let _ = app.emit(SECOND_LAUNCH, cwd);
 }
 
 /// A view a pane has open, and what its terminal has to match to show the session as it is:
@@ -190,9 +224,9 @@ fn open_planes(planes: tauri::State<'_, Planes>) -> Vec<PlaneId> {
 /// a plane closed here can be opened again — by this process or another — with everything
 /// still in it.
 ///
-/// There is no `open_plane` beside this one, deliberately. Opening a plane the operator has
-/// not approved would run what its record names, and the gate for that is a separate piece of
-/// work; until it exists the only plane this process opens is the one its launch resolved.
+/// Its opposite is `opener::open_plane`, which is gated: opening a plane runs what its record
+/// names, so it happens behind the operator's yes (ADR 0035). Closing one needs no gate — it
+/// only ever does less.
 #[tauri::command]
 #[specta::specta]
 fn close_plane(planes: tauri::State<'_, Planes>, plane: PlaneId) -> Result<(), String> {
@@ -827,6 +861,11 @@ fn commands() -> Builder<tauri::Wry> {
         plane_at_launch,
         open_planes,
         close_plane,
+        opener::recent_planes,
+        opener::pick_project,
+        opener::open_plane,
+        opener::approve_plane,
+        opener::window_shows_plane,
         open_session,
         close_session,
         send_input,
@@ -909,10 +948,18 @@ pub fn run() {
     let app = tauri::Builder::default()
         // First, so a second launch is handed to the app already running rather than
         // starting a second one — which would be a second set of sessions on the same plane.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        //
+        // **And its directory is handed over with it.** The arguments and the working
+        // directory used to be bound to `_` and dropped, so `charter` typed inside a second
+        // plane raised a window showing the first — the operator's ask thrown away at the
+        // door. ADR 0033: a second launch hands its plane to the process already running,
+        // which raises the window holding that plane or opens one for it.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, cwd| {
             lifecycle::show(app);
+            second_launch(app, &cwd);
         }))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init());
 
     // What the scenario tests drive the window through. The feature is off in every build
@@ -942,6 +989,9 @@ pub fn run() {
                 panics::keep_in(&logs);
             }
             app.manage(Quitting::default());
+            // Which plane each window has in front. Empty until a window says, and an empty
+            // answer means "not looking", so a notification is sent rather than suppressed.
+            app.manage(Showing::default());
 
             // Which `charter` a hook runs. Without one, nothing is armed and every chat
             // reads `unknown` — never a hook pointed at a path that is not there. It is a

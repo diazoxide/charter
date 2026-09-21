@@ -1,5 +1,6 @@
 import process from "node:process";
 import {
+  aConfigHomeOfItsOwn,
   anEmptyRecord,
   built,
   cloneTheFixtureRepos,
@@ -36,6 +37,9 @@ declareAProfile(plane, writeShell(built("fake-harness")));
 // refresher would have left. Neither is the app's doing: the app only reads them.
 cloneTheFixtureRepos(plane);
 writeForgeCache(plane);
+// charter's machine store, isolated to this run. It decides what the app remembers and what
+// it trusts, so a run that shared the runner's own would pass once and then stop asking.
+const configHome = aConfigHomeOfItsOwn();
 
 export const config: WebdriverIO.Config = {
   runner: "local",
@@ -85,6 +89,7 @@ export const config: WebdriverIO.Config = {
           SHELL: writeShell(built("fake-harness")),
           CHARTER_ROOT: plane,
           CHARTER_PANIC_LOG: PANIC_LOG,
+          CHARTER_CONFIG_HOME: configHome,
         },
       },
     ],

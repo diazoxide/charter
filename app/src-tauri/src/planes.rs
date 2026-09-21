@@ -65,11 +65,12 @@ impl PlaneId {
 /// and takes one of these. A plane that has not been approved cannot reach the record by
 /// construction rather than by a caller remembering to look.
 ///
-/// **The one yes this module can honestly mint is the launch's own working directory** —
-/// the operator ran charter there, which is the act. Every other way in (an opener handing
-/// over a path, a recents list, a second instance's argument) has to get its yes from the
-/// trust gate, which is a separate piece of work; adding a second way to mint one is then a
-/// deliberate edit to this file rather than an argument somebody forgot to pass.
+/// **Two yeses, and they are both written down here.** The launch's own working directory —
+/// the operator ran charter there, which is the act — and the operator's answer to the trust
+/// ask ([`Planes::approve_and_open`]). Every other way in (an opener handing over a path, a
+/// recents row, a second instance's argument) reaches the second of those and nothing else,
+/// so adding a third is a deliberate edit to this file rather than an argument somebody
+/// forgot to pass.
 pub struct Approved(());
 
 /// The one way this app writes a plane's record — **and `reopen::write` is named here and
@@ -137,9 +138,7 @@ impl Records {
             return;
         };
         let contributed = machine::Contribution::of(&self.root);
-        let when = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |since| since.as_secs());
+        let when = now();
         let root = self.root.clone();
         if let Err(why) = machine::update(config, move |store| {
             store.vouch(&root, contributed, when);
@@ -288,6 +287,13 @@ impl Planes {
         // is this one spelling of the plane, so nothing downstream has to resolve anything.
         let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let id = PlaneId::of(&root);
+        // Remembered HERE, and therefore under the spelling the line above settled on. Done
+        // in the caller instead, it would be done against whatever path that caller happened
+        // to hold — and a machine store keyed on `/var/…` while every approval is keyed on
+        // `/private/var/…` is two entries for one project, each answering half the question.
+        // It is not an approval: `Store::remember` carries an existing one over and creates
+        // none, so opening a plane a hundred times does not become consent to it.
+        self.remember(&root);
 
         let mut open = self.map();
         if let Some(already) = open.get(&id) {
@@ -309,6 +315,177 @@ impl Planes {
         // which asks this very registry what the chat is called.
         let Ok(held) = self.held(plane) else { return };
         held.reopen(STARTING);
+    }
+
+    /// Opens a plane the operator asked for — **only if this machine has already recorded
+    /// their yes to exactly what it contributes now.**
+    ///
+    /// The consent is read HERE, from the store, against the plane as it is on this disk at
+    /// this instant, and the answer decides between the two arms. A caller cannot open the
+    /// plane and then think about trust, because there is no way to open it that does not
+    /// come through this function or [`Self::approve_and_open`], and both end in the one
+    /// private mint below.
+    ///
+    /// **An ask attaches nothing.** [`Self::open`] is safe to call on an unapproved plane —
+    /// it binds a socket and starts no program — but an operator who cancels the dialog would
+    /// be left with a live, empty project in the registry that they never asked for, and a
+    /// hook socket bound in a stranger's directory. So the ask arm touches the plane only to
+    /// read what it would contribute.
+    pub fn open_if_approved(&self, root: &Path) -> Result<Opening, String> {
+        let root = plane_at(root)?;
+        // **A plane this process is already holding is answered, not asked about.** "Open it"
+        // then means "show me that project", which is what a recents row and a second launch
+        // both mean when they name a plane already on screen. Asking again would put a dialog
+        // in front of chats that are already running, about a grant that is already in force,
+        // and answering it would reach [`Self::minted`] — see the guard there for what that
+        // would have cost.
+        let id = PlaneId::of(&root);
+        if self.held(&id).is_ok() {
+            self.remember(&root);
+            return Ok(Opening::Open(id));
+        }
+        let contributes = machine::Contribution::of(&root);
+        let consent = self.consent_to(&root, &contributes);
+        if consent.must_ask() {
+            return Ok(Opening::Ask(Asking {
+                root,
+                contributes,
+                consent,
+            }));
+        }
+        Ok(Opening::Open(self.minted(&root)))
+    }
+
+    /// The operator's yes to a plane, and the open it authorises.
+    ///
+    /// **The click IS the consent; the store is where it is REMEMBERED.** The difference
+    /// matters on a machine that has no store at all — Windows, where `0600` has no
+    /// expression and `machine` refuses outright (ADR 0031, charter-app#98). There the answer
+    /// cannot be written down, so charter asks again at the next launch and opens on this
+    /// one. A gate that refused to open anything where it could not file the answer would not
+    /// be a gate; it would be the app turned off.
+    ///
+    /// **`shown` is the contribution the dialog drew, and it is checked against the plane
+    /// again here.** Between the ask and the click, anything on the machine — including a
+    /// chat running in another plane — can rewrite this plane's `.claude/settings.json` or
+    /// its reopen record. Without this check the approval would record whatever was on disk
+    /// at CLICK time, so the operator could approve, and charter could then start, a program
+    /// they never read. `approve_profile` makes exactly this check about a profile's command
+    /// line, for exactly this reason, and a review probe is what found it missing there.
+    pub fn approve_and_open(
+        &self,
+        root: &Path,
+        shown: &machine::Contribution,
+    ) -> Result<PlaneId, String> {
+        let root = plane_at(root)?;
+        let now = machine::Contribution::of(&root);
+        if &now != shown {
+            return Err(format!(
+                "{} changed while you were reading it, so nothing was approved and nothing was \
+                 opened. Open it again to see what it contributes now.",
+                charter_core::shown::short(&root.display().to_string())
+            ));
+        }
+        self.record_approval(&root, now);
+        Ok(self.minted(&root))
+    }
+
+    /// Attaches the plane, remembers that it was opened, and puts its record back.
+    ///
+    /// **The one place the operator-facing [`Approved`] is minted**, reached from exactly two
+    /// callers: a consent the store had already recorded, and the operator's own click.
+    ///
+    /// [`Planes::open`] remembers the plane on the way through, and it has to happen before
+    /// the record is put back: [`Records::write`] vouches for the record it just wrote, and
+    /// `Store::vouch` refreshes an entry rather than creating one — so a plane not yet in the
+    /// list would be written and then not vouched for, and the very next launch would ask
+    /// about a record charter itself had written.
+    /// **And the record is put back once per open, never once per yes.** `Planes::open` hands
+    /// back the id a plane already has and binds nothing a second time; `reopen` has no such
+    /// rule, because at the launch there is nothing to have put back yet. Reaching it for a
+    /// plane this process is already holding would start a second copy of every chat the
+    /// record names, beside the copies already running — so the question is asked here, where
+    /// both callers pass, rather than at each of them.
+    fn minted(&self, root: &Path) -> PlaneId {
+        let already = self.held(&PlaneId::of(root)).is_ok();
+        let id = self.open(root);
+        if !already {
+            self.reopen(&id, &Approved(()));
+        }
+        id
+    }
+
+    /// What this machine's store says about opening `root` as it stands right now.
+    ///
+    /// **Every unreadable state is "ask".** No config home, a store charter would not read, a
+    /// platform charter keeps no store on: [`machine::read`] answers with an empty store in
+    /// each case, and an empty store's [`machine::Store::consent`] is
+    /// [`machine::Consent::New`]. Silence is never a yes — `profiletrust` opens its module
+    /// documentation refusing exactly that, and this is the same answer about a bigger grant.
+    fn consent_to(&self, root: &Path, contributes: &machine::Contribution) -> machine::Consent {
+        let Some(config) = self.config.as_deref() else {
+            return machine::Consent::New;
+        };
+        machine::read(config).store.consent(root, contributes)
+    }
+
+    /// Puts `root` at the front of this machine's list of planes.
+    ///
+    /// **Never an approval.** `Store::remember` carries an existing [`machine::Trust`] over
+    /// and creates none, so opening a plane a hundred times does not become consent to it.
+    fn remember(&self, root: &Path) {
+        let Some(config) = self.config.as_deref() else {
+            return;
+        };
+        let when = now();
+        let plane = root.to_path_buf();
+        if let Err(why) = machine::update(config, move |store| store.remember(&plane, when))
+            && why.kind() != std::io::ErrorKind::Unsupported
+        {
+            eprintln!(
+                "charter: {} was opened but not added to the list of recent planes ({why})",
+                root.display()
+            );
+        }
+    }
+
+    /// Writes the operator's answer down, so they are asked once per plane per machine.
+    ///
+    /// Best effort, and never worth refusing the open over: an approval that could not be
+    /// filed costs one more question at the next launch, and refusing here would cost the
+    /// operator the project they just said yes to. `Unsupported` is silent because it is not
+    /// a fault — it is a platform with no store, and the opener says so in its own words
+    /// rather than on a standard error nobody double-clicking an icon can read.
+    fn record_approval(&self, root: &Path, contributed: machine::Contribution) {
+        let Some(config) = self.config.as_deref() else {
+            return;
+        };
+        let when = now();
+        let plane = root.to_path_buf();
+        if let Err(why) = machine::update(config, move |store| {
+            store.approve(&plane, when, contributed);
+        }) && why.kind() != std::io::ErrorKind::Unsupported
+        {
+            eprintln!(
+                "charter: {} was opened, but your approval of it was not recorded ({why}); \
+                 charter will ask about it again",
+                root.display()
+            );
+        }
+    }
+
+    /// Everything this machine remembers, with what it would not take back named.
+    ///
+    /// The store alone: whether each remembered path is still THERE is a `stat` per row and
+    /// is deliberately not asked here — see [`machine::still_a_plane`], and the caller that
+    /// asks it off the thread that draws.
+    pub fn remembered(&self) -> machine::Loaded {
+        match self.config.as_deref() {
+            Some(config) => machine::read(config),
+            // No config home at all. Not an error and not a refusal: it is a machine that
+            // remembers nothing, which is the same shape as a first launch.
+            None => machine::Loaded::default(),
+        }
     }
 
     /// Everything one plane needs, built and wired but not yet started.
@@ -449,6 +626,117 @@ fn no_such(plane: &PlaneId, doing: &str) -> String {
     )
 }
 
+/// What came of being asked to open a plane.
+pub enum Opening {
+    /// It is open, and this is the id every later call names it by.
+    Open(PlaneId),
+    /// The operator has to be asked first. **Nothing was attached and nothing was started.**
+    Ask(Asking),
+}
+
+/// What the operator is being asked about, when a plane must be approved before it opens.
+pub struct Asking {
+    /// The plane's root as charter resolved it — canonical, and the spelling the approval is
+    /// recorded against. Never the one the caller typed: an approval filed under one spelling
+    /// of a directory and read back under another is an approval nobody gets to use.
+    pub root: PathBuf,
+    /// What it would contribute, as it is on this disk at this instant.
+    pub contributes: machine::Contribution,
+    /// Whether nothing has approved it, or it now does more than what was approved — and, for
+    /// the second, every way it differs.
+    pub consent: machine::Consent,
+}
+
+impl Asking {
+    /// Whether nothing has approved this plane at all, rather than its having changed since it
+    /// was approved.
+    ///
+    /// The two read differently to an operator — one is "open this?" and the other is "this is
+    /// not what you said yes to" — so the difference is named once, here, and not spelled out
+    /// again by every caller that has to tell them apart.
+    pub fn first(&self) -> bool {
+        matches!(self.consent, machine::Consent::New)
+    }
+}
+
+/// The plane a path names, resolved to the one spelling everything downstream uses.
+///
+/// **`find_root`, never `resolve`.** `resolve` honours `$CHARTER_ROOT`, so a window built on
+/// it would answer "the plane you picked" with a completely different directory whenever that
+/// variable happened to be set — an operator picking a folder and being handed somebody else's
+/// plane. `find_root` walks up from the directory itself and looks at nothing else, which is
+/// what "open this folder" means. (The launch's own resolution is the opposite case and stays
+/// on `resolve`: there the variable IS the operator saying which plane they meant.)
+///
+/// **Canonicalised first, and a symlink is followed rather than refused** — which is the
+/// other way round from [`machine::still_a_plane`], deliberately. A path the operator is
+/// picking right now has no approval behind it yet, so following the link and approving what
+/// it really points at is honest. A REMEMBERED path that has become a link is the case where
+/// an approval already exists for whatever it pointed at before, and charter cannot tell the
+/// two apart, so that one is dropped.
+fn plane_at(root: &Path) -> Result<PathBuf, String> {
+    let shown = charter_core::shown::short(&root.display().to_string());
+    let here = root
+        .canonicalize()
+        .map_err(|why| format!("charter cannot open {shown}: {why}"))?;
+    charter_core::plane::find_root(&here).map_err(|_| {
+        format!(
+            "{shown} is not a plane: charter found no {} there or in any directory above it",
+            charter_core::plane::MANIFEST
+        )
+    })
+}
+
+/// Now, in seconds since the epoch — and zero on a clock that says it is before 1970, because
+/// a timestamp in the recents list is worth no launch at all.
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs())
+}
+
+/// Which plane each window has in front.
+///
+/// **This is the map #111 named as missing, and the reason it was missing is the reason it is
+/// needed.** `already_looking_at` asks a chat's OWN plane whether that chat is in front,
+/// because every plane numbers its chats from one — and with two planes open that is only
+/// half the question. Plane A's chat 3 can be in front *of plane A* while the window is
+/// showing plane B, and the notification the operator actually needed is the one that gets
+/// suppressed. The window is the only thing that knows which plane it is drawing, so the
+/// window says.
+///
+/// Keyed by window label rather than held as one value, because a second window is the shape
+/// this app is going to (ADR 0033) and a singleton here would be the singleton `Plane` that
+/// ADR 0033 had to undo, one layer up.
+#[derive(Default)]
+pub struct Showing(Mutex<HashMap<String, PlaneId>>);
+
+impl Showing {
+    /// A window says which plane it now has in front, or that it has none — an opener with
+    /// nothing open yet, or the last project closed.
+    pub fn in_window(&self, window: &str, plane: Option<PlaneId>) {
+        let mut showing = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        match plane {
+            Some(plane) => showing.insert(window.to_owned(), plane),
+            None => showing.remove(window),
+        };
+    }
+
+    /// Whether `window` has `plane` in front.
+    ///
+    /// A window that has never said is treated as showing nothing, so a notification is sent
+    /// rather than suppressed. That is the cheap way round: a notification the operator did
+    /// not need costs a glance, and one they needed and did not get costs a chat sitting
+    /// unanswered.
+    pub fn is_showing(&self, window: &str, plane: &PlaneId) -> bool {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(window)
+            == Some(plane)
+    }
+}
+
 /// The size a session starts at. The pane it lands in tells it the real one at once, and a
 /// chat put back at a launch has no pane yet to ask.
 const STARTING: Size = Size {
@@ -518,8 +806,16 @@ fn resolving_with(
     match resolve(&cwd) {
         Ok(root) => {
             let plane = planes.open(&root);
-            // **The one approval this module mints.** The operator ran charter in this
-            // directory; that act is the yes, and it is the yes for THIS plane and no other.
+            // **The first of the two approvals this module mints.** The operator ran charter
+            // in this directory; that act is the yes, and it is the yes for THIS plane and no
+            // other.
+            //
+            // `open` above remembered it but did NOT approve it, and the difference is ADR
+            // 0035's: running charter here is consent to open this plane now, and the
+            // recorded approval is an answer to a question the operator was shown and read.
+            // So this plane appears in the opener's list — an operator who has only ever
+            // launched from a terminal must not find that list empty — and opening it from
+            // that list asks once, as every other plane does.
             planes.reopen(&plane, &Approved(()));
             Launch {
                 plane: Some(plane),
@@ -911,5 +1207,381 @@ mod tests {
             1,
             "the launch attached the plane and never put its record back"
         );
+    }
+
+    /// A registry whose machine store is `config`, which is what a real one has.
+    #[cfg(unix)]
+    fn planes_keeping(config: &Path) -> Planes {
+        Planes::telling(Arc::new(|_: Moved| {}), None, Some(config.to_path_buf()))
+    }
+
+    /// The `Ask` arm, or a failure naming what came back instead.
+    fn asking(opening: Opening) -> Asking {
+        match opening {
+            Opening::Ask(ask) => ask,
+            Opening::Open(plane) => panic!("it opened {} instead of asking", plane.as_str()),
+        }
+    }
+
+    /// The `Open` arm, or a failure naming what came back instead.
+    #[cfg(unix)]
+    fn opened(opening: Opening) -> PlaneId {
+        match opening {
+            Opening::Open(plane) => plane,
+            Opening::Ask(ask) => {
+                panic!("it asked about {} instead of opening", ask.root.display())
+            }
+        }
+    }
+
+    /// Committed settings that enable one plugin, which is code inside the operator's harness.
+    #[cfg(unix)]
+    fn enabling_a_plugin(root: &Path, name: &str) {
+        let claude = root.join(".claude");
+        std::fs::create_dir_all(&claude).expect("the plane's .claude");
+        std::fs::write(
+            claude.join("settings.json"),
+            format!("{{\"enabledPlugins\": {{\"{name}\": true}}}}"),
+        )
+        .expect("the plane's settings");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_plane_nobody_has_approved_is_described_rather_than_opened() {
+        // The whole gate, from the outside: `.charter/app/reopen.json` is an execution input,
+        // and a directory arrives by zip as readily as by clone. Nothing may be attached and
+        // nothing may be started until the operator has read what opening it puts in force.
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        a_record_naming(&root, "/bin/echo");
+        enabling_a_plugin(&root, "stranger@market");
+        let planes = planes_keeping(&config);
+
+        let asked = asking(planes.open_if_approved(&root).expect("it is a plane"));
+
+        assert!(
+            planes.open_now().is_empty(),
+            "an ask attached the plane; a cancelled dialog would leave a socket bound in it"
+        );
+        assert!(asked.first(), "a plane nobody has approved is a first ask");
+        assert!(
+            asked.contributes.plugins.contains_key("stranger@market"),
+            "the ask did not say which plugins the plane enables"
+        );
+        assert_eq!(
+            asked.contributes.starts.len(),
+            1,
+            "the ask did not say what the plane would start"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_operator_s_yes_is_what_opens_a_plane_and_puts_its_record_back() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        a_record_naming(&root, "/bin/echo");
+        let planes = planes_keeping(&config);
+        let shown = asking(planes.open_if_approved(&root).expect("it is a plane")).contributes;
+
+        let plane = planes
+            .approve_and_open(&root, &shown)
+            .expect("the operator said yes");
+
+        let held = planes.held(&plane).expect("it is held");
+        // Counted rather than looked at, as the launch's own test does: a program that dies
+        // at once is a chat that was tried, and on a runner either answer is honest.
+        assert_eq!(
+            held.chats().open_now().len() + held.chats().would_not_start().len(),
+            1,
+            "the yes opened the plane and never put its record back"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_plane_the_operator_already_approved_opens_without_asking_again() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        enabling_a_plugin(&root, "known@market");
+        let planes = planes_keeping(&config);
+        let shown = asking(planes.open_if_approved(&root).expect("it is a plane")).contributes;
+        let first = planes
+            .approve_and_open(&root, &shown)
+            .expect("the operator said yes");
+        planes.close(&first).expect("it closes");
+
+        let again = opened(planes.open_if_approved(&root).expect("it is a plane"));
+
+        assert_eq!(first, again);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opening_a_plane_that_is_already_open_does_not_put_its_record_back_a_second_time() {
+        // `Planes::open` hands back the id a plane already has and binds nothing twice;
+        // `reopen` has no such rule, because at a launch there is nothing to have put back
+        // yet. So a recents row clicked twice — or a second launch naming the project already
+        // on screen — would start a second copy of every chat the record names, beside the
+        // copies already running, and the operator would have no way to tell which was which.
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        a_record_naming(&root, "/bin/echo");
+        let planes = planes_keeping(&config);
+        let shown = asking(planes.open_if_approved(&root).expect("it is a plane")).contributes;
+        let plane = planes.approve_and_open(&root, &shown).expect("yes");
+        let held = planes.held(&plane).expect("it is held");
+        let once = held.chats().open_now().len() + held.chats().would_not_start().len();
+        assert_eq!(once, 1, "the yes did not put the record back at all");
+
+        let again = opened(planes.open_if_approved(&root).expect("it is a plane"));
+
+        assert_eq!(plane, again);
+        assert_eq!(
+            held.chats().open_now().len() + held.chats().would_not_start().len(),
+            once,
+            "opening a plane that was already open started its chats again"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_plane_that_is_already_open_is_shown_rather_than_asked_about_when_it_changes() {
+        // "Open it" for a project already on screen means "show me that project" — a recents
+        // row, or a second launch naming it. A dialog there would be in front of chats that
+        // are already running, about a grant that is already in force, and there is nothing
+        // the operator could answer that would undo either. That is the prompt that teaches
+        // them to click yes without reading, which is the failure the whole ask exists to
+        // avoid paying for.
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        let planes = planes_keeping(&config);
+        let shown = asking(planes.open_if_approved(&root).expect("it is a plane")).contributes;
+        let plane = planes.approve_and_open(&root, &shown).expect("yes");
+
+        // The kind of change that WOULD re-ask about a plane that was not open.
+        enabling_a_plugin(&root, "arrived@market");
+
+        let again = opened(planes.open_if_approved(&root).expect("it is a plane"));
+        assert_eq!(plane, again);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_plane_that_gained_a_plugin_since_it_was_approved_asks_again_and_says_what_is_new() {
+        // `enabledPlugins` is code that will run inside the operator's harness, and it
+        // travels out of the plane's COMMITTED settings — so an ordinary `git pull` of a
+        // shared plane can hand over a grant nobody looked at.
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        let planes = planes_keeping(&config);
+        let shown = asking(planes.open_if_approved(&root).expect("it is a plane")).contributes;
+        let plane = planes.approve_and_open(&root, &shown).expect("yes");
+        planes.close(&plane).expect("it closes");
+
+        enabling_a_plugin(&root, "new@market");
+        let asked = asking(planes.open_if_approved(&root).expect("it is a plane"));
+
+        assert!(!asked.first(), "a re-ask was drawn as a first approval");
+        assert!(
+            asked
+                .consent
+                .changes()
+                .iter()
+                .any(|change| change.name() == "new@market"),
+            "the re-ask did not name the plugin that appeared: {:?}",
+            asked.consent.changes()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_plane_that_only_stopped_contributing_something_is_opened_rather_than_asked_about() {
+        // `Consent::Noted`. A withdrawal cannot make anything run that the approval did not
+        // already cover, and a prompt that never carries risk is one an operator learns to
+        // answer yes to without reading.
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        enabling_a_plugin(&root, "going@market");
+        let planes = planes_keeping(&config);
+        let shown = asking(planes.open_if_approved(&root).expect("it is a plane")).contributes;
+        let plane = planes.approve_and_open(&root, &shown).expect("yes");
+        planes.close(&plane).expect("it closes");
+
+        std::fs::write(root.join(".claude").join("settings.json"), "{}").expect("the plugin goes");
+
+        let again = opened(planes.open_if_approved(&root).expect("it is a plane"));
+        assert_eq!(plane, again);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_plane_that_changed_between_the_ask_and_the_click_approves_nothing_and_opens_nothing() {
+        // Between the dialog reading the plane and the operator pressing the button, anything
+        // on the machine — including a chat running in another plane — can rewrite this
+        // plane's settings or its reopen record. Without this check the approval would record
+        // whatever was on disk at CLICK time, so the operator could approve, and charter could
+        // then start, a program they never read.
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        let planes = planes_keeping(&config);
+        let shown = asking(planes.open_if_approved(&root).expect("it is a plane")).contributes;
+
+        enabling_a_plugin(&root, "slipped-in@market");
+        let refused = planes
+            .approve_and_open(&root, &shown)
+            .expect_err("it must refuse an approval of something else");
+
+        assert!(
+            refused.contains("changed while you were reading it"),
+            "{refused}"
+        );
+        assert!(planes.open_now().is_empty(), "it opened the plane anyway");
+        // And nothing was written down either, so the next ask is still a first ask.
+        assert!(
+            asking(planes.open_if_approved(&root).expect("it is a plane")).first(),
+            "a refused approval was recorded"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn opening_a_plane_puts_it_in_the_list_the_opener_offers() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        let planes = planes_keeping(&config);
+        let shown = asking(planes.open_if_approved(&root).expect("it is a plane")).contributes;
+
+        planes.approve_and_open(&root, &shown).expect("yes");
+
+        let remembered = planes.remembered().store;
+        let entry = remembered
+            .recent(&root.canonicalize().expect("the plane resolves"))
+            .expect("the plane it just opened is in the list");
+        assert!(entry.trust.is_some(), "the yes was not written down");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_launch_s_own_plane_is_remembered_so_the_opener_has_something_to_offer() {
+        // An operator who has only ever run charter from a terminal must not find the opener
+        // empty the first time they double-click the icon. Remembered, and deliberately NOT
+        // approved: running charter here is consent to open it now, and the recorded approval
+        // is an answer to a question they were shown.
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        let planes = planes_keeping(&config);
+
+        resolving_with(&planes, Ok(root.clone()), |_| Ok(root.clone()));
+
+        let resolved = root.canonicalize().expect("the plane resolves");
+        let entry = planes
+            .remembered()
+            .store
+            .recent(&resolved)
+            .cloned()
+            .expect("the launch's plane is in the list");
+        assert!(
+            entry.trust.is_none(),
+            "a terminal launch became a recorded approval"
+        );
+    }
+
+    #[test]
+    fn a_machine_with_no_store_asks_every_time_and_still_opens_on_the_answer() {
+        // Windows keeps no store at all (ADR 0031), so no answer can be written down. The
+        // gate still bites — every open is asked about — and the app is still an app.
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let planes = planes();
+
+        let shown = asking(planes.open_if_approved(&root).expect("it is a plane")).contributes;
+        let plane = planes.approve_and_open(&root, &shown).expect("yes");
+        planes.close(&plane).expect("it closes");
+
+        assert!(
+            asking(planes.open_if_approved(&root).expect("it is a plane")).first(),
+            "a machine that cannot remember an approval behaved as though it had one"
+        );
+    }
+
+    #[test]
+    fn a_directory_inside_a_plane_opens_the_plane_above_it_and_says_which() {
+        // A picker pointed at `workspaces/alpha` means the project, and the approval is
+        // recorded against the root — which is why the ask carries the root it resolved
+        // rather than the path that was handed in.
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = a_plane(&dir.path().join("plane"));
+        let under = root.join("workspaces").join("alpha");
+        std::fs::create_dir_all(&under).expect("a directory below the plane");
+        let planes = planes();
+
+        let asked = asking(
+            planes
+                .open_if_approved(&under)
+                .expect("it is under a plane"),
+        );
+
+        assert_eq!(asked.root, root.canonicalize().expect("the plane resolves"));
+    }
+
+    #[test]
+    fn a_directory_that_is_in_no_plane_is_refused_by_name_rather_than_opened_as_one() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let planes = planes();
+
+        let refused = planes
+            .open_if_approved(dir.path())
+            .map(|_| ())
+            .expect_err("nothing there is a plane");
+
+        assert!(refused.contains(charter_core::plane::MANIFEST), "{refused}");
+    }
+
+    #[test]
+    fn a_path_that_is_not_there_at_all_says_so_rather_than_being_treated_as_empty() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let planes = planes();
+
+        let refused = planes
+            .open_if_approved(&dir.path().join("never"))
+            .map(|_| ())
+            .expect_err("there is nothing at that path");
+
+        assert!(refused.contains("cannot open"), "{refused}");
+    }
+
+    #[test]
+    fn a_window_showing_one_plane_is_not_looking_at_another_plane_s_chat() {
+        // The half #111 named as missing: every plane numbers its chats from one, so "is
+        // session 3 in front" has as many answers as there are planes open, and a window
+        // showing B would have suppressed a notification for A's chat 3.
+        let dir = tempfile::tempdir().expect("a directory");
+        let planes = planes();
+        let one = planes.open(&a_plane(&dir.path().join("one")));
+        let two = planes.open(&a_plane(&dir.path().join("two")));
+        let showing = Showing::default();
+
+        showing.in_window("main", Some(one.clone()));
+
+        assert!(showing.is_showing("main", &one));
+        assert!(!showing.is_showing("main", &two));
+        // And a window that has never said is not looking at anything, so nothing is
+        // suppressed on the strength of silence.
+        assert!(!showing.is_showing("second", &one));
+        // The last project closed: the window is showing no plane at all.
+        showing.in_window("main", None);
+        assert!(!showing.is_showing("main", &one));
     }
 }

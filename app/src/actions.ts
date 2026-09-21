@@ -73,6 +73,9 @@ export type Does =
   | { verb: "showChat"; session: number }
   | { verb: "removeWorktree"; force: boolean }
   | { verb: "mergeWorktree" }
+  /** Lets go of the project this window is showing, which ends its chats and shows the
+   *  opener again. Nothing of the project on disk goes. */
+  | { verb: "closeProject" }
   | { verb: "quit" }
   /** A row that cannot run. It still carries a `Does`, so "what it would do" and "whether it
    *  can" stay separate questions — and `perform` refuses it rather than guessing. */
@@ -144,6 +147,7 @@ export type Doing = {
   removeWorktree: (force: boolean) => Promise<Ran>;
   mergeWorktree: () => Promise<Ran>;
   sendKey: (key: string) => Promise<Ran>;
+  closeProject: () => Promise<Ran>;
   quit: () => void;
 };
 
@@ -294,6 +298,17 @@ export function catalogue(now: Now): Offer[] {
     );
   }
 
+  // Destructive, and therefore here: letting go of a project ends every chat in it. Nothing
+  // of the project on disk goes — what is open is written into it first, and it opens again
+  // with everything still in it (ADR 0033). The row exists so the opener is reachable from a
+  // window that already has a project, which is the only way back to it.
+  const closeProject = "Close this project";
+  offers.push(
+    now.plane === undefined
+      ? cannot("project.close", closeProject, "No project is open, so there is none to close.")
+      : can("project.close", closeProject, { verb: "closeProject" }),
+  );
+
   offers.push(can("charter.quit", "Quit charter", { verb: "quit" }));
 
   return offers;
@@ -342,6 +357,8 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return doing.mergeWorktree();
     case "sendKey":
       return doing.sendKey(does.key);
+    case "closeProject":
+      return doing.closeProject();
     case "quit":
       doing.quit();
       return DID;

@@ -126,14 +126,39 @@ describe("App", () => {
     expect(await screen.findByText("/home/dev/plane")).toBeInTheDocument();
   });
 
-  it("says why there is no plane when the core finds none", async () => {
+  it("says why there is no project here, in the resolver's own words", async () => {
+    // A launch that HAD a directory and found no project in it. The operator asked a
+    // question by running charter there, so they get the answer — and they get the opener
+    // under it, because "no plane" used to be the whole of what this window could say.
     mockIPC(() => {
       throw new Error("no charter.toml in /tmp or any directory above it");
     });
 
     render(<App />);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("no charter.toml in /tmp");
+    expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(
+      "charter found no project here",
+    );
+    expect(screen.getByText(/no charter.toml in \/tmp/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open Project…" })).toBeInTheDocument();
+  });
+
+  it("does not open with an error when the launch had nothing to go on at all", async () => {
+    // A `.app` double-clicked from the dock has `/` for a working directory, so the core
+    // opens holding nothing. That is a newcomer's first screen and it must not be an error
+    // about a concept they do not have yet — which is exactly what the window used to draw.
+    mockIPC((cmd) => {
+      if (cmd === "plane_at_launch") return { plane: null, from: null, why: null };
+      if (cmd === "recent_planes") return { planes: [], dropped: [], forgetful: null };
+      return null;
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent(
+      "You have not opened a project yet",
+    );
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("tells the core when its first frame is on screen", async () => {

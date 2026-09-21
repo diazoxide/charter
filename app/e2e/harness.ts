@@ -330,3 +330,20 @@ function git(cwd: string, args: string[]): void {
 export function anEmptyRecord(plane: string): void {
   rmSync(join(plane, ".charter", "app", "reopen.json"), { force: true });
 }
+
+/**
+ * A config home of this run's own, so charter's machine store is empty when the app starts.
+ *
+ * The store holds which projects this machine remembers and which the operator has approved
+ * (charter ADR 0034), and it lives under `$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`,
+ * else `~/.config`. Left alone, a scenario run would read and WRITE the runner's own — so
+ * "charter asks about a project nobody has approved" would pass on a fresh runner and fail on
+ * the second run of the same one, which is the worst kind of green.
+ *
+ * `$CHARTER_CONFIG_HOME` and not `$XDG_CONFIG_HOME`: `gh` keeps its auth under the second, so
+ * redirecting that one to isolate charter silently logs `gh` out. That is the reason the
+ * variable exists, and it is `report.py:consent_path`'s reason, unchanged.
+ */
+export function aConfigHomeOfItsOwn(): string {
+  return mkdtempSync(join(tmpdir(), "charter-scenario-config-"));
+}

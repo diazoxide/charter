@@ -34,6 +34,7 @@ tauri-plugin-wdio = { version = "1", optional = true }
 tauri-plugin-wdio-webdriver = { version = "1", optional = true }
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 tauri-plugin-single-instance = "2.4.4"
+tauri-plugin-dialog = "2"
 
 [lints]
 workspace = true
