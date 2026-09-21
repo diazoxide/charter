@@ -368,3 +368,92 @@ describe("the chat strip at fifty chats (charter-app#130)", () => {
     }
   });
 });
+
+/**
+ * The axis invariant, as a rule rather than as a convention.
+ *
+ * **"The tab in front is on the strip that is drawn."** It used to hold because every handler
+ * that could break it maintained it — `bringToFront`, `focusWorkspace`, `closeTab`, `openTab`
+ * and the sidebar-read's focus rule each set the focused workspace beside the tab they moved.
+ * Five agreeing handlers is not a rule, and a review of #131 said so: a sixth that forgot
+ * would break the axis silently.
+ *
+ * It was not only a future hazard. **The plane is a directory the operator also edits by hand
+ * and another charter process writes**, and nothing on the plane records a chat — which
+ * workspace a chat is in is decided by the directory it works in, so adding a workspace moves
+ * chats between strips with no handler involved at all. The strip the window drew then stayed
+ * where the last handler left it.
+ */
+describe("the strip that is drawn", () => {
+  const DEEP = `${ALPHA}/deep`;
+
+  /** A plane whose workspaces can change under the window, the way a plane really can.
+   *  Chats are filed by the LONGEST workspace path their directory is under, which is how a
+   *  workspace added inside another one takes a chat over. */
+  function movingPlane(opened: ReturnType<typeof chat>[]) {
+    const chats = [...opened];
+    let workspaces = [
+      { name: "alpha", path: ALPHA },
+      { name: "beta", path: BETA },
+    ];
+    mockIPC((cmd, args) => {
+      const given = (args ?? {}) as Record<string, unknown>;
+      if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
+      if (cmd === "opened_chats") return chats;
+      if (cmd === "start_options") return START_OPTIONS;
+      if (cmd === "chat_states") return [];
+      if (cmd === "chats_that_would_not_start") return [];
+      if (cmd === "running_sessions") return [];
+      if (cmd === "close_session") {
+        const at = chats.findIndex((one) => one.session === given.session);
+        if (at >= 0) chats.splice(at, 1);
+        return null;
+      }
+      if (cmd === "plane_sidebar") {
+        const under = (one: (typeof chats)[number]) =>
+          workspaces
+            .filter((ws) => one.cwd?.startsWith(ws.path))
+            .sort((a, b) => b.path.length - a.path.length)[0];
+        return {
+          root: PLANE,
+          personas: ["steward"],
+          persona: "steward",
+          unfiled: chats.filter((one) => !under(one)),
+          workspaces: workspaces.map((ws) => ({
+            ...ws,
+            vision: "",
+            todos: [],
+            chats: chats.filter((one) => under(one)?.name === ws.name),
+          })),
+        };
+      }
+      return null;
+    });
+    return {
+      /** The operator adds a workspace inside `alpha`, which takes `alpha`'s deeper chats. */
+      addGamma() {
+        workspaces = [...workspaces, { name: "gamma", path: DEEP }];
+      },
+    };
+  }
+
+  it("follows the chat in front when the plane refiles it under another workspace", async () => {
+    const plane = movingPlane([chat(1, "one", DEEP, { in_front: true }), chat(2, "two", ALPHA)]);
+    render(<App />);
+    await vi.waitFor(() => expect(strip()).toEqual(["alpha", "beta"]));
+    expect(focused()).toEqual(["alpha"]);
+    expect(chatTabs()).toEqual(["one steward", "two steward"]);
+
+    // The plane gains a workspace at chat one's own directory, so chat one is `gamma`'s now.
+    // Nothing the window did moved it, and no handler runs on the way: the strip is re-read
+    // because the tabs changed, and what changed is the OTHER chat closing.
+    plane.addGamma();
+    await userEvent.click(screen.getByRole("button", { name: "End chat two steward" }));
+
+    await vi.waitFor(() => expect(strip()).toEqual(["alpha", "beta", "gamma"]));
+    // The pane on screen is chat one's, so the strip drawn has to be chat one's too.
+    expect(panes()).toEqual(["session 1"]);
+    expect(focused()).toEqual(["gamma"]);
+    expect(chatTabs()).toEqual(["one steward"]);
+  });
+});
