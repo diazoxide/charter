@@ -513,24 +513,44 @@ export function PlaneView({
    * pane` and every tab's `×` are looked up by id out of the same catalogue the palette
    * draws, so a row that goes away takes its button with it. The project strip does the same
    * thing one scope up, through `actions.projectRows`.
+   *
+   * **Only for the project in front.** Nothing draws a catalogue for a project that is not on
+   * screen — not its bar, and not the window's palette, which lists the front one's. At ADR
+   * 0026's limits that is the difference between rebuilding 117 rows once per hook event and
+   * rebuilding them once per hook event per project the window happens to hold.
    */
   const offers = useMemo(
     () =>
-      catalogue({
-        tabs,
-        workspaces: sidebar?.workspaces.map((ws) => ws.name) ?? [],
-        focused,
-        worktree,
-        plane,
-        projects,
-        // Only a refusal the REMOVAL gave, and only while it is still on screen: the
-        // discard row is the operator's answer to a sentence they have read.
-        refusal: report?.refused && report.from === "worktree.remove" ? report.words : undefined,
-        needsYou: states.needsYou,
-        quiet,
-        nameOf,
-      }),
-    [focused, nameOf, plane, projects, quiet, report, sidebar, states.needsYou, tabs, worktree],
+      !inFront
+        ? []
+        : catalogue({
+            tabs,
+            workspaces: sidebar?.workspaces.map((ws) => ws.name) ?? [],
+            focused,
+            worktree,
+            plane,
+            projects,
+            // Only a refusal the REMOVAL gave, and only while it is still on screen: the
+            // discard row is the operator's answer to a sentence they have read.
+            refusal:
+              report?.refused && report.from === "worktree.remove" ? report.words : undefined,
+            needsYou: states.needsYou,
+            quiet,
+            nameOf,
+          }),
+    [
+      focused,
+      inFront,
+      nameOf,
+      plane,
+      projects,
+      quiet,
+      report,
+      sidebar,
+      states.needsYou,
+      tabs,
+      worktree,
+    ],
   );
 
   const by = useCallback((id: string) => offers.find((offer) => offer.id === id), [offers]);

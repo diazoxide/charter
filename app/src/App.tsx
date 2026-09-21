@@ -60,9 +60,6 @@ function App() {
   const [openTrouble, setOpenTrouble] = useState<string>();
   /** What a window-level action answered, when it had something to say. */
   const [report, setReport] = useState<{ from: string; refused: boolean; words: string }>();
-  /** What this window cannot do right now, in charter's words — `charter has no plane open`
-   *  and the like (charter-app#111). */
-  const [trouble, setTrouble] = useState<string>();
   /** Whether the palette is up, so what an action answered is said in one place rather than
    *  two: the palette is modal and draws over the line below it. */
   const [paletteOpen, setPaletteOpen] = useState(false);
@@ -397,15 +394,17 @@ function App() {
    * with no tabs and no plane, so it can only be reached by a surface that ignored
    * `available` — which `perform` checks again anyway.
    */
-  const nowhere = useCallback((): Ran => {
-    const why = "charter has no plane open, so there is nowhere to start a chat.";
-    setTrouble(why);
-    return { ok: false, refused: why };
-  }, []);
+  const nowhere = (): Ran => ({
+    ok: false,
+    refused: "charter has no plane open, so there is nowhere to start a chat.",
+  });
   const windowDoing = useMemo<Doing>(
     () => ({
-      newChat: () => void nowhere(),
-      split: () => void nowhere(),
+      // A refusal, not a silence: `perform` hands it back, `run` keeps it, and the palette
+      // draws it beside the row that was pressed. Nothing is written to a second piece of
+      // state that would then have to be cleared when a project arrives.
+      newChat: () => undefined,
+      split: () => undefined,
       closePane: () => undefined,
       closeTab: () => undefined,
       selectTab: () => undefined,
@@ -419,7 +418,7 @@ function App() {
       closeProject: windowDoes.closeProject,
       quit: windowDoes.quit,
     }),
-    [nowhere, windowDoes],
+    [windowDoes],
   );
 
   /** The rows the project strip draws. The same rows `catalogue` splices into the palette —
@@ -501,12 +500,6 @@ function App() {
           ))}
           <Doer offer={strip.open} onPress={press} />
         </nav>
-      )}
-
-      {trouble && (
-        <p className="trouble" role="alert">
-          {trouble}
-        </p>
       )}
 
       {/* What the last action answered. Said here only while the palette is down: it is modal
