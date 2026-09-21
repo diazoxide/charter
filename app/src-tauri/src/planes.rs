@@ -1878,25 +1878,66 @@ mod tests {
     #[test]
     fn a_plane_the_registry_has_let_go_of_takes_its_tab_out_and_the_front_one_moves_with_it() {
         // The id is the only thing a window sends, and an id the process is no longer holding
-        // cannot be turned back into a root honestly. Carrying the window's own `active`
-        // across that gap is how a window comes back on the project beside the one it was on.
+        // cannot be turned back into a root honestly. Finding the front tab again in the list
+        // that SURVIVED is how a window comes back on the project it was on.
+        //
+        // **Three projects, the first let go of, and the second in front.** Two would prove
+        // nothing: `machine::read` clamps an index past the end, so a carried-over `active`
+        // happens to land on the right project whenever the tab that went was before it and
+        // the front one was last. Here the clamp cannot save it — a carried-over `1` is `c`,
+        // and the operator was on `b`.
         let dir = tempfile::tempdir().expect("a directory");
         let config = dir.path().join("config");
-        let one = a_plane(&dir.path().join("one"));
-        let two = a_plane(&dir.path().join("two"));
+        let a = a_plane(&dir.path().join("a"));
+        let b = a_plane(&dir.path().join("b"));
+        let c = a_plane(&dir.path().join("c"));
         let planes = planes_keeping(&config);
-        let first = planes.open(&one);
-        let second = planes.open(&two);
+        let first = planes.open(&a);
+        let second = planes.open(&b);
+        let third = planes.open(&c);
         planes.close(&first).expect("the first project closes");
 
         planes.remember_arrangement(&[Holding {
-            planes: vec![first, second],
+            planes: vec![first, second, third],
             active: Some(1),
         }]);
 
         let back = restorable(machine::read(&config));
-        assert_eq!(back.planes, vec![two.canonicalize().expect("two resolves")]);
-        assert_eq!(back.active, Some(0));
+        assert_eq!(
+            back.planes,
+            vec![
+                b.canonicalize().expect("b resolves"),
+                c.canonicalize().expect("c resolves")
+            ]
+        );
+        assert_eq!(
+            back.active,
+            Some(0),
+            "the window came back on the wrong project"
+        );
+    }
+
+    #[test]
+    fn a_window_that_lets_go_of_its_last_project_stops_being_a_window_in_the_arrangement() {
+        // An empty window in the arrangement is a row charter writes down and then restores
+        // as nothing. It is also the shape that would make "the operator closed everything"
+        // and "there is a window here with nothing in it" indistinguishable.
+        let dir = tempfile::tempdir().expect("a directory");
+        let planes = planes();
+        let one = planes.open(&a_plane(&dir.path().join("one")));
+        let showing = Showing::default();
+        showing.in_window(
+            "main",
+            Holding {
+                planes: vec![one],
+                active: Some(0),
+            },
+        );
+        assert_eq!(showing.arrangement().len(), 1);
+
+        showing.in_window("main", Holding::default());
+
+        assert!(showing.arrangement().is_empty());
     }
 
     #[test]

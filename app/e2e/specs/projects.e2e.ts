@@ -1,4 +1,4 @@
-import { renameSync } from "node:fs";
+import { realpathSync, renameSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { $, $$, browser, expect } from "@wdio/globals";
 import { anEmptyRecord, copyFixturePlane } from "../harness.js";
@@ -29,18 +29,23 @@ const PROJECTS = '[role="tablist"][aria-label="Projects"]';
 const TABS = '[role="tablist"][aria-label="Tabs"]';
 
 /**
- * A project of this spec's own, under a name of its own.
+ * A project of this spec's own, under a name of its own, spelled the way charter will.
  *
- * Renamed, because `copyFixturePlane` names its copy after the fixture and the launch's
+ * **Renamed**, because `copyFixturePlane` names its copy after the fixture and the launch's
  * project is a copy of the same one: two tabs both reading `daily`, and a `Close project
  * daily` button that could be either. The path tells them apart on screen; the name has to
  * tell them apart for the driver.
+ *
+ * **Resolved**, because `Planes::open` canonicalises every root it takes and a `PlaneId` IS
+ * that spelling — so on macOS, where `tmpdir()` is `/var/folders/…` and `/var` is a link into
+ * `/private`, the path this spec would otherwise compare against is not the one the app is
+ * holding. That is the same defect `PlaneId`'s own docstring is about, arrived at from a test.
  */
 const second = (() => {
   const copied = copyFixturePlane();
   const renamed = join(dirname(copied), "second");
   renameSync(copied, renamed);
-  return renamed;
+  return realpathSync(renamed);
 })();
 
 /** What the app answered a command with, insisting it answered at all. */
@@ -93,10 +98,17 @@ async function stripBecomes(want: { path: string | null; front: boolean }[]): Pr
 
 /** Waits until the project in front shows `many` chat tabs. */
 async function chatTabsBecome(many: number): Promise<void> {
-  await browser.waitUntil(async () => (await chatTabs()) === many, {
-    timeout: 30_000,
-    timeoutMsg: `the project in front never showed ${many} chat tabs`,
-  });
+  let saw = -1;
+  await browser.waitUntil(
+    async () => {
+      saw = await chatTabs();
+      return saw === many;
+    },
+    {
+      timeout: 30_000,
+      timeoutMsg: `the project in front showed ${saw} chat tabs, not ${many}`,
+    },
+  );
 }
 
 describe("a window holding more than one project", function () {
@@ -110,7 +122,10 @@ describe("a window holding more than one project", function () {
   let first = "";
   /** What it had running before this spec touched anything. */
   let running: number[] = [];
-  /** Whether this spec is the one that opened that chat, and so owes it a close. */
+  /** How many chat tabs it was showing then. Read rather than assumed: specs share one app
+   *  process and run in name order, so whatever ran before this one decides the number. */
+  let chatsBefore = 0;
+  /** Whether this spec is the one that opened a chat, and so owes it a close. */
   let mine = false;
 
   before(async () => {
@@ -118,13 +133,17 @@ describe("a window holding more than one project", function () {
     // appearing in the second project would be a session the next spec inherits.
     anEmptyRecord(second);
     first = (await ask<string[]>("open_planes"))[0];
-    // One chat in the launch's project, so "the first project kept its sessions" is a claim
-    // about something rather than about an empty list.
+    // At least one chat in the launch's project, so "the first project kept its sessions" is
+    // a claim about something rather than about an empty list.
     if ((await chatTabs()) === 0) {
       await pressAndStart("New tab");
       mine = true;
+      await browser.waitUntil(async () => (await chatTabs()) > 0, {
+        timeout: 30_000,
+        timeoutMsg: "the chat this spec opened never got a tab",
+      });
     }
-    await chatTabsBecome(1);
+    chatsBefore = await chatTabs();
     running = await ask<number[]>("running_sessions", { plane: first });
     expect(running.length).toBeGreaterThan(0);
   });
@@ -180,7 +199,7 @@ describe("a window holding more than one project", function () {
       { path: first, front: true },
       { path: second, front: false },
     ]);
-    await chatTabsBecome(1);
+    await chatTabsBecome(chatsBefore);
     expect(await ask<number[]>("running_sessions", { plane: first })).toEqual(running);
   });
 
