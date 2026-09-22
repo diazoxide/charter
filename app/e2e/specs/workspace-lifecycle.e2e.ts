@@ -163,7 +163,13 @@ describe("making a workspace and deleting one", function () {
     // opening one; a driver that invoked `open_plane` itself would attach the plane in the
     // core and leave the strip showing the launch's project — and every assertion below would
     // be about the wrong plane. `projects.e2e.ts` opens a second project the same way.
-    await $(`${PROJECTS} > button`).click();
+    // **By its accessible name, not by its position** — the same correction #171 made in
+    // `projects.e2e.ts`, for the same reason. This was the strip's one direct-child button,
+    // which stopped matching anything the moment #171 gathered the strip's own controls into
+    // an element of their own. A selector that matches nothing fails as "element wasn't
+    // found" and says nothing about why. The `+` carries the catalogue's words in its
+    // `aria-label` exactly so it can be reached by what it MEANS.
+    await $(`${PROJECTS} button[aria-label="Open a project…"]`).click();
     const box = await $("#open-by-path");
     await box.waitForDisplayed({ timeout: 20_000 });
     await box.addValue(mine);
