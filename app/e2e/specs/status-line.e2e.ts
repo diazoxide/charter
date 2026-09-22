@@ -79,6 +79,24 @@ async function untilTheButtonSays(want: string): Promise<void> {
   }
 }
 
+/** Presses the status line's Alerts button and waits for the drawer, asked for afresh — an
+ *  element looked up before the drawer existed is not the drawer. */
+async function openTheDrawer(): Promise<WebdriverIO.Element> {
+  await $('[data-testid="status-alerts"]').click();
+  const drawer = await $('[data-testid="alerts-drawer"]');
+  await drawer.waitForDisplayed({ timeout: 20_000 });
+  return drawer.getElement();
+}
+
+/** Closes the drawer with Escape if it is up, and waits until it is gone. */
+async function closeTheDrawer(): Promise<void> {
+  if (await $('[data-testid="alerts-drawer"]').isExisting()) await browser.keys("Escape");
+  await browser.waitUntil(async () => !(await $('[data-testid="alerts-drawer"]').isExisting()), {
+    timeout: 20_000,
+    timeoutMsg: "the alerts drawer did not close",
+  });
+}
+
 /** Waits for the status line to say something, and says what it did say when it never does. */
 async function untilItSays(want: string | RegExp): Promise<void> {
   const line = await $('[data-testid="status-line"]');
@@ -203,10 +221,9 @@ describe("the status line", () => {
     // nothing — which is a claim it can make, and the button makes it as `none`, with no badge.
     await untilTheStripIsRead();
     await untilTheButtonSays("Alerts: none");
+    const name = basename(await planeRoot());
 
-    await $('[data-testid="status-alerts"]').click();
-    const drawer = await $('[data-testid="alerts-drawer"]');
-    await drawer.waitForDisplayed({ timeout: 20_000 });
+    const drawer = await openTheDrawer();
     expect(await drawer.getAttribute("role")).toBe("dialog");
 
     // Over the window, not inside a region: the right edge to the right edge, top to bottom.
@@ -222,12 +239,10 @@ describe("the status line", () => {
     expect(y).toBeLessThanOrEqual(1);
     expect(Math.abs(((await drawer.getSize("height")) as number) - height)).toBeLessThanOrEqual(1);
 
-    const name = basename(await planeRoot());
     const project = await drawer.$(`[aria-label="Alerts in ${name}"]`);
     await expect(project).toHaveText(expect.stringContaining("Nothing needs you here."));
 
-    await browser.keys("Escape");
-    await drawer.waitForExist({ reverse: true, timeout: 20_000 });
+    await closeTheDrawer();
   });
 
   it("lists an alert the plane has, counts it, and stops counting it once it is fixed", async () => {
@@ -237,25 +252,22 @@ describe("the status line", () => {
     const plane = await planeRoot();
     const marker = join(plane, "workspaces", "beta", ".charter-structure");
     const was = readFileSync(marker, "utf8");
-    const drawer = await $('[data-testid="alerts-drawer"]');
     try {
       writeFileSync(marker, "4\n");
-      await $('[data-testid="status-alerts"]').click();
-      await drawer.waitForDisplayed({ timeout: 20_000 });
+      const drawer = await openTheDrawer();
       const project = await drawer.$(`[aria-label="Alerts in ${basename(plane)}"]`);
       await expect(project).toHaveText(expect.stringContaining("charter ws reinit --all"));
       await expect(project).toHaveText(expect.stringContaining("beta"));
-      await browser.keys("Escape");
-      await drawer.waitForExist({ reverse: true, timeout: 20_000 });
+      await closeTheDrawer();
       await untilTheButtonSays("Alerts: 1");
     } finally {
-      // Put back what this spec changed: one app process serves the whole run.
+      // Put back what this spec changed, and never leave the drawer over the window: one app
+      // process serves the whole run, and a scrim left up blocks every spec after this one.
       writeFileSync(marker, was);
+      await closeTheDrawer();
     }
-    await $('[data-testid="status-alerts"]').click();
-    await drawer.waitForDisplayed({ timeout: 20_000 });
-    await browser.keys("Escape");
-    await drawer.waitForExist({ reverse: true, timeout: 20_000 });
+    await openTheDrawer();
+    await closeTheDrawer();
     await untilTheButtonSays("Alerts: none");
   });
 

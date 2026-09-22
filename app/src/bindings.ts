@@ -231,11 +231,11 @@ export const commands = {
 	/**
 	 *  What is wrong in every project this process holds, project by project, for the alerts
 	 *  drawer.
-	 *
+	 * 
 	 *  **Every project, never one**: an alert is about a plane rather than the workspace on
 	 *  screen, and the drawer exists because alerts cross projects — so the command takes no plane,
 	 *  and cannot be wired to the one in front by mistake.
-	 *
+	 * 
 	 *  On a blocking thread, because the plane-root alert asks git for a status per project and a
 	 *  window that waited on eight of them would miss its frame.
 	 */
