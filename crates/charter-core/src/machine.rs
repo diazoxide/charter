@@ -1567,7 +1567,7 @@ fn channel_of(
             dropped.push(Dropped::Channel {
                 named: named.to_owned(),
             });
-            crate::updates::Channel::default()
+            crate::updates::Channel::Dev
         }
     }
 }

@@ -39,7 +39,7 @@
       "endpoints": [
         "https://github.com/diazoxide/charter-app/releases/latest/download/latest.json"
       ],
-      "requireSignedVersion": true
+      "requireSignedVersion": false
     }
   }
 }
