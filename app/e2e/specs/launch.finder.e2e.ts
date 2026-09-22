@@ -3,6 +3,7 @@ import { chmodSync, existsSync, readdirSync, readFileSync, statSync, writeFileSy
 import { dirname, join } from "node:path";
 import process from "node:process";
 import { A_FINDER_LAUNCHS_PATH, built, READY } from "../harness.js";
+import { THEIR_STATUS_LINE } from "../wdio.finder.conf.js";
 import { harnessRowsDrawn, pickAndStart, pressOnly } from "../opening.js";
 
 /**
@@ -211,6 +212,36 @@ describe("an app opened from Finder", () => {
     });
     await expect(dialog()).toHaveText(expect.stringContaining(A_FINDER_LAUNCHS_PATH));
     await expect(dialog()).toHaveText(expect.stringContaining("each harness profile probed"));
+
+    await browser.keys(["Escape"]);
+    await expect(dialog()).not.toBeDisplayed();
+  });
+
+  it("says, in the doctor, that it left the operator's own status line alone", async () => {
+    // **The other half of the 2026-09-22 ruling.** This launch's `$CLAUDE_CONFIG_DIR` carries
+    // a `statusLine` of the operator's (`wdio.finder.conf.ts`). One charter armed through
+    // `--settings` would shadow it silently — measured on Claude Code 2.1.280 — so charter
+    // arms none, and the cost (this chat records no turn, so its ctx/cache gauge stays dark)
+    // is said by the doctor rather than left looking like breakage.
+    const button = await $('[data-testid="status-doctor"]');
+    await button.waitForExist({ timeout: 30_000 });
+    await button.click();
+    await expect(dialog()).toBeDisplayed();
+
+    await browser.waitUntil(async () => (await dialog().getText()).includes("chat footer"), {
+      timeout: 60_000,
+      interval: 250,
+      timeoutMsg: "the doctor drew no `chat footer` row",
+    });
+    const said = await dialog().getText();
+    // It names the file in force, not merely that something is.
+    expect(said).toContain("settings.json fills Claude Code's status line");
+    expect(said).toContain("stays dark");
+    expect(said).toContain("will not replace a status line you wrote");
+    // And it is under the app's own heading, because `charter doctor` does not print it.
+    await expect(dialog().$('section[aria-label="This app"]')).toBeDisplayed();
+    // The launcher wrote a command that would genuinely have run.
+    expect(THEIR_STATUS_LINE.startsWith("/bin/echo")).toBe(true);
 
     await browser.keys(["Escape"]);
     await expect(dialog()).not.toBeDisplayed();
