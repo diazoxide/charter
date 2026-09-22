@@ -221,10 +221,15 @@ fn an_id_that_is_a_path_is_refused_because_the_record_is_keyed_by_it() {
 }
 
 #[test]
-fn a_declared_file_that_walks_up_out_of_the_extension_is_refused() {
+fn a_declared_file_that_walks_up_out_of_the_extension_is_refused_by_the_manifest_check() {
     // Checked here as well as at the open, because this string goes into the fingerprint and
     // onto the screen: the operator must not be shown a path charter has not already said is
     // one.
+    //
+    // **Asserted on `declarable`'s OWN words, not on the shared ones.** The first version
+    // looked for "walks up out of", which is also what `contain::no_link_on_the_way` says a
+    // moment later — so it passed with `declarable`'s arm deleted, crediting this check with
+    // a refusal the walk had made. Measured: one of four mutations nothing held.
     let made = Made::new();
     made.ordinary();
     made.manifest(
@@ -232,7 +237,7 @@ fn a_declared_file_that_walks_up_out_of_the_extension_is_refused() {
     );
 
     let why = read_at(&made.at()).expect_err("no extension");
-    assert!(why.contains("walks up out of"), "{why}");
+    assert!(why.contains("names a parent directory"), "{why}");
 }
 
 #[test]
@@ -331,31 +336,39 @@ fn a_program_is_hashed_like_any_other_declared_file() {
 }
 
 #[test]
-fn moving_a_files_bytes_into_its_name_does_not_hash_the_same() {
-    // The length framing. Without it, a part named `a` holding `bc` and a part named `ab`
-    // holding `c` are the same byte stream — and a fingerprint with a collision in it can be
-    // changed under the operator without asking again.
-    let one = Made::new();
-    one.manifest(r#"{"version":1,"id":"x","contributes":{"themes":[{"file":"ab"}]}}"#);
-    one.file("ab", "c");
-    let two = Made::new();
-    two.manifest(r#"{"version":1,"id":"x","contributes":{"themes":[{"file":"ab"}]}}"#);
-    two.file("ab", "c");
+fn a_name_and_its_contents_cannot_run_together() {
+    // The length framing, driven through `digest` rather than through an extension.
+    //
+    // **Through `read_at` this cannot be tested, and the first version of this test did not
+    // know that.** The manifest is itself a part and it names every file the later parts
+    // carry, so two extensions that would collide already differ in the manifest — the test
+    // passed with the framing removed, and the sweep caught it as one of four guards nothing
+    // held. The framing is defence for the first part the manifest does not name, and this
+    // drives the function that does the framing so that dropping it reddens something today.
+    let split_one: [(&str, &[u8]); 1] = [("ab", b"c")];
+    let split_two: [(&str, &[u8]); 1] = [("a", b"bc")];
 
     assert_eq!(
-        read_at(&one.at()).expect("one").fingerprint,
-        read_at(&two.at()).expect("two").fingerprint,
-        "the same bytes must hash the same, or nothing below means anything"
+        digest(&split_one),
+        digest(&split_one),
+        "the same parts must hash the same, or nothing below means anything"
     );
-
-    let three = Made::new();
-    three.manifest(r#"{"version":1,"id":"x","contributes":{"themes":[{"file":"a"}]}}"#);
-    three.file("a", "bc");
-
     assert_ne!(
-        read_at(&one.at()).expect("one").fingerprint,
-        read_at(&three.at()).expect("three").fingerprint,
-        "a name and its contents ran together"
+        digest(&split_one),
+        digest(&split_two),
+        "a part's name ran into its contents, so two different part lists hash the same"
+    );
+}
+
+#[test]
+fn the_same_extension_read_twice_has_the_same_fingerprint() {
+    let made = Made::new();
+    let once = read_at(&made.ordinary()).expect("an extension");
+    let twice = read_at(&made.at()).expect("an extension");
+
+    assert_eq!(
+        once.fingerprint, twice.fingerprint,
+        "the fingerprint is not stable, so nothing else about it means anything"
     );
 }
 
@@ -722,11 +735,17 @@ fn the_record_is_0600_in_a_0700_directory() {
 
 #[cfg(unix)]
 #[test]
-fn a_link_at_the_temp_file_the_write_lands_on_is_refused() {
+fn a_link_at_the_temp_file_the_write_lands_on_is_refused_by_the_walk() {
     // The gate is on the path the write ACTUALLY lands on, which is the temp file and not the
     // record. Guarding the destination of a rename while the bytes go somewhere unguarded is
     // the mistake this repo has had six review rounds on, and a test that plants its link at
     // the record's own path would pass against exactly that defect.
+    //
+    // **`PermissionDenied` exactly, not "either of two kinds".** Two guards refuse this — the
+    // containment walk, and `O_CREAT|O_EXCL` on a symlink — and accepting either kind made
+    // this test pass with the walk deleted, crediting it with a refusal `O_EXCL` had made.
+    // Measured: it was one of four mutations nothing held. The walk answers first and answers
+    // `PermissionDenied`; `create_new` answers `AlreadyExists` and has its own test below.
     let made = Made::new();
     let dir = crate::machine::dir(&made.config());
     std::fs::create_dir_all(&dir).expect("the directory");
@@ -736,16 +755,56 @@ fn a_link_at_the_temp_file_the_write_lands_on_is_refused() {
 
     let why = write_through(&made.config(), &dir.join(RECORD), &temp, b"{}")
         .expect_err("a link at the temp path is refused");
-    assert!(
-        matches!(
-            why.kind(),
-            io::ErrorKind::PermissionDenied | io::ErrorKind::AlreadyExists
-        ),
-        "{why}"
-    );
+    assert_eq!(why.kind(), io::ErrorKind::PermissionDenied, "{why}");
     assert!(
         !outside.exists(),
         "charter wrote through a link out of its own directory"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_on_the_way_to_the_temp_file_is_refused_where_only_the_walk_can_see_it() {
+    // `O_NOFOLLOW` answers for the LAST component and for nothing above it, so a link at an
+    // intermediate directory is the walk's alone. Without the walk this write lands in a tree
+    // outside the config home and reports success.
+    let made = Made::new();
+    let dir = crate::machine::dir(&made.config());
+    std::fs::create_dir_all(&dir).expect("the directory");
+    let outside = made.dir.path().join("outside");
+    std::fs::create_dir_all(&outside).expect("a directory outside");
+    std::os::unix::fs::symlink(&outside, dir.join("through")).expect("a link on the way");
+    let temp = dir.join("through").join("extensions.json.writing");
+
+    let why = write_through(&made.config(), &dir.join(RECORD), &temp, b"{}")
+        .expect_err("a link on the way is refused");
+    assert_eq!(why.kind(), io::ErrorKind::PermissionDenied, "{why}");
+    assert!(
+        !outside.join("extensions.json.writing").exists(),
+        "charter wrote through a link at a directory the walk was the only guard on"
+    );
+}
+
+#[test]
+fn a_file_already_at_the_temp_path_is_refused_rather_than_written_through() {
+    // `create_new` and not `create`+`truncate`, which is what tells this guard apart from the
+    // walk: a plain file is not a link, so the walk passes it and only `O_EXCL` refuses. It is
+    // the right refusal because a `create_new` that fails failed because something was ALREADY
+    // there, and unlinking that something is charter deleting a file it did not make
+    // (`machine::write_through`'s rule, and this is the same directory).
+    let made = Made::new();
+    let dir = crate::machine::dir(&made.config());
+    std::fs::create_dir_all(&dir).expect("the directory");
+    let temp = dir.join("extensions.json.someone-elses.writing");
+    std::fs::write(&temp, "somebody else was here").expect("a file at the temp path");
+
+    let why = write_through(&made.config(), &dir.join(RECORD), &temp, b"{}")
+        .expect_err("an existing file at the temp path is refused");
+    assert_eq!(why.kind(), io::ErrorKind::AlreadyExists, "{why}");
+    assert_eq!(
+        std::fs::read_to_string(&temp).expect("still there"),
+        "somebody else was here",
+        "charter wrote through a file it did not make"
     );
 }
 

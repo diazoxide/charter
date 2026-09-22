@@ -137,6 +137,17 @@ const MOST_DECLARED_FILES: usize = 64;
 /// The most the record may be, for the reason [`crate::machine::MAX_BYTES`] has one.
 const MOST_RECORD_BYTES: u64 = 1 << 20;
 
+/// What [`slurp`] says about a file that is not there, as a constant rather than as a literal
+/// written twice.
+///
+/// [`read`] has to tell "no record at all" — an ordinary machine with no extensions — apart from
+/// "charter could not read the record", because the first is fine and the second must approve
+/// nothing AND refuse to clobber. It tells them apart by this sentence. Spelling it in two
+/// places would mean an edit to the wording silently turned every fresh machine's missing
+/// record into an unreadable one, and [`approve`] would then refuse forever with a message
+/// about a file that was never there.
+const NOT_THERE: &str = "is not there";
+
 /// The sentence charter says about what an extension can reach, which is the most important
 /// string in this module.
 ///
@@ -380,7 +391,7 @@ pub fn read_at(dir: &Path) -> Result<Extension, String> {
 /// checked and the file charter reads cannot be two files.
 fn slurp(root: &Path, path: &Path, most: u64) -> Result<String, String> {
     let mut open = crate::contain::open_no_link(root, path).map_err(|why| match why.kind() {
-        io::ErrorKind::NotFound => "is not there".to_owned(),
+        io::ErrorKind::NotFound => NOT_THERE.to_owned(),
         _ => format!("could not be opened: {why}"),
     })?;
     // A FIFO here is not a slow read, it is a permanent one, and this runs on the path that
@@ -546,7 +557,11 @@ fn declarable(file: &str) -> Result<(), String> {
             }
             Component::CurDir => return Err("holds a '.', which names nothing".into()),
             Component::ParentDir => {
-                return Err("walks up out of the extension's own directory".into());
+                // Deliberately NOT the words `contain::no_link_on_the_way` uses for the same
+                // shape ("walks up out of {root}"). Both guards refuse this path and the walk
+                // refuses it a moment later, so a test asserting on the shared phrase passed
+                // with this check deleted — measured, and the reason this sentence is its own.
+                return Err("names a parent directory, which a manifest may not".into());
             }
             Component::RootDir | Component::Prefix(_) => {
                 return Err("is rooted, and an extension declares its own files".into());
@@ -566,13 +581,11 @@ fn declarable(file: &str) -> Result<(), String> {
 /// discovered when the app gets slower: it is bounded by [`MOST_DECLARED_FILES`] files of
 /// [`MOST_DECLARED_BYTES`] each.
 ///
-/// **Length-framed, so two different splits cannot hash the same.** Each part goes in as its
-/// name's length, its name, its bytes' length and its bytes. Concatenating name and content
-/// without the lengths would let an extension declaring `a` holding `bc` collide with one
-/// declaring `ab` holding `c`, and a fingerprint with a collision in it is a fingerprint that
-/// can be changed under the operator without asking again. The parts are visited in the order
-/// the manifest declares them, and the declared order is itself inside the hash because the
-/// manifest's own bytes are the first part.
+/// **The parts are length-framed** ([`digest`]), and the honest note about that is there rather
+/// than here: through this function the framing is not currently load-bearing, because the
+/// manifest is itself a part and it names every file the later parts carry. It is defence for
+/// the first part the manifest does not name. The parts are visited in the order the manifest
+/// declares them, and that order is inside the hash for the same reason.
 ///
 /// It hands back the theme text alongside the digest for the reason [`Extension::theme_text`]
 /// gives: the bytes the window draws with must be the bytes that were hashed, and a second read
@@ -582,19 +595,7 @@ fn read_parts(
     manifest_bytes: &[u8],
     manifest: &Manifest,
 ) -> Result<(String, BTreeMap<String, String>), String> {
-    use sha2::Digest as _;
-    let mut hasher = sha2::Sha256::new();
-    let part = |hasher: &mut sha2::Sha256, name: &str, bytes: &[u8]| {
-        hasher.update((name.len() as u64).to_be_bytes());
-        hasher.update(name.as_bytes());
-        hasher.update((bytes.len() as u64).to_be_bytes());
-        hasher.update(bytes);
-    };
-    // A domain tag, so this digest can never equal one taken over the same bytes for another
-    // purpose, and a version, so widening what is hashed re-asks rather than silently matching.
-    part(&mut hasher, "charter-extension", &VERSION.to_be_bytes());
-    part(&mut hasher, MANIFEST, manifest_bytes);
-
+    let mut read: Vec<(String, String)> = Vec::new();
     let mut theme_text = BTreeMap::new();
     let declared = manifest
         .themes
@@ -605,12 +606,50 @@ fn read_parts(
         let at = dir.join(file);
         let text = slurp(dir, &at, MOST_DECLARED_BYTES)
             .map_err(|why| format!("'{}' {why}", at.display()))?;
-        part(&mut hasher, file, text.as_bytes());
         if is_a_theme {
-            theme_text.insert(file.to_owned(), text);
+            theme_text.insert(file.to_owned(), text.clone());
         }
+        read.push((file.to_owned(), text));
     }
-    Ok((hex(&hasher.finalize()), theme_text))
+
+    // A domain tag first, so this digest can never equal one taken over the same bytes for
+    // another purpose, and the version with it, so widening what is hashed re-asks rather than
+    // silently matching.
+    let tag = VERSION.to_be_bytes();
+    let mut parts: Vec<(&str, &[u8])> =
+        vec![("charter-extension", &tag), (MANIFEST, manifest_bytes)];
+    parts.extend(
+        read.iter()
+            .map(|(file, text)| (file.as_str(), text.as_bytes())),
+    );
+    Ok((digest(&parts), theme_text))
+}
+
+/// sha256, hex, over a list of named parts — **length-framed**, so no two different lists can
+/// hash the same.
+///
+/// Each part goes in as its name's length, its name, its bytes' length and its bytes.
+/// Concatenating name and content without the lengths would let a part named `a` holding `bc`
+/// collide with one named `ab` holding `c`, and a fingerprint with a collision in it is a
+/// fingerprint that can be changed under the operator without asking again.
+///
+/// **It is a seam, and the seam is why the framing is testable at all.** Through
+/// [`read_parts`] the framing is currently unreachable: the manifest's own bytes are the
+/// second part and they *name every file the later parts carry*, so any pair of extensions
+/// that would collide already differ in the manifest. That makes the framing defence for a
+/// part the manifest does not name — and the day one is added, nobody will notice it became
+/// load-bearing. `a_name_and_its_contents_cannot_run_together` drives this function directly
+/// rather than through an extension, so dropping the framing reddens a test today.
+fn digest(parts: &[(&str, &[u8])]) -> String {
+    use sha2::Digest as _;
+    let mut hasher = sha2::Sha256::new();
+    for (name, bytes) in parts {
+        hasher.update((name.len() as u64).to_be_bytes());
+        hasher.update(name.as_bytes());
+        hasher.update((bytes.len() as u64).to_be_bytes());
+        hasher.update(bytes);
+    }
+    hex(&hasher.finalize())
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -663,7 +702,7 @@ pub fn read(config_root: &Path) -> Loaded {
         // No record is a machine with no extensions, and is the ordinary state. It is the one
         // absence that is not an error, and it is told apart from the others by `NotFound`
         // rather than by a second `stat` that could answer about a different file.
-        Err(why) if why == "is not there" => return Loaded::default(),
+        Err(why) if why == NOT_THERE => return Loaded::default(),
         Err(why) => return refused(format!("'{}' {why}", target.display())),
     };
     let doc: serde_json::Value = match serde_json::from_str(&text) {
