@@ -64,6 +64,7 @@ pub mod shown;
 pub mod start;
 pub mod state;
 pub mod trace;
+pub mod toolgate;
 pub mod tui;
 pub mod updates;
 pub mod usage;
