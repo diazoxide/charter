@@ -122,11 +122,13 @@ jobs:
       # `--time-preflight`: `charter doctor --preflight` runs at every session start, so what it
       # costs is printed here on every run, for both implementations, on the same plane.
       - run: tests/differential/run.py --time-preflight 20
-      # M3.1 stages 1 and 2: `shellseg`, `shellwrap` and `heredoc` are what every Bash refusal
-      # reads a command line with, and they are wired to nothing yet. So they have no CLI surface
-      # for `run.py` to drive, and they are compared FUNCTION BY FUNCTION instead — 200,000
-      # generated command lines through both implementations, EVERY `pub` answer apiece, in
-      # batches so the run's memory is bounded. The example is dev-only; nothing ships it.
+      # M3.1 stages 1 to 4: `shellseg`, `shellwrap`, `heredoc`, `leakguard`, `pypath`, `livesub`,
+      # `credguard`, `floorguard` and `proseguard` are what every Bash refusal reads a command
+      # line with — and now most of what it refuses ON — and they are wired to nothing yet. So
+      # they have no CLI surface for `run.py` to drive, and they are compared FUNCTION BY FUNCTION
+      # instead — 200,000 generated command lines through both implementations, EVERY `pub` answer
+      # apiece, in batches so the run's memory is bounded. The example is dev-only; nothing ships
+      # it.
       - name: The shell reader, against the command lines Python answers
         run: |
           cargo build -p charter-core --example shellseg_oracle

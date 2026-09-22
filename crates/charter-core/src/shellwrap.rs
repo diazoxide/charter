@@ -40,7 +40,7 @@
 //! because the crate's own `$` is end-of-haystack. A token really can hold a newline (`cat "<
 //! "` is one word to a shell), so this is reachable and not a curiosity.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -68,7 +68,7 @@ const WRAPPERS: [&str; 17] = [
 
 /// Shell KEYWORDS that can stand where a program stands once a command has been segmented.
 /// `if true; then cat <vault>; fi` segments into `then cat <vault>`, whose token 0 is `then`.
-const SHELL_KEYWORDS: [&str; 21] = [
+pub(crate) const SHELL_KEYWORDS: [&str; 21] = [
     "if", "then", "elif", "else", "fi", "while", "until", "do", "done", "for", "in", "case",
     "esac", "select", "function", "!", "{", "}", "(", ")", "$",
 ];
@@ -635,9 +635,172 @@ pub fn split_env_chdir(toks: &[String]) -> Invocation {
     }
 }
 
+/// The shell builtins that EXPORT — `_EXPORT_BUILTINS`. `declare` and `typeset` are `export`
+/// spelled two other ways, and they bundle their `x` (`declare -gx`).
+const EXPORT_BUILTINS: [&str; 3] = ["export", "declare", "typeset"];
+
+/// For each segment, the `VAR=value` assignments an EARLIER segment of the same command line has
+/// exported into the environment that segment will run in — `_exported_env`.
+///
+/// **The property is "what this command line has set for its later segments", and the spelling
+/// that stood in for it was "an assignment attached to the invocation" (#496).** [`split_env`]
+/// hands a guard the prefix on the command itself, so `GIT_DIR=<plane>/.git git checkout feature`
+/// was refused — and `export GIT_DIR=<plane>/.git && git checkout feature`, the same variable
+/// reaching the same git for the same reason, was allowed. Verified end to end against git
+/// 2.50.1. The one-credential guard ([`crate::credguard`]) had the identical gap on
+/// `export GIT_SSH_COMMAND=…`, found by sweeping the shape rather than by a report, and is wired
+/// to the same answer.
+///
+/// Parallel to `segments` rather than folded into the caller's walk, because two guards ask it
+/// and a second hand-written copy would grow its own blind spots.
+///
+/// **The shapes modelled, each because a shell really does it** (checked against bash 5 and zsh,
+/// which agree):
+///
+/// * `export NAME=VALUE` — and `declare -x` / `typeset -x`.
+/// * `NAME=VALUE` as a segment of its own, then `export NAME`. A bare assignment segment sets a
+///   SHELL variable and exports nothing — `FOO=1; <child>` really does leave `FOO` unset in the
+///   child — so it is tracked but not exported until something exports it.
+/// * `set -a` (`set -o allexport`), after which a bare assignment segment IS exported.
+///
+/// **This environment only ever GROWS.** `unset`, `export -n` and a subshell that ends are not
+/// modelled: forgetting a variable is the fail-OPEN direction, and a list that gets shorter as
+/// the command line gets longer is a bypass by construction. The cost is refusing
+/// `export GIT_DIR=x && unset GIT_DIR && git checkout feature`, which nobody types by accident.
+///
+/// **The honest boundary is `cd`'s.** A `$(…)`, a sourced file, a `~/.bashrc` and a variable
+/// already in the session's environment before the hook ran are all outside it — the
+/// `PreToolUse` payload carries the command and the cwd, not the environment the command will
+/// inherit. Stated limits, not gaps.
+pub fn exported_env(segments: &[Vec<String>]) -> Vec<Vec<String>> {
+    let mut out: Vec<Vec<String>> = Vec::with_capacity(segments.len());
+    let mut exported: Vec<String> = Vec::new();
+    // Python's `dict[str, str]`: last write wins, and the value is the whole `NAME=VALUE` token.
+    let mut shell_vars: HashMap<String, String> = HashMap::new();
+    let mut allexport = false;
+    for toks in segments {
+        out.push(exported.clone());
+        let mut i = 0;
+        while i < toks.len() && SHELL_KEYWORDS.contains(&toks[i].as_str()) {
+            i += 1;
+        }
+        let rest = &toks[i..];
+        let Some(first) = rest.first() else { continue };
+        let prog = base_lower(first);
+        let args = &rest[1..];
+        if prog == "set" {
+            // `set -a`, `set -ax`, `set -o allexport` — the LETTER, not the token, for the reason
+            // `wrapper_option` walks letters: `-ax` is `-a -x`.
+            if args.iter().any(|a| {
+                (a.starts_with('-') && !a.starts_with("--") && a[1..].contains('a'))
+                    || a == "allexport"
+            }) {
+                allexport = true;
+            }
+            continue;
+        }
+        if EXPORT_BUILTINS.contains(&prog.as_str()) {
+            if prog != "export"
+                && !args
+                    .iter()
+                    .any(|a| a.starts_with('-') && !a.starts_with("--") && a[1..].contains('x'))
+            {
+                // `declare FOO=1` without `-x` is a shell variable, not an export.
+                for a in args {
+                    if is_env_assignment(a) {
+                        shell_vars.insert(assignment_name(a), a.clone());
+                    }
+                }
+                continue;
+            }
+            // No `starts_with('-')` skip here, and that is deliberate rather than an oversight:
+            // every key of `shell_vars` came from [`is_env_assignment`], so each is a shell
+            // identifier and none starts with `-`. A flag token can therefore neither be recorded
+            // by the first arm nor found by the second. The Python deleted that skip and pins the
+            // reason with a test, since an unpinned reason is how dead code comes back to life.
+            for a in args {
+                if is_env_assignment(a) {
+                    shell_vars.insert(assignment_name(a), a.clone());
+                    exported.push(a.clone());
+                } else if let Some(v) = shell_vars.get(a) {
+                    exported.push(v.clone()); // `FOO=1; export FOO`
+                }
+            }
+            continue;
+        }
+        if rest.iter().all(|t| is_env_assignment(t)) {
+            // A segment that is NOTHING but assignments: a shell variable each, exported only
+            // under `set -a`.
+            for t in rest {
+                shell_vars.insert(assignment_name(t), t.clone());
+                if allexport {
+                    exported.push(t.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// `tok.split("=", 1)[0]` for a token [`is_env_assignment`] has already accepted.
+fn assignment_name(tok: &str) -> String {
+    match tok.split_once('=') {
+        Some((name, _)) => name.to_string(),
+        None => tok.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A flag token can be neither recorded as a variable nor found as one — the fact that makes
+    /// the deleted `starts_with('-')` skip in [`exported_env`] dead code rather than a guard.
+    #[test]
+    fn a_flag_cannot_be_mistaken_for_a_variable_name() {
+        assert!(!is_env_assignment("-x"));
+        assert!(!is_env_assignment("--global"));
+        let segs = vec![
+            vec!["export".into(), "-x".into(), "FOO=1".into()],
+            vec!["git".into(), "push".into()],
+        ];
+        assert_eq!(exported_env(&segs)[1], vec!["FOO=1".to_string()]);
+    }
+
+    /// The #496 shape: an EARLIER segment's export reaches a later segment's git.
+    #[test]
+    fn an_export_reaches_a_later_segment() {
+        let segs = vec![
+            vec!["export".into(), "GIT_SSH_COMMAND=/tmp/k".into()],
+            vec!["git".into(), "push".into()],
+        ];
+        assert_eq!(
+            exported_env(&segs)[1],
+            vec!["GIT_SSH_COMMAND=/tmp/k".to_string()]
+        );
+    }
+
+    /// A bare assignment segment sets a SHELL variable and exports nothing until something
+    /// exports it — or until `set -a`.
+    #[test]
+    fn a_bare_assignment_exports_only_once_something_exports_it() {
+        let plain = vec![
+            vec!["FOO=1".into()],
+            vec!["git".into(), "push".into()],
+            vec!["export".into(), "FOO".into()],
+            vec!["git".into(), "push".into()],
+        ];
+        let out = exported_env(&plain);
+        assert!(out[1].is_empty());
+        assert_eq!(out[3], vec!["FOO=1".to_string()]);
+
+        let allexport = vec![
+            vec!["set".into(), "-ax".into()],
+            vec!["FOO=1".into()],
+            vec!["git".into(), "push".into()],
+        ];
+        assert_eq!(exported_env(&allexport)[2], vec!["FOO=1".to_string()]);
+    }
 
     /// The three facts that make [`wrapper_option`]'s two written-down inert branches inert.
     ///
