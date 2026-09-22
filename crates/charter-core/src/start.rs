@@ -305,6 +305,39 @@ fn environment(
     env
 }
 
+/// `env` with the `PATH` a chat runs under ([`crate::programs::chat_path`]), unless it already
+/// names one.
+///
+/// **A profile that declares `env = { PATH = "…" }` wins, whole** — the escape hatch
+/// charter-app#136 was asked to keep. It is the operator's own line in their own machine's
+/// file, and a `PATH` they wrote down is one they meant; charter does not append to it behind
+/// their back. `charter` in the app's own hooks is still found, because those name it by its
+/// absolute path.
+///
+/// **Applied where a chat's program is opened, for every chat** — a profile's and the
+/// operator's shell alike — and not inside [`ready`], because the `charter` whose directory
+/// goes last is the app's to know ([`crate::harness::Harness::state_hooks`] is handed it the
+/// same way) and a shell chat never passes through `ready` at all.
+///
+/// Sorted afterwards, like everything [`environment`] builds, so two starts of one chat are
+/// the same launch.
+pub fn with_chat_path(
+    mut env: Vec<(String, String)>,
+    charter: Option<&Path>,
+) -> Vec<(String, String)> {
+    if env.iter().any(|(name, _)| name == PATH_ENV) {
+        return env;
+    }
+    if let Some(path) = crate::programs::chat_path(charter) {
+        env.push((PATH_ENV.to_owned(), path));
+        env.sort();
+    }
+    env
+}
+
+/// The variable a chat's program searches for every bare word it runs.
+const PATH_ENV: &str = "PATH";
+
 /// The persona a new chat on this plane would adopt — the plane's `[persona] default`, but
 /// **only when it is one the plane actually has**.
 ///
