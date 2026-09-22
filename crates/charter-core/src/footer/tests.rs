@@ -265,3 +265,31 @@ fn a_name_wider_than_the_pane_is_cut_inside_the_frame_and_the_border_still_lines
         "{widths:?} for {out:?}"
     );
 }
+
+#[test]
+fn an_alert_row_follows_the_declaration_inside_the_frame_and_the_active_workspace_is_not_one() {
+    let (_held, root) = a_plane("alpha");
+    let (_other, other) = a_plane("beta");
+    std::fs::rename(other.join("workspaces/beta"), root.join("workspaces/beta")).unwrap();
+    std::fs::write(root.join("workspaces/alpha").join(STRUCTURE_MARKER), "4\n").unwrap();
+    std::fs::write(root.join("workspaces/beta").join(STRUCTURE_MARKER), "4\n").unwrap();
+    let env = |name: &str| match name {
+        "COLUMNS" => Some("80".to_string()),
+        "CHARTER_WORKSPACE" => Some("alpha".to_string()),
+        _ => None,
+    };
+    let out = render(&root, &serde_json::Value::Null, &ambient(&env, &root));
+    let lines: Vec<&str> = out.lines().collect();
+    // Frame, identity row, rule, the declaration, ONE alert, frame: alpha's own stale layout
+    // is the identity row's tip, so the alert counts beta alone.
+    assert_eq!(lines.len(), 6, "{out:?}");
+    assert!(lines[1].contains("reinit"), "{:?}", lines[1]);
+    assert!(
+        lines[4].contains("⚠\x1b[0m \x1b[2mreinit\x1b[0m 1 \x1b[2mws · charter ws reinit --all"),
+        "{:?}",
+        lines[4]
+    );
+    assert!(!NOT_DRAWN_YET.contains("alerts"), "alerts are drawn now");
+    let widths: Vec<usize> = lines.iter().map(|l| crate::tui::width(l)).collect();
+    assert!(widths.iter().all(|w| *w == widths[0]), "{widths:?}");
+}

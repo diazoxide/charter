@@ -122,12 +122,19 @@ function core(
       return waiting.map((session) => ({ session, state: "waiting", queue: waiting }));
     if (cmd === "chats_that_would_not_start") return [];
     if (cmd === "running_sessions") return [];
+    if (cmd === "alerts_everywhere") return alerts;
     return null;
   });
   return { asked };
 }
 
-beforeEach(() => globalThis.localStorage.clear());
+/** What the core says is wrong in every project it holds. A test sets it before `core()`. */
+let alerts: unknown = [];
+
+beforeEach(() => {
+  globalThis.localStorage.clear();
+  alerts = [{ plane: PLANE, alerts: [], stopped: null }];
+});
 afterEach(() => {
   cleanup();
   clearMocks();
@@ -471,13 +478,60 @@ describe("the status line", () => {
     expect(screen.getByTestId("status-line")).toBeInTheDocument();
   });
 
-  it("says charter cannot count alerts rather than drawing a zero", async () => {
-    // The same claim `Panels`'s alerts area makes, on the button that will open its drawer:
-    // charter's alert row is not ported, so any count would be invented.
+  it("counts every project's alerts on the button and opens the drawer over the window", async () => {
+    // The drawer is the window's, and the core is asked about every project at once: the
+    // command names no plane, so nothing can wire it to the one in front by mistake.
+    alerts = [
+      {
+        plane: PLANE,
+        alerts: [
+          {
+            severity: "warn",
+            subject: "reinit",
+            detail: "1 workspace is behind the current layout: beta",
+            remedy: "charter ws reinit --all",
+          },
+        ],
+        stopped: null,
+      },
+    ];
+    const { asked } = core();
+    render(<App />);
+
+    const button = await screen.findByRole("button", { name: "Alerts: 1" });
+    const before = asked.filter((one) => one.cmd === "alerts_everywhere").length;
+    await userEvent.click(button);
+
+    const drawer = await screen.findByRole("dialog", { name: "Alerts" });
+    const plane = within(drawer).getByRole("region", { name: "Alerts in plane" });
+    expect(plane).toHaveTextContent("1 workspace is behind the current layout: beta");
+    expect(plane).toHaveTextContent("charter ws reinit --all");
+    // Opening it asked again, so it lists what is true when it is looked at.
+    await vi.waitFor(() =>
+      expect(asked.filter((one) => one.cmd === "alerts_everywhere").length).toBeGreaterThan(before),
+    );
+    for (const one of asked.filter((a) => a.cmd === "alerts_everywhere"))
+      expect(one.args).toEqual({});
+
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("drops the count when charter stopped looking in a project, and draws no zero", async () => {
+    alerts = [{ plane: PLANE, alerts: [], stopped: "charter.toml is not valid TOML" }];
     core();
     render(<App />);
 
-    const button = await screen.findByRole("button", { name: "Alerts — not drawn by this build" });
-    expect(button).toBeDisabled();
+    const button = await screen.findByRole("button", { name: "Alerts: not counted" });
+    expect(button).toBeEnabled();
+    expect(button).not.toHaveTextContent("0");
+  });
+
+  it("draws no alerts section in the right-hand region any more", async () => {
+    core();
+    render(<App />);
+    await screen.findByRole("button", { name: "Alerts: none" });
+
+    expect(screen.queryByTestId("panel-alerts")).toBeNull();
   });
 });

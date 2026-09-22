@@ -34,6 +34,10 @@ mod plane;
 mod profiles;
 mod session;
 
+/// Python's truthiness of a TOML value, for `crate::alerts`, which reads the same manifest
+/// sections through the same `(cfg.get(name) or {})` idiom.
+pub(crate) use config::truthy as config_truthy;
+
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 

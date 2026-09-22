@@ -1,11 +1,20 @@
-import { BellRing, CircleDashed, ListTodo, LoaderCircle, Star, UserRound } from "lucide-react";
+import { CircleDashed, ListTodo, LoaderCircle, Star, UserRound } from "lucide-react";
 import { NeedsYou } from "./NeedsYou";
 import type { WorkspaceState } from "./workspaceState";
 
 /**
  * The right region: **what is asking for you** (charter ADR 0038).
  *
- * The needs-you queue, alerts, the workspace's todos and the plane's personas. It is the
+ * **Alerts are not here any more, and that is a correction to ADR 0038, not an omission.** It
+ * put them on this side, and this side is one project's: it follows the project in front and
+ * the workspace focused in it. An alert is about a PLANE — a pin, a front door, a workspace's
+ * layout, a plane root being worked in — and the plane that has one is usually not the one on
+ * screen. So alerts are the window's: the status line's Alerts button, always on screen and
+ * counting every open project, opens a drawer over the whole window (`AlertsDrawer.tsx`). A
+ * section here pointing at that button would spend this region's height, in every project, on
+ * a sentence about a control that is already visible one line below.
+ *
+ * The needs-you queue, the workspace's todos and the plane's personas. It is the
  * same `<aside className="panels">` that has been here all along, re-tenanted: the repos and
  * the CI it used to hold are state, and state went to the bottom bar. The queue came the
  * other way, out of `<header className="bar">` where it was sharing a line with the tab
@@ -41,8 +50,6 @@ export function Panels({
       data-testid="panels"
     >
       <NeedsYou queue={queue} quiet={quiet} nameOf={nameOf} show={showChat} />
-
-      <Alerts />
 
       {workspace === undefined ? (
         <p className="empty">No workspace focused.</p>
@@ -125,35 +132,5 @@ export function Panels({
         </>
       )}
     </aside>
-  );
-}
-
-/**
- * The alerts area, which has a region and nothing to draw.
- *
- * ADR 0038 assigns alerts to this side and this build cannot source one: charter's alert row
- * is `charter/statusline.py:_alerts` and it is not ported. `crates/charter-core/src/footer.rs`
- * names the same omission in its own output rather than hiding it — *"a footer that silently
- * omitted the alert row would be worse than a sentence, because an operator reads a footer to
- * find out whether anything needs them, and one that can only ever say 'nothing' is a footer
- * that lies once a week."*
- *
- * **An alerts area that draws nothing tells that same lie**, and more convincingly, because
- * an empty area under a heading reads as "charter looked and there is nothing". So the
- * heading is here and under it is the sentence, until the port exists. Nothing is invented:
- * there is no command for alerts, and this component asks for none.
- */
-function Alerts() {
-  return (
-    <section data-testid="panel-alerts">
-      <h2>
-        <BellRing className="node-icon" />
-        Alerts
-      </h2>
-      <p className="none">
-        Not drawn by this build. charter&apos;s alert row is not ported, so charter cannot tell you
-        whether anything is alerting — an empty list here would be a claim it has no way to make.
-      </p>
-    </section>
   );
 }

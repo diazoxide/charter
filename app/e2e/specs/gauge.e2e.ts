@@ -171,7 +171,9 @@ describe("a chat's context gauge", () => {
     });
     expect((await gauges()).join(" ")).toContain("cache 90%");
 
-    // The turn ends, so nothing this spec started is left mid-turn for the specs after it.
-    hook("stop", chat, socket, sid);
+    // **No `stop` here, deliberately.** A `stop` puts the chat in the needs-you queue, and
+    // `palette.e2e.ts` asserts that queue is empty in this run ("Nothing reports a hook in
+    // this run") — it went red on CI when this spec ended the turn. The chat is ended by
+    // `after` instead, mid-turn, which leaves the queue as it found it.
   });
 });

@@ -134,6 +134,16 @@ jobs:
           cargo build -p charter-core --example shellseg_oracle
           tests/differential/shellseg.py --check
           tests/differential/shellseg.py
+      # M3.1 stage 5: `planeroot` and `gitconfig` — A3 and A3b, the first guards that ASK GIT —
+      # against a git-repository fixture both implementations run in, with one environment
+      # between them. `--coverage` fails if the generators stop reaching any branch of the two
+      # guards; the plain run compares every answer, the git layer on every tenth case.
+      - name: The plane-root guards, against the repository Python answers about
+        run: |
+          cargo build -p charter-core --example planeroot_oracle
+          tests/differential/planeroot.py --check
+          tests/differential/planeroot.py --coverage --cases 5000
+          tests/differential/planeroot.py
   stress:
     # Evidence for charter-app#16, not a gate: fifty tabs on a shared runner is timing-bound,
     # and a flaky REQUIRED check blocks every merge — including the fix for the bug it watches.
