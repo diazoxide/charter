@@ -143,9 +143,18 @@ describe("a chat's context gauge", () => {
     };
 
     // 1. The feed: charter armed its own statusline as this session's statusLine — which it
-    // may here, because this run's `$CLAUDE_CONFIG_DIR` is empty and the plane fills the line
-    // with nothing (`wdio.conf.ts`). The opposite case — the operator has one, charter arms
-    // none, and the doctor says why — is `launch.finder.e2e.ts`.
+    // may only where nothing else fills the line (the ruling of 2026-09-22). The fixture plane
+    // fills it with nothing; the machine's own `~/.claude/settings.json` is the other file
+    // that can answer, and a status line there is why this would fail on somebody's laptop and
+    // pass on CI. The opposite case — the operator HAS one, charter arms none, and the doctor
+    // says why the gauge is dark — is `launch.finder.e2e.ts`.
+    if (settings.statusLine === undefined) {
+      throw new Error(
+        "charter armed no statusLine for this chat. Either the rule broke, or this machine " +
+          "already fills Claude Code's status line (`~/.claude/settings.json`), which charter " +
+          "is right not to replace — the doctor's `chat footer` row says which.",
+      );
+    }
     expect(settings.statusLine?.type).toBe("command");
     expect(settings.statusLine?.command).toMatch(/charter'? statusline$/);
     // Nothing is drawn before a turn has been recorded — never `ctx 0%`.

@@ -2,7 +2,7 @@ import process from "node:process";
 import { config as base } from "./wdio.conf.js";
 import {
   A_FINDER_LAUNCHS_PATH,
-  aClaudeConfigHomeOfItsOwn,
+  writeAStatusLineOfTheirOwn,
   anEmptyRecord,
   built,
   copyFixturePlane,
@@ -62,6 +62,12 @@ const home = (process.env.CHARTER_FINDER_HOME ??= writeAHarnessOnlyAShellWouldFi
   writeAPluginHookingShell(built("fake-harness")),
 ));
 
+// **And this launch's operator already has a status line.** charter must not replace it (the
+// ruling of 2026-09-22, `charter_core::footerclaim`), so the chats this app starts record no
+// turn and their ctx/cache gauge stays dark — which the doctor has to say, in a row that names
+// this file. `launch.finder.e2e.ts` asks it.
+writeAStatusLineOfTheirOwn(home, THEIR_STATUS_LINE);
+
 export const config: WebdriverIO.Config = {
   ...base,
   specs: ["./specs/**/*.finder.e2e.ts"],
@@ -89,10 +95,6 @@ export const config: WebdriverIO.Config = {
           PATH: A_FINDER_LAUNCHS_PATH,
           HOME: home,
           CHARTER_PANIC_LOG: PANIC_LOG,
-          // **This launch has a status line of the operator's own**, which is the other half
-          // of the 2026-09-22 ruling: charter must not replace it, and `doctor` must say why
-          // the chat's ctx/cache gauge is dark. `launch.finder.e2e.ts` asks the doctor.
-          CLAUDE_CONFIG_DIR: aClaudeConfigHomeOfItsOwn(THEIR_STATUS_LINE),
         }),
       },
     ],

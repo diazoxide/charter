@@ -6,7 +6,6 @@ import {
   copyFixturePlane,
   cutAFixturePiece,
   declareAProfile,
-  aClaudeConfigHomeOfItsOwn,
   theRunsEnvironment,
   writeForgeCache,
   writeShell,
@@ -99,10 +98,6 @@ export const config: WebdriverIO.Config = {
         env: theRunsEnvironment(plane, {
           SHELL: writeShell(built("fake-harness")),
           CHARTER_PANIC_LOG: PANIC_LOG,
-          // Empty, so nothing fills Claude Code's status line here and charter may arm its
-          // own — which `gauge.e2e.ts` is about. The operator's real `~/.claude` decides
-          // nothing in a run.
-          CLAUDE_CONFIG_DIR: aClaudeConfigHomeOfItsOwn(),
         }),
       },
     ],

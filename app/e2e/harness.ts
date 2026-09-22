@@ -538,23 +538,22 @@ export function aConfigHomeOfItsOwn(): string {
 }
 
 /**
- * A Claude Code config folder of this launcher's own — `$CLAUDE_CONFIG_DIR`.
+ * Gives `home` a Claude Code status line of its own — a `$HOME/.claude/settings.json` with a
+ * `statusLine` in it.
  *
- * **Because one of the app's decisions now reads it.** charter arms its own `statusLine` for a
- * chat only where nothing else fills the line (`charter_core::footerclaim`), and the operator's
- * real `~/.claude/settings.json` is one of the files that answers that. Without this, whether
- * the gauge scenario passes would depend on whose machine it ran on — green on CI, red on an
- * operator who has a status line of their own.
+ * **What it is for.** charter arms its own `statusLine` for a chat only where nothing else
+ * fills the line (`charter_core::footerclaim`, the operator's ruling of 2026-09-22), and this
+ * is how a scenario puts something there. The Finder launcher uses it, because that launch
+ * already has a `$HOME` of its own.
  *
- * `statusLine`, when a spec wants one in force, is written here by the launcher that wants it.
+ * **Through `$HOME` and not `$CLAUDE_CONFIG_DIR`**: charter's wiring probe reads that variable
+ * too, and pointing it at a directory with no plugin in it makes a wired harness read as
+ * unwired — measured, by a chat that then would not start.
  */
-export function aClaudeConfigHomeOfItsOwn(statusLine?: string): string {
-  const home = mkdtempSync(join(THE_RUNS_TREE, "claude-config-"));
-  if (statusLine !== undefined) {
-    writeFileSync(
-      join(home, "settings.json"),
-      JSON.stringify({ statusLine: { type: "command", command: statusLine } }),
-    );
-  }
-  return home;
+export function writeAStatusLineOfTheirOwn(home: string, command: string): void {
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(
+    join(home, ".claude", "settings.json"),
+    JSON.stringify({ statusLine: { type: "command", command } }),
+  );
 }
