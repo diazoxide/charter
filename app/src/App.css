@@ -224,10 +224,20 @@ body {
   font: inherit;
   cursor: pointer;
   white-space: nowrap;
-  /* **`min-width: 0`, or the name never truncates.** A flex item's floor is its content, so
-     without this a long chat name widens its tab past the share it was given and the strip
-     overflows the arithmetic that decided what fits. This is the line that makes an equal
-     share actually equal. */
+}
+
+/* **`min-width: 0`, or the name never truncates.** A flex item's floor is its content, so
+   without this a long chat name widens its tab past the share it was given and the strip
+   overflows the arithmetic that decided what fits. This is the line that makes an equal share
+   actually equal.
+
+   **Only where the button is INSIDE a cell**, which is the trap this rule fell into once. A
+   workspace tab IS its own cell — there is nothing about a workspace to close, so there is no
+   wrapper — and it carries the floor itself from the rule above. A `min-width: 0` here that
+   also matched `.workspaces-strip [role="tab"]` won on source order and took that floor away,
+   so the strip squeezed eight workspaces into the room its arithmetic said four could have. */
+.projects .project > [role="tab"],
+.tabs .tab > [role="tab"] {
   flex: 1 1 auto;
   min-width: 0;
 }

@@ -183,6 +183,39 @@ describe("the window", () => {
     });
     expect(over).toBeLessThanOrEqual(1);
 
+    // **No tab is drawn narrower than the floor its strip fits by**, on any of the three.
+    //
+    // This is the invariant the arithmetic rests on and the one thing about it that only a
+    // real layout can check: `fits.ts` answers "how many fit" as `width / least`, which is a
+    // lie the moment a stylesheet rule lets a tab shrink past `least`. It is not hypothetical
+    // — a `min-width: 0` meant for the button inside a tab also matched the workspace strip's
+    // tabs, which ARE their own cells, and won on source order. The strip then squeezed eight
+    // workspaces into the room its own arithmetic had given four.
+    //
+    // The floor is read off the element, so this and the app cannot disagree about the number.
+    const squeezed = await browser.execute(() => {
+      const strips = ["Projects", "Workspaces", "Tabs"];
+      const narrow: string[] = [];
+      for (const named of strips) {
+        const strip = document.querySelector(`[role="tablist"][aria-label="${named}"]`);
+        if (!strip) continue;
+        const least = Number.parseFloat(getComputedStyle(strip).getPropertyValue("--least"));
+        if (!Number.isFinite(least)) {
+          narrow.push(`${named}: no --least on the strip`);
+          continue;
+        }
+        for (const tab of strip.querySelectorAll('[role="tab"]')) {
+          // The CELL, which is what carries the floor: a wrapper where there is one (a tab and
+          // its `×`), and the button itself where there is not.
+          const cell = tab.closest(".project, .tab") ?? tab;
+          const wide = cell.getBoundingClientRect().width;
+          if (wide < least - 1) narrow.push(`${named}: a tab is ${wide}px, under ${least}px`);
+        }
+      }
+      return narrow;
+    });
+    expect(squeezed).toEqual([]);
+
     await more.click();
     // **Waited for, not read once.** The menu is a Radix portal: it is mounted on the open,
     // in a later frame than the click, so a `$$` taken straight after the click finds an
