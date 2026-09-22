@@ -46,7 +46,14 @@
 //!
 //! # This is a placeholder for a real answer, not a platform policy
 //!
-//! **Neither arm has ever been compiled, let alone run**, and Windows has a real answer:
+//! **It compiles on Windows; it has never run there** — a narrower claim than charter-app#102's
+//! *"neither arm has ever been compiled"*, and worth measuring rather than repeating. The
+//! `windows (build, test, evidence only)` job builds `charter-cli` on `windows-latest` on every
+//! PR, and `charter-core`'s library compiles there with one warning, so this arm has been
+//! compiled on every run since that job landed. What does not compile there is part of the
+//! TEST tree, which is why nothing below has ever been executed on the platform it is for.
+//!
+//! Windows has a real answer:
 //! `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, …)` then `GetExitCodeProcess`
 //! distinguishes "gone" from "there and not ours" the same way `kill(pid, 0)` does with
 //! `ESRCH` and `EPERM`. It is Win32, so under `unsafe_code = "forbid"` it means a crate —
@@ -80,9 +87,10 @@ pub fn alive(pid: u32) -> bool {
 
 /// Off POSIX charter cannot ask, so it does not claim — see the module docstring.
 ///
-/// **Not exercised by any test**, because no platform this builds for takes this arm. It is
-/// written to be the same decision the unix arm makes when it has no evidence, so the day
-/// charter-app#93 gives Windows a real answer there is one place to put it.
+/// **Compiled on Windows and exercised by nothing**: the evidence-only job builds this and
+/// cannot run the tests. So it is written to be the same decision the unix arm makes when it
+/// has no evidence — one direction rather than two — and the day charter-app#93 gives Windows
+/// a real answer there is one place to put it.
 #[cfg(not(unix))]
 pub fn alive(_pid: u32) -> bool {
     false
