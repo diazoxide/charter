@@ -191,6 +191,167 @@ describe("the explorer", () => {
   });
 });
 
+/**
+ * **The tree's rows, measured — because jsdom lays nothing out.**
+ *
+ * Every assertion in this block is about a used value: a height in pixels, a `scrollWidth`, the
+ * position an `::after` was actually painted at. `getComputedStyle` in jsdom answers from the
+ * cascade it managed to build and gives every box a size of zero, so a vitest assertion that a
+ * row "does not wrap" or that the region "scrolls" checks nothing at all. These need a window
+ * that really lays out, which is why they are here.
+ *
+ * They also catch the trap `docs/design-system.md` names: a class that does not exist emits no
+ * CSS and nothing goes red. A rule that never took would show up here as a row two lines tall.
+ */
+describe("the explorer's rows, in a region too narrow for them", () => {
+  /**
+   * Narrows the explorer, measures, and puts it back.
+   *
+   * **The region's own box is narrowed, not the separator dragged.** The question is whether
+   * this scroll container folds its rows or scrolls them when it is narrower than they are, and
+   * the container is `.explorer` itself — so its width is the input, whatever produced it. A
+   * pointer gesture on the separator would ask the same question through a drag whose pixels
+   * differ per platform, and `react-resizable-panels`' own inline style is a shape this spec
+   * would then be pinning. Everything is read back inside one script, before React can render
+   * again and take the style away.
+   */
+  async function narrowed(): Promise<{
+    scrollWidth: number;
+    clientWidth: number;
+    scrolledTo: number;
+    rows: { what: string; height: number; limit: number }[];
+  }> {
+    return browser.execute(() => {
+      const explorer = document.querySelector<HTMLElement>('[data-testid="explorer"]');
+      if (!explorer) throw new Error("no explorer to narrow");
+      const was = explorer.getAttribute("style") ?? "";
+      explorer.style.width = "120px";
+
+      /** What one line of THIS row would measure, from its own font and its own padding.
+       *
+       *  The slack is half a line, which is the gap between the two answers rather than a
+       *  guess: a row that wrapped is a WHOLE line taller, and a row that did not can still
+       *  be a few pixels over its own line box because a chip inside it carries a border and
+       *  its own padding. Measuring to the pixel would make this a test of `.label`'s border
+       *  width; every row still clears this limit by more than three pixels on both platforms,
+       *  and every wrapped one exceeds it by more than three. */
+      const oneLine = (el: Element, what: string) => {
+        const css = getComputedStyle(el);
+        const line = Number.parseFloat(css.lineHeight);
+        const height = Number.isFinite(line) ? line : Number.parseFloat(css.fontSize) * 1.5;
+        const padding = Number.parseFloat(css.paddingTop) + Number.parseFloat(css.paddingBottom);
+        const border =
+          Number.parseFloat(css.borderTopWidth) + Number.parseFloat(css.borderBottomWidth);
+        return {
+          what,
+          height: el.getBoundingClientRect().height,
+          limit: height * 1.5 + padding + border + 4,
+        };
+      };
+
+      const rows = [
+        ...[...explorer.querySelectorAll(".spot")].map((el) => oneLine(el, "a spot")),
+        ...[...explorer.querySelectorAll(".clone > summary")].map((el) => oneLine(el, "a clone")),
+        ...[...explorer.querySelectorAll(".chat")].map((el) => oneLine(el, "a chat")),
+        ...[...explorer.querySelectorAll(".worktree")].map((el) => oneLine(el, "a worktree")),
+      ];
+      const measured = {
+        scrollWidth: explorer.scrollWidth,
+        clientWidth: explorer.clientWidth,
+        scrolledTo: 0,
+        rows,
+      };
+      // It really scrolls, rather than merely having something to scroll: a region whose
+      // overflow is hidden clips the row and answers 0 here.
+      explorer.scrollLeft = 10_000;
+      measured.scrolledTo = explorer.scrollLeft;
+      explorer.scrollLeft = 0;
+
+      explorer.setAttribute("style", was);
+      return measured;
+    });
+  }
+
+  it("keeps every row on one line, and scrolls sideways instead of folding it", async () => {
+    // The operator's own report, and his screenshot: `ai-assistant` and `the workspace itself`
+    // on two lines in a narrow explorer.
+    await onAlpha();
+    await $('[data-testid="clone-svc"]').waitForExist({ timeout: 20_000 });
+
+    const measured = await narrowed();
+
+    expect(measured.rows.length).toBeGreaterThan(3);
+    // Reported as a list rather than asserted one at a time, so a failure names every row that
+    // folded and what it measured instead of stopping at the first.
+    const wrapped = measured.rows
+      .filter((row) => row.height > row.limit)
+      .map((row) => `${row.what}: ${row.height}px, and one line of it is ${row.limit}px`);
+    expect(wrapped).toEqual([]);
+    // Nothing to scroll means the rows were folded to fit instead.
+    expect(measured.scrollWidth).toBeGreaterThan(measured.clientWidth);
+    // And it really scrolls: a region whose overflow is hidden answers 0 here.
+    expect(measured.scrolledTo).toBeGreaterThan(0);
+  });
+
+  /**
+   * **The tree's elbows, against the line they are drawn for.**
+   *
+   * #154 draws them per row at a fixed offset (`0.9em` for a clone and a piece, `0.72em` for a
+   * chat) tuned to the padding and the font size of each of those rows, and its author wrote
+   * that *"any padding change misaligns them, and no test would notice"*. This is the test that
+   * notices: the elbow's painted position against the middle of the name it points at, read off
+   * the real WebView. A row's padding changed by 0.2rem moves one and not the other.
+   */
+  it("draws each elbow at the middle of the line it points at", async () => {
+    await onAlpha();
+    await $('[data-testid="piece-svc-fix-login"]').waitForExist({ timeout: 20_000 });
+
+    const elbows = await browser.execute(() => {
+      const explorer = document.querySelector<HTMLElement>('[data-testid="explorer"]');
+      if (!explorer) throw new Error("no explorer");
+
+      /** Where the row's `::after` — its elbow — was actually painted. */
+      const elbowOf = (li: Element) => {
+        const css = getComputedStyle(li, "::after");
+        // The rule is written in logical properties; a computed style answers in whichever of
+        // the two this engine resolves, so both are asked and the first number wins.
+        for (const value of [css.insetBlockStart, css.top]) {
+          const at = Number.parseFloat(value);
+          if (Number.isFinite(at)) return li.getBoundingClientRect().top + at;
+        }
+        return Number.NaN;
+      };
+
+      const measure = (selector: string, name: string, what: string) =>
+        [...explorer.querySelectorAll(selector)].flatMap((li) => {
+          const label = li.querySelector(name);
+          if (!label) return [];
+          const box = label.getBoundingClientRect();
+          return [
+            {
+              what: `${what} (${label.textContent ?? ""})`,
+              elbow: elbowOf(li),
+              middle: box.top + box.height / 2,
+            },
+          ];
+        });
+
+      return [
+        ...measure(".clones > .clone", "summary .repo", "a clone's elbow"),
+        ...measure(".pieces > li", ".spot-name", "a piece's elbow"),
+        ...measure(".here > li", ".session", "a chat's elbow"),
+      ];
+    });
+
+    // A run where a level drew nothing is a run that proved nothing about it.
+    expect(elbows.length).toBeGreaterThan(1);
+    const crooked = elbows
+      .filter((at) => !(Math.abs(at.elbow - at.middle) <= 2.5))
+      .map((at) => `${at.what}: drawn at ${at.elbow}px, its line centred on ${at.middle}px`);
+    expect(crooked).toEqual([]);
+  });
+});
+
 /** The chats on the strip, which is the focused workspace's and no other's. */
 async function chatTabs(): Promise<string[]> {
   const names = await $$(

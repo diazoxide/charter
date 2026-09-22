@@ -130,6 +130,103 @@ describe("the bottom bar", () => {
     await untilSays("repo-svc", "main");
   });
 
+  /**
+   * **The rows stay rows when the region is narrow, and jsdom cannot say so.**
+   *
+   * The operator asked for it of every tree in the window: a row names one thing and never
+   * folds, and the region scrolls sideways instead. Down here that is the repo table's naming
+   * cells and the worktree tree under each clone. A used height and a `scrollWidth` are the
+   * only evidence for either, and jsdom gives every box a size of zero — so this is the only
+   * place it can be asked. It also catches a rule that emitted no CSS at all.
+   *
+   * The two cells that hold a SENTENCE — a tree charter could not read, a fetch that did not
+   * happen — still wrap, and the next test is the one that holds them to it.
+   */
+  it("keeps a repo's row and its worktrees on one line, and scrolls sideways instead", async () => {
+    await onAlpha();
+    await untilSays("repo-svc", "main");
+
+    const measured = await browser.execute(() => {
+      const bar = document.querySelector<HTMLElement>('[data-testid="bottom-bar"]');
+      if (!bar) throw new Error("no bottom region to narrow");
+      // **The region's own box is narrowed.** The bottom region is the full width of the
+      // window — its slot's size is a HEIGHT — so there is no separator that makes it narrow,
+      // and the question is about this scroll container at a width narrower than its content.
+      const was = bar.getAttribute("style") ?? "";
+      bar.style.width = "260px";
+
+      /** How tall one line of this element is, plus half a line and four pixels of slack — a
+       *  row that wrapped is a WHOLE line taller than that, and a row that did not can still
+       *  run a few pixels over its own line box because a chip in it carries a border. */
+      const measure = (el: Element, what: string) => {
+        const css = getComputedStyle(el);
+        const line = Number.parseFloat(css.lineHeight);
+        const one = Number.isFinite(line) ? line : Number.parseFloat(css.fontSize) * 1.5;
+        const padding = Number.parseFloat(css.paddingTop) + Number.parseFloat(css.paddingBottom);
+        return {
+          what: `${what} (${(el.textContent ?? "").slice(0, 40)})`,
+          height: el.getBoundingClientRect().height,
+          limit: one * 1.5 + padding + 4,
+        };
+      };
+
+      // `svc`'s row, and not every row: a table cell is as tall as its ROW, so a row is what
+      // a wrap in any of its cells shows up in — and `tool`'s pipeline cell is the sentence
+      // that is supposed to wrap, which would make its row tall for the right reason.
+      const svc = bar.querySelector('[data-testid="repo-svc"]');
+      const rows = [
+        ...(svc === null ? [] : [measure(svc, "svc's row")]),
+        ...[...bar.querySelectorAll(".worktree-tree > li")].map((li) =>
+          measure(li, "a worktree row"),
+        ),
+      ];
+      // The cells that name something, as the real engine resolved them. A rule that emitted
+      // no CSS — the trap `docs/design-system.md` names — reads `normal` here.
+      const naming = [
+        ...bar.querySelectorAll(".repo-row > .repo, .repo-row > .dirt, .repo-row > .worktrees"),
+      ].map((el) => getComputedStyle(el).whiteSpace);
+
+      const answer = {
+        scrollWidth: bar.scrollWidth,
+        clientWidth: bar.clientWidth,
+        over: 0,
+        rows,
+        naming,
+      };
+      bar.scrollLeft = 10_000;
+      answer.over = bar.scrollLeft;
+      bar.scrollLeft = 0;
+
+      bar.setAttribute("style", was);
+      return answer;
+    });
+
+    expect(measured.rows.length).toBeGreaterThan(1);
+    const wrapped = measured.rows
+      .filter((row) => row.height > row.limit)
+      .map((row) => `${row.what}: ${row.height}px, and one line of it is ${row.limit}px`);
+    expect(wrapped).toEqual([]);
+    expect(measured.naming.length).toBeGreaterThan(2);
+    expect([...new Set(measured.naming)]).toEqual(["nowrap"]);
+    expect(measured.scrollWidth).toBeGreaterThan(measured.clientWidth);
+    expect(measured.over).toBeGreaterThan(0);
+  });
+
+  it("lets the cell that holds a sentence wrap, because a refusal is not a name", async () => {
+    // `tool` has no entry in the forge cache, so its pipeline cell says why in charter's own
+    // words and at charter's own length. Held on one line it would push the region's scroll
+    // out past every column it has.
+    await onAlpha();
+    await untilSays("ci-tool", "not fetched");
+
+    const wraps = await browser.execute(() => {
+      const cell = document.querySelector('[data-testid="ci-tool"] .none');
+      return cell === null ? null : getComputedStyle(cell).whiteSpace;
+    });
+
+    expect(wraps).toBe("normal");
+  });
+
   it("has nothing in it to press, because the bottom is what is true and not what you do", async () => {
     // charter ADR 0038's reading — *"the bottom is where you read what is true and do not
     // touch it"* — as far as a test can hold it.

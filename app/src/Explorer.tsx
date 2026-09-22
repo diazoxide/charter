@@ -49,6 +49,15 @@ import type { WorkspaceState } from "./workspaceState";
  * explorer put in the bottom slot sits on `surface.deep`, and a mask painted in `surface.base`
  * would be a visible block. A row that draws its own line has no background to know.
  *
+ * **A row never folds, and the region scrolls sideways instead.** The operator's words:
+ * *"all trees components texts should not be breakable to new line — it should be horizontal
+ * scrollable."* A row names one thing, and a name broken across two lines takes the tree with
+ * it — the guides, the indent and the eye all read down a column of first lines. The rule is
+ * in `App.css` beside the guides, because it had to be written without touching the padding
+ * and the font size those elbows are tuned to. Sentences charter says about a FAILURE still
+ * wrap; they are not rows. Neither half of this can be asserted in jsdom, which lays nothing
+ * out: `workspace-explorer.e2e.ts` measures the rows and the elbows in the real WebView.
+ *
  * **The DOM is unchanged; only the look is.** This is deliberately not `role="tree"`. A real
  * tree owes the keyboard arrow navigation, typeahead and `aria-expanded` on every node, and
  * half a tree widget is worse for a screen reader than the list and `<details>` that are here
