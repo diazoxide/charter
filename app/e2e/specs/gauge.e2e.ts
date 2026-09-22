@@ -142,7 +142,10 @@ describe("a chat's context gauge", () => {
       statusLine?: { type: string; command: string };
     };
 
-    // 1. The feed: charter armed its own statusline as this session's statusLine.
+    // 1. The feed: charter armed its own statusline as this session's statusLine — which it
+    // may here, because this run's `$CLAUDE_CONFIG_DIR` is empty and the plane fills the line
+    // with nothing (`wdio.conf.ts`). The opposite case — the operator has one, charter arms
+    // none, and the doctor says why — is `launch.finder.e2e.ts`.
     expect(settings.statusLine?.type).toBe("command");
     expect(settings.statusLine?.command).toMatch(/charter'? statusline$/);
     // Nothing is drawn before a turn has been recorded — never `ctx 0%`.

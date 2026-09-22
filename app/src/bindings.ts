@@ -469,6 +469,8 @@ export type DoctorReport = {
 	rows: DoctorRow[],
 	/**  Whether the harness profiles were probed — the full doctor, not the preflight. */
 	full: boolean,
+	/**  Rows about THIS APP that `charter doctor` does not print. See the module note. */
+	app_rows: DoctorRow[],
 	/**
 	 *  The `PATH` this process has, which is the one every row that looks for a program was
 	 *  answered with.

@@ -15,6 +15,7 @@ pub mod extension;
 pub mod fence;
 pub mod floorguard;
 pub mod footer;
+pub mod footerclaim;
 pub mod forge;
 pub mod forklock;
 pub mod gitconfig;

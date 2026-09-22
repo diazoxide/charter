@@ -536,3 +536,25 @@ export function anEmptyRecord(plane: string): void {
 export function aConfigHomeOfItsOwn(): string {
   return mkdtempSync(join(THE_RUNS_TREE, "config-"));
 }
+
+/**
+ * A Claude Code config folder of this launcher's own — `$CLAUDE_CONFIG_DIR`.
+ *
+ * **Because one of the app's decisions now reads it.** charter arms its own `statusLine` for a
+ * chat only where nothing else fills the line (`charter_core::footerclaim`), and the operator's
+ * real `~/.claude/settings.json` is one of the files that answers that. Without this, whether
+ * the gauge scenario passes would depend on whose machine it ran on — green on CI, red on an
+ * operator who has a status line of their own.
+ *
+ * `statusLine`, when a spec wants one in force, is written here by the launcher that wants it.
+ */
+export function aClaudeConfigHomeOfItsOwn(statusLine?: string): string {
+  const home = mkdtempSync(join(THE_RUNS_TREE, "claude-config-"));
+  if (statusLine !== undefined) {
+    writeFileSync(
+      join(home, "settings.json"),
+      JSON.stringify({ statusLine: { type: "command", command: statusLine } }),
+    );
+  }
+  return home;
+}

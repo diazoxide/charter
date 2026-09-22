@@ -581,6 +581,42 @@ mod tests {
     }
 
     #[test]
+    fn a_fresh_session_records_nothing_rather_than_a_turn_of_nulls() {
+        // **Measured on Claude Code 2.1.280**: the first render of a session hands the
+        // `statusLine` command a payload whose `current_usage`, `used_percentage` and
+        // `remaining_percentage` are all JSON `null` — not absent. That is every chat's normal
+        // first render, so it must record nothing: a row of zeros there would be an invented
+        // turn, and the gauge would read `cache 0%` on a session that has not spent anything.
+        //
+        // An explicit `null` and an absent key are different values, and only the absent one
+        // was covered before this. `whole()` answers `Some(0)` for both, and the
+        // `read == 0 && write == 0` guard is what turns them into "no turn".
+        let fresh = json!({
+            "session_id": "s1",
+            "context_window": {
+                "current_usage": {
+                    "cache_read_input_tokens": null,
+                    "cache_creation_input_tokens": null,
+                },
+                "used_percentage": null,
+                "remaining_percentage": null,
+            }
+        });
+
+        assert_eq!(numbers(&fresh), None);
+
+        let dir = tempfile::tempdir().unwrap();
+        let plane = std::fs::canonicalize(dir.path()).unwrap();
+        assert_eq!(record(&plane, &fresh), Recorded::Nothing);
+        assert!(
+            !file_for(&plane, "s1").unwrap().exists(),
+            "a fresh session wrote a record"
+        );
+        // And a turn that HAS spent something still records, percentage or no percentage.
+        assert_eq!(record(&plane, &payload(90, 10)), Recorded::Appended);
+    }
+
+    #[test]
     fn the_hit_share_rounds_half_to_even_as_python_does() {
         // Python: round(0.5) == 0, round(1.5) == 2, round(2.5) == 2.
         assert_eq!(half_to_even(0.5), 0);

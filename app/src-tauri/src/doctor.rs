@@ -19,6 +19,14 @@
 //! - **The preflight** (`full: false`) is what every SessionStart hook runs: no harness probe,
 //!   no git call for one. The window asks it when a project opens, unprompted, which is safe
 //!   precisely because a session start already pays it.
+//! # One row that is the app's own, and is marked as one
+//!
+//! `charter doctor` prints the core's rows and this hands them over unchanged. The app has one
+//! question of its own that no CLI can answer — whether the chats THIS app starts can record
+//! their turns ([`charter_core::footerclaim`]) — so it travels in [`DoctorReport::app_rows`],
+//! beside the table rather than inside it. Keeping it out of `rows` is what lets the test below
+//! hold "what the window draws is what `charter doctor --json` prints" as an equality.
+//!
 //! - **The full doctor** (`full: true`) also probes each harness profile — it RUNS the harness,
 //!   costs hundreds of milliseconds, and can write into the profile's config folder. The core
 //!   says only a doctor *a person asked for* may do that (`doctor/profiles.rs`, ruling 11), so
@@ -82,6 +90,8 @@ pub struct DoctorReport {
     pub rows: Vec<DoctorRow>,
     /// Whether the harness profiles were probed — the full doctor, not the preflight.
     pub full: bool,
+    /// Rows about THIS APP that `charter doctor` does not print. See the module note.
+    pub app_rows: Vec<DoctorRow>,
     /// The `PATH` this process has, which is the one every row that looks for a program was
     /// answered with.
     ///
@@ -130,8 +140,106 @@ pub(crate) fn report(root: &std::path::Path, full: bool) -> DoctorReport {
             .into_iter()
             .map(DoctorRow::from)
             .collect(),
+        app_rows: vec![chat_footer(root)],
         full,
         path: std::env::var_os("PATH").map(|p| p.to_string_lossy().into_owned()),
+    }
+}
+
+/// `chat footer`: can the chats this app starts record what a turn cost?
+///
+/// **The app's own row, not `charter doctor`'s**, because it is about what the app does when it
+/// starts a chat — which no CLI invocation can answer. Claude Code hands the context and cache
+/// numbers to its `statusLine` command and to nothing else, so a chat whose footer somebody
+/// else fills records nothing, and its `ctx`/`cache` gauge is dark. The operator ruled on
+/// 2026-09-22 that charter must never replace a `statusLine` they wrote; this row is the other
+/// half of that ruling — the missing gauge explains itself instead of looking like breakage.
+///
+/// **It answers for the plane's own directory**, which is where a chat started in the plane
+/// reads its project settings; a chat started in a workspace or a worktree reads that
+/// directory's, and the row says so rather than implying it asked for every chat.
+fn chat_footer(root: &std::path::Path) -> DoctorRow {
+    use charter_core::footerclaim::{Claim, UNSEEN, status_line};
+
+    const NAME: &str = "chat footer";
+    // A row's own words, in the doctor's register. Built here rather than through the core's
+    // `Row`, whose constructors are the core's to call: this is the app's row.
+    let row = |status: DoctorStatus, detail: String, hint: String| DoctorRow {
+        name: NAME.to_owned(),
+        status,
+        detail,
+        hint,
+        // This build runs this check: it is not one of the ported table's deferred rows.
+        checked: true,
+    };
+    let where_it_looked = format!(
+        "This is the answer for {}; a chat started somewhere else reads that directory's \
+         project settings. {UNSEEN}",
+        root.display()
+    );
+    match status_line(Some(root)) {
+        // Green, and still saying what it did not look at: a row that claimed more than it
+        // asked would be the shape ADR 0013 refuses.
+        Claim::Free => row(
+            DoctorStatus::Ok,
+            "charter fills Claude Code's status line in the chats it starts, so each turn's \
+             context and cache are recorded"
+                .to_owned(),
+            where_it_looked,
+        ),
+        Claim::Held {
+            file,
+            charters_own: true,
+        } => row(
+            DoctorStatus::Ok,
+            format!(
+                "{} already runs charter's own statusline, so turns are recorded and charter \
+                 arms none of its own",
+                file.display()
+            ),
+            where_it_looked,
+        ),
+        Claim::Held {
+            file,
+            charters_own: false,
+        } => row(
+            DoctorStatus::Warn,
+            format!(
+                "{} fills Claude Code's status line, so charter arms none of its own and a \
+                 chat's ctx/cache gauge stays dark",
+                file.display()
+            ),
+            format!(
+                "charter will not replace a status line you wrote. Point that one at `charter \
+                 statusline` — it draws the footer you asked for and records the turn — or \
+                 remove the key, and chats started after that record theirs. {where_it_looked}"
+            ),
+        ),
+        Claim::Suppressed { file, key } => row(
+            DoctorStatus::Warn,
+            format!(
+                "{} sets {key}, which narrows the status line to a managed one, so charter \
+                 arms none and a chat's ctx/cache gauge stays dark",
+                file.display()
+            ),
+            format!(
+                "Claude Code skips an unmanaged status line under that key without a word, so \
+                 charter does not arm one it knows would be ignored. {where_it_looked}"
+            ),
+        ),
+        Claim::Unknown { file, why } => row(
+            DoctorStatus::Warn,
+            format!(
+                "not checked (charter could not read {}: {why}), so it armed no status line \
+                 and a chat's ctx/cache gauge stays dark",
+                file.display()
+            ),
+            format!(
+                "charter arms a status line only where it can see that nothing else fills it, \
+                 so a settings file it cannot read leaves the operator's configuration \
+                 untouched. {where_it_looked}"
+            ),
+        ),
     }
 }
 
@@ -171,6 +279,45 @@ mod tests {
             assert_eq!(serde_json::json!(row.detail), json["detail"]);
             assert_eq!(serde_json::json!(row.hint), json["hint"]);
         }
+    }
+
+    #[test]
+    fn the_apps_own_row_says_whether_a_chat_here_can_record_what_a_turn_cost() {
+        let (_dir, root) = plane();
+
+        let free = report(&root, false);
+
+        let row = &free.app_rows[0];
+        assert_eq!(row.name, "chat footer");
+        assert_eq!(row.status, DoctorStatus::Ok);
+        assert!(row.detail.contains("charter fills"), "{row:?}");
+        // Even green, it says what it did not look at.
+        assert!(row.hint.contains("MDM"), "{row:?}");
+        // And it is NOT in the table `charter doctor` prints.
+        assert!(free.rows.iter().all(|r| r.name != "chat footer"));
+    }
+
+    #[test]
+    fn the_apps_own_row_names_the_file_that_keeps_the_gauge_dark() {
+        let (_dir, root) = plane();
+        std::fs::create_dir_all(root.join(".claude")).expect(".claude");
+        std::fs::write(
+            root.join(".claude/settings.json"),
+            r#"{"statusLine": {"type": "command", "command": "my-own-line"}}"#,
+        )
+        .expect("their settings");
+
+        let row = report(&root, false).app_rows.remove(0);
+
+        assert_eq!(row.status, DoctorStatus::Warn);
+        assert!(row.checked, "it is a check this build runs");
+        assert!(
+            row.detail
+                .contains(&root.join(".claude/settings.json").display().to_string()),
+            "the row does not name the file in force: {row:?}"
+        );
+        assert!(row.detail.contains("stays dark"), "{row:?}");
+        assert!(row.hint.contains("will not replace"), "{row:?}");
     }
 
     #[test]

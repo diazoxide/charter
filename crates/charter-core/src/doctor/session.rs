@@ -161,7 +161,7 @@ fn named(items: &[&str]) -> String {
 /// canonical decomposition to a character that lacked one. What is left is a version skew on
 /// characters added since either side's tables were cut, and the scenarios above are what
 /// would report it.
-fn claude_config_home() -> PathBuf {
+pub(crate) fn claude_config_home() -> PathBuf {
     let raw = match std::env::var_os("CLAUDE_CONFIG_DIR") {
         // Empty is kept: Claude Code spells it `??`, not `||`, so an empty value makes it use
         // its own working directory — which charter cannot see, and must not silently rename

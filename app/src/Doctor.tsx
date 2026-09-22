@@ -29,6 +29,15 @@ import { commands, type DoctorReport, type DoctorRow, type PlaneId } from "./bin
  * and the one real warning among them is furniture on its first day. The core tells the two
  * apart (`Row::deferred`), so this does not guess from the wording.
  *
+ * # One row is the app's own
+ *
+ * `charter doctor` answers about the plane. One question is about what THIS APP does when it
+ * starts a chat — whether the chats it opens can record what a turn cost — and no CLI can
+ * answer it, so the core hands it over beside the table (`DoctorReport.app_rows`). It is
+ * counted with the rest, because it is a check this build runs and a warning an operator can
+ * act on; the dialog draws it under its own heading so nobody goes looking for it in
+ * `charter doctor`'s output.
+ *
  * And the footer's rule holds: **zero draws nothing.** A clean doctor is the word `Doctor` with
  * no number — never a green tick, because about twenty checks did not run and a tick over them
  * would be the claim ADR 0013 exists to refuse.
@@ -116,6 +125,11 @@ export function useDoctor(plane: PlaneId): DoctorState {
   return { report, running, trouble, run };
 }
 
+/** Every row the verdict counts: the table's, and the app's own beside it. */
+export function everyRow(report: DoctorReport): DoctorRow[] {
+  return [...report.rows, ...(report.app_rows ?? [])];
+}
+
 /** The rows sorted into what the line and the dialog say about them. */
 export function sorted(rows: readonly DoctorRow[]) {
   return {
@@ -144,7 +158,7 @@ export function onTheLine(doctor: DoctorState): { said?: string; tone: string; l
       };
     return { tone: "unknown", label: running ? "Doctor — checking" : "Doctor" };
   }
-  const { blockers, warnings, unchecked } = sorted(report.rows);
+  const { blockers, warnings, unchecked } = sorted(everyRow(report));
   const said = counted(blockers.length, "blocker") ?? counted(warnings.length, "warning");
   const tone = blockers.length > 0 ? "fail" : warnings.length > 0 ? "warn" : "quiet";
   const label =
@@ -189,6 +203,7 @@ export function Health({ doctor }: { doctor: DoctorState }) {
   const { said, tone, label } = onTheLine(doctor);
   const { report, running, trouble, run } = doctor;
   const groups = report ? sorted(report.rows) : undefined;
+  const ours = report?.app_rows ?? [];
 
   return (
     <Dialog.Root
@@ -233,6 +248,17 @@ export function Health({ doctor }: { doctor: DoctorState }) {
             <p className="honest doctor-trouble" role="alert">
               The doctor could not run: {trouble}
             </p>
+          )}
+          {ours.length > 0 && (
+            <section aria-label="This app">
+              <h3>This app</h3>
+              {/* Said rather than left to be noticed: an operator comparing this with
+                  `charter doctor` in a terminal has to know why one row is not there. */}
+              <p className="honest">
+                What the chats this window starts can do. `charter doctor` does not print these.
+              </p>
+              <Rows rows={ours} />
+            </section>
           )}
           {groups && (
             <>

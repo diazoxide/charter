@@ -2,6 +2,7 @@ import process from "node:process";
 import { config as base } from "./wdio.conf.js";
 import {
   A_FINDER_LAUNCHS_PATH,
+  aClaudeConfigHomeOfItsOwn,
   anEmptyRecord,
   built,
   copyFixturePlane,
@@ -10,6 +11,14 @@ import {
   writeAPluginHookingShell,
 } from "./harness.js";
 import { PANIC_LOG } from "./processes.js";
+
+/**
+ * The status line this launch's operator already has, which charter may not replace.
+ *
+ * Exported so the spec asserts against the same string the launcher wrote: a doctor row that
+ * named a different file, or no file, would pass a test that compared prose with prose.
+ */
+export const THEIR_STATUS_LINE = "/bin/echo their own status line";
 
 /**
  * The app started the way an operator starts it: from Finder, with the `PATH` Finder gives.
@@ -80,6 +89,10 @@ export const config: WebdriverIO.Config = {
           PATH: A_FINDER_LAUNCHS_PATH,
           HOME: home,
           CHARTER_PANIC_LOG: PANIC_LOG,
+          // **This launch has a status line of the operator's own**, which is the other half
+          // of the 2026-09-22 ruling: charter must not replace it, and `doctor` must say why
+          // the chat's ctx/cache gauge is dark. `launch.finder.e2e.ts` asks the doctor.
+          CLAUDE_CONFIG_DIR: aClaudeConfigHomeOfItsOwn(THEIR_STATUS_LINE),
         }),
       },
     ],
