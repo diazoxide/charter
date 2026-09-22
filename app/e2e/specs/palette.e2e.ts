@@ -1,5 +1,5 @@
 import { browser, expect, $, $$ } from "@wdio/globals";
-import { endChat, pickAndStart, pressAndStart, pressOnly } from "../opening.js";
+import { answerTheAsk, endChat, pickAndStart, pressAndStart, pressOnly } from "../opening.js";
 
 /**
  * The command palette against the real app, driven by the keyboard and nothing else.
@@ -236,65 +236,75 @@ describe("the command palette", () => {
     await expect($('[data-testid="pane"]')).toBeDisplayed();
   });
 
-  it("closes the chat it just opened, by the keyboard alone", async () => {
-    // The pane the test above opened is that tab's only one, so closing it closes the tab
-    // with it — which is what makes this checkable without counting panes across tabs.
+  it("raises the question from a keyboard-only press, and Escape answers it with no", async () => {
+    // **The keyboard reaches the question and answers it; it cannot PRESS a button, and that
+    // is the harness rather than the app.** Measured in charter-app#176 with a keydown trace
+    // in the real WebView, on the `Enter` that should have activated a focused `Cancel`:
+    //
+    //     the page saw: Shift on <button> "Cancel"; Tab on <button> "Cancel";
+    //                   Enter on <button> "Cancel"
+    //
+    // Read it closely, because it says two separate things and neither is charter's:
+    //
+    // 1. **`browser.keys(["Shift", "Tab"])` is not delivered as a chord.** The trace prints
+    //    `Shift+` when `event.shiftKey` is set; the Tab line is bare, so the modifier was not
+    //    held. Radix's `FocusScope` needs `shiftKey` to act at the scope's first edge, so it
+    //    never fired and the focus never moved.
+    // 2. **A focused button is not activated by a synthesised `Enter`.** The engine delivered
+    //    the keydown TO `Cancel`, unprevented — so the focus was genuine and the engine
+    //    agreed — and nothing happened. WebDriver key actions carry no implicit activation.
+    //
+    // The second is what makes "press the confirm by keyboard" impossible from a scenario, by
+    // any key: it is not that the wrong key was chosen. So that half of the claim lives in
+    // `App.test.tsx`'s "ends the chat when the confirm is pressed by the keyboard alone",
+    // where jsdom does implement activation — and this spec keeps the half only a real window
+    // can show, which is that a keyboard-only operator gets to the question at all and that
+    // the keyboard can answer it.
+    //
+    // **Escape is a real answer and not a consolation.** Radix listens for it on `document`,
+    // which is why it works here when nothing aimed at a button does, and it has a real
+    // consequence this asserts: nothing is ended. `docs/ui-primitives.md` records the rest.
     const before = await tabNames();
     await openPalette();
     await typeIntoPalette("end this pane");
 
     await browser.keys(["Enter"]);
 
-    // **Ending a chat asks first now, and this spec's point is that the keyboard alone can
-    // do it.** Radix's `AlertDialog` requires a `Cancel` and puts the focus on it — the
-    // non-destructive answer, deliberately — so a Return pressed by reflex cancels, and the
-    // yes is a key away.
-    //
-    // **That key is Shift+Tab, and it took two red CI runs to learn it.** This spec pressed
-    // plain `Tab` and the question stayed on screen — on `webkit macos` first, and then on
-    // `WebKitGTK linux` too (charter-app#176). **Both**, which is the fact that names the
-    // cause: charter embeds the system WebView, and on both of these platforms that is
-    // WebKit, which does not put a `<button>` in the tab sequence at all unless "tab to all
-    // controls" is turned on. It is not a macOS default and it is not this dialog's.
-    //
-    // What makes the confirm reachable anyway is where Radix listens, which is the thing
-    // `docs/ui-primitives.md` says to check per primitive rather than assume:
-    // `@radix-ui/react-focus-scope`'s `handleKeyDown` intercepts Tab only at the EDGES of
-    // the scope — with the focus on the FIRST tabbable it acts on Shift+Tab and moves the
-    // focus to the last itself, and with the focus on the LAST it acts on Tab and moves to
-    // the first. Cancel is the first, so plain Tab from it is left to the engine and the
-    // engine does nothing.
-    //
-    // Shift+Tab from Cancel is Radix's own `focus()` call rather than the browser's tab
-    // sequence, so it reaches the confirm on every platform. `App.test.tsx` pins the shape
-    // that makes it work: exactly two answers, Cancel first and the confirm last, so the two
-    // of them ARE the edges.
-    //
-    // **And `keys(["Shift", "Tab"])` really is a chord**, which is worth knowing because the
-    // array form could as easily have been two separate presses — and two separate presses
-    // are a plain Tab, the thing that failed. WebdriverIO's `keys` puts every key in the
-    // array DOWN in order, pauses, then releases them all, so Shift is held while Tab is
-    // pressed and the `keydown` carries `shiftKey`.
     const asking = await $('[role="alertdialog"]');
     await asking.waitForDisplayed({ timeout: 20_000 });
     const keysSeen = await watchKeys();
-    const cameUpOn = await hasTheKeyboard();
-    await browser.keys(["Shift", "Tab"]);
-    const answeringOn = await hasTheKeyboard();
-    await browser.keys(["Enter"]);
+    // Radix puts the focus on `Cancel` — the non-destructive answer, deliberately — so a
+    // Return pressed by reflex cancels rather than ends.
+    expect(await hasTheKeyboard()).toContain("Cancel");
+
+    await browser.keys(["Escape"]);
+
     try {
       await expect(asking).not.toBeDisplayed();
     } catch {
-      // **What the keyboard did, said in the failure.** Two runs have been spent on this: the
-      // first said only "expected not to be displayed", the second added where the focus was
-      // and showed it never moved. What neither could say is whether the key reached the page
-      // at all, so this one says that too.
-      throw new Error(
-        `the question stayed up: it opened with the keyboard on ${cameUpOn}, Shift+Tab left ` +
-          `it on ${answeringOn}, Enter there did not answer it, and the page saw: ` +
-          `${await keysSeen()}`,
-      );
+      throw new Error(`Escape did not answer the question; the page saw: ${await keysSeen()}`);
     }
+    // **Nothing was ended**, which is the half of Escape that matters: it is the answer "no",
+    // not a way out of a dialog that then does the thing anyway.
+    expect(await tabNames()).toEqual(before);
+  });
+
+  it("ends the chat once the question is answered yes", async () => {
+    // The pane the test above opened is that tab's only one, so closing it closes the tab
+    // with it — which is what makes this checkable without counting panes across tabs.
+    //
+    // **The yes is a click here, and only because a scenario cannot press a button by
+    // keyboard at all** — see the spec above for the trace that measured it. What this proves
+    // is what a scenario uniquely can: that the row the palette ran really does raise the
+    // question against the real core, and that answering it really does end the chat and take
+    // its tab off the strip. Whether a keyboard can press the answer is `App.test.tsx`'s.
+    const before = await tabNames();
+    await openPalette();
+    await typeIntoPalette("end this pane");
+
+    await browser.keys(["Enter"]);
+
+    await answerTheAsk("End this pane's chat");
 
     await browser.waitUntil(async () => (await tabNames()).length === before.length - 1, {
       timeout: 15_000,

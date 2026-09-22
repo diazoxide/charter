@@ -41,15 +41,23 @@ import { ENDS_IT, type Offer } from "./actions";
  * Shift+Tab and moves the focus to the last itself, on the last it acts on Tab and moves to the
  * first, and in between it does nothing and the engine decides. **The engine here is WebKit on
  * both platforms charter's scenarios run on, and WebKit does not put a `<button>` in the tab
- * sequence at all** — measured in charter-app#176, where a scenario pressing plain Tab left this
- * question on screen on `webkit macos` and again on `WebKitGTK linux`.
+ * sequence at all** unless "tab to all controls" is on.
  *
  * So the confirm is reachable by keyboard *because* these two are the only tabbables and the
  * confirm is the second: Cancel IS the first edge and the confirm IS the last, and Shift+Tab
  * from Cancel is Radix's own `focus()` call rather than the engine's tab sequence. **A third
- * focusable between them would be unreachable by keyboard on both platforms** — the engine will
- * not tab to it and Radix only handles the edges. `App.test.tsx` fails on a third rather than
- * leaving it to a scenario run to find.
+ * focusable between them would be unreachable by keyboard** — the engine will not tab to it and
+ * Radix only handles the edges. `App.test.tsx` fails on a third rather than leaving it to a
+ * scenario run to find, and charter-app#186 carries the same question for the window's other
+ * modals.
+ *
+ * **What the above is NOT is the reason a scenario cannot press these buttons**, and an earlier
+ * version of this comment said it was. Measured in charter-app#176 with a keydown trace in the
+ * real WebView: `Enter` on a focused `Cancel` arrives AT that button, unprevented, and does not
+ * activate it — WebDriver key actions carry no implicit activation. That is the harness, not the
+ * engine and not this dialog, and it is why the keyboard half of the claim is tested in
+ * `App.test.tsx` and not in `palette.e2e.ts`. Two findings, one true of the product and one true
+ * only of the test rig; keeping them apart is the whole point of writing them down.
  */
 export function EndingChat({
   offer,

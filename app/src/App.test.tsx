@@ -454,6 +454,38 @@ describe("App", () => {
     expect(answers[1]).toHaveFocus();
   });
 
+  it("ends the chat when the confirm is pressed by the keyboard alone", async () => {
+    // **This is the claim `palette.e2e.ts` used to carry, tested where it can be evaluated.**
+    //
+    // The scenario cannot press it. Measured in charter-app#176 with a keydown trace in the
+    // real WebView: the engine delivers the key TO the focused button, unprevented —
+    // `Enter on <button> "Cancel"` — and does not activate it. Synthesised WebDriver key
+    // events carry no implicit activation, so no key a scenario can send will ever press a
+    // button. jsdom does implement activation, which makes this the only place the claim can
+    // be put to the test at all.
+    //
+    // A reader who wants the other half — that the question is reachable and answerable by
+    // keyboard in the first place — wants the test above: `Cancel` focused, the confirm one
+    // Shift+Tab away, nothing in between.
+    const { asked } = core();
+    render(<App />);
+    await openAChat();
+
+    await userEvent.click(screen.getByRole("button", { name: "End chat 1 steward" }));
+    const asking = await screen.findByRole("alertdialog");
+    // To the confirm and no further, by the key Radix handles at the scope's first edge.
+    await userEvent.tab({ shift: true });
+    expect(within(asking).getByRole("button", { name: "End chat 1 steward" })).toHaveFocus();
+
+    await userEvent.keyboard("{Enter}");
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryAllByTestId("pane")).toEqual([]);
+    expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
+      { plane: "/home/dev/plane", session: 1 },
+    ]);
+  });
+
   it("answers the question with Escape, and Escape means no", async () => {
     // `docs/ui-primitives.md`'s rule for every modal in this window: Escape answers, with the
     // NON-destructive answer. It matters most on this one, because this is the only modal

@@ -191,17 +191,39 @@ to all controls" is turned on — and **WebKit is the engine on both platforms t
 on**: a WKWebView on macOS and WebKitGTK on Linux. charter embeds the system WebView, so this is
 the window's own behaviour rather than one runner's quirk.
 
-It was measured rather than reasoned about, twice. `palette.e2e.ts`'s *"closes the chat it just
-opened, by the keyboard alone"* pressed Tab to move from `Cancel` to the confirm; the question
-stayed on screen on `webkit macos`, and after that was read as a macOS default it did the same on
-`WebKitGTK linux` (charter-app#176). The second run is what named the cause, and it is the reason
-this paragraph says *engine* and not *platform*.
+It was measured rather than reasoned about, three times, and the third measurement **corrected
+the first two**. `palette.e2e.ts`'s *"closes the chat it just opened, by the keyboard alone"*
+pressed Tab to move from `Cancel` to the confirm; the question stayed on screen on `webkit macos`,
+and after that was read as a macOS default it did the same on `WebKitGTK linux`. Then the spec was
+made to write down every keydown the document sees, and it said (charter-app#176):
+
+```
+the page saw: Shift on <button> "Cancel"; Tab on <button> "Cancel"; Enter on <button> "Cancel"
+```
+
+**Two separate findings live in that one line, and only the first is about the product.**
+
+1. The tab sequence really does skip buttons, as above — and the trace adds that
+   `browser.keys(["Shift", "Tab"])` **is not delivered as a chord**: the Tab keydown arrives with
+   `event.shiftKey` unset, so Radix's edge handler never fires either.
+2. **A focused button is not activated by a synthesised `Enter`.** The engine delivered the
+   keydown *to* `Cancel`, unprevented — the focus was genuine and the engine agreed — and nothing
+   happened. WebDriver key actions carry no implicit activation.
+
+The second is a fact about the **test rig**, not about charter, and it is the one that matters
+when writing a spec: **a scenario cannot press a button by keyboard at all, by any key.** That is
+why Escape works in these specs where nothing aimed at a button does — Radix listens for Escape on
+`document` — and why the palette's own Enter works, since the palette handles it in JavaScript.
 
 Three things follow, and the last is the one a reviewer should hold us to:
 
 - **Shift+Tab from the first answer is Radix's own `focus()` call**, not the engine's tab
-  sequence, so it reaches the last answer everywhere. That is the key a keyboard test presses,
-  and `palette.e2e.ts` says so where it presses it.
+  sequence, so it reaches the last answer everywhere a real keyboard is driving. A *scenario*
+  cannot use it, for finding 1 above; `App.test.tsx` is where that route is tested.
+- **A claim of the form "this button can be pressed by keyboard" belongs in a unit test**, where
+  jsdom implements activation. A scenario can prove that the keyboard reaches a surface and that
+  keys the app handles in JavaScript do their work — `palette.e2e.ts` keeps exactly that half,
+  raising the question by keyboard and answering it with Escape.
 - **A dialog whose two answers are its only tabbables is wholly reachable by keyboard** — the
   first and last ARE the two edges Radix handles. `EndingChat.tsx` is that shape.
 - **A third focusable in the middle of any modal in this window is unreachable by keyboard**:

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, renderHook, screen } from "@testing-library/react";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
-import { AFTER_A_MOVE_MS, ChatGauge, useChatUsage, WHILE_RUNNING_MS } from "./ChatGauge";
+import { AFTER_A_MOVE_MS, ChatGauge, Trend, useChatUsage, WHILE_RUNNING_MS } from "./ChatGauge";
 import type { ChatUsage } from "./bindings";
 
 /**
@@ -23,6 +23,8 @@ const USAGE: ChatUsage = {
   context: { value: 83, tone: "bad" },
   cache: { value: 98, tone: "ok" },
   rebuilds: { count: 2, cost: "696k", tone: "bad" },
+  turns: [],
+  cold: null,
 };
 
 describe("the gauge", () => {
@@ -45,13 +47,66 @@ describe("the gauge", () => {
   it("draws only the parts that are known", () => {
     // Early in a session there is usage and no percentage yet: `cache` without `ctx`.
     render(
-      <ChatGauge usage={{ context: null, cache: { value: 40, tone: "bad" }, rebuilds: null }} />,
+      <ChatGauge
+        usage={{
+          context: null,
+          cache: { value: 40, tone: "bad" },
+          rebuilds: null,
+          turns: [],
+          cold: null,
+        }}
+      />,
     );
 
     const gauge = screen.getByTestId("chat-gauge");
     expect(gauge.textContent).not.toContain("ctx");
     expect(gauge.textContent).toContain("cache 40%");
     expect(gauge.textContent).not.toContain("↻");
+  });
+});
+
+describe("the trend", () => {
+  const turn = (value: number, tone: "ok" | "warn" | "bad") => ({
+    cache: { value, tone },
+    context: { value: 20, tone: "ok" as const },
+    written: "1k",
+  });
+
+  it("draws a bar per turn, as tall as its cache share and in its tone", () => {
+    render(<Trend turns={[turn(100, "ok"), turn(10, "bad"), turn(60, "warn")]} />);
+
+    const bars = [...screen.getByTestId("gauge-trend").querySelectorAll("rect")];
+    expect(bars.map((bar) => bar.getAttribute("height"))).toEqual(["10", "1", "6"]);
+    expect(bars.map((bar) => bar.getAttribute("class"))).toEqual([
+      "gauge-ok",
+      "gauge-bad",
+      "gauge-warn",
+    ]);
+    expect(bars[1].textContent).toBe("turn 2, cache 10%, ctx 20%, wrote 1k");
+  });
+
+  it("draws a turn whose share is unknown as a muted stub, not as a zero", () => {
+    render(<Trend turns={[turn(90, "ok"), { cache: null, context: null, written: null }]} />);
+
+    const bars = [...screen.getByTestId("gauge-trend").querySelectorAll("rect")];
+    expect(bars[1].getAttribute("class")).toBe("gauge-unknown");
+    expect(bars[1].textContent).toBe("turn 2, cache unknown");
+  });
+
+  it("is drawn beside the gauge only once there are two turns to compare", () => {
+    const { rerender } = render(<ChatGauge usage={{ ...USAGE, turns: [turn(90, "ok")] }} />);
+    expect(screen.queryByTestId("gauge-trend")).toBeNull();
+
+    rerender(<ChatGauge usage={{ ...USAGE, turns: [turn(90, "ok"), turn(95, "ok")] }} />);
+    expect(screen.getByTestId("gauge-trend")).toBeInTheDocument();
+  });
+
+  it("says a cold streak in words once the core says there is one", () => {
+    const { rerender } = render(<ChatGauge usage={USAGE} />);
+    expect(screen.getByTestId("chat-gauge").textContent).not.toContain("cold");
+
+    rerender(<ChatGauge usage={{ ...USAGE, cold: 3 }} />);
+    expect(screen.getByText("cold 3")).toHaveClass("gauge-warn");
   });
 });
 
