@@ -185,15 +185,38 @@ describe("a count is drawn only when charter can stand behind it", () => {
 });
 
 describe("the alerts button", () => {
-  it("says the alert row is not ported rather than showing a zero", () => {
-    // charter's alert row is `charter/statusline.py:_alerts` and nothing of it is ported.
-    // `footer.rs` names the omission in its own output and `Panels` says the same in prose:
-    // an empty list — or a `0` — would be a claim charter has no way to make.
+  it("is disabled and says so when no drawer is behind it", () => {
+    // A control that answered a press with nothing would teach the operator that alerts are
+    // quiet. The window always wires the drawer; a status line drawn on its own does not.
     draw();
 
-    const button = screen.getByRole("button", { name: "Alerts — not drawn by this build" });
+    const button = screen.getByRole("button", { name: "Alerts — nothing to open here" });
     expect(button).toBeDisabled();
-    expect(button.getAttribute("title")).toContain("not ported");
+  });
+
+  it("drops a count charter cannot stand behind and still opens the drawer", async () => {
+    // Not every project has answered, or charter stopped looking in one: a partial total is a
+    // wrong total. The dash is not a zero, and the drawer is where the reason is.
+    const open = vi.fn();
+    draw({ alerts: { count: undefined, open } });
+
+    const button = screen.getByRole("button", { name: "Alerts: not counted" });
+    expect(button).toBeEnabled();
+    expect(button).not.toHaveTextContent(/\d/);
+    expect(button).toHaveTextContent("—");
+    await userEvent.click(button);
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it("draws no badge at zero, and says none to a screen reader", () => {
+    // The footer's rule: a `0` there every day is furniture, and a real `2` in that spot then
+    // draws no more attention than the zero did.
+    draw({ alerts: { count: 0, open: vi.fn() } });
+
+    const button = screen.getByRole("button", { name: "Alerts: none" });
+    expect(button).toBeEnabled();
+    expect(button).not.toHaveTextContent("0");
+    expect(button).not.toHaveTextContent("—");
   });
 
   it("draws the count and opens the drawer once there is a source for one", async () => {
