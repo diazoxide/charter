@@ -175,8 +175,13 @@ pub const BUILT_IN_THEMES: [&str; 2] = ["charter-dark", "charter-light"];
 /// path that draws the window — so a planted giant is a launch that never finishes.
 const MOST_MANIFEST_BYTES: u64 = 64 << 10;
 
-/// The most any one declared file may be. A theme is forty-odd hex strings; a program is a
-/// program, and this is the bound on what charter will *hash*, not on what it would run.
+/// The most any one file charter **keeps** may be — a theme's text, which is held in memory and
+/// handed to the window. A theme is forty-odd hex strings.
+///
+/// It stopped being the bound on what charter *hashes* at charter-app#152: the tree is hashed in
+/// chunks and nothing is held, so [`MOST_TREE_BYTES`] bounds that and a declared program is no
+/// longer capped on its own. This is a bound on memory, which is why it belongs to the files that
+/// are kept rather than to the files that are read.
 const MOST_DECLARED_BYTES: u64 = 8 << 20;
 
 /// The most files one extension may declare. Declaring is what puts a file on the screen and,
