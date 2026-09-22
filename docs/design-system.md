@@ -50,11 +50,20 @@ means. Fifty-four names in eleven groups:
 | `terminal.*` | `background` `foreground` `cursor` `cursor-accent` `selection` | |
 | `terminal.ansi.*` | the eight, and the eight bright | |
 
-**Two tokens may hold the same value and still be two tokens.** `needs-you.base` and
-`danger.base` are the same red in both built-ins. They stay separate because they are separate
-meanings — one marks a chat that wants the operator, the other marks an answer that cannot be
-undone — and a theme that wanted the first to shout and the second to whisper has to be able to
-say so. A test in `theme.test.ts` fails if somebody merges them.
+**Two tokens may look like one token and are not.** `needs-you.base` and `danger.base` were a
+single value before this — `--stop`, `#c05c5c`, "charter's red" — and splitting them by meaning
+paid for itself on the first measurement: white on `#c05c5c` is **4.26:1**, under WCAG AA, and
+the badge that failed is the count of chats waiting for the operator. `needs-you.base` is now
+`#b85050` (4.88:1) and the mark on an answer that cannot be undone is untouched. A palette token
+cannot make that move; that is the whole argument for semantic names in one change.
+
+**Every theme is held to a contrast floor.** `contrast.test.ts` checks each pair that ends up as
+something drawn on something: 4.5:1 for text, 3:1 for the state marks and the sixteen ANSI
+colours against the terminal's own background. "Complete" is not "legible", and a light theme
+made by inverting a dark one passes every other test in the directory while being unreadable.
+The one exemption is `terminal.ansi.black`, held to 1.5:1 — ANSI black on a dark terminal is dim
+in every theme there has ever been, because it is the colour a program picks when it means
+*recede*; it still has to be visible, and charter-dark measures 2.14:1.
 
 **The chat states and the CI states share a group on purpose.** `.ci-pending` is
 `var(--state-waiting)` because amber means "not finished" in both, and a theme author who wants

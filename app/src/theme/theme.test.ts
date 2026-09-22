@@ -40,11 +40,14 @@ describe("a theme is a complete set of semantic tokens", () => {
   });
 
   it("names a token for what it means, not for what colour it is", () => {
-    // `needs-you` and `danger` are the same red in both built-ins and are still two tokens,
-    // because a theme that wanted one to shout and the other to whisper has to be able to say
-    // so. This test is the one that fails if somebody "tidies up" by merging them.
+    // `needs-you.base` and `danger.base` were one value — `--stop`, `#c05c5c` — because they
+    // are both "charter's red". Splitting them by meaning immediately paid for itself:
+    // `contrast.test.ts` measured white on `#c05c5c` at 4.26:1, under AA, and the badge that
+    // fails is the count of chats waiting for the operator. Darkening it to `#b85050` fixed
+    // that one badge without touching the mark on an answer that cannot be undone, which is a
+    // move a shared palette token cannot make.
     const dark = BUILT_IN["charter-dark"].values;
-    expect(dark["needs-you.base"]).toEqual(dark["danger.base"]);
+    expect(dark["needs-you.base"]).not.toEqual(dark["danger.base"]);
     expect(TOKENS).toContain("needs-you.base");
     expect(TOKENS).toContain("danger.base");
   });
