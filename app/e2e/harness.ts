@@ -133,6 +133,61 @@ export function writeShell(fakeHarness: string): string {
 }
 
 /**
+ * A harness that runs a hook the way the charter PLUGIN spells it — `charter hook
+ * sessionstart`, the bare word — and writes down the `PATH` it was given.
+ *
+ * **charter-app#136.** The hooks charter arms on a chat itself (`--settings`) name the bundled
+ * binary by its absolute path, so they never depended on `PATH`. The ones that did are the
+ * plugin's `hooks.json` and a plane's own `.claude/settings.json`: both are files that travel
+ * to other machines, so they say `charter` and leave it to the chat's `PATH` — and a chat
+ * started from a Finder-launched app got Finder's four directories, where no `charter` is.
+ * The operator saw `/bin/sh: charter: command not found` on every `SessionStart`, and the
+ * plugin's `PreToolUse` guard failed the same way, which a harness reads as non-blocking.
+ *
+ * The payload is the shape Claude Code pipes to a hook, and `CLAUDE_PID` is the harness's own
+ * pid — `$PPID` inside the `/bin/sh -c` the fake harness runs the hook in — so the board
+ * judges this report exactly as it judges a real Claude Code's (ADR 0024): the conversation
+ * charter chose, which `theProfilesProgram` exported from `--session-id`. A hook that cannot
+ * find `charter` says so in the pane and the harness carries on, as Claude Code does.
+ */
+export function writeAPluginHookingShell(fakeHarness: string): string {
+  const where = join(THE_RUNS_TREE, "shells");
+  mkdirSync(where, { recursive: true });
+  const shell = join(where, "plugin-hooking-harness-as-a-shell");
+  const recordThePath = [
+    'mkdir -p "$CHARTER_ROOT/.charter/scenario"',
+    `printf '%s' "$PATH" > "$CHARTER_ROOT/.charter/scenario/path-$CHARTER_CHAT"`,
+  ].join(" && ");
+  const thePluginsHook = [
+    `printf '{"session_id":"%s","hook_event_name":"SessionStart","source":"startup"}'`,
+    '"$CLAUDE_CODE_SESSION_ID"',
+    "| CLAUDE_PID=$PPID charter hook sessionstart",
+    `|| echo "charter-app#136: this chat's PATH has no charter on it (exit $?)"`,
+  ].join(" ");
+  writeFileSync(
+    shell,
+    [
+      "#!/bin/sh",
+      "# Written by the scenario tests: a harness running a hook the plugin's way, by bare word.",
+      `exec ${JSON.stringify(fakeHarness)} \\`,
+      "  --synthetic 4096 \\",
+      `  --sentinel ${JSON.stringify(READY)} \\`,
+      `  --hook ${singleQuoted(recordThePath)} \\`,
+      `  --hook ${singleQuoted(thePluginsHook)} \\`,
+      "  --interactive",
+      "",
+    ].join("\n"),
+  );
+  chmodSync(shell, 0o755);
+  return shell;
+}
+
+/** `text` as one word `/bin/sh` expands nothing in. */
+function singleQuoted(text: string): string {
+  return `'${text.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
  * The same, for a harness that reports its state the way a real one does — by running
  * `charter hook` from inside its own session.
  *
