@@ -84,36 +84,75 @@ body {
    selected one is lit along the edge that faces what it selects. That is the shape Zed has and
    VS Code has, and it is the shape the tmux frame charter was ported off had before either.
 
-   **One shape, three depths.** Which strip you are looking at is said by the surface it sits
-   on — projects on `surface.deep`, workspaces on `surface.raised`, chats on the bar itself —
-   and never by drawing the three differently. Three different-looking strips would be three
-   things to learn; this is one axis at three levels (ADR 0036). */
+   **One shape, three depths — and the depths are now drawn, not only coloured.** This used to
+   say the three strips differ by the surface under them and *"never by drawing the three
+   differently"*, on the argument that three different-looking strips are three things to
+   learn. The operator overruled it from the running app: *"tabs should show that PROJECT is
+   holder of workspaces, workspaces are holder of sessions — so style is present that like ZED
+   tabs."* In Zed the project segments are full-width and large and the file tabs sit visibly
+   inside the selected one, and the nesting is legible from the shape before a word is read.
+   Three rows of identically sized cells said nothing about which held which.
+
+   So the three differ in three ways and no more, each one meaning depth rather than identity:
+   **height** (a project's row is the tallest), **inset** (each strip starts further in than
+   the one above, so a child row begins under its parent's first tab) and **surface** (deep,
+   raised, then the bar itself). The tab CELL is still one shape.
+
+   **And every strip lays its tabs out the way a browser does**: each takes an equal share of
+   the row, floored at `--least` and capped, and what no longer fits collapses into that
+   strip's show-more button rather than scrolling away. `app/src/fits.ts` is the arithmetic and
+   the argument; `--least` is set on the element from the same constant the arithmetic uses, so
+   the stylesheet and the count cannot disagree. */
 .projects,
 .workspaces-strip,
 .bar .tabs {
   display: flex;
   align-items: stretch;
-  min-height: 1.9rem;
   gap: 0;
 }
 
-/* The projects this window holds, above everything one of them draws (ADR 0033). */
+/* The projects this window holds, above everything one of them draws (ADR 0033) — and the
+   widest, tallest row in the window, because it is the one that holds the other two. */
 .projects {
-  padding-inline: 0.3rem;
+  min-height: 2.3rem;
   background: var(--surface-deep);
   border-bottom: 1px solid var(--border-subtle);
 }
 
-/* The workspaces of the project in front: the middle of the three strips (ADR 0036). */
-.workspaces-strip {
-  padding-inline: 0.3rem;
+/* The workspaces of the project in front: the middle of the three strips (ADR 0036). Inset,
+   so the row visibly begins inside the project row above it rather than beside it. */
+.workspaces {
+  display: flex;
+  align-items: stretch;
+  min-height: 2rem;
+  padding-inline-start: var(--nested);
   background: var(--surface-raised);
   border-bottom: 1px solid var(--border-subtle);
 }
 
+.workspaces-strip {
+  min-height: 2rem;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* How far each row begins inside the one above it. One value, used twice, because the two
+   insets are the same fact — a level of nesting — and two numbers that have to look equal is
+   how they come to differ. */
+:root {
+  --nested: 1.1rem;
+}
+
 /* One tab: the cell, and the hairline that parts it from the next. `.project` and `.tab` are
    wrappers holding a tab and its `×`; a workspace tab is the button itself, because there is
-   nothing about a workspace to close. */
+   nothing about a workspace to close.
+
+   **`flex: 1 1 0` and a floor, which is what makes the collapse exact.** Every tab takes an
+   equal share of its strip and is never drawn narrower than `--least`, so `n` tabs fit in a
+   strip of `width` exactly when `width / n >= least` — arithmetic over one measured number
+   rather than a measurement of fifty boxes. `fits.ts` holds the reasoning, the cost (two chats
+   are drawn as two wide tabs) and the number itself, which is handed to this rule on the
+   element rather than written here a second time. */
 .projects .project,
 .workspaces-strip [role="tab"],
 .tabs .tab {
@@ -121,8 +160,20 @@ body {
   display: flex;
   align-items: center;
   gap: 0;
-  flex: none;
+  flex: 1 1 0;
+  min-width: var(--least);
   border-inline-end: 1px solid var(--border-subtle);
+}
+
+/* A cap, so a strip with two chats on it does not draw two tabs half a window wide. The
+   projects have none: the operator asked for *"large full-width segments across the top, each
+   taking an equal share"*, and a cap is the one thing that would stop them filling the row. */
+.workspaces-strip [role="tab"] {
+  max-width: 18rem;
+}
+
+.tabs .tab {
+  max-width: 15rem;
 }
 
 /* The lit edge. Drawn on every tab and coloured only on the selected one, so a strip does not
@@ -173,6 +224,12 @@ body {
   font: inherit;
   cursor: pointer;
   white-space: nowrap;
+  /* **`min-width: 0`, or the name never truncates.** A flex item's floor is its content, so
+     without this a long chat name widens its tab past the share it was given and the strip
+     overflows the arithmetic that decided what fits. This is the line that makes an equal
+     share actually equal. */
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /* Hover never touches the selected tab: it is already the loudest thing on the strip, and a
@@ -256,85 +313,54 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* **Every strip scrolls rather than growing past the window edge** (charter-app#130). At
-   fifty chats the tab strip filled the window and the last tabs were simply unreachable: no
-   scroll, no menu, nothing. Three rules make that impossible to come back —
-   `min-width: 0` so a strip may shrink inside its flex parent, `overflow-x: auto` so what
-   does not fit can be reached, and `flex: none` on the items so they keep their width
-   instead of being squeezed to nothing.
+/* **No strip scrolls. What does not fit is not drawn** — the operator, looking at the
+   running app: *"i noticed that tabs now scrollable — instead of automatic expanding in show
+   more button."* That reverses what ADR 0039 left open and what stood here, and the amendment
+   to that record carries the argument. What the record was protecting is kept and is worth
+   restating, because it is the thing a reviewer should aim at: charter-app#130 was fifty tabs
+   with NO way to reach the last of them, and the rule that came out of it is that this strip
+   may not have an unreachable tab.
 
-   **A scrollbar AND an overflow menu, which reverses half of what stood here** (ADR 0039).
-   What this comment used to say is that a menu would be a third answer to "which chats are
-   there" beside the palette and the sidebar's listing. ADR 0038 takes the sidebar's listing
-   away, and — the part that was wrong on its own terms — a scroller was never an answer to
-   that question at all. It answers "can I reach the ones I cannot see", and only if you
-   already know to look: the tabs past the edge are not merely un-clicked, they are
-   un-enumerated, and nothing on the strip said how many there were.
+   With the collapse, reachability is three things and not a scrollbar:
 
-   **So the two are kept, because they do two jobs, and the reasons they are not one job
-   twice are worth writing down.** The scroller is what makes every tab REACHABLE — in the
-   DOM, in the tab order, with its own close button — and the chat strip is not allowed to
-   have an unreachable tab, which is the whole of charter-app#130. The menu is the affordance
-   that says there is more, and the short path to it (`.show-more`, `PlaneView`). Collapsing
-   the strip's tail into the menu instead would make the menu the ONLY way to a tab, which is
-   an aiming surface turned into a reading surface, and would put a wanted control inside the
-   thing that hides controls — #130's actual defect, in different clothes.
+   - every hidden tab is listed in that strip's show-more menu, which says how many there are;
+   - a row of that menu brings its tab forward, and the selected tab is always drawn
+     (`fits.ts`), so it arrives on the strip with its own `×`;
+   - and the palette lists every chat with a search over it, which is the find surface and
+     always was.
 
-   The strip also still owes the operator that the selected tab is on screen, which
-   `PlaneView`'s `intoView` does on every change of front, from whichever surface asked. */
+   `overflow: hidden` rather than `auto`, so the failure mode if the arithmetic is ever wrong
+   is a clipped tab and not a scrollbar creeping back. */
 .projects,
 .workspaces-strip,
 .tabs {
   min-width: 0;
-  overflow-x: auto;
-  overflow-y: hidden;
+  overflow: hidden;
   flex-wrap: nowrap;
-  scrollbar-width: thin;
 }
 
-.projects::-webkit-scrollbar,
-.workspaces-strip::-webkit-scrollbar,
-.tabs::-webkit-scrollbar {
-  height: 5px;
-}
-
-.projects::-webkit-scrollbar-thumb,
-.workspaces-strip::-webkit-scrollbar-thumb,
-.tabs::-webkit-scrollbar-thumb {
-  background: var(--border-strong);
-  border-radius: 999px;
-}
-
-.project,
-.tab,
-.projects > button,
-.workspaces-strip > button,
-.tabs > button {
+/* A strip's own controls: the `+` that makes one more of what the strip lists, and the
+   show-more button. **Never sized with the tabs and never collapsed with them** — the
+   measured defect of charter-app#130/#131 was a wanted control living inside the thing that
+   hides controls, and a collapse is that thing. `useRoom` takes this element's width off the
+   room the tabs are given, which is how the two stay out of each other's way. */
+.strip-doing {
+  display: flex;
+  align-items: stretch;
   flex: none;
+  gap: 0.25rem;
+  padding-inline: 0.3rem;
 }
 
-/* **The `+` never scrolls out of reach.** On the chat strip it is out of the scroller
-   altogether (`.adding`, in `PlaneView`). The projects strip cannot move its own without
-   moving what `projects.e2e.ts` reaches it by, so it is stuck to the right-hand edge
-   instead, with the strip's background behind it so tabs pass underneath. */
-.projects > button:last-child {
-  position: sticky;
-  right: 0;
-  z-index: 1;
-  align-self: center;
-  margin-inline-start: 0.35rem;
-  box-shadow: -0.5rem 0 0.5rem var(--surface-deep);
-}
-
-/* The strip's own controls — today only the `+` that opens another project. A tab overrides
-   every one of these from a more specific selector above; what is left here is a button. */
+/* The strip's own buttons. A tab overrides every one of these from a more specific selector
+   above; what is left here is a button. */
 .projects button {
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
   color: var(--text-primary);
-  background: var(--control-base);
-  border: 1px solid var(--border-subtle);
+  background: none;
+  border: 0;
   border-radius: 4px;
   padding: 0.2rem 0.5rem;
   font: inherit;
@@ -343,18 +369,20 @@ body {
 }
 
 .projects button:hover:not(:disabled) {
-  border-color: var(--accent-base);
+  background: var(--surface-hover);
 }
 
+/* The innermost of the three rows: the chats of the workspace above. Inset twice, so it
+   begins inside the workspace row exactly as that one begins inside the project row. */
 .bar {
   display: flex;
-  gap: 1rem;
-  align-items: center;
-  padding: 0.35rem 0.6rem;
+  gap: 0.5rem;
+  align-items: stretch;
+  min-height: 1.85rem;
+  padding: 0 0.6rem 0 calc(var(--nested) * 2);
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.tabs,
 .doing,
 .adding,
 .tab {
@@ -363,12 +391,12 @@ body {
   align-items: center;
 }
 
-/* The tabs are the one thing on the bar that gives way: they shrink and scroll, and
-   everything else keeps its width. A strip that could not shrink pushed the splits and the
-   region buttons off the window at about thirty chats. It does not
-   GROW, so a window with two chats looks as it always did. */
+/* The tabs are the one thing on the bar that gives way: they take what is left after the
+   controls and share it out between them, and what has no room collapses into the show-more
+   button. A strip that could not shrink pushed the splits and the region buttons off the
+   window at about thirty chats. */
 .tabs {
-  flex: 0 1 auto;
+  flex: 1 1 auto;
 }
 
 .bar > .adding,
@@ -379,11 +407,12 @@ body {
 }
 
 /* `+` and the show-more button sit against the tabs they belong to, not a whole gap away.
-   Both are outside the scroller and neither may ever shrink: they are the two controls that
+   Both are outside the strip and neither may ever shrink: they are the two controls that
    matter most exactly when the strip is full. */
 .bar > .more,
 .bar > .adding {
-  margin-left: -0.75rem;
+  display: flex;
+  align-items: center;
 }
 
 /* The show-more button. It exists only while something is hidden, so it is drawn as a count
@@ -442,10 +471,14 @@ body {
   white-space: nowrap;
 }
 
-.tab-name {
+/* The name, truncated rather than widening its tab. The whole of it is in the tab's `title`
+   and in the palette, which is the surface for reading (ADR 0039). */
+.tab-name,
+.project-name,
+.workspace-name {
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 14rem;
+  min-width: 0;
 }
 
 /* The mark on something the operator pinned (charter ADR 0039). A dot and not a `📌`: an
@@ -485,6 +518,66 @@ body {
 .bar button:disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+/* **A `+` drawn as a tab rather than as a button** — the operator's *"it should looks like
+   new tab, without label — just icon"*. It is the same square at the end of every strip, so
+   an operator learns it once; its accessible name is the catalogue's own words, which is the
+   one condition `docs/design-system.md` puts on an icon with no text beside it.
+
+   Written as `button.bare` and placed here on purpose: `.bar button` above dresses every
+   button on the bar, and a plain `.bare` would lose to it on specificity and draw a bordered
+   box with a `+` in it. */
+button.bare {
+  justify-content: center;
+  align-self: center;
+  min-width: 1.9rem;
+  padding: 0.25rem;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+}
+
+button.bare:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--surface-hover);
+  border: 0;
+}
+
+button.bare:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* The show-more button on a strip that is not the chat strip. The chat strip's sits on the
+   bar and is dressed by `.bar button`; these two sit inside their own strip. */
+.workspaces .more,
+.projects .show-more {
+  display: flex;
+  align-items: center;
+}
+
+.workspaces .more {
+  flex: none;
+  padding-inline: 0.3rem;
+}
+
+.workspaces .show-more {
+  align-self: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--control-base);
+  color: var(--text-primary);
+  padding: 0.15rem 0.45rem;
+  font: inherit;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.workspaces .show-more:hover {
+  border-color: var(--accent-base);
 }
 
 /* `End this pane's chat` ends a session, like a tab's `×`, and is drawn with the same weight:

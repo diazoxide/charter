@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { listen } from "@tauri-apps/api/event";
 import "./styles.css";
 import { commands, type Ask, type PlaneId } from "./bindings";
@@ -18,7 +26,16 @@ import { Extensions } from "./Extensions";
 import { Opener } from "./Opener";
 import { Palette } from "./Palette";
 import { QuitWarning, type Ending } from "./QuitWarning";
-import { Closer, Doer, Pin, PlaneView, type PlaneReport, type WindowDoing } from "./PlaneView";
+import { fitting, LEAST, useRoom } from "./fits";
+import {
+  Closer,
+  Doer,
+  Pin,
+  PlaneView,
+  ShowMore,
+  type PlaneReport,
+  type WindowDoing,
+} from "./PlaneView";
 import type { Alerts } from "./StatusLine";
 import { noTabs } from "./tabs";
 
@@ -526,6 +543,45 @@ function App() {
     [drawn, inFront, pinnedProjects],
   );
 
+  /**
+   * How wide the project strip is, less its own `+`, and therefore which projects it draws.
+   *
+   * The widest of the three (`LEAST.project`), because a project is the thing that holds the
+   * other two: the operator asked for *"PROJECT is holder of workspaces, workspaces are
+   * holder of sessions"*, and the shape is what says so before any word is read.
+   */
+  const { strip: projectStrip, controls: projectControls, width: room } = useRoom(drawn.length);
+  const projectsShown = useMemo(
+    () =>
+      fitting(
+        drawn,
+        drawn.find((one) => one.plane === inFront),
+        room,
+        LEAST.project,
+      ),
+    [drawn, inFront, room],
+  );
+
+  /** What a project is drawn as, on the strip and in the menu of what the strip had no room
+   *  for. One definition, because they are the same project. */
+  const projectMarks = (project: Project) => (
+    <>
+      <span className="project-name">{project.name}</span>
+      <Pin held={pinnedProjects.includes(project.plane)} what="project" />
+      {/* What is waiting for you over there. It is the reason a project behind the one on
+          screen goes on listening rather than being torn down. */}
+      {(reports[project.plane]?.needsYou ?? 0) > 0 && (
+        <span
+          className="project-needs"
+          data-needs={reports[project.plane]?.needsYou}
+          aria-label={`${reports[project.plane]?.needsYou} chats need you in ${project.name}`}
+        >
+          {reports[project.plane]?.needsYou}
+        </span>
+      )}
+    </>
+  );
+
   /** Every action a window with no project in front can do. The project's own catalogue is
    *  `PlaneView`'s; this is the one for the opener, and its refusals are #111's. */
   const openerOffers = useMemo(
@@ -570,38 +626,59 @@ function App() {
           back to the opener. Named, because the chat tabs and the workspaces are tablists
           too and a query for `role="tab"` across the whole window would mix all three. */}
       {planes.length > 0 && (
-        <nav className="projects" role="tablist" aria-label="Projects">
-          {drawn.map((project, at) => (
-            <span className="project" key={project.plane}>
-              <button
-                role="tab"
-                aria-selected={project.plane === inFront}
-                // The path, because two projects can share a directory name and the name is
-                // all the tab has room for.
-                title={project.plane}
-                onClick={() => {
-                  const offer = strip.switchTo[at];
-                  if (offer.available) press(offer);
-                }}
-              >
-                <span className="project-name">{project.name}</span>
-                <Pin held={pinnedProjects.includes(project.plane)} what="project" />
-                {/* What is waiting for you over there. It is the reason a project behind the
-                    one on screen goes on listening rather than being torn down. */}
-                {(reports[project.plane]?.needsYou ?? 0) > 0 && (
-                  <span
-                    className="project-needs"
-                    data-needs={reports[project.plane]?.needsYou}
-                    aria-label={`${reports[project.plane]?.needsYou} chats need you in ${project.name}`}
-                  >
-                    {reports[project.plane]?.needsYou}
-                  </span>
-                )}
-              </button>
-              <Closer offer={strip.close[at]} onPress={press} />
-            </span>
-          ))}
-          <Doer offer={strip.open} onPress={press} />
+        <nav
+          className="projects"
+          role="tablist"
+          aria-label="Projects"
+          ref={projectStrip}
+          style={{ "--least": `${LEAST.project}px` } as CSSProperties}
+        >
+          {projectsShown.shown.map((project) => {
+            const at = drawn.indexOf(project);
+            return (
+              <span className="project" key={project.plane}>
+                <button
+                  role="tab"
+                  aria-selected={project.plane === inFront}
+                  // The path, because two projects can share a directory name and the name is
+                  // all the tab has room for.
+                  title={project.plane}
+                  onClick={() => {
+                    const offer = strip.switchTo[at];
+                    if (offer.available) press(offer);
+                  }}
+                >
+                  {projectMarks(project)}
+                </button>
+                <Closer offer={strip.close[at]} onPress={press} />
+              </span>
+            );
+          })}
+          {/* The strip's own controls, and the one part of this strip that never collapses.
+              They are inside the tablist because a `role="tab"` has to be owned by the
+              tablist it belongs to, so `useRoom` is told to take their width off the room
+              the tabs get rather than leaving the tabs to be squeezed under them.
+
+              **A `+` and not a labelled button** — the operator's: *"open-project button is
+              not looks like separate button, but it should looks like new tab, without label
+              — just icon."* It is the same shape as the chat strip's `New tab` one level
+              down: the `+` at the end of a strip makes one more of what the strip lists. Its
+              accessible name is still the catalogue's `Open a project…`.
+
+              And the projects there was no room for, in the same component the chat strip
+              uses, so an operator learns one control for all three strips. */}
+          <span className="strip-doing" ref={projectControls}>
+            <Doer offer={strip.open} onPress={press} iconOnly />
+            <ShowMore
+              noun="project"
+              hidden={projectsShown.hidden.map((project) => ({
+                key: project.plane,
+                offer: strip.switchTo[drawn.indexOf(project)],
+                children: projectMarks(project),
+              }))}
+              onPress={press}
+            />
+          </span>
         </nav>
       )}
 
