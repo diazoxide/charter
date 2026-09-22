@@ -163,7 +163,7 @@ pub fn change_or_none(value: Option<&Value>) -> Option<u64> {
 
 /// `int(text)` as CPython parses a base-10 string: surrounding whitespace, an optional sign,
 /// and digits that may be separated by single underscores.
-fn python_int(text: &str) -> Option<i128> {
+pub(crate) fn python_int(text: &str) -> Option<i128> {
     let body = text.trim_matches(|c: char| c.is_whitespace());
     let (sign, digits) = match body.strip_prefix('-') {
         Some(rest) => (-1i128, rest),

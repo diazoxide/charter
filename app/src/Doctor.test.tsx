@@ -29,8 +29,20 @@ const deferred = (name: string) =>
   row(name, "warn", { detail: "not checked (not ported)", checked: false });
 
 function report(rows: DoctorRow[], over: Partial<DoctorReport> = {}): DoctorReport {
-  return { rows, full: false, path: "/usr/bin:/bin:/usr/sbin:/sbin", ...over };
+  return {
+    rows,
+    app_rows: [],
+    full: false,
+    path: "/usr/bin:/bin:/usr/sbin:/sbin",
+    ...over,
+  };
 }
+
+/** The app's own row — the one `charter doctor` does not print. */
+const footerRow = (status: DoctorRow["status"] = "warn"): DoctorRow =>
+  row("chat footer", status, {
+    detail: "their settings.json fills Claude Code's status line, so the gauge stays dark",
+  });
 
 function state(over: Partial<DoctorState> = {}): DoctorState {
   return { running: false, run: () => {}, ...over };
@@ -89,6 +101,44 @@ describe("the doctor's button", () => {
 
     expect(button()).toHaveAccessibleName(/could not run: no plane \/x is open/);
     expect(button().textContent).not.toMatch(/blocker|warning/);
+  });
+});
+
+describe("the app's own rows", () => {
+  it("counts a warning about this app's own chats, beside the table's", () => {
+    render(
+      <Health
+        doctor={state({ report: report([row("git", "ok")], { app_rows: [footerRow()] }) })}
+      />,
+    );
+
+    expect(button().textContent).toContain("1 warning");
+  });
+
+  it("draws them under their own heading, because charter doctor does not print them", async () => {
+    render(
+      <Health
+        doctor={state({ report: report([row("git", "ok")], { app_rows: [footerRow()] }) })}
+      />,
+    );
+
+    await userEvent.click(button());
+
+    const dialog = await screen.findByRole("dialog");
+    const ours = within(dialog).getByRole("region", { name: "This app" });
+    expect(within(ours).getByText("chat footer")).toBeInTheDocument();
+    expect(within(ours).getByText(/gauge stays dark/)).toBeInTheDocument();
+    // And it is not counted twice, in the table's own sections.
+    expect(within(dialog).getAllByText("chat footer")).toHaveLength(1);
+  });
+
+  it("draws no heading for a core that sends none", async () => {
+    render(<Health doctor={state({ report: report([row("git", "ok")]) })} />);
+
+    await userEvent.click(button());
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).queryByRole("region", { name: "This app" })).toBeNull();
   });
 });
 

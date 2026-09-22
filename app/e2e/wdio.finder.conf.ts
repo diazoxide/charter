@@ -2,6 +2,7 @@ import process from "node:process";
 import { config as base } from "./wdio.conf.js";
 import {
   A_FINDER_LAUNCHS_PATH,
+  writeAStatusLineOfTheirOwn,
   anEmptyRecord,
   built,
   copyFixturePlane,
@@ -10,6 +11,14 @@ import {
   writeAPluginHookingShell,
 } from "./harness.js";
 import { PANIC_LOG } from "./processes.js";
+
+/**
+ * The status line this launch's operator already has, which charter may not replace.
+ *
+ * Exported so the spec asserts against the same string the launcher wrote: a doctor row that
+ * named a different file, or no file, would pass a test that compared prose with prose.
+ */
+export const THEIR_STATUS_LINE = "/bin/echo their own status line";
 
 /**
  * The app started the way an operator starts it: from Finder, with the `PATH` Finder gives.
@@ -52,6 +61,12 @@ const plane = (process.env.CHARTER_FINDER_PLANE ??= copyFixturePlane());
 const home = (process.env.CHARTER_FINDER_HOME ??= writeAHarnessOnlyAShellWouldFind(
   writeAPluginHookingShell(built("fake-harness")),
 ));
+
+// **And this launch's operator already has a status line.** charter must not replace it (the
+// ruling of 2026-09-22, `charter_core::footerclaim`), so the chats this app starts record no
+// turn and their ctx/cache gauge stays dark — which the doctor has to say, in a row that names
+// this file. `launch.finder.e2e.ts` asks it.
+writeAStatusLineOfTheirOwn(home, THEIR_STATUS_LINE);
 
 export const config: WebdriverIO.Config = {
   ...base,

@@ -341,6 +341,217 @@ fn write_row(plane: &Path, path: &Path, bytes: &[u8]) -> io::Result<()> {
     file.write_all(bytes)
 }
 
+// ---- reading it back ------------------------------------------------------------------------
+//
+// Everything above WRITES the record. What follows is the first reader outside the writer:
+// a port of `charter/statusline.py:recorded_context_gauge` (#413) and the helpers it shares
+// with the live gauge — `_last_ctx_of`, `_hits`, `_pairs`, `_rebuilds`, `_fmt_tok` and the
+// thresholds in `_ctx_part` / `_cache_part`. Python wrote it for the tmux frame's panel,
+// which never sees a payload and so can only draw what was recorded. The app is that reader
+// too: a chat tab has no payload either.
+//
+// **Data, not a drawn line.** Python returns ANSI strings; this returns the numbers and the
+// verdict each is drawn in, and the window draws them. The thresholds live HERE for #413's
+// own reason: two surfaces drawing one number with two thresholds is a green 60% beside a
+// yellow 60%, and nobody can debug that from what is on screen.
+
+/// How a gauge's number reads: `ok`, `warn` or `bad` — `statusline.accent`'s three.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone {
+    Ok,
+    Warn,
+    Bad,
+}
+
+/// A turn whose input was under this share cache-read counts as cold. `_COLD_BELOW`.
+pub const COLD_BELOW: i64 = 50;
+/// How many cold turns in a row before a cold streak is worth saying. `_COLD_STREAK`.
+pub const COLD_STREAK: usize = 3;
+/// A cache write this big, with the read collapsed, is a prefix rebuild. `_REBUILD_MIN_WRITE`.
+pub const REBUILD_MIN_WRITE: i64 = 15_000;
+/// Rebuilds costing this much in total are drawn loud. `_REBUILD_LOUD`.
+pub const REBUILD_LOUD: i64 = 200_000;
+
+/// One recorded turn, as far as its row could be read. `None` for a field that is absent or
+/// is not a whole number — each reader below skips what it cannot use, as Python's do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sample {
+    pub read: Option<i64>,
+    pub write: Option<i64>,
+    pub hit: Option<i64>,
+    pub context: Option<i64>,
+    /// How many comma-separated fields the row had. Python's readers branch on it
+    /// (`len(p) >= 3`, `len(p) < 4`), so it is kept rather than inferred.
+    fields: usize,
+}
+
+impl Sample {
+    fn of(row: &str) -> Self {
+        let p: Vec<&str> = row.split(',').collect();
+        let int = |i: usize| {
+            p.get(i)
+                .and_then(|f| crate::glrefresh::python_int(f))
+                .and_then(|n| i64::try_from(n).ok())
+        };
+        Self {
+            read: int(0),
+            write: int(1),
+            hit: int(2),
+            context: int(3),
+            fields: p.len(),
+        }
+    }
+}
+
+/// Every turn recorded for Claude Code's session `sid`, oldest first — at most [`KEEP`].
+///
+/// Empty for every way there is nothing: an id that is not one path segment, no file, a file
+/// that is a link or a FIFO or too big ([`rows_at`] refuses each and says nothing). A reader
+/// that cannot tell "no turns yet" from "could not read" draws nothing for both, which is the
+/// rule the gauge is built on.
+pub fn history(plane: &Path, sid: &str) -> Vec<Sample> {
+    let Some(path) = file_for(plane, sid) else {
+        return Vec::new();
+    };
+    rows_at(plane, &path)
+        .iter()
+        .map(|r| Sample::of(r))
+        .collect()
+}
+
+/// What the gauge draws. Every field is `None` when charter does not know it — never zero.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Gauge {
+    /// `ctx NN%`: the most recent recorded `context_window.used_percentage`, and its tone.
+    pub context: Option<(i64, Tone)>,
+    /// `cache NN%`: the last turn's share of input served from cache, and its tone.
+    pub cache: Option<(i64, Tone)>,
+    /// `↻N 696k`: how many prefix rebuilds this session has paid for, their total cost in
+    /// tokens as `_fmt_tok` spells it, and its tone. `None` when there were none.
+    pub rebuilds: Option<(usize, String, Tone)>,
+}
+
+/// The gauge for a recorded history. `recorded_context_gauge`, without the ANSI.
+///
+/// **An unreadable read/write pair empties the whole gauge**, which is Python's behaviour
+/// and is kept: `_pairs` raises on it, and `recorded_context_gauge`'s `except Exception:
+/// return []` takes `ctx` and `cache` down with it. A file with a corrupt row in it is a file
+/// whose other numbers charter cannot vouch for either, and "draw nothing" is this gauge's
+/// answer to "not actually known".
+pub fn gauge(history: &[Sample]) -> Gauge {
+    let Some(pairs) = pairs(history) else {
+        return Gauge::default();
+    };
+    let (n, cost) = rebuilds(&pairs);
+    Gauge {
+        context: last_context(history).map(|pct| (pct, context_tone(pct))),
+        cache: hits(history).last().map(|&hit| (hit, cache_tone(hit))),
+        rebuilds: (n > 0).then(|| {
+            (
+                n,
+                tokens(cost),
+                if cost >= REBUILD_LOUD {
+                    Tone::Bad
+                } else {
+                    Tone::Warn
+                },
+            )
+        }),
+    }
+}
+
+/// `_last_ctx_of`: the LAST row that carries a percentage, not the last row — a turn early in
+/// a session has usage and no percentage, and blanking a gauge that was right a moment ago
+/// is worse than showing it. Rows with fewer than four fields (pre-#413) are skipped.
+fn last_context(history: &[Sample]) -> Option<i64> {
+    history
+        .iter()
+        .rev()
+        .filter(|s| s.fields >= 4)
+        .find_map(|s| s.context)
+}
+
+/// `_hits`: the cache-hit shares, positionally (`rows[2]`, never "the last field", which
+/// since #413 is the context percentage). A row too short to hold one is skipped.
+pub fn hits(history: &[Sample]) -> Vec<i64> {
+    history
+        .iter()
+        .filter(|s| s.fields >= 3)
+        .filter_map(|s| s.hit)
+        .collect()
+}
+
+/// `_pairs`: every `(read, write)`, or `None` when a row long enough to carry one does not
+/// — Python's `int()` raising.
+fn pairs(history: &[Sample]) -> Option<Vec<(i64, i64)>> {
+    history
+        .iter()
+        .filter(|s| s.fields >= 3)
+        .map(|s| Some((s.read?, s.write?)))
+        .collect()
+}
+
+/// `_rebuilds`: `(count, total tokens)` of prefix rebuilds — a big write with the read
+/// collapsed to under half the previous turn's, or any big write on the first turn.
+fn rebuilds(pairs: &[(i64, i64)]) -> (usize, i64) {
+    let mut n = 0;
+    let mut cost = 0i64;
+    for (i, &(read, write)) in pairs.iter().enumerate() {
+        if write < REBUILD_MIN_WRITE {
+            continue;
+        }
+        let prev = if i == 0 { 0 } else { pairs[i - 1].0 };
+        // `read < prev * 0.5` in Python's float arithmetic; `2 * read < prev` is the same
+        // comparison on integers, with no rounding to disagree about.
+        if i == 0 || read.saturating_mul(2) < prev {
+            n += 1;
+            cost = cost.saturating_add(write);
+        }
+    }
+    (n, cost)
+}
+
+/// How many turns in a row, most recent last, were cache-cold. `_cold_streak`.
+pub fn cold_streak(hits: &[i64]) -> usize {
+    hits.iter()
+        .rev()
+        .take_while(|&&hit| hit < COLD_BELOW)
+        .count()
+}
+
+/// `_ctx_part`'s thresholds: under half is fine, under four fifths is a warning.
+pub fn context_tone(pct: i64) -> Tone {
+    if pct < 50 {
+        Tone::Ok
+    } else if pct < 80 {
+        Tone::Warn
+    } else {
+        Tone::Bad
+    }
+}
+
+/// `_cache_part`'s thresholds, the other way round: a high hit share is the healthy one.
+pub fn cache_tone(hit: i64) -> Tone {
+    if hit >= 80 {
+        Tone::Ok
+    } else if hit >= 50 {
+        Tone::Warn
+    } else {
+        Tone::Bad
+    }
+}
+
+/// `_fmt_tok`: `1.2M`, `696k`, `999`.
+pub fn tokens(n: i64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1000 {
+        format!("{}k", n / 1000)
+    } else {
+        n.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -367,6 +578,42 @@ mod tests {
             numbers(&json!({"session_id": "s1", "context_window": {"current_usage": {}}})),
             None
         );
+    }
+
+    #[test]
+    fn a_fresh_session_records_nothing_rather_than_a_turn_of_nulls() {
+        // **Measured on Claude Code 2.1.280**: the first render of a session hands the
+        // `statusLine` command a payload whose `current_usage`, `used_percentage` and
+        // `remaining_percentage` are all JSON `null` — not absent. That is every chat's normal
+        // first render, so it must record nothing: a row of zeros there would be an invented
+        // turn, and the gauge would read `cache 0%` on a session that has not spent anything.
+        //
+        // An explicit `null` and an absent key are different values, and only the absent one
+        // was covered before this. `whole()` answers `Some(0)` for both, and the
+        // `read == 0 && write == 0` guard is what turns them into "no turn".
+        let fresh = json!({
+            "session_id": "s1",
+            "context_window": {
+                "current_usage": {
+                    "cache_read_input_tokens": null,
+                    "cache_creation_input_tokens": null,
+                },
+                "used_percentage": null,
+                "remaining_percentage": null,
+            }
+        });
+
+        assert_eq!(numbers(&fresh), None);
+
+        let dir = tempfile::tempdir().unwrap();
+        let plane = std::fs::canonicalize(dir.path()).unwrap();
+        assert_eq!(record(&plane, &fresh), Recorded::Nothing);
+        assert!(
+            !file_for(&plane, "s1").unwrap().exists(),
+            "a fresh session wrote a record"
+        );
+        // And a turn that HAS spent something still records, percentage or no percentage.
+        assert_eq!(record(&plane, &payload(90, 10)), Recorded::Appended);
     }
 
     #[test]
@@ -640,5 +887,151 @@ mod tests {
         assert_eq!(with(json!(true)), Some(1));
         assert_eq!(with(json!("42")), None);
         assert_eq!(with(json!(null)), None);
+    }
+
+    // ---- reading it back ----------------------------------------------------------------
+    //
+    // Each expected value below is what the Python charter's own helpers answer for the same
+    // rows (`_last_ctx_of`, `_hits`, `_pairs`, `_rebuilds`, `_fmt_tok`, `_cold_streak`),
+    // run against the frozen oracle on 2026-09-22. `recorded_context_gauge` is internal to
+    // the frame's panel and has no CLI surface for `tests/differential/run.py` to drive, so
+    // the oracle was asked directly and its answers are pinned here.
+
+    fn rows(lines: &[&str]) -> Vec<Sample> {
+        lines.iter().map(|l| Sample::of(l)).collect()
+    }
+
+    /// `(ctx, cache, rebuild count, rebuild cost as drawn, cold streak)`, as the oracle
+    /// printed them.
+    fn drawn(lines: &[&str]) -> (Option<i64>, Option<i64>, usize, Option<String>, usize) {
+        let h = rows(lines);
+        let g = gauge(&h);
+        (
+            g.context.map(|(n, _)| n),
+            g.cache.map(|(n, _)| n),
+            g.rebuilds.as_ref().map_or(0, |r| r.0),
+            g.rebuilds.map(|r| r.1),
+            cold_streak(&hits(&h)),
+        )
+    }
+
+    #[test]
+    fn the_gauge_answers_what_the_python_charter_answers_for_the_same_rows() {
+        let none = None::<String>;
+        assert_eq!(
+            drawn(&["900,100,90,12", "950,20,98,14", "990,5,99,"]),
+            (Some(14), Some(99), 0, none.clone(), 0),
+            "the last row with a percentage, not the last row"
+        );
+        assert_eq!(
+            drawn(&["900,100,90", "950,20,98"]),
+            (None, Some(98), 0, none.clone(), 0),
+            "pre-#413 rows carry no percentage"
+        );
+        assert_eq!(
+            drawn(&[
+                "800000,2000,100,40",
+                "10000,696088,1,41",
+                "700000,3000,100,42"
+            ]),
+            (Some(42), Some(100), 1, Some("696k".into()), 0)
+        );
+        assert_eq!(
+            drawn(&["0,20000,0,3"]),
+            (Some(3), Some(0), 1, Some("20k".into()), 1),
+            "a big write on the first turn is a rebuild"
+        );
+        assert_eq!(
+            drawn(&["900,100,90,12", "950,20,98,abc"]),
+            (Some(12), Some(98), 0, none.clone(), 0),
+            "a corrupt percentage is skipped past"
+        );
+        assert_eq!(
+            drawn(&["900,100", "950,20,98,7"]),
+            (Some(7), Some(98), 0, none.clone(), 0),
+            "a row too short to carry a hit is skipped"
+        );
+        assert_eq!(
+            drawn(&[" 900 , 100 ,90, 55 "]),
+            (Some(55), Some(90), 0, none.clone(), 0),
+            "int() takes surrounding whitespace"
+        );
+        assert_eq!(
+            drawn(&[
+                "10,90,10,1",
+                "900,100,90,2",
+                "10,90,10,3",
+                "10,90,10,4",
+                "20,80,20,5"
+            ]),
+            (Some(5), Some(20), 0, none, 3)
+        );
+        assert_eq!(
+            drawn(&["0,1250000,0,9"]),
+            (Some(9), Some(0), 1, Some("1.2M".into()), 1)
+        );
+        assert_eq!(
+            drawn(&["0,150000,0,1", "100000,1000,99,2", "1000,60000,2,3"]),
+            (Some(3), Some(2), 2, Some("210k".into()), 1)
+        );
+    }
+
+    #[test]
+    fn an_unreadable_token_count_empties_the_whole_gauge_as_python_does() {
+        // `_pairs` raises, and `recorded_context_gauge` answers `[]` for everything —
+        // the percentage and the cache share included.
+        assert_eq!(
+            gauge(&rows(&["900,100,90,12", "x,20,98,14"])),
+            Gauge::default()
+        );
+    }
+
+    #[test]
+    fn each_number_is_drawn_in_the_tone_its_threshold_gives_it() {
+        assert_eq!(context_tone(49), Tone::Ok);
+        assert_eq!(context_tone(50), Tone::Warn);
+        assert_eq!(context_tone(79), Tone::Warn);
+        assert_eq!(context_tone(80), Tone::Bad);
+        assert_eq!(cache_tone(80), Tone::Ok);
+        assert_eq!(cache_tone(79), Tone::Warn);
+        assert_eq!(cache_tone(50), Tone::Warn);
+        assert_eq!(cache_tone(49), Tone::Bad);
+        // Loud at the Python charter's 200k, and not a token before.
+        let quiet = gauge(&rows(&["0,199999,0,1"]));
+        assert_eq!(quiet.rebuilds.unwrap().2, Tone::Warn);
+        let loud = gauge(&rows(&["0,200000,0,1"]));
+        assert_eq!(loud.rebuilds.unwrap().2, Tone::Bad);
+    }
+
+    #[test]
+    fn the_history_is_read_back_from_the_file_the_statusline_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let plane = std::fs::canonicalize(dir.path()).unwrap();
+        record(&plane, &payload(90, 10));
+        record(&plane, &payload(95, 5));
+
+        let h = history(&plane, "s1");
+
+        assert_eq!(h.len(), 2);
+        assert_eq!(gauge(&h).context, Some((42, Tone::Ok)));
+        assert_eq!(gauge(&h).cache, Some((95, Tone::Ok)));
+        // An id that is not one path segment names no file at all.
+        assert!(history(&plane, "../s1").is_empty());
+        assert!(history(&plane, "nobody").is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_history_file_that_is_a_link_is_not_followed() {
+        // The reader goes through the same gated open the writer's read does: a planted
+        // `<sid>.usage -> elsewhere` reads as no history rather than as someone else's file.
+        let dir = tempfile::tempdir().unwrap();
+        let plane = std::fs::canonicalize(dir.path()).unwrap();
+        let elsewhere = plane.join("elsewhere");
+        std::fs::write(&elsewhere, "900,100,90,77\n").unwrap();
+        std::fs::create_dir_all(plane.join(SESSIONS)).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, file_for(&plane, "s1").unwrap()).unwrap();
+
+        assert!(history(&plane, "s1").is_empty());
     }
 }

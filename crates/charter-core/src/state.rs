@@ -595,6 +595,20 @@ impl Board {
         self.moves
     }
 
+    /// The conversation this chat holds NOW, where charter knows one — the id charter started
+    /// it under, or the one its own harness moved to on `/clear` (C6), which [`Tracked::take`]
+    /// follows. `None` for a chat the board does not have, or one whose harness has not named
+    /// a conversation yet.
+    ///
+    /// **Now, and not the one it was started under**, because the thing it names moves: Claude
+    /// Code's `statusLine` payload carries the CURRENT session id, so the usage it records
+    /// after a `/clear` is filed under the new one. A reader keyed on the start id would
+    /// draw the conversation the operator cleared away. And never a nested harness's: the
+    /// board refuses to follow a report from any process but the chat's own (C5).
+    pub fn conversation(&self, number: u32) -> Option<&str> {
+        self.chats.get(&number)?.conversation.as_deref()
+    }
+
     /// What this chat is doing. A chat the app does not have is [`State::Unknown`], which is
     /// what it looks like from outside.
     pub fn state(&self, number: u32) -> State {
@@ -1142,6 +1156,37 @@ mod tests {
 
         assert!(board.reported(&report(7, Event::Stop, Some(B))));
         assert_eq!(board.state(7), State::Waiting);
+    }
+
+    #[test]
+    fn the_conversation_a_chat_holds_follows_a_clear_and_never_a_nested_harness() {
+        // What the app's usage gauge is keyed on: Claude Code files a turn under its CURRENT
+        // session id, so the gauge has to follow `/clear` (C6) — and must not follow a
+        // `claude` running inside the chat (C5), whose turns are not this chat's.
+        let mut board = Board::new();
+        claude_chat(&mut board, 7, Some(A));
+        assert_eq!(board.conversation(7), Some(A), "the id charter chose");
+
+        board.reported(&report(7, Event::UserPromptSubmit, Some(A)));
+        board.reported(&from_pid(7, Event::Stop, Some(NESTED), CLAUDE + 1));
+        assert_eq!(
+            board.conversation(7),
+            Some(A),
+            "a nested harness was followed"
+        );
+
+        board.reported(&report(7, Event::Stop, Some(B)));
+        assert_eq!(
+            board.conversation(7),
+            Some(B),
+            "the chat's own /clear was not followed"
+        );
+
+        assert_eq!(
+            board.conversation(8),
+            None,
+            "a chat the board does not have"
+        );
     }
 
     #[test]
