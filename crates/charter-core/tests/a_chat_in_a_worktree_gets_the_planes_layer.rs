@@ -10,7 +10,7 @@ mod support;
 
 use std::path::Path;
 
-use charter_core::{guest, start, worktree};
+use charter_core::{guest, reopen, start, worktree};
 
 fn layered_plane(repo: &str) -> support::Fixture {
     let f = support::plane_with_clone(repo);
@@ -759,5 +759,39 @@ fn a_plane_file_linked_from_inside_the_plane_is_still_mirrored() {
     assert_eq!(
         want.get(".claude/agents/forge.md").map(String::as_str),
         Some("# forge\n")
+    );
+}
+
+#[test]
+fn a_plane_file_over_the_bound_is_dropped_rather_than_mirrored_half() {
+    // charter-app#112's size bound, at the call site where the two halves of it can be told
+    // apart. `readable_text` bounds twice — once by asking the open descriptor how big it is,
+    // and again with a `take` on the way in — and the second alone would answer here by
+    // TRUNCATING: a megabyte of somebody's agent, cut mid-sentence, copied into their
+    // repository as though it were the whole file. Dropped is the honest answer and it is
+    // Python's (`contain.TOO_LARGE`), which is what the `fstat` half is for.
+    let f = layered_plane("thing");
+    let giant = f.plane.join(".claude/agents/giant.md");
+    std::fs::write(
+        &giant,
+        "# giant\n".to_owned() + &"a".repeat(usize::try_from(reopen::MAX_BYTES).unwrap()),
+    )
+    .unwrap();
+    assert!(
+        std::fs::metadata(&giant).unwrap().len() > reopen::MAX_BYTES,
+        "the fixture has to be over the bound for the bound to be what answers"
+    );
+
+    let want = guest::want(&f.plane);
+
+    assert_eq!(
+        want.get(".claude/agents/giant.md"),
+        None,
+        "a file over the bound was mirrored — and if it was mirrored it was truncated, which \
+         puts half of somebody's agent in their repository with nothing saying so"
+    );
+    assert!(
+        want.contains_key(".claude/agents/steward.md"),
+        "and the honest one beside it is still carried"
     );
 }

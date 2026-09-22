@@ -158,6 +158,15 @@ impl Records {
     }
 }
 
+/// A reopen record as one read of the plane gave it back, or why charter would not read it.
+///
+/// **A type alias rather than the bare `Result`, so the thing being passed has a name.** What
+/// travels from [`Planes::open_if_approved`] and [`Planes::approve_and_open`] down to
+/// [`Held::reopen`] is not "a record" — it is *the record this open was decided on*, and the
+/// reason it is passed rather than read is charter-app#123. `Reading::record` is where it
+/// comes from.
+type Read = Result<reopen::Record, std::io::Error>;
+
 /// What the app holds for one open plane: its board, its chats, and where it is.
 pub struct Held {
     id: PlaneId,
@@ -197,11 +206,18 @@ impl Held {
     ///
     /// The plane starts recording HERE, and not before: from this moment the app has read
     /// what was there, so writing over it is replacing its own answer rather than the
-    /// operator's. It is set before the record is read, so a chat that starts during the
-    /// reopen is recorded like any other.
-    fn reopen(&self, size: Size) {
+    /// operator's.
+    ///
+    /// **It does not read the record, and that is charter-app#123's whole fix.** The bytes are
+    /// handed in by the caller, which got them from the same read that produced the
+    /// contribution the operator was shown (`machine::Contribution::read`). This function used
+    /// to open `.charter/app/reopen.json` itself, a moment after `approve_and_open` had
+    /// compared what a *different* read of it said — so a write landing between the two was
+    /// started without ever having been drawn in a dialog. There is now one read per open, and
+    /// no way to write a second one without changing this signature.
+    fn reopen(&self, size: Size, record: Read) {
         self.records.allow();
-        let record = match reopen::read_or_refusal(&self.root) {
+        let record = match record {
             Ok(record) => record,
             Err(why) => {
                 // Not the same thing as an empty plane, and an operator told "nothing to
@@ -311,17 +327,35 @@ impl Planes {
         id
     }
 
+    /// The record of a plane this registry is already holding, read against the root the
+    /// registry settled on.
+    ///
+    /// **For the launch, which has no dialog to have shown one.** Every other caller of
+    /// [`Self::reopen`] arrives with the record already in hand, from the same read that
+    /// produced the contribution the operator approved (charter-app#123). A plane the registry
+    /// is not holding has no record here rather than a guessed path: the id is a `display()`
+    /// of the root, and spelling it back into a path substitutes for bytes that are not UTF-8.
+    fn record_of(&self, plane: &PlaneId) -> Read {
+        match self.held(plane) {
+            Ok(held) => reopen::read_or_refusal(&held.root),
+            Err(why) => Err(std::io::Error::other(why)),
+        }
+    }
+
     /// Puts back what the plane held, which **starts the programs its record names**.
     ///
     /// Private, and it takes [`Approved`] — a value nothing outside this module can build.
     /// That is the gate: [`Planes::open`] above attaches a plane and has no way to reach
     /// this, so a plane the operator has not said yes to cannot run anything.
-    fn reopen(&self, plane: &PlaneId, _yes: &Approved) {
+    ///
+    /// `record` is the bytes the caller decided on, never a path for this to read: see
+    /// [`Held::reopen`] and charter-app#123.
+    fn reopen(&self, plane: &PlaneId, _yes: &Approved, record: Read) {
         // The handle is taken and the lock dropped BEFORE anything starts: reopening runs
         // programs, and a program that dies at once tells the board, which tells the window,
         // which asks this very registry what the chat is called.
         let Ok(held) = self.held(plane) else { return };
-        held.reopen(STARTING);
+        held.reopen(STARTING, record);
     }
 
     /// Opens a plane the operator asked for — **only if this machine has already recorded
@@ -351,16 +385,20 @@ impl Planes {
             self.remember(&root);
             return Ok(Opening::Open(id));
         }
-        let contributes = machine::Contribution::of(&root);
-        let consent = self.consent_to(&root, &contributes);
+        // ONE read, and both arms are cut from it (charter-app#123). The ask arm throws the
+        // record away on purpose: nothing is started, and by the time the operator clicks,
+        // `approve_and_open` reads again to compare what they read against what is there now.
+        // The open arm keeps it, because it is about to run it.
+        let reading = machine::Contribution::read(&root);
+        let consent = self.consent_to(&root, &reading.contributes);
         if consent.must_ask() {
             return Ok(Opening::Ask(Asking {
                 root,
-                contributes,
+                contributes: reading.contributes,
                 consent,
             }));
         }
-        Ok(Opening::Open(self.minted(&root)))
+        Ok(Opening::Open(self.minted(&root, reading.record)))
     }
 
     /// The operator's yes to a plane, and the open it authorises.
@@ -379,22 +417,52 @@ impl Planes {
     /// at CLICK time, so the operator could approve, and charter could then start, a program
     /// they never read. `approve_profile` makes exactly this check about a profile's command
     /// line, for exactly this reason, and a review probe is what found it missing there.
+    ///
+    /// **And the record compared here is the record that runs** (charter-app#123). The check
+    /// above used to be made against one read of `.charter/app/reopen.json` and `put_back`
+    /// then made its own, so a write landing in between was executed without having been
+    /// shown. `Contribution::read` hands back the bytes it judged and they travel down to
+    /// `put_back` unchanged, which closes that window by construction rather than by narrowing
+    /// it.
+    ///
+    /// What that does **not** close is ADR 0035's own stated limit: the fingerprint is *"not a
+    /// defence against an agent that set out to forge the fingerprint"*. A chat that can write
+    /// this plane can write it before the dialog is drawn just as easily as after. What closes
+    /// is the gap between a human clicking a button and the app reading a file.
     pub fn approve_and_open(
         &self,
         root: &Path,
         shown: &machine::Contribution,
     ) -> Result<PlaneId, String> {
+        self.approving(root, shown, || {})
+    }
+
+    /// [`Self::approve_and_open`], with a seam between the read and the open.
+    ///
+    /// `between` exists for one test and nothing else: charter-app#123 is a window, and a
+    /// window can only be shown to have closed by a writer that lands *in* it. A test that
+    /// writes before the call is testing the comparison above, which was already there; a test
+    /// that writes after it is testing nothing at all. This is the same seam, for the same
+    /// reason, that `machine::write_through` keeps so a test can plant its link at the path
+    /// that is actually opened.
+    fn approving(
+        &self,
+        root: &Path,
+        shown: &machine::Contribution,
+        between: impl FnOnce(),
+    ) -> Result<PlaneId, String> {
         let root = plane_at(root)?;
-        let now = machine::Contribution::of(&root);
-        if &now != shown {
+        let reading = machine::Contribution::read(&root);
+        if &reading.contributes != shown {
             return Err(format!(
                 "{} changed while you were reading it, so nothing was approved and nothing was \
                  opened. Open it again to see what it contributes now.",
                 charter_core::shown::short(&root.display().to_string())
             ));
         }
-        self.record_approval(&root, now);
-        Ok(self.minted(&root))
+        between();
+        self.record_approval(&root, reading.contributes);
+        Ok(self.minted(&root, reading.record))
     }
 
     /// Attaches the plane, remembers that it was opened, and puts its record back.
@@ -413,11 +481,11 @@ impl Planes {
     /// plane this process is already holding would start a second copy of every chat the
     /// record names, beside the copies already running — so the question is asked here, where
     /// both callers pass, rather than at each of them.
-    fn minted(&self, root: &Path) -> PlaneId {
+    fn minted(&self, root: &Path, record: Read) -> PlaneId {
         let already = self.held(&PlaneId::of(root)).is_ok();
         let id = self.open(root);
         if !already {
-            self.reopen(&id, &Approved(()));
+            self.reopen(&id, &Approved(()), record);
         }
         id
     }
@@ -1066,7 +1134,17 @@ fn resolving_with(
             // So this plane appears in the opener's list — an operator who has only ever
             // launched from a terminal must not find that list empty — and opening it from
             // that list asks once, as every other plane does.
-            planes.reopen(&plane, &Approved(()));
+            //
+            // The record is read HERE, because the launch draws no dialog and so has nothing
+            // to have shown. It is still one read: `Held::reopen` no longer makes its own
+            // (charter-app#123), so this line is the whole of it and a second one would have
+            // to be written on purpose.
+            //
+            // Against the root the REGISTRY settled on, never the one the resolver handed
+            // over: `Planes::open` canonicalises, and reading `/var/…` while the plane is held
+            // as `/private/var/…` is the same two-spellings-of-one-directory defect the id
+            // exists to stop, wearing the record's hat.
+            planes.reopen(&plane, &Approved(()), planes.record_of(&plane));
             Launch {
                 plane: Some(plane),
                 from,
@@ -1226,6 +1304,68 @@ mod tests {
     fn a_record_naming(root: &Path, program: &str) -> Vec<u8> {
         reopen::write(root, &one_chat_on(program)).expect("the record is written");
         std::fs::read(record_of(root)).expect("the record reads back")
+    }
+
+    /// A record in `root` naming one chat per program, in order.
+    #[cfg(unix)]
+    fn a_record_naming_each(root: &Path, programs: &[&str]) {
+        let chats = programs
+            .iter()
+            .enumerate()
+            .map(|(which, program)| charter_core::reopen::Chat {
+                program: (*program).to_owned(),
+                args: Vec::new(),
+                cwd: None,
+                name: format!("chat.{which}"),
+                resume: None,
+                active: which == 0,
+                profile: None,
+                persona: None,
+                show_footer: false,
+                pinned: false,
+            })
+            .collect();
+        reopen::write(root, &reopen::Record { chats }).expect("the record is written");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_record_written_after_the_operator_clicked_is_not_the_one_that_is_started() {
+        // charter-app#123, at the only place it can be shown: a write that lands **between**
+        // the comparison `approve_and_open` makes and the record `put_back` executes.
+        //
+        // The comparison itself was already there — it is why a plane that changed while the
+        // dialog was open refuses — so a test that writes BEFORE the call is testing that, and
+        // a test that writes AFTER it is testing nothing. The seam puts the writer in the
+        // window, which is the whole defect.
+        //
+        // Counted rather than looked at, as every other test of `put_back` here is: a program
+        // that dies at once is a chat that was TRIED, and on a runner either answer is honest.
+        // What must not happen is that three chats were tried when the operator read one.
+        let dir = tempfile::tempdir().expect("a directory");
+        let config = dir.path().join("config");
+        let root = a_plane(&dir.path().join("plane"));
+        a_record_naming(&root, "/bin/echo");
+        let planes = planes_keeping(&config);
+        let shown = asking(planes.open_if_approved(&root).expect("it is a plane")).contributes;
+        assert_eq!(shown.starts.len(), 1, "the dialog drew one chat");
+
+        let planting = root.clone();
+        let plane = planes
+            .approving(&root, &shown, || {
+                // A chat running in another plane, a shell, anything with write access to this
+                // directory — the operator has clicked and is not looking at it any more.
+                a_record_naming_each(&planting, &["/bin/echo", "/bin/echo", "/bin/echo"]);
+            })
+            .expect("the operator said yes to what they were shown");
+
+        let held = planes.held(&plane).expect("it is held");
+        assert_eq!(
+            held.chats().open_now().len() + held.chats().would_not_start().len(),
+            1,
+            "the record that was executed is not the record that was approved: a write that \
+             landed after the click was started without ever having been drawn"
+        );
     }
 
     /// Whether the store would stop to ask about this plane, as it stands right now.
