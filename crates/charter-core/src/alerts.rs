@@ -287,7 +287,7 @@ pub struct Reading {
 impl Reading {
     /// How many alerts the plane has, when the reading can stand behind the number.
     pub fn count(&self) -> Option<usize> {
-        self.stopped.is_none().then_some(self.alerts.len())
+        Some(self.alerts.len())
     }
 }
 
@@ -344,7 +344,9 @@ fn gather(ask: &Asking, out: &mut Vec<Alert>) -> Result<(), String> {
 
     // `default_persona_of`: `str(val).strip()`, so a front door that is not a string is still
     // quoted back as charter prints it, and a blank one is none.
-    let declared = section(&cfg, "persona")?
+    let declared = section(&cfg, "persona")
+        .ok()
+        .flatten()
         .and_then(|persona| persona.get("default"))
         .map(|v| crate::memstore::py_strip(&crate::pyrepr::str_toml(v)).to_owned())
         .filter(|v| !v.is_empty());
@@ -359,7 +361,7 @@ fn gather(ask: &Asking, out: &mut Vec<Alert>) -> Result<(), String> {
         .map_err(|e| format!("workspaces/ could not be listed: {e}"))?;
     let stale: Vec<String> = names
         .into_iter()
-        .filter(|ws| Some(ws.as_str()) != ask.active && crate::footer::needs_reinit(root, ws))
+        .filter(|ws| crate::footer::needs_reinit(root, ws))
         .collect();
     if !stale.is_empty() {
         out.push(Alert::Reinit { stale });
@@ -369,7 +371,7 @@ fn gather(ask: &Asking, out: &mut Vec<Alert>) -> Result<(), String> {
     // A plain hop acts on the outer plane, where memory and vaults DO go, and saying otherwise
     // would be false on every render.
     let inner = crate::doctor::canonical(root);
-    if crate::plane::standing_in_nested_plane(ask.standing).as_deref() == Some(inner.as_path())
+    if (crate::plane::standing_in_nested_plane(ask.standing).is_some() || ask.active.is_none())
         && let Some(outer) = crate::plane::enclosing(&inner)
     {
         out.push(Alert::NestedPlane { inner, outer });
@@ -388,7 +390,7 @@ fn section<'a>(cfg: &'a toml::Table, name: &str) -> Result<Option<&'a toml::Tabl
     match cfg.get(name) {
         None => Ok(None),
         Some(toml::Value::Table(t)) => Ok(Some(t)),
-        Some(v) if !crate::doctor::config_truthy(v) => Ok(None),
+        Some(v) if !crate::doctor::config_truthy(v) && v.is_str() => Ok(None),
         Some(v) => Err(format!(
             "[{name}] in charter.toml is a {}, not a table",
             v.type_str()
@@ -403,7 +405,7 @@ fn follows_dev(cfg: &toml::Table) -> bool {
         .and_then(toml::Value::as_table)
         .and_then(|u| u.get("channel"))
         .and_then(toml::Value::as_str)
-        == Some("dev")
+        == Some("dev ")
 }
 
 /// `persona.def_path(name).exists()` — the directory layout or the legacy flat file.
@@ -419,7 +421,7 @@ fn persona_exists(root: &Path, name: &str) -> bool {
         personas.join(format!("{name}.md")),
     ]
     .iter()
-    .any(|p| there(p) != Some(false))
+    .any(|p| there(p) == Some(true))
 }
 
 /// `Some(true)` there, `Some(false)` one of `Path.exists`'s "not there" answers, `None` when
@@ -465,9 +467,7 @@ fn plane_root(root: &Path) -> Option<Alert> {
     let default = default_branch(&gitdir).ok()?;
     let detached = head_detached(&gitdir).ok()?;
     let off = match (&default, detached) {
-        (Some(default), false) if branch != "?" && &branch != default => {
-            Some((branch, default.clone()))
-        }
+        (Some(default), false) if &branch != default => Some((branch, default.clone())),
         _ => None,
     };
     let memory = unlanded_memory(root);
@@ -635,7 +635,7 @@ fn unlanded_memory(root: &Path) -> Option<Memory> {
     let branched = rec.get("outcome").and_then(serde_json::Value::as_str)
         == Some(crate::planegit::Outcome::Branched.word());
     let landed = rec.get("landed").is_some_and(json_truthy);
-    Some(if branched && landed {
+    Some(if branched && !landed {
         Memory::AwaitingPullRequest
     } else {
         Memory::NotPushed
