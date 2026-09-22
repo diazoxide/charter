@@ -93,6 +93,15 @@ does NOT share with the four dialogs, both because it is a menu and not a questi
 Its measurement of what does not fit lives in `app/src/offscreen.ts` and is
 `IntersectionObserver`, not a scroll handler reading fifty rects.
 
+And the **alerts drawer** (`app/src/AlertsDrawer.tsx`, M6.5): `@radix-ui/react-dialog` drawn as a
+sheet from the right, over the whole window, opened from the status line. It is the primitive
+itself with charter's CSS on it — not a copied shadcn `Sheet`, whose class list is written in
+shadcn's token names and would have emitted no CSS here (`design-system.md`). It is modal, and it
+parts from the four dialogs below on one decision: **a click outside closes it**, because a
+drawer asks nothing and a stray click cannot answer anything. Radix hands focus back only to a
+`Dialog.Trigger`, and the button that opens this lives in a project's status line while the drawer
+is the window's, so the drawer remembers where the keyboard was and puts it back itself.
+
 Two decisions those four share, taken once so they do not have to be taken again per dialog:
 
 - **A click outside answers nothing.** `onInteractOutside` is prevented on all four, which is

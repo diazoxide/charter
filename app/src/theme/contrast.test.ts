@@ -54,6 +54,8 @@ const PAIRS: [Token, Token, number][] = [
   ["text.secondary", "surface.base", 4.5],
   ["text.muted", "surface.base", 4.5],
   ["text.muted", "surface.overlay", 4.5],
+  // The alerts drawer is `surface.overlay`: its details are secondary text on it.
+  ["text.secondary", "surface.overlay", 4.5],
   ["needs-you.text", "needs-you.base", 4.5],
   ["danger.text", "danger.surface", 4.5],
   ["terminal.foreground", "terminal.background", 4.5],
@@ -64,6 +66,10 @@ const PAIRS: [Token, Token, number][] = [
   ["state.success", "surface.base", 3],
   ["state.unreadable", "surface.base", 3],
   ["danger.base", "surface.base", 3],
+  // The alerts drawer's marks, on the drawer, and the status line's bell on its button.
+  ["state.waiting", "surface.overlay", 3],
+  ["state.failed", "surface.overlay", 3],
+  ["state.waiting", "control.base", 3],
   ["accent.base", "surface.base", 3],
   ["focus.ring", "surface.base", 3],
   ["border.subtle", "surface.base", 1.2],
