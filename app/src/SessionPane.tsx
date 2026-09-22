@@ -6,6 +6,7 @@ import "@xterm/xterm/css/xterm.css";
 import * as bench from "./bench";
 import { commands, type PlaneId } from "./bindings";
 import { draw } from "./renderer";
+import { inForce, xtermTheme } from "./theme/theme";
 
 /**
  * One pane, drawing one session.
@@ -51,7 +52,11 @@ export function SessionPane({
     const pane = new Terminal({
       fontSize: 12,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-      theme: { background: "#181818", foreground: "#d8d8d8" },
+      // The same theme the rest of the window is drawn from. It used to be two hex values
+      // written out here, which were `--paper` and `--ink` spelled a second time and had
+      // nothing keeping them equal — and which left the other eighteen colours a terminal
+      // has to the library's defaults.
+      theme: xtermTheme(inForce()),
     });
     const fit = new FitAddon();
     pane.loadAddon(fit);

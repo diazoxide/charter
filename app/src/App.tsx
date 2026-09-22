@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import "./App.css";
+import "./styles.css";
 import { commands, type Ask, type PlaneId } from "./bindings";
 import {
   catalogue,

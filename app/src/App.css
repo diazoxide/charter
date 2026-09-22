@@ -1,16 +1,13 @@
+/* **No colour is written here.** Every one of them is a token in `src/theme/`, written onto
+   this element by `theme.apply` before React renders, and `docs/design-system.md` is the rule.
+   A literal in this file is a second theme that no theme file can reach, which is how the
+   terminal ended up with a palette of its own. `src/theme/literals.test.ts` refuses one. */
 :root {
-  --ink: #d8d8d8;
-  --paper: #181818;
-  --edge: #303030;
-  --lit: #6a9fb5;
-  /* What marks the answer that cannot be undone. */
-  --stop: #c05c5c;
-
   font-family: ui-sans-serif, Inter, Avenir, Helvetica, Arial, sans-serif;
   font-size: 13px;
   line-height: 1.4;
-  color: var(--ink);
-  background: var(--paper);
+  color: var(--text-primary);
+  background: var(--surface-base);
 
   font-synthesis: none;
   text-rendering: optimizeLegibility;
@@ -42,8 +39,8 @@ body {
   gap: 0.25rem;
   align-items: center;
   padding: 0.3rem 0.6rem;
-  background: #131313;
-  border-bottom: 1px solid var(--edge);
+  background: var(--surface-deep);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .project {
@@ -60,17 +57,17 @@ body {
   gap: 0.25rem;
   align-items: center;
   padding: 0.25rem 0.6rem;
-  background: #171717;
-  border-bottom: 1px solid var(--edge);
+  background: var(--surface-raised);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .workspaces-strip button {
   display: flex;
   gap: 0.3rem;
   align-items: center;
-  color: var(--ink);
-  background: #222;
-  border: 1px solid var(--edge);
+  color: var(--text-primary);
+  background: var(--control-base);
+  border: 1px solid var(--border-subtle);
   border-radius: 4px;
   padding: 0.15rem 0.5rem;
   font: inherit;
@@ -79,12 +76,12 @@ body {
 }
 
 .workspaces-strip button:hover:not(:disabled) {
-  border-color: var(--lit);
+  border-color: var(--accent-base);
 }
 
 .workspaces-strip [role="tab"][aria-selected="true"] {
-  border-color: var(--lit);
-  background: #2b3338;
+  border-color: var(--accent-base);
+  background: var(--tab-active);
 }
 
 /* How many chats are open in a workspace that is not the one on screen. With the chat strip
@@ -92,7 +89,7 @@ body {
 .workspace-count {
   padding: 0 0.3rem;
   border-radius: 999px;
-  background: #333;
+  background: var(--control-count);
   font-size: 0.85em;
   opacity: 0.85;
 }
@@ -102,8 +99,8 @@ body {
 .workspace-needs {
   padding: 0 0.3rem;
   border-radius: 999px;
-  background: var(--stop);
-  color: #fff;
+  background: var(--needs-you-base);
+  color: var(--needs-you-text);
   font-size: 0.85em;
 }
 
@@ -152,7 +149,7 @@ body {
 .projects::-webkit-scrollbar-thumb,
 .workspaces-strip::-webkit-scrollbar-thumb,
 .tabs::-webkit-scrollbar-thumb {
-  background: #3f3f3f;
+  background: var(--border-strong);
   border-radius: 999px;
 }
 
@@ -172,13 +169,13 @@ body {
   position: sticky;
   right: 0;
   z-index: 1;
-  box-shadow: -0.5rem 0 0.5rem #131313;
+  box-shadow: -0.5rem 0 0.5rem var(--surface-deep);
 }
 
 .projects button {
-  color: var(--ink);
-  background: #222;
-  border: 1px solid var(--edge);
+  color: var(--text-primary);
+  background: var(--control-base);
+  border: 1px solid var(--border-subtle);
   border-radius: 4px;
   padding: 0.2rem 0.5rem;
   font: inherit;
@@ -187,12 +184,12 @@ body {
 }
 
 .projects button:hover:not(:disabled) {
-  border-color: var(--lit);
+  border-color: var(--accent-base);
 }
 
 .projects [role="tab"][aria-selected="true"] {
-  border-color: var(--lit);
-  background: #2b3338;
+  border-color: var(--accent-base);
+  background: var(--tab-active);
 }
 
 /* How many chats are waiting for you in a project that is NOT on screen. It is the reason a
@@ -201,8 +198,8 @@ body {
   margin-left: 0.35rem;
   padding: 0 0.3rem;
   border-radius: 999px;
-  background: var(--stop);
-  color: #fff;
+  background: var(--needs-you-base);
+  color: var(--needs-you-text);
   font-size: 0.85em;
 }
 
@@ -211,7 +208,7 @@ body {
   gap: 1rem;
   align-items: center;
   padding: 0.35rem 0.6rem;
-  border-bottom: 1px solid var(--edge);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .tabs,
@@ -267,10 +264,10 @@ body {
   max-height: 60vh;
   overflow-y: auto;
   padding: 0.3rem;
-  background: #1c1c1c;
-  border: 1px solid var(--edge);
+  background: var(--surface-overlay);
+  border: 1px solid var(--border-subtle);
   border-radius: 6px;
-  box-shadow: 0 0.5rem 1.5rem #0009;
+  box-shadow: 0 0.5rem 1.5rem var(--overlay-shadow);
   z-index: 10;
 }
 
@@ -280,14 +277,14 @@ body {
   align-items: center;
   padding: 0.25rem 0.45rem;
   border-radius: 4px;
-  color: var(--ink);
+  color: var(--text-primary);
   cursor: pointer;
   /* Radix gives a menu item its own roving focus and no outline of its own. */
   outline: none;
 }
 
 .more-tab[data-highlighted] {
-  background: #2b3338;
+  background: var(--tab-active);
 }
 
 .more-tab[data-disabled] {
@@ -326,13 +323,13 @@ body {
   font-size: 0.7em;
   line-height: 1;
   opacity: 0.8;
-  color: var(--lit);
+  color: var(--accent-base);
 }
 
 .bar button {
-  color: var(--ink);
-  background: #222;
-  border: 1px solid var(--edge);
+  color: var(--text-primary);
+  background: var(--control-base);
+  border: 1px solid var(--border-subtle);
   border-radius: 4px;
   padding: 0.2rem 0.5rem;
   font: inherit;
@@ -340,7 +337,7 @@ body {
 }
 
 .bar button:hover:not(:disabled) {
-  border-color: var(--lit);
+  border-color: var(--accent-base);
 }
 
 .bar button:disabled {
@@ -349,8 +346,8 @@ body {
 }
 
 .bar [role="tab"][aria-selected="true"] {
-  border-color: var(--lit);
-  background: #2b3338;
+  border-color: var(--accent-base);
+  background: var(--tab-active);
 }
 
 .plane {
@@ -364,9 +361,9 @@ body {
 .trouble {
   margin: 0;
   padding: 0.35rem 0.6rem;
-  color: #f2a0a0;
-  background: #2a1a1a;
-  border-bottom: 1px solid var(--edge);
+  color: var(--danger-text);
+  background: var(--danger-surface);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .panes {
@@ -387,18 +384,18 @@ body {
 }
 
 .pane.focused {
-  border-color: var(--lit);
+  border-color: var(--accent-base);
 }
 
 /* The handle between two panes: thin, and easier to hit than it looks. */
 [data-separator] {
-  background: var(--edge);
+  background: var(--border-subtle);
   flex: 0 0 1px;
 }
 
 [data-separator]:hover,
 [data-separator][data-dragging] {
-  background: var(--lit);
+  background: var(--accent-base);
 }
 
 .xterm {
@@ -435,16 +432,16 @@ body {
 }
 
 .region-explorer {
-  border-right: 1px solid var(--edge, #3a3a3a);
+  border-right: 1px solid var(--border-subtle);
 }
 
 .region-aside {
-  border-left: 1px solid var(--edge, #3a3a3a);
+  border-left: 1px solid var(--border-subtle);
 }
 
 .region-bottom {
-  border-top: 1px solid var(--edge, #3a3a3a);
-  background: #131313;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-deep);
 }
 
 /* The buttons that put a region away and bring it back. Quiet, because they are about the
@@ -460,7 +457,7 @@ body {
 }
 
 .region-toggle[aria-pressed="true"] {
-  border-bottom: 1px solid var(--lit);
+  border-bottom: 1px solid var(--accent-base);
 }
 
 /* The left region: the repo and worktree explorer, which is the selector WITHIN a workspace
@@ -502,12 +499,12 @@ body {
 }
 
 .explorer .spot:hover {
-  background: #202020;
+  background: var(--surface-hover);
 }
 
 .explorer .spot[aria-current="true"] {
-  border-inline-start-color: var(--lit);
-  background: #1f2a2f;
+  border-inline-start-color: var(--accent-base);
+  background: var(--accent-surface);
   font-weight: 600;
 }
 
@@ -523,7 +520,7 @@ body {
   cursor: pointer;
   padding: 0.25rem 0.3rem;
   margin-top: 0.35rem;
-  border-top: 1px solid var(--edge, #3a3a3a);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .explorer .repo {
@@ -556,7 +553,7 @@ body {
 }
 
 .explorer .chat:hover {
-  background: #202020;
+  background: var(--surface-hover);
   opacity: 1;
 }
 
@@ -575,14 +572,14 @@ body {
 }
 
 .explorer .absent {
-  border-top: 1px solid var(--edge, #3a3a3a);
+  border-top: 1px solid var(--border-subtle);
   margin-top: 0.5rem;
   padding-top: 0.25rem;
   opacity: 0.7;
 }
 
 .explorer .trouble {
-  color: #f85149;
+  color: var(--state-failed);
   margin: 0.25rem 0;
 }
 
@@ -631,25 +628,25 @@ body {
 }
 
 .state-bar .unreadable {
-  color: #f0883e;
+  color: var(--state-unreadable);
 }
 
 /* Never colour alone: the state's own word is the text of the cell. */
 .state-bar .ci-success {
-  color: #3fb950;
+  color: var(--state-success);
 }
 
 .state-bar .ci-failed {
-  color: #f85149;
+  color: var(--state-failed);
 }
 
 .state-bar .ci-running,
 .state-bar .ci-pending {
-  color: #d29922;
+  color: var(--state-waiting);
 }
 
 .state-bar .trouble {
-  color: #f85149;
+  color: var(--state-failed);
   margin: 0.25rem 0;
 }
 
@@ -658,8 +655,8 @@ body {
   margin: 0;
   padding: 0.35rem 0.75rem;
   font-size: 0.85rem;
-  background: var(--edge);
-  border-bottom: 1px solid var(--edge);
+  background: var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .came-back code {
@@ -689,7 +686,7 @@ body {
 .asking {
   position: fixed;
   inset: 0;
-  background: rgb(0 0 0 / 55%);
+  background: var(--overlay-scrim);
 }
 
 .warning {
@@ -701,10 +698,10 @@ body {
   max-height: 80vh;
   overflow: auto;
   padding: 1.25rem 1.5rem;
-  border: 1px solid var(--edge);
+  border: 1px solid var(--border-subtle);
   border-radius: 8px;
-  background: var(--paper);
-  box-shadow: 0 8px 32px rgb(0 0 0 / 40%);
+  background: var(--surface-base);
+  box-shadow: 0 8px 32px var(--overlay-shadow);
 }
 
 .warning h2 {
@@ -723,7 +720,7 @@ body {
   gap: 0.5rem;
   align-items: baseline;
   padding: 0.2rem 0;
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .ending .what {
@@ -748,7 +745,7 @@ body {
 .choices {
   margin: 0 0 1rem;
   padding: 0.1rem 0.75rem 0.35rem;
-  border: 1px solid var(--edge);
+  border: 1px solid var(--border-subtle);
   border-radius: 6px;
 }
 
@@ -772,7 +769,7 @@ body {
 }
 
 .choice + .choice {
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--border-subtle);
 }
 
 /* The detail sits under the name, in the name's column: it is what the name means, and a row
@@ -788,7 +785,7 @@ body {
   gap: 0.15rem 0.5rem;
   align-items: baseline;
   font-size: 0.8rem;
-  color: #999;
+  color: var(--text-muted);
 }
 
 /* The one thing in the row that names it, and the thing the whole row is clickable through:
@@ -815,9 +812,9 @@ body {
   width: 0.85rem;
   height: 0.85rem;
   padding: 0;
-  border: 1px solid var(--edge);
-  background: #101010;
-  color: var(--lit);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-sunken);
+  color: var(--accent-base);
   cursor: pointer;
   /* On the text's first line, whatever the row's detail does below it. */
   align-self: start;
@@ -836,7 +833,7 @@ body {
 
 .dot[data-state="checked"],
 .box[data-state="checked"] {
-  border-color: var(--lit);
+  border-color: var(--accent-base);
 }
 
 .dot-mark {
@@ -844,7 +841,7 @@ body {
   width: 0.4rem;
   height: 0.4rem;
   border-radius: 50%;
-  background: var(--lit);
+  background: var(--accent-base);
 }
 
 /* Focus is drawn, and drawn on the control rather than only implied by the row. A keyboard
@@ -852,7 +849,7 @@ body {
    webview unless it is asked for. */
 .dot:focus-visible,
 .box:focus-visible {
-  outline: 2px solid var(--lit);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
@@ -861,14 +858,14 @@ body {
    rest of the row. `.warning .where` dims every path in these dialogs; this is three deep to
    outrank it. */
 .choice .meta .where {
-  color: #c8c8c8;
+  color: var(--text-secondary);
   opacity: 1;
 }
 
 /* A profile charter has not recorded running, marked in its own row and not only in the
    sentence below the list. */
 .choice .needs-approval {
-  color: var(--stop);
+  color: var(--danger-base);
 }
 
 /* The sentence that says what charter does not know. It is not a warning to be styled away. */
@@ -890,9 +887,9 @@ body {
    unavailable one. */
 .answer button,
 .warning .doing button {
-  color: var(--ink);
-  background: #222;
-  border: 1px solid var(--edge);
+  color: var(--text-primary);
+  background: var(--control-base);
+  border: 1px solid var(--border-subtle);
   border-radius: 4px;
   padding: 0.25rem 0.7rem;
   font: inherit;
@@ -901,7 +898,7 @@ body {
 
 .answer button:hover:not(:disabled),
 .warning .doing button:hover:not(:disabled) {
-  background: var(--edge);
+  background: var(--border-subtle);
 }
 
 /* Unavailable, and said by more than a shade: the cursor stops offering it too. */
@@ -913,14 +910,14 @@ body {
 
 .answer button:focus-visible,
 .warning .doing button:focus-visible {
-  outline: 2px solid var(--lit);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
 
 /* The answer that ends everything is marked, and it is not the one Return finds. */
 .answer .ends-it {
-  border-color: var(--stop);
-  color: var(--stop);
+  border-color: var(--danger-base);
+  color: var(--danger-base);
 }
 
 /* What a chat is doing. A mark, plus a shape per state: colour alone is no state at all to
@@ -940,12 +937,12 @@ body {
   background: none;
 }
 .state-running {
-  background: #2f81f7;
+  background: var(--state-running);
 }
 .state-waiting {
-  background: #d29922;
+  background: var(--state-waiting);
   /* A ring, so waiting is told from running without colour. */
-  box-shadow: 0 0 0 2px rgb(210 153 34 / 35%);
+  box-shadow: 0 0 0 2px var(--state-waiting-glow);
 }
 .state-done {
   background: none;
@@ -953,7 +950,7 @@ body {
   opacity: 0.45;
 }
 .state-failed {
-  background: #f85149;
+  background: var(--state-failed);
   border-radius: 2px;
 }
 
@@ -965,7 +962,7 @@ body {
   flex-direction: column;
   gap: 0.2rem;
   padding-bottom: 0.4rem;
-  border-bottom: 1px solid var(--edge, #3a3a3a);
+  border-bottom: 1px solid var(--border-subtle);
 }
 .needs-you ul {
   display: flex;
@@ -982,12 +979,12 @@ body {
   border: none;
   border-radius: 2px;
   color: inherit;
-  background: #202020;
+  background: var(--control-base);
   font: inherit;
   cursor: default;
 }
 .needs-you li button:hover {
-  background: #2a2a2a;
+  background: var(--control-hover);
 }
 .needs-you-count {
   font-weight: 600;
@@ -1011,9 +1008,9 @@ body {
 .warning .honest.mid-turn,
 .warning .honest.approve {
   padding: 0.4rem 0.6rem;
-  border-inline-start: 2px solid var(--stop);
+  border-inline-start: 2px solid var(--danger-base);
   border-radius: 2px;
-  background: rgb(192 92 92 / 12%);
+  background: var(--danger-wash);
   opacity: 1;
 }
 
@@ -1073,21 +1070,21 @@ body {
   font-size: 0.75rem;
 }
 .panels .unreadable {
-  color: #f0883e;
+  color: var(--state-unreadable);
 }
 /* Never colour alone: the state's own word is the text of the cell. */
 .panels .ci-success {
-  color: #3fb950;
+  color: var(--state-success);
 }
 .panels .ci-failed {
-  color: #f85149;
+  color: var(--state-failed);
 }
 .panels .ci-running,
 .panels .ci-pending {
-  color: #d29922;
+  color: var(--state-waiting);
 }
 .panels .trouble {
-  color: #f85149;
+  color: var(--state-failed);
   margin: 0.25rem 0;
 }
 
@@ -1119,14 +1116,14 @@ body {
   padding: 0.5rem 0.6rem;
   font: inherit;
   font-size: 1rem;
-  color: var(--ink);
-  background: #101010;
-  border: 1px solid var(--edge);
+  color: var(--text-primary);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
   border-radius: 6px;
 }
 
 .palette-query:focus {
-  outline: 2px solid var(--lit);
+  outline: 2px solid var(--focus-ring);
   outline-offset: 1px;
 }
 
@@ -1150,8 +1147,8 @@ body {
 /* The row Enter is aimed at. An inset edge as well as a background, so the aim survives a
    display that renders neither colour nor translucency. */
 .palette-row.aimed {
-  background: #232323;
-  box-shadow: inset 2px 0 0 var(--lit);
+  background: var(--control-aimed);
+  box-shadow: inset 2px 0 0 var(--accent-base);
 }
 
 /* Dimming is decoration. The reason beside it is the meaning, and it is always drawn. */
@@ -1169,9 +1166,9 @@ body {
 .palette .refusal {
   margin: 0;
   padding: 0.5rem 0.6rem;
-  border: 1px solid var(--stop);
+  border: 1px solid var(--danger-base);
   border-radius: 6px;
-  color: #f85149;
+  color: var(--state-failed);
 }
 
 .palette .said,
@@ -1216,7 +1213,7 @@ body {
 
 .opener button {
   padding: 0.35rem 0.75rem;
-  border: 1px solid var(--edge);
+  border: 1px solid var(--border-subtle);
   border-radius: 6px;
   background: transparent;
   color: inherit;
@@ -1225,7 +1222,7 @@ body {
 }
 
 .opener button:hover:not(:disabled) {
-  background: var(--edge);
+  background: var(--border-subtle);
 }
 
 .opener button:disabled {
@@ -1247,7 +1244,7 @@ body {
 .by-path input {
   flex: 1;
   padding: 0.3rem 0.5rem;
-  border: 1px solid var(--edge);
+  border: 1px solid var(--border-subtle);
   border-radius: 6px;
   background: transparent;
   color: inherit;
@@ -1264,7 +1261,7 @@ body {
   display: flex;
   gap: 0.5rem;
   align-items: baseline;
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .recents li button {

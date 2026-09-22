@@ -5,19 +5,38 @@
 This is a rule and not a preference, so the rest of this file is the reasons for it and the way
 to follow it.
 
+**Its sibling is [`design-system.md`](design-system.md), which says what the window is drawn
+*in*: a theme is a data file, every colour is a semantic token, and a literal anywhere outside
+`app/src/theme/` fails the build. Read that one before writing a rule with a colour in it, and
+for what a copied-in shadcn/ui component has to satisfy.**
+
+**Where the rule is decided.** charter **ADR 0037**, *charter takes the behaviour and keeps the
+look*, and its amendment of 2026-09-22, which settled the conflict this file used to flag. That
+record is authoritative; this file is its code-side expression, and where the two disagree this
+file is the defect.
+
 ## The rule
 
 - A dialog, a radio group, a checkbox, a menu, a popover, a tooltip, a collapsible section, a
   tab list: take the Radix primitive. Install the one package you need
   (`@radix-ui/react-<thing>`) — the primitives tree-shake per package, so the window pays for
   what it uses and nothing else.
-- **Do not write a wrapper layer around them.** No `<Modal>`, no `<Field>`, no house component
-  library. The primitive is the component; charter's look is CSS on it. A wrapper is the custom
-  tooling this repo's first rule exists to prevent, and it is how a primitives migration turns
-  back into hand-rolled markup with extra steps.
+- **No library between you and the primitive, and no indirection you cannot read.** No `<Modal>`,
+  no `<Field>`, no house component library. The primitive is the component; charter's look is CSS
+  on it. A charter API in front of Radix is the custom tooling this repo's first rule exists to
+  prevent, and it is how a primitives migration turns back into hand-rolled markup with extra
+  steps. The test is at the **call site**: can the next person see which primitive this is and
+  reach its props?
+- **A component's source copied into this repo is neither of those, and is allowed.** Until
+  2026-09-22 the rule above read *"do not write a wrapper layer around them"*, which forbade a
+  shadcn/ui component — a shadcn component is literally a thin wrapper around a Radix primitive.
+  The operator settled it: that rule was written against **a dependency that owns your markup**,
+  and a file in `app/src/components/ui/` is ours, editable line by line, and visible in the diff
+  that adds it. `docs/design-system.md` has what a copy must satisfy.
 - Charter's own look, always. Radix ships **no CSS at all** — every primitive is an unstyled
   element with `data-state` attributes to hang rules off. `App.css` stays the one place the
-  window is drawn.
+  window is drawn — but **no colour is written in it**: every one is `var(--<token>)` and the
+  values live in `app/src/theme/`. See `design-system.md`.
 - Native HTML that already does the job is not hand-rolled markup and does not need replacing:
   `<details>/<summary>`, `<label for>`, `<button>`. Reach for a primitive when the browser has
   no element for what you mean — a modal that traps focus, a listbox, a menu.

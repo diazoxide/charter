@@ -1,0 +1,69 @@
+{
+  "name": "charter-light",
+  "appearance": "light",
+  "tokens": {
+    "surface.base": "#ffffff",
+    "surface.sunken": "#f1f2f4",
+    "surface.deep": "#e4e6ea",
+    "surface.raised": "#eceef1",
+    "surface.overlay": "#ffffff",
+    "surface.hover": "#e8eaee",
+
+    "control.base": "#e4e6ea",
+    "control.hover": "#d6d9df",
+    "control.aimed": "#dcdfe4",
+    "control.count": "#ccd0d7",
+
+    "text.primary": "#1f2328",
+    "text.secondary": "#3c434d",
+    "text.muted": "#6b727c",
+
+    "border.subtle": "#d0d4da",
+    "border.strong": "#b0b6be",
+
+    "accent.base": "#2d6d85",
+    "accent.surface": "#dcecf3",
+    "focus.ring": "#2d6d85",
+    "tab.active": "#cbe0e9",
+
+    "needs-you.base": "#a83232",
+    "needs-you.text": "#ffffff",
+
+    "danger.base": "#a83232",
+    "danger.surface": "#fbeaea",
+    "danger.text": "#8a1f1f",
+    "danger.wash": "#a832321f",
+
+    "state.running": "#0969da",
+    "state.waiting": "#9a6700",
+    "state.waiting-glow": "#9a670045",
+    "state.failed": "#cf222e",
+    "state.success": "#1a7f37",
+    "state.unreadable": "#bc4c00",
+
+    "overlay.scrim": "#1f232866",
+    "overlay.shadow": "#1f23282e",
+
+    "terminal.background": "#ffffff",
+    "terminal.foreground": "#1f2328",
+    "terminal.cursor": "#1f2328",
+    "terminal.cursor-accent": "#ffffff",
+    "terminal.selection": "#2d6d8540",
+    "terminal.ansi.black": "#24292f",
+    "terminal.ansi.red": "#cf222e",
+    "terminal.ansi.green": "#116329",
+    "terminal.ansi.yellow": "#7d4e00",
+    "terminal.ansi.blue": "#0969da",
+    "terminal.ansi.magenta": "#8250df",
+    "terminal.ansi.cyan": "#1b7c83",
+    "terminal.ansi.white": "#6e7781",
+    "terminal.ansi.bright-black": "#57606a",
+    "terminal.ansi.bright-red": "#a40e26",
+    "terminal.ansi.bright-green": "#1a7f37",
+    "terminal.ansi.bright-yellow": "#633c01",
+    "terminal.ansi.bright-blue": "#218bff",
+    "terminal.ansi.bright-magenta": "#a475f9",
+    "terminal.ansi.bright-cyan": "#3192aa",
+    "terminal.ansi.bright-white": "#8c959f"
+  }
+}
