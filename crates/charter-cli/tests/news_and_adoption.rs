@@ -23,15 +23,29 @@ fn charter(root: &Path, args: &[&str]) -> Output {
         .args(args)
         .current_dir(root)
         .env("CHARTER_ROOT", root)
+        // `update` reads the machine store for the update channel (charter ADR 0042), so the
+        // store is pinned too, inside the run's own temp tree. Unpinned, a
+        // fenced build dies rather than read the operator's `~/.config` (charter-app#129).
+        .env("CHARTER_CONFIG_HOME", config_home(root))
         .env("NO_COLOR", "1")
         .env("TERM", "dumb")
         .output()
         .expect("the binary runs")
 }
 
+/// The config home a test's `charter` keeps its machine store in: inside the plane's own temp
+/// directory, so it goes when the plane does, and under a name that is not `.charter`, so a test
+/// asserting the plane gained no state is not answered by the store.
+fn config_home(root: &Path) -> std::path::PathBuf {
+    root.join("machine-config-home")
+}
+
 fn plane() -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("charter.toml"), "").unwrap();
+    // Made here because the fence resolves the path it is handed, and a directory that does
+    // not exist yet resolves nowhere — so an absent config home reads as outside the fence.
+    std::fs::create_dir_all(config_home(dir.path())).unwrap();
     dir
 }
 
@@ -210,5 +224,38 @@ fn the_flags_that_move_a_python_package_are_answered_rather_than_rejected() {
         err(&said).contains("the pin was left alone"),
         "{}",
         err(&said)
+    );
+}
+
+#[test]
+fn update_names_the_channel_and_moves_it_only_to_a_channel_that_exists() {
+    let dir = plane();
+    let home = config_home(dir.path());
+    let said = charter(dir.path(), &["update"]);
+    assert!(
+        err(&said).contains("updates from the stable channel"),
+        "{}",
+        err(&said)
+    );
+
+    let moved = charter(dir.path(), &["update", "--channel", "dev"]);
+    assert!(moved.status.success(), "{moved:?}");
+    assert_eq!(
+        charter_core::machine::read(&home).store.channel,
+        charter_core::updates::Channel::Dev
+    );
+    let said = charter(dir.path(), &["update"]);
+    assert!(
+        err(&said).contains("updates from the dev channel"),
+        "{}",
+        err(&said)
+    );
+
+    // A typo exits 1 and leaves the channel where it was, rather than guessing.
+    let refused = charter(dir.path(), &["update", "--channel", "nightly"]);
+    assert_eq!(refused.status.code(), Some(1), "{refused:?}");
+    assert_eq!(
+        charter_core::machine::read(&home).store.channel,
+        charter_core::updates::Channel::Dev
     );
 }

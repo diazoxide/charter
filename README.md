@@ -95,20 +95,16 @@ node tools/bench.mjs          # builds release, then prints and writes target/be
 ## A build you can run
 
 CI builds the app but never bundles it, so nothing in a PR is installable. The `release`
-workflow is: run it from the Actions tab (**release → Run workflow**, any branch) and it
-produces a macOS `.app` and `.dmg` and a Linux `.deb` and AppImage, release profile, as
-workflow artifacts kept for 90 days. The run's job summary prints exactly what to type to
-install and launch each one.
+workflow does, three ways: a `v*` tag publishes to the **stable** channel, a green `main`
+publishes to the **dev** channel, and **release → Run workflow** on any branch builds a macOS
+`.app`/`.dmg` and a Linux `.deb`/AppImage as run artifacts, published nowhere. The job summary
+prints what to type to install each one.
 
-Everything it produces is **unsigned and not notarized**. On macOS that means Gatekeeper
-refuses it until the quarantine flag is stripped:
-
-```bash
-xattr -dr com.apple.quarantine charter.app
-```
-
-Signed installers and the updater are M4 (spec decisions 19 and 21); the seams for them are
-commented in `.github/workflows/release.yml`.
+The app updates itself from those channels, and `charter update --channel dev|stable` picks
+one. Published builds are updater-signed (minisign) and Developer ID signed, **not notarized**,
+so a first install from a browser meets Gatekeeper once and updates do not. How that works, and
+the keys and secrets only the operator can set up, are in [`docs/updating.md`](docs/updating.md)
+and charter ADR 0042.
 
 The bundles carry the `charter` binary beside the app's own executable, because the app runs
 that one for hooks and deliberately does not look at `PATH`. It is staged as a Tauri sidecar by

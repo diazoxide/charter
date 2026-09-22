@@ -28,6 +28,12 @@ allow = [
   # libloading, under the tray icon's Linux appindicator binding. Permissive, OSI approved
   # and FSF free — the same terms as the BSD-2-Clause already allowed, minus a clause.
   "ISC",
+  # webpki-root-certs: Mozilla's CA root list, packaged as data, under the updater's HTTP
+  # client (charter ADR 0042). It is what TLS checks the update endpoint's certificate against,
+  # and the manifest is unsigned, so this list is part of what keeps a hostile network from
+  # serving one. CDLA-Permissive-2.0 is the Linux Foundation's permissive licence for data: use,
+  # modify and share, with no copyleft and no obligation beyond keeping the licence text.
+  "CDLA-Permissive-2.0",
 ]
 
 [bans]

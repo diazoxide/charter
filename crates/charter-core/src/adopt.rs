@@ -277,6 +277,97 @@ pub fn version_move_refusal(verb: &str) -> Report {
     report
 }
 
+// ------------------------------------------------------------------------------------------
+// `charter update --channel` (charter ADR 0042)
+// ------------------------------------------------------------------------------------------
+
+/// Which stream the app takes its next version from, said beside [`THE_APP_MOVES_IT`].
+///
+/// `update` is the command whose subject is "moving charter", and its first line already says
+/// the app is what does the moving. The channel is which stream it moves along, so this is the
+/// natural place to say it — and until M6.4's status bar exists, the only place an operator can
+/// change it at all.
+fn channel_line(channel: crate::updates::Channel) -> String {
+    let other = match channel {
+        crate::updates::Channel::Stable => crate::updates::Channel::Dev,
+        crate::updates::Channel::Dev => crate::updates::Channel::Stable,
+    };
+    format!(
+        "  the app on this machine updates from the {} channel.  to move it:  charter update \
+         --channel {}",
+        channel.name(),
+        other.name()
+    )
+}
+
+/// `charter update` without `--channel`: the report as it was, plus the channel line.
+///
+/// `config_root` is `None` on a machine with no config home, which reads as the default — the
+/// same answer the app gives, from the same store.
+pub fn update_report_with_channel(
+    root: Option<&Path>,
+    config_root: Option<&Path>,
+    args: &UpdateArgs,
+    d: &dyn Dispatch,
+) -> Report {
+    let mut report = update_report(root, args, d);
+    let channel = config_root
+        .map(|at| crate::machine::read(at).store.channel)
+        .unwrap_or_default();
+    // Second, right under the refusal that names the app as the mover — not at the bottom,
+    // after the news, where it would read as a footnote to a different subject.
+    report.said.insert(1, Say::Info(channel_line(channel)));
+    report
+}
+
+/// `charter update --channel <word>`: put this machine on a channel, or refuse the word.
+///
+/// Only the channel moves. The news half is not run, because an operator switching streams is
+/// not asking what this plane skipped, and a command that did two things at once would bury
+/// the one sentence they typed it for.
+///
+/// **A word charter does not know exits 1 and changes nothing.** The exact reader
+/// ([`crate::updates::Channel::named`]) is the rule; `Dev` or `nightly` is a typo, and guessing
+/// what it meant would be guessing toward the less safe channel.
+pub fn set_channel_report(config_root: Option<&Path>, word: &str) -> Report {
+    let mut report = Report::new_public();
+    let Some(channel) = crate::updates::Channel::named(word) else {
+        report.said.push(Say::Err(format!(
+            "{word:?} is not an update channel. There are two: stable and dev."
+        )));
+        report.code = 1;
+        return report;
+    };
+    let Some(config_root) = config_root else {
+        report.said.push(Say::Err(
+            "this machine has no config home, so charter has nowhere to keep the channel."
+                .to_owned(),
+        ));
+        report.code = 1;
+        return report;
+    };
+    match crate::machine::update(config_root, |store| store.channel = channel) {
+        Ok(_) => {
+            report.said.push(Say::Ok(format!(
+                "the app on this machine now updates from the {} channel.",
+                channel.name()
+            )));
+            report.said.push(Say::Info(format!(
+                "  it reads {} at its next check; nothing is installed until you say so in the \
+                 app.",
+                channel.endpoint()
+            )));
+        }
+        Err(why) => {
+            report.said.push(Say::Err(format!(
+                "the channel could not be recorded: {why}"
+            )));
+            report.code = 1;
+        }
+    }
+    report
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,5 +589,61 @@ mod tests {
         let version = said(&version_report(Some(dir.path())));
         assert!(update.contains(THE_APP_MOVES_IT), "{update}");
         assert!(version.contains(THE_APP_MOVES_IT), "{version}");
+    }
+
+    // `charter update --channel` (charter ADR 0042)
+
+    #[test]
+    fn update_says_which_channel_the_app_takes_charter_from_right_under_the_refusal() {
+        let plane = tempfile::tempdir().unwrap();
+        let machine = tempfile::tempdir().unwrap();
+        let report = update_report_with_channel(
+            Some(plane.path()),
+            Some(machine.path()),
+            &UpdateArgs::default(),
+            &NoCommands,
+        );
+        let Some(Say::Info(line)) = report.said.get(1) else {
+            panic!("{:?}", report.said);
+        };
+        assert!(line.contains("from the stable channel"), "{line}");
+        assert!(line.contains("charter update --channel dev"), "{line}");
+    }
+
+    #[test]
+    fn a_channel_set_from_the_terminal_is_the_one_the_app_reads() {
+        let machine = tempfile::tempdir().unwrap();
+        let report = set_channel_report(Some(machine.path()), "dev");
+        assert_eq!(report.code, 0, "{}", said(&report));
+        assert_eq!(
+            crate::machine::read(machine.path()).store.channel,
+            crate::updates::Channel::Dev
+        );
+        let back = update_report_with_channel(
+            None,
+            Some(machine.path()),
+            &UpdateArgs::default(),
+            &NoCommands,
+        );
+        assert!(
+            said(&back).contains("from the dev channel"),
+            "{}",
+            said(&back)
+        );
+    }
+
+    #[test]
+    fn a_word_that_is_not_a_channel_exits_one_and_moves_nothing() {
+        let machine = tempfile::tempdir().unwrap();
+        set_channel_report(Some(machine.path()), "dev");
+        for word in ["Dev", "STABLE", "nightly", "", "dev "] {
+            let report = set_channel_report(Some(machine.path()), word);
+            assert_eq!(report.code, 1, "{word:?} was accepted");
+            assert_eq!(
+                crate::machine::read(machine.path()).store.channel,
+                crate::updates::Channel::Dev,
+                "{word:?} moved the channel"
+            );
+        }
     }
 }
