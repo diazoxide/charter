@@ -30,6 +30,16 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "UNSET-THE-OPERATOR-GENERATES-THIS-SEE-docs-updating.md",
+      "endpoints": [
+        "https://github.com/diazoxide/charter-app/releases/latest/download/latest.json"
+      ],
+      "requireSignedVersion": true
+    }
   }
 }
