@@ -40,22 +40,56 @@ use std::path::Path;
 use crate::repocmd::{Say, Sink};
 use crate::wscmd;
 
-/// `charter workspace remove <name> [--force]`, and its exit code.
+/// What [`remove`] did, and — when the guard refused — **the reading it refused on**.
+///
+/// **The list travels with the refusal because the refusal's words are about it**
+/// (charter-app#182). The window asks `work_at_risk` a second time, when the dialog opens, to
+/// draw a preview; that read is older than this one by however long somebody spent reading the
+/// dialog. If the workspace moved in between — a clone goes dirty, a commit is made, a
+/// worktree appears — the surface then names one clone in the sentence it quotes and a
+/// different one on the button that discards it, at exactly the moment consent is being given.
+/// Nothing was ever deleted wrongly: this read is the one that decides, and it always was.
+/// What was wrong was that the window had no way to draw the list this read was made of.
+///
+/// **Empty on every outcome but the guard's refusal**, a forced delete included: `--force` is
+/// the operator choosing to discard what is here, so what it discarded is reported by the
+/// `Warn` lines and by the delete itself, and a caller must never read a non-empty list as
+/// "something stopped".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Removal {
+    /// The exit code, unchanged: 0 removed, 1 could not, 2 the guard refused.
+    pub code: u8,
+    /// `work_at_risk`'s answer at the instant of the delete, when that answer is what stopped
+    /// it. The sentences in it are the same sentences the refusal above joined together.
+    pub refused_over: Vec<wscmd::AtRisk>,
+}
+
+impl Removal {
+    /// An outcome with nothing refused over — every path but the guard's.
+    fn just(code: u8) -> Self {
+        Self {
+            code,
+            refused_over: Vec::new(),
+        }
+    }
+}
+
+/// `charter workspace remove <name> [--force]`, its exit code, and what it refused on.
 ///
 /// Exit 2 for the guard, as Python does: a refusal that protected work is not the same
 /// failure as a name that is not a workspace, and a script can tell them apart.
-pub fn remove(root: &Path, name: &str, force: bool, say: Sink) -> u8 {
+pub fn remove(root: &Path, name: &str, force: bool, say: Sink) -> Removal {
     let Some(dir) = wscmd::workspace_dir(root, name) else {
         say(Say::Fail(format!(
             "invalid workspace name '{}' (use letters, digits, '.', '_', '-'; must not start \
              with a dot)",
             crate::personas::one_line(name)
         )));
-        return 1;
+        return Removal::just(1);
     };
     if !wscmd::workspace_dir_exists(root, name) {
         say(Say::Fail(format!("no workspace '{name}'")));
-        return 1;
+        return Removal::just(1);
     }
     // Before the guard and before anything is read below it: a `workspaces/<ws>` that is a
     // link out of the plane is a directory this command would delete somewhere else
@@ -65,7 +99,7 @@ pub fn remove(root: &Path, name: &str, force: bool, say: Sink) -> u8 {
             "'{name}' does not resolve to a directory inside this plane, so nothing was \
              removed ({why})."
         )));
-        return 1;
+        return Removal::just(1);
     }
 
     let risky = wscmd::work_at_risk(root, name);
@@ -76,7 +110,14 @@ pub fn remove(root: &Path, name: &str, force: bool, say: Sink) -> u8 {
              or pass --force.",
             joined.join("; ")
         )));
-        return 2;
+        // The sentence and the list are made from one reading, here, and handed back together.
+        // A caller that wanted to name what was refused over and read the guard again would be
+        // naming a second, later answer — which is charter-app#182 with the clock the other
+        // way round.
+        return Removal {
+            code: 2,
+            refused_over: risky,
+        };
     }
 
     // Reported, never guarded on — see this module's header. Said HERE rather than above the
@@ -102,12 +143,12 @@ pub fn remove(root: &Path, name: &str, force: bool, say: Sink) -> u8 {
         say(Say::Fail(format!(
             "could not remove '{name}' ({why}) — some of it may still be there."
         )));
-        return 1;
+        return Removal::just(1);
     }
     say(Say::Done(format!(
         "Removed workspace '{name}' and its clones."
     )));
-    0
+    Removal::just(0)
 }
 
 /// Every `info/exclude` outside this workspace that still holds charter's managed block, as
@@ -168,12 +209,19 @@ mod tests {
         dir
     }
 
+    /// The command as a caller that only cares about the verdict sees it. The list it refused
+    /// on has a test of its own below, where it is the claim rather than a detail.
     fn run(root: &Path, name: &str, force: bool) -> (u8, Vec<String>) {
+        let (done, said) = run_fully(root, name, force);
+        (done.code, said)
+    }
+
+    fn run_fully(root: &Path, name: &str, force: bool) -> (Removal, Vec<String>) {
         let mut said = Vec::new();
-        let code = remove(root, name, force, &mut |line: Say| {
+        let done = remove(root, name, force, &mut |line: Say| {
             said.push(line.to_string())
         });
-        (code, said)
+        (done, said)
     }
 
     /// A real repository, because the guard's whole job is to read one.
@@ -182,6 +230,14 @@ mod tests {
         git(at, &["init", "-q", "-b", "main"]);
         git(at, &["config", "user.email", "t@example.com"]);
         git(at, &["config", "user.name", "T"]);
+        // **A fixture repository may not inherit the developer's signing configuration.** With
+        // `commit.gpgsign = true` and 1Password's signer in `~/.gitconfig` — an ordinary setup,
+        // and the operator's — every commit below either parks on a biometric prompt or fails
+        // with `1Password: agent returned an error`, and a dozen tests of this command go red
+        // for a reason that has nothing to do with it. **CI cannot see it**: a runner has no
+        // signing config. charter's Python suite hit exactly this and turned it off everywhere
+        // (`news/0.54.0-…-your-thumb.md`); this port carried the helpers over without it.
+        git(at, &["config", "commit.gpgsign", "false"]);
         std::fs::write(at.join("README.md"), "hi\n").unwrap();
         git(at, &["add", "-A"]);
         git(at, &["commit", "-qm", "first"]);
@@ -225,6 +281,63 @@ mod tests {
         assert!(clone.exists(), "the guard fired, so nothing was deleted");
     }
 
+    /// **The refusal hands back the reading it was made on** (charter-app#182).
+    ///
+    /// Not a convenience. The surface that asks for consent draws a preview from an earlier
+    /// reading of the same guard, and between the two the workspace can move; without this,
+    /// the only list a caller has to name what is being discarded is that older one. The claim
+    /// here is the identity: every sentence in the list is a sentence in the refusal, and
+    /// nothing is in one and not the other.
+    #[test]
+    fn the_refusal_carries_the_list_it_refused_on() {
+        // Two, so the assertion is about a LIST and not about one sentence that happens to
+        // match: the failure #182 is about is a button naming one clone while the refusal
+        // above it names another.
+        let dir = plane();
+        for name in ["svc", "lib"] {
+            let clone = repo(&dir.path().join("workspaces/beta").join(name));
+            std::fs::write(clone.join("README.md"), "changed\n").unwrap();
+        }
+
+        let (done, said) = run_fully(dir.path(), "beta", false);
+
+        assert_eq!(done.code, 2, "{said:?}");
+        let named: Vec<&str> = done
+            .refused_over
+            .iter()
+            .map(|risk| risk.what.as_str())
+            .collect();
+        assert_eq!(named, vec!["lib", "svc"], "{said:?}");
+        for risk in &done.refused_over {
+            assert!(
+                said[0].contains(&risk.said),
+                "the refusal says {:?} and the list does not: {said:?}",
+                risk.said
+            );
+        }
+    }
+
+    /// **And nothing else hands one back.** A caller drawing "what this discarded" from a
+    /// non-empty list would be drawing it on a delete that went through, and on a name that
+    /// was never a workspace.
+    #[test]
+    fn every_outcome_but_the_guards_refusal_refuses_over_nothing() {
+        let dir = plane();
+        let clone = repo(&dir.path().join("workspaces/beta/svc"));
+        std::fs::write(clone.join("README.md"), "changed\n").unwrap();
+
+        assert_eq!(run_fully(dir.path(), "nope", false).0.refused_over, vec![]);
+        assert_eq!(
+            run_fully(dir.path(), "../escape", false).0.refused_over,
+            vec![]
+        );
+        // Forced, over work the guard did find: `--force` is the operator discarding it, so
+        // what went is said in the lines and never as something that stopped the command.
+        let (done, said) = run_fully(dir.path(), "beta", true);
+        assert_eq!(done.code, 0, "{said:?}");
+        assert_eq!(done.refused_over, vec![]);
+    }
+
     #[test]
     fn an_untracked_file_is_uncommitted_work_too() {
         let dir = plane();
@@ -254,6 +367,8 @@ mod tests {
         );
         git(&clone, &["config", "user.email", "t@example.com"]);
         git(&clone, &["config", "user.name", "T"]);
+        // A clone is not made by `repo`, so it needs the same line — see `repo`.
+        git(&clone, &["config", "commit.gpgsign", "false"]);
         std::fs::write(clone.join("second.md"), "x\n").unwrap();
         git(&clone, &["add", "-A"]);
         git(&clone, &["commit", "-qm", "second"]);
