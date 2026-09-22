@@ -878,6 +878,7 @@ export function PlaneView({
       mergeWorktree,
       sendKey,
       openProject: windowDoes.openProject,
+      showExtensions: windowDoes.showExtensions,
       selectProject: windowDoes.selectProject,
       closeProject: windowDoes.closeProject,
       quit: windowDoes.quit,
@@ -1370,6 +1371,9 @@ export type PlaneReport = {
 /** What a project asks the WINDOW to do, because the window is what holds projects. */
 export type WindowDoing = {
   openProject: () => void;
+  /** Shows what has contributed what to this window. The window's and not a project's: an
+   *  extension is machine state (charter ADR 0041), so it is the same list behind every tab. */
+  showExtensions: () => void;
   selectProject: (plane: string) => void;
   closeProject: (plane: string) => Promise<Ran>;
   /** Pinning a PROJECT is the window's, because the project strip is: a project that is not

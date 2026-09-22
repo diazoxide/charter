@@ -100,6 +100,11 @@ export type Does =
   /** Shows the opener, so another project can be opened into this window beside the ones it
    *  already holds. It opens nothing by itself — the trust gate is the opener's (ADR 0035). */
   | { verb: "openProject" }
+  /** Shows what has contributed what to this window: charter's own themes, and every
+   *  extension this machine has, with what each is contributing right now (charter ADR 0041).
+   *  It puts nothing in force by itself — an extension contributes only once it is approved,
+   *  and the approval is the dialog's. */
+  | { verb: "showExtensions" }
   /** Brings a project this window already holds to the front. Nothing is opened, nothing is
    *  closed, and the project that was in front keeps every chat it had running. */
   | { verb: "selectProject"; plane: string }
@@ -214,6 +219,7 @@ export type Doing = {
   mergeWorktree: () => Promise<Ran>;
   sendKey: (key: string) => Promise<Ran>;
   openProject: () => void;
+  showExtensions: () => void;
   selectProject: (plane: string) => void;
   closeProject: (plane: string) => Promise<Ran>;
   quit: () => void;
@@ -353,6 +359,12 @@ export function catalogue(now: Now): Offer[] {
   // A chat starts through the picker, which is the only path ADR 0022 admits. The palette
   // opens that question; it never answers it.
   offers.push(can("chat.new", "New tab", { verb: "chat.new" }));
+
+  // **Always available, and available with nothing open.** charter ADR 0041 item 5: ADR 0035
+  // shows what a project contributes in the dialog and nothing shows it afterwards, so the
+  // surface every later trust decision is read on is the one that lists what is in force NOW.
+  // It is about the machine and not about a project, which is why it does not wait for one.
+  offers.push(can("extensions.show", "Extensions…", { verb: "showExtensions" }));
 
   for (const [id, title, direction] of [
     ["pane.split.right", "Split right", "row"],
@@ -586,6 +598,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return doing.sendKey(does.key);
     case "openProject":
       doing.openProject();
+      return DID;
+    case "showExtensions":
+      doing.showExtensions();
       return DID;
     case "selectProject":
       doing.selectProject(does.plane);
