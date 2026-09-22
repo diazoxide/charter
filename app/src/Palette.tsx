@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { aim, narrow, PASS_THROUGH_ID, PASS_THROUGH_KEY, type Offer, type Ran } from "./actions";
+import {
+  aim,
+  CHAT_KEYBOARD,
+  narrow,
+  PASS_THROUGH_ID,
+  PASS_THROUGH_KEY,
+  type Offer,
+  type Ran,
+} from "./actions";
 
 /**
  * The command palette: every action the window can do, reachable by typing.
@@ -11,11 +19,11 @@ import { aim, narrow, PASS_THROUGH_ID, PASS_THROUGH_KEY, type Offer, type Ran } 
  * so the bar's buttons here are not a second list, they are four rows of THIS one, drawn
  * permanently. `actions.catalogue` is the whole of the seam.
  *
- * **Keyboard first, and nothing in it needs a mouse.** `F2` or `⌘K`/`Ctrl-K` opens it, typing
- * narrows it, the arrows move over every row, Enter runs the one it is aimed at, Escape
- * leaves — and the focus goes back where it was, which for an operator mid-chat is the
- * terminal they were typing in. A click selects and runs too; that is a convenience, not the
- * path.
+ * **Keyboard first, and nothing in it needs a mouse.** `F2` and `⌘K` open it from anywhere and
+ * `Ctrl-K` from anywhere but a chat's own terminal (the rule is below); typing narrows it, the
+ * arrows move over every row, Enter runs the one it is aimed at, Escape leaves — and the focus
+ * goes back where it was, which for an operator mid-chat is the terminal they were typing in.
+ * A click selects and runs too; that is a convenience, not the path.
  *
  * **An unavailable row is listed WITH ITS REASON.** It is dimmed and `aria-disabled`, and the
  * reason is a visible sentence beside it rather than the dimming alone — the same rule M1.3b
@@ -27,6 +35,19 @@ import { aim, narrow, PASS_THROUGH_ID, PASS_THROUGH_KEY, type Offer, type Ran } 
  * the idiom of the frame this app replaces. It is the catalogue's own `pane.sendkey` row that
  * runs, not a second path to the same thing, and the palette says so on screen the moment it
  * opens — a way out nobody can find is the same bug with more code in it.
+ *
+ * **And the rule that decides which keys it may claim at all** (charter-app#106):
+ *
+ * > A chord a terminal encodes belongs to the chat whenever a chat has the keyboard, unless
+ * > the window claims it there deliberately — and a key claimed from under a focused chat
+ * > must have a way to hand it back.
+ *
+ * Three keys, three answers out of one rule. `F2` is claimed from under the chat and has its
+ * way back, which is what #47 bought. `⌘K` is claimed everywhere and takes nothing, because a
+ * terminal sends nothing for it: xterm.js 6.0.0 answers a `⌘`-chord with `SELECT_ALL` for
+ * `⌘A` and with no bytes at all for anything else. `Ctrl-K` is neither — a terminal encodes
+ * it as `\x0b`, which is readline's kill-to-end-of-line in the shell every chat starts in, so
+ * the chat keeps it and this listener stands back (`theChatKeepsIt`).
  *
  * **A refusal keeps the palette open, in the core's own words.** `charter_core::worktree`
  * refuses a removal with a sentence naming the repair; the window does not reword it, does
@@ -135,14 +156,20 @@ export function Palette({
   // modal surface can be, and it is not a state to be one stray focus away from.
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
-      if (opensIt(e)) {
+      // The chord is the palette's, but not everywhere: one a terminal encodes belongs to the
+      // chat while the chat has the keyboard. Falling through here is the whole of the fix —
+      // nothing is prevented and nothing is stopped, so the keystroke carries on down to
+      // xterm's textarea exactly as it would if the palette were not here at all.
+      if (opensIt(e) && !theChatKeepsIt(e)) {
         e.preventDefault();
         e.stopPropagation();
         // Pressed again while it is already up. tmux answers this with `send-prefix` and so
         // does this: the second `F2` is the operator asking for the key ITSELF, so the
-        // palette gets out of the way and the chat in front receives it. `⌘K`/`Ctrl-K` do
-        // not hand anything back here — what a terminal makes of those is not this key's
-        // question, and it is filed on its own.
+        // palette gets out of the way and the chat in front receives it. `⌘K` hands nothing
+        // back, and needs to hand nothing back: a terminal sends no bytes for it, so a second
+        // press would be delivering a keystroke the pane never had (charter-app#106). Nor
+        // does `Ctrl-K`, for the opposite reason — the chat kept it, and a key that was never
+        // taken has nothing to give back.
         //
         // **A held key is not a second press.** A key held down repeats, and without this
         // the palette would open, close, open, close under a resting finger, spraying
@@ -358,4 +385,34 @@ export function Palette({
 export function opensIt(e: KeyboardEvent): boolean {
   if (e.key === "F2") return !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey;
   return (e.key === "k" || e.key === "K") && (e.metaKey || e.ctrlKey) && !e.altKey;
+}
+
+/**
+ * Whether the chat keeps this keystroke, although the palette would otherwise open on it.
+ *
+ * **The question `opensIt` deliberately does not answer.** That one is about the KEY — is
+ * this the palette's chord — and this one is about where it landed, because the same chord
+ * belongs to two different programs depending on who has the keyboard. Two predicates and not
+ * one condition, for the reason `actions` gives about `available` and `reason`: a surface that
+ * says the wrong thing should be a defect in one of them rather than an ambiguity in both.
+ *
+ * **Only a `Ctrl` chord, and that is the whole of the rule** (charter-app#106). A terminal
+ * encodes `Ctrl` with a letter as a C0 control byte — xterm.js 6.0.0 answers `Ctrl` plus a
+ * key code in 65..90 with `String.fromCharCode(code - 64)`, so `Ctrl-K` is `\x0b`, which is
+ * kill-to-end-of-line in readline and in every emacs-keys line editor. Swallowing it on the
+ * window is taking an editing key out of the shell every chat starts in. `F2` is not here
+ * because #47 already settled it the other way, with a way back; `⌘` is not here because
+ * xterm.js sends nothing at all for a `⌘`-chord but `⌘A`, so there is nothing for the window
+ * to be taking.
+ *
+ * **Where it landed, not where the focus is.** A capture listener on the window runs before
+ * the focus has any say, and `e.target` is the element the keystroke was delivered to — which
+ * inside a pane is xterm's own textarea, a descendant of the marked holder. An undispatched
+ * event has no target and is therefore nobody's: that is the palette's, which is what makes
+ * `opensIt` testable on a bare `KeyboardEvent`.
+ */
+export function theChatKeepsIt(e: KeyboardEvent): boolean {
+  if (!e.ctrlKey || e.metaKey) return false;
+  const on = e.target;
+  return on instanceof Element && on.closest(`[${CHAT_KEYBOARD}]`) !== null;
 }
