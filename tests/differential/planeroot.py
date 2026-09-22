@@ -17,16 +17,19 @@ runs git.
 
 # The fixture
 
-Four plane roots, because the guards' answers depend on the repository's STATE and one state
-reaches one branch of each question:
+Five plane roots and a sixth spelling of one, because the guards' answers depend on the
+repository's STATE and one state reaches one branch of each question:
 
     plane            main, an upstream two commits behind, origin/HEAD -> main, a remote-only
-                     branch, a tag, a name that is both a branch and a tracked file, and twenty
-                     repo aliases — chains, loops, a shell alias, a `!git` alias, an alias whose
-                     body is not UTF-8, an alias past the hop limit
+                     branch, a tag, a name that is both a branch and a tracked file, and thirty
+                     repo aliases — chains, loops (one that grows its arguments each hop), a shell
+                     alias, a `!git` alias behind leading blanks, an alias whose body is not
+                     UTF-8, one with a carriage return inside quotes, one past the hop limit
     plane-master     `master`, no remote: the default is guessed, and there is no upstream
     plane-trunk      origin/HEAD -> trunk with a stale local `main`: the remote's answer wins
     plane-nodefault  `dev` only, no remote: there is no default to name
+    link-to-plane    `plane` again, named through a SYMLINK, so `config.ROOT` must be resolved
+    plane-both       `main` AND `master`, no remote: the ORDER of the guess is the answer
 
 plus the directories a workspace clone can be — one whose `core.worktree` names the plane
 (absolute, relative, through a `.git` FILE, quoted, and inside a subsection that does not count) —
@@ -146,7 +149,11 @@ os.environ.clear()
 os.environ.update(ENV)
 
 PLANE = BASE / "plane"
-PLANES = [PLANE, BASE / "plane-master", BASE / "plane-trunk", BASE / "plane-nodefault"]
+#: The plane each case names by index. `link-to-plane` is the first plane reached through a
+#: SYMLINK, so `config.ROOT` itself has to be resolved; `plane-both` has `main` AND `master` and no
+#: remote, so the guess ORDER is what answers.
+PLANES = [PLANE, BASE / "plane-master", BASE / "plane-trunk", BASE / "plane-nodefault",
+          BASE / "link-to-plane", BASE / "plane-both"]
 
 
 #: The fixture as DATA: every directory, file, link and git call, in order, with the base directory
@@ -208,7 +215,8 @@ def fixture_steps() -> None:
         ("lpa", "lpb"), ("lpb", "lpa"), ("d1", "d2"), ("d2", "d3"), ("d3", "d4"), ("d4", "d5"),
         ("d5", "checkout"), ("empty", ""), ("bad", "checkout 'unterminated"),
         ("Mixed", "checkout"), ("bang", "!"), ("gitonly", "!git"), ("sp", "  checkout   "),
-        ("rs", "reset"), ("dash", "checkout --detach"),
+        ("rs", "reset"), ("dash", "checkout --detach"), ("lq", "lr -q"), ("lr", "lq"),
+        ("spbang", "  !git checkout"), ("crq", "checkout 'x\ry'"),
     ):
         g("plane", "config", f"alias.{name}", body)
     # An alias body that is not UTF-8: Python's strict decode raises and the resolver stands
@@ -244,6 +252,15 @@ def fixture_steps() -> None:
     g("plane-nodefault", "add", "-A")
     g("plane-nodefault", "commit", "-q", "-m", "one")
     g("plane-nodefault", "branch", "feature")
+
+    # ---- `main` AND `master`, no remote: which one the guess tries FIRST is the answer
+    mkdir("plane-both")
+    g("plane-both", "init", "-q", "-b", "master", ".")
+    write("plane-both/README", "b\n")
+    g("plane-both", "add", "-A")
+    g("plane-both", "commit", "-q", "-m", "one")
+    g("plane-both", "branch", "main")
+    g("plane-both", "branch", "feature")
 
     # ---- the directories a workspace clone can be. Their `.git` is written by hand: the guard
     # never runs git in them, it only READS their config (`gitconfig`).
@@ -333,7 +350,7 @@ CWDS = [f"{B}/plane", f"{B}/plane/docs", f"{B}/plane/sub/deep", f"{B}/plane/.git
         f"{B}/ws/clone", f"{B}/ws/clone/deep", f"{B}/ws/redirected", f"{B}/ws/relredirect",
         f"{B}/ws/linked", f"{B}/ws/subsec", f"{B}/ws/quoted", f"{B}/ws/oneline",
         f"{B}/ws/continued", f"{B}/elsewhere", f"{B}/link-to-plane", "", "plane", "ws/up/plane",
-        f"{B}/plane-master", f"{B}/plane-trunk", f"{B}/plane-nodefault"]
+        f"{B}/plane-master", f"{B}/plane-trunk", f"{B}/plane-nodefault", f"{B}/plane-both"]
 
 #: `(dir, named git dir)` pairs `configured_work_tree` is asked about, two per case.
 CWT_PROBES = [(c, None) for c in CWDS] + [
@@ -586,6 +603,7 @@ CURATED = [
     _c("git Mixed feature"), _c("git bang"), _c("git gitonly"), _c("git sp feature"),
     _c("git nu feature"), _c("git gsw feature"), _c("git glob feature"), _c("git xdgco feature"),
     _c("git envco feature"), _c("git co main"), _c("git co README"), _c("git co --orphan README"),
+    _c("git lq x"), _c("git spbang feature"), _c("git crq"),
     _c("git -c alias.zz=checkout zz feature"), _c("git -c alias.zz='checkout -b' zz neu"),
     _c("git -c alias.zz=co zz feature"), _c("git -c alias.zz=checkout -c alias.zz=status zz x"),
     _c("git -c alias.z='reset --hard origin/main' z"), _c("git -calias.zz=checkout zz feature"),
@@ -609,6 +627,11 @@ CURATED = [
     _c("git checkout dev", plane=3, cwd=f"{B}/plane-nodefault"),
     _c("git checkout feature", plane=3, cwd=f"{B}/plane-nodefault"),
     _c("git checkout -b neu", plane=3, cwd=f"{B}/plane-nodefault"),
+    _c("git checkout feature", plane=4, cwd=f"{B}/plane"),
+    _c("git checkout feature", plane=4, cwd=f"{B}/link-to-plane"),
+    _c("git reset --hard origin/main", plane=4, cwd=f"{B}/link-to-plane"),
+    _c("git checkout main", plane=5, cwd=f"{B}/plane-both"),
+    _c("git checkout master", plane=5, cwd=f"{B}/plane-both"),
     # ---- charter#1176: git and the root recognised by SPELLING (reproduced, pinned)
     _c("GIT checkout feature"), _c("/usr/bin/git checkout feature"),
     _c(f"git -C {B}/PLANE checkout feature", cwd=E),
@@ -694,7 +717,7 @@ def a_config(rng: random.Random) -> str:
 
 
 #: Each plane's default branch, and a name that is not it — the remedy family's operands.
-DEFAULTS = ["main", "master", "trunk", "dev"]
+DEFAULTS = ["main", "master", "trunk", "dev", "main", "main"]
 RESTORE_ONLY = ["", "", "", " -f", " -q", " -fq", " --quiet", " --force", " -m"]
 RESET_MODES = [" --hard", " --hard", " --merge", " --keep", " --soft", " --mixed", "", " -q --hard"]
 RESET_TARGETS = ["", "", "", " origin/main", " HEAD", " HEAD~1", " HEAD~2", " HEAD~3", " feature", " README",
@@ -747,7 +770,7 @@ def a_command(rng: random.Random, plane: int) -> str:
 
 
 def a_case(rng: random.Random, git: bool) -> dict:
-    plane = 0 if rng.random() < 0.7 else rng.randint(1, 3)
+    plane = 0 if rng.random() < 0.6 else rng.randint(1, len(PLANES) - 1)
     if rng.random() < 0.55:
         cwd = str(PLANES[plane]).replace(str(BASE), B)
     else:

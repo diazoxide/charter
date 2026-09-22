@@ -686,6 +686,70 @@
   ]
  },
  {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.lq",
+   "lr -q"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.lr",
+   "lq"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.spbang",
+   "  !git checkout"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.crq",
+   "checkout 'x\ry'"
+  ]
+ },
+ {
   "append_hex": "plane/.git/config",
   "hex": "5b616c6961735d0a096e75203d20636865636b6f757420ff0a"
  },
@@ -978,6 +1042,93 @@
  },
  {
   "git": "plane-nodefault",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "branch",
+   "feature"
+  ]
+ },
+ {
+  "mkdir": "plane-both"
+ },
+ {
+  "git": "plane-both",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "init",
+   "-q",
+   "-b",
+   "master",
+   "."
+  ]
+ },
+ {
+  "write": "plane-both/README",
+  "text": "b\n"
+ },
+ {
+  "git": "plane-both",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "add",
+   "-A"
+  ]
+ },
+ {
+  "git": "plane-both",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "commit",
+   "-q",
+   "-m",
+   "one"
+  ]
+ },
+ {
+  "git": "plane-both",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "branch",
+   "main"
+  ]
+ },
+ {
+  "git": "plane-both",
   "args": [
    "-c",
    "commit.gpgsign=false",
