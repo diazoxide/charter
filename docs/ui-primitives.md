@@ -165,23 +165,30 @@ tabbable of the scope: on the first it acts on **Shift+Tab** and moves the focus
 itself, on the last it acts on **Tab** and moves to the first. Anywhere in between it does
 nothing at all and the browser's own tab sequence decides.
 
-That matters here because **a WKWebView on macOS does not put a `<button>` in the tab sequence**
-unless the operator has turned Full Keyboard Access on — the platform default for web content,
-and the same for every dialog in this window, not just the new one. It was measured rather than
-reasoned about: `palette.e2e.ts`'s *"closes the chat it just opened, by the keyboard alone"*
-pressed Tab to move from `Cancel` to the confirm and the question stayed on screen on
-`scenario tests (macos-latest)`, green on Linux (charter-app#176).
+That matters because **WebKit does not put a `<button>` in the tab sequence at all** unless "tab
+to all controls" is turned on — and **WebKit is the engine on both platforms the scenarios run
+on**: a WKWebView on macOS and WebKitGTK on Linux. charter embeds the system WebView, so this is
+the window's own behaviour rather than one runner's quirk.
 
-Two things follow, and the second is the one a reviewer should hold us to:
+It was measured rather than reasoned about, twice. `palette.e2e.ts`'s *"closes the chat it just
+opened, by the keyboard alone"* pressed Tab to move from `Cancel` to the confirm; the question
+stayed on screen on `webkit macos`, and after that was read as a macOS default it did the same on
+`WebKitGTK linux` (charter-app#176). The second run is what named the cause, and it is the reason
+this paragraph says *engine* and not *platform*.
 
-- **Shift+Tab from the first answer is Radix's own `focus()` call**, not the browser's tab
-  sequence, so it reaches the last answer on every platform. That is the key a keyboard test
-  presses, and `palette.e2e.ts` says so where it presses it.
-- **A dialog whose two answers are its only tabbables is reachable by keyboard everywhere; one
-  with a third control between them is not, on one platform only.** So that shape is a
-  *property* rather than a tidiness, and it belongs in a unit test — `App.test.tsx`'s "asks with
-  two answers, Cancel focused and the confirm at the other edge" reads the buttons off the DOM
-  and fails on a third, because the alternative is finding out from a scenario run on one runner.
+Three things follow, and the last is the one a reviewer should hold us to:
+
+- **Shift+Tab from the first answer is Radix's own `focus()` call**, not the engine's tab
+  sequence, so it reaches the last answer everywhere. That is the key a keyboard test presses,
+  and `palette.e2e.ts` says so where it presses it.
+- **A dialog whose two answers are its only tabbables is wholly reachable by keyboard** — the
+  first and last ARE the two edges Radix handles. `EndingChat.tsx` is that shape.
+- **A third focusable in the middle of any modal in this window is unreachable by keyboard**:
+  the engine will not tab to it and Radix only handles the edges. That is a property to check
+  when a dialog grows a control, not a thing to discover from a scenario run — `App.test.tsx`'s
+  "asks with two answers, Cancel focused and the confirm at the other edge" reads the buttons
+  off the DOM and fails on a third. **It is also bigger than one dialog**, and charter-app#186
+  is where the window-wide half of it lives — the picker's `Start` is the one to look at first.
 
 ## The four regions added no primitive, which is the rule working
 

@@ -211,16 +211,20 @@ describe("the command palette", () => {
     // non-destructive answer, deliberately — so a Return pressed by reflex cancels, and the
     // yes is a key away.
     //
-    // **That key is Shift+Tab, and it took a red CI run to learn it.** This spec pressed
-    // plain `Tab` and the question stayed on screen (`scenario tests (macos-latest)`,
-    // charter-app#176). The reason is where Radix listens, which is the thing
+    // **That key is Shift+Tab, and it took two red CI runs to learn it.** This spec pressed
+    // plain `Tab` and the question stayed on screen — on `webkit macos` first, and then on
+    // `WebKitGTK linux` too (charter-app#176). **Both**, which is the fact that names the
+    // cause: charter embeds the system WebView, and on both of these platforms that is
+    // WebKit, which does not put a `<button>` in the tab sequence at all unless "tab to all
+    // controls" is turned on. It is not a macOS default and it is not this dialog's.
+    //
+    // What makes the confirm reachable anyway is where Radix listens, which is the thing
     // `docs/ui-primitives.md` says to check per primitive rather than assume:
     // `@radix-ui/react-focus-scope`'s `handleKeyDown` intercepts Tab only at the EDGES of
     // the scope — with the focus on the FIRST tabbable it acts on Shift+Tab and moves the
     // focus to the last itself, and with the focus on the LAST it acts on Tab and moves to
-    // the first. Cancel is the first, so plain Tab from it is left to the platform — and a
-    // WKWebView on macOS does not put a `<button>` in the tab sequence at all unless Full
-    // Keyboard Access is on.
+    // the first. Cancel is the first, so plain Tab from it is left to the engine and the
+    // engine does nothing.
     //
     // Shift+Tab from Cancel is Radix's own `focus()` call rather than the browser's tab
     // sequence, so it reaches the confirm on every platform. `App.test.tsx` pins the shape

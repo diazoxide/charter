@@ -39,13 +39,17 @@ import { ENDS_IT, type Offer } from "./actions";
  * **Exactly two answers, in that order, and it is load-bearing rather than tidy.** Radix's
  * `FocusScope` intercepts Tab only at the EDGES of the scope: on the first tabbable it acts on
  * Shift+Tab and moves the focus to the last itself, on the last it acts on Tab and moves to the
- * first, and in between it does nothing and the platform decides. A WKWebView on macOS does not
- * put a `<button>` in the tab sequence at all unless Full Keyboard Access is on — measured,
- * charter-app#176, where a scenario pressing plain Tab left this question on screen. So the
- * confirm is reachable by keyboard on every platform *because* these two are the only tabbables
- * and the confirm is the second: Shift+Tab from Cancel is Radix's own `focus()` call rather than
- * the browser's tab sequence. A third focusable between them would take that away on one
- * platform and nowhere else; `App.test.tsx` fails on it rather than leaving it to a scenario.
+ * first, and in between it does nothing and the engine decides. **The engine here is WebKit on
+ * both platforms charter's scenarios run on, and WebKit does not put a `<button>` in the tab
+ * sequence at all** — measured in charter-app#176, where a scenario pressing plain Tab left this
+ * question on screen on `webkit macos` and again on `WebKitGTK linux`.
+ *
+ * So the confirm is reachable by keyboard *because* these two are the only tabbables and the
+ * confirm is the second: Cancel IS the first edge and the confirm IS the last, and Shift+Tab
+ * from Cancel is Radix's own `focus()` call rather than the engine's tab sequence. **A third
+ * focusable between them would be unreachable by keyboard on both platforms** — the engine will
+ * not tab to it and Radix only handles the edges. `App.test.tsx` fails on a third rather than
+ * leaving it to a scenario run to find.
  */
 export function EndingChat({
   offer,
