@@ -77,6 +77,34 @@ async function tabNames(): Promise<string[]> {
   );
 }
 
+/**
+ * How many tabs charter itself says are open, counted from the palette.
+ *
+ * **The one answer to "how many tabs are there" that does not come from the strip under
+ * test.** The catalogue emits one `End chat <name>` row per tab and the palette lists them
+ * all, which is what makes it the right oracle for a strip that no longer draws every tab —
+ * and it is the find surface charter ADR 0039 names, so it is not a second one invented here.
+ *
+ * **Tabs and not sessions**, which is the distinction that made the first version of the
+ * assertion below wrong on both platforms: a split puts two sessions in ONE tab, the spec
+ * three above this one leaves exactly such a tab behind, and `harnessesRunning()` therefore
+ * counted one more than the strip could ever have shown.
+ */
+async function tabsOpen(): Promise<number> {
+  await browser.keys(["F2"]);
+  const palette = await $('[role="dialog"][aria-label="Command palette"]');
+  await palette.waitForDisplayed({ timeout: 20_000 });
+  const counted = await browser.execute(
+    () =>
+      [...document.querySelectorAll('[role="option"] .palette-title')].filter((row) =>
+        (row.textContent ?? "").startsWith("End chat "),
+      ).length,
+  );
+  await browser.keys(["Escape"]);
+  await expect(palette).not.toBeDisplayed();
+  return counted;
+}
+
 describe("the window", () => {
   it("opens a session in a new tab, and the pane shows what it wrote", async () => {
     await pressAndStart("New tab");
@@ -131,39 +159,92 @@ describe("the window", () => {
   });
 
   /**
-   * The show-more menu, against a real layout (charter ADR 0039).
+   * The strip collapsing, against a real layout (charter ADR 0039, as amended).
    *
-   * **This is the only place the measurement itself is under test.** What does not fit is a
-   * property of the strip's width, the tabs in it and where it is scrolled to, and jsdom
-   * gives every element a zero-sized box — so the unit tests drive an observer of their own
-   * and this is what says the real one answers anything at all. It runs straight after the
-   * fifty-session test, which is the state that makes the question real.
+   * **This is the only place the measurement itself is under test.** How many tabs fit is a
+   * property of the strip's laid-out width, and jsdom gives every element a zero-sized box
+   * (#149) — so the unit tests hand `fitting` a width and this is what says a real WebView
+   * ever produces one. It runs straight after the fifty-session test, which is the state that
+   * makes the question real.
+   *
+   * It is also where the operator's own complaint is held: *"i noticed that tabs now
+   * scrollable — instead of automatic expanding in show more button."* A scroller coming back
+   * would pass every unit test in the repo.
+   *
+   * **This spec can now assert what tabs are drawn, which the version before it could not.**
+   * The old measurement was an `IntersectionObserver`, answered in the engine's rendering
+   * step, and macOS gives a WKWebView no rendering while its window is covered — Linux
+   * reported 3 of 51 tabs visible against macOS's 0 of 49, same commit (charter-app M0.6).
+   * What replaced it reads `clientWidth` in a layout effect, and a layout is not a paint.
    */
-  it("says how many tabs it is not showing, and gets to one of them", async () => {
-    const before = await tabNames();
-    expect(before.length).toBeGreaterThan(40);
+  it("shows what fits, hides the rest behind one button, and does not scroll", async () => {
+    const drawn = await tabNames();
+    const open = await tabsOpen();
+    expect(open).toBeGreaterThan(40);
 
     // On the bar, and by what it SAYS rather than by its class: the accessible name is the
     // whole of what an operator gets from it before they open it.
     const more = await $('.bar button[aria-label^="Show "]');
     await more.waitForExist({
       timeout: 10_000,
-      timeoutMsg: "fifty tabs did not overflow the strip, so nothing said there were more",
+      timeoutMsg:
+        `fifty chats did not overflow the strip: it drew ${drawn.length} tabs and nothing ` +
+        `said there were more. A strip that has never measured its own width draws ` +
+        `everything, so this is either a layout that never happened or a collapse that is ` +
+        `not working at all`,
     });
     const said = await more.getAttribute("aria-label");
     const counted = Number(/^Show (\d+) tabs? /.exec(said ?? "")?.[1]);
+
+    // **Every tab is in exactly one of the two places.** This is the whole of what the
+    // collapse owes and the assertion the scroller could not make: nothing is both drawn and
+    // hidden, and nothing is neither. `open` is charter's own count and not the strip's —
+    // see `tabsOpen`, and why it is tabs rather than sessions.
+    expect(drawn.length + counted).toBe(open);
+    expect(drawn.length).toBeGreaterThan(0);
     expect(counted).toBeGreaterThan(0);
-    expect(counted).toBeLessThanOrEqual(before.length);
-    // **And deliberately no assertion that some tabs ARE on the strip**, which is what this
-    // line tried to say for two runs. An `IntersectionObserver` is answered in the browser's
-    // own rendering step, and macOS gives a WKWebView no rendering at all while its window
-    // is covered or the display is asleep — measured in charter-app M0.6 and again here:
-    // Linux reported 3 of 51 tabs visible and macOS reported 0 of 49, same build, same
-    // commit. On a runner that stops rendering, the first delivery is the only delivery and
-    // it lands before the strip has its width. So what this spec holds is what does not
-    // depend on the window still being drawn — that the measurement produced a count, that
-    // the menu lists exactly that many, that a row reaches its tab, and that the strip did
-    // not move. Which tabs are visible is not a question a covered window can be asked.
+
+    // **And the strip really does not scroll.** `overflow: hidden` means a scrollbar cannot
+    // appear, so what this catches is the other half: tabs laid out wider than the strip they
+    // sit in, which would be tabs clipped and unreachable rather than collapsed and listed.
+    const over = await browser.execute(() => {
+      const strip = document.querySelector('[role="tablist"][aria-label="Tabs"]');
+      return strip === null ? -1 : strip.scrollWidth - strip.clientWidth;
+    });
+    expect(over).toBeLessThanOrEqual(1);
+
+    // **No tab is drawn narrower than the floor its strip fits by**, on any of the three.
+    //
+    // This is the invariant the arithmetic rests on and the one thing about it that only a
+    // real layout can check: `fits.ts` answers "how many fit" as `width / least`, which is a
+    // lie the moment a stylesheet rule lets a tab shrink past `least`. It is not hypothetical
+    // — a `min-width: 0` meant for the button inside a tab also matched the workspace strip's
+    // tabs, which ARE their own cells, and won on source order. The strip then squeezed eight
+    // workspaces into the room its own arithmetic had given four.
+    //
+    // The floor is read off the element, so this and the app cannot disagree about the number.
+    const squeezed = await browser.execute(() => {
+      const strips = ["Projects", "Workspaces", "Tabs"];
+      const narrow: string[] = [];
+      for (const named of strips) {
+        const strip = document.querySelector(`[role="tablist"][aria-label="${named}"]`);
+        if (!strip) continue;
+        const least = Number.parseFloat(getComputedStyle(strip).getPropertyValue("--least"));
+        if (!Number.isFinite(least)) {
+          narrow.push(`${named}: no --least on the strip`);
+          continue;
+        }
+        for (const tab of strip.querySelectorAll('[role="tab"]')) {
+          // The CELL, which is what carries the floor: a wrapper where there is one (a tab and
+          // its `×`), and the button itself where there is not.
+          const cell = tab.closest(".project, .tab") ?? tab;
+          const wide = cell.getBoundingClientRect().width;
+          if (wide < least - 1) narrow.push(`${named}: a tab is ${wide}px, under ${least}px`);
+        }
+      }
+      return narrow;
+    });
+    expect(squeezed).toEqual([]);
 
     await more.click();
     // **Waited for, not read once.** The menu is a Radix portal: it is mounted on the open,
@@ -207,8 +288,19 @@ describe("the window", () => {
         )) === going,
       { timeout: 10_000, timeoutMsg: `the menu did not bring ${going} to the front` },
     );
-    // **And the strip did not move.** The menu sorts by activity; the strip never does.
-    expect(await tabNames()).toEqual(before);
+
+    // **And it arrived WITH its close button**, which is what keeps ending a chat two presses
+    // rather than one from a menu under the cursor (charter-app#130).
+    await expect(
+      $(`[role="tablist"][aria-label="Tabs"] button[aria-label="End chat ${going}"]`),
+    ).toBeExisting();
+
+    // **And the strip did not re-order.** The menu sorts by activity; the strip never does.
+    // What it draws now is the tab that was brought forward plus some of what it drew before,
+    // still in the order it drew them.
+    const after = await tabNames();
+    const kept = after.filter((name) => drawn.includes(name));
+    expect(kept).toEqual(drawn.filter((name) => kept.includes(name)));
   });
 
   it("ends a session when its tab closes", async () => {

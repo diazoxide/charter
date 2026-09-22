@@ -148,11 +148,36 @@ describe("the stylesheet and the vocabulary agree", () => {
   const bridge = nonEmpty("src/styles.css");
   const used = new Set([...css.matchAll(/var\((--[a-z0-9-]+)/g)].map((hit) => hit[1]));
   const declared = new Set(TOKENS.map(property));
+  /** Custom properties the stylesheet declares for itself. A colour may not be one of these —
+   *  the tests above fail on a literal — so what is left is a length or a count. */
+  const ownProperties = new Set([...css.matchAll(/^\s+(--[a-z0-9-]+):/gm)].map((hit) => hit[1]));
 
-  it("every custom property the stylesheet reads is a token", () => {
+  /**
+   * The one custom property the WINDOW sets rather than the stylesheet: how narrow a tab of
+   * this strip may be drawn (`src/fits.ts`).
+   *
+   * It is here rather than in `TOKENS` because it is not a colour and a theme has no business
+   * with it, and it is not in `App.css` because the arithmetic that decides what fits reads
+   * the same number — two copies of a number that must agree is how they come to differ.
+   * Listed by hand, so that adding a second one is a decision somebody makes in this file
+   * rather than a hole that opens quietly; the test below holds it to being really set.
+   */
+  const fromTheWindow = ["--least"];
+
+  it("every custom property the stylesheet reads is a token, its own, or the window's", () => {
     // A `var(--typo)` resolves to nothing and the rule silently disappears, which is the one
     // failure mode of a token layer that no screenshot catches.
-    expect([...used].filter((name) => !declared.has(name))).toEqual([]);
+    const known = new Set([...declared, ...ownProperties, ...fromTheWindow]);
+    expect([...used].filter((name) => !known.has(name))).toEqual([]);
+  });
+
+  it("every custom property the window is trusted to set is set by it", () => {
+    // The exemption above is a hole unless something checks the other end of it: a property
+    // exempted here and set nowhere is exactly the silently-missing rule the test guards.
+    const window = sources(".tsx")
+      .map(([, raw]) => raw)
+      .join("\n");
+    expect(fromTheWindow.filter((name) => !window.includes(`"${name}"`))).toEqual([]);
   });
 
   it("every token the window has is drawn with", () => {
