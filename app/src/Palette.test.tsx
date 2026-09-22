@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { Palette, opensIt } from "./Palette";
-import type { Offer, Ran } from "./actions";
+import { CHAT_KEYBOARD, type Offer, type Ran } from "./actions";
 
 afterEach(cleanup);
 
@@ -331,6 +331,128 @@ describe("handing F2 back to the chat", () => {
 
     expect(onRun).not.toHaveBeenCalled();
     expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+});
+
+/**
+ * Which keys belong to the chat, and which to the window (charter-app#106).
+ *
+ * `Ctrl-K` was claimed on the window, capture-phase, with `preventDefault()` — the same way
+ * `F2` was before #47 — and it is kill-to-end-of-line in readline, which is to say in the
+ * shell every chat starts in. So an operator killing the rest of a line got the palette.
+ *
+ * **The rule these pin**: a chord a terminal encodes belongs to the chat whenever a chat has
+ * the keyboard, unless the window claims it there deliberately — and a key claimed from under
+ * a focused chat must have a way to hand it back. `F2` has one; `⌘K` needs none, because
+ * xterm.js sends no bytes for a `⌘`-chord but `⌘A`; `Ctrl-K` had neither, so the chat keeps
+ * it.
+ *
+ * **They are unit tests and not scenarios on purpose.** A scenario is the right shape for
+ * "the chat received these bytes", but this rig cannot press a modifier chord at all:
+ * `browser.keys(["Shift", "Tab"])` was measured in #176 arriving with `shiftKey` unset, and
+ * `docs/ui-primitives.md` records it. jsdom dispatches the real event, so the claim can be
+ * made here and nowhere else.
+ */
+describe("a chord the chat's own terminal would encode", () => {
+  /** A pane, marked the way `SessionPane` marks itself, with xterm's textarea inside it. */
+  const chat = () => (
+    <div {...{ [CHAT_KEYBOARD]: "" }}>
+      <textarea aria-label="a pane's terminal" />
+    </div>
+  );
+
+  const watching: (() => void)[] = [];
+  afterEach(() => {
+    for (const stop of watching.splice(0)) stop();
+  });
+
+  /**
+   * Every keydown that got past the window, and whether it had already been stopped.
+   *
+   * Capture on `document`, which is one step BELOW the window in the capture path, so the
+   * palette's own listener has had its say by the time this runs. It is the half of the claim
+   * that matters: the palette not opening is not the same thing as the keystroke surviving,
+   * and it is the survival that reaches the shell.
+   */
+  function watchTheDocument() {
+    const seen: { key: string; prevented: boolean }[] = [];
+    const watch = (e: KeyboardEvent) => {
+      seen.push({ key: e.key, prevented: e.defaultPrevented });
+    };
+    document.addEventListener("keydown", watch, true);
+    watching.push(() => document.removeEventListener("keydown", watch, true));
+    return seen;
+  }
+
+  /** Puts the keyboard where an operator mid-sentence has it: inside the pane's terminal. */
+  function inTheChat() {
+    screen.getByLabelText("a pane's terminal").focus();
+  }
+
+  it("reaches the chat when it is Ctrl-K, which is the shell's kill-to-end-of-line", async () => {
+    const seen = watchTheDocument();
+    render(
+      <>
+        {chat()}
+        <Palette offers={OFFERS} onRun={ok} />
+      </>,
+    );
+    inTheChat();
+
+    await userEvent.keyboard("{Control>}k{/Control}");
+
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // Unprevented and unstopped, so xterm's textarea gets it and sends the control byte.
+    expect(seen).toContainEqual({ key: "k", prevented: false });
+  });
+
+  it("still opens the palette from anywhere that is not a chat, so the chord survives", async () => {
+    // Why `Ctrl-K` is not simply dropped: on Linux there is no `⌘`, and taking the desktop's
+    // own chord away everywhere would be the regression `opensIt` was written to avoid. It is
+    // the chat that has a claim on it, not the whole window.
+    render(
+      <>
+        {chat()}
+        <Palette offers={OFFERS} onRun={ok} />
+      </>,
+    );
+
+    await userEvent.keyboard("{Control>}k{/Control}");
+
+    expect(await screen.findByRole("dialog", { name: "Command palette" })).toBeInTheDocument();
+  });
+
+  it("opens on ⌘K even inside a chat, because a terminal sends nothing for it", async () => {
+    // Measured in the version this app depends on: xterm.js 6.0.0's `evaluateKeyboardEvent`
+    // answers a `⌘`-chord with `SELECT_ALL` for `⌘A` and with no bytes at all for anything
+    // else. There is nothing for the window to be taking, so it takes it.
+    render(
+      <>
+        {chat()}
+        <Palette offers={OFFERS} onRun={ok} />
+      </>,
+    );
+    inTheChat();
+
+    await userEvent.keyboard("{Meta>}k{/Meta}");
+
+    expect(await screen.findByRole("dialog", { name: "Command palette" })).toBeInTheDocument();
+  });
+
+  it("opens on F2 even inside a chat, because #47 gave F2 a way back", async () => {
+    // The precedent, unchanged and deliberately so: `F2` IS claimed from under a focused
+    // chat, and what makes that defensible is `send-prefix` — a second press sends it on.
+    render(
+      <>
+        {chat()}
+        <Palette offers={OFFERS} onRun={ok} />
+      </>,
+    );
+    inTheChat();
+
+    await userEvent.keyboard("{F2}");
+
+    expect(await screen.findByRole("dialog", { name: "Command palette" })).toBeInTheDocument();
   });
 });
 
