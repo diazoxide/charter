@@ -540,6 +540,41 @@ impl Planes {
         }
     }
 
+    /// Pins or unpins a project, or one of its workspaces, in the machine store.
+    ///
+    /// **This one refuses rather than shrugging**, unlike `remember` and `record_approval`
+    /// above, and the difference is who is waiting. Those two are charter's own bookkeeping
+    /// on a path the operator is already walking; this is a button they just pressed, and a
+    /// pin that silently did not happen is a control that does not work. So the store's own
+    /// sentence travels back — including the one a machine with no store gives
+    /// (`Unsupported`, which on Windows is ADR 0031's refusal and is the honest answer to
+    /// "pin this": charter cannot, here, and says so).
+    pub fn pin(&self, root: &Path, workspace: Option<&str>, pinned: bool) -> Result<(), String> {
+        let Some(config) = self.config.as_deref() else {
+            return Err(
+                "charter has no config home on this machine, so it cannot remember a pin."
+                    .to_owned(),
+            );
+        };
+        let plane = root.to_path_buf();
+        let workspace = workspace.map(str::to_owned);
+        // The store's own refusal, out of the closure: `update` answers an `io::Error`, and
+        // wrapping a bound the operator can act on ("unpin one first") in one would turn a
+        // sentence they can follow into a sentence about a file.
+        let mut refused = None;
+        machine::update(config, |store| {
+            refused = match &workspace {
+                Some(name) => store.pin_workspace(&plane, name, pinned).err(),
+                None => store.pin(&plane, pinned).err(),
+            };
+        })
+        .map_err(|why| format!("charter could not write the pin down: {why}"))?;
+        match refused {
+            Some(why) => Err(why),
+            None => Ok(()),
+        }
+    }
+
     /// Everything this machine remembers, with what it would not take back named.
     ///
     /// The store alone: whether each remembered path is still THERE is a `stat` per row and
@@ -1182,6 +1217,7 @@ mod tests {
                 profile: None,
                 persona: None,
                 show_footer: false,
+                pinned: false,
             }],
         }
     }

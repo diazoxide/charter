@@ -442,3 +442,65 @@ describe("the order of the strip and the order of the menu", () => {
     expect(strip).toEqual([1, 2, 3, 4]);
   });
 });
+
+describe("a pin on the strip", () => {
+  /** Four tabs, opened 1, 2, 3, 4, with the second in front. */
+  function fourTabs(): Tabs {
+    return selectTab(
+      [11, 22, 33, 44].reduce((tabs, s) => openTab(tabs, s), noTabs()),
+      2,
+    );
+  }
+
+  /** The tabs the operator pinned, by tab id. */
+  const holding =
+    (...ids: number[]) =>
+    (id: number) =>
+      ids.includes(id);
+
+  it("draws a pinned tab first and leaves the rest where they were", () => {
+    const tabs = fourTabs();
+
+    expect(tabsIn(tabs, "alpha", oneWorkspace, holding(3))).toEqual([3, 1, 2, 4]);
+  });
+
+  it("does not sort two pinned tabs against each other", () => {
+    // A pin says WHICH tabs come first, never in what order they do. Sorting them would be
+    // the strip deciding something the operator did not, which is what ADR 0039 refuses.
+    const tabs = fourTabs();
+
+    expect(tabsIn(tabs, "alpha", oneWorkspace, holding(4, 2))).toEqual([2, 4, 1, 3]);
+  });
+
+  it("leaves tabs.order alone, which is the tab's real place", () => {
+    const tabs = fourTabs();
+
+    tabsIn(tabs, "alpha", oneWorkspace, holding(4));
+
+    expect(tabs.order).toEqual([1, 2, 3, 4]);
+  });
+
+  it("brings forward the tab beside it ON THE STRIP when one closes", () => {
+    // "Beside" is what the operator can see. With tab 4 pinned the strip reads 4, 1, 2, 3 —
+    // so closing tab 1 comes back to tab 4 and not to "nothing before it".
+    const tabs = selectTab(fourTabs(), 1);
+
+    const after = closeTab(tabs, 1, oneWorkspace, holding(4));
+
+    expect(after.inFront).toBe(4);
+  });
+
+  it("comes back to the strip's first tab, not the order's, when a workspace is focused", () => {
+    const tabs = fourTabs();
+
+    expect(showWorkspace(tabs, "alpha", oneWorkspace, undefined, holding(3)).inFront).toBe(3);
+  });
+
+  it("is what a strip with nothing pinned always did", () => {
+    // Every caller that does not care about pins passes nothing, and gets the old answer.
+    const tabs = fourTabs();
+
+    expect(tabsIn(tabs, "alpha", oneWorkspace)).toEqual([1, 2, 3, 4]);
+    expect(closeTab(selectTab(tabs, 2), 2, oneWorkspace).inFront).toBe(1);
+  });
+});

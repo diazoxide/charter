@@ -73,6 +73,23 @@ pub struct Chat {
     /// they had turned on. A record written before ADR 0029 has no such key, and `false` is
     /// both serde's default and the behaviour every such record was written under.
     pub show_footer: bool,
+    /// Whether the operator pinned this chat (charter ADR 0039, stored per ADR 0040).
+    ///
+    /// **A chat pin is an app record and not machine state**, which is the one of the three
+    /// levels that does not go in `machine.rs`: ADR 0034 forbids a chat name outside a plane
+    /// in as many words, and a chat is numbered per plane, so its number means nothing
+    /// anywhere else. This file is already the only record that a chat exists at all, which
+    /// is what lets a pin disappear with the chat it pins rather than needing a second list
+    /// to keep in step. It is out of git, so a pin still travels with nobody.
+    ///
+    /// **And this is not a format change, although ADR 0039 expected one.** That record
+    /// reasoned from this file's rule that a record of another version is ignored whole —
+    /// which is exactly why a bump is expensive: every operator's open chats would be dropped
+    /// at the first launch after it. A bump is owed when a field's absence cannot be read
+    /// honestly, and this one's reads as `false`, which is what was true of every record
+    /// written before pins existed. `show_footer` above is the same move under ADR 0029, and
+    /// is the precedent rather than an analogy.
+    pub pinned: bool,
 }
 
 /// Every chat that was open.
@@ -401,6 +418,10 @@ struct ChatOnDisk {
     /// answer that is safe for a word off a file somebody else may have written.
     #[serde(default)]
     footer: String,
+    /// Whether the operator pinned this chat. Absent in every record written before pins
+    /// existed, and `false` is what was true of those — see [`Chat::pinned`].
+    #[serde(default)]
+    pinned: bool,
 }
 
 impl From<&Record> for OnDisk {
@@ -436,6 +457,7 @@ impl From<&Record> for OnDisk {
                     } else {
                         String::new()
                     },
+                    pinned: chat.pinned,
                 })
                 .collect(),
         }
@@ -458,6 +480,7 @@ impl From<ChatOnDisk> for Chat {
             // One word means "show" and every other word means the default, which is what
             // the app did before ADR 0029 and what a record written before it says.
             show_footer: chat.footer == crate::start::FOOTER_SHOW,
+            pinned: chat.pinned,
         }
     }
 }
@@ -478,6 +501,7 @@ mod tests {
             profile: None,
             persona: None,
             show_footer: false,
+            pinned: false,
         }
     }
 
@@ -794,6 +818,7 @@ mod tests {
                 profile: None,
                 persona: None,
                 show_footer: false,
+                pinned: false,
             }],
         }
     }
@@ -963,5 +988,62 @@ mod tests {
         let held = tempfile::tempdir().unwrap();
 
         assert_eq!(read_or_refusal(held.path()).unwrap(), Record::default());
+    }
+
+    // ----- a pinned chat (charter ADR 0039, stored per ADR 0040) -----
+
+    #[test]
+    fn a_pinned_chat_comes_back_pinned() {
+        let plane = tempfile::tempdir().unwrap();
+        let record = Record {
+            chats: vec![
+                Chat {
+                    pinned: true,
+                    ..claude("ide.7", Some(ID))
+                },
+                claude("ide.8", None),
+            ],
+        };
+
+        write(plane.path(), &record).expect("the record is written");
+
+        assert_eq!(read(plane.path()), record);
+    }
+
+    #[test]
+    fn a_record_written_before_pins_existed_reads_as_nothing_pinned() {
+        // **This is why there is no version bump**, although charter ADR 0039 expected one:
+        // a bump would read every such record as "nothing to put back" and take the
+        // operator's open chats with it at the first launch after the upgrade. A field is
+        // owed a bump when its absence cannot be read honestly, and this one's reads as
+        // `false` — which is what was true of every record written before pins existed.
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(plane.path().join(".charter/app")).unwrap();
+        std::fs::write(
+            path(plane.path()),
+            br#"{"version":1,"at":0,"chats":[{"program":"claude","name":"ide.7"}]}"#,
+        )
+        .unwrap();
+
+        let back = read(plane.path());
+
+        assert_eq!(back.chats.len(), 1);
+        assert!(!back.chats[0].pinned);
+    }
+
+    #[test]
+    fn a_pin_that_is_not_a_boolean_is_read_as_no_record_at_all() {
+        // Every other field off this file is held to what it has to be, and a value of the
+        // wrong type fails the parse — which is this file's oldest rule for a record it
+        // cannot understand, and the one direction that never invents an arrangement.
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(plane.path().join(".charter/app")).unwrap();
+        std::fs::write(
+            path(plane.path()),
+            br#"{"version":1,"at":0,"chats":[{"program":"claude","name":"i","pinned":"yes"}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(read(plane.path()), Record::default());
     }
 }

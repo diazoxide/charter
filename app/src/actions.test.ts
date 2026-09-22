@@ -30,6 +30,18 @@ function doing(): Doing & { calls: string[] } {
     selectTab: note("selectTab"),
     focusWorkspace: note("focusWorkspace"),
     showChat: note("showChat"),
+    pinTab: vi.fn(async (tab: number, pinned: boolean) => {
+      calls.push(`pinTab:${tab},${pinned}`);
+      return { ok: true as const };
+    }),
+    pinWorkspace: vi.fn(async (workspace: string, pinned: boolean) => {
+      calls.push(`pinWorkspace:${workspace},${pinned}`);
+      return { ok: true as const };
+    }),
+    pinProject: vi.fn(async (plane: string, pinned: boolean) => {
+      calls.push(`pinProject:${plane},${pinned}`);
+      return { ok: true as const };
+    }),
     removeWorktree: vi.fn(async (force: boolean) => {
       calls.push(`removeWorktree:${force}`);
       return { ok: true as const };
@@ -462,6 +474,13 @@ describe("carrying out a row", () => {
         "mergeWorktree",
         "sendKey:F2",
         "openProject",
+        // Three pin verbs and not one, because they are three stores (charter ADR 0040).
+        "pinTab:1,true",
+        "pinTab:2,true",
+        "pinWorkspace:alpha,true",
+        "pinWorkspace:beta,true",
+        "pinProject:/plane,true",
+        "pinProject:/other,true",
         "selectProject:/other",
         "closeProject:/plane",
         "closeProject:/other",
@@ -482,6 +501,10 @@ describe("the catalogue as the tabs change", () => {
     expect(ids(catalogue(now({ tabs }))).filter((id) => id.startsWith("tab."))).toEqual([
       "tab.select:1",
       "tab.select:2",
+      // The pin rows sit with the switching rows, above the line: pinning is an arrangement
+      // and ends nothing, and `frame/leave.py`'s rule is that only the destructive go last.
+      "tab.pin:1",
+      "tab.pin:2",
       "tab.close:1",
       "tab.close:2",
     ]);
@@ -575,8 +598,17 @@ describe("the palette at fifty chats", () => {
     expect(offers.filter((row) => row.id.startsWith("tab.select:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("tab.close:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("workspace.focus:"))).toHaveLength(6);
-    // 118 rows: 50 chats twice over, 6 workspaces, 2 in the queue, and the ten verbs.
-    expect(offers).toHaveLength(118);
+    // And one pin row per chat and per workspace (charter ADR 0039). **This is the cost of
+    // pinning through the palette rather than through a control on every tab**, and it is
+    // the number that decides whether that was the right trade: the catalogue is half as
+    // long again. It buys back fifty controls on the one strip that broke at fifty
+    // (charter-app#130), and `narrow` ranks a verb the operator typed above any row that
+    // merely carries a name, so the rows these crowd are other names and not the verbs.
+    expect(offers.filter((row) => row.id.startsWith("tab.pin:"))).toHaveLength(50);
+    expect(offers.filter((row) => row.id.startsWith("workspace.pin:"))).toHaveLength(6);
+    // 174 rows: 50 chats three times over, 6 workspaces twice, 2 in the queue, and the ten
+    // verbs. It was 118 before the pins.
+    expect(offers).toHaveLength(174);
   });
 });
 

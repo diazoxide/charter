@@ -74,6 +74,7 @@ function open(session: number, unreported: string | null): OpenChat {
     profile: null,
     persona: null,
     unreported,
+    pinned: false,
   };
 }
 

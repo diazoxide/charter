@@ -53,6 +53,7 @@ function chat(one: Partial<OpenChat> & { session: number; name: string }): OpenC
     profile: null,
     persona: null,
     unreported: null,
+    pinned: false,
     ...one,
   };
 }

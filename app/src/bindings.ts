@@ -161,6 +161,20 @@ export const commands = {
 	chatsThatWouldNotStart: (plane: PlaneId) => typedError<([string, string])[], string>(__TAURI_INVOKE("chats_that_would_not_start", { plane })),
 	/**  Says which chat is in front, so the record brings that one back in front. */
 	chatInFront: (plane: PlaneId, session: number | null) => typedError<null, string>(__TAURI_INVOKE("chat_in_front", { plane, session })),
+	/**  What this operator has pinned in this project. */
+	planePins: (plane: PlaneId) => typedError<Pins, string>(__TAURI_INVOKE("plane_pins", { plane })),
+	/**  Pins or unpins the project itself. */
+	pinProject: (plane: PlaneId, pinned: boolean) => typedError<null, string>(__TAURI_INVOKE("pin_project", { plane, pinned })),
+	/**  Pins or unpins one workspace inside a project. */
+	pinWorkspace: (plane: PlaneId, workspace: string, pinned: boolean) => typedError<null, string>(__TAURI_INVOKE("pin_workspace", { plane, workspace, pinned })),
+	/**
+	 *  Pins or unpins one chat.
+	 * 
+	 *  Its own command rather than a third case of the two above, because it is written
+	 *  somewhere else entirely: a chat pin goes in the plane's own `.charter/app/reopen.json`
+	 *  and never in the machine store, which ADR 0034 forbids holding a chat's name.
+	 */
+	pinChat: (plane: PlaneId, session: number, pinned: boolean) => typedError<null, string>(__TAURI_INVOKE("pin_chat", { plane, session, pinned })),
 	/**
 	 *  Asks the app to quit, the way the menu's Quit and the tray's do.
 	 * 
@@ -410,6 +424,11 @@ export type OpenChat = {
 	persona: string | null,
 	/**  What its harness cannot tell charter, said on the chat — none where it tells all. */
 	unreported: string | null,
+	/**
+	 *  Whether the operator pinned it (charter ADR 0039). It rides the plane's own app
+	 *  record, so a pinned chat comes back pinned at the next launch.
+	 */
+	pinned: boolean,
 };
 
 /**
@@ -479,6 +498,33 @@ export type Piece = {
 	wired: boolean,
 	/**  Set when git still has a registration whose directory is gone. */
 	stale: boolean,
+};
+
+/**
+ *  What the operator has pinned in one project (charter ADR 0039, stored per ADR 0040).
+ * 
+ *  The project's own pin and its pinned workspaces come from the machine store; a pinned
+ *  CHAT is not here, because a chat pin rides that chat's own record and reaches the window
+ *  on `OpenChat::pinned` with the chat it is about.
+ */
+export type Pins = {
+	/**  Whether this project itself is pinned. */
+	project: boolean,
+	/**
+	 *  Its pinned workspaces that still exist, in the plane's own order.
+	 * 
+	 *  The plane's order and never the pin's: a pin says WHICH workspaces come first, not in
+	 *  what order they do, so two operators who pin the same two see the same arrangement.
+	 */
+	workspaces: string[],
+	/**
+	 *  Pins that no longer name a workspace on the plane — renamed, or removed.
+	 * 
+	 *  **Named rather than dropped silently**, and never drawn as a workspace: a window that
+	 *  drew one would be offering a workspace the plane does not have. This is ADR 0034's
+	 *  own hazard for a trust entry keyed on a path, one scope down.
+	 */
+	missing: string[],
 };
 
 /**

@@ -15,7 +15,7 @@ import { ApprovePlane } from "./ApprovePlane";
 import { Opener } from "./Opener";
 import { Palette } from "./Palette";
 import { QuitWarning, type Ending } from "./QuitWarning";
-import { Closer, Doer, PlaneView, type PlaneReport, type WindowDoing } from "./PlaneView";
+import { Closer, Doer, Pin, PlaneView, type PlaneReport, type WindowDoing } from "./PlaneView";
 import { noTabs } from "./tabs";
 
 /**
@@ -88,6 +88,54 @@ function App() {
     () => planes.map((plane) => ({ plane, name: calledOn(plane) })),
     [planes],
   );
+
+  /**
+   * The projects this operator has pinned, by root (charter ADR 0039).
+   *
+   * **The window's and not a project's**, because the project strip is the window's: a
+   * project that is not in front draws nothing, and its own pin still has to be on the strip.
+   * Each `PlaneView` reports its own, and this is where they meet.
+   *
+   * It is a list of roots rather than a flag per project for the reason `actions.ts` gives:
+   * a pin is the operator's arrangement of the projects and not a property of one, so it is
+   * held once, here, instead of copied onto each.
+   */
+  const [pinnedProjects, setPinnedProjects] = useState<string[]>([]);
+
+  // What this machine already remembers as pinned, asked once per project it holds. A pin
+  // outlives the app, so a window that did not ask would draw an operator's arrangement as
+  // if they had never made it. Asked per plane rather than as one list, because the machine
+  // store's answer for a plane is what `plane_pins` gives and there is no second reader of
+  // that file in the app.
+  useEffect(() => {
+    let gone = false;
+    for (const plane of planes) {
+      void commands
+        .planePins(plane)
+        .then((answer) => {
+          if (gone || answer.status !== "ok" || !answer.data.project) return;
+          setPinnedProjects((was) => (was.includes(plane) ? was : [...was, plane]));
+        })
+        // A window that cannot ask simply draws nothing pinned. Every project is still there.
+        .catch(() => undefined);
+    }
+    return () => {
+      gone = true;
+    };
+  }, [planes]);
+
+  /** Pins or unpins one project. The core's refusal travels back whole — the store is
+   *  bounded, and "unpin one first" is a sentence the operator can act on. */
+  const pinProject = useCallback(async (plane: string, pinned: boolean): Promise<Ran> => {
+    const answer = await commands
+      .pinProject(plane, pinned)
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    if (answer.status === "error") return { ok: false, refused: answer.error };
+    setPinnedProjects((was) =>
+      pinned ? (was.includes(plane) ? was : [...was, plane]) : was.filter((one) => one !== plane),
+    );
+    return { ok: true };
+  }, []);
 
   /**
    * Takes a project into this window, as a tab.
@@ -198,9 +246,10 @@ function App() {
       openProject: () => setShowing({ at: "opener" }),
       selectProject: (plane: string) => setShowing({ at: "plane", plane }),
       closeProject,
+      pinProject,
       quit: () => void commands.askToQuit().catch(() => undefined),
     }),
-    [closeProject],
+    [closeProject, pinProject],
   );
 
   // Which plane this launch opened — asked once, and the answer the first tab is built from.
@@ -410,6 +459,9 @@ function App() {
       selectTab: () => undefined,
       focusWorkspace: () => undefined,
       showChat: () => undefined,
+      pinTab: async () => nowhere(),
+      pinWorkspace: async () => nowhere(),
+      pinProject: windowDoes.pinProject,
       removeWorktree: async () => nowhere(),
       mergeWorktree: async () => nowhere(),
       sendKey: async () => nowhere(),
@@ -421,9 +473,26 @@ function App() {
     [windowDoes],
   );
 
+  /**
+   * The projects in the order the strip draws them: **pinned first** (ADR 0039).
+   *
+   * The same rule the chat strip follows (`tabs.tabsIn`) and for the same reason: nothing
+   * moves that the operator did not move, and within each group the order is untouched.
+   */
+  const drawn = useMemo(
+    () => [
+      ...projects.filter((one) => pinnedProjects.includes(one.plane)),
+      ...projects.filter((one) => !pinnedProjects.includes(one.plane)),
+    ],
+    [pinnedProjects, projects],
+  );
+
   /** The rows the project strip draws. The same rows `catalogue` splices into the palette —
    *  one place the words and the availability are written down (`actions.projectRows`). */
-  const strip = useMemo(() => projectRows(projects, inFront), [inFront, projects]);
+  const strip = useMemo(
+    () => projectRows(drawn, inFront, pinnedProjects),
+    [drawn, inFront, pinnedProjects],
+  );
 
   /** Every action a window with no project in front can do. The project's own catalogue is
    *  `PlaneView`'s; this is the one for the opener, and its refusals are #111's. */
@@ -432,11 +501,12 @@ function App() {
       catalogue({
         tabs: noTabs(),
         workspaces: [],
-        projects,
+        projects: drawn,
         needsYou: [],
+        pinned: { chats: [], workspaces: [], projects: pinnedProjects },
         nameOf: String,
       }),
-    [projects],
+    [drawn, pinnedProjects],
   );
 
   const run = useCallback(
@@ -469,7 +539,7 @@ function App() {
           too and a query for `role="tab"` across the whole window would mix all three. */}
       {planes.length > 0 && (
         <nav className="projects" role="tablist" aria-label="Projects">
-          {projects.map((project, at) => (
+          {drawn.map((project, at) => (
             <span className="project" key={project.plane}>
               <button
                 role="tab"
@@ -483,6 +553,7 @@ function App() {
                 }}
               >
                 <span className="project-name">{project.name}</span>
+                <Pin held={pinnedProjects.includes(project.plane)} what="project" />
                 {/* What is waiting for you over there. It is the reason a project behind the
                     one on screen goes on listening rather than being torn down. */}
                 {(reports[project.plane]?.needsYou ?? 0) > 0 && (
@@ -546,7 +617,8 @@ function App() {
           key={plane}
           plane={plane}
           inFront={plane === inFront}
-          projects={projects}
+          projects={drawn}
+          pinnedProjects={pinnedProjects}
           window={windowDoes}
           onReport={onReport}
         />
