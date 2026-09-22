@@ -419,6 +419,24 @@ describe("App", () => {
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
+  it("focuses Cancel, and puts the yes one Tab away", async () => {
+    // **The keyboard route to ending a chat, pinned here rather than assumed.** Radix's
+    // `AlertDialog` requires a `Cancel` and focuses it, which is why a Return pressed by
+    // reflex cancels — and it makes the yes exactly Tab then Enter. `palette.e2e.ts` drives
+    // that against the real WebView; this is what says which key, so a reordering of the two
+    // answers fails here instead of as a scenario timeout with no explanation.
+    core();
+    render(<App />);
+    await openAChat();
+
+    await userEvent.click(screen.getByRole("button", { name: "End chat 1 steward" }));
+    const asking = await screen.findByRole("alertdialog");
+
+    expect(within(asking).getByRole("button", { name: "Cancel" })).toHaveFocus();
+    await userEvent.tab();
+    expect(within(asking).getByRole("button", { name: "End chat 1 steward" })).toHaveFocus();
+  });
+
   it("answers the question with Escape, and Escape means no", async () => {
     // `docs/ui-primitives.md`'s rule for every modal in this window: Escape answers, with the
     // NON-destructive answer. It matters most on this one, because this is the only modal
