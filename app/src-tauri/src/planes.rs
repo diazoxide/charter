@@ -217,7 +217,7 @@ impl Held {
     /// no way to write a second one without changing this signature.
     fn reopen(&self, size: Size, record: Read) {
         self.records.allow();
-        let record = match record.and(reopen::read_or_refusal(&self.root)) {
+        let record = match record {
             Ok(record) => record,
             Err(why) => {
                 // Not the same thing as an empty plane, and an operator told "nothing to
