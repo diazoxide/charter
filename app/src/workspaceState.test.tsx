@@ -131,6 +131,48 @@ describe("useWorkspaceState", () => {
     expect(result.current.pieces.svc?.map((one) => one.piece)).not.toContain("alpha-one");
   });
 
+  it("reads the workspace again when the window says it changed it (charter-app#174)", async () => {
+    // The explorer's rows can remove a worktree now, and the tree they removed it from is
+    // drawn out of this record. Without a way to ask again, the row stayed on screen until
+    // the operator focused another workspace and came back — which looks exactly like a
+    // removal that silently failed.
+    let pieces = [piece("one"), piece("two")];
+    const { asked } = core((cmd, args) => {
+      if (cmd === "worktree_list") return args.repo === "svc" ? pieces : [];
+      return ORDINARY(cmd, args);
+    });
+
+    const { result, rerender } = renderHook(
+      ({ again }: { again: number }) => useWorkspaceState(PLANE, "alpha", again),
+      { initialProps: { again: 0 } },
+    );
+    await waitFor(() => expect(result.current.pieces.svc).toHaveLength(2));
+
+    // `one` is removed, and the window says so with the counter.
+    pieces = [piece("two")];
+    rerender({ again: 1 });
+
+    await waitFor(() => expect(result.current.pieces.svc?.map((p) => p.piece)).toEqual(["two"]));
+    // Everything is asked again, not only the listing: removing a piece also changes what
+    // `git status` says about the clone it was cut from, which the bottom bar draws.
+    expect(asked.filter((one) => one.cmd === "workspace_repos")).toHaveLength(2);
+  });
+
+  it("does not ask again for a counter that has not moved", async () => {
+    // A counter in a dependency array is only as good as its stillness: one that changed per
+    // render would be a `git worktree list` per clone per keystroke.
+    const { asked } = core(ORDINARY);
+
+    const { result, rerender } = renderHook(() => useWorkspaceState(PLANE, "alpha", 3));
+
+    await waitFor(() => expect(result.current.pieces.svc).toHaveLength(2));
+    rerender();
+    rerender();
+
+    expect(asked.filter((one) => one.cmd === "worktree_list")).toHaveLength(2);
+    expect(asked.filter((one) => one.cmd === "workspace_panels")).toHaveLength(1);
+  });
+
   it("asks nothing at all when no workspace is focused", async () => {
     const { asked } = core(ORDINARY);
 

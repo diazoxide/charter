@@ -1,6 +1,6 @@
 import { useEffect, useId, type ReactNode } from "react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
-import { menuRows, type MenuOn, type Offer } from "./actions";
+import { menuRows, type Catalogued, type MenuOn, type Offer } from "./actions";
 
 /**
  * The window's context menus: right-click on a thing, and charter offers what it can do to it.
@@ -34,8 +34,11 @@ export function Menued({
 }: {
   /** The item this menu is about. */
   on: MenuOn;
-  /** The catalogue as it stands. The same array the palette lists and the bar reads. */
-  offers: readonly Offer[];
+  /** The catalogue as it stands, by id — the same rows the palette lists and the bar reads,
+   *  indexed once for the whole window. A menu on a strip is drawn per tab per render, so an
+   *  array here would be a scan per tab per render over a list that #174 made half as long
+   *  again; `actions.catalogued` has what that measured and why it was changed. */
+  offers: Catalogued;
   onPress: (offer: Offer) => void;
   /** The element the menu belongs to. One element, because it is the trigger itself —
    *  `asChild`, so no wrapper is added to a strip whose layout is measured. */

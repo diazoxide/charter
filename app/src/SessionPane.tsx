@@ -3,6 +3,7 @@ import { Channel } from "@tauri-apps/api/core";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
+import { CHAT_KEYBOARD } from "./actions";
 import * as bench from "./bench";
 import { commands, type PlaneId } from "./bindings";
 import { draw } from "./renderer";
@@ -141,6 +142,9 @@ export function SessionPane({
     <div
       className={focused ? "pane focused" : "pane"}
       data-testid="pane"
+      // Everything under here is a shell's keyboard, and the window's own bindings stand
+      // back from the chords a terminal encodes (`actions.CHAT_KEYBOARD`, charter-app#106).
+      {...{ [CHAT_KEYBOARD]: "" }}
       data-session={session}
       onMouseDown={take}
       onClick={take}

@@ -12,6 +12,7 @@ import "./styles.css";
 import { commands, type Ask, type PlaneId } from "./bindings";
 import {
   catalogue,
+  catalogued,
   perform,
   projectRows,
   type Doing,
@@ -563,6 +564,9 @@ function App() {
       createWorkspace: () => undefined,
       removeWorkspace: () => undefined,
       showChat: () => undefined,
+      // A persona belongs to a plane, and there is no plane here. The row it would open does
+      // not exist without one, for the same reason the workspace rows above do not.
+      showPersona: () => undefined,
       pinTab: async () => nowhere(),
       pinWorkspace: async () => nowhere(),
       pinProject: windowDoes.pinProject,
@@ -613,6 +617,11 @@ function App() {
     () => [strip.open, strip.create, ...strip.switchTo, ...strip.pin, ...strip.close],
     [strip],
   );
+
+  /** The same rows by id, which is what a project tab's menu looks one up in. Built once for
+   *  the strip rather than scanned per tab per render — `actions.catalogued` has the numbers,
+   *  measured on the chat strip where fifty of them are drawn at ADR 0026's limits. */
+  const stripFound = useMemo(() => catalogued(stripOffers), [stripOffers]);
 
   /**
    * How wide the project strip is, less its own `+`, and therefore which projects it draws.
@@ -713,7 +722,7 @@ function App() {
               <Menued
                 key={project.plane}
                 on={{ on: "project", plane: project.plane }}
-                offers={stripOffers}
+                offers={stripFound}
                 onPress={press}
               >
                 <span className="project">
