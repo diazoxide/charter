@@ -274,6 +274,10 @@ impl Chats {
         // arguments may end in a positional prompt that nothing may come after.
         let mut all = self.state_hook_args(harness);
         all.extend(args);
+        // The directories charter searched for the harness, then the `charter` the hooks
+        // above name by absolute path — so a hook the plugin or the plane spells as the bare
+        // word `charter` finds one from a Finder launch too (charter-app#136).
+        let env = charter_core::start::with_chat_path(env, self.binary.as_deref());
         // What the announcement below said, so a start that fails can take it back.
         let announced = std::sync::atomic::AtomicU32::new(0);
         let session = self
