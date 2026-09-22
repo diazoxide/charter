@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import {
   commands,
+  type AtRisk,
   type ChatWorktree,
   type OpenChat,
   type PlaneId,
@@ -38,6 +39,9 @@ import {
   type Project,
   type Ran,
 } from "./actions";
+import { DeleteWorkspace } from "./DeleteWorkspace";
+import { Menued } from "./Menus";
+import { NewWorkspace } from "./NewWorkspace";
 import { StartChat } from "./StartChat";
 import { SessionPane } from "./SessionPane";
 import { Explorer, type Spot } from "./Explorer";
@@ -167,6 +171,35 @@ export function PlaneView({
   const [located, setLocated] = useState<{ cwd: string; piece?: ChatWorktree }>();
   /** Bumped when something changed the answer, so it is asked again rather than guessed. */
   const [relocate, setRelocate] = useState(0);
+  /**
+   * Bumped when THIS window changed which workspaces the plane has.
+   *
+   * The sidebar is re-read whenever the chats change, because opening or ending a chat is what
+   * this window could previously change about the answer. Making and deleting a workspace
+   * changes it without touching a chat, so they say so — the plane is still the truth and it is
+   * read again, rather than the window editing its own copy of what it thinks is there.
+   */
+  const [replan, setReplan] = useState(0);
+  /** Whether the new-workspace dialog is up, why the last attempt made nothing, and whether
+   *  charter is making one right now. */
+  const [makingWorkspace, setMakingWorkspace] = useState(false);
+  const [workspaceTrouble, setWorkspaceTrouble] = useState<string>();
+  const [busyMaking, setBusyMaking] = useState(false);
+  /**
+   * The workspace the operator is being asked about deleting, if any.
+   *
+   * `atRisk` is `undefined` until the core has answered and is drawn as "still reading" — an
+   * empty list and an unanswered question are the two states this must never merge, because
+   * one of them says "nothing would be lost". `refusal` is the sentence the core gave the last
+   * time Delete was pressed, and its presence is the only thing that makes forcing reachable.
+   */
+  const [removing, setRemoving] = useState<{
+    workspace: string;
+    atRisk?: AtRisk[];
+    unreadable?: string;
+    refusal?: string;
+    busy: boolean;
+  }>();
   /** The same, for the pins: a pin is written by the core, so the window asks what the core
    *  now says rather than assuming its own write landed as it expected. */
   const [pinning, setPinning] = useState(0);
@@ -346,7 +379,7 @@ export function PlaneView({
       })
       // A window with no readable plane still runs its panes; the header already says so.
       .catch(() => setSidebar(undefined));
-  }, [plane, startedIn, tabs]);
+  }, [plane, replan, startedIn, tabs]);
 
   /**
    * What the machine store says this operator has pinned here, and what it says is gone.
@@ -796,6 +829,113 @@ export function PlaneView({
     [plane, worktree],
   );
 
+  /** Asks for a new workspace. It makes nothing: the dialog is what asks, and
+   *  `workspace_create` is what makes one. */
+  const createWorkspace = useCallback(() => {
+    setWorkspaceTrouble(undefined);
+    setMakingWorkspace(true);
+  }, []);
+
+  /**
+   * Makes it, through `charter workspace create`.
+   *
+   * **The name is not checked here.** `workspace_create` runs `wscmd::create`, which runs
+   * `wscmd::ensure`, which is where `contain::workspace_name_ok` lives — so the window refuses
+   * exactly the names a terminal refuses, in the same sentence. A refusal stays in the dialog,
+   * where the operator is still standing.
+   */
+  const makeWorkspace = useCallback(
+    async (name: string, vision: string) => {
+      setBusyMaking(true);
+      const answer = await commands
+        .workspaceCreate(plane, name, vision.trim() === "" ? null : vision)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      setBusyMaking(false);
+      if (answer.status === "error") {
+        setWorkspaceTrouble(answer.error);
+        return;
+      }
+      setMakingWorkspace(false);
+      setWorkspaceTrouble(undefined);
+      // charter's own lines, which say where it landed and whether it is LOCAL or LIVE.
+      setReport({ from: "workspace.create", refused: false, words: answer.data.join(" ") });
+      // The plane is read again rather than this window writing the workspace into its own
+      // copy of the sidebar, and the strip lands on what was just made: it holds no chats, so
+      // `picked` is the only thing that can put the window in it.
+      setPicked(name);
+      setReplan((asked) => asked + 1);
+    },
+    [plane],
+  );
+
+  /**
+   * Asks about deleting one, and reads the core's guard so the dialog can show it first.
+   *
+   * The reading is for DRAWING. `workspace_remove` asks `work_at_risk` again, inside the core,
+   * against the disk at the moment of the delete — this is what the operator sees before they
+   * press, not what decides.
+   */
+  const removeWorkspace = useCallback(
+    (workspace: string) => {
+      setRemoving({ workspace, busy: false });
+      void commands
+        .workspaceAtRisk(plane, workspace)
+        .then((answer) =>
+          setRemoving((now) =>
+            now?.workspace !== workspace
+              ? now
+              : answer.status === "ok"
+                ? { ...now, atRisk: answer.data }
+                : { ...now, unreadable: answer.error },
+          ),
+        )
+        // A preview charter could not take is said as one. It is never drawn as an empty list:
+        // "nothing would be lost" is a claim, and this is the absence of one.
+        .catch((err: unknown) =>
+          setRemoving((now) =>
+            now?.workspace === workspace ? { ...now, unreadable: String(err) } : now,
+          ),
+        );
+    },
+    [plane],
+  );
+
+  /**
+   * Deletes it — **through `workspace_remove` and through nothing else**.
+   *
+   * There is one path from this window to a deleted workspace and the core's guard is inside
+   * it (`wscmd::remove`, which runs `wscmd::work_at_risk` before `remove_dir_all`). `force` is
+   * never passed on the operator's behalf: it arrives here only from the second button, which
+   * does not exist until a refusal does and which names what it will discard.
+   */
+  const deleteWorkspace = useCallback(
+    async (workspace: string, force: boolean) => {
+      setRemoving((now) => (now?.workspace === workspace ? { ...now, busy: true } : now));
+      const answer = await commands
+        .workspaceRemove(plane, workspace, force)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (answer.status === "error") {
+        // Verbatim: the sentence names the repair — push or commit first — and the force
+        // button is drawn beside it rather than instead of it.
+        setRemoving((now) =>
+          now?.workspace === workspace ? { ...now, busy: false, refusal: answer.error } : now,
+        );
+        return;
+      }
+      setRemoving(undefined);
+      setReport({
+        from: `workspace.remove:${workspace}`,
+        refused: false,
+        words: answer.data.join(" "),
+      });
+      // Nothing is picked any more: the workspace that was picked may be the one that has just
+      // gone, and the sidebar's own focus rule decides what the window lands on.
+      setPicked(undefined);
+      setReplan((asked) => asked + 1);
+    },
+    [plane],
+  );
+
   /** Lands the piece in its clone, fast-forward only. The core never pushes. */
   const mergeWorktree = useCallback(async (): Promise<Ran> => {
     if (!worktree) return { ok: false, refused: "There is no worktree in front to merge." };
@@ -891,11 +1031,14 @@ export function PlaneView({
       pinWorkspace,
       pinProject: windowDoes.pinProject,
       focusWorkspace,
+      createWorkspace,
+      removeWorkspace,
       showChat,
       removeWorktree,
       mergeWorktree,
       sendKey,
       openProject: windowDoes.openProject,
+      createProject: windowDoes.createProject,
       showExtensions: windowDoes.showExtensions,
       selectProject: windowDoes.selectProject,
       closeProject: windowDoes.closeProject,
@@ -905,11 +1048,13 @@ export function PlaneView({
       bringToFront,
       close,
       closePane,
+      createWorkspace,
       focusWorkspace,
       mergeWorktree,
       newTab,
       pinTab,
       pinWorkspace,
+      removeWorkspace,
       removeWorktree,
       sendKey,
       showChat,
@@ -1122,40 +1267,49 @@ export function PlaneView({
             ).length;
             const here = tabsIn(tabs, workspace, filedIn).length;
             return (
-              <button
+              /* Right-click is the third reader of the catalogue (`Menus.tsx`): focus, pin,
+                 make one, and — under the line — delete this one. `asChild`, so the strip
+                 gains no wrapper: the trigger IS the tab. */
+              <Menued
                 key={workspace}
-                role="tab"
-                aria-selected={workspace === focused}
-                title={offer?.title}
-                onClick={() => {
-                  if (offer?.available) press(offer);
-                }}
+                on={{ on: "workspace", workspace }}
+                offers={offers}
+                onPress={press}
               >
-                <span className="workspace-name">
-                  {workspace === OUTSIDE ? OUTSIDE_TITLE : workspace}
-                </span>
-                <Pin held={pinnedWorkspaces.includes(workspace)} what="workspace" />
-                {/* How many chats are open over there. With the strip below showing one
-                    workspace's chats, this is the answer to "where are the other forty". */}
-                {here > 0 && (
-                  <span className="workspace-count" aria-label={`${here} chats`}>
-                    {here}
+                <button
+                  role="tab"
+                  aria-selected={workspace === focused}
+                  title={offer?.title}
+                  onClick={() => {
+                    if (offer?.available) press(offer);
+                  }}
+                >
+                  <span className="workspace-name">
+                    {workspace === OUTSIDE ? OUTSIDE_TITLE : workspace}
                   </span>
-                )}
-                {/* And how many of them are asking for you. Scoping the chats to a workspace
+                  <Pin held={pinnedWorkspaces.includes(workspace)} what="workspace" />
+                  {/* How many chats are open over there. With the strip below showing one
+                    workspace's chats, this is the answer to "where are the other forty". */}
+                  {here > 0 && (
+                    <span className="workspace-count" aria-label={`${here} chats`}>
+                      {here}
+                    </span>
+                  )}
+                  {/* And how many of them are asking for you. Scoping the chats to a workspace
                     would otherwise hide a chat that needs you behind a strip nobody is
                     looking at — the same hole the project tabs close one scope up. */}
-                {waiting > 0 && (
-                  <span
-                    className="workspace-needs"
-                    aria-label={`${waiting} chats need you in ${
-                      workspace === OUTSIDE ? OUTSIDE_TITLE : workspace
-                    }`}
-                  >
-                    {waiting}
-                  </span>
-                )}
-              </button>
+                  {waiting > 0 && (
+                    <span
+                      className="workspace-needs"
+                      aria-label={`${waiting} chats need you in ${
+                        workspace === OUTSIDE ? OUTSIDE_TITLE : workspace
+                      }`}
+                    >
+                      {waiting}
+                    </span>
+                  )}
+                </button>
+              </Menued>
             );
           })}
         </div>
@@ -1171,28 +1325,30 @@ export function PlaneView({
             /* `data-tab` is how `offscreen.ts` finds a tab without knowing this markup.
                The whole tab is measured, `×` included: a tab whose close button is over the
                edge is one an operator cannot finish using. */
-            <span className="tab" key={id} {...{ [TAB_ATTRIBUTE]: id }}>
-              <button
-                role="tab"
-                aria-selected={id === tabs.inFront}
-                ref={id === tabs.inFront ? intoView : undefined}
-                // The catalogue's row, not a second copy of it. The tab already in front
-                // has a row that says so and cannot run — a tab is never disabled, because
-                // the selected tab is the one a keyboard has to be able to land on.
-                onClick={() => {
-                  const offer = by(`tab.select:${id}`);
-                  if (offer?.available) press(offer);
-                }}
-              >
-                <span className="tab-name">{tabs.byId[id].name}</span>
-                <Pin held={isPinned(id)} what="chat" />
-                {/* The first pane's session is the tab's own chat. Its own element, so what
+            <Menued key={id} on={{ on: "chat", tab: id }} offers={offers} onPress={press}>
+              <span className="tab" {...{ [TAB_ATTRIBUTE]: id }}>
+                <button
+                  role="tab"
+                  aria-selected={id === tabs.inFront}
+                  ref={id === tabs.inFront ? intoView : undefined}
+                  // The catalogue's row, not a second copy of it. The tab already in front
+                  // has a row that says so and cannot run — a tab is never disabled, because
+                  // the selected tab is the one a keyboard has to be able to land on.
+                  onClick={() => {
+                    const offer = by(`tab.select:${id}`);
+                    if (offer?.available) press(offer);
+                  }}
+                >
+                  <span className="tab-name">{tabs.byId[id].name}</span>
+                  <Pin held={isPinned(id)} what="chat" />
+                  {/* The first pane's session is the tab's own chat. Its own element, so what
                     a tab IS stays separate from what it is DOING — a tab whose text changed
                     every time a turn began would be unreadable, and untestable. */}
-                <ChatState state={stateOf(states, panesOf(tabs, id)[0]?.session ?? -1)} />
-              </button>
-              <Closer offer={by(`tab.close:${id}`)} onPress={press} />
-            </span>
+                  <ChatState state={stateOf(states, panesOf(tabs, id)[0]?.session ?? -1)} />
+                </button>
+                <Closer offer={by(`tab.close:${id}`)} onPress={press} />
+              </span>
+            </Menued>
           ))}
         </div>
         {/* The affordance that says the strip is not showing everything (ADR 0039). It is
@@ -1330,25 +1486,31 @@ export function PlaneView({
           bottom: <BottomBar workspace={ofWorkspace} state={workspaceState} />,
         }}
         centre={
-          <div className="panes">
-            {frontTab ? (
-              <LayoutPanes
-                plane={plane}
-                layout={frontTab.layout}
-                focused={frontTab.focused}
-                onFocus={(pane) => change((tabs) => focusPane(tabs, pane))}
-              />
-            ) : tabs.order.length > 0 ? (
-              // Chats are running — just not in the workspace being looked at. Saying
-              // "no sessions" here would be charter telling the operator that what it is
-              // still drawing on the strip above does not exist.
-              <p className="empty">
-                No chats in this workspace. Open one with New tab, or pick a workspace above.
-              </p>
-            ) : (
-              <p className="empty">No sessions. Open one with New tab.</p>
-            )}
-          </div>
+          /* The centre is where a chat is, so its menu is the chat verbs the bar has: a new
+             tab, the two splits, the key the palette claimed, and — under the line — ending
+             this pane's chat. `asChild` again: the panes' box is measured, and it must not
+             gain a wrapper. */
+          <Menued on={{ on: "pane" }} offers={offers} onPress={press}>
+            <div className="panes">
+              {frontTab ? (
+                <LayoutPanes
+                  plane={plane}
+                  layout={frontTab.layout}
+                  focused={frontTab.focused}
+                  onFocus={(pane) => change((tabs) => focusPane(tabs, pane))}
+                />
+              ) : tabs.order.length > 0 ? (
+                // Chats are running — just not in the workspace being looked at. Saying
+                // "no sessions" here would be charter telling the operator that what it is
+                // still drawing on the strip above does not exist.
+                <p className="empty">
+                  No chats in this workspace. Open one with New tab, or pick a workspace above.
+                </p>
+              ) : (
+                <p className="empty">No sessions. Open one with New tab.</p>
+              )}
+            </div>
+          </Menued>
         }
       />
 
@@ -1370,6 +1532,33 @@ export function PlaneView({
         state={workspaceState}
         alerts={alerts}
       />
+
+      {/* Making a workspace, and deleting one. Mounted only while they are up, and drawn
+          here rather than in the window: a workspace belongs to a project. */}
+      {makingWorkspace && (
+        <NewWorkspace
+          plane={plane}
+          trouble={workspaceTrouble}
+          making={busyMaking}
+          onCreate={(name, vision) => void makeWorkspace(name, vision)}
+          onCancel={() => {
+            setMakingWorkspace(false);
+            setWorkspaceTrouble(undefined);
+          }}
+        />
+      )}
+
+      {removing && (
+        <DeleteWorkspace
+          workspace={removing.workspace}
+          atRisk={removing.atRisk}
+          unreadable={removing.unreadable}
+          refusal={removing.refusal}
+          deleting={removing.busy}
+          onDelete={(force) => void deleteWorkspace(removing.workspace, force)}
+          onCancel={() => setRemoving(undefined)}
+        />
+      )}
 
       {picking && (
         <StartChat
@@ -1410,6 +1599,9 @@ export type PlaneReport = {
 /** What a project asks the WINDOW to do, because the window is what holds projects. */
 export type WindowDoing = {
   openProject: () => void;
+  /** Shows the dialog that makes a new project. The window's, like the opener: what it ends in
+   *  is another project tab, and the open it ends in is the gated one (ADR 0035). */
+  createProject: () => void;
   /** Shows what has contributed what to this window. The window's and not a project's: an
    *  extension is machine state (charter ADR 0041), so it is the same list behind every tab. */
   showExtensions: () => void;

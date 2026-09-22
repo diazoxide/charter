@@ -13,6 +13,7 @@ mod planes;
 mod sessions;
 mod slowstart;
 mod updates;
+mod workspaces;
 mod worktrees;
 
 use std::path::PathBuf;
@@ -1017,6 +1018,7 @@ fn commands() -> Builder<tauri::Wry> {
         opener::approve_plane,
         opener::planes_to_restore,
         opener::window_holds_planes,
+        opener::create_project,
         open_session,
         close_session,
         send_input,
@@ -1044,6 +1046,9 @@ fn commands() -> Builder<tauri::Wry> {
         start_options,
         approve_profile,
         start_chat,
+        workspaces::workspace_create,
+        workspaces::workspace_at_risk,
+        workspaces::workspace_remove,
         worktrees::worktree_of_chat,
         worktrees::worktree_list,
         worktrees::worktree_remove,

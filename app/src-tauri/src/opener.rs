@@ -413,6 +413,128 @@ pub fn window_holds_planes(
     planes.remember_arrangement(&showing.arrangement());
 }
 
+/// Makes a NEW project — scaffolds a plane in a directory — **and opens it through the gate**.
+///
+/// Two halves, in this order and never the other way round. What is written is
+/// `scaffold::init`'s, which is `charter init`; what happens next is [`open_plane`]'s gate,
+/// because a plane charter has just created is still a plane this machine has approved
+/// nothing about (ADR 0035). So the ordinary answer to this command is an [`Ask`], and the
+/// operator reads what their new project contributes before it is opened — the same dialog, on
+/// the same path, as a project that came from a recents row.
+///
+/// **It never writes a plane into a repository the operator pointed at.** That is `init`'s own
+/// refusal (`scaffold::repo_is_not_a_plane_yet`) and ADR 0035's decision, and it is reached
+/// here rather than reimplemented: a directory picked in a dialog has nobody standing in it,
+/// so the scaffolding — including an edit to a tracked `.gitignore` — is a write nobody typed.
+/// `plane_is_this_repo` is the operator asking for the old shape **by name**, which is how
+/// charter's own plane exists, and it comes from a box they ticked.
+///
+/// **The directory is the directory, and no walk decides otherwise.** `plane::place` — what
+/// the CLI's `init` uses — reads `$CHARTER_ROOT` and walks up to an enclosing plane, which is
+/// right for a command run where somebody is standing and wrong for one handed a path: a new
+/// project inside `~/code` would otherwise be scaffolded into whatever plane happens to be
+/// above it. The walk is still asked, through `plane::find_root`, but only to REFUSE: a
+/// directory inside a plane is a place for a workspace's clone, not for a second plane.
+#[tauri::command]
+#[specta::specta]
+pub fn create_project(
+    planes: tauri::State<'_, Planes>,
+    path: String,
+    plane_is_this_repo: bool,
+) -> Result<Opened, String> {
+    let root = scaffold_at(std::path::Path::new(&path), plane_is_this_repo)?;
+    planes.open_if_approved(&root).map(Opened::from)
+}
+
+/// Scaffolds the plane and answers with the directory to open, or with why nothing was made.
+fn scaffold_at(
+    at: &std::path::Path,
+    plane_is_this_repo: bool,
+) -> Result<std::path::PathBuf, String> {
+    if !at.is_absolute() {
+        return Err(format!(
+            "'{}' is not a full path, so charter cannot tell which directory it means. Pick a \
+             folder, or type the whole path.",
+            at.display()
+        ));
+    }
+    if at.exists() && !at.is_dir() {
+        return Err(format!(
+            "{} is a file, and a project is a directory. Pick a folder, or name one that is not \
+             there yet.",
+            at.display()
+        ));
+    }
+    std::fs::create_dir_all(at)
+        .map_err(|why| format!("charter could not make {} ({why}).", at.display()))?;
+    // Resolved before anything reads it, so a path with a link in it names the tree by the
+    // route everything downstream will use.
+    let root = at.canonicalize().unwrap_or_else(|_| at.to_path_buf());
+    match charter_core::plane::find_root(&root) {
+        // It is already a plane. Nothing is written, and the gate below opens it — which is
+        // exactly what pointing the opener at it would have done.
+        Ok(found) if found == root => return Ok(root),
+        Ok(found) => {
+            return Err(format!(
+                "{} is inside the project {}. A project is a plane of its own, and a plane \
+                 inside another one is a workspace's clone — charter wrote nothing. Pick a \
+                 directory outside it.",
+                root.display(),
+                found.display()
+            ));
+        }
+        Err(_) => {}
+    }
+    let place = charter_core::plane::Place {
+        root: root.clone(),
+        is_plane: false,
+    };
+    let outcome = charter_core::scaffold::init(
+        &place,
+        &charter_core::scaffold::InitArgs {
+            // What `charter init` defaults to, and the same defaults the CLI hands it: the
+            // forge and owner are edited in `charter.toml` afterwards, and `init` says so
+            // itself when no owner was given.
+            forge: "github".to_owned(),
+            owner: String::new(),
+            host: None,
+            // Never from here. `--clone-this-repo` refuses in this charter (the git policy is
+            // not ported), and a flag whose whole behaviour is a refusal is not one to offer.
+            clone_this_repo: false,
+            plane_is_this_repo,
+            front_door: Some("steward".to_owned()),
+        },
+    );
+    if outcome.code != 0 {
+        // **Verbatim, and all of it.** `init`'s refusal in a repository is four lines: what it
+        // will not do, the three commands that make a plane beside the repo, what asking for
+        // the old shape by name would write, and where the decision is recorded. An operator
+        // shown a summary of that can follow none of it.
+        return Err(outcome
+            .said
+            .iter()
+            .map(marked)
+            .collect::<Vec<_>>()
+            .join("\n"));
+    }
+    Ok(root)
+}
+
+/// One line `init` said, with the mark `charter init` prints in front of it.
+///
+/// `scaffold::Say` carries no `Display` of its own — the CLI's `voice` module is where its
+/// marks live — so the four are spelled here, in the same glyphs, because an operator reading
+/// this refusal in the window must be reading what a terminal would have shown them.
+fn marked(line: &charter_core::scaffold::Say) -> String {
+    use charter_core::scaffold::Say;
+    match line {
+        Say::Info(text) => format!("• {text}"),
+        Say::Ok(text) => format!("✓ {text}"),
+        Say::Warn(text) => format!("! {text}"),
+        Say::Err(text) => format!("✗ {text}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -423,6 +545,120 @@ mod tests {
         std::fs::create_dir_all(at).expect("the plane's directory");
         std::fs::write(at.join(charter_core::plane::MANIFEST), "").expect("its charter.toml");
         at.to_path_buf()
+    }
+
+    /// A git repository at the top of `at`, because `init`'s one divergence from the Python
+    /// charter is about a directory that IS one and nothing else can stand in for it.
+    fn a_repo(at: &Path) -> PathBuf {
+        std::fs::create_dir_all(at).expect("the repository's directory");
+        for argv in [
+            vec!["init", "-q", "-b", "main", "."],
+            vec!["config", "user.email", "t@e.invalid"],
+            vec!["config", "user.name", "t"],
+        ] {
+            charter_core::forklock::output(
+                std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(at)
+                    .args(&argv),
+            )
+            .expect("git runs in a test");
+        }
+        at.to_path_buf()
+    }
+
+    #[test]
+    fn a_new_project_is_a_plane_scaffolded_where_it_was_asked_for() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let at = dir.path().join("thing");
+
+        let root = scaffold_at(&at, false).expect("an empty directory is scaffolded");
+
+        assert!(root.join(charter_core::plane::MANIFEST).is_file());
+        for baseline in charter_core::scaffold::BASELINE_DIRS {
+            assert!(root.join(baseline).is_dir(), "{baseline} is missing");
+        }
+    }
+
+    #[test]
+    fn a_repository_is_never_scaffolded_into_and_the_refusal_says_how_to_ask() {
+        // ADR 0035, spec decision 27, and the reason it is the app's problem: a directory
+        // picked in a dialog has nobody standing in it, so writing `charter.toml`,
+        // `personas/` and a block of `.gitignore` rules into it is a write nobody typed.
+        let dir = tempfile::tempdir().expect("a directory");
+        let repo = a_repo(&dir.path().join("svc"));
+
+        let refused = scaffold_at(&repo, false).expect_err("a repo is not scaffolded into");
+
+        assert!(
+            refused.contains("does not make a repository into a control plane"),
+            "{refused}"
+        );
+        assert!(
+            refused.contains("--plane-is-this-repo"),
+            "the refusal names how to ask for the old shape: {refused}"
+        );
+        assert!(
+            !repo.join(charter_core::plane::MANIFEST).exists(),
+            "nothing was written into the repository"
+        );
+        assert!(!repo.join(".gitignore").exists());
+    }
+
+    #[test]
+    fn the_old_shape_is_still_there_when_it_is_asked_for_by_name() {
+        // charter's own plane is a repository, which is why the option exists at all. It is
+        // the operator ticking a box, and never a default.
+        let dir = tempfile::tempdir().expect("a directory");
+        let repo = a_repo(&dir.path().join("svc"));
+
+        let root = scaffold_at(&repo, true).expect("the operator asked for it by name");
+
+        assert!(root.join(charter_core::plane::MANIFEST).is_file());
+    }
+
+    #[test]
+    fn a_directory_inside_a_plane_is_refused_and_nothing_is_written() {
+        // A plane inside another plane's tree is a workspace's clone, not a project. `place`
+        // would have walked up and scaffolded the OUTER one, which is right for a command run
+        // where somebody is standing and wrong for one handed a path.
+        let dir = tempfile::tempdir().expect("a directory");
+        let plane = a_plane(&dir.path().join("plane"));
+        let inside = plane.join("workspaces").join("alpha").join("thing");
+
+        let refused = scaffold_at(&inside, false).expect_err("a plane inside a plane");
+
+        assert!(refused.contains("is inside the project"), "{refused}");
+        assert!(!inside.join(charter_core::plane::MANIFEST).exists());
+    }
+
+    #[test]
+    fn a_directory_that_is_already_a_plane_is_left_exactly_as_it_is() {
+        // "New project" pointed at one is the opener pointed at one: the gate above opens it
+        // and nothing here writes a thing.
+        let dir = tempfile::tempdir().expect("a directory");
+        let plane = a_plane(&dir.path().join("plane"));
+
+        let root = scaffold_at(&plane, false).expect("an existing plane is simply opened");
+
+        assert_eq!(root, plane.canonicalize().expect("it resolves"));
+        assert_eq!(
+            std::fs::read_to_string(plane.join(charter_core::plane::MANIFEST)).expect("readable"),
+            "",
+            "its charter.toml is the one that was there"
+        );
+        assert!(
+            !plane.join("personas").exists(),
+            "and nothing was scaffolded"
+        );
+    }
+
+    #[test]
+    fn a_path_that_is_not_a_full_one_is_refused_before_anything_is_made() {
+        let refused = scaffold_at(Path::new("thing"), false).expect_err("a relative path");
+
+        assert!(refused.contains("is not a full path"), "{refused}");
+        assert!(!Path::new("thing").exists());
     }
 
     fn remembering(planes: &[&Path]) -> machine::Loaded {

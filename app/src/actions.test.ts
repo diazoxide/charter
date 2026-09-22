@@ -29,6 +29,8 @@ function doing(): Doing & { calls: string[] } {
     closeTab: note("closeTab"),
     selectTab: note("selectTab"),
     focusWorkspace: note("focusWorkspace"),
+    createWorkspace: note("createWorkspace"),
+    removeWorkspace: note("removeWorkspace"),
     showChat: note("showChat"),
     pinTab: vi.fn(async (tab: number, pinned: boolean) => {
       calls.push(`pinTab:${tab},${pinned}`);
@@ -55,6 +57,7 @@ function doing(): Doing & { calls: string[] } {
       return { ok: true as const };
     }),
     openProject: note("openProject"),
+    createProject: note("createProject"),
     showExtensions: note("showExtensions"),
     selectProject: note("selectProject"),
     closeProject: vi.fn(async (plane: string) => {
@@ -475,7 +478,11 @@ describe("carrying out a row", () => {
         "mergeWorktree",
         "sendKey:F2",
         "openProject",
+        "createProject",
         "showExtensions",
+        "createWorkspace",
+        "removeWorkspace:alpha",
+        "removeWorkspace:beta",
         // Three pin verbs and not one, because they are three stores (charter ADR 0040).
         "pinTab:1,true",
         "pinTab:2,true",
@@ -559,13 +566,21 @@ describe("the palette at fifty chats", () => {
     );
 
   it("puts the verb ahead of every name that merely shares its letters", () => {
-    // `re` is in `release`, in `reddit` and in `worktree`. Only one of those is a word
-    // charter chose; the rest are somebody's chat names.
+    // `re` is in `release`, in `reddit` and in `worktree`. Only the last is a word charter
+    // chose; the rest are somebody's chat names. **And `create` is one of charter's words
+    // too**, which is why the two rows that make things come first: `workspace.create` and
+    // `project.create` are matched on charter's own half of the id, exactly as `worktree` is,
+    // and within that group the catalogue's own order stands. Every row here is a verb.
     const rows = narrow("re", loaded());
 
-    expect(rows.slice(0, 2).map((row) => row.title)).toEqual([
+    const verbs = rows.slice(0, 6).map((row) => row.title);
+    expect(verbs).toEqual([
+      "New workspace…",
+      "New project…",
       "Merge this chat's worktree into its clone",
       "Remove this chat's worktree",
+      "Delete workspace ide",
+      "Delete workspace charter",
     ]);
     // Not a cap and not a filter: every name that matched is still listed, below.
     expect(rows.some((row) => row.title === "Switch to tab release.3")).toBe(true);
@@ -580,7 +595,7 @@ describe("the palette at fifty chats", () => {
   it("aims Enter at a verb rather than at a chat that happens to sort first", () => {
     const rows = narrow("re", loaded());
 
-    expect(rows[aim(rows)].title).toBe("Merge this chat's worktree into its clone");
+    expect(rows[aim(rows)].title).toBe("New workspace…");
   });
 
   it("does not reorder anything when every row matched charter's own word", () => {
@@ -608,9 +623,18 @@ describe("the palette at fifty chats", () => {
     // merely carries a name, so the rows these crowd are other names and not the verbs.
     expect(offers.filter((row) => row.id.startsWith("tab.pin:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("workspace.pin:"))).toHaveLength(6);
-    // 175 rows: 50 chats three times over, 6 workspaces twice, 2 in the queue, and the eleven
-    // verbs. It was 118 before the pins and 174 before the extension list (charter ADR 0041).
-    expect(offers).toHaveLength(175);
+    // One row per workspace that can be deleted, and never one for the strip of chats
+    // outside every workspace: that strip is not a workspace on the plane, and there is
+    // nothing on disk for a delete to name.
+    expect(offers.filter((row) => row.id.startsWith("workspace.remove:"))).toHaveLength(6);
+    // 183 rows: 50 chats three times over, 6 workspaces THREE times, 2 in the queue, and the
+    // thirteen verbs. It was 118 before the pins, 174 before the extension list (charter ADR
+    // 0041) and 175 before a workspace could be made and deleted from the window. Six of the
+    // eight added are the deletes, which is the cost of one destructive row per workspace —
+    // paid for the reason `actions.ts` gives: a row that acts on whichever workspace happens
+    // to be focused is a destructive action whose target the operator reads off somewhere
+    // else on the page.
+    expect(offers).toHaveLength(183);
   });
 });
 

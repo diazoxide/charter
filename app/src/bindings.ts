@@ -120,6 +120,31 @@ export const commands = {
 	 */
 	windowHoldsPlanes: (held: WindowTabs) => __TAURI_INVOKE<void>("window_holds_planes", { held }),
 	/**
+	 *  Makes a NEW project — scaffolds a plane in a directory — **and opens it through the gate**.
+	 * 
+	 *  Two halves, in this order and never the other way round. What is written is
+	 *  `scaffold::init`'s, which is `charter init`; what happens next is [`open_plane`]'s gate,
+	 *  because a plane charter has just created is still a plane this machine has approved
+	 *  nothing about (ADR 0035). So the ordinary answer to this command is an [`Ask`], and the
+	 *  operator reads what their new project contributes before it is opened — the same dialog, on
+	 *  the same path, as a project that came from a recents row.
+	 * 
+	 *  **It never writes a plane into a repository the operator pointed at.** That is `init`'s own
+	 *  refusal (`scaffold::repo_is_not_a_plane_yet`) and ADR 0035's decision, and it is reached
+	 *  here rather than reimplemented: a directory picked in a dialog has nobody standing in it,
+	 *  so the scaffolding — including an edit to a tracked `.gitignore` — is a write nobody typed.
+	 *  `plane_is_this_repo` is the operator asking for the old shape **by name**, which is how
+	 *  charter's own plane exists, and it comes from a box they ticked.
+	 * 
+	 *  **The directory is the directory, and no walk decides otherwise.** `plane::place` — what
+	 *  the CLI's `init` uses — reads `$CHARTER_ROOT` and walks up to an enclosing plane, which is
+	 *  right for a command run where somebody is standing and wrong for one handed a path: a new
+	 *  project inside `~/code` would otherwise be scaffolded into whatever plane happens to be
+	 *  above it. The walk is still asked, through `plane::find_root`, but only to REFUSE: a
+	 *  directory inside a plane is a place for a workspace's clone, not for a second plane.
+	 */
+	createProject: (path: string, planeIsThisRepo: boolean) => typedError<Opened, string>(__TAURI_INVOKE("create_project", { path, planeIsThisRepo })),
+	/**
 	 *  Starts a session, and remembers it as a chat so a quit can write it down. No program is
 	 *  the operator's shell.
 	 */
@@ -279,6 +304,39 @@ export const commands = {
 	 */
 	startChat: (plane: PlaneId, profile: string, persona: string | null, cwd: string | null, name: string, showFooter: boolean, columns: number, rows: number) => typedError<Started, string>(__TAURI_INVOKE("start_chat", { plane, profile, persona, cwd, name, showFooter, columns, rows })),
 	/**
+	 *  Make a workspace: `charter workspace create <name>`, with the vision when one was typed.
+	 * 
+	 *  **The name is checked by the core and by nothing in the window.** `wscmd::create` runs
+	 *  `wscmd::ensure`, which is where `contain::workspace_name_ok` is, so the app refuses exactly
+	 *  the names a terminal refuses and says the same sentence about them. A second alphabet in
+	 *  the dialog would be a second answer to what a workspace may be called, and the two would
+	 *  drift the first time either moved.
+	 * 
+	 *  LOCAL, never LIVE, and it selects nothing: `--live` commits a workspace's manifest and
+	 *  memory into the plane's own git, and `--use` writes a session lock that belongs to a
+	 *  terminal. Neither is a default the window may take on the operator's behalf; both are
+	 *  `charter workspace live` and `charter workspace use`, which still exist.
+	 */
+	workspaceCreate: (plane: PlaneId, name: string, vision: string | null) => typedError<string[], string>(__TAURI_INVOKE("workspace_create", { plane, name, vision })),
+	/**
+	 *  What deleting this workspace would discard, for the dialog to show **before** anything is
+	 *  pressed.
+	 * 
+	 *  The core's own guard, read for drawing. It decides nothing: [`workspace_remove`] asks again,
+	 *  inside `wscmd::remove`, against the disk as it is at the moment of the delete. A window that
+	 *  treated this answer as the decision would be deciding on a reading that is already old — and
+	 *  worse, one taken while the operator read a dialog.
+	 */
+	workspaceAtRisk: (plane: PlaneId, workspace: string) => typedError<AtRisk[], string>(__TAURI_INVOKE("workspace_at_risk", { plane, workspace })),
+	/**
+	 *  Delete a workspace and its clones: `charter workspace remove <name> [--force]`.
+	 * 
+	 *  **This is the one delete, and the guard is inside it.** See this module's header. `force` is
+	 *  the operator saying to discard work the core found — it is never passed on their behalf, and
+	 *  the window asks for it only after showing them the refusal the core gave.
+	 */
+	workspaceRemove: (plane: PlaneId, workspace: string, force: boolean) => typedError<string[], string>(__TAURI_INVOKE("workspace_remove", { plane, workspace, force })),
+	/**
 	 *  The piece a chat's working directory sits in, or `None`.
 	 * 
 	 *  Called for every chat the sidebar draws. `worktree::locate` is path arithmetic and spawns
@@ -417,6 +475,19 @@ export type Ask = {
 	changes: string[],
 	/**  Whether this is a first approval rather than a re-ask, so the dialog can say which. */
 	first: boolean,
+};
+
+/**
+ *  One reason a workspace holds work that deleting it would discard.
+ * 
+ *  A mirror of [`wscmd::AtRisk`] rather than the thing itself, because `charter-core` never
+ *  depends on the app and the app's wire types are generated into TypeScript.
+ */
+export type AtRisk = {
+	/**  What to look at: a clone's name, or `<repo>/<piece>` for a worktree. */
+	what: string,
+	/**  charter's own sentence about it, name included: `svc: 2 unpushed commit(s)`. */
+	said: string,
 };
 
 /**  Where a chat is working, when it is working in a piece. */

@@ -1,0 +1,355 @@
+import { StrictMode } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { cleanup, fireEvent, render as renderBare, screen, within } from "@testing-library/react";
+import { userEvent } from "@testing-library/user-event";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
+import App from "./App";
+
+/**
+ * Making a workspace and deleting one, from the window.
+ *
+ * **The delete is what these tests are for.** `charter workspace remove` refuses over work
+ * that removing the workspace would discard (`wscmd::work_at_risk`), and that guard runs
+ * inside the command. So what has to be true of the window is narrow and checkable:
+ *
+ * - the only thing it ever calls is `workspace_remove`;
+ * - the first press passes `force: false`, always;
+ * - a refusal is shown in the core's own words, and **nothing is deleted**;
+ * - forcing is a second press on a button that did not exist before the refusal, and it names
+ *   what it is about to discard.
+ *
+ * Against the whole app rather than the dialog alone, because the claim is about the path from
+ * a right-click on a strip to an IPC call, and a test of the dialog in isolation would leave
+ * every step of that path unasserted.
+ */
+
+vi.mock("./SessionPane", () => ({
+  SessionPane: ({ session }: { session: number }) => (
+    <div data-testid="pane">session {session}</div>
+  ),
+}));
+
+const render = (ui: React.ReactElement) => renderBare(<StrictMode>{ui}</StrictMode>);
+
+afterEach(() => {
+  cleanup();
+  clearMocks();
+});
+
+const PLANE = "/home/dev/plane";
+
+/** The refusal the core gives when a clone in the workspace has uncommitted work. */
+const REFUSED =
+  "Refusing to remove 'alpha' — this would discard work: svc: uncommitted changes. " +
+  "Push/commit first, or pass --force.";
+
+/**
+ * The core, with a plane of two workspaces and a workspace verb that answers as charter does.
+ *
+ * `remove` refuses unless it is forced, exactly as `wscmd::remove` refuses: the point of these
+ * tests is what the WINDOW does with that refusal, so the mock has to give one.
+ */
+function core(
+  over: {
+    atRisk?: { what: string; said: string }[];
+    refuses?: boolean;
+  } = {},
+) {
+  const asked: { cmd: string; args: Record<string, unknown> }[] = [];
+  const atRisk = over.atRisk ?? [{ what: "svc", said: "svc: uncommitted changes" }];
+  const refuses = over.refuses ?? true;
+  const gone: string[] = [];
+  mockIPC((cmd, args) => {
+    const got = (args ?? {}) as Record<string, unknown>;
+    asked.push({ cmd, args: got });
+    if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
+    if (cmd === "opened_chats") return [];
+    if (cmd === "chats_that_would_not_start") return [];
+    if (cmd === "running_sessions") return [];
+    if (cmd === "chat_states") return [];
+    if (cmd === "plane_sidebar")
+      return {
+        root: PLANE,
+        personas: ["steward"],
+        persona: "steward",
+        unfiled: [],
+        workspaces: ["alpha", "beta"]
+          .filter((name) => !gone.includes(name))
+          .map((name) => ({
+            name,
+            path: `${PLANE}/workspaces/${name}`,
+            vision: "",
+            todos: [],
+            chats: [],
+          })),
+      };
+    if (cmd === "workspace_at_risk") return atRisk;
+    if (cmd === "workspace_remove") {
+      if (refuses && got.force !== true) throw REFUSED;
+      gone.push(String(got.workspace));
+      return [`✓ Removed workspace '${String(got.workspace)}' and its clones.`];
+    }
+    if (cmd === "workspace_create") {
+      const name = String(got.name);
+      if (name.includes("/"))
+        throw `invalid workspace name '${name}' (use letters, digits, '.', '_', '-'; must not start with a dot)`;
+      return [`✓ Workspace '${name}' ready (LOCAL) → workspaces/${name}/`];
+    }
+    return null;
+  });
+  return { asked, calls: (cmd: string) => asked.filter((one) => one.cmd === cmd) };
+}
+
+/** The workspaces, as the strip lists them. */
+const strip = () =>
+  within(screen.getByRole("tablist", { name: "Workspaces" }))
+    .getAllByRole("tab")
+    .map((tab) => tab.querySelector(".workspace-name")?.textContent);
+
+/** Right-clicks a workspace tab and waits for charter's own menu. */
+async function menuOn(workspace: string) {
+  const tab = within(screen.getByRole("tablist", { name: "Workspaces" }))
+    .getAllByRole("tab")
+    .find((one) => one.querySelector(".workspace-name")?.textContent === workspace);
+  if (!tab) throw new Error(`no ${workspace} on the strip; it lists ${strip().join(", ")}`);
+  fireEvent.contextMenu(tab);
+  return await screen.findByRole("menu");
+}
+
+/** Opens the delete dialog for one workspace, through the menu an operator would use. */
+async function askToDelete(workspace: string) {
+  await menuOn(workspace);
+  await userEvent.click(screen.getByRole("menuitem", { name: `Delete workspace ${workspace}` }));
+  return await screen.findByRole("alertdialog");
+}
+
+async function settled() {
+  await vi.waitFor(() => expect(strip()).toEqual(["alpha", "beta"]));
+}
+
+describe("deleting a workspace", () => {
+  it("is reached from the workspace tab's own menu, which the operator asked for", async () => {
+    core();
+    render(<App />);
+    await settled();
+
+    const menu = await menuOn("alpha");
+
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((row) => row.textContent?.trim()),
+    ).toEqual([
+      "Focus workspace alpha",
+      expect.stringContaining("Pin workspace alpha"),
+      "New workspace…",
+      expect.stringContaining("Delete workspace alpha"),
+    ]);
+  });
+
+  it("shows what charter would discard before anything is pressed", async () => {
+    // The preview is `workspace_at_risk`, which is the core's own guard read for drawing. The
+    // sentences are charter's, not the window's.
+    const { calls } = core();
+    render(<App />);
+    await settled();
+
+    await askToDelete("alpha");
+
+    expect(calls("workspace_at_risk")[0].args).toMatchObject({
+      plane: PLANE,
+      workspace: "alpha",
+    });
+    expect(await screen.findByText("svc: uncommitted changes")).toBeInTheDocument();
+  });
+
+  it("never forces on the first press, and offers no way to", async () => {
+    const { calls } = core();
+    render(<App />);
+    await settled();
+    const dialog = await askToDelete("alpha");
+    await screen.findByText("svc: uncommitted changes");
+
+    // The only answer on screen is the one that does not force.
+    expect(
+      within(dialog)
+        .getAllByRole("button")
+        .map((button) => button.textContent),
+    ).toEqual(["Delete workspace", "Cancel"]);
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete workspace" }));
+
+    expect(calls("workspace_remove").map((one) => one.args)).toEqual([
+      { plane: PLANE, workspace: "alpha", force: false },
+    ]);
+  });
+
+  it("shows the core's refusal word for word, and deletes nothing", async () => {
+    const { calls } = core();
+    render(<App />);
+    await settled();
+    const dialog = await askToDelete("alpha");
+    await screen.findByText("svc: uncommitted changes");
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete workspace" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(REFUSED);
+    // One call, and it was the one that asked the core to refuse.
+    expect(calls("workspace_remove")).toHaveLength(1);
+    // The strip is only reachable once the dialog is answered: a Radix alert dialog marks
+    // the rest of the window `aria-hidden`, which is the surface behaving correctly
+    // (`docs/ui-primitives.md`). Cancelled, the workspace is still there.
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(strip()).toEqual(["alpha", "beta"]);
+  });
+
+  it("only then offers to force, and the button names what it discards", async () => {
+    const { calls } = core();
+    render(<App />);
+    await settled();
+    const dialog = await askToDelete("alpha");
+    await screen.findByText("svc: uncommitted changes");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete workspace" }));
+    await within(dialog).findByRole("alert");
+
+    const force = within(dialog).getByRole("button", {
+      name: "Delete it anyway, discarding the work in svc",
+    });
+    // And the answer that does not force has gone: a dialog offering both is offering to
+    // force to somebody who has read nothing.
+    expect(within(dialog).queryByRole("button", { name: "Delete workspace" })).toBeNull();
+
+    await userEvent.click(force);
+
+    expect(calls("workspace_remove").map((one) => one.args.force)).toEqual([false, true]);
+    await vi.waitFor(() => expect(strip()).toEqual(["beta"]));
+  });
+
+  it("deletes nothing when the dialog is cancelled", async () => {
+    const { calls } = core();
+    render(<App />);
+    await settled();
+    const dialog = await askToDelete("alpha");
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    expect(calls("workspace_remove")).toEqual([]);
+    expect(strip()).toEqual(["alpha", "beta"]);
+  });
+
+  it("goes through workspace_remove and never through anything else", async () => {
+    // The guard is INSIDE `wscmd::remove`. A window that reached a lower-level call would be
+    // past it, which is the worst defect available here — so the whole IPC transcript of a
+    // delete is asserted, not just the call that was expected.
+    const { asked } = core({ refuses: false });
+    render(<App />);
+    await settled();
+    const dialog = await askToDelete("alpha");
+    const before = asked.length;
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete workspace" }));
+    await vi.waitFor(() => expect(strip()).toEqual(["beta"]));
+
+    // Everything else the delete sets off is the window reading the plane again: the sidebar,
+    // this operator's pins, and the two the three regions share for whatever workspace the
+    // window lands on afterwards. None of them writes anything.
+    const READS = [
+      "plane_sidebar",
+      "plane_pins",
+      "workspace_panels",
+      "workspace_repos",
+      "alerts_everywhere",
+      "window_holds_planes",
+    ];
+    const during = asked.slice(before).map((one) => one.cmd);
+    expect(during.filter((cmd) => !READS.includes(cmd))).toEqual(["workspace_remove"]);
+  });
+
+  it("says what the core said when it worked", async () => {
+    core({ refuses: false });
+    render(<App />);
+    await settled();
+    const dialog = await askToDelete("alpha");
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete workspace" }));
+
+    expect(
+      await screen.findByText("✓ Removed workspace 'alpha' and its clones."),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("making a workspace", () => {
+  async function askToCreate() {
+    await menuOn("alpha");
+    await userEvent.click(screen.getByRole("menuitem", { name: "New workspace…" }));
+    return await screen.findByRole("dialog");
+  }
+
+  it("is reached from the same menu, and asks for the name and the vision", async () => {
+    const { calls } = core();
+    render(<App />);
+    await settled();
+    const dialog = await askToCreate();
+
+    await userEvent.type(within(dialog).getByLabelText("Name"), "gamma");
+    await userEvent.type(within(dialog).getByLabelText("What it is for (optional)"), "ship it");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create workspace" }));
+
+    expect(calls("workspace_create").map((one) => one.args)).toEqual([
+      { plane: PLANE, name: "gamma", vision: "ship it" },
+    ]);
+  });
+
+  it("sends no vision when the box was left empty", async () => {
+    // An empty box is no vision, not a vision that is empty — the core would otherwise write
+    // an empty `## Vision` and read it back as one that had been recorded.
+    const { calls } = core();
+    render(<App />);
+    await settled();
+    const dialog = await askToCreate();
+
+    await userEvent.type(within(dialog).getByLabelText("Name"), "gamma");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create workspace" }));
+
+    expect(calls("workspace_create")[0].args.vision).toBeNull();
+  });
+
+  it("cannot be answered with nothing", async () => {
+    core();
+    render(<App />);
+    await settled();
+    const dialog = await askToCreate();
+
+    expect(within(dialog).getByRole("button", { name: "Create workspace" })).toBeDisabled();
+  });
+
+  it("shows the core's refusal about a name, in the dialog, and stays open", async () => {
+    // The window validates no name of its own: `workspace_create` runs `wscmd::ensure`, which
+    // is where `contain::workspace_name_ok` is. A second alphabet here would drift.
+    core();
+    render(<App />);
+    await settled();
+    const dialog = await askToCreate();
+
+    await userEvent.type(within(dialog).getByLabelText("Name"), "../escape");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create workspace" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "invalid workspace name '../escape'",
+    );
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+  });
+
+  it("reads the plane again rather than writing the new workspace into its own copy", async () => {
+    const { calls } = core();
+    render(<App />);
+    await settled();
+    const before = calls("plane_sidebar").length;
+    const dialog = await askToCreate();
+
+    await userEvent.type(within(dialog).getByLabelText("Name"), "gamma");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Create workspace" }));
+
+    await vi.waitFor(() => expect(calls("plane_sidebar").length).toBeGreaterThan(before));
+  });
+});
