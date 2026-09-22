@@ -1,5 +1,12 @@
 import { browser, expect, $, $$ } from "@wdio/globals";
-import { answerTheAsk, endChat, pickAndStart, pressAndStart, pressOnly } from "../opening.js";
+import {
+  answerTheAsk,
+  endChat,
+  pickAndStart,
+  pressAndStart,
+  pressOnly,
+  whereTheKeyboardIs,
+} from "../opening.js";
 
 /**
  * The command palette against the real app, driven by the keyboard and nothing else.
@@ -31,22 +38,6 @@ async function openPalette() {
   const up = await $(PALETTE);
   await up.waitForDisplayed({ timeout: 20_000 });
   return up;
-}
-
-/**
- * What has the keyboard right now, as a sentence.
- *
- * **For the failure message, not for an assertion.** A spec about the keyboard that fails
- * saying only "expected not to be displayed" has said nothing about the keyboard, which is
- * how a wrong key cost a whole CI round once already.
- */
-async function hasTheKeyboard(): Promise<string> {
-  return browser.execute(() => {
-    const on = document.activeElement;
-    if (!on) return "nothing";
-    const named = on.getAttribute("aria-label") ?? on.textContent ?? "";
-    return `<${on.tagName.toLowerCase()}> ${JSON.stringify(named.trim().slice(0, 40))}`;
-  });
 }
 
 /**
@@ -275,7 +266,7 @@ describe("the command palette", () => {
     const keysSeen = await watchKeys();
     // Radix puts the focus on `Cancel` — the non-destructive answer, deliberately — so a
     // Return pressed by reflex cancels rather than ends.
-    expect(await hasTheKeyboard()).toContain("Cancel");
+    expect(await whereTheKeyboardIs()).toContain("Cancel");
 
     await browser.keys(["Escape"]);
 
