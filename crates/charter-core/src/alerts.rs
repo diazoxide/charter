@@ -543,7 +543,7 @@ fn head_detached(gitdir: &Path) -> Result<bool, ()> {
         None => false,
         Some(text) => {
             let text = crate::memstore::py_strip(&text);
-            !text.is_empty() && !text.starts_with("ref:")
+            !text.is_empty() && text.starts_with("ref:")
         }
     })
 }
