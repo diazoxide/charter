@@ -513,8 +513,15 @@ body {
   border-bottom: 1px solid var(--border-subtle);
 }
 
+/* **The panes take the centre region's whole height, by `height`, not by `flex`.**
+   This was `flex: 1` from when `.panes` sat in a flex column. Since the four regions it sits in
+   the centre panel's inner box, which `react-resizable-panels` draws as a plain block — so
+   `flex: 1` meant nothing, `.panes` took its content's height, and xterm's `FitAddon` fitted
+   each terminal to a box exactly as tall as the terminal already was: 24 rows, and the rest of
+   the region empty. `.region-centre` has a definite height (the rule below), so 100% of it is
+   the region. `pane-fill.e2e.ts` is what measures it; jsdom lays nothing out. */
 .panes {
-  flex: 1;
+  height: 100%;
   min-height: 0;
 }
 
