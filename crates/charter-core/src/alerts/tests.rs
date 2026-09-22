@@ -427,6 +427,17 @@ fn origin_head_decides_the_default_and_a_packed_main_is_still_main() {
 }
 
 #[test]
+fn a_head_charter_cannot_read_is_no_branch_to_be_off_and_not_a_detached_one() {
+    // `?` is `branch_of`'s "HEAD unreadable": nothing to compare against the default, so
+    // nothing is claimed — and unknown is not the most alarming state either.
+    let (_held, root) = plane(HEALTHY);
+    repo(&root);
+    std::fs::remove_file(root.join(".git/HEAD")).unwrap();
+    std::fs::create_dir(root.join(".git/HEAD")).unwrap();
+    assert_eq!(reading(&root), Reading::default());
+}
+
+#[test]
 fn a_plane_root_with_no_default_to_be_off_says_nothing_about_its_branch() {
     let (_held, root) = plane(HEALTHY);
     repo(&root);
