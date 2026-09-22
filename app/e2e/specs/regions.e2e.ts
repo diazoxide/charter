@@ -72,6 +72,21 @@ async function untilTheStripIsRead(): Promise<void> {
   );
 }
 
+/**
+ * A persona's row in the right-hand region, by its own name.
+ *
+ * By text across the section's buttons rather than `button=<name>`: the row carries a mark
+ * and, for the plane's default, the word `default` and a star, so an exact-text match finds
+ * none of them and a window-wide match would pick whichever came first.
+ */
+async function personaRow(persona: string) {
+  const rows = await $$('[data-testid="panel-personas"] button').getElements();
+  for (const row of rows) {
+    if ((await row.getText()).startsWith(persona)) return row;
+  }
+  throw new Error(`no ${persona} among the personas the panel lists`);
+}
+
 describe("the bottom bar", () => {
   it("lists the focused workspace's repos with the branch each is on", async () => {
     await onAlpha();
@@ -286,6 +301,76 @@ describe("the right-hand region", () => {
     await $('[data-testid="panels"]').waitForExist({ timeout: 20_000 });
 
     expect(await $('[data-testid="panel-alerts"]').isExisting()).toBe(false);
+  });
+
+  /**
+   * **A persona row opens**, against the real app and the fixture plane's two real
+   * definitions: `devops` (`vault: devops`, a `delegate-when`, a role) and `steward`
+   * (`vault: none`, and the plane's default).
+   *
+   * The operator: *"personas list in right sidebar is just texts, without click action, we
+   * can on clicking show some info about persona."* What it shows is what the core already
+   * reads off `personas/<name>/persona.md` — nothing here invents a field.
+   */
+  it("opens a persona's own definition when its row is clicked", async () => {
+    await onAlpha();
+    await untilSays("panel-personas", "devops");
+
+    await (await personaRow("devops")).click();
+
+    const card = await $('[data-testid="persona-details-devops"]');
+    await card.waitForExist({ timeout: 20_000 });
+    await browser.waitUntil(async () => (await card.getText()).includes("DevOps Engineer"), {
+      timeout: 20_000,
+      timeoutMsg: "the card never said what the fixture's `devops` declares as its role",
+    });
+    const said = await card.getText();
+    // `delegate-when` is what makes a persona findable, and what a router reads.
+    expect(said).toContain("k8s deploys");
+    expect(said).toContain("personas/devops/persona.md");
+
+    // **The vault, asked of the element that holds it and not of the card's text.** A
+    // mutation that replaced the vault's name with a fixed word left `toContain("devops")`
+    // green, because the card is headed `devops` — the persona is called that too. What the
+    // card says about a vault is a NAME, which is the whole of what charter will ever put on
+    // a panel about one, so the name is what is read back.
+    const vault = await browser.execute(() => {
+      const names = document.querySelectorAll('[data-testid="persona-details-devops"] code');
+      return [...names].map((name) => name.textContent);
+    });
+    expect(vault).toEqual(["devops", "personas/devops/persona.md"]);
+
+    await browser.keys("Escape");
+    await browser.waitUntil(async () => !(await card.isExisting()), {
+      timeout: 20_000,
+      timeoutMsg: "the card did not close on Escape",
+    });
+  });
+
+  it("says a persona holds no credentials where its definition says so", async () => {
+    // The fixture's `steward` declares `vault: none` — deliberately nothing, which is not
+    // the same answer as a definition that names no vault at all.
+    await onAlpha();
+    await untilSays("panel-personas", "steward");
+
+    await (await personaRow("steward")).click();
+
+    const card = await $('[data-testid="persona-details-steward"]');
+    await card.waitForExist({ timeout: 20_000 });
+    await browser.waitUntil(async () => (await card.getText()).includes("no credentials"), {
+      timeout: 20_000,
+      timeoutMsg: "the card never said what `vault: none` means",
+    });
+
+    // **Not modal**: the queue this region exists for is still reachable while a card is up.
+    // A Radix dialog would have marked it `aria-hidden` and this would find nothing.
+    expect(await $('[data-testid="panels"] [aria-label="Needs you"]').isExisting()).toBe(true);
+
+    await browser.keys("Escape");
+    await browser.waitUntil(async () => !(await card.isExisting()), {
+      timeout: 20_000,
+      timeoutMsg: "the card did not close on Escape",
+    });
   });
 
   it("no longer holds the repos or the CI, which went to the bottom bar", async () => {
