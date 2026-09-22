@@ -102,6 +102,27 @@ drawer asks nothing and a stray click cannot answer anything. Radix hands focus 
 `Dialog.Trigger`, and the button that opens this lives in a project's status line while the drawer
 is the window's, so the drawer remembers where the keyboard was and puts it back itself.
 
+And the **persona card** (`@radix-ui/react-popover`, `app/src/Panels.tsx`): what a row in the
+right-hand region's persona list opens. It is the first popover in the window, and it was picked
+over the other two surfaces Radix has for the same content:
+
+- **Not a dialog**, because a dialog is modal and modal is wrong here twice. Radix marks
+  everything outside an open dialog `aria-hidden`, including the needs-you queue two sections up
+  — the one surface charter ADR 0038 says this region must never compete with — and a modal is
+  for a question that has to be answered before anything else happens. A persona's role is
+  reading.
+- **Not a sheet**, because the window already has one and it is the window's: `AlertsDrawer` is a
+  sheet from the right over every open project. A second sheet, over one project's region, would
+  be two drawers with two different rules and two different scopes.
+- **A popover is anchored to the row it is about**, which is what makes a card legible when five
+  of them are listed one under the other.
+
+It takes the show-more menu's two decisions rather than the four dialogs': **not modal**, so the
+rest of the window stays reachable to a screen reader and to a scenario spec, and **a click
+outside closes it**, because there is no answer to lose. `side="left"` is where it opens from in
+the default arrangement and no more than that — a region MOVES (ADR 0038), and Radix flips to the
+other side when there is no room, which is what makes naming a side safe at all.
+
 Two decisions those four share, taken once so they do not have to be taken again per dialog:
 
 - **A click outside answers nothing.** `onInteractOutside` is prevented on all four, which is

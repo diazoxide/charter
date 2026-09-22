@@ -374,6 +374,30 @@ fn workspace_panels(
     panels::of(planes.held(&plane)?.root(), &workspace)
 }
 
+/// What one persona's definition says about it: its role, when to delegate to it, its tools,
+/// the vault it names and what it extends.
+///
+/// **Its own command, asked when a row is clicked, and not part of `workspace_panels`.** The
+/// panels are the hot path of focusing a workspace — the spec gives that 100 ms — and folding
+/// this in would read every persona's definition, and every definition up every `extends:`
+/// chain, on every focus, for something nobody has asked to see. A plane with twenty personas
+/// would pay for twenty file reads per click on the workspace strip.
+///
+/// **It names its plane**, like every other command here: a persona belongs to a plane, and a
+/// window holds several.
+///
+/// It answers with `charter_core::personas::name_refusal`'s own sentence where it will not
+/// answer — the same words the CLI gives for the same name.
+#[tauri::command]
+#[specta::specta]
+fn persona_details(
+    planes: tauri::State<'_, Planes>,
+    plane: PlaneId,
+    persona: String,
+) -> Result<panels::PersonaDetails, String> {
+    panels::persona(planes.held(&plane)?.root(), &persona)
+}
+
 /// What git says about each of the focused workspace's clones, and what the forge cache
 /// last recorded for the branch each is on.
 ///
@@ -1039,6 +1063,7 @@ fn commands() -> Builder<tauri::Wry> {
         window_showing,
         plane_sidebar,
         workspace_panels,
+        persona_details,
         workspace_repos,
         alerts_everywhere,
         start_options,

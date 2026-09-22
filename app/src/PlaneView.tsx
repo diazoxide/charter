@@ -1319,6 +1319,7 @@ export function PlaneView({
           ),
           aside: (
             <Panels
+              plane={plane}
               workspace={ofWorkspace}
               state={workspaceState}
               queue={states.needsYou}
