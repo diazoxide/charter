@@ -1351,6 +1351,7 @@ export function PlaneView({
           surface that is drawn whatever else the window is doing. */}
       <StatusLine
         plane={plane}
+        read={sidebar !== undefined}
         where={focused === OUTSIDE ? OUTSIDE_TITLE : focused}
         workspaces={sidebar?.workspaces.length}
         state={workspaceState}

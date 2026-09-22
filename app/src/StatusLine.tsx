@@ -70,6 +70,7 @@ import type { WorkspaceState } from "./workspaceState";
  */
 export function StatusLine({
   plane,
+  read,
   where,
   workspaces,
   state,
@@ -77,11 +78,19 @@ export function StatusLine({
 }: {
   /** The project's root directory — the path that used to sit in the top-right corner. */
   plane: string;
-  /** The workspace the window is on, as it should be read. `undefined` until the plane has
-   *  been read, which is a different claim from "no workspace". */
+  /**
+   * Whether the plane has been read at all.
+   *
+   * **Separate from {@link where}, because "not yet" and "nowhere" are different claims** and
+   * the workspace's name cannot carry both. A plane that holds no workspaces answers
+   * perfectly well and leaves the window on none of them; a line that said *"reading the
+   * plane…"* under it would be charter waiting for something that has already happened.
+   */
+  read: boolean;
+  /** The workspace the window is on, as it should be read. `undefined` when it is on none. */
   where: string | undefined;
   /** How many workspaces this project has, for `ws N`. `undefined` until the plane has been
-   *  read. */
+   *  read. Zero IS drawn: a plane with no workspaces is a fact, not an absence of one. */
   workspaces: number | undefined;
   /** What the core has said about the focused workspace. The counts are read off it and
    *  nothing extra is asked for: `useWorkspaceState` already makes these calls once for the
@@ -112,10 +121,14 @@ export function StatusLine({
         <span className="status-glyph" aria-hidden="true">
           ⬢
         </span>{" "}
-        {where === undefined ? (
-          <span className="pending">reading the plane…</span>
-        ) : (
+        {where !== undefined ? (
           <span className="status-workspace">{where}</span>
+        ) : read ? (
+          // The plane answered and the window is on no workspace — a plane that holds none,
+          // or one whose workspaces all went away. Said, because it is the answer.
+          <span className="none">no workspace</span>
+        ) : (
+          <span className="pending">reading the plane…</span>
         )}
       </span>
 

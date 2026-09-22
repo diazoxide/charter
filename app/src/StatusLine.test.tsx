@@ -49,7 +49,14 @@ type Props = Parameters<typeof StatusLine>[0];
 
 /** The line, with everything read and nothing to count unless a test says so. */
 function draw(over: Partial<Props> = {}) {
-  const props: Props = { plane: PLANE, where: "alpha", workspaces: 2, state: state(), ...over };
+  const props: Props = {
+    plane: PLANE,
+    read: true,
+    where: "alpha",
+    workspaces: 2,
+    state: state(),
+    ...over,
+  };
   return render(<StatusLine {...props} />);
 }
 
@@ -67,11 +74,22 @@ describe("the status line says where you are", () => {
     // Before the plane has answered there is no workspace to name, and an empty cell there
     // would read as "you are nowhere" — which is a different claim from "charter has not
     // looked yet".
-    draw({ where: undefined, workspaces: undefined });
+    draw({ read: false, where: undefined, workspaces: undefined });
 
     expect(words()).toContain("reading the plane…");
     // And `ws 0` is not drawn either, for the same reason: nobody has counted yet.
     expect(screen.queryByTestId("status-workspaces")).toBeNull();
+  });
+
+  it("says the window is on no workspace once the plane has answered with none", () => {
+    // A plane that holds no workspaces answers perfectly well. "reading the plane…" under it
+    // would be charter waiting forever for something that has already happened.
+    draw({ read: true, where: undefined, workspaces: 0 });
+
+    expect(words()).toContain("no workspace");
+    expect(words()).not.toContain("reading");
+    // Zero IS drawn for `ws`: an empty plane is a fact, not an absence of one.
+    expect(within(screen.getByTestId("status-workspaces")).getByText("0")).toBeInTheDocument();
   });
 
   it("carries the project's directory, whole, as the path it is", () => {
