@@ -153,6 +153,26 @@ describe("useUpdates", () => {
     return hook;
   }
 
+  it("draws the quiet updater, and rejects nothing, when the core refuses to listen", async () => {
+    clearMocks();
+    mockIPC(() => {
+      throw new Error("refused");
+    });
+    const unhandled: unknown[] = [];
+    const note = (e: PromiseRejectionEvent | unknown) => unhandled.push(e);
+    process.on("unhandledRejection", note);
+    try {
+      const { result } = renderHook(() => useUpdates());
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      expect(result.current.state).toEqual({ kind: "quiet" });
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", note);
+    }
+  });
+
   it("shows the offer a check found, and goes quiet when a check finds none", async () => {
     const { result } = await mounted();
 

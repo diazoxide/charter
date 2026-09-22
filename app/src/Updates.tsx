@@ -96,7 +96,11 @@ export function useUpdates(): Updates {
         asked.current = false;
         if (wasAsked) setState({ kind: "failed", why });
       });
-    })();
+    })().catch(() => {
+      // A window that cannot listen draws the quiet updater — the icon, the channel, and
+      // `Check now` — rather than taking the status line down. Seen on CI: a test whose mock
+      // core throws for every command it does not name made `listen` reject, unhandled.
+    });
     void commands
       .updateChannel()
       .then((now) => {
