@@ -318,10 +318,11 @@ export const commands = {
 	/**
 	 *  What has contributed what to this window.
 	 * 
-	 *  It reads the disk — every installed extension's manifest and every file it declares, to
-	 *  re-take the fingerprint — because an approval is of bytes and the bytes are what may have
-	 *  changed since. ADR 0041 names that cost: *the fingerprint is a hash of code, checked at
-	 *  each launch*. Off the UI thread for exactly that reason.
+	 *  It reads the disk — every installed extension's whole directory, to re-take the fingerprint
+	 *  — because an approval is of bytes and the bytes are what may have changed since. ADR 0041
+	 *  names that cost: *the fingerprint is a hash of code, checked at each launch*, and
+	 *  charter-app#152 widened it from the declared list to the tree. Off the UI thread for exactly
+	 *  that reason, and the cost is measured in #152's PR body rather than left as an estimate.
 	 */
 	installedExtensions: () => typedError<InstalledExtensions, string>(__TAURI_INVOKE("installed_extensions")),
 	/**
@@ -485,10 +486,12 @@ export type DoctorStatus = "ok" | "warn" | "fail";
  *  A mirror of [`extension::Prompt`] rather than the thing itself, because `charter-core` never
  *  depends on the app and the app's wire types are generated into TypeScript.
  * 
- *  **The two sentences travel with it rather than being written in the dialog.** That is the
- *  point of carrying them: a window that composed its own words about what an extension can
+ *  **charter's own sentences travel with it rather than being written in the dialog.** That is
+ *  the point of carrying them: a window that composed its own words about what an extension can
  *  reach could drift kinder than the truth one edit at a time, and the truth here is
- *  uncomfortable enough that kinder is the likely direction.
+ *  uncomfortable enough that kinder is the likely direction. Since charter-app#152 there are
+ *  three of them, because the fingerprint note acquired an exception and an exception the window
+ *  worded itself would be the same drift through a smaller door.
  */
 export type ExtensionAsk = {
 	/**  The id the record is keyed by, and the id the yes is recorded against. */
@@ -519,6 +522,16 @@ export type ExtensionAsk = {
 	 *  boundary.
 	 */
 	fingerprint_note: string,
+	/**
+	 *  `extension::state_note` — which one directory charter does NOT read, when this
+	 *  extension declares one, and `null` when it declares none (charter-app#152).
+	 * 
+	 *  It travels for the same reason the other two do. The fingerprint note says charter read
+	 *  every file in the directory; the exception to that sentence belongs on the same screen
+	 *  as the sentence, in the core's words, or the wording has the defect #152 was opened over
+	 *  one carve-out later.
+	 */
+	state_note: string | null,
 };
 
 /**  One row of "what has contributed what to this window". */
