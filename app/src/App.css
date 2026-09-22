@@ -1328,3 +1328,50 @@ body {
 [data-separator].edge-gone {
   display: none;
 }
+
+/* The extension list (charter ADR 0041 item 5: what is in force, after approval and not only
+   at it). It is a `.warning` as well, so the dialog chrome is the one every other consent
+   surface in this window uses rather than a second look nobody maintains. Only the row shape
+   is here. */
+.extension-rows {
+  margin: 0 0 0.75rem;
+  padding: 0;
+  list-style: none;
+}
+
+.extension-rows li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  align-items: baseline;
+  padding: 0.4rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+  overflow-wrap: anywhere;
+}
+
+.extension-rows .name {
+  font-weight: 600;
+}
+
+/* A row's standing is the sentence that says whether anything it declares is actually in
+   force, so it is not dimmed the way a path is: "contributing nothing" is the answer, not a
+   footnote to it. */
+.extension-rows .standing {
+  color: var(--text-secondary);
+}
+
+.extension-rows .in-force {
+  color: var(--state-success);
+}
+
+/* The one paragraph in this window that must never read as a reassurance. It is charter's own
+   sentence about what it cannot stop an extension doing, and it is drawn as the dialog's
+   loudest text rather than as small print under the buttons. */
+.warning .runs-as-you {
+  margin-top: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  border-left: 2px solid var(--danger-base);
+  background: var(--danger-wash);
+  color: var(--text-primary);
+  opacity: 1;
+}

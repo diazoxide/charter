@@ -10,6 +10,7 @@ pub mod dispatch;
 pub mod docsrc;
 pub mod doctor;
 pub mod engine;
+pub mod extension;
 pub mod fence;
 pub mod floorguard;
 pub mod footer;
