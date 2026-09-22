@@ -1,3 +1,6 @@
+/// <reference types="node" />
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
@@ -256,5 +259,69 @@ describe("the explorer", () => {
     });
 
     expect(screen.getByRole("alert")).toHaveTextContent("alias");
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// Drawn as a tree (M6.6)
+// ---------------------------------------------------------------------------------------
+
+describe("the explorer is drawn as a tree", () => {
+  it("marks each kind of node with its own icon, so a chat leaf is told from a worktree leaf", () => {
+    draw({ chats: [chat(1, "ide.1", `${CUT}/one`)] });
+
+    const svc = screen.getByTestId("clone-svc");
+    // Lucide names each `<svg>` after its icon, which is the only handle a test has on which
+    // mark was drawn — the mark itself is hidden from the accessibility tree on purpose.
+    expect(svc.querySelector("summary .lucide-folder-git-2")).not.toBeNull();
+    expect(svc.querySelector("summary .twisty")).not.toBeNull();
+    const one = screen.getByTestId("piece-svc-one");
+    expect(one.querySelector(".spot .lucide-git-branch")).not.toBeNull();
+    expect(one.querySelector(".chat .lucide-square-terminal")).not.toBeNull();
+  });
+
+  it("keeps every row named by its words, with the icons beside them unread", () => {
+    draw({ chats: [chat(1, "ide.1", `${CUT}/one`)] });
+
+    // The names the rest of this file and the scenario specs press by. An icon that joined
+    // an accessible name would rename every row it was put on.
+    expect(screen.getByRole("button", { name: /^one$/ })).toBeInTheDocument();
+    for (const svg of screen.getByTestId("explorer").querySelectorAll("svg")) {
+      expect(svg.getAttribute("aria-hidden")).toBe("true");
+    }
+  });
+
+  it("spins only while something is still being read", () => {
+    draw({ state: state({ pieces: {} }) });
+    expect(screen.getByTestId("clone-svc").querySelector(".pending .spinning")).not.toBeNull();
+
+    cleanup();
+    draw({});
+    expect(screen.getByTestId("explorer").querySelector(".spinning")).toBeNull();
+  });
+});
+
+/**
+ * **The tree's guides may not paint a background**, because a region moves (ADR 0038).
+ *
+ * The usual way to stop a tree's vertical line at its last row is a rectangle in the background
+ * colour laid over the line's tail. That works exactly as long as the tree is on that
+ * background — and the explorer can be put in the bottom slot, which is `surface.deep`, where
+ * the mask would be a visible block. So each row draws only its own segment, and this holds
+ * the rule a well-meaning simplification would break.
+ */
+describe("the explorer's tree guides", () => {
+  const css = readFileSync(join(process.cwd(), "src/App.css"), "utf8");
+  const guides = [...css.matchAll(/([^{}]*\.explorer[^{}]*::(?:before|after)[^{}]*)\{([^}]*)\}/g)];
+
+  it("are drawn by rules the stylesheet has", () => {
+    expect(guides.length).toBeGreaterThan(0);
+  });
+
+  it("draw with borders only, so they need to know nothing about what is behind them", () => {
+    const painted = guides
+      .filter(([, , body]) => /(?:^|[;\s])background(?:-color)?\s*:/.test(body))
+      .map(([, selector]) => selector.trim());
+    expect(painted).toEqual([]);
   });
 });

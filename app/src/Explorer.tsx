@@ -1,3 +1,14 @@
+import type { ReactNode } from "react";
+import {
+  ChevronRight,
+  FolderGit2,
+  Folders,
+  FolderX,
+  GitBranch,
+  LoaderCircle,
+  SquareTerminal,
+  TriangleAlert,
+} from "lucide-react";
 import type { OpenChat } from "./bindings";
 import { ChatState } from "./NeedsYou";
 import { WorktreeMark } from "./Worktree";
@@ -27,6 +38,22 @@ import type { WorkspaceState } from "./workspaceState";
  * the core spelled, and a piece carries its own. Making the clone itself pickable needs the
  * core to say where it is, which is a change to `Panels` and to the generated bindings, and
  * it is not in this one.
+ *
+ * **It is drawn as a tree, and the lines are drawn by the rows rather than by the lists.**
+ * The nesting was always here — workspace, clone, piece, chat — and nothing said so: four
+ * levels of `padding-inline-start` and no line to follow, which is what the operator meant by
+ * *"trees are not looking like tree"*. Each row draws its own vertical segment and its own
+ * elbow (`App.css`, `.explorer .pieces > li::before`), so the last row's segment simply stops
+ * at the elbow. The usual trick — a line on the list, masked at the bottom by a rectangle in
+ * the background colour — cannot be used here, because **a region moves** (ADR 0038): the
+ * explorer put in the bottom slot sits on `surface.deep`, and a mask painted in `surface.base`
+ * would be a visible block. A row that draws its own line has no background to know.
+ *
+ * **The DOM is unchanged; only the look is.** This is deliberately not `role="tree"`. A real
+ * tree owes the keyboard arrow navigation, typeahead and `aria-expanded` on every node, and
+ * half a tree widget is worse for a screen reader than the list and `<details>` that are here
+ * — which already say "collapsible" and already say which row is current. That is its own
+ * ticket, and it is a behaviour change rather than a visual one.
  */
 export function Explorer({
   workspace,
@@ -72,21 +99,18 @@ export function Explorer({
 
   return (
     <nav className="explorer" aria-label="Explorer" data-testid="explorer">
-      {state.trouble && (
-        <p className="trouble" role="alert">
-          {state.trouble}
-        </p>
-      )}
+      {state.trouble && <Trouble>{state.trouble}</Trouble>}
 
       <button
         type="button"
-        className="spot"
+        className="spot spot-root"
         // Not `aria-selected`: that belongs to a tab, and the three tablists in this window
         // are the axis (ADR 0036). This is the current item of a list, which is what
         // `aria-current` is for, and it is what the old sidebar's workspace rows used.
         aria-current={spot === undefined ? "true" : undefined}
         onClick={() => onPick(undefined)}
       >
+        <Folders className="node-icon" />
         <span className="spot-name">{workspace}</span>
         <span className="spot-what">the workspace itself</span>
       </button>
@@ -97,68 +121,79 @@ export function Explorer({
       />
 
       {panels === undefined ? (
-        <p className="pending">Reading the plane…</p>
+        <Pending>Reading the plane…</Pending>
       ) : clones.length === 0 ? (
         <p className="none">No repos in this workspace</p>
       ) : (
-        clones.map((repo) => (
-          // `<details>` and not a primitive: the browser has a collapsible and
-          // `docs/ui-primitives.md` says native HTML that already does the job is not what
-          // the Radix rule is about. Open by default — a closed explorer explores nothing.
-          <details className="clone" key={repo} data-testid={`clone-${repo}`} open>
-            <summary>
-              <span className="repo">{repo}</span>
-              <PieceCount pieces={pieces[repo]} refused={piecesRefused[repo]} />
-            </summary>
-            {piecesRefused[repo] ? (
-              // Said, never swallowed: a clone with no rows otherwise reads as a clone
-              // nobody has cut a worktree in.
-              <p className="trouble" role="alert">
-                charter could not list the worktrees of <code>{repo}</code>: {piecesRefused[repo]}
-              </p>
-            ) : pieces[repo] === undefined ? (
-              <p className="pending">Asking git…</p>
-            ) : pieces[repo].length === 0 ? (
-              <p className="none">No worktrees cut here</p>
-            ) : (
-              <ul className="pieces">
-                {pieces[repo].map((piece) => {
-                  const here = chats.filter((chat) => under(chat.cwd, piece.path));
-                  const picked = spot?.repo === repo && spot.piece === piece.piece;
-                  return (
-                    <li key={piece.piece} data-testid={`piece-${repo}-${piece.piece}`}>
-                      <button
-                        type="button"
-                        className="spot"
-                        aria-current={picked ? "true" : undefined}
-                        // The whole path, because two clones in one workspace can hold a
-                        // piece of the same name and the row has room for one word.
-                        title={piece.path}
-                        onClick={() => onPick({ repo, piece: piece.piece, path: piece.path })}
-                      >
-                        <span className="spot-name">{piece.piece}</span>
-                      </button>
-                      {/* The branch, and the two states the operator has to see BEFORE they
+        // The clones are the workspace row's children, and the wrapper is what lets them be
+        // drawn as such — the tree lines hang off it, one level in from the root row.
+        <div className="clones">
+          {clones.map((repo) => (
+            // `<details>` and not a primitive: the browser has a collapsible and
+            // `docs/ui-primitives.md` says native HTML that already does the job is not what
+            // the Radix rule is about. Open by default — a closed explorer explores nothing.
+            <details className="clone" key={repo} data-testid={`clone-${repo}`} open>
+              <summary>
+                {/* The twisty says which way the disclosure goes, which the default marker
+                    said in the platform's own glyph at the platform's own size. It turns
+                    with `[open]`, and the turn is the one motion here that is a direct
+                    answer to a click — `prefers-reduced-motion` stops it all the same. */}
+                <ChevronRight className="twisty" />
+                <FolderGit2 className="node-icon" />
+                <span className="repo">{repo}</span>
+                <PieceCount pieces={pieces[repo]} refused={piecesRefused[repo]} />
+              </summary>
+              {piecesRefused[repo] ? (
+                // Said, never swallowed: a clone with no rows otherwise reads as a clone
+                // nobody has cut a worktree in.
+                <Trouble>
+                  charter could not list the worktrees of <code>{repo}</code>: {piecesRefused[repo]}
+                </Trouble>
+              ) : pieces[repo] === undefined ? (
+                <Pending>Asking git…</Pending>
+              ) : pieces[repo].length === 0 ? (
+                <p className="none">No worktrees cut here</p>
+              ) : (
+                <ul className="pieces">
+                  {pieces[repo].map((piece) => {
+                    const here = chats.filter((chat) => under(chat.cwd, piece.path));
+                    const picked = spot?.repo === repo && spot.piece === piece.piece;
+                    return (
+                      <li key={piece.piece} data-testid={`piece-${repo}-${piece.piece}`}>
+                        <button
+                          type="button"
+                          className="spot"
+                          aria-current={picked ? "true" : undefined}
+                          // The whole path, because two clones in one workspace can hold a
+                          // piece of the same name and the row has room for one word.
+                          title={piece.path}
+                          onClick={() => onPick({ repo, piece: piece.piece, path: piece.path })}
+                        >
+                          <GitBranch className="node-icon" />
+                          <span className="spot-name">{piece.piece}</span>
+                        </button>
+                        {/* The branch, and the two states the operator has to see BEFORE they
                           start a chat in a tree: `unwired` and `stale`. The same component
                           the palette's worktree rows are written against. */}
-                      <WorktreeMark
-                        worktree={{
-                          workspace,
-                          repo,
-                          piece: piece.piece,
-                          branch: piece.branch,
-                          wired: piece.wired,
-                          stale: piece.stale,
-                        }}
-                      />
-                      <ChatList chats={here} states={states} onShow={onShowChat} />
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </details>
-        ))
+                        <WorktreeMark
+                          worktree={{
+                            workspace,
+                            repo,
+                            piece: piece.piece,
+                            branch: piece.branch,
+                            wired: piece.wired,
+                            stale: piece.stale,
+                          }}
+                        />
+                        <ChatList chats={here} states={states} onShow={onShowChat} />
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </details>
+          ))}
+        </div>
       )}
 
       {(panels?.absent.length ?? 0) > 0 && (
@@ -168,18 +203,51 @@ export function Explorer({
             {panels?.absent.map((name) => (
               // Membership without a clone. There is nothing to explore in it and nothing
               // to start a chat in, so it is named and not made a heading.
-              <li key={name}>{name}</li>
+              <li key={name}>
+                <FolderX className="node-icon" />
+                {name}
+              </li>
             ))}
           </ul>
         </section>
       )}
 
       {panels?.refused.map(([name, why]) => (
-        <p className="trouble" role="alert" key={`refused-${name}`}>
+        <Trouble key={`refused-${name}`}>
           charter will not read <code>{name}</code>: {why}
-        </p>
+        </Trouble>
       ))}
     </nav>
+  );
+}
+
+/** A refusal, with the mark that says it is one.
+ *
+ *  The icon is decorative and Lucide hides it from a screen reader by itself (it adds
+ *  `aria-hidden` to any icon given no accessible name of its own), so what an assistive
+ *  technology gets is the alert and its sentence, exactly as before. */
+function Trouble({ children }: { children: ReactNode }) {
+  return (
+    <p className="trouble" role="alert">
+      <TriangleAlert className="node-icon" />
+      <span>{children}</span>
+    </p>
+  );
+}
+
+/** Something charter is still reading.
+ *
+ *  **The one place in this region an animation earns its place.** A spinner here means "this
+ *  is still happening", which is a state no colour and no word can distinguish from "this
+ *  stopped and nothing came back" — the reason the operator asked for motion on the pipelines.
+ *  It is a state that ends, and it is drawn at most twice. `prefers-reduced-motion` stops the
+ *  spin and leaves the mark. */
+function Pending({ children }: { children: ReactNode }) {
+  return (
+    <p className="pending">
+      <LoaderCircle className="node-icon spinning" />
+      <span>{children}</span>
+    </p>
   );
 }
 
@@ -221,6 +289,10 @@ function ChatList({
       {chats.map((chat) => (
         <li key={chat.session}>
           <button type="button" className="chat" onClick={() => onShow(chat.session)}>
+            {/* What tells a chat leaf from a worktree leaf at a glance. The tree has two
+                kinds of leaf under one kind of parent, and at fifty chats the indent alone
+                stopped being enough to tell them apart. */}
+            <SquareTerminal className="node-icon" />
             <span className="session">{chat.name}</span>
             <ChatState state={stateOf(states, chat.session)} />
             {/* The PROFILE where there is one, and the harness otherwise. A profile is what

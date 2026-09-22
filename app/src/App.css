@@ -23,6 +23,51 @@ body {
   margin: 0;
 }
 
+/* **Every icon in the window, sized once, from the text it sits in.**
+ *
+ * Lucide puts `lucide` on every `<svg>` it draws, so this one rule is the whole of the icon
+ * layer — there is no wrapper component, nothing to import, and no `size={14}` to get wrong on
+ * the fiftieth call site. `1em` is what makes a 0.8rem row's icons smaller than a 1rem row's
+ * without either row saying so, which is the same argument the tokens make about colour.
+ * `app/src/lib/icons.test.tsx` pins both halves: that the class is there, and that an icon is
+ * `currentColor`, so a theme reaches it without an icon ever naming a colour.
+ *
+ * `flex: none`, because every one of them is in a flex row beside a name that may be
+ * ellipsised, and an icon squeezed to nothing is a row that has lost its mark rather than its
+ * last three characters. */
+.lucide {
+  width: 1em;
+  height: 1em;
+  flex: none;
+  vertical-align: -0.14em;
+}
+
+/* **The one animation in the window, and what it is allowed to mean.**
+ *
+ * It says *this is still happening* — a pipeline that is running, a listing charter has asked
+ * git for and not been answered. That state is otherwise indistinguishable from a stopped one:
+ * the colour is the same amber whether the run is moving or was abandoned an hour ago, and
+ * "running" is a word both of them can carry. Nothing that has already finished spins, because
+ * motion beside a settled answer is only a thing to look at.
+ *
+ * `prefers-reduced-motion` stops it and leaves the mark, which still reads — the mark is a
+ * shape and a word, never the motion alone. */
+@keyframes charter-spin {
+  to {
+    rotate: 1turn;
+  }
+}
+
+.spinning {
+  animation: charter-spin 900ms linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinning {
+    animation: none;
+  }
+}
+
 /* The window is the bar and the panes, and the panes take whatever is left. */
 .window {
   display: flex;
@@ -467,6 +512,8 @@ body {
 /* The left region: the repo and worktree explorer, which is the selector WITHIN a workspace
    (charter ADR 0038). */
 .explorer {
+  height: 100%;
+  overflow: auto;
   padding: 0.5rem;
   font-size: 0.85rem;
 }
@@ -479,8 +526,84 @@ body {
   padding: 0;
 }
 
-.explorer .pieces {
-  padding-inline-start: 0.6rem;
+/* **The tree's lines, drawn by the rows and not by the lists.**
+
+   A level is an indent plus a vertical guide, and each row draws its own segment of that guide
+   plus the elbow into its own first line. The last row's segment stops AT its elbow, which is
+   what makes a tree look finished at the bottom of a branch.
+
+   The usual way to do this is one line on the list and a rectangle in the background colour
+   masking its tail. That cannot be used here: **a region moves** (ADR 0038), so the explorer
+   may be sitting on `surface.base` or on `surface.deep`, and a mask has to know which. A row
+   that draws only its own segment never has to know what is behind it. `Explorer.tsx` says the
+   same thing from the other side.
+
+   The elbow's offset differs per level because the rows differ: a clone's first line is a
+   `<summary>`, a piece's is a `.spot` button, and a chat's is a `.chat` button one font step
+   smaller. Each is half a line down its own row. */
+.explorer .clones,
+.explorer .pieces,
+.explorer .here {
+  margin-inline-start: 0.5rem;
+  padding-inline-start: 0.85rem;
+}
+
+.explorer .clones > .clone,
+.explorer .pieces > li,
+.explorer .here > li {
+  position: relative;
+}
+
+.explorer .clones > .clone::before,
+.explorer .pieces > li::before,
+.explorer .here > li::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: -0.85rem;
+  border-inline-start: 1px solid var(--border-subtle);
+}
+
+.explorer .clones > .clone:last-child::before,
+.explorer .pieces > li:last-child::before {
+  inset-block-end: auto;
+  height: 0.9em;
+}
+
+.explorer .here > li:last-child::before {
+  inset-block-end: auto;
+  height: 0.72em;
+}
+
+.explorer .clones > .clone::after,
+.explorer .pieces > li::after,
+.explorer .here > li::after {
+  content: "";
+  position: absolute;
+  inset-inline-start: -0.85rem;
+  width: 0.55rem;
+  border-block-start: 1px solid var(--border-subtle);
+}
+
+.explorer .clones > .clone::after,
+.explorer .pieces > li::after {
+  inset-block-start: 0.9em;
+}
+
+.explorer .here > li::after {
+  inset-block-start: 0.72em;
+}
+
+/* An icon per kind of node, which is what tells the two kinds of leaf apart: a worktree is a
+   branch and a chat is a terminal, and at four levels of indent the indent alone stopped
+   saying which was which. Quiet by default — an icon that competes with the name it sits
+   beside is noise at fifty sessions. */
+.explorer .node-icon {
+  color: var(--text-muted);
+}
+
+.explorer .spot[aria-current="true"] .node-icon {
+  color: var(--accent-base);
 }
 
 /* A spot is what the next chat starts in. The current one is marked with more than colour —
@@ -488,8 +611,8 @@ body {
    the one thing in this region that must never be read wrong. */
 .explorer .spot {
   display: flex;
-  gap: 0.4rem;
-  align-items: baseline;
+  gap: 0.35rem;
+  align-items: center;
   width: 100%;
   text-align: left;
   padding: 0.15rem 0.3rem;
@@ -517,30 +640,115 @@ body {
   opacity: 0.6;
 }
 
+/* A clone's heading. The default disclosure marker goes, because the platform draws it at its
+   own size in its own glyph and the tree already has a column for a twisty. The rule that put
+   a line above every clone goes with it — the tree's own guides say where a branch starts now,
+   and a second horizontal rule through them read as a divider between unrelated things. */
 .explorer .clone > summary {
   display: flex;
-  gap: 0.4rem;
-  align-items: baseline;
+  gap: 0.35rem;
+  align-items: center;
   cursor: pointer;
-  padding: 0.25rem 0.3rem;
-  margin-top: 0.35rem;
-  border-top: 1px solid var(--border-subtle);
+  padding: 0.15rem 0.3rem;
+  border-radius: 2px;
+  list-style: none;
+}
+
+.explorer .clone > summary::-webkit-details-marker {
+  display: none;
+}
+
+.explorer .clone > summary:hover {
+  background: var(--surface-hover);
+}
+
+/* The twisty turns with the disclosure. This is motion that is the direct answer to a click —
+   it says which way the thing just went — and it is the only transition in the window that is
+   not about something still happening. It stops under `prefers-reduced-motion`; the state is
+   carried by the direction the chevron points, never by the turn. */
+.explorer .clone > summary .twisty {
+  color: var(--text-muted);
+  transition: rotate 120ms ease;
+}
+
+.explorer .clone[open] > summary .twisty {
+  rotate: 90deg;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .explorer .clone > summary .twisty {
+    transition: none;
+  }
 }
 
 .explorer .repo {
   font-weight: 600;
+  color: var(--text-primary);
 }
 
+/* How many pieces a clone has, on its heading. A count is a pill; the two things that are not
+   a count — `unreadable`, and the `…` while git has not answered — are words, and `.none` and
+   `.pending` below already draw those. A pill saying "unreadable" would read as a quantity. */
 .explorer .piece-count {
+  margin-inline-start: auto;
   font-size: 0.75rem;
-  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+
+.explorer .piece-count:not(.none):not(.pending) {
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--control-count);
+  color: var(--text-secondary);
+}
+
+/* What a piece's row says under its name: the branch, and the two states the operator has to
+   read before starting a chat in the tree. It was an unstyled run of spans on the row that
+   matters most for that decision. */
+.explorer .worktree {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-inline-start: 1.5rem;
+  font-size: 0.75rem;
+}
+
+.explorer .worktree .branch {
+  color: var(--text-muted);
+}
+
+/* **The two states that change what starting a chat in a tree would mean**, and until now
+   they had no rule at all — `unwired` was the same grey as the branch beside it, on the one
+   label that says a chat there would run with none of the plane's ask/deny rules. A chip, and
+   never colour alone: each one is its own word, in a box, in its own colour.
+
+   `unwired` is `state.waiting` because it means *not finished* — charter writes the layer when
+   it starts a chat there. `stale` is `state.unreadable` because it means charter cannot make
+   sense of what git is holding, which is what that token says everywhere else. */
+.label {
+  padding: 0 0.25rem;
+  border: 1px solid;
+  border-radius: 3px;
+  color: var(--text-secondary);
+  font-size: 0.9em;
+  white-space: nowrap;
+}
+
+/* **The colour is on the border and never on the word**, which is a contrast decision and not
+   a style one. `state.waiting` as text measures 3.89:1 on `surface.deep` in charter-light —
+   under AA — while the same value as a 1px edge is a graphic, whose bar is 3:1, and clears it
+   in both themes. The word stays `text.secondary`, so it is legible whatever the theme does
+   with the state colours. */
+.label.unwired {
+  border-color: var(--state-waiting);
+}
+
+.label.stale {
+  border-color: var(--state-unreadable);
 }
 
 /* The chats already running at a spot: a button each, which brings that chat forward. */
-.explorer .here {
-  padding-inline-start: 1rem;
-}
-
 .explorer .chat {
   display: inline-flex;
   gap: 0.3rem;
@@ -563,6 +771,9 @@ body {
 
 .explorer .none,
 .explorer .pending {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
   margin: 0.1rem 0 0.1rem 0.6rem;
   opacity: 0.6;
 }
@@ -582,9 +793,24 @@ body {
   opacity: 0.7;
 }
 
+.explorer .absent li {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
 .explorer .trouble {
+  display: flex;
+  gap: 0.35rem;
+  align-items: flex-start;
   color: var(--state-failed);
   margin: 0.25rem 0;
+}
+
+/* The mark is on the sentence's first line, not centred on a paragraph that wraps to three. */
+.explorer .trouble .node-icon {
+  color: inherit;
+  margin-block-start: 0.2em;
 }
 
 /* What a chat's harness cannot tell charter (#27). Read as a note on the chat, never as
