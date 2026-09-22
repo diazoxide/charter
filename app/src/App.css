@@ -534,6 +534,52 @@ body {
   border-color: var(--accent-base);
 }
 
+/* A pane and its gauge. The gauge is a SIBLING of the element xterm draws into, never a child
+   of it, so nothing charter draws is ever inside the terminal's own DOM. */
+.pane-frame {
+  position: relative;
+  height: 100%;
+  width: 100%;
+}
+
+/* **A chat's `ctx`/`cache` gauge** (`app/src/ChatGauge.tsx`): small, in the pane's top-right
+   corner, over the terminal rather than taking a row from it. The corner is where a harness's
+   header leaves the most room, and a strip across every pane would cost every chat a line to
+   carry three numbers. Raised and bordered so it reads as charter's and not as the program's
+   output. */
+.chat-gauge {
+  position: absolute;
+  top: 3px;
+  right: 8px;
+  display: flex;
+  gap: 0.5rem;
+  padding: 0 0.35rem;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  opacity: 0.92;
+}
+
+.gauge-label {
+  color: var(--text-muted);
+}
+
+.gauge-ok {
+  color: var(--state-success);
+}
+
+.gauge-warn {
+  color: var(--state-waiting);
+}
+
+.gauge-bad {
+  color: var(--state-failed);
+}
+
 /* The handle between two panes: thin, and easier to hit than it looks. */
 [data-separator] {
   background: var(--border-subtle);

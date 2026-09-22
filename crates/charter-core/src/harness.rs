@@ -305,11 +305,44 @@ fn claude_code_settings(binary: &std::path::Path) -> String {
         })
         .collect();
     serde_json::Value::Object(
-        [("hooks".to_owned(), serde_json::Value::Object(hooks))]
-            .into_iter()
-            .collect(),
+        [
+            ("hooks".to_owned(), serde_json::Value::Object(hooks)),
+            ("statusLine".to_owned(), claude_code_status_line(binary)),
+        ]
+        .into_iter()
+        .collect(),
     )
     .to_string()
+}
+
+/// Claude Code's `statusLine`, pointed at `charter statusline` — for THIS session only.
+///
+/// **This is how a chat's `ctx`/`cache` history gets written at all, and without it the app's
+/// gauge is a renderer with nothing to render.** Claude Code hands `context_window` — the
+/// context percentage and the cache numbers — to its `statusLine` command and to nothing
+/// else: no hook payload carries them (charter ADR 0019, measured). `charter statusline`
+/// is the command that writes them down (`usage::record`), on every render, whether or not
+/// it draws anything. And since charter 0.57.0 (#895) nothing puts that command in a
+/// session's settings any more, while the app arms only hooks — so, measured on 2026-09-22,
+/// the operator's own plane had not had a turn recorded since 2026-09-04, and every chat the
+/// app started ran with no gauge on any surface.
+///
+/// **What the chat SEES does not change by default.** Inside the app `charter statusline`
+/// prints an empty line (ADR 0019 transposed, `charter-cli/src/statusline.rs`), which is
+/// the footer the app's chats were already meant to have — and ADR 0029's per-chat checkbox,
+/// which sets `CHARTER_FOOTER=show`, draws charter's footer instead. That checkbox was a
+/// switch on a command nothing invoked; this is what makes it one.
+///
+/// **What it costs, said:** a `statusLine` the operator wired in their own Claude Code
+/// settings is shadowed for the chats the app starts — `--settings` merges, but a key is one
+/// value, and this session's value wins. Their own `claude` in a terminal is untouched, and
+/// nothing is written to any file. A command costs one process per footer render, which
+/// Claude Code already debounces.
+fn claude_code_status_line(binary: &std::path::Path) -> serde_json::Value {
+    serde_json::json!({
+        "type": "command",
+        "command": format!("{} statusline", shell_quoted(&binary.display().to_string())),
+    })
 }
 
 /// The `-c` pairs that arm Codex's state hooks on one session.
@@ -618,6 +651,27 @@ mod tests {
                 "{event}'s hook is armed with no short deadline"
             );
         }
+    }
+
+    #[test]
+    fn a_claude_code_chat_runs_charter_statusline_so_its_turns_are_recorded() {
+        // Claude Code hands the context and cache numbers to its `statusLine` command and to
+        // nothing else, so a chat whose settings name none records nothing and the app's
+        // gauge has nothing to draw. Quoted as a hook command is, because Claude Code runs it
+        // through `/bin/sh -c` too.
+        let hooks = Harness::ClaudeCode.state_hooks(std::path::Path::new("/home/o'brien/charter"));
+        let StateHooks::ThisSessionOnly { args, .. } = hooks else {
+            panic!("armed per session");
+        };
+        let settings: serde_json::Value = serde_json::from_str(&args[1]).expect("JSON");
+
+        assert_eq!(
+            settings["statusLine"],
+            serde_json::json!({
+                "type": "command",
+                "command": r"'/home/o'\''brien/charter' statusline",
+            })
+        );
     }
 
     #[test]

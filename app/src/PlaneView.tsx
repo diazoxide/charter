@@ -47,6 +47,7 @@ import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame, RegionToggle } from "./RegionFrame";
 import { StatusLine } from "./StatusLine";
 import { useDoctor } from "./Doctor";
+import { PaneGauge } from "./ChatGauge";
 import {
   byLastActivity,
   closeFocusedPane,
@@ -1337,6 +1338,7 @@ export function PlaneView({
                 layout={frontTab.layout}
                 focused={frontTab.focused}
                 onFocus={(pane) => change((tabs) => focusPane(tabs, pane))}
+                states={states}
               />
             ) : tabs.order.length > 0 ? (
               // Chats are running — just not in the workspace being looked at. Saying
@@ -1620,6 +1622,7 @@ function LayoutPanes({
   layout,
   focused,
   onFocus,
+  states,
 }: {
   /** Which plane's sessions these panes are showing. A session number belongs to a plane,
    *  and every command a pane makes carries it. */
@@ -1627,15 +1630,28 @@ function LayoutPanes({
   layout: Layout;
   focused: number;
   onFocus: (pane: number) => void;
+  /** What every chat is doing, for the gauge in each pane's corner: it reads its record
+   *  again when its chat moves, and keeps reading while the chat is mid-turn. */
+  states: ChatStates;
 }) {
   if (layout.kind === "pane") {
     return (
-      <SessionPane
-        plane={plane}
-        session={layout.session}
-        focused={layout.pane === focused}
-        onFocus={() => onFocus(layout.pane)}
-      />
+      // The frame holds the terminal and the gauge side by side, so the gauge is never a
+      // child of the element xterm draws into.
+      <div className="pane-frame">
+        <SessionPane
+          plane={plane}
+          session={layout.session}
+          focused={layout.pane === focused}
+          onFocus={() => onFocus(layout.pane)}
+        />
+        <PaneGauge
+          plane={plane}
+          session={layout.session}
+          moved={movedAt(states, layout.session)}
+          running={stateOf(states, layout.session) === "running"}
+        />
+      </div>
     );
   }
   return (
@@ -1644,7 +1660,13 @@ function LayoutPanes({
         <Fragment key={nameOfLayout(child)}>
           {side === 1 && <Separator />}
           <Panel>
-            <LayoutPanes plane={plane} layout={child} focused={focused} onFocus={onFocus} />
+            <LayoutPanes
+              plane={plane}
+              layout={child}
+              focused={focused}
+              onFocus={onFocus}
+              states={states}
+            />
           </Panel>
         </Fragment>
       ))}

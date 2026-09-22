@@ -12,6 +12,7 @@ mod panics;
 mod planes;
 mod sessions;
 mod slowstart;
+mod usage;
 mod worktrees;
 
 use std::path::PathBuf;
@@ -1020,6 +1021,7 @@ fn commands() -> Builder<tauri::Wry> {
         extensions::forget_extension,
         extensions::extension_themes,
         doctor::plane_doctor,
+        usage::chat_usage,
     ])
 }
 

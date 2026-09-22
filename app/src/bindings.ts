@@ -352,6 +352,23 @@ export const commands = {
 	 *  waited on that would stop drawing.
 	 */
 	planeDoctor: (plane: PlaneId, full: boolean) => typedError<DoctorReport, string>(__TAURI_INVOKE("plane_doctor", { plane, full })),
+	/**
+	 *  What one chat's recorded usage says, or nothing.
+	 * 
+	 *  **`None` is the ordinary answer and it draws nothing**: a chat on a harness with no
+	 *  `statusLine` (Codex, a shell), a Claude Code chat before its first turn, a chat whose
+	 *  record charter would not read. `frame/slots.py`'s rule, which `recorded_context_gauge`
+	 *  keeps: a gauge silently reading zero is worse than no gauge.
+	 * 
+	 *  Not on a blocking thread: it is one bounded read of a sixteen-line file.
+	 */
+	chatUsage: (plane: PlaneId, session: number) => typedError<{
+	/**  `ctx NN%`: how full the context window was at the last turn that said. */
+	context: Percent | null,
+	/**  `cache NN%`: the share of the last turn's input served from cache. */
+	cache: Percent | null,
+	rebuilds: Rebuilds | null,
+} | null, string>(__TAURI_INVOKE("chat_usage", { plane, session })),
 };
 
 /* Types */
@@ -384,6 +401,15 @@ export type Ask = {
 	changes: string[],
 	/**  Whether this is a first approval rather than a re-ask, so the dialog can say which. */
 	first: boolean,
+};
+
+/**  Everything the chat's gauge draws. Every part is absent when charter does not know it. */
+export type ChatUsage = {
+	/**  `ctx NN%`: how full the context window was at the last turn that said. */
+	context: Percent | null,
+	/**  `cache NN%`: the share of the last turn's input served from cache. */
+	cache: Percent | null,
+	rebuilds: Rebuilds | null,
 };
 
 /**  Where a chat is working, when it is working in a piece. */
@@ -522,6 +548,9 @@ export type ExtensionTheme = {
 	 */
 	text: string,
 };
+
+/**  How a number reads, as the window colours it — `charter_core::usage::Tone`. */
+export type GaugeTone = "ok" | "warn" | "bad";
 
 /**
  *  What has contributed what to this window — charter ADR 0041's item 2, and the thing every
@@ -689,6 +718,16 @@ export type Panels = {
 	persona: string | null,
 };
 
+/**  One percentage on the gauge, and the tone its threshold gives it. */
+export type Percent = {
+	/**
+	 *  A whole percentage. `i32`, because `specta` refuses the core's `i64`, and a recorded
+	 *  value outside it is not a percentage anyone could read anyway.
+	 */
+	value: number,
+	tone: GaugeTone,
+};
+
 /**  One piece, as the window shows it. */
 export type Piece = {
 	piece: string,
@@ -800,6 +839,17 @@ export type ProfileRow = {
 	 *  runs; absent when charter has already recorded running exactly this.
 	 */
 	approval: string | null,
+};
+
+/**  The prefix rebuilds this conversation has paid for (`↻N 696k`). */
+export type Rebuilds = {
+	count: number,
+	/**
+	 *  The total, already spelled as charter spells tokens (`696k`, `1.2M`), so the window
+	 *  and the frame's panel cannot come to round it differently.
+	 */
+	cost: string,
+	tone: GaugeTone,
 };
 
 /**
