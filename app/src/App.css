@@ -393,7 +393,6 @@ body {
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.doing,
 .adding,
 .tab {
   display: flex;
@@ -411,7 +410,6 @@ body {
 
 .bar > .adding,
 .bar > .more,
-.bar > .doing,
 .bar > .regions-doing {
   flex: none;
 }
@@ -590,13 +588,10 @@ button.bare:focus-visible {
   border-color: var(--accent-base);
 }
 
-/* `End this pane's chat` ends a session, like a tab's `×`, and is drawn with the same weight:
-   the danger surface on hover rather than the accent edge every other bar button gets. */
-.bar .ends-a-chat:hover:not(:disabled) {
-  border-color: var(--danger-base);
-  background: var(--danger-surface);
-  color: var(--danger-text);
-}
+/* **`End this pane's chat` is not on the bar any more** — it is in each pane's own corner, and
+   `.pane-doing .ends-a-chat` below is where its danger hover now lives. The rule that was here
+   is gone with the button rather than left behind matching nothing: dead CSS is how a rule
+   comes to be copied for a reason that stopped being true. */
 
 /* The project's directory. It used to be the last thing on `header.bar`; it is on the status
    line at the bottom of the window now, and this is the only place it is drawn. It is the one
