@@ -35,6 +35,10 @@ tauri-plugin-wdio-webdriver = { version = "1", optional = true }
 tauri-specta = { version = "=2.0.0-rc.25", features = ["derive", "typescript"] }
 tauri-plugin-single-instance = "2.4.4"
 tauri-plugin-dialog = "2"
+# The app moving itself (charter ADR 0042). Its signature check is an ordinary dependency
+# of the plugin, not a feature, so there is no build of it that skips verification.
+tauri-plugin-updater = "2"
+tokio = { version = "1", features = ["time"] }
 
 [lints]
 workspace = true

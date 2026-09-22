@@ -1834,7 +1834,10 @@ mod tests {
             !text.contains("channel"),
             "the default is written into the file: {text}"
         );
-        assert_eq!(read(machine.path()).store.channel, crate::updates::Channel::Stable);
+        assert_eq!(
+            read(machine.path()).store.channel,
+            crate::updates::Channel::Stable
+        );
     }
 
     #[test]
@@ -1914,7 +1917,11 @@ mod tests {
         let back = read(machine.path());
 
         assert_eq!(back.store.channel, crate::updates::Channel::Stable);
-        assert_eq!(back.dropped, Vec::new(), "an absent field was called a fault");
+        assert_eq!(
+            back.dropped,
+            Vec::new(),
+            "an absent field was called a fault"
+        );
     }
 
     #[test]

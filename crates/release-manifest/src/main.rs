@@ -11,7 +11,7 @@
 //!                  --dir dist --base-url https://github.com/…/releases/download/dev \
 //!                  --entry darwin-aarch64=charter.app.tar.gz \
 //!                  --entry linux-x86_64-appimage=charter_0.2.0_amd64.AppImage \
-//!                  --out dist
+//!                  --tauri-config app/src-tauri/tauri.conf.json --out dist
 //! ```
 //!
 //! Each `--entry` names a file in `--dir`; its signature is read from `<file>.sig` beside it,
@@ -45,6 +45,7 @@ fn run(args: Vec<String>) -> Result<PathBuf, String> {
     let mut dir = PathBuf::new();
     let mut base_url = String::new();
     let mut out = PathBuf::new();
+    let mut config = PathBuf::new();
     let mut entries: Vec<(String, String)> = Vec::new();
 
     let mut rest = args.into_iter();
@@ -67,6 +68,7 @@ fn run(args: Vec<String>) -> Result<PathBuf, String> {
             "--dir" => dir = PathBuf::from(value()?),
             "--base-url" => base_url = value()?,
             "--out" => out = PathBuf::from(value()?),
+            "--tauri-config" => config = PathBuf::from(value()?),
             "--entry" => {
                 let pair = value()?;
                 let (target, file) = pair
@@ -82,8 +84,11 @@ fn run(args: Vec<String>) -> Result<PathBuf, String> {
     let rows = entries
         .into_iter()
         .map(|(target, file)| {
+            let path = dir.join(&file);
             Ok(Entry {
                 signature: signature_beside(&dir, &file)?,
+                artifact: std::fs::read(&path)
+                    .map_err(|why| format!("{} could not be read: {why}", path.display()))?,
                 // The url is the base and the artifact's own name, joined here so the
                 // workflow cannot name one file and link another.
                 url: format!("{}/{}", base_url.trim_end_matches('/'), file),
@@ -92,11 +97,32 @@ fn run(args: Vec<String>) -> Result<PathBuf, String> {
         })
         .collect::<Result<Vec<_>, String>>()?;
 
-    let (name, text) = assemble(channel, &version, &pub_date, &notes, &rows)
+    let pubkey = pubkey_in(&config)?;
+    let (name, text) = assemble(channel, &pubkey, &version, &pub_date, &notes, &rows)
         .map_err(|refused| refused.to_string())?;
     let path = out.join(name);
-    std::fs::write(&path, text).map_err(|why| format!("{} could not be written: {why}", path.display()))?;
+    std::fs::write(&path, text)
+        .map_err(|why| format!("{} could not be written: {why}", path.display()))?;
     Ok(path)
+}
+
+/// `plugins.updater.pubkey` out of `tauri.conf.json` — the key the shipped app verifies with.
+///
+/// Read from the file the build read, not passed on the command line, so the key a release is
+/// checked against cannot differ from the key the app it describes carries.
+fn pubkey_in(config: &Path) -> Result<String, String> {
+    let text = std::fs::read_to_string(config).map_err(|why| {
+        format!(
+            "--tauri-config {} could not be read: {why}",
+            config.display()
+        )
+    })?;
+    let doc: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|why| format!("{} is not json: {why}", config.display()))?;
+    doc["plugins"]["updater"]["pubkey"]
+        .as_str()
+        .map(str::to_owned)
+        .ok_or_else(|| format!("{} carries no plugins.updater.pubkey", config.display()))
 }
 
 /// The `.sig` the bundler wrote beside an artifact.

@@ -273,7 +273,7 @@ fn base64_bytes(text: &str) -> Option<Vec<u8>> {
     // truncated encoding: `AAAAA` yields three whole bytes with six zero bits left over, so
     // every test that looks only at the output passes it. Four characters to a quantum,
     // padding included, and a remainder of one character is a quantum that cannot exist.
-    if padding > 2 || chars % 4 == 1 || (chars + padding) % 4 != 0 {
+    if padding > 2 || chars % 4 == 1 || !(chars + padding).is_multiple_of(4) {
         return None;
     }
     // Whatever is left over after the last whole byte has to be the encoder's zero fill.
@@ -328,8 +328,18 @@ mod tests {
         // Every one of these would put a machine on a channel it did not ask for, if the
         // reader were lenient in the direction that looks helpful.
         for word in [
-            "", "DEV", "Dev", " dev", "dev ", "dev\n", "devel", "development", "beta", "nightly",
-            "STABLE", "latest",
+            "",
+            "DEV",
+            "Dev",
+            " dev",
+            "dev ",
+            "dev\n",
+            "devel",
+            "development",
+            "beta",
+            "nightly",
+            "STABLE",
+            "latest",
         ] {
             assert_eq!(Channel::named(word), None, "{word:?} was read as a channel");
         }
@@ -359,8 +369,14 @@ mod tests {
         // Stable goes through GitHub's `latest` pointer, which skips prereleases — that is
         // what keeps the rolling dev release from ever becoming what a stable machine reads.
         assert!(stable.contains("/releases/latest/download/"), "{stable}");
-        assert!(!stable.contains(DEV_TAG), "{stable} can resolve to the dev release");
-        assert!(dev.contains(&format!("/releases/download/{DEV_TAG}/")), "{dev}");
+        assert!(
+            !stable.contains(DEV_TAG),
+            "{stable} can resolve to the dev release"
+        );
+        assert!(
+            dev.contains(&format!("/releases/download/{DEV_TAG}/")),
+            "{dev}"
+        );
     }
 
     /// A real minisign public key file, as `tauri signer generate` writes it, base64'd whole.
@@ -432,13 +448,19 @@ mod tests {
         let mut wrong = vec![b'X', b'Y'];
         wrong.extend(std::iter::repeat_n(0u8, 40));
         let file = format!("untrusted comment: x\n{}\n", encode(&wrong));
-        assert_eq!(pubkey_usable(&encode(file.as_bytes())), Err(NotAKey::NotMinisign));
+        assert_eq!(
+            pubkey_usable(&encode(file.as_bytes())),
+            Err(NotAKey::NotMinisign)
+        );
 
         // Right tag, wrong length: 8 bytes of key id and 32 of key is the whole of it.
         let mut short = vec![b'E', b'd'];
         short.extend(std::iter::repeat_n(0u8, 20));
         let file = format!("untrusted comment: x\n{}\n", encode(&short));
-        assert_eq!(pubkey_usable(&encode(file.as_bytes())), Err(NotAKey::NotMinisign));
+        assert_eq!(
+            pubkey_usable(&encode(file.as_bytes())),
+            Err(NotAKey::NotMinisign)
+        );
     }
 
     #[test]
@@ -447,9 +469,9 @@ mod tests {
             "not base64!",
             "RWQ*****",
             "-----BEGIN PUBLIC KEY-----",
-            "AAAA=AAA",  // padding in the middle
-            "AAAAA",     // not a whole quantum
-            "QQ==QQ==",  // two quanta, the first padded
+            "AAAA=AAA", // padding in the middle
+            "AAAAA",    // not a whole quantum
+            "QQ==QQ==", // two quanta, the first padded
         ] {
             assert_eq!(
                 pubkey_usable(junk),
@@ -474,7 +496,10 @@ mod tests {
         assert!(!checks_on_its_own(true, false), "a fenced build checked");
         assert!(!checks_on_its_own(false, true), "a debug build checked");
         assert!(!checks_on_its_own(true, true));
-        assert!(checks_on_its_own(false, false), "a shipped build did not check");
+        assert!(
+            checks_on_its_own(false, false),
+            "a shipped build did not check"
+        );
     }
 
     #[test]

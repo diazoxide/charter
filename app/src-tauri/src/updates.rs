@@ -23,13 +23,13 @@
 //!
 //! Nothing in this file draws anything, because the surface it would draw on does not exist
 //! yet. When M6.4's status bar lands, it listens for [`CHECKED`] and shows the offer, calls
-//! [`install_update`] from it, and shows [`crate::update_channel`] beside it with a control
+//! [`install_update`] from it, and shows [`update_channel`] beside it with a control
 //! that calls [`set_update_channel`]. The skew a plane's pin reports is a different row and a
 //! different question — `charter version` answers it today (charter ADR 0030) and M6.4's
 //! status bar is where it goes; this module deliberately does not restate it.
 
 use charter_core::updates::{Channel, NotAKey, pubkey_usable};
-use tauri::{Emitter, Manager, Runtime};
+use tauri::{Emitter, Runtime};
 use tauri_plugin_updater::UpdaterExt;
 
 /// The event a finished check emits, carrying [`Offer`] or nothing.
@@ -141,10 +141,12 @@ async fn offer<R: Runtime>(app: &tauri::AppHandle<R>) -> Result<Option<Offer>, S
         .map_err(|why| format!("charter's update endpoint was refused: {why}"))?
         .build()
         .map_err(|why| format!("charter's updater could not be built: {why}"))?;
-    let found = updater
-        .check()
-        .await
-        .map_err(|why| format!("charter could not reach the {} channel: {why}", channel.name()))?;
+    let found = updater.check().await.map_err(|why| {
+        format!(
+            "charter could not reach the {} channel: {why}",
+            channel.name()
+        )
+    })?;
     Ok(found.map(|update| Offer {
         version: update.version.clone(),
         current: update.current_version.clone(),
@@ -188,10 +190,12 @@ pub async fn install<R: Runtime>(app: tauri::AppHandle<R>) {
             .map_err(|why| format!("charter's update endpoint was refused: {why}"))?
             .build()
             .map_err(|why| format!("charter's updater could not be built: {why}"))?;
-        let Some(update) = updater
-            .check()
-            .await
-            .map_err(|why| format!("charter could not reach the {} channel: {why}", channel.name()))?
+        let Some(update) = updater.check().await.map_err(|why| {
+            format!(
+                "charter could not reach the {} channel: {why}",
+                channel.name()
+            )
+        })?
         else {
             return Err("there is no newer charter on this channel any more".to_owned());
         };
@@ -223,8 +227,10 @@ pub async fn install<R: Runtime>(app: tauri::AppHandle<R>) {
 /// **A test build and a development build never start it** —
 /// [`charter_core::updates::checks_on_its_own`] is the rule and its note is why.
 pub fn watch<R: Runtime>(app: &tauri::AppHandle<R>) {
-    if !charter_core::updates::checks_on_its_own(charter_core::fence::FENCED, cfg!(debug_assertions))
-    {
+    if !charter_core::updates::checks_on_its_own(
+        charter_core::fence::FENCED,
+        cfg!(debug_assertions),
+    ) {
         return;
     }
     let app = app.clone();
@@ -237,17 +243,45 @@ pub fn watch<R: Runtime>(app: &tauri::AppHandle<R>) {
     });
 }
 
+/// Which channel this machine takes charter from: `stable` or `dev`.
+#[tauri::command]
+#[specta::specta]
+pub fn update_channel() -> String {
+    channel_now().name().to_owned()
+}
+
+/// Put this machine on a channel. A word charter does not know is refused, not guessed at.
+#[tauri::command]
+#[specta::specta]
+pub fn set_update_channel(channel: String) -> Result<(), String> {
+    let chosen = Channel::named(&channel)
+        .ok_or_else(|| format!("{channel:?} is not an update channel (stable, dev)"))?;
+    set_channel(chosen)
+}
+
+/// Look for a newer charter now. The answer arrives as [`CHECKED`] or [`FAILED`].
+#[tauri::command]
+#[specta::specta]
+pub fn check_for_update(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(look(app));
+}
+
+/// Install the newer charter. The answer arrives as [`INSTALLED`] or [`FAILED`]; charter has
+/// to be relaunched after it, and says so rather than doing it under the operator's sessions.
+#[tauri::command]
+#[specta::specta]
+pub fn install_update(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(install(app));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// `tauri.conf.json`, as the build reads it.
     fn config() -> serde_json::Value {
-        let text = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/tauri.conf.json"
-        ))
-        .expect("tauri.conf.json is beside this crate");
+        let text = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.conf.json"))
+            .expect("tauri.conf.json is beside this crate");
         serde_json::from_str(&text).expect("tauri.conf.json is json")
     }
 
@@ -297,10 +331,14 @@ mod tests {
         // Tauri REQUIRES the field — a config without it is a plugin that will not
         // deserialise, which is an app that does not start. So the placeholder has to be a
         // string, and the thing that has to refuse it is charter's own check.
-        let pubkey = config()["plugins"]["updater"]["pubkey"]
+        let config = config();
+        let pubkey = config["plugins"]["updater"]["pubkey"]
             .as_str()
             .expect("the updater config carries a pubkey");
-        assert!(!pubkey.is_empty(), "an empty pubkey is a config Tauri accepts");
+        assert!(
+            !pubkey.is_empty(),
+            "an empty pubkey is a config Tauri accepts"
+        );
         match pubkey_usable(pubkey) {
             // Before the operator generates the keypair: the placeholder, refused by name.
             Err(NotAKey::Unset) => {
