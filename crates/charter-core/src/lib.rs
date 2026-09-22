@@ -24,6 +24,7 @@ pub mod glrefresh;
 pub mod glstate;
 pub mod guest;
 pub mod handoff;
+pub mod handoffguard;
 pub mod harness;
 pub mod heredoc;
 pub mod hookwire;
