@@ -260,7 +260,7 @@ pub fn chat_path_from(
         && dir.is_absolute()
         && !dirs.iter().any(|have| have == dir)
     {
-        dirs.push(dir.to_path_buf());
+        dirs.insert(0, dir.to_path_buf());
     }
     let inherited: Vec<PathBuf> = path
         .map(|p| std::env::split_paths(p).collect())
