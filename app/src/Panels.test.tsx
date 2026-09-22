@@ -1,11 +1,14 @@
 /// <reference types="node" />
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { Panels } from "./Panels";
+import { catalogue, catalogued, type Catalogued, type Offer } from "./actions";
+import { noTabs } from "./tabs";
 import type { Panels as PanelsModel, PersonaDetails } from "./bindings";
 import type { WorkspaceState } from "./workspaceState";
 
@@ -42,6 +45,14 @@ function state(on: Partial<WorkspaceState> = {}): WorkspaceState {
   };
 }
 
+/**
+ * The panel, with the window's own state around it.
+ *
+ * **Which persona's card is open belongs to the window now** (charter-app#174): opening it is
+ * a catalogue row, so a context menu and the palette can open it from outside this panel. The
+ * wrapper here is that window, in as few lines as the claim needs — without it these tests
+ * would be asserting that a card opens against a prop that never changes.
+ */
 function draw(
   on: {
     workspace?: string;
@@ -49,19 +60,29 @@ function draw(
     queue?: number[];
     quiet?: string[];
     showChat?: (session: number) => void;
+    offers?: Catalogued;
+    onPress?: (offer: Offer) => void;
   } = {},
 ) {
-  render(
-    <Panels
-      plane={PLANE}
-      workspace={"workspace" in on ? on.workspace : "alpha"}
-      state={on.state ?? state()}
-      queue={on.queue ?? []}
-      quiet={on.quiet ?? []}
-      nameOf={(session) => `ide.${session}`}
-      showChat={on.showChat ?? (() => {})}
-    />,
-  );
+  function Window() {
+    const [shownPersona, setShownPersona] = useState<string>();
+    return (
+      <Panels
+        plane={PLANE}
+        workspace={"workspace" in on ? on.workspace : "alpha"}
+        state={on.state ?? state()}
+        queue={on.queue ?? []}
+        quiet={on.quiet ?? []}
+        nameOf={(session) => `ide.${session}`}
+        showChat={on.showChat ?? (() => {})}
+        offers={on.offers ?? new Map()}
+        onPress={on.onPress ?? (() => {})}
+        shownPersona={shownPersona}
+        onShowPersona={setShownPersona}
+      />
+    );
+  }
+  render(<Window />);
 }
 
 describe("the right-hand region", () => {
@@ -413,5 +434,69 @@ describe("a persona's details", () => {
 
     await waitFor(() => expect(screen.queryByTestId("persona-details-devops")).toBeNull());
     expect(row).toHaveFocus();
+  });
+});
+
+/**
+ * Right-click on a persona row (charter-app#174).
+ *
+ * **In jsdom, because a WebDriver right-click sends no `contextmenu` event** — measured on
+ * both engines and recorded in `docs/ui-primitives.md`. What is asserted is the wiring: the
+ * row has charter's own menu and it lists the catalogue's row for that persona. What the row
+ * SAYS is `actions.test.ts`'s.
+ *
+ * The one row is the point rather than a shortfall. A persona is a file `charter persona
+ * create` writes and an operator edits; reading it is the whole of what this window can do to
+ * one, and a menu with three invented verbs would be the second list `actions.ts` refuses.
+ */
+describe("a persona row's menu", () => {
+  const offers = () =>
+    catalogued(
+      catalogue({
+        tabs: noTabs(),
+        workspaces: [],
+        plane: PLANE,
+        personas: ["devops", "steward"],
+        needsYou: [],
+        nameOf: String,
+      }),
+    );
+
+  /** Right-clicks a persona row, the way a WebView's own pointer does. */
+  function rightClick(persona: string) {
+    const row = within(screen.getByTestId("panel-personas")).getByRole("button", {
+      name: new RegExp(persona),
+    });
+    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  }
+
+  it("opens on a right-click with the catalogue's row for that persona", async () => {
+    core(() => definition());
+    draw({ offers: offers() });
+
+    rightClick("devops");
+
+    const menu = await screen.findByRole("menu");
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((one) => one.getAttribute("aria-label")),
+    ).toEqual(["Show what devops is"]);
+  });
+
+  it("hands back the row that opens the card, which is the state the window holds", async () => {
+    // The card's openness is the window's now, so a row run from anywhere — this menu, the
+    // palette, the row's own click — lands in one place. That is what a catalogue row buys,
+    // and it is why `PersonaRow` no longer owns whether it is open.
+    core(() => definition());
+    const pressed: Offer[] = [];
+    draw({ offers: offers(), onPress: (offer) => pressed.push(offer) });
+
+    rightClick("devops");
+    await screen.findByRole("menu");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Show what devops is" }));
+
+    expect(pressed.map((offer) => offer.id)).toEqual(["persona.show:devops"]);
+    expect(pressed[0].does).toEqual({ verb: "showPersona", persona: "devops" });
   });
 });

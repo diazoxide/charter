@@ -6,6 +6,8 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { Explorer, type Spot } from "./Explorer";
 import { nothingKnown } from "./chatState";
+import { catalogue, catalogued, type Catalogued, type Offer } from "./actions";
+import { noTabs } from "./tabs";
 import type { OpenChat, Panels as PanelsModel, Piece } from "./bindings";
 import type { WorkspaceState } from "./workspaceState";
 
@@ -64,6 +66,11 @@ function draw(on: {
   onPick?: (spot: Spot | undefined) => void;
   onShowChat?: (session: number) => void;
   workspace?: string;
+  /** The catalogue a piece row's menu is drawn out of. Empty here for every test but the one
+   *  about the menu: `Menued` draws nothing for an item the catalogue has no rows for, so the
+   *  tree these tests are about is the tree they were always about. */
+  offers?: Catalogued;
+  onPress?: (offer: Offer) => void;
 }) {
   render(
     <Explorer
@@ -74,6 +81,8 @@ function draw(on: {
       spot={on.spot}
       onPick={on.onPick ?? (() => {})}
       onShowChat={on.onShowChat ?? (() => {})}
+      offers={on.offers ?? new Map()}
+      onPress={on.onPress ?? (() => {})}
     />,
   );
 }
@@ -259,6 +268,71 @@ describe("the explorer", () => {
     });
 
     expect(screen.getByRole("alert")).toHaveTextContent("alias");
+  });
+});
+
+/**
+ * Right-click on a piece row (charter-app#174).
+ *
+ * **Asked in jsdom, because a WebDriver right-click sends no `contextmenu` event at all** —
+ * measured on webkit 605.1.15 and on WebKitGTK, and recorded in `docs/ui-primitives.md`. A
+ * scenario spec can prove a menu is on screen; whether a right-click opens one is a question
+ * only this environment can answer.
+ *
+ * What is asserted here is the wiring and nothing else: the row has a menu, and the menu's
+ * rows are the catalogue's. What those rows SAY is `actions.test.ts`'s, and saying it again
+ * here would be the second answer the whole design exists to prevent.
+ */
+describe("a piece row's menu", () => {
+  const cut = { workspace: "alpha", repo: "svc", piece: "one" };
+  const offers = () =>
+    catalogued(
+      catalogue({
+        tabs: noTabs(),
+        workspaces: ["alpha"],
+        focused: "alpha",
+        plane: "/plane",
+        pieces: [cut],
+        needsYou: [],
+        nameOf: String,
+      }),
+    );
+
+  it("opens on a right-click with the catalogue's own rows for that piece", async () => {
+    draw({ offers: offers() });
+
+    const row = within(screen.getByTestId("piece-svc-one")).getByRole("button", { name: "one" });
+    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+
+    const menu = await screen.findByRole("menu");
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((one) => one.getAttribute("aria-label")),
+    ).toEqual(["Merge worktree one into svc", "Remove worktree one in svc"]);
+  });
+
+  it("hands the catalogue's offer back when a row is pressed", async () => {
+    const pressed: string[] = [];
+    draw({ offers: offers(), onPress: (offer) => pressed.push(offer.id) });
+
+    const row = within(screen.getByTestId("piece-svc-one")).getByRole("button", { name: "one" });
+    row.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+    await screen.findByRole("menu");
+    await userEvent.click(screen.getByRole("menuitem", { name: "Remove worktree one in svc" }));
+
+    expect(pressed).toEqual(["worktree.remove:svc/one"]);
+  });
+
+  it("leaves a clone row without one, because nothing in the catalogue is about a clone", () => {
+    // The gap this component's docstring records: `workspace_panels` answers with clone NAMES
+    // and nothing charter can do takes one. A menu there would have to invent a verb.
+    draw({ offers: offers() });
+
+    const clone = within(screen.getByTestId("clone-svc")).getByText("svc");
+    clone.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 });
 
