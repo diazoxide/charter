@@ -7,15 +7,16 @@
 //! `_quote_map`, `_splice_continuations` and `_fallback_segments`. Twenty definitions and
 //! 565 lines of Python, measured by an AST walk over the frozen oracle.
 //!
-//! # Nothing calls this yet, on purpose
+//! # Where this is called from
 //!
-//! `charter hook pretooluse` is ONE switch: `main.rs`'s `is_a_tool_hook` answers every word in
-//! the `pretooluse`/`posttooluse` namespace with exit 2 — *block* — and `charter-cli`'s
-//! `hook.rs` pins that. The first partial implementation of the guard flips that switch from
-//! fail-closed to allow-everything-except-the-arm-that-is-ported. So the guard is built BEHIND
-//! the switch, module by module, and the switch moves in the last change, when every arm is
-//! ported. **This module is stage 1 and is wired to nothing.**
+//! [`crate::toolgate`] — `charter/hooks.py:pretooluse`'s eight refusals, in its order — and
+//! through it `charter hook pretooluse` (M3.1 stage 6).
 //!
+//! Until that stage the switch was closed: `main.rs`'s `is_a_tool_hook` answered every word in
+//! the `pretooluse`/`posttooluse` namespace with exit 2 — *block* — because a PARTIAL guard on
+//! the switch turns fail-closed into allow-everything-except-the-arm-that-is-ported. It moved
+//! once all eight arms were standing, and never earlier. The other eight words in that
+//! namespace still block, for the same reason they always did.
 //! # Why this is the piece to get exactly right
 //!
 //! Every refusal above it decides on `prog` and `args` taken from these segments. A boundary

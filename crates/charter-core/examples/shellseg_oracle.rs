@@ -3,8 +3,8 @@
 //! One JSON-encoded string per line of stdin, one JSON object per line of stdout. It exists so
 //! `tests/differential/shellseg.py` can ask both implementations the same 200,000 questions
 //! without anything being checked in, and it is an EXAMPLE rather than a binary because nothing
-//! ships it: `cargo build -p charter-cli` does not build it, and the guard it reports on is not
-//! wired to the hook yet either way.
+//! ships it: `cargo build -p charter-cli` does not build it, and the guard it reports on
+//! reaches a chat through `charter hook pretooluse` rather than through anything here.
 //!
 //! The comparison is over PARSED json on the Python side, so the spacing here means nothing.
 

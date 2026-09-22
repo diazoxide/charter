@@ -199,6 +199,21 @@ class Scenario:
     #: that panics on every input satisfies it, and one did — three containment scenarios
     #: reported `ok` against a shim that ran nothing at all.
     refusal: str = ""
+    #: What a `PreToolUse` DENIAL must say, as a substring of the `permissionDecisionReason`
+    #: — checked on BOTH sides' stdout.
+    #:
+    #: A hook refuses by PRINTING, not by exiting: the verdict is one JSON object on stdout
+    #: and the status is 0 either way (`hooks.py:_deny`). So `refusal`, which reads stderr
+    #: and declares the command failed, cannot say anything about one — and without this a
+    #: guard scenario where NEITHER side fires is green while proving nothing, which is the
+    #: `refusal` docstring's own objection one field over. Both sides are checked, so an arm
+    #: that stops firing on the ORACLE goes red too.
+    denies: str = ""
+    #: The mirror, for the case that matters most: both sides must print NOTHING, which is
+    #: how a `PreToolUse` hook says `allow`. A guard is only a guard if something gets
+    #: through it, and "the canonical spelling still passes" is not a claim any denial
+    #: scenario can make.
+    allows: bool = False
     #: Why the two stderrs are not expected to match. charter's refusals are prose and the
     #: Rust CLI's are not, so a refusal scenario states its own shape via `refusal` instead.
     stderr_differs: str = ""
@@ -220,6 +235,11 @@ class Scenario:
     #: the part charter wrote — so this hides a known quotation, never a difference of
     #: charter's own words.
     stderr_mask: list = field(default_factory=list)
+    #: The same, for STDOUT. Separate from the field above rather than one list applied to
+    #: both, because a mask is a claim about one stream: a pattern that is right for a
+    #: refusal sentence is not automatically right for a render, and a guard's whole verdict
+    #: is on stdout where every other scenario's words are on stderr.
+    stdout_mask: list = field(default_factory=list)
     #: `(regex, why)` pairs naming ITEMS Python lists in `init`'s inventory that the Rust
     #: binary does not write, with the reason. Each matching item is taken out of Python's
     #: stderr before the comparison — out of a `+ item` line (and the headline's count with
@@ -4667,6 +4687,31 @@ def _root_with_a_memory_commit_awaiting_a_pull_request(root: Path) -> None:
     _push_record(root, outcome="branched", landed="charter/1a2b3c4d", branch="main")
 
 
+def _root_ahead_of_its_upstream(root: Path) -> None:
+    """The plane root with one commit its upstream has and one it does not.
+
+    What **A3b** needs, and nothing less does. That guard "only speaks when it has measured that
+    something really would be lost", and the measurement is
+    `git rev-list --count HEAD --not <target> @{upstream}` — so the root needs a real upstream
+    ref and a real commit ahead of it. `_a_plane_root_repo` deliberately has no remote, which
+    makes `@{upstream}` fail and the guard silent: a scenario built on it is green while
+    measuring nothing, which is how it was first written here.
+
+    The remote is a bare repository BESIDE the plane copy: `file://` needs no network and no
+    credential, and it sits outside the tree the scenario compares. `.git` is in
+    `ROOT_REPO_IGNORES`, so the two sides' different absolute remote paths are not compared.
+    """
+    _a_plane_root_repo(root)
+    side = root.parent
+    remote = side / "origin.git"
+    _git(side, "init", "-q", "--bare", str(remote))
+    _git(side, "remote", "add", "origin", str(remote), cwd=root)
+    _git(side, "push", "-q", "-u", "origin", "main", cwd=root)
+    (root / "notes.md").write_text("# notes\n\na commit that reached no remote\n")
+    _git(side, "add", "-A", cwd=root)
+    _git(side, "commit", "-q", "-m", "unpushed", cwd=root)
+
+
 def _root_dirty_off_its_branch_with_a_memory_never_pushed(root: Path) -> None:
     """Every finding at once: they share ONE row, in charter's order."""
     _root_off_its_branch(root)
@@ -4789,7 +4834,199 @@ ALERT_SCENARIOS = [
 ]
 
 
+# --------------------------------------------------------------------------- #
+# `charter hook pretooluse`: the Bash guard, as a PROCESS, on both sides         #
+# --------------------------------------------------------------------------- #
+#
+# M3.1 stage 6. Every other differential in this repository compares a guard ARM against the
+# Python function it was ported from (`tests/differential/shellseg.py`, `planeroot.py`). These
+# compare the whole hook: the same payload on stdin, the same fixture plane, and then the exit
+# status, the JSON on stdout byte for byte, and the two planes afterwards.
+#
+# **They are what measures the ORDER.** Eight arms, and which of two that both fire is the one
+# the chat is told about is a fact about `pretooluse` rather than about any arm — no per-function
+# harness can see it, and it is the whole subject of `toolgate.rs`. `denies` names the arm by the
+# sentence it opens with, checked on BOTH sides, so an order that drifted on either shows up as
+# the wrong sentence rather than as a silent agreement.
+#
+# **The bookkeeping is IGNORED, narrowly and by name.** `pretooluse` writes three things the port
+# does not: a guard sighting, the persona tool-gate's session snapshot, and a trace row. None
+# changes a verdict, all are declared gaps in `toolgate.rs`'s header, and each is listed with the
+# reason rather than the whole of `.charter/` being waved through — a wide ignore here would hide
+# the arms that really do write, which is what a guard differential must not do.
+GUARD_IGNORES = {
+    ".charter/guard-seen.json": "`_mark_guard_seen` — the sighting `doctor` and the status line "
+    "read back to say the guard is live under this harness. Not ported: it is a fact about a "
+    "plane's bookkeeping, not a verdict (charter-core `toolgate`'s header lists it)",
+    ".charter/sessions": "`_turn_bump` and the persona tool-gate's per-session snapshot "
+    "(`<sid>.tools`, `<sid>.gate`, charter#432). The ALLOW half of `pretooluse` is not ported "
+    "at all, so nothing here has a snapshot to freeze",
+    ".charter/persona-state": "`_trace` — one row per verdict. The `Verdict` carries its "
+    "`reason` and `shape` so a later stage can write them; nothing writes them yet",
+}
+
+#: The plane root, as a denial that names it spells it. Each side's copy is at its own absolute
+#: path, so the PATH is what neither implementation decides; everything the denial says around it
+#: still has to match byte for byte.
+GUARD_PLANE_PATH = (r"(?<=git -C )\S+", "each side's plane copy lives at its own absolute path")
+
+#: The payload a harness sends, with only the fields the guard reads.
+#:
+#: **`cwd` defaults to `"."`, and that is not a placeholder.** It is where the COMMAND would run,
+#: which A, A3 and A3b all resolve their paths against — and the plane root is a different
+#: absolute path on each side (`<scratch>/python/plane` against `<scratch>/rust/plane`), so no
+#: literal could name it in a payload both sides are handed. Both processes stand in their own
+#: root, so `"."` is the same answer computed on each side. A scenario that needs the command to
+#: run somewhere else passes `cwd=` itself.
+def _tool_call(command: str, **extra) -> str:
+    return json.dumps({
+        "session_id": SESSION,
+        "cwd": ".",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        **extra,
+    })
+
+
+def _guard(name: str, command: str, *, denies: str = "", allows: bool = False,
+           plane: str = "daily", setup=None, ignore=None, env=None,
+           stdout_mask=None, local_origin_why: str = "", **payload) -> Scenario:
+    """One `charter hook pretooluse`, put to both implementations.
+
+    `$CHARTER_HARNESS` is set on every one of them: A7 reads it to decide whether an `agent_id`
+    means a sub-agent, and a scenario that left it to the environment would answer differently
+    on a developer's machine than in CI.
+    """
+    return Scenario(
+        name=f"pretooluse-{name}",
+        plane=plane,
+        setup=setup,
+        python=["hook", "pretooluse"],
+        stdin=_tool_call(command, **payload),
+        # A guard reads a command line and a payload; it takes no clock and writes nothing that
+        # carries a stamp, so `hook` has no `--now` to be given one.
+        pins_the_clock=False,
+        denies=denies,
+        allows=allows,
+        stdout_mask=stdout_mask or [],
+        local_origin_why=local_origin_why,
+        ignore={**GUARD_IGNORES, **(ignore or {})},
+        env={"CHARTER_HARNESS": "claude-code", **(env or {})},
+    )
+
+
+PRETOOLUSE_SCENARIOS = [
+    # ---- the two answers that are not a denial at all. First, because every scenario below
+    # would pass against a guard that refused everything.
+    _guard("allows-an-ordinary-command", "git status", allows=True),
+    _guard("allows-the-canonical-handoff",
+           "charter handoff beta <<'BRIEF'\nship it\nBRIEF", allows=True),
+
+    # ---- A: the leak guard. Ungated, and first.
+    _guard("leak", "cat .charter/vaults/db.json",
+           denies="reads a vault/secret file directly"),
+    # ---- A2: the golden rule.
+    _guard("golden-rule", "git clone git@github.com:o/r.git",
+           denies="The control plane is **token-only**"),
+    # ---- A3 and A3b: the plane root is one shared working tree. Both need a real repository
+    # underneath, which is what `_a_plane_root_repo` is for.
+    _guard("plane-root-branch", "git checkout -b side",
+           setup=_a_plane_root_repo, ignore=ROOT_REPO_IGNORES,
+           denies="The plane root is one working tree every session shares"),
+    _guard("plane-root-reset", "git reset --hard HEAD~1",
+           setup=_root_ahead_of_its_upstream, ignore=ROOT_REPO_IGNORES,
+           # A3b's denial names the root so the operator can look at what would go, and each
+           # side's root is its own absolute path. The masked comparison is still exact
+           # everywhere else, which is where the count and the upstream's name are.
+           stdout_mask=[GUARD_PLANE_PATH],
+           local_origin_why="A3b's whole condition is `@{upstream}`, so the root needs a "
+                            "remote it is ahead of. It is a bare repository beside the plane "
+                            "copy: no forge is involved and none is being measured",
+           denies="that is not on origin/main"),
+    # ...and the half that says A3b is a MEASUREMENT and not a word match: the same command in
+    # the same root, with nothing ahead of the upstream, is allowed.
+    _guard("plane-root-reset-with-nothing-at-risk", "git reset --hard HEAD~1",
+           setup=_a_plane_root_repo, ignore=ROOT_REPO_IGNORES, allows=True),
+    # ---- A4: an unattended run may not publish. Both sides of the gate, because "unattended"
+    # is the whole condition and an attended answer that started denying is a guard that
+    # reached the operator.
+    _guard("release-floor", "gh release create v1.0.0",
+           permission_mode="bypassPermissions",
+           denies="Publishing is on charter's floor"),
+    _guard("release-floor-is-attended-only", "gh release create v1.0.0", allows=True),
+    # ---- A5 and A6: a live substitution in prose that gets published.
+    _guard("forge-substitution", 'gh issue create --body "$(cat notes)"',
+           denies="`gh issue create` publishes prose"),
+    _guard("charter-substitution", 'charter persona remember devops "$(cat notes)"',
+           denies="`charter persona remember` takes text"),
+    # ---- A7: all four rows.
+    _guard("handoff-spelling", "python3 -m charter handoff beta <<'BRIEF'\nx\nBRIEF",
+           denies="must be spelled exactly that"),
+    _guard("handoff-brief-source", "charter handoff beta",
+           denies="takes its brief from a QUOTED heredoc"),
+    _guard("handoff-shell-string", "eval 'charter handoff beta'",
+           denies="inside a string or a heredoc a shell runs"),
+    _guard("handoff-subagent", "charter handoff beta <<'BRIEF'\nx\nBRIEF",
+           agent_id="sub-1",
+           denies="refused from inside a sub-agent"),
+    _guard("handoff-unattended", "charter handoff beta <<'BRIEF'\nx\nBRIEF",
+           permission_mode="bypassPermissions",
+           denies="refused in an unattended run"),
+    # ...and the harness nobody measured, where an `agent_id` means nothing and the canonical
+    # spelling still goes through. The gap this pins is a REFUSAL that must not happen.
+    _guard("handoff-from-an-unmeasured-harness",
+           "charter handoff beta <<'BRIEF'\nship it\nBRIEF",
+           agent_id="sub-1", env={"CHARTER_HARNESS": "opencode"}, allows=True),
+
+    # ---- the ORDER, which is the only thing no per-arm harness can see.
+    # A before everything: a line that leaks AND hands off is explained by the leak.
+    _guard("leak-outranks-the-handoff-guard",
+           "cat .charter/vaults/db.json && charter handoff beta",
+           denies="reads a vault/secret file directly"),
+    # A5 before A6: a line that is both is explained by the guard that publishes to a forge.
+    _guard("the-forge-guard-outranks-charters-own",
+           'charter persona remember d "$(x)" && gh issue create --body "$(x)"',
+           denies="`gh issue create` publishes prose"),
+    # A7's own order: a sub-agent is asked before an unattended run, and both before the
+    # spelling. One command, three payloads, three different sentences.
+    _guard("a-sub-agent-is-asked-before-an-unattended-run",
+           "python3 -m charter handoff beta",
+           agent_id="sub-1", permission_mode="bypassPermissions",
+           denies="refused from inside a sub-agent"),
+    _guard("an-unattended-run-is-asked-before-the-spelling",
+           "python3 -m charter handoff beta",
+           permission_mode="bypassPermissions",
+           denies="refused in an unattended run"),
+
+    # ---- the plane gate. `plane=""` is a directory that is not a plane, which is where the
+    # five gated arms denied in every unrelated repository on the machine (charter#852).
+    _guard("outside-a-plane-the-golden-rule-is-silent", "git clone git@github.com:o/r.git",
+           plane="", allows=True),
+    _guard("outside-a-plane-the-handoff-guard-is-silent", "charter handoff beta",
+           plane="", allows=True),
+    # ...and the two that are NOT gated, in the same directory: a fact about the shell is a
+    # fact about the shell wherever it is typed.
+    _guard("outside-a-plane-the-charter-prose-guard-still-refuses",
+           'charter persona remember devops "$(cat notes)"',
+           plane="", denies="`charter persona remember` takes text"),
+    _guard("outside-a-plane-the-leak-guard-still-refuses", "cat .charter/vaults/db.json",
+           plane="", denies="reads a vault/secret file directly"),
+
+    # ---- the payloads a guard has to survive. A hook that crashed on one of these would
+    # block every tool call in the session it was armed on.
+    _guard("a-payload-with-no-command", "", allows=True),
+]
+
+# Exactly one of the two, on every one of them: a guard scenario that asserts neither is a
+# scenario where both sides can allow and nothing is proved. This is the `refusal` field's own
+# objection, applied to the field that replaces it.
+for _s in PRETOOLUSE_SCENARIOS:
+    assert bool(_s.denies) != _s.allows, f"{_s.name} says neither what it denies nor that it allows"
+
+
 SCENARIOS = [
+    *PRETOOLUSE_SCENARIOS,
     *INIT_SCENARIOS,
     *LADDER_SCENARIOS,
     *NEWS_SCENARIOS,
@@ -5453,6 +5690,25 @@ SCENARIOS = [
 ]
 
 
+def _decision(stdout: str) -> str | None:
+    """The `permissionDecisionReason` a `PreToolUse` hook printed, or `None`.
+
+    Read rather than string-matched, so a scenario's `denies` is about the FIELD the harness
+    acts on and not about a sentence that happens to be somewhere in the output. A hook that
+    printed something other than a deny — a `systemMessage`, an allow — answers `None`, which
+    is the same failure as printing nothing.
+    """
+    if not stdout.strip():
+        return None
+    try:
+        out = json.loads(stdout)["hookSpecificOutput"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    if out.get("permissionDecision") != "deny":
+        return None
+    return out.get("permissionDecisionReason")
+
+
 def _env(root: Path, home: Path, pins: Path) -> dict[str, str]:
     """A FRESH environment, never the caller's.
 
@@ -5760,8 +6016,13 @@ def _declared(scenario: Scenario, py: subprocess.CompletedProcess,
 
 
 def _masked(text: str, scenario: Scenario) -> str:
-    """*text* with each of the scenario's masks blanked — what neither side's words decide."""
-    for pattern, _why in scenario.stderr_mask:
+    """*text* with each of the scenario's STDERR masks blanked — what neither side's words
+    decide."""
+    return _mask_with(text, scenario.stderr_mask)
+
+
+def _mask_with(text: str, masks: list) -> str:
+    for pattern, _why in masks:
         text = re.sub(pattern, "<masked>", text)
     return text
 
@@ -5955,10 +6216,38 @@ def check(scenario: Scenario, binary: Path) -> bool:
                     problems.append(f"    stdout differs before {cut!r}:")
                     problems.append(f"      python {want!r}")
                     problems.append(f"      rust   {got!r}")
-        elif py.stdout != rs.stdout:
-            problems.append("    stdout differs:")
-            problems.append(f"      python {py.stdout!r}")
-            problems.append(f"      rust   {rs.stdout!r}")
+        else:
+            want = _mask_with(py.stdout, scenario.stdout_mask)
+            got = _mask_with(rs.stdout, scenario.stdout_mask)
+            if want != got:
+                problems.append("    stdout differs:")
+                problems.append(f"      python {want!r}")
+                problems.append(f"      rust   {got!r}")
+
+        # A hook's verdict is on STDOUT, so the check above — "the two match" — is satisfied by
+        # two sides that both allowed. These two say WHICH, on each side separately, so a guard
+        # that stopped firing is red rather than symmetrically silent.
+        if scenario.denies:
+            for side, out in (("python", py.stdout), ("rust", rs.stdout)):
+                said = _decision(out)
+                if said is None:
+                    problems.append(
+                        f"    {side} printed no PreToolUse denial at all: {out!r}"
+                    )
+                elif scenario.denies not in said:
+                    problems.append(
+                        f"    {side} denied with something else — wanted {scenario.denies!r}, "
+                        f"got {said!r}"
+                    )
+        if scenario.allows:
+            if scenario.denies:
+                problems.append(
+                    "    this scenario says both `allows` and `denies`, which cannot both be "
+                    "what the hook answered"
+                )
+            for side, out in (("python", py.stdout), ("rust", rs.stdout)):
+                if out:
+                    problems.append(f"    {side} did not allow — it printed {out!r}")
 
         if scenario.alerts is not None:
             problems.extend(_alert_rows(scenario, py.stdout, rs.stdout))
@@ -6082,10 +6371,15 @@ def main() -> int:
     wanted = everything
     if args.scenario:
         names = {s.name for s in everything}
-        unknown = [n for n in args.scenario if n not in names]
+        # An exact name, or a PREFIX of one. The prefix is what makes a family runnable while
+        # it is being written — `--scenario pretooluse` is 25 scenarios — and it cannot
+        # silently select nothing, because a word that matches no name is still an error.
+        unknown = [n for n in args.scenario
+                   if n not in names and not any(m.startswith(n) for m in names)]
         if unknown:
             ap.error(f"no such scenario: {', '.join(unknown)} (have {', '.join(sorted(names))})")
-        wanted = [s for s in everything if s.name in set(args.scenario)]
+        wanted = [s for s in everything
+                  if any(s.name == n or s.name.startswith(n) for n in args.scenario)]
 
     # Before the scenarios, and whichever of them were asked for: a corpus that has drifted makes
     # every `news --for` scenario report a difference in a rendered body, and this names the file.
