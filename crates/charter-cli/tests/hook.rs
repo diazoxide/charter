@@ -172,9 +172,13 @@ fn a_tool_hook_this_binary_does_not_answer_blocks_rather_than_allowing() {
     // `charter hook pretooluse-notebook` exited 1, which a harness logs and ignores, so the
     // day charter adds a matcher the Rust binary on PATH would allow that whole tool class
     // silently. The namespace covers every matcher there is and every one there will be.
+    //
+    // **`pretooluse` is NOT here any more (M3.1 stage 6).** It is the one word in the namespace
+    // this binary has ported and answers; the tests below are its. Every other word — the eight
+    // the charter plugin wires and every one charter has not invented — still blocks, and the
+    // argument is unchanged: a program that has checked nothing may not say `allow`.
     for word in [
-        // The guard as it stands.
-        "pretooluse",
+        // The guard as it stands, minus the one answered.
         "pretooluse-read",
         "pretooluse-edit",
         "pretooluse-dispatch",
@@ -203,6 +207,264 @@ fn a_tool_hook_this_binary_does_not_answer_blocks_rather_than_allowing() {
             "`charter hook {word}` refused without saying what to check"
         );
     }
+}
+
+/// `charter hook pretooluse` with `payload` on stdin, standing in `cwd`. Answers
+/// `(exit code, stdout, stderr)`.
+///
+/// `env_clear`, and `$CHARTER_ROOT` is set positively on every call: a guard reads the plane
+/// from the PROCESS's directory, and an inherited `$CHARTER_ROOT` would point this test at the
+/// operator's own plane — which is the fence this suite is under (charter-app#132).
+fn guard(cwd: &std::path::Path, payload: &str, env: &[(&str, &str)]) -> (i32, String, String) {
+    let mut child = Command::new(CHARTER)
+        .args(["hook", "pretooluse"])
+        .current_dir(cwd)
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("CHARTER_ROOT", cwd)
+        .env("CHARTER_HARNESS", "claude-code")
+        .envs(env.iter().copied())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("charter runs");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(payload.as_bytes())
+        .expect("the payload is written");
+    let out = child.wait_with_output().expect("charter finishes");
+    (
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+/// A payload for one Bash call, as a harness sends it.
+fn bash(command: &str) -> String {
+    serde_json::json!({
+        "session_id": "11111111-2222-4333-8444-555555555555",
+        "cwd": ".",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+    })
+    .to_string()
+}
+
+/// A plane with a `charter.toml` and a vault in it — enough for the gate to open and for the
+/// leak guard to have something real to refuse.
+fn a_plane() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("a directory");
+    std::fs::write(dir.path().join("charter.toml"), "schema = 1\n").expect("the marker");
+    let vaults = dir.path().join(".charter").join("vaults");
+    std::fs::create_dir_all(&vaults).expect("the vault directory");
+    std::fs::write(vaults.join("db.json"), "{}\n").expect("a vault");
+    dir
+}
+
+/// The `permissionDecisionReason` this hook printed, or `None`.
+fn decision(stdout: &str) -> Option<String> {
+    let out: serde_json::Value = serde_json::from_str(stdout).ok()?;
+    let out = out.get("hookSpecificOutput")?;
+    if out.get("permissionDecision")?.as_str()? != "deny" {
+        return None;
+    }
+    Some(out.get("permissionDecisionReason")?.as_str()?.to_owned())
+}
+
+#[test]
+fn the_bash_guard_refuses_by_printing_and_exits_cleanly() {
+    // **A `PreToolUse` hook refuses by PRINTING.** The verdict is the JSON on stdout and the
+    // status is 0; exit 2 is the fallback for a denial that could not be delivered, and every
+    // other non-zero status is a non-blocking error the harness logs while the tool call goes
+    // ahead. Getting this wrong in the safe-looking direction — exit 2 as well — would make
+    // the harness show a refusal with no reason attached.
+    let plane = a_plane();
+    let (code, out, err) = guard(plane.path(), &bash("cat .charter/vaults/db.json"), &[]);
+
+    assert_eq!(code, 0, "a denial is exit 0; the JSON is the refusal");
+    assert_eq!(err, "", "nothing on stderr when the verdict was delivered");
+    let said = decision(&out).unwrap_or_else(|| panic!("a denial: {out:?}"));
+    assert!(said.starts_with("charter guard: "), "{said}");
+    assert!(
+        said.contains("reads a vault/secret file directly"),
+        "{said}"
+    );
+    assert!(
+        said.contains("no config key, environment variable or switch"),
+        "every denial carries the override note: {said}"
+    );
+}
+
+#[test]
+fn an_ordinary_command_is_answered_with_nothing_at_all() {
+    // Silence is how a `PreToolUse` hook allows. This is the switch's real subject: before it,
+    // every one of these exited 2 and the tool call was refused.
+    let plane = a_plane();
+    for command in [
+        "git status",
+        "charter handoff beta <<'BRIEF'\nship it\nBRIEF",
+        "echo hello",
+    ] {
+        let (code, out, err) = guard(plane.path(), &bash(command), &[]);
+        assert_eq!(code, 0, "{command:?}");
+        assert_eq!(out, "", "{command:?} was not allowed: {out}");
+        assert_eq!(err, "", "{command:?}");
+    }
+}
+
+#[test]
+fn the_guard_survives_every_payload_a_harness_could_send() {
+    // A hook that crashed on one of these would take the tool call with it, and a non-zero
+    // exit that is not 2 is a NON-blocking error — so the failure would be silent. `""` is
+    // what the deadline in `payload()` produces when a harness opens stdin and never writes.
+    let plane = a_plane();
+    for payload in [
+        "",
+        "not json {{{",
+        "null",
+        "[]",
+        "{}",
+        r#"{"tool_input": null}"#,
+        r#"{"tool_input": {"command": null}}"#,
+        r#"{"tool_input": {"command": 7}, "cwd": 7, "permission_mode": 7, "agent_id": 7}"#,
+    ] {
+        let (code, out, err) = guard(plane.path(), payload, &[]);
+        assert_eq!(code, 0, "{payload:?} did not answer cleanly: {err}");
+        assert_eq!(out, "", "{payload:?} refused something it cannot have read");
+    }
+}
+
+#[test]
+fn outside_a_plane_the_gated_arms_are_silent_and_the_others_are_not() {
+    // charter#852. The plugin is installed per user, so this handler runs in every repository
+    // on the machine; the arms that are about a control plane must say nothing where there is
+    // none, and the arms that are about the SHELL must still speak.
+    //
+    // **The gate is the `charter.toml`, not a resolved directory.** `$CHARTER_ROOT` is set on
+    // every call here and points at a directory that is not a plane, which is exactly the case
+    // the differential caught the first port of this getting wrong.
+    let bare = tempfile::tempdir().expect("a directory");
+    let vaults = bare.path().join(".charter").join("vaults");
+    std::fs::create_dir_all(&vaults).expect("the vault directory");
+    std::fs::write(vaults.join("db.json"), "{}\n").expect("a vault");
+
+    for gated in [
+        "git clone git@github.com:o/r.git",
+        "charter handoff beta",
+        "gh release create v1.0.0",
+    ] {
+        let (code, out, _) = guard(bare.path(), &bash(gated), &[]);
+        assert_eq!(code, 0);
+        assert_eq!(out, "", "{gated:?} was refused where there is no plane");
+    }
+    for ungated in [
+        "cat .charter/vaults/db.json",
+        "charter persona remember d \"$(cat notes)\"",
+    ] {
+        let (_, out, _) = guard(bare.path(), &bash(ungated), &[]);
+        assert!(
+            decision(&out).is_some(),
+            "{ungated:?} is a fact about the shell and must still be refused: {out:?}"
+        );
+    }
+}
+
+#[test]
+fn the_two_payload_fields_no_command_can_see_are_read() {
+    // A7's whole reason for being the hook's and not the command's. Neither `agent_id` nor
+    // `permission_mode` is anything `charter handoff` could ask about once it is running.
+    let plane = a_plane();
+    let canonical = "charter handoff beta <<'BRIEF'\nship it\nBRIEF";
+    let with = |field: &str, value: &str| {
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&bash(canonical)).expect("the payload");
+        payload[field] = serde_json::Value::String(value.to_owned());
+        payload.to_string()
+    };
+
+    let (_, out, _) = guard(plane.path(), &with("agent_id", "sub-1"), &[]);
+    assert!(
+        decision(&out).is_some_and(|d| d.contains("from inside a sub-agent")),
+        "{out:?}"
+    );
+    let (_, out, _) = guard(
+        plane.path(),
+        &with("permission_mode", "bypassPermissions"),
+        &[],
+    );
+    assert!(
+        decision(&out).is_some_and(|d| d.contains("in an unattended run")),
+        "{out:?}"
+    );
+    // ...and on a harness nobody measured, an `agent_id` means nothing at all.
+    let (_, out, _) = guard(
+        plane.path(),
+        &with("agent_id", "sub-1"),
+        &[("CHARTER_HARNESS", "opencode")],
+    );
+    assert_eq!(out, "", "an unmeasured harness is not read as a sub-agent");
+}
+
+#[test]
+fn the_guard_answers_the_command_line_the_plugin_actually_writes() {
+    // `hooks/hooks.json` calls `charter hook pretooluse --plugin-version 0.62.1`, never the
+    // bare word. The flag is taken and ignored here, as it is for every other event: the skew
+    // check it feeds is the Python charter's. What must NOT happen is the `sessionstart`
+    // notice — a `systemMessage` on every tool call is a line the operator reads once and
+    // then learns to ignore, which is the gate `_queue_plugin_notices` exists for.
+    let plane = a_plane();
+    let mut child = Command::new(CHARTER)
+        .args(["hook", "pretooluse", "--plugin-version", "0.62.1"])
+        .current_dir(plane.path())
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("CHARTER_ROOT", plane.path())
+        .env("CHARTER_HARNESS", "claude-code")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("charter runs");
+    child
+        .stdin
+        .take()
+        .expect("stdin")
+        .write_all(bash("charter handoff beta").as_bytes())
+        .expect("written");
+    let out = child.wait_with_output().expect("charter finishes");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+
+    assert_eq!(out.status.code(), Some(0));
+    assert!(decision(&stdout).is_some(), "{stdout:?}");
+    assert!(
+        !stdout.contains("systemMessage"),
+        "the plugin notice is a session-start line, not a per-tool-call one: {stdout}"
+    );
+}
+
+#[test]
+fn the_denial_is_written_the_way_python_writes_it() {
+    // Byte for byte with `json.dumps`: Python's separators and `ensure_ascii`. The denials
+    // carry `—` and `…`, and a `serde_json` default would pack the separators and write both
+    // characters literally — which the differential compares stdout on.
+    let plane = a_plane();
+    let (_, out, _) = guard(plane.path(), &bash("charter handoff beta"), &[]);
+
+    assert!(
+        out.starts_with(r#"{"hookSpecificOutput": {"hookEventName": "PreToolUse", "#),
+        "{out}"
+    );
+    assert!(out.contains(r#""permissionDecision": "deny", "#), "{out}");
+    assert!(out.contains("\\u2014"), "an em dash is escaped: {out}");
+    assert!(
+        out.ends_with("}}\n"),
+        "one line, newline-terminated: {out:?}"
+    );
 }
 
 #[test]

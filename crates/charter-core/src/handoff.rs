@@ -27,12 +27,16 @@
 //! | a call from a sub-agent, or an unattended run (`bypassPermissions`) | the **hook's** (A7) | no |
 //!
 //! The four A7 rows each need a fact no command can observe: the *source spelling* of the
-//! command line, and the harness's own hook payload (`agent_id`, `permission_mode`). They
-//! live in `charter/hooks.py`, which is the PreToolUse guard — the Rust binary answers no
-//! tool hook at all yet (`charter-cli/src/main.rs:is_a_tool_hook` blocks rather than
-//! allowing, for exactly this reason), and the guard is M3's. **So a plane running this
-//! binary as its `charter` has the command's refusals and not the hook's**, and that is
-//! recorded here rather than left to be discovered.
+//! command line, and the harness's own hook payload (`agent_id`, `permission_mode`). They live
+//! in `charter/hooks.py`, which is the PreToolUse guard, and they are ported in
+//! [`crate::handoffguard`] — assembled with the other seven arms by [`crate::toolgate`] and
+//! answered by `charter hook pretooluse` since M3.1 stage 6.
+//!
+//! **So a plane running this binary as its `charter` now has both halves**, which it did not
+//! before that stage: `charter-cli/src/main.rs:is_a_tool_hook` used to answer every word in
+//! the `pretooluse` namespace with exit 2 rather than decide anything. What a plane still does
+//! not get from this binary is the hook's ALLOW half — the persona tool-gate — which
+//! [`crate::toolgate`]'s header records as a declared gap.
 //!
 //! # The frame, and why this charter refuses every handoff
 //!

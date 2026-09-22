@@ -738,9 +738,23 @@ mod tests {
 
     #[test]
     fn no_guard_hook_is_ever_armed_by_the_app() {
-        // The guard is the Python charter's, it is security-critical, and it is not this
-        // milestone's to answer. Arming one here would run a Rust hook that decides less
-        // than the guard does in front of every tool call.
+        // **Still true after M3.1, and for a different reason than before.** It used to be
+        // that the guard was not this milestone's to answer; the Bash guard is now ported
+        // (`charter_core::toolgate`). Arming it here would be a second, different thing:
+        //
+        // - a chat that ALSO has the Python charter's plugin would then meet two guards on
+        //   one Bash call, one of which decides less — two denials, or one denial and one
+        //   allow, for the same command;
+        // - the app opens chats in repositories that are not planes, and the arms that are
+        //   about a plane are silent there by design (charter#852), so an armed guard would
+        //   be mostly an unarmed one;
+        // - and `PermissionRequest` can ALLOW, which is authority the app has no business
+        //   taking from a file a chat can write.
+        //
+        // The guard reaches a chat the way it always has: the plugin's `hooks.json` names
+        // `charter` by the bare word, and `programs::chat_path` decides which one that is.
+        // The cwd is where `footerclaim` looks for a status line already in force; an
+        // empty directory is a chat with none, which is what this test is about.
         let empty = tempfile::tempdir().expect("a directory with no settings in it");
         let hooks = Harness::ClaudeCode
             .state_hooks(std::path::Path::new("/bin/charter"), Some(empty.path()));
