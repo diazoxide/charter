@@ -11,8 +11,13 @@
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
+use charter_core::credguard;
+use charter_core::floorguard;
+use charter_core::forge;
 use charter_core::heredoc::{self, Header, Line};
 use charter_core::leakguard;
+use charter_core::livesub;
+use charter_core::proseguard;
 use charter_core::pypath;
 use charter_core::shellseg::{self, LexError, Tok};
 use charter_core::shellwrap;
@@ -198,6 +203,55 @@ fn rotation<T: Clone>(cmd: &str, table: &[T], count: usize) -> Vec<T> {
     (0..count)
         .map(|k| table[(n + k) % table.len()].clone())
         .collect()
+}
+
+/// `PROBE_AT` in the harness: how many positions the quoting scanners are started at.
+const PROBE_AT: usize = 4;
+
+/// One row of `_CHARTER_PROSE` as the `tbl` answer carries it: `((noun, verb), (dest, file))`.
+type ProseRow = (
+    (&'static str, &'static str),
+    (&'static str, Option<&'static str>),
+);
+
+/// `PROBE_PENDING` in the harness: the heredocs `heredoc_bodies` is asked to consume — one that
+/// EXPANDS, one that does not, one with the `<<-` tab strip, and the empty delimiter `<<""`
+/// names.
+fn probe_pending() -> Vec<(String, bool, bool)> {
+    vec![
+        ("EOF".to_string(), true, false),
+        ("EOF".to_string(), false, false),
+        ("EOF".to_string(), true, true),
+        (String::new(), true, false),
+    ]
+}
+
+/// `PROBE_MODES` in the harness. `None` is the payload with no `permission_mode` at all, which
+/// is what an attended host sends.
+const PROBE_MODES: [Option<&str>; 5] = [
+    None,
+    Some("bypassPermissions"),
+    Some("default"),
+    Some("acceptEdits"),
+    Some("BYPASSPERMISSIONS"),
+];
+
+/// `probe_positions` in the harness: 0, then just past the first three characters one of the
+/// three scanners is really entered on. CHARACTER offsets, as every offset here is.
+fn probe_positions(chars: &[char]) -> Vec<usize> {
+    let mut out = vec![0usize];
+    for (i, c) in chars.iter().enumerate() {
+        if out.len() >= PROBE_AT {
+            break;
+        }
+        if matches!(c, '\'' | '"' | '$' | '\n') {
+            out.push(i + 1);
+        }
+    }
+    while out.len() < PROBE_AT {
+        out.push(chars.len());
+    }
+    out
 }
 
 fn main() {
@@ -412,7 +466,192 @@ fn read_it(cmd: &str, fx: &Fixture) -> Value {
     ) {
         obj.insert(key.to_string(), value);
     }
+    for (key, value) in stage4(cmd, fx, &chars, &segments) {
+        obj.insert(key.to_string(), value);
+    }
     answer
+}
+
+/// The golden rule's, the floor's and the two prose guards' answers — `stage4` in
+/// `tests/differential/shellseg.py`.
+///
+/// Every arm is asked of the RAW command, not the stripped one: A2, A4, A5 and A6 all walk
+/// `segment_argv(cmd)` themselves, and A5/A6 deliberately read the whole string.
+fn stage4(
+    cmd: &str,
+    fx: &Fixture,
+    chars: &[char],
+    segments: &[Vec<String>],
+) -> Vec<(&'static str, Value)> {
+    let forges = forge::known_ordered(&fx.root);
+    let befores = shellwrap::exported_env(segments);
+    let s4seg: Vec<Value> = segments
+        .iter()
+        .zip(befores.iter())
+        .map(|(toks, before)| {
+            let (prog, seg_env, argv) = shellwrap::split_env(toks);
+            let args: Vec<String> = argv.iter().skip(1).cloned().collect();
+            let mut env = before.clone();
+            env.extend(seg_env);
+            json!([
+                credguard::git_subcommand(&args),
+                credguard::has_ssh_command_config(&args),
+                credguard::has_config_env_sshcommand(&args),
+                credguard::has_git_config_env_sshcommand(&env),
+                credguard::is_sshcommand_config_write(&args),
+                credguard::url_args(&args),
+                proseguard::charter_words(&prog, &argv),
+            ])
+        })
+        .collect();
+
+    // Python's `sorted(set)` / `sorted(dict.items())`: every entry here is ASCII, so the two
+    // languages' string order is the same order.
+    let mut forge_prose: Vec<[&str; 3]> = proseguard::FORGE_PROSE
+        .iter()
+        .map(|(a, b, c)| [*a, *b, *c])
+        .collect();
+    forge_prose.sort_unstable();
+    let mut publish: Vec<[&str; 3]> = floorguard::PUBLISH_FORGE
+        .iter()
+        .map(|(a, b, c)| [*a, *b, *c])
+        .collect();
+    publish.sort_unstable();
+    let mut tags: Vec<&str> = floorguard::TAG_HARMLESS.to_vec();
+    tags.sort_unstable();
+    // `_CHARTER_PROSE`, which is `CHARTER_PROSE_ROWS` widened by the noun aliases — built here
+    // the same way the module builds it, because a hand-copied second half is a row that drifts.
+    let mut charter_prose: Vec<ProseRow> = Vec::new();
+    for (noun, verb, dest, from_file) in proseguard::CHARTER_PROSE_ROWS {
+        charter_prose.push(((noun, verb), (dest, from_file)));
+        if let Some(alias) = match noun {
+            "workspace" => Some("ws"),
+            "worktree" => Some("wt"),
+            _ => None,
+        } {
+            charter_prose.push(((alias, verb), (dest, from_file)));
+        }
+    }
+    charter_prose.sort_unstable_by_key(|((noun, verb), _)| (*noun, *verb));
+    let charter_prose_rows: Vec<Value> = charter_prose
+        .iter()
+        .map(|((noun, verb), (dest, from_file))| json!([[noun, verb], [dest, from_file]]))
+        .collect();
+
+    let at = probe_positions(chars);
+    let pending = probe_pending();
+    let lsub = |v: Option<&'static str>| match v {
+        None => Value::Null,
+        Some(s) => Value::String(s.to_string()),
+    };
+    let pair = |v: Option<(&'static str, String)>| match v {
+        None => Value::Null,
+        Some((shape, said)) => json!([shape, said]),
+    };
+
+    vec![
+        (
+            "tbl",
+            json!([
+                [
+                    json!(forge_prose.len()),
+                    json!(rotation(cmd, &forge_prose, 3))
+                ],
+                json!(publish),
+                json!(tags),
+                json!(livesub::SUBSTITUTIONS),
+                json!(floorguard::UNATTENDED_MODE),
+                [
+                    json!(charter_prose_rows.len()),
+                    json!(rotation(cmd, &charter_prose_rows, 2))
+                ],
+            ]),
+        ),
+        (
+            "kf",
+            json!(
+                forges
+                    .iter()
+                    .map(|f| json!([f.host, f.kind.cli()]))
+                    .collect::<Vec<_>>()
+            ),
+        ),
+        (
+            "sph",
+            json!(
+                credguard::ssh_prefix_hosts(&forges)
+                    .into_iter()
+                    .map(|(p, h)| json!([p, h]))
+                    .collect::<Vec<_>>()
+            ),
+        ),
+        (
+            "sch",
+            match credguard::single_credential_hit(cmd, &forges) {
+                None => Value::Null,
+                Some((shape, detail)) => json!([shape, detail]),
+            },
+        ),
+        (
+            "scr",
+            json!(credguard::single_credential_reason(cmd, &forges)),
+        ),
+        ("s4seg", Value::Array(s4seg)),
+        ("ee", json!(befores)),
+        ("rfr", json!(floorguard::release_floor_reason(cmd, true))),
+        ("rfa", json!(floorguard::release_floor_reason(cmd, false))),
+        (
+            "unat",
+            json!(
+                PROBE_MODES
+                    .iter()
+                    .map(|m| floorguard::unattended(*m))
+                    .collect::<Vec<_>>()
+            ),
+        ),
+        ("ls", lsub(livesub::live_substitution(cmd))),
+        (
+            "ace",
+            json!(
+                at.iter()
+                    .map(|&i| json!([i, livesub::ansi_c_end(chars, i)]))
+                    .collect::<Vec<_>>()
+            ),
+        ),
+        (
+            "dqs",
+            json!(
+                at.iter()
+                    .map(|&i| {
+                        let (hit, next) = livesub::double_quoted_substitution(chars, i);
+                        json!([i, [lsub(hit), json!(next)]])
+                    })
+                    .collect::<Vec<_>>()
+            ),
+        ),
+        ("hsub", lsub(livesub::heredoc_substitution(cmd))),
+        (
+            "hb",
+            json!(
+                at.iter()
+                    .map(|&i| {
+                        let (hit, next) = livesub::heredoc_bodies(chars, i, &pending);
+                        json!([i, [lsub(hit), json!(next)]])
+                    })
+                    .collect::<Vec<_>>()
+            ),
+        ),
+        ("fpc", json!(proseguard::forge_prose_command(cmd))),
+        ("fsh", pair(proseguard::forge_substitution_hit(cmd))),
+        (
+            "cpc",
+            match proseguard::charter_prose_command(cmd) {
+                None => Value::Null,
+                Some((where_, dest, from_file)) => json!([where_, dest, from_file]),
+            },
+        ),
+        ("csh", pair(proseguard::charter_substitution_hit(cmd))),
+    ]
 }
 
 /// The leak guard's answers — `stage3` in `tests/differential/shellseg.py`.

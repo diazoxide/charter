@@ -466,6 +466,44 @@ pub fn known(root: &Path) -> BTreeMap<String, Forge> {
     out
 }
 
+/// [`known`], in **Python's dict order** rather than sorted by host — what the one-credential
+/// guard ([`crate::credguard::single_credential_hit`]) is handed.
+///
+/// The order is not cosmetic and that is why this exists beside [`known`]. The `ssh <forge>` arm
+/// reports **the first** host whose `git@<host>` appears in the argv, so two hosts where one's
+/// name is a prefix of the other's — `github.co` declared beside the default `github.com` — are
+/// told apart only by position, and a `BTreeMap` puts the declared one first where Python's
+/// `{**defaults, **declared}` puts it last.
+///
+/// Python's dict semantics, reproduced exactly: each kind's DEFAULT host first, in [`KINDS`]
+/// order; then each declared host in `charter.toml` block order; and a declared host that
+/// re-declares a default REPLACES its value while keeping the default's POSITION.
+///
+/// Never raises, for [`known`]'s reason: this is on every Bash `PreToolUse` call, so an
+/// unreadable or malformed `charter.toml` degrades to the class defaults rather than failing.
+pub fn known_ordered(root: &Path) -> Vec<Forge> {
+    let mut out: Vec<Forge> = KINDS.iter().map(|k| Forge::default_of(*k)).collect();
+    let Ok(cfg) = load_config(root) else {
+        return out;
+    };
+    for block in blocks(&cfg) {
+        if !block.is_table() {
+            continue;
+        }
+        let kind = text_of(block, "kind")
+            .filter(|k| !k.is_empty())
+            .unwrap_or(DEFAULT_KIND.word());
+        let Ok(forge) = Forge::build(kind, text_of(block, "host")) else {
+            continue; // one bad block costs only itself
+        };
+        match out.iter_mut().find(|f| f.host == forge.host) {
+            Some(row) => *row = forge,
+            None => out.push(forge),
+        }
+    }
+    out
+}
+
 /// The forge a remote URL belongs to, by its HOST, or `None` when this plane does not
 /// manage that host. Python's `registry.resolve_host`.
 pub fn resolve_host(url: &str, root: &Path) -> Option<Forge> {
