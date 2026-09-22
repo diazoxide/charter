@@ -189,6 +189,11 @@ pub fn verdict(call: &Call<'_>, plane: Option<&Plane<'_>>) -> Option<Verdict> {
 
     if let Some(plane) = plane {
         // A2: golden rule — one credential (each forge's token over HTTPS); no SSH, no signing.
+        //
+        // The HIT rather than [`credguard::single_credential_reason`], because the trace row
+        // wants the shape as well and asking twice would walk the command line twice. The prose
+        // is that function's, spelled here — which is the one thing charter#289 says must not
+        // drift, so `the_golden_rules_two_answers_cannot_drift_apart` below pins the pair.
         if let Some((shape, detail)) = credguard::single_credential_hit(cmd, plane.forges) {
             return Some(Verdict::new(
                 REASON_SINGLE_CREDENTIAL,
@@ -386,6 +391,32 @@ mod tests {
             verdict(&c, Some(&plane)).map(|v| v.reason),
             Some(REASON_RELEASE_FLOOR.to_string())
         );
+    }
+
+    #[test]
+    fn the_golden_rules_two_answers_cannot_drift_apart() {
+        // This module rebuilds A2's prose from the HIT so it can carry the shape too, and
+        // `credguard::single_credential_reason` builds the same prose from the same hit. Two
+        // spellings of one sentence is exactly the defect charter#289 named — the traced shape
+        // and the prose disagreeing about what matched — so the pair is pinned rather than
+        // trusted, and a change to either side that forgets the other goes red here.
+        let fix = Fixture::new();
+        let forges = forges();
+        for cmd in [
+            "git clone git@github.com:o/r.git",
+            "git commit -S -m x",
+            "ssh -T git@github.com",
+            "git -c core.sshCommand=/tmp/k push",
+            "git config core.sshCommand /tmp/k",
+        ] {
+            let mine = verdict_of(cmd, &fix, true).unwrap_or_else(|| panic!("{cmd:?} is refused"));
+            assert_eq!(mine.reason, REASON_SINGLE_CREDENTIAL, "{cmd:?}");
+            assert_eq!(
+                Some(mine.denial.as_str()),
+                credguard::single_credential_reason(cmd, &forges).as_deref(),
+                "{cmd:?}: the assembled denial is not the arm's own",
+            );
+        }
     }
 
     #[test]
