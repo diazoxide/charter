@@ -513,8 +513,15 @@ body {
   border-bottom: 1px solid var(--border-subtle);
 }
 
+/* **The panes take the centre region's whole height, by `height`, not by `flex`.**
+   This was `flex: 1` from when `.panes` sat in a flex column. Since the four regions it sits in
+   the centre panel's inner box, which `react-resizable-panels` draws as a plain block — so
+   `flex: 1` meant nothing, `.panes` took its content's height, and xterm's `FitAddon` fitted
+   each terminal to a box exactly as tall as the terminal already was: 24 rows, and the rest of
+   the region empty. `.region-centre` has a definite height (the rule below), so 100% of it is
+   the region. `pane-fill.e2e.ts` is what measures it; jsdom lays nothing out. */
 .panes {
-  flex: 1;
+  height: 100%;
   min-height: 0;
 }
 
@@ -1937,8 +1944,8 @@ body {
   border-color: var(--accent-base);
 }
 
-/* Not ported, so not pressable — and drawn as such rather than as a live control that answers
-   a press with nothing. `StatusLine.tsx` says why that is the honest state and a `0` is not. */
+/* No drawer behind it, so not pressable — and drawn as such rather than as a live control that
+   answers a press with nothing (`StatusLine.tsx`). The window always wires one. */
 .status-alerts:disabled {
   opacity: 0.45;
   cursor: default;
@@ -1954,7 +1961,6 @@ body {
   background: var(--control-count);
   font-variant-numeric: tabular-nums;
 }
-
 /* **The doctor's button** (`app/src/Doctor.tsx`): the same chrome as the alerts button beside
    it, so the right-hand end of the line reads as "things you can open". Its tone is the
    verdict's — a blocker in the colour a failed check has everywhere else in the window, a
@@ -2125,6 +2131,149 @@ body {
   margin: 0.75rem 0 0;
   font-size: 0.8rem;
   overflow-wrap: anywhere;
+}
+
+/* There are alerts: the bell takes the colour charter's footer gives a warning, so the one
+   button on the line that is asking for something looks it. The count's own badge stays the
+   neutral one, because it is words and `state.waiting` is held to 3:1 as a mark, not 4.5 as
+   text. */
+.status-alerts:not([data-count="0"]):not([data-count="unknown"]) .lucide {
+  color: var(--state-waiting);
+}
+
+/* **The alerts drawer** (`AlertsDrawer.tsx`): a sheet over the whole window, from the right —
+   the side the alerts used to have a section on, so the eye goes where it went before. The
+   scrim is `.asking`, the one every modal surface here shares.
+
+   Its own surface rather than `.warning`'s: that one is a centred question with a width for
+   prose, and this is a full-height list an operator scans. `surface.overlay` is the layer the
+   theme defines for what floats over the window, and `text.muted` on it is one of the pairs
+   `contrast.test.ts` holds to 4.5. */
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(30rem, 92vw);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow: auto;
+  padding: 0.9rem 1rem 1.25rem;
+  background: var(--surface-overlay);
+  color: var(--text-primary);
+  border-left: 1px solid var(--border-strong);
+  box-shadow: -8px 0 32px var(--overlay-shadow);
+}
+
+.drawer:focus {
+  outline: none;
+}
+
+.drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.drawer-head h2 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.drawer-close {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  color: var(--text-primary);
+  background: var(--control-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0.15rem 0.5rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.drawer-close:hover {
+  background: var(--control-hover);
+}
+
+.drawer-close:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.drawer-about {
+  margin: 0 0 0.25rem;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+/* One project's alerts. A rule between projects rather than a box around each, so eight
+   projects read as one list with headings and not as eight cards. */
+.drawer-project {
+  padding: 0.6rem 0 0.2rem;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.drawer-project h3 {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  margin: 0 0 0.4rem;
+  font-size: 0.9rem;
+}
+
+.drawer-project .none,
+.drawer-project .pending {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.drawer-alerts {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* The mark, the words, and the command under them. The command wraps onto its own line so a
+   long one never pushes the words off the drawer, and it is a `code` because it is typed. */
+.drawer-alerts li {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 0.45rem;
+  row-gap: 0.2rem;
+  align-items: baseline;
+  padding: 0.35rem 0;
+  overflow-wrap: anywhere;
+}
+
+.drawer-alerts li[data-severity="warn"] .lucide {
+  color: var(--state-waiting);
+}
+
+.drawer-alerts li[data-severity="bad"] .lucide {
+  color: var(--state-failed);
+}
+
+.alert-subject {
+  font-weight: 600;
+}
+
+.alert-detail {
+  color: var(--text-secondary);
+}
+
+.alert-remedy {
+  grid-column: 2;
+  justify-self: start;
+  padding: 0.05rem 0.35rem;
+  border-radius: 3px;
+  background: var(--control-base);
+  color: var(--text-primary);
+  font-size: 0.8rem;
 }
 
 /* The extension list (charter ADR 0041 item 5: what is in force, after approval and not only

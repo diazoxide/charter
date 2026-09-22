@@ -106,16 +106,15 @@ export function StatusLine({
    *  second time. */
   state: WorkspaceState;
   /**
-   * The alerts, when there are any to have.
+   * The window's alerts drawer: how many alerts every open project has, and the way to open it
+   * (`AlertsDrawer.tsx`, `alerts.ts`).
    *
-   * **`undefined` is today, and it is the honest value.** charter's alert row is
-   * `charter/statusline.py:_alerts` and nothing of it is ported — `footer.rs` names the
-   * omission in its own output, and `Panels`'s alerts area says the same thing in prose:
-   * *"an empty list here would be a claim it has no way to make."* A `0` on this button
-   * would be that claim with a number on it.
+   * **The count is the window's, not this project's.** Alerts are about planes, and the drawer
+   * lists every project the window holds, so the number on the button is that whole list's —
+   * the same number whichever project is in front.
    *
-   * This is the seam M6.5's drawer attaches to: a count to draw and something to call when
-   * the button is pressed. Nothing else about the drawer is decided here.
+   * `undefined` means no drawer was wired, which the window always does; a status line drawn
+   * on its own says so rather than offering a button that answers a press with nothing.
    */
   alerts?: Alerts;
   /** What the doctor last said about this project, run inside the app (`Doctor.tsx`). Absent
@@ -184,23 +183,32 @@ export function StatusLine({
   );
 }
 
-/** What M6.5's drawer hands the button. See {@link StatusLine}'s `alerts` for why the absence
- *  of this is a state with words of its own rather than a zero. */
+/** What the window's drawer hands the button. */
 export type Alerts = {
-  /** How many there are. */
-  count: number;
+  /**
+   * How many alerts every open project has — or `undefined` when charter cannot stand behind
+   * a number: not every project has answered yet, or charter stopped looking in one of them
+   * (`alerts.ts`'s `countOf`). **Dropped, never zero**: a partial total is a wrong total, and
+   * once it is a number on a line nobody can tell the two apart.
+   */
+  count: number | undefined;
   /** Opens the drawer. */
   open: () => void;
 };
 
 /**
- * The alerts button, in the two states it can be in.
+ * The alerts button, in the states it can be in.
  *
- * **With no source it is disabled and says so**, rather than being a control that opens an
- * empty drawer. A button that answers a press with nothing teaches an operator that alerts are
- * quiet; the sentence teaches them that charter cannot tell. Those are the two claims
- * `footer.rs` refuses to let a reader confuse, and the disabled state is the only one of the
- * two a person can tell apart at a glance.
+ * - **A count** — drawn in the badge, because something needs the operator.
+ * - **Zero** — the word `Alerts` and no badge. The footer's rule: a `0` sitting there every
+ *   day is furniture by the end of the week, and then a real `2` in that spot draws no more
+ *   attention than the zero did. Presence is the signal. The button's NAME still says `none`,
+ *   because a screen reader has no "absent badge" to notice.
+ * - **No number charter can stand behind** — a dash, and the drawer still opens: it says,
+ *   project by project, what charter could not read. A button that refused to open then would
+ *   hide the one explanation there is.
+ * - **No drawer wired** — disabled and said, rather than a control that answers a press with
+ *   nothing. The window always wires one; this is a status line drawn on its own.
  */
 function AlertsButton({ alerts }: { alerts?: Alerts }) {
   if (alerts === undefined) {
@@ -210,11 +218,8 @@ function AlertsButton({ alerts }: { alerts?: Alerts }) {
         className="status-alerts"
         data-testid="status-alerts"
         disabled
-        aria-label="Alerts — not drawn by this build"
-        title={
-          "charter's alert row is not ported, so charter cannot tell you whether anything is " +
-          "alerting. A count here — even a zero — would be a claim it has no way to make."
-        }
+        aria-label="Alerts — nothing to open here"
+        title="This status line has no alerts drawer behind it."
       >
         <Bell aria-hidden="true" size="1em" /> Alerts{" "}
         <span className="status-unknown" aria-hidden="true">
@@ -223,17 +228,35 @@ function AlertsButton({ alerts }: { alerts?: Alerts }) {
       </button>
     );
   }
+  const { count } = alerts;
   return (
     <button
       type="button"
       className="status-alerts"
       data-testid="status-alerts"
-      aria-label={`Alerts: ${alerts.count}`}
-      title="Open the alerts drawer"
+      data-count={count ?? "unknown"}
+      aria-label={
+        count === undefined ? "Alerts: not counted" : `Alerts: ${count === 0 ? "none" : count}`
+      }
+      title={
+        count === undefined
+          ? "charter could not count every open project's alerts — open the drawer to see why"
+          : "Open the alerts drawer: every open project's alerts"
+      }
       onClick={alerts.open}
     >
-      <Bell aria-hidden="true" size="1em" /> Alerts{" "}
-      <span className="status-count">{alerts.count}</span>
+      <Bell aria-hidden="true" size="1em" /> Alerts
+      {count === undefined ? (
+        <span className="status-unknown" aria-hidden="true">
+          —
+        </span>
+      ) : (
+        count > 0 && (
+          <span className="status-count" aria-hidden="true">
+            {count}
+          </span>
+        )
+      )}
     </button>
   );
 }

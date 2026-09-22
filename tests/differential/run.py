@@ -260,6 +260,26 @@ class Scenario:
     #: is what stands in for it rather than nothing.
     facts: "Callable[[Path], str] | None" = None
 
+    #: How many ALERT LINES charter draws in this scenario's status line, when the scenario
+    #: compares them — `statusline._alerts`, which charter-app ports as `alerts.rs`.
+    #:
+    #: The alert rows sit BELOW the zone rule, where `stdout_cut_at` stops comparing, and below
+    #: zone 2, which charter-app does not draw. So they cannot be compared by position: they are
+    #: picked out of both stdouts by [`ALERT_MARK`] and the two lists must be equal, line for
+    #: line and byte for byte — frame, padding, colour and truncation included.
+    #:
+    #: **The number is asserted of charter's side**, and that is what keeps the comparison from
+    #: going vacuous in either direction: a scenario written to produce a reinit row that
+    #: produces none would otherwise compare two empty lists and report `ok`, and one that
+    #: starts producing a second row nobody asked about is a change in the oracle worth seeing.
+    alerts: "int | None" = None
+    #: `(charter's words, charter-app's words, why)`: the one DECIDED difference in an alert
+    #: row. charter's words are replaced by charter-app's in charter's lines before they are
+    #: compared, and both halves are held to being there — charter's in charter's rows and
+    #: charter-app's in charter-app's — so the note fails the day either side stops saying it.
+    #: The `why` must cite an ADR, as a `Divergence` must.
+    alert_rewrite: "tuple[str, str, str] | None" = None
+
     #: A refusal whose WORDS are ported too: stderr is then compared byte for byte, as it
     #: is for a success, rather than only searched for `refusal`.
     same_stderr: bool = False
@@ -4524,6 +4544,251 @@ VERSION_SCENARIOS = [
 ]
 
 
+# M6.5: the alert rows — `statusline._alerts`, ported as `crates/charter-core/src/alerts.rs`
+# --------------------------------------------------------------------------------------------
+#
+# charter draws its alert rows full width below zone 2: a pin the running charter does not meet,
+# a front door naming no persona, workspaces needing a reinit, a nested plane, and a plane root
+# being worked in. Each carries the command that fixes it, and each renders only when real.
+#
+# These scenarios compare the ROWS, picked out of both stdouts by `ALERT_MARK` (see
+# `Scenario.alerts`), and keep comparing zone 1 above the rule exactly as the statusline
+# scenarios above do. Every scenario states how many rows charter draws, so one that stops
+# producing the row it is named for fails rather than comparing two empty lists.
+#
+# What is NOT here, and where it is instead: the nested-plane row needs the plane copy to sit
+# inside another plane's `workspaces/`, which `_refuse_enclosing_plane` exists to make
+# impossible for this harness — it is `alerts.rs`'s own tests that drive it.
+
+#: One decided difference, and only one. charter's pin row points at `charter version sync`,
+#: which INSTALLS a published charter-cp; charter-app is a binary inside the app and answers
+#: that verb with a refusal whose last line is "what this charter is, and what this plane
+#: pins:  charter version". So charter-app's row names `charter version` directly — the command
+#: that prints both numbers and how to conform the plane — rather than a verb that refuses and
+#: then points at it.
+PIN_ROW_REMEDY = (
+    "· charter version sync",
+    "· charter version",
+    "ADR 0030: `charter version sync` moves a published charter-cp release, which charter-app "
+    "is not; its row names the command that says what this charter brought and how to "
+    "conform the plane, which is where `version sync` itself sends the operator here.",
+)
+
+
+def _manifest_says(old: str, new: str):
+    """`charter.toml` with *old* replaced by *new* — the fixture's own manifest, edited, so the
+    rest of it still decides the forge, the persona and the memory share."""
+
+    def setup(root: Path) -> None:
+        manifest = root / "charter.toml"
+        text = manifest.read_text()
+        if old not in text:
+            raise SystemExit(f"setup: the fixture manifest has no {old!r} to replace")
+        manifest.write_text(text.replace(old, new))
+
+    return setup
+
+
+def _manifest_ends_with(extra: str):
+    def setup(root: Path) -> None:
+        manifest = root / "charter.toml"
+        manifest.write_text(f"{manifest.read_text()}\n{extra}")
+
+    return setup
+
+
+def _stale(ws: str):
+    """Stamp *ws* with an older layout version: a workspace needing `charter ws reinit`."""
+
+    def setup(root: Path) -> None:
+        (root / "workspaces" / ws / ".charter-structure").write_text("4\n")
+
+    return setup
+
+
+def _a_plane_root_repo(root: Path) -> None:
+    """The plane root as a git repository on `main`, one commit, no remote, clean.
+
+    No `origin`: the default branch is then the local `main`, which is the fallback charter
+    reads straight off the refs — and a remote would have to be one no forge answers, which is
+    `_forge_trap`'s business and not this row's. `notes.md` is a tracked file for a scenario to
+    dirty; `.charter/` is ignored, as `charter init` writes it.
+    """
+    side = root.parent
+    _identity(side)
+    (root / ".gitignore").write_text(".charter/\n")
+    (root / "notes.md").write_text("# notes\n")
+    _git(side, "init", "-q", "-b", "main", ".", cwd=root)
+    _git(side, "add", "-A", cwd=root)
+    _git(side, "commit", "-q", "-m", "the plane", cwd=root)
+
+
+def _root_dirty(root: Path) -> None:
+    _a_plane_root_repo(root)
+    (root / "notes.md").write_text("# notes\n\nan edit nobody committed\n")
+
+
+def _root_with_only_untracked_files(root: Path) -> None:
+    """Memory defaults to `share = "local"`, so every plane a few days old carries untracked
+    files. They are not the root being worked in — `doctor` asks git `-uno` for the same
+    reason — so this is NOT an alert."""
+    _a_plane_root_repo(root)
+    (root / "personas" / "steward" / "memory" / "a-local-memory.md").write_text("# local\n")
+
+
+def _root_off_its_branch(root: Path) -> None:
+    _a_plane_root_repo(root)
+    _git(root.parent, "checkout", "-q", "-b", "side", cwd=root)
+
+
+def _root_detached(root: Path) -> None:
+    _a_plane_root_repo(root)
+    _git(root.parent, "checkout", "-q", "--detach", cwd=root)
+
+
+def _push_record(root: Path, **record: str) -> None:
+    head = _git(root.parent, "rev-parse", "HEAD", cwd=root)
+    state = root / ".charter"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "plane-push.json").write_text(json.dumps({"head": head, **record}))
+
+
+def _root_with_a_memory_commit_never_pushed(root: Path) -> None:
+    """A push record whose commit reached no remote: there is no upstream to be an ancestor
+    of, so the record is still true, and the next `git reset --hard` would delete it."""
+    _a_plane_root_repo(root)
+    _push_record(root, outcome="rejected", branch="main")
+
+
+def _root_with_a_memory_commit_awaiting_a_pull_request(root: Path) -> None:
+    """The same, landed on `charter/<sha>` because `main` requires a pull request: nothing is
+    at risk, something is unfinished — so it is the WARN colour, not the red one."""
+    _a_plane_root_repo(root)
+    _push_record(root, outcome="branched", landed="charter/1a2b3c4d", branch="main")
+
+
+def _root_dirty_off_its_branch_with_a_memory_never_pushed(root: Path) -> None:
+    """Every finding at once: they share ONE row, in charter's order."""
+    _root_off_its_branch(root)
+    (root / "notes.md").write_text("# notes\n\nan edit nobody committed\n")
+    _push_record(root, outcome="rejected", branch="main")
+
+
+#: What a plane root that is a repository leaves that the tree walk cannot compare: git's own
+#: files, and charter's repo-state TTL cache, which charter-app does not keep (it asks git on
+#: the render, as the app's panels do, and writes nothing on a read).
+ROOT_REPO_IGNORES = {
+    ".git": "the index and the reflogs carry timestamps and inodes; what the row says about "
+    "the tree is what is compared",
+    ".charter/cache": "where charter keeps its TTL cache of `git status` answers "
+    "(`repostate.json`), a directory it creates to hold it; charter-app keeps none, because a "
+    "status line render is a read and writes nothing",
+}
+
+
+def _alert(name: str, alerts: int, *, setup=None, turn: str = A_TURN, cols: int = 120,
+           rewrite: "tuple[str, str, str] | None" = None,
+           ignore: "dict[str, str] | None" = None) -> Scenario:
+    return Scenario(
+        name=f"statusline-alerts-{name}",
+        plane="daily",
+        python=["statusline"],
+        stdin=turn,
+        env=_pane(cols),
+        setup=setup,
+        stdout_cut_at=IDENTITY_ROW,
+        stdout_cut_why=BELOW_THE_RULE,
+        alerts=alerts,
+        alert_rewrite=rewrite,
+        ignore=ignore or {},
+    )
+
+
+ALERT_SCENARIOS = [
+    # The healthy plane. Rows render only when real, so a plane with nothing wrong costs none —
+    # and the count of zero is asserted against charter, not assumed.
+    _alert("none-on-a-healthy-plane", 0),
+    # A pin neither side meets: charter's row, with the one decided difference in its remedy.
+    _alert("a-pin-this-charter-does-not-meet", 1, setup=_pinning(PIN_NEITHER_SIDE_MEETS),
+           rewrite=PIN_ROW_REMEDY),
+    # A pin both sides meet is not drift, and draws nothing.
+    _alert("a-pin-this-charter-meets", 0, setup=_pinning(PIN_BOTH_SIDES_MEET)),
+    # A pin beside `[update] channel = "dev"` is its own state with its own row (#1018): the
+    # drift row's `version sync` would install the pin over a plane following `main`.
+    _alert("a-pin-beside-the-dev-channel", 1, setup=_manifest_ends_with(
+        f'[charter]\nversion = "{PIN_NEITHER_SIDE_MEETS}"\n\n[update]\nchannel = "dev"\n')),
+    # A channel charter does not know is `stable` — the conservative one — so this is the
+    # ordinary drift row and not the dev one.
+    _alert("a-pin-beside-a-channel-charter-does-not-know", 1, setup=_manifest_ends_with(
+        f'[charter]\nversion = "{PIN_NEITHER_SIDE_MEETS}"\n\n[update]\nchannel = "DEV"\n'),
+        rewrite=PIN_ROW_REMEDY),
+    # A front door that names nothing: the persona chip just disappears, and this row is what
+    # makes the absence a message.
+    _alert("a-front-door-naming-no-persona", 1,
+           setup=_manifest_says('default = "steward"', 'default = "ghost"')),
+    # `str(val)`: a front door that is not a string is still quoted back as charter prints it.
+    _alert("a-front-door-that-is-a-number", 1,
+           setup=_manifest_says('default = "steward"', "default = 7")),
+    # A blank front door is no front door, not a persona named "   ".
+    _alert("a-front-door-that-is-blank", 0,
+           setup=_manifest_says('default = "steward"', 'default = "   "')),
+    # Another workspace stale: `reinit 1 ws`.
+    _alert("another-workspace-needing-a-reinit", 1, setup=_stale("beta")),
+    # The ACTIVE workspace stale is the identity row's tip, not an alert — the two surfaces do
+    # not both say it. With `beta` stale too the count is 1, not 2.
+    _alert("the-active-workspace-is-the-identity-rows-to-flag", 1,
+           setup=_both(_stale("alpha"), _stale("beta")), turn=A_TURN_IN_ALPHA),
+    _alert("the-active-workspace-alone-draws-no-alert", 0, setup=_stale("alpha"),
+           turn=A_TURN_IN_ALPHA),
+    # charter's ONE guard: a `persona` that is not a table raises inside `_alerts`, and every
+    # row after the raise is dropped — the stale workspace's among them — while the pin row
+    # before it stands.
+    _alert("a-raise-drops-the-rows-after-it-and-not-the-rows-before", 1, setup=_both(
+        _manifest_says('[persona]\ndefault = "steward"\n', ""),
+        _manifest_says("schema = 1\n", 'schema = 1\npersona = "steward"\n'),
+        _manifest_ends_with(f'[charter]\nversion = "{PIN_NEITHER_SIDE_MEETS}"\n'),
+        _stale("beta"),
+    ), rewrite=PIN_ROW_REMEDY),
+    # The plane root. Clean on its default branch: nothing.
+    _alert("a-plane-root-that-is-clean", 0, setup=_a_plane_root_repo, ignore=ROOT_REPO_IGNORES),
+    _alert("a-plane-root-with-only-untracked-files", 0, setup=_root_with_only_untracked_files,
+           ignore=ROOT_REPO_IGNORES),
+    _alert("a-dirty-plane-root", 1, setup=_root_dirty, ignore=ROOT_REPO_IGNORES),
+    _alert("a-plane-root-off-its-default-branch", 1, setup=_root_off_its_branch,
+           ignore=ROOT_REPO_IGNORES),
+    _alert("a-plane-root-on-a-detached-head", 1, setup=_root_detached,
+           ignore=ROOT_REPO_IGNORES),
+    _alert("a-plane-root-holding-a-memory-commit-never-pushed", 1,
+           setup=_root_with_a_memory_commit_never_pushed, ignore=ROOT_REPO_IGNORES),
+    _alert("a-plane-root-holding-a-memory-commit-awaiting-a-pull-request", 1,
+           setup=_root_with_a_memory_commit_awaiting_a_pull_request, ignore=ROOT_REPO_IGNORES),
+    _alert("a-plane-root-with-every-finding-on-one-row", 1,
+           setup=_root_dirty_off_its_branch_with_a_memory_never_pushed,
+           ignore=ROOT_REPO_IGNORES),
+    # Every row at once, in charter's order: the order IS what a reader meets first.
+    _alert("every-row-in-charters-order", 4, setup=_both(
+        _pinning(PIN_NEITHER_SIDE_MEETS),
+        _manifest_says('default = "steward"', 'default = "ghost"'),
+        _stale("beta"),
+        _root_dirty,
+    ), rewrite=PIN_ROW_REMEDY, ignore=ROOT_REPO_IGNORES),
+    # …in a pane too narrow for them: each row is cropped with `…` at the frame's inner width,
+    # measured in columns, and the border still lines up.
+    _alert("cropped-to-a-narrow-pane", 3, setup=_both(
+        _manifest_says('default = "steward"', 'default = "ghost"'),
+        _stale("beta"),
+        _root_with_a_memory_commit_never_pushed,
+    ), cols=44, ignore=ROOT_REPO_IGNORES),
+    # A plane that recolours its accents: the `⚠` of a warn row and of a bad one, and the red
+    # word inside the plane-root row, all follow `[frame]`.
+    _alert("in-the-colours-the-plane-chose", 2, setup=_both(
+        _manifest_ends_with('[frame]\nwarn = "magenta"\nbad = "brightcyan"\n'),
+        _stale("beta"),
+        _root_with_a_memory_commit_never_pushed,
+    ), ignore=ROOT_REPO_IGNORES),
+]
+
+
 SCENARIOS = [
     *INIT_SCENARIOS,
     *LADDER_SCENARIOS,
@@ -4782,6 +5047,7 @@ SCENARIOS = [
     *STATUS_SCENARIOS,
     *GL_REFRESH_SCENARIOS,
     *STATUSLINE_SCENARIOS,
+    *ALERT_SCENARIOS,
 
     # --- M2.2: `charter recall`. What an agent reads at session start; byte for byte.
     Scenario(
@@ -5694,10 +5960,85 @@ def check(scenario: Scenario, binary: Path) -> bool:
             problems.append(f"      python {py.stdout!r}")
             problems.append(f"      rust   {rs.stdout!r}")
 
+        if scenario.alerts is not None:
+            problems.extend(_alert_rows(scenario, py.stdout, rs.stdout))
+        elif scenario.alert_rewrite is not None:
+            problems.append(
+                "    alert_rewrite is set but the scenario compares no alert rows — set alerts"
+            )
+
         print(("ok   " if not problems else "DIFF ") + scenario.name)
         for line in problems:
             print(line)
         return not problems
+
+
+#: What makes a status-line row an ALERT row: the `⚠` every `_alerts` row opens with, reset
+#: straight after — `{accent}⚠{_R} `. Nothing else charter draws has that shape: the identity
+#: row's reinit tip is `⚠ reinit:` and the session strip's cold cache is `⚠ cache cold`, both
+#: with the glyph and its words in ONE colour, so neither is picked up.
+ALERT_MARK = "⚠\x1b[0m "
+
+
+def _alert_lines(stdout: str) -> list[str]:
+    return [line for line in stdout.splitlines() if ALERT_MARK in line]
+
+
+def _rewritten(line: str, theirs: str, ours: str) -> str:
+    """*line* with charter's words replaced by charter-app's, **and the frame kept true**.
+
+    A row is boxed: after its last reset comes the fill that carries it out to the right border.
+    Replacing words of a different length and leaving the fill alone would move that border, and
+    the comparison would then report the difference it was told to allow as a different one. So
+    the fill is moved by exactly the length the words changed by, right after the reset that
+    closes them — both literals are ASCII, so length is width.
+    """
+    at = line.find(theirs)
+    if at < 0:
+        return line
+    rest = line[at + len(theirs):]
+    reset = rest.find("\x1b[0m")
+    if reset < 0:
+        return line
+    reset += len("\x1b[0m")
+    # Only ever shorter: a longer replacement would have to take fill that may not be there.
+    assert len(ours) <= len(theirs), "an alert_rewrite may only shorten charter's words"
+    return line[:at] + ours + rest[:reset] + " " * (len(theirs) - len(ours)) + rest[reset:]
+
+
+def _alert_rows(scenario: Scenario, py_out: str, rs_out: str) -> list[str]:
+    """Compare the alert rows of both status lines — see `Scenario.alerts`."""
+    problems: list[str] = []
+    want, got = _alert_lines(py_out), _alert_lines(rs_out)
+    if len(want) != scenario.alerts:
+        problems.append(
+            f"    charter draws {len(want)} alert row(s) and this scenario says "
+            f"{scenario.alerts} — the plane it sets up no longer produces what it is named for:"
+        )
+        problems.extend(f"      python {line!r}" for line in want)
+    if scenario.alert_rewrite is not None:
+        theirs, ours, why = scenario.alert_rewrite
+        if not re.search(r"\bADR \d{4}\b", why):
+            problems.append("    this alert_rewrite's `why` names no ADR")
+        if not any(theirs in line for line in want):
+            problems.append(
+                f"    charter no longer says {theirs!r} in an alert row, which is what this "
+                "rewrite is a difference FROM — drop it, or find out what changed"
+            )
+        if not any(ours in line for line in got):
+            problems.append(
+                f"    charter-app no longer says {ours!r} in an alert row, which is what this "
+                "rewrite says it says instead"
+            )
+        want = [_rewritten(line, theirs, ours) for line in want]
+    if want != got:
+        problems.append("    alert rows differ:")
+        problems.extend(
+            f"      {line}" for line in difflib.unified_diff(
+                [repr(x) for x in want], [repr(x) for x in got], "python", "rust",
+                lineterm="", n=1)
+        )
+    return problems
 
 
 def main() -> int:
