@@ -173,6 +173,19 @@ class Scenario:
     stdout_cut_at: str = ""
     #: Why that cut is where it is.
     stdout_cut_why: str = ""
+    #: `(charter's words, charter-app's words, why)` triples: a DECIDED difference inside an
+    #: otherwise byte-for-byte stdout. charter's words are replaced by charter-app's in
+    #: charter's stdout, in order and once each, and the result must equal the Rust side's
+    #: stdout exactly — so everything the triples do not name is still compared as it always
+    #: was.
+    #:
+    #: `alert_rewrite`'s shape, widened from one row to a whole render, and held to the same
+    #: rule: **both halves must be there**, charter's in charter's output and charter-app's in
+    #: charter-app's, so a note cannot outlive the difference it records. It is `stdout_differs`
+    #: turned inside out — that one says "not yet" about the whole render and passes the day
+    #: the two agree; this one says what the difference IS and fails the day it stops being
+    #: that. `DOCS_DIVERGE` is what fills it (charter-app#119).
+    stdout_rewrite: list = field(default_factory=list)
     #: Whether the Rust side takes `--now`. A read command does not.
     pins_the_clock: bool = True
     #: Run against each plane copy before the command, for a starting state the fixtures
@@ -4368,6 +4381,251 @@ DOCS_SOURCE_MASK = [
 ]
 
 
+@dataclass(frozen=True)
+class PageDiverges:
+    """A vendored page charter-app deliberately holds a DIFFERENT version of.
+
+    `Divergence` for the docs corpus rather than for a command, and the same refusal to be a
+    waiver (charter-app#119). `check_docs_corpus` holds the two copies of every page byte for
+    byte, which is exactly what it is for; a page describing behaviour ADR 0035 reversed
+    cannot pass that and cannot be corrected where it lives, because spec decision 17 freezes
+    the Python charter and a frozen oracle documenting behaviour it does not have would be
+    worse than the drift.
+
+    Skipping the page would have been the cheap answer and the wrong one: a skipped page is
+    one nothing compares, so the NEXT drift in it — anywhere in it, for any reason — lands in
+    silence. So this does not skip. It states what charter's copy says and what charter-app's
+    says instead, the run rewrites the oracle's page with those pairs, and the result is
+    compared byte for byte. Everything the divergence does not name is held to the bar it
+    always was.
+
+    It fails loudly in both directions, which is the point:
+
+    - **`why` must cite the record** — an ADR and a spec decision — because in six months the
+      only thing between this and two copies nobody can explain is a sentence with a number
+      in it.
+    - **charter must still say its half.** A `theirs` that has left the oracle's page is a
+      divergence FROM something that is gone: the direction a reviewer forgets, and the one
+      that rots first.
+    - **charter-app must say its half**, so a declaration cannot outlive the edit it records.
+    - **the two copies must still differ.** If the pages ever match again the divergence is
+      over, and the run says so instead of passing quietly.
+
+    `docs show` prints the page's bytes, so the same pairs drive the per-topic scenario's
+    stdout through `Scenario.stdout_rewrite`. One table, both comparisons — the alternative is
+    a corpus check and a render check that can disagree about which page is the right one.
+    """
+
+    #: Prose naming the records that decided it. Must cite an ADR and a spec decision.
+    why: str
+    #: `(charter's words, charter-app's words)`, applied in order, once each.
+    rewrites: tuple[tuple[str, str], ...]
+
+
+#: Why both diverged pages diverge. One string, because it is one decision and a second copy
+#: of it would be a second thing to keep true.
+DOCS_DIVERGE_WHY = (
+    "ADR 0035 reversed `charter init`'s default at the top of an existing git repository: the "
+    "plane goes in a directory of its own and the repo becomes its first clone, with "
+    "`--plane-is-this-repo` as the opt-in. charter-app spec decision 27 carries it, and "
+    "`INIT_IN_A_REPO_DIVERGES` is the same decision holding the BEHAVIOUR apart — this is its "
+    "documentation. Each page says in its own text which implementation it describes, which is "
+    "the condition charter-app#119 puts on holding a different copy at all."
+)
+
+#: The pages charter-app holds its own version of, and exactly what differs in each.
+#:
+#: Read `PageDiverges` before changing anything here, and ADR 0035 before deciding it should
+#: not exist. Adding a page to this table is a decision with a record behind it, never a way
+#: to make a red `docs-corpus` green.
+DOCS_DIVERGE: dict[str, PageDiverges] = {
+    "control-plane": PageDiverges(
+        why=DOCS_DIVERGE_WHY,
+        rewrites=(
+            (
+                """\
+
+`charter init` therefore produces the same plane wherever it runs. Being inside a git repo
+no longer changes what you get; it changes only what init *offers*, which is to clone that
+repo into your first workspace:
+
+""",
+                """\
+
+`charter init` therefore produces the same plane wherever it runs. Being at the top of a git
+repo no longer changes what you get; it changes whether init writes anything at all. It
+writes nothing, and says what the two ways on are:
+
+""",
+            ),
+            (
+                """\
+$ charter init --forge github --owner acme
+✓ Initialized control plane (schema 1) → charter.toml, personas/, …
+• You are standing in the git repo 'myapp'. Work happens in a workspace, not in the plane
+  root — clone it into the first one:
+      charter init --clone-this-repo
+```
+
+That is an offer, not a prompt: charter never reads stdin (it runs inside hooks, where
+blocking would hang the turn), so the second command *is* the acceptance — the same shape
+`charter report` uses for consent. Run it and you get `workspaces/default/myapp/`, cloned
+from the repo you are standing in and pointed at the same `origin` it has; ignore it and
+the plane is complete as it stands. Either way the control plane itself is identical, and
+nothing is written to your repo's git state.
+
+""",
+                """\
+$ charter init --forge github --owner acme
+✗ this is the git repo 'myapp', and `charter init` does not make a repository into a
+  control plane unless you ask it to. Nothing was written.
+• A plane is a directory of its own, and this repo is the first clone in it:
+      mkdir ../myapp-plane && cd ../myapp-plane
+      charter init --forge github --owner acme
+      charter discover && charter clone myapp
+• To make THIS repo the plane instead, ask for it by name:
+      charter init --plane-is-this-repo --forge github --owner acme
+```
+
+That is a refusal, not a prompt: charter never reads stdin (it runs inside hooks, where
+blocking would hang the turn), so naming the option *is* the acceptance — the same shape
+`charter report` uses for consent. Take the first way and you get
+`workspaces/default/myapp/`, cloned from the repo you were standing in and pointed at the
+same `origin` it has; take the second and this repo becomes the plane. Either way the
+control plane itself is identical, and until you choose, nothing is written to your repo at
+all.
+
+**This page describes charter-app**, whose default here is the opposite of the Python
+charter's, which scaffolds a plane into the repo and *offers* to clone it into the first
+workspace. See [ADR 0035](adr/0035-a-plane-is-untrusted-until-the-operator-opens-it.md) and
+charter-app spec decision 27 for why it was reversed. `charter init` anywhere that is not the
+top of a git repo is unchanged.
+
+""",
+            ),
+            (
+                """\
+A solo user with one repo used to be able to `charter init` and carry on working in that
+repo, because `default` *was* the plane root. It no longer is (ADR 0007), so their path is
+`charter init --clone-this-repo` — the offer above — and then work in
+`workspaces/default/<repo>/`.
+
+""",
+                """\
+A solo user with one repo used to be able to `charter init` and carry on working in that
+repo, because `default` *was* the plane root. It no longer is (ADR 0007), so their path is a
+plane in a directory of its own and then `charter clone <repo>` — the first way out of the
+refusal above — and then work in `workspaces/default/<repo>/`.
+
+""",
+            ),
+        ),
+    ),
+    "install": PageDiverges(
+        why=DOCS_DIVERGE_WHY,
+        rewrites=(
+            (
+                """\
+`--forge` is `gitlab` (the default) or `github`; `--owner` is the GitLab group or GitHub
+org/user whose repos this control plane tracks. Run inside an existing git repo, `init`
+also *offers* to clone that repo into your first workspace — accept with `charter init
+--clone-this-repo`, because work happens in a workspace, never in the plane root.
+
+""",
+                """\
+`--forge` is `gitlab` (the default) or `github`; `--owner` is the GitLab group or GitHub
+org/user whose repos this control plane tracks. Run at the top of an existing git repo,
+`init` writes nothing at all and says so: a plane is a directory of its own and that repo
+becomes its first clone (`charter clone <repo>`), because work happens in a workspace, never
+in the plane root. To make that repo the plane instead, ask for it by name with `charter
+init --plane-is-this-repo`. That default is charter-app's and is the opposite of the Python
+charter's, which scaffolds the plane into the repo — ADR 0035, and charter-app spec
+decision 27.
+
+""",
+            ),
+        ),
+    ),
+}
+
+#: Ask the ORACLE for one page's bytes, the way `_DOCS_DIGEST` asks it for its digests: what a
+#: divergence is measured against is the page `docs show` would print, not a file this
+#: repository happens to have a copy of.
+_DOCS_PAGE = (
+    "import sys\n"
+    "from charter import docsrc\n"
+    "root = docsrc.source()\n"
+    "sys.stdout.buffer.write((root / (sys.argv[1] + '.md')).read_bytes())\n"
+)
+
+
+def _oracle_page(topic: str) -> "str | None":
+    """What charter's own `docs/` holds for *topic*, or `None` if it could not be read."""
+    said = subprocess.run([sys.executable, "-c", _DOCS_PAGE, topic],
+                          capture_output=True, text=True)
+    return said.stdout if said.returncode == 0 else None
+
+
+def _opening(words: str) -> str:
+    """The first non-empty line of a rewrite's half, for a problem line to quote."""
+    return next((line for line in words.splitlines() if line.strip()), words)
+
+
+def _declared_page_problems(topic: str) -> list[str]:
+    """Check one `PageDiverges` in full — see its docstring for why each clause is here."""
+    declared = DOCS_DIVERGE[topic]
+    problems = []
+    if "ADR" not in declared.why or "decision" not in declared.why:
+        problems.append(
+            f"    {topic}.md: this divergence's `why` names no record — it must cite the ADR "
+            "and the spec decision that decided it"
+        )
+    theirs = _oracle_page(topic)
+    if theirs is None:
+        return problems + [f"    {topic}.md: the oracle could not print its own page"]
+    ours = (DOCS_DIR / f"{topic}.md").read_text()
+    if theirs == ours:
+        return problems + [
+            f"    {topic}.md: the two copies are identical again, so this divergence is over "
+            "— delete it and let the digest hold the page"
+        ]
+    rewritten = theirs
+    for was, now in declared.rewrites:
+        if was not in rewritten:
+            problems.append(
+                f"    {topic}.md: charter no longer says {_opening(was)!r}, so this divergence "
+                "is a divergence FROM something that is gone"
+            )
+            continue
+        if now not in ours:
+            problems.append(
+                f"    {topic}.md: charter-app does not say {_opening(now)!r}, which this "
+                "divergence declares it says instead"
+            )
+        rewritten = rewritten.replace(was, now, 1)
+    if rewritten != ours:
+        problems.append(f"    {topic}.md: differs BEYOND what this divergence declares:")
+        problems.extend(
+            f"      {line}" for line in difflib.unified_diff(
+                rewritten.splitlines(), ours.splitlines(),
+                "charter, rewritten as declared", "charter-app", lineterm="", n=1)
+        )
+    return problems
+
+
+def _docs_stdout_rewrite(topic: str) -> list:
+    """The same pairs, for the scenario that compares what `docs show <topic>` PRINTS.
+
+    Python's `docs show` prints the page's text, so a page's divergence is its render's — and
+    driving both off one table is what stops the corpus check and the scenario disagreeing
+    about which copy is the right one.
+    """
+    declared = DOCS_DIVERGE.get(topic)
+    if declared is None:
+        return []
+    return [(was, now, declared.why) for was, now in declared.rewrites]
+
+
 def check_docs_corpus() -> bool:
     """The vendored `docs/` and the pages the oracle serves are the same pages, byte for byte.
 
@@ -4380,6 +4638,10 @@ def check_docs_corpus() -> bool:
     the whole answer. There is no frontmatter here that a rendered body leaves out, which is
     what makes this simpler than `news`'s — the digest is belt to the scenarios' braces only
     for the corpus's SHAPE, not for a part of the page nothing renders.
+
+    **A page in `DOCS_DIVERGE` is compared through its declaration instead of through its
+    digest** (charter-app#119) — not skipped: see `PageDiverges` for what is still held, and
+    for why skipping was the wrong answer.
     """
     said = subprocess.run([sys.executable, "-c", _DOCS_DIGEST], capture_output=True, text=True)
     if said.returncode != 0:
@@ -4398,9 +4660,19 @@ def check_docs_corpus() -> bool:
         problems.append(f"    only charter has: docs/{topic}.md")
     for topic in sorted(set(ours) - set(theirs)):
         problems.append(f"    only charter-app has: crates/charter-core/docs/{topic}.md")
-    for topic in sorted(set(theirs) & set(ours)):
-        if theirs[topic] != ours[topic]:
+    both = set(theirs) & set(ours)
+    for topic in sorted(both):
+        if topic in DOCS_DIVERGE:
+            problems.extend(_declared_page_problems(topic))
+        elif theirs[topic] != ours[topic]:
             problems.append(f"    differs: {topic}.md")
+    for topic in sorted(set(DOCS_DIVERGE) - both):
+        # A declaration about a page one side does not carry is a declaration about nothing,
+        # and it would otherwise sit here reading as a check.
+        problems.append(
+            f"    a divergence is declared for {topic}.md, which is not a page both "
+            "implementations carry"
+        )
     print(("ok   " if not problems else "DIFF ") + f"docs-corpus ({len(theirs)} pages)")
     for line in problems:
         print(line)
@@ -4441,6 +4713,9 @@ DOCS_SCENARIOS = [
             plane="daily",
             python=["docs", "show", topic],
             pins_the_clock=False,
+            # Empty for every page but the two `DOCS_DIVERGE` names, so this reads as the
+            # byte-for-byte comparison it has always been everywhere else.
+            stdout_rewrite=_docs_stdout_rewrite(topic),
         )
         for topic in _docs_topics()
     ],
@@ -6216,7 +6491,21 @@ def check(scenario: Scenario, binary: Path) -> bool:
                     problems.append(f"    stdout differs before {cut!r}:")
                     problems.append(f"      python {want!r}")
                     problems.append(f"      rust   {got!r}")
+        elif scenario.stdout_rewrite:
+            want, trouble = _rewritten_stdout(scenario, py.stdout, rs.stdout)
+            problems.extend(trouble)
+            if want != rs.stdout:
+                problems.append(
+                    "    stdout differs BEYOND what this scenario's rewrites declare:"
+                )
+                problems.extend(
+                    f"      {line}" for line in difflib.unified_diff(
+                        want.splitlines(), rs.stdout.splitlines(),
+                        "python, rewritten as declared", "rust", lineterm="", n=1)
+                )
         else:
+            # `stdout_mask` is empty for every scenario that does not set it, so this is the
+            # plain comparison for all of them and a masked one only where one is declared.
             want = _mask_with(py.stdout, scenario.stdout_mask)
             got = _mask_with(rs.stdout, scenario.stdout_mask)
             if want != got:
@@ -6249,6 +6538,14 @@ def check(scenario: Scenario, binary: Path) -> bool:
                 if out:
                     problems.append(f"    {side} did not allow — it printed {out!r}")
 
+        if scenario.stdout_rewrite and (scenario.stdout_differs or scenario.stdout_cut_at):
+            # Both of those take precedence in the chain above, so the rewrites would be
+            # declaring a difference that nothing compares.
+            problems.append(
+                "    stdout_rewrite is set beside stdout_differs or stdout_cut_at, and those "
+                "answer first — so these rewrites assert nothing"
+            )
+
         if scenario.alerts is not None:
             problems.extend(_alert_rows(scenario, py.stdout, rs.stdout))
         elif scenario.alert_rewrite is not None:
@@ -6271,6 +6568,31 @@ ALERT_MARK = "⚠\x1b[0m "
 
 def _alert_lines(stdout: str) -> list[str]:
     return [line for line in stdout.splitlines() if ALERT_MARK in line]
+
+
+def _rewritten_stdout(scenario: Scenario, py_out: str, rs_out: str) -> "tuple[str, list[str]]":
+    """charter's stdout with charter-app's words in it — see `Scenario.stdout_rewrite`.
+
+    Both halves are held to being there. Without the first check a rewrite would go on
+    "allowing" a difference charter had stopped making; without the second it would allow one
+    charter-app had stopped making, which is the same rot in the other direction.
+    """
+    problems = []
+    text = py_out
+    for theirs, ours, why in scenario.stdout_rewrite:
+        if theirs not in text:
+            problems.append(
+                f"    python no longer prints what a rewrite replaces, so it is a rewrite of "
+                f"nothing: {_opening(theirs)!r} ({why})"
+            )
+            continue
+        if ours not in rs_out:
+            problems.append(
+                f"    rust does not print what a rewrite replaces it with, so the declaration "
+                f"has outlived the difference: {_opening(ours)!r} ({why})"
+            )
+        text = text.replace(theirs, ours, 1)
+    return text, problems
 
 
 def _rewritten(line: str, theirs: str, ours: str) -> str:
