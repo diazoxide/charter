@@ -14,6 +14,7 @@ import { Group, Panel, Separator } from "react-resizable-panels";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import {
   ChevronDown,
+  FolderOpen,
   FolderPlus,
   Pin as PinMark,
   Plus,
@@ -1847,13 +1848,22 @@ export function Doer({
  * `pane.close` ends a chat, so its mark is the same `X` a tab's close carries and it gets the
  * same danger hover (`App.css`, `.ends-a-chat`) — an icon may not make ending a chat look
  * lighter than it is.
+ *
+ * **The project strip draws two of these side by side, so they may not be the same glyph**
+ * (charter-app#178). `FolderPlus` is the folder-with-a-plus every file manager puts on *New
+ * folder*, and `project.create` is the row that writes a directory that was not there; opening
+ * one that already exists is `FolderOpen`, which is that same universal pair's other half.
+ * `project.open` wore `FolderPlus` only because it was the strip's one control when #171 drew
+ * it — two icon-only buttons an inch apart carrying one glyph is a strip an operator has to
+ * aim at by memory.
  */
 export const MARKS: Record<string, typeof Plus> = {
   "chat.new": Plus,
   "pane.split.right": SquareSplitHorizontal,
   "pane.split.down": SquareSplitVertical,
   "pane.close": X,
-  "project.open": FolderPlus,
+  "project.create": FolderPlus,
+  "project.open": FolderOpen,
 };
 
 /**

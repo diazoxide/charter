@@ -142,6 +142,21 @@ export const commands = {
 	 *  project inside `~/code` would otherwise be scaffolded into whatever plane happens to be
 	 *  above it. The walk is still asked, through `plane::find_root`, but only to REFUSE: a
 	 *  directory inside a plane is a place for a workspace's clone, not for a second plane.
+	 * 
+	 *  **And that is not a second walk** (charter-app#178). The operator's ruling was worded as
+	 *  *walk as the CLI does, and refuse rather than write when the walk lands somewhere other
+	 *  than the directory picked*, and a reviewer asked the fair question about the paragraph
+	 *  above: if this asks `find_root` where the CLI asks `place`, the two can drift, and the day
+	 *  they do, the refusal starts naming a plane `charter init` would not have chosen. They
+	 *  cannot. `find_root` and `place` are **one** walk in this core — `plane::walk`, which is a
+	 *  single function on purpose and says so at length, because two copies of it are two answers
+	 *  about one directory (M2.9, then M2.16). The two differ in what they do with a `None` and
+	 *  in reading `$CHARTER_ROOT`, and neither difference can reach the `Some` this refusal is
+	 *  made of. `$CHARTER_ROOT` is the one thing deliberately not honoured here, and that is the
+	 *  difference this command wants: a variable inherited from whatever shell opened the app is
+	 *  not an answer about a folder somebody just pointed at.
+	 *  `the_refusal_names_the_plane_the_cli_would_have_scaffolded_into` holds the identity, so a
+	 *  change that made the two walks disagree lands in this file.
 	 */
 	createProject: (path: string, planeIsThisRepo: boolean) => typedError<Opened, string>(__TAURI_INVOKE("create_project", { path, planeIsThisRepo })),
 	/**
