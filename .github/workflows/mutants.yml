@@ -23,13 +23,17 @@ name: mutants
 #
 # Four causes, one colour. The three changes below give each one its own answer:
 #
-# 1. **The budget fits.** Sixteen shards, round-robin so no shard inherits a slow file, is
-#    ~3 h 56 m apiece against a 5 h step timeout and GitHub's 6 h cap. A shard that overruns
-#    now fails AT the timeout, named, instead of being cancelled at the platform limit.
-#    Sizing is a measurement and it will go stale: charter-core went from 3,640 mutants on
-#    2026-09-20 to 6,555 on 2026-09-21. The `incomplete` verdict below is what says so.
-# 2. **The baseline is checked ONCE.** With a per-shard baseline, sixteen shards is sixteen
-#    rolls of the same flaky dice: three separate deadline-bound tests were caught failing an
+# 1. **The budget fits.** Twenty-four shards, round-robin so no shard inherits a slow file.
+#    Sized against a dispatch of THIS file on 2026-09-22, which is the only measurement that
+#    includes the setup it actually pays for: 6,632 mutants, 414 to a shard at 16, and 38.7 s
+#    a mutant over the 359 that ran — so 16 shards would have been 4 h 28 m against a 5 h
+#    timeout, which is not headroom. At 24 it is ~2 h 58 m, and the crate can nearly double
+#    before the timeout bites.
+#    Sizing is a measurement and it WILL go stale: charter-core went from 3,640 mutants on
+#    2026-09-20 to 6,555 on 09-21 to 6,632 on 09-22. The `incomplete` verdict below is what
+#    says so, in words, instead of a job vanishing at the platform limit.
+# 2. **The baseline is checked ONCE.** With a per-shard baseline, 24 shards is 24 rolls of
+#    the same flaky dice: three separate deadline-bound tests were caught failing an
 #    unmutated charter-core while this was being written. One job asks the question, every
 #    shard runs `--baseline skip`, and a red `baseline` job means "charter-core's own tests do
 #    not pass", which is a different sentence from anything mutation testing says.
@@ -73,7 +77,7 @@ env:
   # `--shard N/K` argument, and the denominator the report checks it received. The report
   # fails if it does not get this many verdicts, so a drift between them is visible rather
   # than a silent hole in the coverage.
-  SHARDS: "16"
+  SHARDS: "24"
   # Pinned on purpose. An unpinned tool in a nightly changes its own answers, and "the
   # nightly went red" then has one more possible cause. 27.1.0 is what ran on 2026-09-21 and
   # what the sizing above was measured against.
@@ -90,7 +94,7 @@ jobs:
       # Exactly what cargo-mutants runs as its baseline, and the reason the shards below can
       # skip it. `--no-fail-fast` for `ci.yml`'s reason: cargo stops at the first failing test
       # binary and skips every later one, so a single flake would hide the rest.
-      - name: The unmutated tree, once, for all sixteen shards
+      - name: The unmutated tree, once, for all twenty-four shards
         run: cargo test --package charter-core --locked --no-fail-fast
 
   core:
@@ -100,7 +104,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+        shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+                12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -122,7 +127,8 @@ jobs:
       #
       # `--timeout` and `--build-timeout` are explicit because `--baseline skip` removes the
       # measurement cargo-mutants would otherwise derive them from. 300 s is above the 231–239 s
-      # it chose for itself on 2026-09-21, against a 42–47 s test phase.
+      # it chose for itself on 2026-09-21, against a 42–47 s test phase, and above the 96.5 s
+      # slowest mutant measured on 2026-09-22.
       - name: cargo mutants
         timeout-minutes: 300
         continue-on-error: true
@@ -169,7 +175,7 @@ jobs:
           path: artifacts
           pattern: mutants-*
       # Red for what is NEW, not for what is known. charter-core had 141 survivors in the 38%
-      # of itself that ran on 2026-09-21; a job that fails on any survivor at all would be red
+      # of itself that ran on 2026-09-21, and a 5% sample on 09-22 found 31 more; a job that fails on any survivor at all would be red
       # every night from here to the end of the backlog, which is the disease and not the cure.
       # `.github/mutants-survivors.txt` is the backlog, and it is a file people edit on purpose.
       - name: Every NEW survivor, in one table
