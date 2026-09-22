@@ -1,7 +1,7 @@
-import { browser } from "@wdio/globals";
 import { nextLoad } from "../load.js";
 import {
   appProcess,
+  closeEverything,
   corpus,
   frame,
   frames,
@@ -77,16 +77,10 @@ describe("fifty sessions, forty-nine of them streaming", () => {
         },
       };
 
-      // Every tab closed, so the next load starts from none.
-      await browser.execute(() => {
-        for (const close of [...document.querySelectorAll('button[aria-label^="End chat"]')]) {
-          (close as HTMLElement).click();
-        }
-      });
-      await browser.waitUntil(async () => harnesses().running === 0, {
-        timeout: 60_000,
-        timeoutMsg: "closing every tab left harnesses running",
-      });
+      // Every tab closed, so the next load starts from none. One helper, because ending a
+      // chat asks first and the question is modal — see `closeEverything` for what that did
+      // to the loop this used to be.
+      await closeEverything();
     });
   }
 });

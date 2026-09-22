@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import process from "node:process";
-import { browser } from "@wdio/globals";
+import { $, browser } from "@wdio/globals";
 import type { Bench, Plan } from "../../src/bench.ts";
 import type { Renderer } from "../../src/renderer.ts";
 import { built } from "../harness.js";
@@ -199,11 +199,21 @@ export function harnesses(): { running: number; cpuPercent: number } {
  * hands the next test a load it does not know about and does not report.
  */
 export async function closeEverything(): Promise<void> {
-  await browser.execute(() => {
-    for (const close of [...document.querySelectorAll('button[aria-label^="End chat"]')]) {
-      (close as HTMLElement).click();
-    }
-  });
+  // **One at a time, answering as it goes.** Ending a chat asks first, and the question is
+  // modal — so the loop this used to be, clicking every close button in one `execute`, opened
+  // one dialog and then pressed forty inert buttons behind it. The strip also collapses rather
+  // than scrolling, so what it draws is not every tab: the loop goes round until the document
+  // has no close button left rather than over a list read once.
+  for (let pressed = 0; pressed < 200; pressed++) {
+    const closer = await $('button[aria-label^="End chat "]');
+    if (!(await closer.isExisting())) break;
+    const name = (await closer.getAttribute("aria-label")) ?? "";
+    await closer.click();
+    const asking = await $('[role="alertdialog"]');
+    await asking.waitForDisplayed({ timeout: 20_000 });
+    await asking.$(`button=${name}`).click();
+    await asking.waitForDisplayed({ timeout: 20_000, reverse: true });
+  }
   await browser.waitUntil(async () => harnesses().running === 0, {
     timeout: 60_000,
     timeoutMsg: "closing every tab left harnesses running",

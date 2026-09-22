@@ -456,6 +456,11 @@ describe("the strip that is drawn", () => {
     // because the tabs changed, and what changed is the OTHER chat closing.
     plane.addGamma();
     await userEvent.click(screen.getByRole("button", { name: "End chat two steward" }));
+    await userEvent.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "End chat two steward",
+      }),
+    );
 
     await vi.waitFor(() => expect(strip()).toEqual(["alpha", "beta", "gamma"]));
     // The pane on screen is chat one's, so the strip drawn has to be chat one's too.

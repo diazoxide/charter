@@ -3,7 +3,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { browser, expect, $ } from "@wdio/globals";
 import { built, READY } from "../harness.js";
-import { harnessRowsDrawn, pickAndStart, pressOnly } from "../opening.js";
+import { endChat, harnessRowsDrawn, pickAndStart, pressOnly } from "../opening.js";
 
 /**
  * **A chat's `ctx`/`cache` gauge, end to end** — everything but Claude Code itself.
@@ -94,7 +94,10 @@ describe("a chat's context gauge", () => {
 
   after(async () => {
     for (const name of (await tabNames()).filter((tab) => !wereAlreadyOpen.includes(tab))) {
-      await pressOnly(`End chat ${name}`);
+      // `endChat` and not `pressOnly`: ending a chat asks first now, and a teardown that
+      // leaves the question up leaves it up for every spec after this one — one app process
+      // serves the whole run.
+      await endChat(`End chat ${name}`);
     }
     await browser.waitUntil(
       async () => (await tabNames()).every((tab) => wereAlreadyOpen.includes(tab)),

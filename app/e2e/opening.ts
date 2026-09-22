@@ -59,3 +59,49 @@ export async function pressAndStart(name: string): Promise<void> {
   await pressOnly(name);
   await pickAndStart();
 }
+
+/**
+ * Ending a chat, as the operator does it since the pane controls landed: press, then answer.
+ *
+ * **Nothing ends a chat without asking** — the operator's *"closing session should ask
+ * confirmation"*, and it is asked in one place (`PlaneView`'s `run`), so a tab's `×`, a
+ * pane's `×` and the palette's rows all come through here. That is also what keeps the rule
+ * from being quietly removed: take the question out and every spec below hangs waiting for a
+ * dialog that never comes.
+ *
+ * It is `role="alertdialog"` rather than `dialog`: Radix's `AlertDialog`, which is the
+ * primitive for a question the operator did not go looking for.
+ */
+export async function answerTheAsk(name: string): Promise<void> {
+  const asking = await $('[role="alertdialog"]');
+  await asking.waitForDisplayed({ timeout: 20_000 });
+  const answer = await asking.$(`button=${name}`);
+  await answer.waitForClickable({ timeout: 20_000 });
+  await answer.click();
+  await expect(asking).not.toBeDisplayed();
+}
+
+/** Ends the chat a control named `name` belongs to, and answers the question it asks. */
+export async function endChat(name: string): Promise<void> {
+  await pressOnly(name);
+  await answerTheAsk(name);
+}
+
+/**
+ * Ends every chat the strip is drawing, and the ones it is not.
+ *
+ * **The strip collapses rather than scrolling** (charter ADR 0039, as amended), so at fifty
+ * chats it draws a handful and hides the rest. This terminates because closing a drawn tab
+ * gives the strip room for a hidden one — the hidden tabs flow onto the strip as the drawn
+ * ones go — and it is bounded so that a close which stops taking is a failure and not a hang.
+ */
+export async function endEveryChat(most = 200): Promise<void> {
+  for (let pressed = 0; pressed < most; pressed++) {
+    const closer = await $('button[aria-label^="End chat "]');
+    if (!(await closer.isExisting())) return;
+    const name = (await closer.getAttribute("aria-label")) ?? "";
+    await closer.click();
+    await answerTheAsk(name);
+  }
+  throw new Error(`${most} presses did not end every chat`);
+}

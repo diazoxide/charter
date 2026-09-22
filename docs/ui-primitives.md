@@ -108,6 +108,22 @@ drawer asks nothing and a stray click cannot answer anything. Radix hands focus 
 `Dialog.Trigger`, and the button that opens this lives in a project's status line while the drawer
 is the window's, so the drawer remembers where the keyboard was and puts it back itself.
 
+And the **question before a chat ends** (`app/src/EndingChat.tsx`):
+`@radix-ui/react-alert-dialog`, the operator's *"closing session should ask confirmation"*. It is
+the first surface here that is **not** a `Dialog`, and the reason is the role: an
+alert dialog is `role="alertdialog"`, announced as an interruption rather than as a surface, and
+the primitive requires a `Cancel` that focus goes to. The four below are questions the operator
+went looking for; this one arrives *because of* something they did, which is the distinction the
+role exists for. Two consequences worth knowing before the next one:
+
+- **`AlertDialogContent` takes no `onInteractOutside`.** It refuses outside interaction itself,
+  so the rule the four `Dialog`s write out by hand is the primitive here. A reviewer looking for
+  the missing line should find this paragraph rather than a hole.
+- **It is asked in one place** — `PlaneView`'s `run`, which carries out a catalogue row from
+  whichever surface pressed it — so a tab's `×`, a pane's `×` and the palette's rows all ask.
+  A confirmation on one surface and not another is the second answer the catalogue exists to
+  not have.
+
 And the **persona card** (`@radix-ui/react-popover`, `app/src/Panels.tsx`): what a row in the
 right-hand region's persona list opens. It is the first popover in the window, and it was picked
 over the other two surfaces Radix has for the same content:
@@ -162,6 +178,60 @@ open dialog `aria-hidden`, so a `getByRole` for anything behind it finds nothing
 spec cannot click a tab while a picker is up. That is the app behaving correctly. When a test
 breaks on it, the test was reaching for something an operator could not have reached — fix the
 test to take a route that exists.
+
+**Tab inside a dialog is the PLATFORM's, except at the two edges — and that is the third time
+"check, per primitive" has earned its place.** `FocusScope`'s `handleKeyDown`
+(`@radix-ui/react-focus-scope`) intercepts Tab only when the focus is on the first or the last
+tabbable of the scope: on the first it acts on **Shift+Tab** and moves the focus to the last
+itself, on the last it acts on **Tab** and moves to the first. Anywhere in between it does
+nothing at all and the browser's own tab sequence decides.
+
+That matters because **WebKit does not put a `<button>` in the tab sequence at all** unless "tab
+to all controls" is turned on — and **WebKit is the engine on both platforms the scenarios run
+on**: a WKWebView on macOS and WebKitGTK on Linux. charter embeds the system WebView, so this is
+the window's own behaviour rather than one runner's quirk.
+
+It was measured rather than reasoned about, three times, and the third measurement **corrected
+the first two**. `palette.e2e.ts`'s *"closes the chat it just opened, by the keyboard alone"*
+pressed Tab to move from `Cancel` to the confirm; the question stayed on screen on `webkit macos`,
+and after that was read as a macOS default it did the same on `WebKitGTK linux`. Then the spec was
+made to write down every keydown the document sees, and it said (charter-app#176):
+
+```
+the page saw: Shift on <button> "Cancel"; Tab on <button> "Cancel"; Enter on <button> "Cancel"
+```
+
+**Two separate findings live in that one line, and only the first is about the product.**
+
+1. The tab sequence really does skip buttons, as above — and the trace adds that
+   `browser.keys(["Shift", "Tab"])` **is not delivered as a chord**: the Tab keydown arrives with
+   `event.shiftKey` unset, so Radix's edge handler never fires either.
+2. **A focused button is not activated by a synthesised `Enter`.** The engine delivered the
+   keydown *to* `Cancel`, unprevented — the focus was genuine and the engine agreed — and nothing
+   happened. WebDriver key actions carry no implicit activation.
+
+The second is a fact about the **test rig**, not about charter, and it is the one that matters
+when writing a spec: **a scenario cannot press a button by keyboard at all, by any key.** That is
+why Escape works in these specs where nothing aimed at a button does — Radix listens for Escape on
+`document` — and why the palette's own Enter works, since the palette handles it in JavaScript.
+
+Three things follow, and the last is the one a reviewer should hold us to:
+
+- **Shift+Tab from the first answer is Radix's own `focus()` call**, not the engine's tab
+  sequence, so it reaches the last answer everywhere a real keyboard is driving. A *scenario*
+  cannot use it, for finding 1 above; `App.test.tsx` is where that route is tested.
+- **A claim of the form "this button can be pressed by keyboard" belongs in a unit test**, where
+  jsdom implements activation. A scenario can prove that the keyboard reaches a surface and that
+  keys the app handles in JavaScript do their work — `palette.e2e.ts` keeps exactly that half,
+  raising the question by keyboard and answering it with Escape.
+- **A dialog whose two answers are its only tabbables is wholly reachable by keyboard** — the
+  first and last ARE the two edges Radix handles. `EndingChat.tsx` is that shape.
+- **A third focusable in the middle of any modal in this window is unreachable by keyboard**:
+  the engine will not tab to it and Radix only handles the edges. That is a property to check
+  when a dialog grows a control, not a thing to discover from a scenario run — `App.test.tsx`'s
+  "asks with two answers, Cancel focused and the confirm at the other edge" reads the buttons
+  off the DOM and fails on a third. **It is also bigger than one dialog**, and charter-app#186
+  is where the window-wide half of it lives — the picker's `Start` is the one to look at first.
 
 ## The four regions added no primitive, which is the rule working
 

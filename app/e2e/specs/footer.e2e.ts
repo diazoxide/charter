@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { browser, expect, $ } from "@wdio/globals";
 import { READY } from "../harness.js";
-import { harnessRowsDrawn, pressOnly } from "../opening.js";
+import { endChat, harnessRowsDrawn, pressOnly } from "../opening.js";
 
 /**
  * Charter's footer inside a chat's pane, per chat, against the real app (charter ADR 0029).
@@ -116,7 +116,7 @@ describe("charter's footer inside a chat", () => {
 
   after(async () => {
     for (const name of (await tabNames()).filter((tab) => !wereAlreadyOpen.includes(tab))) {
-      await pressOnly(`End chat ${name}`);
+      await endChat(`End chat ${name}`);
     }
     await browser.waitUntil(
       async () => (await tabNames()).every((tab) => wereAlreadyOpen.includes(tab)),
