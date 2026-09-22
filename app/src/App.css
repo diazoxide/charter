@@ -315,6 +315,20 @@ body {
   max-width: 14rem;
 }
 
+/* The mark on something the operator pinned (charter ADR 0039). A dot and not a `📌`: an
+   emoji is drawn by the operating system at a size and a colour this window does not
+   choose, and next to a state dot of charter's own it reads as a second, louder thing. What
+   pinning DOES is draw the thing first on its strip; the mark is only how you tell that a
+   thing is first on purpose. */
+.pinned {
+  flex: none;
+  margin-left: 0.3rem;
+  font-size: 0.7em;
+  line-height: 1;
+  opacity: 0.8;
+  color: var(--lit);
+}
+
 .bar button {
   color: var(--ink);
   background: #222;

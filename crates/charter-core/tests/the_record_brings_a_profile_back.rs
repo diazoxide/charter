@@ -25,6 +25,7 @@ fn a_chat_on(profile: &str, persona: Option<&str>) -> Chat {
         profile: Some(profile.to_owned()),
         persona: persona.map(str::to_owned),
         show_footer: false,
+        pinned: false,
     }
 }
 
