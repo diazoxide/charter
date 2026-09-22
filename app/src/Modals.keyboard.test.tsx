@@ -4,6 +4,9 @@ import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { ENDS_IT } from "./actions";
 import { AlertsDrawer } from "./AlertsDrawer";
+import { DeleteWorkspace } from "./DeleteWorkspace";
+import { NewProject } from "./NewProject";
+import { NewWorkspace } from "./NewWorkspace";
 import { ApproveExtension } from "./ApproveExtension";
 import { ApprovePlane } from "./ApprovePlane";
 import { EndingChat } from "./EndingChat";
@@ -568,6 +571,54 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
     expect(await reachableByKeyboard()).toEqual(['button "Close"']);
   });
 
+  it("reaches the three surfaces that arrived while this was being measured", async () => {
+    // **#172 landed the workspace lifecycle between the survey and this branch, and every one
+    // of its dialogs had the defect.** That is the argument for a file like this one rather
+    // than a fix per dialog: the hole is not a mistake anybody made, it is what a modal in a
+    // WebView does by default, so a new surface has it on the day it is written.
+    //
+    // `NewProject` is the sharpest of the three. Only its folder box was in the engine's
+    // sequence at all — a text `<input>` — and it is the scope's first edge, with `Cancel` the
+    // last. `Browse…`, the checkbox that decides whether charter writes into a repository the
+    // operator already has, and `Create project` were all in between, reachable by nothing.
+    render(<NewProject making={false} onCreate={() => {}} onCancel={() => {}} />);
+    // Answered first: both dialogs disable their create button until they have been, and a
+    // disabled control is out of the tab sequence everywhere and rightly so. The state worth
+    // measuring is the one where the answer can be given.
+    await userEvent.type(screen.getByLabelText("Folder"), "/where/it/goes");
+    expect(await reachableByKeyboard()).toEqual([
+      'input "Folder"',
+      'button "Browse…"',
+      'checkbox "Make this repo itself the plane"',
+      'button "Create project"',
+      'button "Cancel"',
+    ]);
+    cleanup();
+
+    // Two text boxes were reachable and the button that acts on them was not.
+    render(<NewWorkspace plane="plane" making={false} onCreate={() => {}} onCancel={() => {}} />);
+    await userEvent.type(screen.getByLabelText("Name"), "svc");
+    expect(await reachableByKeyboard()).toEqual([
+      'input "Name"',
+      'textarea "What it is for (optional)"',
+      'button "Create workspace"',
+      'button "Cancel"',
+    ]);
+    cleanup();
+
+    // Two answers, so the edges covered it — in one direction, and only while there are two.
+    render(
+      <DeleteWorkspace
+        workspace="svc"
+        atRisk={[]}
+        deleting={false}
+        onDelete={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    expect(await reachableByKeyboard()).toEqual(['button "Cancel"', 'button "Delete workspace"']);
+  });
+
   it("reaches the palette's box, which was never in doubt and says why", async () => {
     // The one modal in the window that needed nothing. Its only tabbable is a text `<input>`,
     // and `TextFieldInputType::isKeyboardFocusable` answers for itself without ever consulting
@@ -582,7 +633,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
   });
 
   it("keeps the keyboard inside the surface when there is nowhere further to go", async () => {
-    // The trap, asserted once rather than relied on eleven times above. `reachableByKeyboard`
+    // The trap, asserted once rather than relied on by every walk above. `reachableByKeyboard`
     // reads a repeat as "it has come round", and a focus that escaped to the document would
     // read the same way — so this is what separates the two: Tab off the last answer lands on
     // the first, by Radix's own `focus(first)`, and never on `<body>`.

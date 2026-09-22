@@ -294,21 +294,32 @@ cannot answer the question at all, for finding 2 above.
 
 What it found, before anything was changed:
 
-| surface                     | tabbables | opened on | Tab reached                  | Shift+Tab reached              | reachable by neither          |
-| --------------------------- | --------- | --------- | ---------------------------- | ------------------------------ | ----------------------------- |
-| `StartChat` (the picker)    | 6         | `Cancel`  | **nothing — it never moved** | the form, then `Start`          | the footer checkbox           |
-| `Updates` (the offer)       | 5         | channel   | nothing                      | `Close`                        | `Install`, `Check now`        |
-| `Extensions`                | 4         | `Add…`    | nothing                      | `Done`                         | `Review`, `Remove`, per row   |
-| `Doctor`                    | 3         | `<summary>` | nothing                    | `Close`                        | `Check again`                 |
-| `QuitWarning`, `EndingChat` | 2         | `Cancel`  | nothing                      | the other answer               | —                             |
-| `ApprovePlane`, `ApproveExtension` | 2  | `Cancel`  | the other answer             | nothing                        | —                             |
-| `AlertsDrawer`, `PinItem`   | 1         | its one control | —                      | —                              | —                             |
-| `Palette`                   | 1         | its box   | —                            | —                              | —                             |
+| surface                            | tabbables | opened on       | Tab reached                  | Shift+Tab reached      | reachable by neither                          |
+| ---------------------------------- | --------- | --------------- | ---------------------------- | ---------------------- | --------------------------------------------- |
+| `StartChat` (the picker)           | 6         | `Cancel`        | **nothing — it never moved** | the form, then `Start` | the footer checkbox                           |
+| `Updates` (the offer)              | 5         | channel         | nothing                      | `Close`                | `Install`, `Check now`                        |
+| `NewProject`                       | 5         | the folder box  | nothing                      | nothing                | `Browse…`, the checkbox, `Create project`     |
+| `Extensions`                       | 4         | `Add…`          | nothing                      | `Done`                 | `Review`, `Remove`, per row                   |
+| `NewWorkspace`                     | 4         | the name box    | the vision box               | nothing                | `Create workspace`                            |
+| `Doctor`                           | 3         | `<summary>`     | nothing                      | `Close`                | `Check again`                                 |
+| `QuitWarning`, `EndingChat`        | 2         | `Cancel`        | nothing                      | the other answer       | —                                             |
+| `ApprovePlane`, `ApproveExtension` | 2         | `Cancel`        | the other answer             | nothing                | —                                             |
+| `DeleteWorkspace`                  | 2         | `Cancel`        | nothing                      | the delete             | —                                             |
+| `AlertsDrawer`, `PinItem`          | 1         | its one control | —                            | —                      | —                                             |
+| `Palette`                          | 1         | its box         | —                            | —                      | —                                             |
+
+The last three rows arrived from charter-app#172 while this was being measured, each with the
+defect on the day it was written — which is the argument for a file that walks every surface
+rather than a fix per dialog. `NewProject` is the sharpest: only its folder box was in the
+engine's sequence at all, and the checkbox in the middle is the one that decides whether charter
+writes into a repository the operator already has.
 
 Read the `Tab reached` column first, because it is the one an operator lives in: **in eight of
-the eleven surfaces, pressing Tab did nothing whatsoever.** The two-answer dialogs were whole
-only by way of the one key nobody presses to go forwards, and which of the two directions worked
-was decided by nothing more than whether `Cancel` was written first or second in the JSX.
+the fourteen surfaces, pressing Tab moved the focus nowhere at all**, and in a ninth it moved
+one step between two text boxes and then stopped. Three of the remaining five have a single
+control and nowhere to go by construction. That leaves two — `ApprovePlane` and
+`ApproveExtension` — where Tab did what Tab does, and it worked there for no better reason than
+that `Cancel` happens to be written second in their JSX rather than first.
 
 **The ticket's headline is half refuted, and the half that survives is the worse half.** It said
 the picker's `Start` could not be reached; `Start` could be reached, by walking the dialog
