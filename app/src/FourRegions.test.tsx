@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render as renderBare, screen, within } from "@testing-library/react";
+import { cleanup, render as renderBare, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
@@ -387,5 +387,97 @@ describe("the window the stored arrangement asks for", () => {
         { id: "bottom", side: "bottom", order: 0, collapsed: false },
       ],
     });
+  });
+});
+
+/**
+ * **The status line**, against the whole window, because every question about it is a question
+ * about where it is relative to everything else (`StatusLine.tsx` for what is on it and why).
+ *
+ * The operator asked for the project's directory to move out of the top-right corner into a
+ * one-line bar at the very bottom. These are the assertions that it went there and that it is
+ * not a fifth region; the component's own rules are in `StatusLine.test.tsx`.
+ */
+describe("the status line", () => {
+  it("sits below every region, and outside the group that draws them", async () => {
+    core();
+    render(<App />);
+    await screen.findByLabelText("Repository state");
+
+    const line = screen.getByTestId("status-line");
+    const bottom = screen.getByTestId("bottom-bar");
+    // Under the bottom region, not beside it.
+    expect(bottom.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // And not inside the panel group at all: it is the window's chrome, the way the project
+    // strip above the regions is, and `StatusLine.tsx` argues why it is not in the arrangement.
+    expect(document.querySelector(".regions")?.contains(line)).toBe(false);
+  });
+
+  it("carries the project's directory, which is no longer in the corner of the bar", async () => {
+    core();
+    render(<App />);
+    await screen.findByTestId("status-line");
+
+    expect(within(screen.getByTestId("status-line")).getByText(PLANE)).toBeInTheDocument();
+    // The bar is the tab strip, the `+`, the splits and the region toggles, and nothing else.
+    expect(document.querySelector("header.bar .plane")).toBeNull();
+  });
+
+  it("says which workspace the window is on, and follows the focus", async () => {
+    core();
+    render(<App />);
+    await screen.findByTestId("clone-svc");
+
+    const line = screen.getByTestId("status-line");
+    expect(line).toHaveTextContent("alpha");
+
+    await focus("beta");
+
+    await waitFor(() => expect(line).toHaveTextContent("beta"));
+  });
+
+  it("counts what the workspace holds, off the answers the regions already asked for", async () => {
+    // No second `workspace_panels` and no second `worktree_list`: the line reads the state the
+    // three regions share (`useWorkspaceState`), which is what keeps `git status` per clone
+    // from running twice for one focused workspace.
+    const { asked } = core();
+    render(<App />);
+    await screen.findByTestId("clone-svc");
+
+    // The mock's `alpha` holds one clone with two worktrees cut off it, on a plane of two
+    // workspaces.
+    const line = screen.getByTestId("status-line");
+    await waitFor(() => expect(line).toHaveTextContent(/pieces\s*2/));
+    expect(line).toHaveTextContent(/ws\s*2/);
+
+    const listings = asked.filter(
+      (one) => one.cmd === "worktree_list" && one.args.workspace === "alpha",
+    );
+    expect(listings).toHaveLength(1);
+  });
+
+  it("cannot be put away, because it is not a region", async () => {
+    // Every region in the arrangement gets a toggle drawn from it. The status line has none —
+    // it is the frame, and a status line an operator can lose is one they will lose.
+    core();
+    render(<App />);
+    await screen.findByLabelText("Repository state");
+
+    for (const name of ["Explorer", "Attention", "State"]) {
+      await userEvent.click(screen.getByRole("button", { name, pressed: true }));
+    }
+
+    expect(screen.queryByRole("button", { name: "Status" })).toBeNull();
+    expect(screen.getByTestId("status-line")).toBeInTheDocument();
+  });
+
+  it("says charter cannot count alerts rather than drawing a zero", async () => {
+    // The same claim `Panels`'s alerts area makes, on the button that will open its drawer:
+    // charter's alert row is not ported, so any count would be invented.
+    core();
+    render(<App />);
+
+    const button = await screen.findByRole("button", { name: "Alerts — not drawn by this build" });
+    expect(button).toBeDisabled();
   });
 });
