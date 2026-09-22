@@ -12,6 +12,7 @@ import {
   type Ran,
 } from "./actions";
 import { ApprovePlane } from "./ApprovePlane";
+import { Extensions } from "./Extensions";
 import { Opener } from "./Opener";
 import { Palette } from "./Palette";
 import { QuitWarning, type Ending } from "./QuitWarning";
@@ -63,6 +64,9 @@ function App() {
   /** Whether the palette is up, so what an action answered is said in one place rather than
    *  two: the palette is modal and draws over the line below it. */
   const [paletteOpen, setPaletteOpen] = useState(false);
+  /** Whether the extension list is up. The window's, not a project's: an extension is machine
+   *  state, so it is the same list whichever project is in front. */
+  const [extensions, setExtensions] = useState(false);
   /** Why this launch took longer than the limit, when it did — and nothing when it did not
    *  (charter-app#24). The core decides that; the window only draws it. */
   const [slowStart, setSlowStart] = useState<string>();
@@ -244,6 +248,7 @@ function App() {
   const windowDoes = useMemo<WindowDoing>(
     () => ({
       openProject: () => setShowing({ at: "opener" }),
+      showExtensions: () => setExtensions(true),
       selectProject: (plane: string) => setShowing({ at: "plane", plane }),
       closeProject,
       pinProject,
@@ -466,6 +471,7 @@ function App() {
       mergeWorktree: async () => nowhere(),
       sendKey: async () => nowhere(),
       openProject: windowDoes.openProject,
+      showExtensions: windowDoes.showExtensions,
       selectProject: windowDoes.selectProject,
       closeProject: windowDoes.closeProject,
       quit: windowDoes.quit,
@@ -674,6 +680,11 @@ function App() {
         onRun={saying?.run ?? run}
         onOpened={setPaletteOpen}
       />
+
+      {/* What has contributed what to this window (charter ADR 0041 item 5). Mounted only
+          while it is asked for: it reads every installed extension's files to re-take its
+          fingerprint, and a launch does not pay for that unless somebody looked. */}
+      {extensions && <Extensions onClose={() => setExtensions(false)} />}
 
       {asking && <QuitWarning chats={ending} onQuit={quit} onCancel={dontQuit} />}
     </main>
