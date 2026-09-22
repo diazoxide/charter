@@ -7,13 +7,16 @@
 //! the reason the Python gives for not folding it into either guard: a second copy of a shell
 //! quoting walk is a second thing to be wrong about.
 //!
-//! # Nothing calls this yet, on purpose
+//! # Where this is called from
 //!
-//! `charter hook pretooluse` is ONE switch. `main.rs`'s `is_a_tool_hook` answers every word in
-//! the `pretooluse`/`posttooluse` namespace with exit 2 — *block* — and
-//! `crates/charter-cli/tests/hook.rs` pins that. **This is stage 4 of six and is wired to
-//! nothing**; the switch moves in the last PR and nowhere earlier.
+//! [`crate::toolgate`] — `charter/hooks.py:pretooluse`'s eight refusals, in its order — and
+//! through it `charter hook pretooluse` (M3.1 stage 6).
 //!
+//! Until that stage the switch was closed: `main.rs`'s `is_a_tool_hook` answered every word in
+//! the `pretooluse`/`posttooluse` namespace with exit 2 — *block* — because a PARTIAL guard on
+//! the switch turns fail-closed into allow-everything-except-the-arm-that-is-ported. It moved
+//! once all eight arms were standing, and never earlier. The other eight words in that
+//! namespace still block, for the same reason they always did.
 //! # Why this cannot be [`crate::shellseg`]
 //!
 //! The Python says it and the port is bound by the same fact. `segment_argv_parsed` opens with

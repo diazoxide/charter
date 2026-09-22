@@ -161,9 +161,16 @@ describe("an app opened from Finder", () => {
 
   it("runs the charter the operator installed, where there is one, before the app's own", async () => {
     // The operator's own shape: `charter` in `~/.local/bin`, where `uv`/`pipx` put it. The
-    // plugin's `hooks.json` is that charter's, and its tool hooks are ones the app's binary
-    // BLOCKS (it refuses a tool hook it does not answer) — so the order is load-bearing, not
-    // a preference. A stand-in that says it was asked, then hands the call to the real binary.
+    // plugin's `hooks.json` is that charter's, and its tool hooks are mostly ones the app's
+    // binary BLOCKS — so the order is load-bearing, not a preference. A stand-in that says it
+    // was asked, then hands the call to the real binary.
+    //
+    // **M3.1 narrowed "mostly" and did not change the conclusion** (charter-app#181).
+    // `pretooluse` is now answered rather than blocked; the other eight tool-hook words the
+    // plugin wires still block, `pretooluse-read` among them, which Claude Code fires on every
+    // `Read` and `Grep`. And for `pretooluse` the app's binary decides strictly less than the
+    // Python — no persona tool-gate, no guard sighting, no trace — so shadowing an installed
+    // charter is a regression either way. `programs::chat_path_from` carries the argument.
     const home = given("CHARTER_FINDER_HOME");
     const asked = join(home, "the-installed-charter-was-asked");
     const installed = join(home, ".local", "bin", "charter");

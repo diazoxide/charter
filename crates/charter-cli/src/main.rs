@@ -32,6 +32,7 @@ use charter_core::state::Event;
 use charter_core::workspaces::Plane;
 use clap::{Args, Parser, Subcommand};
 
+mod guard;
 mod handoff;
 mod memory;
 mod statusline;
@@ -887,6 +888,15 @@ impl Here {
     }
 }
 
+/// The one word in the tool-hook namespace this binary ANSWERS — the Bash guard (M3.1).
+///
+/// `charter/hooks.py:_HANDLERS` has nine words in that namespace and the charter plugin's
+/// `hooks/hooks.json` wires all nine. This is one of them. The other eight still reach
+/// [`is_a_tool_hook`] and still block, and that is not an oversight — each is a different
+/// handler with its own refusals, and a binary that answered a word it had not ported would be
+/// the exact fail-open [`is_a_tool_hook`] exists to prevent.
+const GUARDED_TOOL_HOOK: &str = "pretooluse";
+
 /// Whether a word this binary does not own is a TOOL hook, where refusing means blocking.
 ///
 /// **The namespace, not a list of words, and not a blanket rule either.** Both of those were
@@ -903,6 +913,12 @@ impl Here {
 /// call to protect and blocking is the safe answer, for every matcher charter has and every
 /// one it adds. Outside it there is nothing to protect and blocking can only wedge a session.
 /// A review found both halves of this.
+///
+/// **M3.1 narrowed what this covers and changed nothing about it.** [`GUARDED_TOOL_HOOK`] is
+/// answered before this is ever asked, so what is left here is eight words rather than nine —
+/// `pretooluse-read`, `pretooluse-edit`, `pretooluse-dispatch`, the five `posttooluse` ones,
+/// and every word charter has not invented yet. The rule is unchanged because its argument is:
+/// a program that has checked nothing may not say `allow`.
 fn is_a_tool_hook(name: &str) -> bool {
     name.starts_with("pretooluse") || name.starts_with("posttooluse")
 }
@@ -944,10 +960,23 @@ fn payload() -> String {
 
 /// `charter hook <name>` — always succeeds, whatever went wrong.
 ///
-/// **Never exit 2.** A harness reads 2 as "block": on `Stop` it makes the harness carry on
-/// rather than end. Nothing charter draws is worth that, so every failure here is a silent 0
-/// and the state the app draws is simply the last one it was told.
+/// **Never exit 2, except where the whole point is to.** A harness reads 2 as "block": on
+/// `Stop` it makes the harness carry on rather than end. Nothing charter draws is worth that,
+/// so every failure on a REPORTING hook is a silent 0 and the state the app draws is simply the
+/// last one it was told. The two exceptions are both about a tool call: a word in the tool-hook
+/// namespace this binary cannot answer ([`is_a_tool_hook`]), and a denial the guard decided and
+/// could not print ([`guard::pretooluse`]).
 fn hook(name: &str, plugin_version: Option<&str>) -> ExitCode {
+    // **The switch (M3.1 stage 6).** Before the eight arms were ported this word fell through
+    // to `is_a_tool_hook` below and blocked, because a program that has checked nothing may not
+    // say `allow`. It is now checked, and it answers.
+    //
+    // FIRST, in front of `Event::parse`, because it is not one of the app's reporting events
+    // and never becomes one: a `PreToolUse` payload carries no chat state worth a `Report`, and
+    // a guard that also spoke on the app's socket would be two jobs on one exit status.
+    if name == GUARDED_TOOL_HOOK {
+        return guard::pretooluse(&payload());
+    }
     let Some(event) = Event::parse(name) else {
         let tool = is_a_tool_hook(name);
         // The word comes out of a settings file a chat can write, and this sentence goes to

@@ -2146,8 +2146,64 @@ button.bare:focus-visible {
   cursor: pointer;
 }
 
-.status-doctor:hover {
+.status-doctor:hover,
+.status-update:hover,
+.status-pin:hover {
   border-color: var(--accent-base);
+}
+
+/* **The update button and the pin** (`app/src/Updates.tsx`), in the same chrome as the doctor
+   beside them. A quiet updater is its icon alone, in the muted colour: it is a way in to the
+   channel, not a fact on the line. An offer is in the accent — the one thing on the line that
+   is news — and a failure the operator asked about is amber. The pin is drawn only when it
+   drifts, so it is always amber. */
+.status-update,
+.status-pin {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  color: var(--text-primary);
+  background: var(--control-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0.05rem 0.4rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.status-update.update-quiet {
+  color: var(--text-muted);
+}
+
+.status-update.update-offered,
+.status-update.update-installed {
+  color: var(--accent-base);
+  border-color: var(--accent-base);
+}
+
+.status-update.update-failed,
+.status-pin {
+  color: var(--state-waiting);
+}
+
+.warning.update {
+  max-width: 40rem;
+}
+
+.update-notes {
+  max-height: 12rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 0.8rem;
+  padding: 0.5rem;
+  background: var(--surface-sunken);
+  border-radius: 4px;
+}
+
+.pin-news {
+  margin: 0;
+  padding-left: 1rem;
+  font-size: 0.85rem;
 }
 
 .status-doctor.doctor-tone-fail {
