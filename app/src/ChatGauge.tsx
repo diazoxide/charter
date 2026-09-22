@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { commands, type ChatUsage, type GaugeTone, type PlaneId } from "./bindings";
+import { commands, type ChatUsage, type GaugeTone, type PlaneId, type UsageTurn } from "./bindings";
 
 /**
  * **A chat's `ctx`/`cache` gauge, in its own pane's corner.**
@@ -40,6 +40,17 @@ import { commands, type ChatUsage, type GaugeTone, type PlaneId } from "./bindin
  * The core's gauge, whole: `ctx NN%`, `cache NN%`, and `↻N cost` when the prefix has been
  * rebuilt — each in the tone the core's threshold gives it, so this and the frame's panel can
  * never colour one number two ways. **Nothing at all when nothing is known**, never `ctx 0%`.
+ *
+ * # And the trend beside it
+ *
+ * ADR 0038 names "usage and the token trend" as its own gap: *"the trend over a session's
+ * turns rather than this turn's percentage"*. It lives here and not in a panel of its own,
+ * because it is the same conversation's history — a trend window would be a second place to
+ * look for one chat's numbers. It is drawn as one bar per recorded turn (at most sixteen, the
+ * record's ring), each as tall as that turn's cache share and in its tone, so a rebuild reads
+ * as the dip it is. The numbers behind every bar are on the bar's title. And once the cache has
+ * been cold three turns running — `_cache_hint`'s rule, which Python only ever said in the
+ * live footer — it says so in words: `cold 3`.
  */
 
 /** How long after a move the record is read again, for the render that lands after `Stop`. */
@@ -97,7 +108,7 @@ const TONE: Record<GaugeTone, string> = { ok: "gauge-ok", warn: "gauge-warn", ba
 /** The gauge itself, or nothing. */
 export function ChatGauge({ usage }: { usage: ChatUsage | undefined }) {
   if (usage === undefined) return null;
-  const { context, cache, rebuilds } = usage;
+  const { context, cache, rebuilds, turns, cold } = usage;
   const said = [
     context && `context window ${context.value}% full`,
     cache && `${cache.value}% of the last turn's input served from cache`,
@@ -126,6 +137,15 @@ export function ChatGauge({ usage }: { usage: ChatUsage | undefined }) {
           ↻{rebuilds.count} {rebuilds.cost}
         </span>
       )}
+      {cold != null && (
+        <span
+          className="gauge-part gauge-warn"
+          title={`The cache has been cold ${cold} turns running: something keeps changing the prompt's prefix — a model or effort switch, an MCP server toggling, a /compact. /rewind keeps it; /compact rebuilds it.`}
+        >
+          cold {cold}
+        </span>
+      )}
+      {turns.length > 1 && <Trend turns={turns} />}
     </div>
   );
 }
@@ -143,4 +163,53 @@ export function PaneGauge({
   running: boolean;
 }) {
   return <ChatGauge usage={useChatUsage(plane, session, moved, running)} />;
+}
+
+/** What one turn's bar says on its title. */
+function turnSaid(turn: UsageTurn, index: number): string {
+  return [
+    `turn ${index + 1}`,
+    turn.cache ? `cache ${turn.cache.value}%` : "cache unknown",
+    turn.context ? `ctx ${turn.context.value}%` : undefined,
+    turn.written ? `wrote ${turn.written}` : undefined,
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
+/**
+ * The trend: one bar per recorded turn, oldest on the left, as tall as its cache share.
+ *
+ * An SVG with a bar per turn rather than a charting library: sixteen rectangles is not a chart
+ * a library earns its weight on, and the colour comes from the theme through each bar's class,
+ * never from a value written here. A turn whose share could not be read draws a stub in the
+ * muted colour — a gap in the record, not a zero.
+ */
+export function Trend({ turns }: { turns: readonly UsageTurn[] }) {
+  const width = turns.length * 3;
+  return (
+    <svg
+      className="gauge-trend"
+      data-testid="gauge-trend"
+      viewBox={`0 0 ${width} 10`}
+      preserveAspectRatio="none"
+      aria-hidden="true"
+    >
+      {turns.map((turn, i) => {
+        const height = turn.cache ? Math.max(1, Math.round(turn.cache.value / 10)) : 1;
+        return (
+          <rect
+            key={i}
+            x={i * 3}
+            y={10 - height}
+            width={2}
+            height={height}
+            className={turn.cache ? TONE[turn.cache.tone] : "gauge-unknown"}
+          >
+            <title>{turnSaid(turn, i)}</title>
+          </rect>
+        );
+      })}
+    </svg>
+  );
 }

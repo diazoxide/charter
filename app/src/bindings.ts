@@ -467,6 +467,16 @@ export const commands = {
 	/**  `cache NN%`: the share of the last turn's input served from cache. */
 	cache: Percent | null,
 	rebuilds: Rebuilds | null,
+	/**
+	 *  The session's recorded turns, oldest first, at most sixteen — the trend charter ADR
+	 *  0038 names beside the gauge: the whole history rather than this turn.
+	 */
+	turns: UsageTurn[],
+	/**
+	 *  How many turns in a row the cache has been cold, once that is three or more
+	 *  (`_cache_hint`'s threshold) — the prefix churning, which is the expensive failure.
+	 */
+	cold: number | null,
 } | null, string>(__TAURI_INVOKE("chat_usage", { plane, session })),
 	/**  The pin report for this plane. */
 	planePin: (plane: PlaneId) => typedError<PinReport, string>(__TAURI_INVOKE("plane_pin", { plane })),
@@ -542,6 +552,16 @@ export type ChatUsage = {
 	/**  `cache NN%`: the share of the last turn's input served from cache. */
 	cache: Percent | null,
 	rebuilds: Rebuilds | null,
+	/**
+	 *  The session's recorded turns, oldest first, at most sixteen — the trend charter ADR
+	 *  0038 names beside the gauge: the whole history rather than this turn.
+	 */
+	turns: UsageTurn[],
+	/**
+	 *  How many turns in a row the cache has been cold, once that is three or more
+	 *  (`_cache_hint`'s threshold) — the prefix churning, which is the expensive failure.
+	 */
+	cold: number | null,
 };
 
 /**  Where a chat is working, when it is working in a piece. */
@@ -1256,6 +1276,16 @@ export type StartOptions = {
 export type Started = {
 	session: number,
 	wired: string | null,
+};
+
+/**  One turn of the trend. */
+export type UsageTurn = {
+	/**  The share of that turn's input served from cache, in its tone. */
+	cache: Percent | null,
+	/**  The context percentage that turn recorded, in its tone. */
+	context: Percent | null,
+	/**  What that turn wrote to the cache, as charter spells tokens. */
+	written: string | null,
 };
 
 /**
