@@ -419,12 +419,21 @@ describe("App", () => {
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
-  it("focuses Cancel, and puts the yes one Tab away", async () => {
-    // **The keyboard route to ending a chat, pinned here rather than assumed.** Radix's
-    // `AlertDialog` requires a `Cancel` and focuses it, which is why a Return pressed by
-    // reflex cancels — and it makes the yes exactly Tab then Enter. `palette.e2e.ts` drives
-    // that against the real WebView; this is what says which key, so a reordering of the two
-    // answers fails here instead of as a scenario timeout with no explanation.
+  it("asks with two answers, Cancel focused and the confirm at the other edge", async () => {
+    // **The shape the keyboard route depends on, pinned because the route is not obvious.**
+    //
+    // Radix's `FocusScope` intercepts Tab only at the EDGES of the scope
+    // (`@radix-ui/react-focus-scope`, `handleKeyDown`): on the FIRST tabbable it acts on
+    // Shift+Tab and moves the focus to the last itself; on the LAST it acts on Tab and moves
+    // to the first. In between it does nothing and the platform decides — and a WKWebView on
+    // macOS does not put a `<button>` in the tab sequence unless Full Keyboard Access is on,
+    // which is what sent `palette.e2e.ts` back red pressing plain Tab (charter-app#176).
+    //
+    // So the confirm is reachable by keyboard on every platform exactly while these two are
+    // the only tabbables and the confirm is the second: then Cancel IS the first edge and the
+    // confirm IS the last, and Shift+Tab is Radix's own `focus()` call rather than the
+    // browser's tab sequence. **A third focusable added between them would take that away
+    // silently on one platform**, and this is what fails instead.
     core();
     render(<App />);
     await openAChat();
@@ -432,9 +441,17 @@ describe("App", () => {
     await userEvent.click(screen.getByRole("button", { name: "End chat 1 steward" }));
     const asking = await screen.findByRole("alertdialog");
 
-    expect(within(asking).getByRole("button", { name: "Cancel" })).toHaveFocus();
-    await userEvent.tab();
-    expect(within(asking).getByRole("button", { name: "End chat 1 steward" })).toHaveFocus();
+    // Read off the DOM rather than asked for by name: "the only two, in this order" is the
+    // claim, and `getByRole` for each would pass with a third between them.
+    const answers = within(asking).getAllByRole("button");
+    expect(answers.map((answer) => answer.textContent)).toEqual(["Cancel", "End chat 1 steward"]);
+    // Cancel first, so a Return pressed by reflex cancels. The dialog itself is not in the
+    // sequence — Radix gives the content `tabIndex={-1}`.
+    expect(answers[0]).toHaveFocus();
+
+    await userEvent.tab({ shift: true });
+
+    expect(answers[1]).toHaveFocus();
   });
 
   it("answers the question with Escape, and Escape means no", async () => {

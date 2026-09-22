@@ -24,14 +24,28 @@ import { ENDS_IT, type Offer } from "./actions";
  * `docs/ui-primitives.md` are questions the operator went looking for; this one arrives
  * *because of* something they did, which is the distinction the role exists for.
  *
- * The two house rules for a modal here are the four dialogs' (`docs/ui-primitives.md`):
+ * The two house rules for a modal here are the four dialogs' (`docs/ui-primitives.md`), and
+ * this primitive keeps both without being told:
  *
- * - **A click outside answers nothing.** `onInteractOutside` is prevented, as on all four.
+ * - **A click outside answers nothing.** The four `Dialog`s prevent `onInteractOutside` by
+ *   hand; `AlertDialogContent` does not take the prop at all, because it refuses outside
+ *   interaction itself.
  * - **Escape answers, with the non-destructive answer** — the primitive's own `Cancel`.
  *
  * And one that is this dialog's alone: **Cancel is focused, and it is first.** The destructive
  * answer is never the one a stray Return finds, which matters most on the one dialog that
  * appears without being asked for.
+ *
+ * **Exactly two answers, in that order, and it is load-bearing rather than tidy.** Radix's
+ * `FocusScope` intercepts Tab only at the EDGES of the scope: on the first tabbable it acts on
+ * Shift+Tab and moves the focus to the last itself, on the last it acts on Tab and moves to the
+ * first, and in between it does nothing and the platform decides. A WKWebView on macOS does not
+ * put a `<button>` in the tab sequence at all unless Full Keyboard Access is on — measured,
+ * charter-app#176, where a scenario pressing plain Tab left this question on screen. So the
+ * confirm is reachable by keyboard on every platform *because* these two are the only tabbables
+ * and the confirm is the second: Shift+Tab from Cancel is Radix's own `focus()` call rather than
+ * the browser's tab sequence. A third focusable between them would take that away on one
+ * platform and nowhere else; `App.test.tsx` fails on it rather than leaving it to a scenario.
  */
 export function EndingChat({
   offer,
@@ -62,6 +76,10 @@ export function EndingChat({
           // interaction itself, because an alert dialog is a question that must be answered.
           // The four `Dialog`s in `docs/ui-primitives.md` write the same rule out by hand
           // because `Dialog` would otherwise close on a click outside; this one cannot.
+          // **The focus is put on Cancel here although the primitive already does it** —
+          // measured: taking this out leaves every test green, because `AlertDialogContent`
+          // focuses its `Cancel` itself. It stays because it is the one property a stray
+          // Return depends on, and a property that matters is spelled rather than inherited.
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             cancel.current?.focus();

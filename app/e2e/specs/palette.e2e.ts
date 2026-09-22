@@ -33,6 +33,22 @@ async function openPalette() {
   return up;
 }
 
+/**
+ * What has the keyboard right now, as a sentence.
+ *
+ * **For the failure message, not for an assertion.** A spec about the keyboard that fails
+ * saying only "expected not to be displayed" has said nothing about the keyboard, which is
+ * how a wrong key cost a whole CI round once already.
+ */
+async function hasTheKeyboard(): Promise<string> {
+  return browser.execute(() => {
+    const on = document.activeElement;
+    if (!on) return "nothing";
+    const named = on.getAttribute("aria-label") ?? on.textContent ?? "";
+    return `<${on.tagName.toLowerCase()}> ${JSON.stringify(named.trim().slice(0, 40))}`;
+  });
+}
+
 /** Types into the box the palette focused itself. Nothing clicks it. */
 async function typeIntoPalette(what: string) {
   const box = await $("#palette-query");
@@ -191,16 +207,48 @@ describe("the command palette", () => {
     await browser.keys(["Enter"]);
 
     // **Ending a chat asks first now, and this spec's point is that the keyboard alone can
-    // do it.** Radix's `AlertDialog` puts the focus on Cancel — the non-destructive answer,
-    // deliberately — so the yes is Tab and then Enter, and a Return pressed by reflex
-    // cancels. That is the behaviour worth pinning here rather than in a unit test: it is
-    // the primitive's, not charter's, and `docs/ui-primitives.md` says to check per
-    // primitive rather than assume.
+    // do it.** Radix's `AlertDialog` requires a `Cancel` and puts the focus on it — the
+    // non-destructive answer, deliberately — so a Return pressed by reflex cancels, and the
+    // yes is a key away.
+    //
+    // **That key is Shift+Tab, and it took a red CI run to learn it.** This spec pressed
+    // plain `Tab` and the question stayed on screen (`scenario tests (macos-latest)`,
+    // charter-app#176). The reason is where Radix listens, which is the thing
+    // `docs/ui-primitives.md` says to check per primitive rather than assume:
+    // `@radix-ui/react-focus-scope`'s `handleKeyDown` intercepts Tab only at the EDGES of
+    // the scope — with the focus on the FIRST tabbable it acts on Shift+Tab and moves the
+    // focus to the last itself, and with the focus on the LAST it acts on Tab and moves to
+    // the first. Cancel is the first, so plain Tab from it is left to the platform — and a
+    // WKWebView on macOS does not put a `<button>` in the tab sequence at all unless Full
+    // Keyboard Access is on.
+    //
+    // Shift+Tab from Cancel is Radix's own `focus()` call rather than the browser's tab
+    // sequence, so it reaches the confirm on every platform. `App.test.tsx` pins the shape
+    // that makes it work: exactly two answers, Cancel first and the confirm last, so the two
+    // of them ARE the edges.
+    //
+    // **And `keys(["Shift", "Tab"])` really is a chord**, which is worth knowing because the
+    // array form could as easily have been two separate presses — and two separate presses
+    // are a plain Tab, the thing that failed. WebdriverIO's `keys` puts every key in the
+    // array DOWN in order, pauses, then releases them all, so Shift is held while Tab is
+    // pressed and the `keydown` carries `shiftKey`.
     const asking = await $('[role="alertdialog"]');
     await asking.waitForDisplayed({ timeout: 20_000 });
-    await browser.keys(["Tab"]);
+    const cameUpOn = await hasTheKeyboard();
+    await browser.keys(["Shift", "Tab"]);
+    const answeringOn = await hasTheKeyboard();
     await browser.keys(["Enter"]);
-    await expect(asking).not.toBeDisplayed();
+    try {
+      await expect(asking).not.toBeDisplayed();
+    } catch {
+      // **Where the focus went, said in the failure.** The run that sent this spec back said
+      // only "expected not to be displayed", which is a fact about the dialog and not about
+      // the keyboard — and the keyboard is what this spec is about.
+      throw new Error(
+        `the question stayed up: it opened with the keyboard on ${cameUpOn}, Shift+Tab left ` +
+          `it on ${answeringOn}, and Enter there did not answer it`,
+      );
+    }
 
     await browser.waitUntil(async () => (await tabNames()).length === before.length - 1, {
       timeout: 15_000,

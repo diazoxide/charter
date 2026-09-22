@@ -158,6 +158,31 @@ spec cannot click a tab while a picker is up. That is the app behaving correctly
 breaks on it, the test was reaching for something an operator could not have reached — fix the
 test to take a route that exists.
 
+**Tab inside a dialog is the PLATFORM's, except at the two edges — and that is the third time
+"check, per primitive" has earned its place.** `FocusScope`'s `handleKeyDown`
+(`@radix-ui/react-focus-scope`) intercepts Tab only when the focus is on the first or the last
+tabbable of the scope: on the first it acts on **Shift+Tab** and moves the focus to the last
+itself, on the last it acts on **Tab** and moves to the first. Anywhere in between it does
+nothing at all and the browser's own tab sequence decides.
+
+That matters here because **a WKWebView on macOS does not put a `<button>` in the tab sequence**
+unless the operator has turned Full Keyboard Access on — the platform default for web content,
+and the same for every dialog in this window, not just the new one. It was measured rather than
+reasoned about: `palette.e2e.ts`'s *"closes the chat it just opened, by the keyboard alone"*
+pressed Tab to move from `Cancel` to the confirm and the question stayed on screen on
+`scenario tests (macos-latest)`, green on Linux (charter-app#176).
+
+Two things follow, and the second is the one a reviewer should hold us to:
+
+- **Shift+Tab from the first answer is Radix's own `focus()` call**, not the browser's tab
+  sequence, so it reaches the last answer on every platform. That is the key a keyboard test
+  presses, and `palette.e2e.ts` says so where it presses it.
+- **A dialog whose two answers are its only tabbables is reachable by keyboard everywhere; one
+  with a third control between them is not, on one platform only.** So that shape is a
+  *property* rather than a tidiness, and it belongs in a unit test — `App.test.tsx`'s "asks with
+  two answers, Cancel focused and the confirm at the other edge" reads the buttons off the DOM
+  and fails on a third, because the alternative is finding out from a scenario run on one runner.
+
 ## The four regions added no primitive, which is the rule working
 
 charter ADR 0038 split the window into four regions, and the whole layout came out of what was
