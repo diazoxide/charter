@@ -73,7 +73,7 @@ import {
 } from "./tabs";
 import { ChatState } from "./NeedsYou";
 import { Panels } from "./Panels";
-import { movedAt, quietOnes, stateOf, useChatStates } from "./chatState";
+import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
 import { fitting, LEAST, useRoom } from "./fits";
 import type { Ending } from "./QuitWarning";
 
