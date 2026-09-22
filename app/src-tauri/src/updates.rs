@@ -19,14 +19,16 @@
 //! not required for any of it** — the timer runs whether or not one is showing, and the
 //! notification is how an operator with the window hidden finds out.
 //!
-//! # Where the status bar hooks in (M6.4)
+//! # Where the status line hooks in (M6.4)
 //!
-//! Nothing in this file draws anything, because the surface it would draw on does not exist
-//! yet. When M6.4's status bar lands, it listens for [`CHECKED`] and shows the offer, calls
-//! [`install_update`] from it, and shows [`update_channel`] beside it with a control
-//! that calls [`set_update_channel`]. The skew a plane's pin reports is a different row and a
-//! different question — `charter version` answers it today (charter ADR 0030) and M6.4's
-//! status bar is where it goes; this module deliberately does not restate it.
+//! Nothing in this file draws anything. M6.4's status line (`app/src/StatusLine.tsx`, #153)
+//! is the surface, and it landed while this was being written, so the wiring is a follow-up
+//! rather than part of this change. When it is added, the status line listens for [`CHECKED`]
+//! and shows the offer, calls [`install_update`] from it, and shows [`update_channel`] beside
+//! it with a control that calls [`set_update_channel`]. The skew a plane's pin reports is a
+//! different item and a different question: `charter version` answers it today (charter ADR
+//! 0030), and the status line's item for it asks `adopt::version_report`, never a comparison
+//! of its own. This module deliberately does not restate it.
 
 use charter_core::updates::{Channel, NotAKey, pubkey_usable};
 use tauri::{Emitter, Runtime};
