@@ -722,6 +722,23 @@ button.bare:focus-visible {
 
 /* The left region: the repo and worktree explorer, which is the selector WITHIN a workspace
    (charter ADR 0038). */
+/* **A row names one thing, and a name is never broken across two lines.** The operator's
+   own words: *"all trees components texts should not be breakable to new line — it should be
+   horizontal scrollable."* In a narrow left region `alpha` and `the workspace itself` came
+   apart onto two lines, and a wrapped row stops being a row: the tree's guides, the indent
+   and the eye all read down a column of first lines.
+
+   So the region scrolls sideways instead, which is what `overflow: auto` has always allowed
+   and nothing ever produced — every row was told `width: 100%`, so a name too long for the
+   region was folded rather than overflowing it, and the region never had anything to scroll.
+   The rows below carry `min-width: max-content` for that: at least the region's width, so a
+   hover or a `[aria-current]` band still reaches the right-hand edge, and wider when the name
+   is wider, which is what gives `.explorer` a `scrollWidth` to scroll through.
+
+   **Prose still wraps** — `.trouble`, `.unreported`, `.empty`, `.none`, `.pending`. Those are
+   sentences charter says about a failure, not names of nodes: a refusal held on one line would
+   push the horizontal scroll out by a paragraph and take the tree with it. The rule is the
+   distinction, not the region. */
 .explorer {
   height: 100%;
   overflow: auto;
@@ -735,6 +752,33 @@ button.bare:focus-visible {
   list-style: none;
   margin: 0;
   padding: 0;
+}
+
+/* Every row that NAMES something: one line, and at least as wide as its own name.
+
+   **The two declarations do different jobs, measured rather than assumed.**
+   `min-width: max-content` is what grows the row's own BOX, so the band behind a hovered or
+   current row reaches the end of the name instead of stopping at the region's edge — and it
+   is what gives `.explorer` a `scrollWidth` to scroll through. `white-space: nowrap` is the
+   rule that a name is not prose. With the `min-width` there the row is already as wide as its
+   unwrapped content, so nothing folds either way today; `nowrap` is what keeps that true the
+   day a row's width is constrained by something else. `workspace-explorer.e2e.ts` holds each
+   separately — the box's own overflow for the first, the resolved `white-space` for the
+   second — because a run with only one of them in place still looks right.
+
+   **Nothing here touches padding, font size or line height**, and that is deliberate rather
+   than incidental: the elbows below are drawn at a fixed offset down each row (`0.9em`,
+   `0.72em`) tuned to exactly those three, and #154's author flagged that any change to them
+   misaligns the tree with nothing going red. `workspace-explorer.e2e.ts` now measures the
+   elbow against the middle of the row's first line in the real WebView, so a change to them
+   does go red — but this rule still had no business making one. */
+.explorer .spot,
+.explorer .clone > summary,
+.explorer .chat,
+.explorer .worktree,
+.explorer .absent li {
+  min-width: max-content;
+  white-space: nowrap;
 }
 
 /* **The tree's lines, drawn by the rows and not by the lists.**
@@ -916,11 +960,14 @@ button.bare:focus-visible {
 /* What a piece's row says under its name: the branch, and the two states the operator has to
    read before starting a chat in the tree. It was an unstyled run of spans on the row that
    matters most for that decision. */
+/* `flex-wrap: nowrap`, where this used to wrap: the branch and the two chips are what the
+   piece above them IS, and a narrow region folded them under the row they belong to. They
+   scroll with everything else now. */
 .explorer .worktree {
   display: flex;
   gap: 0.35rem;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   margin-inline-start: 1.5rem;
   font-size: 0.75rem;
 }
@@ -1064,12 +1111,29 @@ button.bare:focus-visible {
   white-space: nowrap;
 }
 
+/* **A cell that names something is one line, where this used to break a name anywhere it
+   fitted** (`overflow-wrap: anywhere`). The same rule as the explorer's rows and for the same
+   reason: `main origin/main 2 ahead` folded into three lines in a short bottom region, and a
+   table whose rows are three lines tall is not a table you can read down. `.state-bar` has
+   `overflow: auto`, so what a wide row does now is give the region something to scroll.
+   A table sized `width: 100%` is a MINIMUM — it grows past it for cells it cannot shrink —
+   so the columns keep filling the region while a long branch pushes the row out. */
 .state-bar .repo-row > th,
 .state-bar .repo-row > td {
   padding: 0.2rem 0.6rem 0.2rem 0;
   text-align: left;
   vertical-align: top;
   font-weight: normal;
+  white-space: nowrap;
+}
+
+/* The two cells that hold a SENTENCE rather than a name, wrapping again. A tree that could
+   not be read and a fetch that did not happen each say why, in charter's own words and at
+   charter's own length, and one of those held on a single line would scroll the region past
+   every column it has. Same distinction the explorer makes between a row and a refusal. */
+.state-bar .branch.unreadable,
+.state-bar .ci .none {
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 
@@ -1690,13 +1754,108 @@ button.bare:focus-visible {
   color: var(--text-muted);
   font-weight: normal;
 }
-.panels .personas .is-default > .node-icon,
+.panels .personas .is-default .persona > .node-icon,
 .panels .personas .default .node-icon {
   color: var(--accent-base);
 }
 /* The star follows the word it decorates; flush against it, it read as one glyph. */
 .panels .personas .default .node-icon {
   margin-inline-start: 0.25rem;
+}
+
+/* **A persona's row is the button that opens it**, and it is drawn as the row it already was
+   — the same weight, the same colours, the same star. What says it can be pressed is the
+   hover band and the pointer, because a row that suddenly looked like a control would have
+   made a read-only list of names into five buttons on the one region that must not compete
+   with the queue above it (ADR 0038). */
+.panels .personas .persona {
+  display: flex;
+  gap: 0.35rem;
+  align-items: baseline;
+  width: 100%;
+  text-align: left;
+  padding: 0.1rem 0.25rem;
+  margin-inline-start: -0.25rem;
+  border: none;
+  border-radius: 2px;
+  color: inherit;
+  background: none;
+  font: inherit;
+  cursor: default;
+}
+.panels .personas .persona:hover {
+  background: var(--surface-hover);
+}
+
+/* What a row opens: the persona's own definition, read as `charter persona show` reads it.
+   Radix ships no CSS at all, so every rule here is charter's — see `docs/ui-primitives.md`. */
+.persona-card {
+  max-width: 22rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--surface-overlay);
+  box-shadow: 0 8px 24px var(--overlay-shadow);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  z-index: 40;
+}
+.persona-card h3 {
+  margin: 0 0 0.35rem;
+  font-size: 0.9rem;
+}
+.persona-card h3 .role {
+  color: var(--text-secondary);
+  font-weight: normal;
+}
+/* The card's own version of the star the row carries, said in words as well — the star alone
+   would be the one fact here that is colour and shape and nothing else. */
+.persona-card .is-default-note {
+  display: flex;
+  gap: 0.35rem;
+  align-items: baseline;
+  margin: 0 0 0.45rem;
+  color: var(--text-secondary);
+}
+.persona-card .is-default-note .node-icon {
+  color: var(--accent-base);
+}
+/* A definition list, because every row here IS a term and its value — and a screen reader
+   then says "Vault: devops" rather than reading the card as one run-on line. */
+.persona-card dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.15rem 0.6rem;
+  margin: 0;
+}
+.persona-card dt {
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.persona-card dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.persona-card code {
+  font-size: 0.95em;
+}
+.persona-card .none,
+.persona-card .note,
+.persona-card .pending {
+  color: var(--text-muted);
+}
+.persona-card .pending {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  margin: 0;
+}
+.persona-card .trouble {
+  margin: 0;
+  color: var(--state-failed);
+}
+.persona-card-arrow {
+  fill: var(--surface-overlay);
 }
 
 /* A todo's mark is a ring and not a tick: nothing in this panel is done, by definition — it

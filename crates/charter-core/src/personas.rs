@@ -352,6 +352,145 @@ pub fn name_refusal(root: &Path, name: &str) -> Option<String> {
     ))
 }
 
+// ---------------------------------------------------------------------------------------
+// What a persona SAYS about itself: the keys `charter persona show` puts on screen, read
+// through the one frontmatter reader above and merged down the `extends:` chain exactly as
+// `persona.resolve` merges them.
+
+/// Which vault a persona uses, as its own definition declares it.
+///
+/// **Three answers and not two**, because "holds no credentials" and "nobody said" are
+/// different facts and rounding the second down to the first is the shape this repo keeps
+/// refusing elsewhere. `charter/persona.py` makes the same split — `declares_no_vault` is
+/// its own function beside `vault_of`, and its docstring says why: *"Use `declares_no_vault`
+/// to tell 'none, deliberately' from 'none, unexamined'."*
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Vault {
+    /// `vault: <name>`, inherited-inclusive. **The NAME, and never anything inside it.**
+    Named(String),
+    /// `vault: none` — the reserved value, declared by a persona that holds no credentials.
+    DeclaredNone,
+    /// No `vault:` anywhere up the chain.
+    ///
+    /// **This is not "no vault".** charter's own `vault_of` falls back to the vault registry
+    /// — a vault tagged with this persona's name in `vaults.json` — and that registry has no
+    /// Rust reader yet. Whoever shows this must say "not declared" and not "none", or the
+    /// answer claims a persona holds no credentials on the strength of a file nothing read.
+    Undeclared,
+}
+
+/// What a persona's definition says about it, with its `extends:` chain applied.
+///
+/// The keys are the ones `charter persona show` prints, minus the two this cannot answer
+/// (the memory counts, and the charter body — neither is a fact about the persona that a
+/// panel row is asking for). Everything here comes through [`load`], which is the one
+/// frontmatter reader (#67); nothing re-parses the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Details {
+    pub name: String,
+    /// `role:`, or `None` where the definition declares none.
+    pub role: Option<String>,
+    /// `delegate-when:` — what makes a persona findable, and what a router reads.
+    pub delegate_when: Option<String>,
+    /// `tools:`, the union down the chain in the order a parent declared them first.
+    pub tools: Vec<String>,
+    pub vault: Vault,
+    /// The `extends:` chain, child first. One name long for a persona that extends nothing.
+    pub lineage: Vec<String>,
+    /// The definition file, relative to the plane where it is inside it.
+    pub file: String,
+}
+
+/// The effective frontmatter of `name` and everything it extends — `persona.resolve`'s
+/// `meta` and its `tools`, for the keys [`Details`] carries.
+///
+/// Root first so a child's line wins, and **a blank value never overwrites**: `persona.resolve`
+/// skips a pair whose value is empty (`if k in (…) or not v: continue`), so a child that
+/// writes `role:` with nothing after it inherits its parent's role rather than erasing it.
+///
+/// `tools` is unioned rather than overwritten, parent's first, deduplicated — which is what
+/// `tools_of`'s "including inherited ones (union across the `extends` chain)" means.
+fn effective(root: &Path, chain: &[String]) -> (Vec<(String, String)>, Vec<String>) {
+    // **Appended rather than overwritten, because [`meta`] already reads the LAST pair.** That
+    // is `dict(pairs)`'s rule for one file, and walking root first makes it the chain's rule
+    // too: a child's line is pushed after its parent's and answers instead of it.
+    let mut declared: Vec<(String, String)> = Vec::new();
+    let mut tools: Vec<String> = Vec::new();
+    for ancestor in chain.iter().rev() {
+        let Some(pairs) = load(root, ancestor) else {
+            continue;
+        };
+        for (key, value) in &pairs {
+            // `tools` is merged below; `extends` is the chain itself and is not shown; the
+            // other two are lists charter merges and nothing here reads. A blank value is
+            // skipped, so a child that writes `role:` with nothing after it inherits.
+            if matches!(key.as_str(), "tools" | "agent-tools" | "uses" | "extends")
+                || value.is_empty()
+            {
+                continue;
+            }
+            declared.push((key.clone(), value.clone()));
+        }
+        for tool in csv(meta(&pairs, "tools").unwrap_or_default()) {
+            if !tools.contains(&tool) {
+                tools.push(tool);
+            }
+        }
+    }
+    (declared, tools)
+}
+
+/// `persona._csv_list`: the value's outer brackets dropped, split at commas, each part
+/// stripped, and an empty part thrown away.
+///
+/// The brackets are stripped as CHARACTERS from both ends, which is what Python's
+/// `str.strip("[]")` does — so `[a, b]`, `a, b` and `]a, b[` all answer with the same two.
+fn csv(value: &str) -> Vec<String> {
+    value
+        .trim_matches(|c| c == '[' || c == ']')
+        .split(',')
+        .map(memstore::py_strip)
+        .filter(|part| !part.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// What a persona says about itself, or the sentence saying why charter will not answer.
+///
+/// The refusal is [`name_refusal`]'s, so a panel, the CLI and a hook all refuse a name in
+/// the same words — which is the whole point of that function existing (#1057, #1059).
+pub fn details(root: &Path, name: &str) -> Result<Details, String> {
+    if let Some(refused) = name_refusal(root, name) {
+        return Err(refused);
+    }
+    let chain = lineage(root, name);
+    let (declared, tools) = effective(root, &chain);
+    let value = |key: &str| meta(&declared, key).map(str::to_string);
+    let vault = match meta(&declared, "vault") {
+        // `persona.vault_of`: the reserved `none` is a declaration, not a name.
+        Some(NO_VAULT) => Vault::DeclaredNone,
+        // A blank value never reaches here, so anything else is a name.
+        Some(named) => Vault::Named(named.to_string()),
+        None => Vault::Undeclared,
+    };
+    let file = def_path(root, name);
+    Ok(Details {
+        name: name.to_string(),
+        role: value("role"),
+        delegate_when: value("delegate-when"),
+        tools,
+        vault,
+        lineage: chain,
+        file: file
+            .strip_prefix(root)
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| file.to_string_lossy().into_owned()),
+    })
+}
+
+/// A `vault:` value meaning "deliberately nothing" — `persona.NO_VAULT`.
+pub const NO_VAULT: &str = "none";
+
 /// The title `persona remember` records — `(title or text.splitlines()[0]).strip()[:72]`.
 ///
 /// A title given as `""` is no title; one given as spaces is a title of nothing, which the
@@ -577,5 +716,209 @@ mod name_tests {
             Some(""),
             "a declared role of nothing is declared, and is not no role at all"
         );
+    }
+}
+
+#[cfg(test)]
+mod detail_tests {
+    use super::*;
+
+    fn plane() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("charter.toml"), "").unwrap();
+        dir
+    }
+
+    fn persona(root: &Path, name: &str, text: &str) {
+        std::fs::create_dir_all(root.join("personas").join(name)).unwrap();
+        std::fs::write(root.join("personas").join(name).join("persona.md"), text).unwrap();
+    }
+
+    /// Everything a reader is shown, off the shape the fixture plane's `devops` has.
+    #[test]
+    fn a_persona_says_its_role_when_to_delegate_to_it_its_tools_and_its_vault() {
+        let dir = plane();
+        persona(
+            dir.path(),
+            "devops",
+            "---\nname: devops\nrole: DevOps Engineer\nvault: devops\ntools: kubectl, glab\n\
+             delegate-when: CI/CD pipelines, k8s deploys\n---\n\n# DevOps Engineer\nbody\n",
+        );
+
+        let shown = details(dir.path(), "devops").expect("it loads");
+
+        assert_eq!(shown.name, "devops");
+        assert_eq!(shown.role.as_deref(), Some("DevOps Engineer"));
+        assert_eq!(
+            shown.delegate_when.as_deref(),
+            Some("CI/CD pipelines, k8s deploys")
+        );
+        assert_eq!(shown.tools, ["kubectl", "glab"]);
+        assert_eq!(shown.vault, Vault::Named("devops".to_string()));
+        assert_eq!(shown.lineage, ["devops"]);
+        assert_eq!(shown.file, "personas/devops/persona.md");
+    }
+
+    /// The three answers about a vault, and the reason there are three: a persona that
+    /// DECLARES it holds no credentials is not the same as one nobody has said anything
+    /// about — charter's own `vault_of` falls back to the vault registry for the second,
+    /// and nothing in Rust reads that registry yet.
+    #[test]
+    fn a_declared_none_is_not_the_same_answer_as_nothing_declared() {
+        let dir = plane();
+        persona(
+            dir.path(),
+            "steward",
+            "---\nrole: Steward\nvault: none\n---\n",
+        );
+        persona(dir.path(), "release", "---\nrole: Release\n---\n");
+        persona(dir.path(), "forge", "---\nrole: Forge\nvault: forge\n---\n");
+
+        assert_eq!(
+            details(dir.path(), "steward").unwrap().vault,
+            Vault::DeclaredNone
+        );
+        assert_eq!(
+            details(dir.path(), "release").unwrap().vault,
+            Vault::Undeclared
+        );
+        assert_eq!(
+            details(dir.path(), "forge").unwrap().vault,
+            Vault::Named("forge".to_string())
+        );
+    }
+
+    /// `persona.resolve`, root first: a child's line wins, and a line with nothing after the
+    /// colon is skipped rather than written — so a child that writes `role:` empty keeps its
+    /// parent's role instead of erasing it.
+    #[test]
+    fn a_child_overrides_its_parent_and_a_blank_value_overrides_nothing() {
+        let dir = plane();
+        persona(
+            dir.path(),
+            "base",
+            "---\nrole: Base\nvault: shared-vault\ndelegate-when: anything at all\n---\n",
+        );
+        persona(
+            dir.path(),
+            "child",
+            "---\nextends: base\nrole:\nvault: child-vault\n---\n",
+        );
+
+        let shown = details(dir.path(), "child").expect("it loads");
+
+        assert_eq!(
+            shown.role.as_deref(),
+            Some("Base"),
+            "a blank `role:` erased the parent's"
+        );
+        assert_eq!(shown.vault, Vault::Named("child-vault".to_string()));
+        assert_eq!(shown.delegate_when.as_deref(), Some("anything at all"));
+        assert_eq!(shown.lineage, ["child", "base"], "child first");
+    }
+
+    /// `tools_of`: the UNION across the chain, in the order a parent declared them first,
+    /// deduplicated — not the child's line replacing the parent's.
+    #[test]
+    fn tools_are_the_union_down_the_chain_with_the_parents_first() {
+        let dir = plane();
+        persona(dir.path(), "base", "---\ntools: gh, git\n---\n");
+        persona(
+            dir.path(),
+            "child",
+            "---\nextends: base\ntools: git, kubectl\n---\n",
+        );
+
+        assert_eq!(
+            details(dir.path(), "child").unwrap().tools,
+            ["gh", "git", "kubectl"]
+        );
+    }
+
+    /// `_csv_list` strips `[` and `]` as CHARACTERS off both ends, so the bracketed spelling
+    /// a YAML habit produces answers with the same list as the bare one.
+    #[test]
+    fn a_bracketed_tools_list_is_the_same_list() {
+        let dir = plane();
+        persona(dir.path(), "a", "---\ntools: [gh, glab]\n---\n");
+        persona(dir.path(), "b", "---\ntools: gh, glab\n---\n");
+        persona(dir.path(), "c", "---\ntools: gh, , glab,\n---\n");
+
+        let tools = |name: &str| details(dir.path(), name).unwrap().tools;
+        assert_eq!(tools("a"), ["gh", "glab"]);
+        assert_eq!(tools("b"), ["gh", "glab"]);
+        assert_eq!(tools("c"), ["gh", "glab"], "an empty part is thrown away");
+    }
+
+    /// The refusal is [`name_refusal`]'s, word for word: one sentence per fix, wherever a
+    /// persona name is taken.
+    #[test]
+    fn a_name_this_plane_does_not_define_is_refused_in_charters_own_words() {
+        let dir = plane();
+
+        assert_eq!(
+            details(dir.path(), "nope").unwrap_err(),
+            "no persona 'nope' (create it: charter persona create nope)"
+        );
+        assert_eq!(
+            details(dir.path(), "Bad").unwrap_err(),
+            "invalid persona name 'Bad' (lowercase letters, digits, '.', '_', '-')"
+        );
+        assert_eq!(
+            details(dir.path(), "_shared").unwrap_err(),
+            "invalid persona name '_shared' (lowercase letters, digits, '.', '_', '-')"
+        );
+    }
+
+    /// The legacy flat layout is a persona too, and the file a reader is told about is the
+    /// one charter would open.
+    #[test]
+    fn the_file_named_is_the_one_charter_reads_including_the_flat_layout() {
+        let dir = plane();
+        std::fs::create_dir_all(dir.path().join("personas")).unwrap();
+        std::fs::write(
+            dir.path().join("personas/flat.md"),
+            "---\nrole: Flat\n---\n",
+        )
+        .unwrap();
+
+        let shown = details(dir.path(), "flat").expect("it loads");
+
+        assert_eq!(shown.file, "personas/flat.md");
+        assert_eq!(shown.role.as_deref(), Some("Flat"));
+    }
+
+    /// A definition below the closing fence is BODY, and the body is never read for keys —
+    /// so nothing a persona writes into its charter can arrive on a panel as a vault name.
+    #[test]
+    fn nothing_below_the_frontmatter_becomes_one_of_these_keys() {
+        let dir = plane();
+        persona(
+            dir.path(),
+            "a",
+            "---\nrole: Real\n---\nvault: not-a-vault\ntools: kubectl\n",
+        );
+
+        let shown = details(dir.path(), "a").expect("it loads");
+
+        assert_eq!(shown.vault, Vault::Undeclared);
+        assert_eq!(shown.tools, [] as [String; 0]);
+    }
+
+    /// A key written twice collapses to the LAST line, which is what `dict(pairs)` does and
+    /// what every other consumer of a definition already gets.
+    #[test]
+    fn a_key_written_twice_answers_with_the_last_line() {
+        let dir = plane();
+        persona(
+            dir.path(),
+            "a",
+            "---\nvault: first\nvault: second\nrole: one\nrole: two\n---\n",
+        );
+
+        let shown = details(dir.path(), "a").expect("it loads");
+
+        assert_eq!(shown.vault, Vault::Named("second".to_string()));
+        assert_eq!(shown.role.as_deref(), Some("two"));
     }
 }

@@ -277,6 +277,23 @@ export const commands = {
 	 */
 	workspaceRemove: (plane: PlaneId, workspace: string, force: boolean) => typedError<string[], string>(__TAURI_INVOKE("workspace_remove", { plane, workspace, force })),
 	/**
+	 *  What one persona's definition says about it: its role, when to delegate to it, its tools,
+	 *  the vault it names and what it extends.
+	 * 
+	 *  **Its own command, asked when a row is clicked, and not part of `workspace_panels`.** The
+	 *  panels are the hot path of focusing a workspace — the spec gives that 100 ms — and folding
+	 *  this in would read every persona's definition, and every definition up every `extends:`
+	 *  chain, on every focus, for something nobody has asked to see. A plane with twenty personas
+	 *  would pay for twenty file reads per click on the workspace strip.
+	 * 
+	 *  **It names its plane**, like every other command here: a persona belongs to a plane, and a
+	 *  window holds several.
+	 * 
+	 *  It answers with `charter_core::personas::name_refusal`'s own sentence where it will not
+	 *  answer — the same words the CLI gives for the same name.
+	 */
+	personaDetails: (plane: PlaneId, persona: string) => typedError<PersonaDetails, string>(__TAURI_INVOKE("persona_details", { plane, persona })),
+	/**
 	 *  What git says about each of the focused workspace's clones, and what the forge cache
 	 *  last recorded for the branch each is on.
 	 * 
@@ -832,6 +849,43 @@ export type Panels = {
 	/**  The plane's personas, and the one a chat started here would adopt. */
 	personas: string[],
 	persona: string | null,
+};
+
+/**
+ *  What one persona says about itself, for the row a reader clicked.
+ * 
+ *  **The vault is a NAME and nothing else.** charter refuses a secret by kind and never
+ *  echoes one, and a panel is the last place that rule should get a special case: this struct
+ *  carries the word `vault: <name>` puts in the definition, so the window can say which vault
+ *  a chat as this persona would open. Nothing here ever reads the vault.
+ */
+export type PersonaDetails = {
+	name: string,
+	/**  `role:`, inherited-inclusive. */
+	role: string | null,
+	/**
+	 *  `delegate-when:` — the work that should come to this persona, which is what makes it
+	 *  findable and what a router reads.
+	 */
+	delegate_when: string | null,
+	/**  `tools:`, the union down the `extends:` chain. */
+	tools: string[],
+	/**  The vault's name, where the definition declares one. */
+	vault: string | null,
+	/**
+	 *  Whether the definition declares `vault: none` — that it holds no credentials at all.
+	 * 
+	 *  **Separate from `vault` being absent, and the window must keep them apart.** charter's
+	 *  own `vault_of` falls back to a vault tagged with this persona in the registry, and
+	 *  nothing in Rust reads that registry yet — so "no `vault:` line" means charter-app has
+	 *  not looked, not that there is nothing. Drawing the two the same way would have the
+	 *  window claim a persona holds no credentials on the strength of a file nobody read.
+	 */
+	declares_no_vault: boolean,
+	/**  The `extends:` chain, child first. One name long for a persona that extends nothing. */
+	lineage: string[],
+	/**  The definition file, relative to the plane. */
+	file: string,
 };
 
 /**  One piece, as the window shows it. */
