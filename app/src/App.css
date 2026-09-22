@@ -1427,10 +1427,14 @@ body {
   list-style: none;
 }
 .needs-you li button {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
   width: 100%;
   text-align: left;
-  padding: 0.1rem 0.3rem;
+  padding: 0.15rem 0.35rem;
   border: none;
+  border-inline-start: 2px solid var(--needs-you-base);
   border-radius: 2px;
   color: inherit;
   background: var(--control-base);
@@ -1440,8 +1444,47 @@ body {
 .needs-you li button:hover {
   background: var(--control-hover);
 }
+.needs-you li button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* **The count of chats waiting for the operator, drawn as the most important thing in the
+   window.** It is what charter-app is for: at fifty sessions nothing else on screen is worth
+   looking up for, and it was a 0.85rem line in the same grey as the todos under it.
+
+   The number carries the emphasis and the sentence carries the meaning — "3 need you" is still
+   one phrase to a screen reader, because the emphasis is markup inside it rather than a badge
+   beside it. */
 .needs-you-count {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
   font-weight: 600;
+  color: var(--text-primary);
+}
+/* The mark may be `needs-you.base`; the WORDS may not. `#b85050` on `surface.base` measures
+   3.64:1 in charter-dark, which is under AA for text and over the 3:1 an icon is held to —
+   the same distinction that split `needs-you` from `danger` in the first place. The number
+   below is loud by being filled, on the one pair the contrast test already measures. */
+.needs-you-count .node-icon {
+  color: var(--needs-you-base);
+}
+.needs-you-number {
+  min-width: 1.6rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--needs-you-base);
+  color: var(--needs-you-text);
+  font-size: 1.15rem;
+  line-height: 1.25;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.needs-you-empty .node-icon {
+  color: var(--state-success);
+  margin-inline-end: 0.35rem;
 }
 /* The fade is on the reassuring words alone. The note beside them is the half of the answer
    the app cannot vouch for, and it must not fade with them (#27). */
@@ -1491,10 +1534,15 @@ body {
 /* The right region: what is asking for you (charter ADR 0038) — the needs-you queue, the
    alerts sentence, the workspace's todos and the plane's personas. */
 .panels {
+  height: 100%;
+  overflow: auto;
   padding: 0.5rem;
   font-size: 0.85rem;
 }
 .panels h2 {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1507,11 +1555,45 @@ body {
   padding: 0;
 }
 .panels li {
+  display: flex;
+  gap: 0.35rem;
+  align-items: baseline;
   padding: 0.1rem 0;
   overflow-wrap: anywhere;
 }
+.panels .node-icon {
+  color: var(--text-muted);
+}
 .panels .repo {
   font-weight: 600;
+}
+
+/* **The personas, which the operator named as the last plain-text list in the window.** A row
+   is a person charter can run a chat as, so it carries the mark for one, and the plane's
+   default is marked twice — the words it always had, and a star. The words are what a screen
+   reader gets and what the scenario spec asks for; the star is on top of them. */
+.panels .personas .is-default {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.panels .personas .default {
+  color: var(--text-muted);
+  font-weight: normal;
+}
+.panels .personas .is-default > .node-icon,
+.panels .personas .default .node-icon {
+  color: var(--accent-base);
+}
+/* The star follows the word it decorates; flush against it, it read as one glyph. */
+.panels .personas .default .node-icon {
+  margin-inline-start: 0.25rem;
+}
+
+/* A todo's mark is a ring and not a tick: nothing in this panel is done, by definition — it
+   lists what is open — and a tick beside an open todo would be the panel contradicting
+   itself. */
+.panels .todos .node-icon {
+  align-self: center;
 }
 .panels .none,
 .panels .pending,

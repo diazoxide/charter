@@ -1,4 +1,5 @@
 /** What a chat is doing, as the tab and the queue draw it. */
+import { CircleCheck, Hand, SquareTerminal } from "lucide-react";
 import { type State } from "./chatState";
 
 /** The word beside a chat's name. */
@@ -69,18 +70,33 @@ export function NeedsYou({
     // whether every open chat can report — never both, because they are different claims.
     return (
       <div className="needs-you needs-you-empty" aria-label="Needs you">
-        <span>{quiet.length === 0 ? "Nothing needs you" : "Nothing has said it needs you"}</span>
+        <span>
+          <CircleCheck className="node-icon" />
+          {quiet.length === 0 ? "Nothing needs you" : "Nothing has said it needs you"}
+        </span>
         {unsaid}
       </div>
     );
   }
   return (
+    // **The loudest thing in the window, and deliberately.** This number is why charter-app
+    // exists: it is how many chats have stopped and are waiting on the operator, and at fifty
+    // sessions it is the only thing on screen that is worth interrupting for. So it is drawn
+    // at a size nothing else here has, in `needs-you.base`, with the one hand-raised mark the
+    // window uses — and the sentence still says the number in words for anyone who is read to.
     <div className="needs-you" aria-label="Needs you">
-      <span className="needs-you-count">{queue.length} need you</span>
+      <span className="needs-you-count">
+        <Hand className="node-icon" />
+        <strong className="needs-you-number">{queue.length}</strong>
+        {" need you"}
+      </span>
       <ul>
         {queue.map((session) => (
           <li key={session}>
-            <button onClick={() => show(session)}>{nameOf(session)}</button>
+            <button onClick={() => show(session)}>
+              <SquareTerminal className="node-icon" />
+              {nameOf(session)}
+            </button>
           </li>
         ))}
       </ul>
