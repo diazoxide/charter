@@ -21,9 +21,12 @@
  * exactly when `width / n >= least` — and the only thing that has to be measured is one
  * number per strip, the strip's own width. Fifty tabs are not measured at all.
  *
- * It is also what an operator already knows. A browser with forty tabs shrinks them to a
- * floor and then puts the rest behind a control; charter now does the same thing at three
- * levels, which is the nesting the operator asked for (projects hold workspaces hold chats).
+ * **The sizing is the browsers'; the overflow is not, and the difference is worth being
+ * accurate about.** Every browser shares the row out equally and shrinks to a floor — that
+ * part an operator already knows, and it is what makes the arithmetic exact. What they do
+ * *past* the floor differs and none of them does what charter does: Chrome and Safari keep
+ * going and then scroll, Firefox scrolls with arrows. The show-more menu is ADR 0039's own
+ * answer, argued there against exactly those.
  *
  * ## What it costs, said where it bites
  *

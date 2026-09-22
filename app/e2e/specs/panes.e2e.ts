@@ -77,6 +77,34 @@ async function tabNames(): Promise<string[]> {
   );
 }
 
+/**
+ * How many tabs charter itself says are open, counted from the palette.
+ *
+ * **The one answer to "how many tabs are there" that does not come from the strip under
+ * test.** The catalogue emits one `End chat <name>` row per tab and the palette lists them
+ * all, which is what makes it the right oracle for a strip that no longer draws every tab —
+ * and it is the find surface charter ADR 0039 names, so it is not a second one invented here.
+ *
+ * **Tabs and not sessions**, which is the distinction that made the first version of the
+ * assertion below wrong on both platforms: a split puts two sessions in ONE tab, the spec
+ * three above this one leaves exactly such a tab behind, and `harnessesRunning()` therefore
+ * counted one more than the strip could ever have shown.
+ */
+async function tabsOpen(): Promise<number> {
+  await browser.keys(["F2"]);
+  const palette = await $('[role="dialog"][aria-label="Command palette"]');
+  await palette.waitForDisplayed({ timeout: 20_000 });
+  const counted = await browser.execute(
+    () =>
+      [...document.querySelectorAll('[role="option"] .palette-title')].filter((row) =>
+        (row.textContent ?? "").startsWith("End chat "),
+      ).length,
+  );
+  await browser.keys(["Escape"]);
+  await expect(palette).not.toBeDisplayed();
+  return counted;
+}
+
 describe("the window", () => {
   it("opens a session in a new tab, and the pane shows what it wrote", async () => {
     await pressAndStart("New tab");
@@ -151,8 +179,8 @@ describe("the window", () => {
    */
   it("shows what fits, hides the rest behind one button, and does not scroll", async () => {
     const drawn = await tabNames();
-    const open = harnessesRunning();
-    expect(open).toBe(50);
+    const open = await tabsOpen();
+    expect(open).toBeGreaterThan(40);
 
     // On the bar, and by what it SAYS rather than by its class: the accessible name is the
     // whole of what an operator gets from it before they open it.
@@ -168,11 +196,13 @@ describe("the window", () => {
     const said = await more.getAttribute("aria-label");
     const counted = Number(/^Show (\d+) tabs? /.exec(said ?? "")?.[1]);
 
-    // **Every chat is in exactly one of the two places.** This is the whole of what the
+    // **Every tab is in exactly one of the two places.** This is the whole of what the
     // collapse owes and the assertion the scroller could not make: nothing is both drawn and
-    // hidden, and nothing is neither.
+    // hidden, and nothing is neither. `open` is charter's own count and not the strip's —
+    // see `tabsOpen`, and why it is tabs rather than sessions.
     expect(drawn.length + counted).toBe(open);
     expect(drawn.length).toBeGreaterThan(0);
+    expect(counted).toBeGreaterThan(0);
 
     // **And the strip really does not scroll.** `overflow: hidden` means a scrollbar cannot
     // appear, so what this catches is the other half: tabs laid out wider than the strip they
