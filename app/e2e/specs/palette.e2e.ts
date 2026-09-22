@@ -49,6 +49,45 @@ async function hasTheKeyboard(): Promise<string> {
   });
 }
 
+/**
+ * Starts writing down every key the PAGE receives, and hands back the way to read it.
+ *
+ * **Because two CI rounds have now been spent on where a key went.** The first said only
+ * "expected not to be displayed"; the second said the focus was on `Cancel` before and after
+ * the key, which ruled out the focus being wrong and left "the key did nothing" with no
+ * evidence either way. This is the evidence: what the document saw, on what target, and
+ * whether anything had already called `preventDefault` on it.
+ *
+ * Capture phase on `document`, so it runs before any handler of the app's or Radix's and a
+ * key that is swallowed later is still written down. It is diagnostics and never an
+ * assertion — nothing passes or fails on what it collects.
+ */
+async function watchKeys(): Promise<() => Promise<string>> {
+  await browser.execute(() => {
+    const seen: string[] = [];
+    (window as unknown as { charterKeysSeen?: string[] }).charterKeysSeen = seen;
+    document.addEventListener(
+      "keydown",
+      (event) => {
+        const on = event.target as Element | null;
+        const named = (on?.getAttribute?.("aria-label") ?? on?.textContent ?? "").trim();
+        seen.push(
+          `${event.shiftKey ? "Shift+" : ""}${event.key} on <${
+            on?.tagName?.toLowerCase() ?? "?"
+          }> ${JSON.stringify(named.slice(0, 24))}${event.defaultPrevented ? " (already prevented)" : ""}`,
+        );
+      },
+      true,
+    );
+  });
+  return async () => {
+    const seen = await browser.execute(
+      () => (window as unknown as { charterKeysSeen?: string[] }).charterKeysSeen ?? [],
+    );
+    return seen.length === 0 ? "the page saw no keydown at all" : seen.join("; ");
+  };
+}
+
 /** Types into the box the palette focused itself. Nothing clicks it. */
 async function typeIntoPalette(what: string) {
   const box = await $("#palette-query");
@@ -238,6 +277,7 @@ describe("the command palette", () => {
     // pressed and the `keydown` carries `shiftKey`.
     const asking = await $('[role="alertdialog"]');
     await asking.waitForDisplayed({ timeout: 20_000 });
+    const keysSeen = await watchKeys();
     const cameUpOn = await hasTheKeyboard();
     await browser.keys(["Shift", "Tab"]);
     const answeringOn = await hasTheKeyboard();
@@ -245,12 +285,14 @@ describe("the command palette", () => {
     try {
       await expect(asking).not.toBeDisplayed();
     } catch {
-      // **Where the focus went, said in the failure.** The run that sent this spec back said
-      // only "expected not to be displayed", which is a fact about the dialog and not about
-      // the keyboard — and the keyboard is what this spec is about.
+      // **What the keyboard did, said in the failure.** Two runs have been spent on this: the
+      // first said only "expected not to be displayed", the second added where the focus was
+      // and showed it never moved. What neither could say is whether the key reached the page
+      // at all, so this one says that too.
       throw new Error(
         `the question stayed up: it opened with the keyboard on ${cameUpOn}, Shift+Tab left ` +
-          `it on ${answeringOn}, and Enter there did not answer it`,
+          `it on ${answeringOn}, Enter there did not answer it, and the page saw: ` +
+          `${await keysSeen()}`,
       );
     }
 
