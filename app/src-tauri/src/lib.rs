@@ -2,6 +2,7 @@
 //! TypeScript by `tauri-specta`, so no shape is written by hand on either side.
 
 mod chats;
+mod doctor;
 mod extensions;
 mod hooks;
 mod lifecycle;
@@ -1018,6 +1019,7 @@ fn commands() -> Builder<tauri::Wry> {
         extensions::approve_extension,
         extensions::forget_extension,
         extensions::extension_themes,
+        doctor::plane_doctor,
     ])
 }
 

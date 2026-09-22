@@ -344,6 +344,14 @@ export const commands = {
 	 *  this command only shapes it.
 	 */
 	extensionThemes: () => typedError<ExtensionTheme[], string>(__TAURI_INVOKE("extension_themes")),
+	/**
+	 *  Every row `charter doctor` would print for this plane, run inside the app.
+	 * 
+	 *  On a blocking thread: every git question a row asks has a five-second deadline
+	 *  (`doctor::CHECK_TIMEOUT`), and the full doctor runs a harness per profile. A window that
+	 *  waited on that would stop drawing.
+	 */
+	planeDoctor: (plane: PlaneId, full: boolean) => typedError<DoctorReport, string>(__TAURI_INVOKE("plane_doctor", { plane, full })),
 };
 
 /* Types */
@@ -387,6 +395,46 @@ export type ChatWorktree = {
 	wired: boolean,
 	stale: boolean,
 };
+
+/**  What the doctor said, and what it was asked with. */
+export type DoctorReport = {
+	/**  Every row, in the order `charter doctor` prints them. */
+	rows: DoctorRow[],
+	/**  Whether the harness profiles were probed — the full doctor, not the preflight. */
+	full: boolean,
+	/**
+	 *  The `PATH` this process has, which is the one every row that looks for a program was
+	 *  answered with.
+	 * 
+	 *  **Not a row, and not the doctor's**: `charter doctor` prints no such line, and this is
+	 *  not dressed as one. It is here for the incident this module exists for — a Finder
+	 *  launch hands the app a four-directory `PATH`, and a built-in profile the doctor does
+	 *  not list (it lists one only when it finds its program) makes no sense until you can see
+	 *  the `PATH` it was looked for on. `None` when the process has none at all, which is
+	 *  itself the answer.
+	 */
+	path: string | null,
+};
+
+/**  One doctor row: the four fields `charter doctor --json` prints, and one it does not. */
+export type DoctorRow = {
+	name: string,
+	status: DoctorStatus,
+	detail: string,
+	hint: string,
+	/**
+	 *  Whether this build runs this check at all ([`Row::deferred`]).
+	 * 
+	 *  `false` is about twenty rows on every plane, each a WARN that says *not checked (…not
+	 *  ported…)*. They are drawn, because a doctor that dropped them would read as those
+	 *  problems being fixed — but a summary that COUNTED them would draw a warning count that
+	 *  never moves, and the one real warning among them would be invisible on its first day.
+	 */
+	checked: boolean,
+};
+
+/**  A row's verdict, as the window draws it. */
+export type DoctorStatus = "ok" | "warn" | "fail";
 
 /**
  *  The question charter asks before an extension contributes anything.
