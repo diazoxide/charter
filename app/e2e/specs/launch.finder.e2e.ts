@@ -18,6 +18,7 @@ import { harnessRowsDrawn, pickAndStart, pressOnly } from "../opening.js";
  * they all run under CI's own `PATH` against an absolute command.
  */
 const dialog = () => $('[role="dialog"]');
+const TABS = '[role="tablist"][aria-label="Tabs"] [role="tab"]';
 
 /** The plane and `$HOME` the launcher gave the app (`wdio.finder.conf.ts`). */
 function given(name: "CHARTER_FINDER_PLANE" | "CHARTER_FINDER_HOME"): string {
@@ -28,7 +29,7 @@ function given(name: "CHARTER_FINDER_PLANE" | "CHARTER_FINDER_HOME"): string {
 
 /** What the NEWEST tab says its chat is doing, by the accessible name on its state mark. */
 async function theNewestTabSays(): Promise<string> {
-  const tabs = await $$('[role="tablist"][aria-label="Tabs"] [role="tab"]').getElements();
+  const tabs = await $$(TABS).getElements();
   if (tabs.length === 0) return "(no tab)";
   const mark = await tabs[tabs.length - 1].$(".state");
   return (await mark.getAttribute("aria-label")) ?? "";
@@ -58,17 +59,21 @@ async function theNewestTabComesToSay(state: string, why: string): Promise<void>
   }
 }
 
-/** Starts one more chat on the built-in `claude` and waits for its pane. */
+/**
+ * Starts one more chat on the built-in `claude` and waits for its tab. A tab and not a pane:
+ * a new tab takes the front, so the number of panes on screen need not change.
+ */
 async function startAChatOnTheBuiltIn(): Promise<void> {
-  const before = (await $$('[data-testid="pane"]').getElements()).length;
+  const before = (await $$(TABS).getElements()).length;
   await pressOnly("New tab");
   await harnessRowsDrawn();
   await (await $("label*=claude")).click();
   await pickAndStart();
-  await browser.waitUntil(
-    async () => (await $$('[data-testid="pane"]').getElements()).length === before + 1,
-    { timeout: 30_000, interval: 250, timeoutMsg: "no pane opened for the new chat" },
-  );
+  await browser.waitUntil(async () => (await $$(TABS).getElements()).length === before + 1, {
+    timeout: 30_000,
+    interval: 250,
+    timeoutMsg: "no tab opened for the new chat",
+  });
 }
 
 /** The `PATH` the newest chat's harness wrote down (`writeAPluginHookingShell`). */
