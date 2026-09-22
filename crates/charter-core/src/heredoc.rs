@@ -213,6 +213,13 @@ impl Line {
         self.chars.len()
     }
 
+    /// The line's CHARACTERS, for a walk that needs them but not the quote map —
+    /// [`crate::livesub`]. `pub(crate)` rather than `pub`: it hands out this type's
+    /// representation, and the differential compares answers rather than internals.
+    pub(crate) fn chars(&self) -> &[char] {
+        &self.chars
+    }
+
     /// `_inside_quotes(line, at)`.
     fn quoted(&self, at: usize) -> bool {
         self.quoting.inside(at as isize)

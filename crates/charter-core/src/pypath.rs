@@ -157,6 +157,29 @@ pub fn realpath(filename: &str) -> String {
     let mut seen: HashMap<String, Option<String>> = HashMap::new();
 
     while part_count > 0 {
+        // `part_count` counts a SUBSET of `rest`: every real path part, but neither the `None`
+        // marker nor the symlink path directly beneath it. So a positive count always has an
+        // entry to pop — CPython relies on the same fact, and its `name = rest.pop()` raises
+        // `IndexError` if it is ever wrong.
+        //
+        // Stated here because the `break` below is otherwise a SECOND, silent stop condition,
+        // and a silent one made three mutations to this loop's counter impossible for any test
+        // to catch. The nightly reported all three as MISSED on 2026-09-21 — `while part_count
+        // >= 0` (always true on a `usize`), `part_count += 1`, and `part_count /= 1` — and none
+        // of them is a no-op: each one means the loop no longer stops when the parts run out.
+        // They survived only because the `break` absorbed the overrun and returned the same
+        // answer anyway. A sweep of 540,000 generated symlink farms confirmed it: zero
+        // divergences for all three, against 54,004 for a control mutation known to be real.
+        //
+        // `debug_assert`, and deliberately NOT `expect`. In tests it fires on the first call
+        // any of those three mutants makes, which is what kills them. In a shipped guard it is
+        // gone, and the `break` stands, because a PANIC here is not the safe direction: a
+        // crashed `pretooluse` exits 1 and a harness reads that as ALLOW — the same reasoning
+        // that makes a symlink loop return a path instead of raising (see the loop test).
+        debug_assert!(
+            !rest.is_empty(),
+            "part_count counts entries of `rest`, so a positive count has one to pop"
+        );
         let Some(popped) = rest.pop() else { break };
         let Some(name) = popped else {
             // A resolved symlink target: the entry below is the symlink path it belongs to.
@@ -682,6 +705,57 @@ mod tests {
         // ...and a loop in the MIDDLE of a path still answers, with the rest appended.
         let deep = root.join("lp").join("x").to_string_lossy().into_owned();
         assert_eq!(realpath(&deep), deep);
+    }
+
+    /// The walk stops when the PARTS run out, which is not when the stack does.
+    ///
+    /// `realpath` keeps two kinds of thing on one stack: the path parts still to resolve, and,
+    /// for every symlink it expands, a two-entry marker recording where that link landed.
+    /// `part_count` counts only the first kind. So a path whose LAST component is a symlink
+    /// finishes with a marker pair still on the stack and the loop leaving it there — and
+    /// since nothing after the loop reads `seen`, walking off the end instead changed no
+    /// answer at all. That is why the nightly reported three mutations to this counter as
+    /// MISSED on 2026-09-21 (`> 0` to `>= 0`, `-= 1` to `+= 1`, `-= 1` to `/= 1`): a second,
+    /// silent `break` on an empty stack was absorbing every one of them. A sweep of 540,000
+    /// generated symlink farms found zero divergences for all three, against 54,004 for a
+    /// control mutation known to be real.
+    ///
+    /// They are catchable now because the loop states that invariant in a `debug_assert`
+    /// instead of letting a `break` paper over it. Each of the three was put back into the
+    /// source and this test was watched go red. The assertion is compiled out of a shipped
+    /// guard on purpose — a panic in `pretooluse` is read as ALLOW, so the `break` is still
+    /// what runs there.
+    #[test]
+    fn the_walk_stops_when_the_parts_run_out_and_not_when_the_stack_does() {
+        let tmp = tempfile::tempdir().expect("a temporary directory");
+        let root = tmp.path().canonicalize().expect("the root resolves");
+        std::fs::create_dir(root.join("real")).expect("a directory to land in");
+        std::fs::write(root.join("real").join("f"), b"x").expect("a file in it");
+        let real = root.join("real").to_string_lossy().into_owned();
+
+        // A link as the LAST component: the parts run out with its marker pair unread.
+        std::os::unix::fs::symlink("real", root.join("one")).expect("symlink");
+        let one = root.join("one").to_string_lossy().into_owned();
+        assert_eq!(
+            realpath(&one),
+            real,
+            "a trailing link resolves to its target"
+        );
+
+        // ...and a chain of them, so more than one marker pair is left behind.
+        std::os::unix::fs::symlink("one", root.join("two")).expect("symlink");
+        std::os::unix::fs::symlink("two", root.join("three")).expect("symlink");
+        let three = root.join("three").to_string_lossy().into_owned();
+        assert_eq!(realpath(&three), real, "a chain of trailing links resolves");
+
+        // A link in the MIDDLE, where the counter still has parts to stop for afterwards.
+        let through = root.join("three").join("f").to_string_lossy().into_owned();
+        let target = root.join("real").join("f").to_string_lossy().into_owned();
+        assert_eq!(
+            realpath(&through),
+            target,
+            "the rest of the path follows the link"
+        );
     }
 
     proptest! {

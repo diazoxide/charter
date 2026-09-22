@@ -34,7 +34,22 @@ Stage 3 adds the guard itself — `_leak_reason` and its neighbourhood: `_names_
 CPython answers that closure stands on and a port could plausibly get wrong: `os.path.normpath`,
 `posixpath.join`, `os.path.realpath` and `fnmatch.fnmatch`.
 
-**Every `pub` item of the five Rust modules is in `KEYS`**, or in `COVERED_ELSEWHERE` with the
+Stage 4 adds the four arms that stand on all of it. A2, the golden rule —
+`_single_credential_hit`, `_single_credential_reason`, `_url_args`, `_ssh_prefix_hosts`,
+`_git_subcommand`, `_has_ssh_command_config`, `_has_config_env_sshcommand`,
+`_has_git_config_env_sshcommand`, `_is_sshcommand_config_write` — with `_exported_env`, which
+answers "what has this command line set for its LATER segments" and which A3 will ask too. A4,
+the release floor — `_release_floor_reason`, `_unattended`. The quoting walk both prose guards
+share — `_live_substitution`, `_ansi_c_end`, `_double_quoted_substitution`,
+`_heredoc_substitution`, `_heredoc_bodies`. And A5 and A6 themselves —
+`_forge_prose_command`, `_forge_substitution_hit`, `_charter_words`, `_charter_prose_command`,
+`_charter_substitution_hit`.
+
+Their TABLES are compared as data too (`tbl`), rotated by the case's length so a run sweeps every
+row without any one case carrying the whole of it. A table is otherwise only covered once the
+fuzz has reached every row, which `--coverage` cannot promise per row.
+
+**Every `pub` item of the nine Rust modules is in `KEYS`**, or in `COVERED_ELSEWHERE` with the
 key that compares it. Stage 1's one real harness defect was a field nobody diffed —
 `_split_punctuation`'s per-piece offsets — and it was found by mutation rather than by reading,
 so the rule is written down: a `pub` item in neither list is a rule with no evidence.
@@ -42,6 +57,7 @@ so the rule is written down: a `pub` item in neither list is a rule with no evid
     ./shellseg.py                      # the default fuzz: 200,000 seeded cases
     ./shellseg.py --cases 2000         # fewer, while iterating
     ./shellseg.py --coverage           # which branches the cases REACH — read this first
+    ./shellseg.py --surface            # ...and which `pub` items it reaches AT ALL
     ./shellseg.py --record             # rewrite the checked-in curated corpus
     ./shellseg.py --check              # ...and fail if it moved
 
@@ -78,10 +94,32 @@ layout's whole subject was barely being reached. `a_heredoc_case` builds from th
 instead, and half the cases come from it. The same 20,000 then dropped a body 92 times, opened
 9,433 heredocs against 792, and reached `_compound_holds_executor` 580 times against 1.
 
+Stage 4 does the same for its own arms, and the numbers before it did are the argument. Measured
+over 20,000 GENERATED cases with the curated rows excluded, so this is about the generators:
+
+    branch            stages 1-3 generators    + a_credential_case / a_prose_case
+    a2-git                             460                                  1,775
+    a2-denied                            0                                  1,072
+    a2-ssh-url                           0                                    124
+    a2-config-write                      0                                    154
+    a4-denied                            0                                    366
+    a5-pair                            695                                  2,199
+    a5-denied                          182                                  1,488
+    a6-pair                              0                                  2,058
+    a6-denied                            0                                  1,688
+
+Three of the four arms this stage ports were REFUSED NOTHING by a 20,000-case run of the
+generators that came before it. `a_credential_case` and `a_prose_case` build from those grammars
+instead. `a_credential_case` also picks a FAMILY before its tail — a `config` write, an ssh URL,
+a signing flag, or the rest — because one shared tail table left the first three at 0.1–0.2% of a
+run, and half of that was the override arms ABOVE them answering first rather than the arm under
+test being absent.
+
 The curated cases are every command line the Python docstrings name as a defect that shipped:
 the quoted `)`, the `&` of `2>&1`, the `{` mid-command, the comment bypass in both spellings, the
-substitution that stranded an operand, and the broken quote that folded every later line into
-the first. They run in the fuzz too, at the front, so a run with `--cases 20` still covers them.
+substitution that stranded an operand, the broken quote that folded every later line into the
+first, the export that reached a later git, and the backtick meant as a markdown code span. They
+run in the fuzz too, at the front, so a run with `--cases 20` still covers them.
 """
 
 from __future__ import annotations
@@ -92,6 +130,7 @@ import json
 import os
 import posixpath
 import random
+import re
 import shlex
 import subprocess
 import sys
@@ -175,6 +214,29 @@ def build_fixture() -> None:
         p = ROOT / link
         if not p.is_symlink():
             p.symlink_to(target)
+    # Stage 4. `_single_credential_hit` asks `registry.known_forges(config.ROOT)` for the hosts
+    # its denial set is built from, so the fixture has to BE a plane and has to declare a
+    # self-hosted forge — the one case no class default host can ever match, and the reason the
+    # Rust takes an ordered forge list rather than reading a global.
+    (ROOT / "charter.toml").write_text(
+        'schema = 1\n\n'
+        '[[forge]]\nkind = "github"\nowner = "diazoxide"\n\n'
+        '[[forge]]\nkind = "gitlab"\nhost = "git.internal"\n\n'
+        # A block that RE-DECLARES a default host with the other kind. Python's
+        # `{**defaults, **declared}` keeps the DEFAULT's position and takes the declared VALUE,
+        # and that is the one ordering rule `git.internal` alone cannot measure — it sorts before
+        # both defaults, so a `BTreeMap` and a dict disagree about it either way.
+        '[[forge]]\nkind = "github"\nhost = "gitlab.com"\n\n'
+        # A host spelled with UPPERCASE letters, which `host_ok` accepts and nothing normalises.
+        # Without one, folding the `git@<host>` needle in the ssh arm is a rule no case can
+        # reach — the sweep reported it inert, and it was the evidence missing rather than the
+        # rule. A hand-written `charter.toml` really can carry this.
+        '[[forge]]\nkind = "gitlab"\nhost = "UP.EXAMPLE"\n\n'
+        # A block that does NOT resolve, because `known_forges` degrades per block: this must
+        # cost only itself, and both sides have to agree that it costs only itself.
+        '[[forge]]\nkind = "nosuchforge"\nhost = "broken.example"\n',
+        encoding="utf-8",
+    )
 
 
 build_fixture()
@@ -182,7 +244,18 @@ build_fixture()
 # import, and uses it verbatim.
 os.environ["CHARTER_HOME"] = str(STATE)
 
+from charter import config as charter_config  # noqa: E402
 from charter import hooks  # noqa: E402  (after $CHARTER_HOME, deliberately)
+
+# **The plane this run is about, pinned.** `config.ROOT` is derived at import by walking up from
+# the process's directory, which on this machine is a checkout INSIDE the operator's real plane
+# (charter-app#129) — so `_known_forges` would read the OPERATOR's `charter.toml` and the answer
+# would be different on every machine. `use` re-derives everything from the fixture instead.
+# `$CHARTER_HOME` is already the fixture's state directory and the derivation reads it verbatim,
+# so every stage-1-to-3 answer stays exactly where it was; the assertion below is what says so.
+charter_config.use(ROOT)
+assert str(charter_config.STATE_DIR) == str(STATE), charter_config.STATE_DIR
+assert str(charter_config.ROOT) == str(ROOT), charter_config.ROOT
 
 #: Every command line a Python docstring in `hooks.py` names as a bypass that SHIPPED, plus the
 #: ones its review rounds pinned. Each is a rule in `shellseg.rs`; deleting the rule changes the
@@ -623,6 +696,280 @@ CURATED: list[str] = [
     # The prefix and suffix strips are CHAINED, not alternatives: `**/` then `*/`.
     "rg --glob '**/*/.charter/*/**' TOKEN .",
     "rg --glob '!!!/.charter//' TOKEN .",
+
+    # ----------------------------------------------------------------- stage 4: A2, the golden
+    # rule. Each row is a bypass a docstring in `hooks.py` names as having shipped.
+    #
+    # #496, in this guard: an EARLIER segment's export reaches the same git as an attached
+    # prefix does, and the attached spelling was denied while this one was allowed.
+    "GIT_SSH_COMMAND=/tmp/k git push",
+    "export GIT_SSH_COMMAND=/tmp/k && git push",
+    "export GIT_SSH_COMMAND=/tmp/k; git push",
+    "declare -x GIT_SSH_COMMAND=/tmp/k && git push",
+    "declare GIT_SSH_COMMAND=/tmp/k && git push",      # no `-x`: a shell variable, not an export
+    "typeset -gx GIT_SSH=/tmp/k && git push",
+    "GIT_SSH_COMMAND=/tmp/k; export GIT_SSH_COMMAND; git push",
+    "set -a && GIT_SSH_COMMAND=/tmp/k && git push",
+    "set -o allexport && GIT_SSH_COMMAND=/tmp/k && git push",
+    "export -x GIT_SSH_COMMAND=/tmp/k && git push",    # a flag is not a variable name
+    # The environment only ever GROWS: forgetting one is the fail-OPEN direction.
+    "export GIT_SSH_COMMAND=/tmp/k && unset GIT_SSH_COMMAND && git push",
+    # A Shift key is not a bypass: the program, the host and the config key all fold.
+    "GIT push git@github.com:o/r.git",
+    "git clone GIT@GITHUB.COM:o/r.git",
+    "git -c CORE.SSHCOMMAND=x push",
+    # …and a URL inside a MESSAGE is not an operand.
+    "git commit -m git@github.com:o/r.git",
+    "git commit --message=git@github.com:o/r.git",
+    "git commit -F git@github.com:o/r.git",
+    "git push git@github.com:o/r.git",
+    "git push ssh://git@gitlab.com/o/r.git",
+    "git push git@git.internal:o/r.git",                # the DECLARED self-hosted host
+    "git push https://github.com/o/r.git",
+    # `-c`'s three documented twins, each the same SSH transport override.
+    "git --config-env=core.sshCommand=K push",
+    "git --config-env core.sshCommand=K push",
+    "git --config-env=core.pager=K push",
+    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.sshCommand GIT_CONFIG_VALUE_0=x git push",
+    "GIT_CONFIG_KEY_0=CORE.SSHCOMMAND git push",
+    # CPython's `$` matches before a trailing newline and the crate's does not; a QUOTED newline
+    # is how a token carries one, since a bare newline is a segment boundary.
+    "GIT_CONFIG_KEY_0='core.sshCommand\n' git push",
+    "GIT_CONFIG_KEY_0='core.ssh\nCommand' git push",
+    # `\\d` is `\\p{Nd}` in both engines and `[0-9]` in neither — and the ROUTE matters, which is
+    # the finding. A bare prefix cannot carry a Unicode digit at all: `_ENV_ASSIGN_RE` is
+    # `^[A-Za-z_][A-Za-z0-9_]*=`, so `GIT_CONFIG_KEY_٣=…` is not an assignment to the SHELL and
+    # never reaches the pattern. Through `env`, whose own operand rule is only "contains an `=`",
+    # it does — and so do the two Turkic spellings of `i` that CPython's `(?i)` folds and the
+    # `regex` crate's does not. Without the `env` rows below, both faithfulness measures in
+    # `_GIT_CONFIG_KEY_ENV_RE` would be inert: a rule with no case, which reads exactly like a
+    # rule with no effect.
+    "GIT_CONFIG_KEY_٣=core.sshCommand git push",
+    "env GIT_CONFIG_KEY_٣=core.sshCommand git push",
+    "env GıT_CONFIG_KEY_0=core.sshCommand git push",
+    "env GİT_CONFIG_KEY_0=core.sshCommand git push",
+    "env GIT_CONFIG_KEY_0=' core.sshCommand ' git push",
+    "env GIT_CONFIG_KEY_0='core.sshCommand\n' git push",
+    "sudo GIT_CONFIG_KEY_٣=core.sshCommand git push",
+    # A `git config` READ stays allowed; every write shape does not.
+    "git config --get core.sshCommand",
+    "git config core.sshCommand",
+    "git config core.sshCommand 'ssh -i /tmp/k'",
+    "git config core.sshCommand=x",
+    "git config --add core.sshCommand",
+    "git config --replace-all core.sshCommand",
+    "git config --list core.sshCommand x",
+    "git -C /repo config core.sshCommand x",
+    "git --git-dir=.git config core.sshCommand x",
+    # Signing, read by SUBCOMMAND and never by positional membership.
+    "git log -S commit",
+    "git commit -s -m x",
+    "git commit -S -m x",
+    "git tag -s v1",
+    "git tag --sign v1",
+    "git commit --gpg-sign=KEY -m x",
+    "git -c commit.gpgsign=true commit -m x",
+    "git -c tag.gpgsign=false tag v1",
+    "ssh -T git@github.com",
+    "ssh -T git@git.internal",
+    "ssh -T git@example.invalid",
+    "SSH -T GIT@GITHUB.COM",
+
+    # ----------------------------------------------------------------- stage 4: A4, the floor
+    "git tag v1.2.3",
+    "git tag",
+    "git tag -l",
+    "git tag --list v*",
+    "git tag -d v1",
+    # The harmless flag clears the WHOLE command line, not its segment — the Python `return`s
+    # out of the loop, and a port that narrowed it to a `continue` would deny where it allows.
+    "git tag -l && gh release create v1",
+    "gh release create v1 && git tag -l",
+    "git push --tags",
+    "git push --follow-tags origin main",
+    "git push origin refs/tags/v1",
+    "git push origin v1.2.3",
+    "git push origin 1.2",
+    "git push origin main",
+    "git push origin release-1",
+    "gh pr merge 12",
+    "gh pr create --title x",
+    "glab mr merge 12",
+    "glab release create v1",
+    "charter change land",
+    "edm change land",
+    "python3 -m charter change land",
+    "charter change show",
+    "GIT tag v1.2.3",
+
+    # -------------------------------------------------- stage 4: the live-substitution walk
+    # #703 itself: a backtick meant as a markdown code span, inside double quotes.
+    "gh issue create --body \"a `env -u PYTHONSAFEPATH` b\"",
+    "gh issue create --body 'a `env` b'",
+    # The shape the working rule PRESCRIBES, which must not be refused — and the unquoted
+    # spelling one word's less typing away, which expands exactly the same and must be.
+    "gh pr create --body-file - <<'BODY'\na `env` b\nBODY\n",
+    "gh pr create --body-file - <<BODY\na `env` b\nBODY\n",
+    "gh pr create --body-file - <<-'BODY'\na `env` b\n\tBODY\n",
+    "gh pr create --body-file - <<\\BODY\na `env` b\nBODY\n",
+    "gh pr create --body-file - <<BO'D'Y\na `env` b\nBODY\n",
+    # An empty QUOTED delimiter is a real heredoc bash does not expand — the false REFUSAL the
+    # Python's deletion sweep found, and the reason the header tests `delim or quoted`.
+    "gh issue create --body-file - <<\"\"\na `env` b\n\n",
+    "gh issue create --body-file - <<''\na `env` b\n\n",
+    # …while `<<` with no word after it is not a heredoc at all.
+    "gh issue create --body-file - <<\na `env` b\n",
+    # A plain `<` redirection is not a heredoc header: reading a QUOTED FILENAME as an inert
+    # delimiter swallowed the rest of the command, which is the second fail-OPEN half.
+    "gh issue create --body-file - < 'notes.md' && echo `env`",
+    # A bare `$VAR` is not `$'`: skipping to the next single quote steps over a live one.
+    "gh issue create --body \"$VAR 'q' `env`\"",
+    "gh issue create --body $'a\\'`env`b'",
+    "gh issue create --body $'a\\'b' --title `env`",
+    # A here-STRING is an ordinary double-quoted word, not a heredoc.
+    "gh issue create --body-file - <<<\"a `env` b\"",
+    # An apostrophe inside double quotes opens nothing.
+    "gh issue create --body \"it's `env`\"",
+    # Arithmetic reads as `$(` — a known divergence, in the deny direction.
+    "gh issue create --body \"$((1+2))\"",
+    # Quotes inside an EXPANDING body are literal, so the body scan is not the outer walk.
+    "gh issue create --body-file - <<BODY\n'`env`'\nBODY\n",
+    # Two heredocs take their bodies in HEADER order.
+    "gh pr create --body-file - <<'A' <<B\n`env`\nA\n`env`\nB\n",
+    "gh pr create --body-file - <<B <<'A'\n`env`\nB\n`env`\nA\n",
+    # A delimiter ending in a backslash is the IndexError the sweep found.
+    "gh issue create --body-file - <<BODY\\\na `env` b\n",
+    # An unterminated quote leaves the rest literal — which is what a shell does with the line.
+    "gh issue create --body 'a `env`",
+    "gh issue create --body \"a `env`",
+
+    # ----------------------------------------------------------------- stage 4: A5 and A6
+    # Adjacent PAIRS, because a global flag's value sits in front of the noun…
+    "gh --repo o/r issue create --body \"a `env` b\"",
+    # …and the flag filter that would have JOINED two flag values into a pair is absent.
+    "gh issue list --label issue --state create --body \"a `env` b\"",
+    "gh issue list --search 'pr create' --body \"a `env` b\"",
+    # Scoped to the whole Bash call, not to the argument and not even to the segment.
+    "cd \"$(git rev-parse --show-toplevel)\" && gh pr create --body-file b.md",
+    "gh pr create --body-file b.md --head \"$(git branch --show-current)\"",
+    # `merge` is absent from the forge table on purpose.
+    "gh pr merge 12 --body \"a `env` b\"",
+    # A6: the #778 memory, and charter's own spellings.
+    "charter persona remember \"appending to `pending` each pass\"",
+    "charter persona remember 'appending to `pending` each pass'",
+    "charter ws note \"a `env` b\"",
+    "charter workspace note \"a `env` b\"",
+    "charter wt abandon \"a `env` b\"",
+    "charter worktree abandon \"a `env` b\"",
+    "charter report bug \"a `env` b\"",
+    "charter report gap \"a $(env) b\"",
+    "charter change create \"a `env` b\"",
+    "python3 -m charter persona remember \"a `env` b\"",
+    "python3 -B -m charter ws todo \"a `env` b\"",
+    "env -u X python3 -m charter persona remember \"a `env` b\"",
+    # `-mcharter` is the NAMED fail-open hole, not a rule with a bug.
+    "python3 -mcharter persona remember \"a `env` b\"",
+    "python3 -m pytest persona remember \"a `env` b\"",
+    # `edm` is `_is_charter`'s and NOT `_charter_words`'.
+    "edm persona remember \"a `env` b\"",
+    # The FIRST two words, so a search whose words are adjacent is not refused.
+    "charter recall --scope persona remember \"a `env` b\"",
+    # One operand must not reach `words[1]` — the IndexError the sweep found.
+    "charter \"a `env` b\"",
+    "charter persona",
+    # charter's commit-message commands stay OUT, measured the other way (#711).
+    "charter save -m \"a `env` b\"",
+    "charter workspace rename -m \"a `env` b\"",
+    "git commit -m \"$(cat <<'EOF'\na `env` b\nEOF\n)\"",
+    # Both prefilters, from both sides: a line that passes them and is still allowed.
+    "gh issue list `true`",
+    "charter recall `true`",
+    "gh issue create --body x",
+    "charter persona remember x",
+    # A line that is BOTH A5 and A6 is explained by the one that publishes to a forge.
+    "charter persona remember \"a `env` b\" | gh issue create --body-file -",
+
+    # ------------------------------------------------- stage 4, round two: the rows the mutation
+    # sweep asked for. Each of these closed a mutation that came back INERT or with a handful of
+    # divergences in 20,000 cases — a rule with no case, which reads exactly like a rule with no
+    # effect. They are here, in the recording, so `cargo test` holds each one with no Python.
+    #
+    # `<<-` strips leading TABS only, never spaces. A space-indented line that is not a terminator
+    # keeps the body running, and what follows is body rather than command — which is the whole
+    # difference between an inert single-quoted backtick and a live one.
+    "gh issue create --body-file - <<-BODY\n BODY\n'`env`'\nBODY\n",
+    "gh issue create --body-file - <<-'BODY'\n BODY\n`env`\nBODY\n",
+    "gh issue create --body-file - <<-BODY\n\tBODY\n`env`\n",
+    # The pending list is emptied once its bodies are consumed. Without that, the NEXT newline
+    # consumes a second body from wherever the walk has got to, and swallows a live substitution.
+    "cat <<'A'\nq\nA\n'`env`'\n`env`\n",
+    # `set -ax` is `set -a -x`: the LETTER, not the token.
+    "set -ax && GIT_SSH_COMMAND=/tmp/k && git push",
+    "set -xa; GIT_SSH=/tmp/k; git push",
+    # A shell keyword in front of `export` is not the program.
+    "if true; then export GIT_SSH_COMMAND=/tmp/k; fi && git push",
+    "while read l; do export GIT_SSH=/tmp/k; done && git push",
+    # CPython's `\\w` is `str.isalnum() or '_'`; the `regex` crate's counts a combining mark and a
+    # variation selector. A tag ending in one is NOT a version tag to the oracle.
+    "git push origin v1.2.3️",
+    "git push origin v1.2.3-rc1",
+    # `re.fullmatch` allows no trailing newline, unlike `$`. A quoted newline is how a token
+    # carries one.
+    "git push origin 'v1.2\n'",
+    # Exactly TWO words after `charter`, with the substitution in another segment: the form
+    # `_charter_prose_command`'s length test is keyed on, and the one a widened `<= 2` allows.
+    "echo `date` && charter persona remember",
+    "charter ws note && echo `date`",
+    "x=$(date); charter report bug",
+
+    # ---------------------------------------------- stage 4, round three: the rows the SECOND
+    # pass of the sweep asked for. Each closed a mutation that the fuzz caught and the RECORDING
+    # did not, or that came back INERT because no case could tell it from its absence.
+    #
+    # A bare `$VAR` is not `$'`, OUTSIDE double quotes — which is the only place the outer walk
+    # reaches that branch. The quoted row above it was answered by the double-quote scanner and
+    # never got here, so the rule read as covered and was not.
+    "gh issue create --body x $VAR 'q' `env`",
+    "charter persona remember x $VAR 'q' `env`",
+    # A plain `<` is not `<<`, and the difference only SHOWS once there is a newline for the
+    # mis-read header's body to eat.
+    "gh issue create --body-file - < 'notes.md'\n`env`\n",
+    # `<<-` strips leading tabs off the TERMINATOR. With a quoted delimiter and a live backtick
+    # after it, stripping or not is the whole answer.
+    "gh issue create --body-file - <<-'BODY'\n\tBODY\n`env`\n",
+    # CPython's `$` in `_CONFIG_KEY_RE`, which is a different pattern from the KEY_ENV one above.
+    "git config 'core.sshCommand\n' 'ssh -i /k'",
+    # `-c core.sshCommand=` is refused wherever it stands, not only where git's grammar puts it.
+    "git push -c core.sshCommand=/tmp/k",
+    "git config --list -c core.sshCommand=/tmp/k",
+    # The `--config-env` FLAG spelling is folded too — defensively, says the Python, and a
+    # defensive rule with no case reads exactly like a rule with no effect.
+    "git --CONFIG-ENV=core.sshCommand=K push",
+    "git --Config-Env core.sshCommand=K push",
+    # A4's version scan skips `words[0]`, and `words[0]` is only ever version-shaped when a
+    # global flag's VALUE is sitting in front of the subcommand.
+    "git -C v1.2.3 push origin main",
+    # `_charter_words` stops at the FIRST `-m`: `python3 -m pytest -m charter` runs pytest, whose
+    # own `-m` is a marker expression, and charter is not being invoked at all.
+    "python3 -m pytest -m charter persona remember \"a `env` b\"",
+    # charter#1173 — A5's and A6's hot-path name filters are case-SENSITIVE while the readers
+    # behind them fold, so an uppercase program name walks past both guards. Reproduced here on
+    # purpose, because the frozen Python is this differential's oracle; these rows pin today's
+    # answer so the upstream fix shows up as a divergence rather than silently.
+    "GH issue create --body \"a `env` b\"",
+    "Gh issue create --body \"a `env` b\"",
+    "/usr/bin/GH pr create --body \"a $(env) b\"",
+    "GLAB issue create --body \"a `env` b\"",
+    "CHARTER persona remember \"a `env` b\"",
+    "Charter ws note \"a `env` b\"",
+    # ...and the control that says it is the FILTER and not the reader: A2 folds the program and
+    # refuses the same spelling.
+    "GIT push git@github.com:o/r.git",
+    # The ssh arm builds its needle from a DECLARED host, which the fixture spells in uppercase
+    # for this row: without one, folding the needle is a rule no case can reach.
+    "ssh -T git@UP.EXAMPLE",
+    "ssh -T GIT@up.example",
+    "git push git@UP.EXAMPLE:o/r.git",
 ]
 
 #: What a case is built out of. Single characters where the shell gives one meaning, and the
@@ -778,22 +1125,184 @@ def a_reader_case(rng: random.Random) -> str:
             f"{rng.choice(READ_OPERANDS)}")
 
 
+#: The golden rule's grammar — stage 4's first arm. Stage 2's lesson again: A2's answers live on
+#: a git invocation carrying one of six overrides, and a random join of FRAGMENTS produces one
+#: about never. Measured before this generator existed: 20,000 fragment-and-stage-3 cases reached
+#: `_single_credential_hit`'s `base == "git"` arm 489 times and DENIED 0.
+#:
+#: The environment prefixes are the #496 shape and everything around it, because "what an earlier
+#: segment exported" is the half of this guard that was allowed for a year.
+CRED_ENVS = ["", "", "GIT_SSH_COMMAND=/tmp/k ", "GIT_SSH=/tmp/k ",
+             "export GIT_SSH_COMMAND=/tmp/k && ", "export GIT_SSH_COMMAND=/tmp/k; ",
+             "declare -x GIT_SSH_COMMAND=/tmp/k && ", "declare GIT_SSH_COMMAND=/tmp/k && ",
+             "typeset -gx GIT_SSH=/tmp/k && ", "set -a && GIT_SSH_COMMAND=/tmp/k && ",
+             "set -o allexport; GIT_SSH=/tmp/k; ", "GIT_SSH_COMMAND=/tmp/k; export GIT_SSH_COMMAND; ",
+             "FOO=1; export FOO && ", "export -x GIT_SSH=/tmp/k && ",
+             "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.sshCommand GIT_CONFIG_VALUE_0=x ",
+             "GIT_CONFIG_KEY_٣=CORE.SSHCOMMAND ", "GIT_CONFIG_KEY_0='core.sshCommand\n' ",
+             "GIT_CONFIG_KEY_x=core.sshCommand ", "GITSSH=1 ", "env GIT_SSH_COMMAND=/tmp/k ",
+             "sudo GIT_SSH=/tmp/k ", "if ", "while ",
+             # Through `env`, whose operand rule is only "contains an `=`", a key name the SHELL
+             # would not accept as an assignment still reaches `_GIT_CONFIG_KEY_ENV_RE` — which
+             # is the only route by which its `\\d` and its `(?i)` over an `i` are reachable at
+             # all. Measured against the oracle before it was believed.
+             "env GIT_CONFIG_KEY_٣=core.sshCommand ", "env GıT_CONFIG_KEY_0=core.sshCommand ",
+             "env GİT_CONFIG_KEY_0=CORE.SSHCOMMAND ", "env GIT_CONFIG_KEY_0=' core.sshCommand ' ",
+             "env GIT_CONFIG_KEY_0='core.sshCommand\n' ", "sudo GIT_CONFIG_KEY_٣=core.sshCommand "]
+#: Weighted toward `git`, because every arm but one lives behind `base == "git"` — `gıt` is here
+#: because CPython's `str.lower` and Rust's `to_lowercase` could part company on it and the
+#: program's NAME is what this guard turns on.
+CRED_PROGS = ["git", "git", "git", "git", "GIT", "/usr/bin/git", "gıt", "ssh", "ssh", "SSH",
+              "/usr/bin/ssh", "scp", "charter", "gh", "glab", "python3"]
+CRED_GLOBALS = ["", "", " -c core.sshCommand=x", " -c CORE.SSHCOMMAND=x", " -c core.sshcommand",
+                " -c core.sshCommand", " --config-env=core.sshCommand=K",
+                " --config-env core.sshCommand=K", " --config-env=core.pager=K",
+                " --config-env", " -C /repo", " --git-dir=.git", " -c user.name=x",
+                " -c commit.gpgsign=true", " -c tag.gpgsign=false", " -c gpgsign=true"]
+CRED_SUBS = ["push", "fetch", "clone", "commit", "tag", "log", "config", "am", "cherry-pick",
+             "rebase", "revert", "merge", "remote", "", "-T", "-q"]
+CRED_TAIL = ["", "", " git@github.com:o/r.git", " ssh://git@gitlab.com/o/r.git",
+             " GIT@GITHUB.COM:o/r.git", " git@git.internal:o/r.git", " git@broken.example:o/r",
+             " https://github.com/o/r.git", " -S", " -s", " --sign", " --gpg-sign",
+             " --gpg-sign=KEY", " -m 'git@github.com:o/r'", " -m", " -F body.md",
+             " --message=git@github.com:o/r.git", " --file=git@github.com:o/r",
+             " core.sshCommand 'ssh -i /k'", " core.sshCommand", " --get core.sshCommand",
+             " --get-regexp core.sshCommand", " --add core.sshCommand", " core.sshCommand=x",
+             " --list core.sshCommand x", " -T git@github.com", " -T git@example.invalid",
+             " --tags", " --follow-tags", " refs/tags/v1", " v1.2.3", " 1.2", " v1.2.3-rc1",
+             " origin main", " release-1", " release create v1", " pr merge 12",
+             " mr merge 12", " change land", " change show", " -l", " -d v1", " --points-at HEAD"]
+
+
+#: The `git config` family, generated on its own. Rolled into the table above it, a write to
+#: `core.sshCommand` needs `config` out of sixteen subcommands AND a value-shaped tail out of
+#: forty, which measured at 0.1% of a run — two orders below the arm beside it. A guard whose
+#: evidence is 0.1% of the cases is a guard the next generated corpus can lose by accident.
+CRED_CONFIG_TAILS = [
+    "core.sshCommand 'ssh -i /k'", "core.sshCommand", "core.sshCommand=x",
+    "CORE.SSHCOMMAND 'ssh'", "--get core.sshCommand", "--get-all core.sshCommand",
+    "--get-regexp core.ssh", "--list", "-l core.sshCommand", "--add core.sshCommand",
+    "--replace-all core.sshCommand x", "--unset core.sshCommand", "core.pager less",
+    "core.sshCommand 'ssh' --global", "--global core.sshCommand ssh", "'core.sshCommand\n' x",
+    "core.sshCommand=", "--add core.pager less", "--get core.sshCommand extra",
+]
+
+#: The URL and signing tails, likewise: both were 0.2% when they shared one table with everything
+#: else, and both are arms with their own denial text.
+CRED_URL_TAILS = [
+    "git@github.com:o/r.git", "GIT@GITHUB.COM:o/r.git", "ssh://git@gitlab.com/o/r.git",
+    "SSH://GIT@GITLAB.COM/o/r", "git@git.internal:o/r.git", "git@broken.example:o/r",
+    "https://github.com/o/r.git", "git@github.co:o/r.git", "git@github.com",
+    "-m git@github.com:o/r.git", "--message=git@github.com:o/r.git", "-F git@github.com:o/r",
+    "--file=git@github.com:o/r", "-m", "-F",
+]
+CRED_SIGN_TAILS = [
+    "-S", "-s", "--sign", "--gpg-sign", "--gpg-sign=KEY", "-S -m x", "-s -m x",
+    "commit.gpgsign=true", "tag.gpgsign=true", "tag.gpgsign=false", "-c commit.gpgsign=true",
+]
+
+
+def a_credential_case(rng: random.Random) -> str:
+    """One generated command that really puts a git or ssh invocation to the golden rule.
+
+    A FAMILY is chosen first and its tail second. Choosing one tail table for everything left the
+    `config`-write, ssh-URL and signing arms at 0.1–0.2% of a run, and a branch that thin is one
+    generator edit away from having no evidence at all — which is stage 2's lesson about the
+    heredoc, in this arm.
+    """
+    prog = rng.choice(CRED_PROGS)
+    family = rng.random()
+    if family < 0.20:
+        return (f"{rng.choice(CRED_ENVS)}{prog}{rng.choice(CRED_GLOBALS)} config "
+                f"{rng.choice(CRED_CONFIG_TAILS)}")
+    # The URL and signing arms sit BEHIND the four override arms, so a loud environment or a
+    # `-c core.sshCommand=` on the same line answers first and this case measures the arm above
+    # instead. The quiet tables are what make these two arms reachable at all: with the full ones
+    # they were 0.3% of a run, half of it masking rather than absence.
+    quiet_env = rng.choice(["", "", "", "FOO=1 ", "export FOO=1 && ", "GITSSH=1 "])
+    quiet_glob = rng.choice(["", "", "", " -C /repo", " --git-dir=.git", " -c user.name=x"])
+    if family < 0.42:
+        sub = rng.choice(["push", "fetch", "clone", "remote add origin", ""])
+        return f"{quiet_env}{prog}{quiet_glob} {sub} {rng.choice(CRED_URL_TAILS)}"
+    if family < 0.60:
+        sub = rng.choice(["commit", "tag", "log", "merge", "am", "revert", "rebase", "push"])
+        return f"{quiet_env}{prog}{quiet_glob} {sub} {rng.choice(CRED_SIGN_TAILS)}"
+    return (f"{rng.choice(CRED_ENVS)}{prog}{rng.choice(CRED_GLOBALS)} "
+            f"{rng.choice(CRED_SUBS)}{rng.choice(CRED_TAIL)}")
+
+
+#: The prose grammar — A5, A6 and the quoting walk under both. Reaching a denial here needs a
+#: table pair AND a live substitution on the same line, which a random join supplies about never:
+#: measured before this generator existed, 20,000 cases produced 3 live substitutions and 0
+#: denials from either arm.
+PROSE_PROGS = ["gh issue create", "gh issue comment", "gh issue edit", "gh pr create",
+               "gh pr comment", "gh pr edit", "gh pr review", "gh release create",
+               "gh release edit", "gh gist create", "gh gist edit", "glab issue create",
+               "glab issue note", "glab issue update", "glab mr create", "glab mr note",
+               "glab mr update", "glab release create", "glab snippet create",
+               "gh --repo o/r issue create", "gh issue list", "gh pr merge 12",
+               "gh issue list --label issue --state create", "gh issue list --search 'pr create'",
+               "glab mr merge 12", "GH issue create", "/usr/bin/gh pr create",
+               "charter persona remember", "charter persona log", "charter workspace remember",
+               "charter workspace note", "charter workspace todo", "charter workspace vision",
+               "charter ws note", "charter ws todo", "charter wt abandon",
+               "charter worktree abandon", "charter change create", "charter change drop",
+               "charter report bug", "charter report gap", "charter change land",
+               "charter recall --scope persona remember", "charter save -m", "git commit -m",
+               "charter workspace rename -m", "charter persona", "charter",
+               "python3 -m charter persona remember", "python3 -B -m charter ws note",
+               "python3 -mcharter persona remember", "python3 -m pytest persona remember",
+               "edm persona remember", "/usr/local/bin/charter persona log",
+               "CHARTER persona remember", "env -u X python3 -m charter report bug"]
+PROSE_TEXTS = ['"a `env` b"', "'a `env` b'", '"a $(env) b"', '"it\'s `env`"', '"$((1+2))"',
+               "'plain prose'", '"plain prose"', '"a \\`env\\` b"', "$'a\\'`env`'",
+               "$'a\\'b' --title x", '"a `env"', "'a `env", "plain", "\"$VAR 'q' `env`\"",
+               " --body-file - <<'BODY'\na `env` b\nBODY\n",
+               " --body-file - <<BODY\na `env` b\nBODY\n",
+               " --body-file - <<-'BODY'\na `env` b\n\tBODY\n",
+               " --body-file - <<\\BODY\na `env` b\nBODY\n",
+               " --body-file - <<\"\"\na `env` b\n\n",
+               " --body-file - <<''\na `env` b\n\n",
+               " --body-file - <<\na `env` b\n",
+               " --body-file - <<BODY\\\na `env` b\n",
+               " --body-file - <<BODY\n'`env`'\nBODY\n",
+               " --body-file - <<'A' <<B\n`env`\nA\n`env`\nB\n",
+               " --body-file - <<B <<'A'\n`env`\nB\n`env`\nA\n",
+               " --body-file - <<<\"a `env` b\"",
+               " -F body=@notes.md", ' --body "$(cat b.md)"', " --body-file b.md"]
+PROSE_HEADS = ["", "", 'cd "$(git rev-parse --show-toplevel)" && ', "cd /tmp && ",
+               "echo `date` | ", "x=`date`; ", "echo 'a `b`' && ", "# `env`\n"]
+PROSE_TAILS = ["", "", " | gh issue create --body-file -", " && charter persona remember x",
+               " # `env`", " ; charter ws note \"a `env` b\""]
+
+
+def a_prose_case(rng: random.Random) -> str:
+    """One generated command that really puts a prose-publishing command to the quoting walk."""
+    return (f"{rng.choice(PROSE_HEADS)}{rng.choice(PROSE_PROGS)} {rng.choice(PROSE_TEXTS)}"
+            f"{rng.choice(PROSE_TAILS)}")
+
+
 def a_case(rng: random.Random) -> str:
     """One generated command line.
 
-    Four generators: a random join of FRAGMENTS — which is where the LEXER's answers live, and
+    SIX generators: a random join of FRAGMENTS — which is where the LEXER's answers live, and
     which stage 1 measured on — a well-formed heredoc, which is where the LAYOUT's answers live,
-    and stage 3's two, which are where the GUARD's are. None reaches another's interesting cases
-    on its own, and the shares are set by what each one is measured to reach (the table in the
-    PR body).
+    stage 3's two, which are where the LEAK GUARD's are, and stage 4's two, which are where the
+    golden rule's and the prose guards' are. None reaches another's interesting cases on its own,
+    and the shares are set by what each one is MEASURED to reach — `--coverage`, whose table is
+    in the PR body and which the run itself fails on a branch nothing reached.
     """
     r = rng.random()
-    if r < 0.27:
+    if r < 0.19:
         return a_walk_case(rng)
-    if r < 0.54:
+    if r < 0.38:
         return a_reader_case(rng)
-    if r < 0.77:
+    if r < 0.54:
         return a_heredoc_case(rng)
+    if r < 0.72:
+        return a_credential_case(rng)
+    if r < 0.90:
+        return a_prose_case(rng)
     return "".join(rng.choice(FRAGMENTS) for _ in range(rng.randint(1, 14)))
 
 
@@ -1028,6 +1537,8 @@ def oracle(cmd: str) -> dict:
         "ie": [[tok, hooks._is_executor(tok)] for tok in probe],
         # ---- stage 3: the leak guard
         **stage3(cmd),
+        # ---- stage 4: the golden rule, the release floor and the two prose guards
+        **stage4(cmd),
     }
 
 
@@ -1081,6 +1592,126 @@ def stage3(cmd: str) -> dict:
                 for e in entries for p in pats for lim in (0, 512)],
         "wigs0": rel(hooks._walk_into_guarded_state(cwd, ops, pats)),
     }
+
+
+# --------------------------------------------------------------------------- #
+# Stage 4's probes: the golden rule, the floor and the two prose guards         #
+# --------------------------------------------------------------------------- #
+
+#: How many positions the quoting scanners are asked to start at. `_ansi_c_end`,
+#: `_double_quoted_substitution` and `_heredoc_bodies` are entered from the middle of a line, so
+#: asking them only what `_live_substitution` happens to ask leaves each one compared only where
+#: the walk above it already agreed — which is exactly the shape of the harness defect stage 1
+#: found ("the field nobody diffs").
+PROBE_AT = 4
+
+#: The heredocs `_heredoc_bodies` is asked to consume: one that EXPANDS, one that does not, one
+#: with the `<<-` tab strip, and the empty delimiter that `<<""` names.
+PROBE_PENDING = [["EOF", True, False], ["EOF", False, False], ["EOF", True, True], ["", True, False]]
+
+#: The payloads `_unattended` is asked about. Constant, and that is the point: it pins
+#: `UNATTENDED_MODE` itself, which no other answer reads unless a case happens to be a publish.
+PROBE_MODES = [None, "bypassPermissions", "default", "acceptEdits", "BYPASSPERMISSIONS"]
+
+
+def probe_positions(cmd: str) -> list[int]:
+    """The CHARACTER offsets the three scanners are started at: 0, then just past the first three
+    characters one of them is really entered on.
+
+    Characters, not bytes: every offset in this area is a `str` index on the Python side, and the
+    alphabet carries astral-plane characters precisely so a byte index would show up here.
+    """
+    out = [0]
+    for i, c in enumerate(cmd):
+        if len(out) >= PROBE_AT:
+            break
+        if c in "'\"$\n":
+            out.append(i + 1)
+    while len(out) < PROBE_AT:
+        out.append(len(cmd))
+    return out
+
+
+def stage4(cmd: str) -> dict:
+    """What the frozen Python's golden rule, release floor and prose guards say.
+
+    Every arm is asked of the RAW command, not the stripped one: A2, A4, A5 and A6 all walk
+    `_segment_argv(cmd)` themselves, and A5/A6 deliberately read the whole string rather than its
+    segments.
+    """
+    segs = hooks._segment_argv(cmd)
+    befores = hooks._exported_env(segs)
+    per = []
+    for toks, before in zip(segs, befores):
+        prog, seg_env, argv = hooks._split_env(toks)
+        args = argv[1:]
+        env = before + seg_env
+        per.append([
+            hooks._git_subcommand(args),
+            hooks._has_ssh_command_config(args),
+            hooks._has_config_env_sshcommand(args),
+            hooks._has_git_config_env_sshcommand(env),
+            hooks._is_sshcommand_config_write(args),
+            hooks._url_args(args),
+            hooks._charter_words(prog, argv),
+        ])
+    at = probe_positions(cmd)
+    forges = hooks._known_forges()
+    # LISTS, not tuples, all the way down: the Rust side comes back through `json.loads`, so a
+    # tuple here compares unequal to the identical list there on every case — which is a
+    # divergence about the harness and not about the port.
+    charter_prose = sorted([list(k), list(v)] for k, v in hooks._CHARTER_PROSE.items())
+    forge_prose = sorted(list(t) for t in hooks._FORGE_PROSE)
+    return {
+        # ---- the tables, as DATA. A table is only covered by the guard that reads it once the
+        # fuzz has reached every row, which `--coverage` cannot promise per row; comparing the
+        # table itself is the check that does not depend on that. The two big ones are ROTATED by
+        # the case's length, with their LENGTH beside them, so a run sweeps every row without any
+        # one case carrying the whole of it — the same device `pr` uses for stage 3's probes.
+        "tbl": [
+            [len(forge_prose), rotation(cmd, forge_prose, 3)],
+            sorted(list(t) for t in hooks._PUBLISH_FORGE),
+            sorted(hooks._TAG_HARMLESS),
+            list(hooks._SUBSTITUTIONS),
+            hooks.UNATTENDED_MODE,
+            [len(charter_prose), rotation(cmd, charter_prose, 2)],
+        ],
+        # ---- the forge list, in the ORDER A2 reads it. The `ssh <forge>` arm reports the FIRST
+        # host whose `git@<host>` is in the argv, so a `BTreeMap`'s sorted order is a different
+        # answer from Python's dict order the moment a declared host sorts before a default one —
+        # which the fixture's `charter.toml` makes true (`git.internal` < `github.com`).
+        "kf": [[host, f.cli] for host, f in forges.items()],
+        "sph": [[p, h] for p, h in hooks._ssh_prefix_hosts(forges).items()],
+        # ---- A2
+        "sch": _pair(hooks._single_credential_hit(cmd)),
+        "scr": hooks._single_credential_reason(cmd),
+        "s4seg": per,
+        "ee": befores,
+        # ---- A4. Both sides of the gate, because "unattended" is the whole condition and an
+        # attended answer that stopped being `None` would be a guard that reached the operator.
+        "rfr": hooks._release_floor_reason(cmd, {"permission_mode": hooks.UNATTENDED_MODE}),
+        "rfa": hooks._release_floor_reason(cmd, {"permission_mode": "default"}),
+        "unat": [hooks._unattended({} if m is None else {"permission_mode": m})
+                 for m in PROBE_MODES],
+        # ---- the quoting walk
+        "ls": hooks._live_substitution(cmd),
+        "ace": [[i, hooks._ansi_c_end(cmd, i)] for i in at],
+        "dqs": [[i, list(hooks._double_quoted_substitution(cmd, i))] for i in at],
+        "hsub": hooks._heredoc_substitution(cmd),
+        "hb": [[i, list(hooks._heredoc_bodies(cmd, i, [tuple(p) for p in PROBE_PENDING]))]
+               for i in at],
+        # ---- A5 and A6
+        "fpc": hooks._forge_prose_command(cmd),
+        "fsh": _pair(hooks._forge_substitution_hit(cmd)),
+        "cpc": _pair(hooks._charter_prose_command(cmd)),
+        "csh": _pair(hooks._charter_substitution_hit(cmd)),
+    }
+
+
+def _pair(t):
+    """A tuple answer as JSON, or `None` — `json.dumps` writes a tuple as a list anyway, and
+    spelling it makes the two sides' shapes identical to read in a failure."""
+    return None if t is None else list(t)
 
 
 #: The entries `_glob_selects_inside` is put to: a non-empty guarded directory, a nested tree, a
@@ -1154,24 +1785,115 @@ KEYS = (
     # of them is a divergence about that segment.
     "pr", "lr", "lacr", "gseg", "nvp", "iab", "np", "pj", "rp", "fnm", "gap", "gse", "gsi",
     "wigs0",
+    # ---- stage 4. `s4seg` carries the seven per-segment answers of A2 and A6 in one list per
+    # segment, for `gseg`'s reason: they are all asked of the same `_split_env`, and a divergence
+    # in one of them is a divergence about that segment.
+    "tbl", "kf", "sph", "sch", "scr", "s4seg", "ee", "rfr", "rfa", "unat",
+    "ls", "ace", "dqs", "hsub", "hb", "fpc", "fsh", "cpc", "csh",
 )
 
-#: The `pub` items with no key of their own, and why each is already covered. Kept as a LIST
-#: rather than as prose so the next stage has to answer for anything it adds: a `pub` item that
-#: is in neither `KEYS` nor here is a rule with no evidence, which is the defect stage 1 found
-#: by mutation rather than by reading.
+#: The `pub` items of those modules that the example does NOT name, and the key that covers each.
+#:
+#: Kept as a LIST rather than as prose so the next stage has to answer for anything it adds — and
+#: **it is asserted now**, by :func:`surface`, where three stages kept it by hand. A `pub` item
+#: the example never reaches and that is not here is a rule with no evidence, which is the defect
+#: stage 1 found by mutation rather than by reading, and which stages 2 and 3 each found one more
+#: of. A rule nothing checks is the rule that goes stale next.
 COVERED_ELSEWHERE = {
-    # The three refusal texts are returned verbatim by `leak_reason`, so every denial in `lr`
-    # compares them character for character — and `the_shell_is_read_the_way_python_reads_it.rs`
-    # asserts each literal is really in the recorded corpus, so a corpus edit cannot quietly
-    # take the evidence away.
+    # ---- the token layer's predicates and its memoised quote map. None is asked directly,
+    # because none is a question `_leak_reason` or anything above it puts on its own.
+    "shellseg::is_op": "sp — the predicate `split_punctuation` asks of every piece it makes",
+    "shellseg::is_any_op": "sp — the same predicate, over the whole operator table",
+    "shellseg::is_control_op": "so — `segments_of`'s boundary test, per segment",
+    "shellseg::is_grouping": "seg — `segment_tokens`' grouping test",
+    "shellseg::segment_tokens": "seg — `segment_argv_parsed` is the only caller",
+    # Found by this function on its first run, which is the argument for having it: the example
+    # asks `segment_argv_parsed` because it also wants the `parsed` flag, and never names the
+    # half that every stage-4 guard actually walks with.
+    "shellseg::segment_argv": "seg, sch, rfr, fpc, cpc — `segment_argv_parsed`'s first half, "
+                              "and what A2, A4, A5 and A6 each walk a command line with",
+    "shellseg::Quoting": "qm — `quote_map` is the same walk, compared character by character",
+    "shellseg::inside": "qm — `Quoting`'s reader",
+    "shellseg::at_end": "hl — read by `heredoc::quote_open_at_end`, which decides a fold",
+    "shellseg::flags": "qm — `Quoting`'s whole map",
+    # ---- the wrapper split's predicates and its two return types. Every field of both is in the
+    # answer their function produces, so the types are compared; the predicates are not asked.
+    "shellwrap::is_env_assignment": "sec, ee — `split_env_chdir`'s and `exported_env`'s front test",
+    "shellwrap::basename": "sec — under `base_lower`",
+    "shellwrap::base_lower": "sec, lr, sch, rfr — what every guard here reads a program NAME with",
+    "shellwrap::is_redirect_token": "sec — `split_env_chdir`'s front scan",
+    "shellwrap::WrapperOption": "wo — every field of it is in that answer",
+    "shellwrap::Invocation": "sec — every field of it is in that answer",
+    # ---- the heredoc layout's one predicate and its four return types.
+    "heredoc::quote_open_at_end": "hl — `heredoc_layout`'s fold test",
+    "heredoc::Opener": "ho — every field of it is in that answer",
+    "heredoc::Pipeline": "lp — every field of it is in that answer",
+    "heredoc::PlanEntry": "hsp — every field of it is in that answer",
+    "heredoc::LayoutLine": "hl — every field of it is in that answer",
+    # ---- the refusal texts, returned VERBATIM by the guard that owns each. That is only
+    # evidence while the corpus really holds a denial of each kind, which the two replay tests
+    # assert by name so a corpus edit cannot quietly take it away.
     "leakguard::READ_REASON": "lr",
     "leakguard::REVEAL_REASON": "lr",
     "leakguard::WALK_FIX": "lr",
-    # `walks_into_guarded_state` is the seventh column of `gseg`; `walk_into_guarded_state` is
-    # `wigs0`, which puts it operands and exclusions the command did not have to supply.
-    "leakguard::walks_into_guarded_state": "gseg",
+    "credguard::SINGLE_CREDENTIAL_FIX": "scr",
+    "floorguard::RELEASE_FLOOR_FIX": "rfr",
+    # ---- the one `pypath` answer with no key: it takes a `&Path` where `realpath` takes a `&str`
+    # and is what the guarded-state walk resolves with, so `rp` compares the walk it is under.
+    "pypath::realpath_of": "wigs0, gseg — `walk_into_guarded_state` resolves every target with it",
 }
+
+#: The Rust modules this harness is the evidence for.
+GUARD_MODULES = ("shellseg", "shellwrap", "heredoc", "leakguard", "pypath",
+                 "livesub", "credguard", "floorguard", "proseguard")
+
+_PUB_RE = re.compile(
+    r"^\s*pub\s+(?:fn|const|static|struct|enum|type)\s+([A-Za-z_][A-Za-z0-9_]*)", re.M)
+_LINE_COMMENT_RE = re.compile(r"^[ \t]*//.*$", re.M)
+
+
+def _pub_items() -> list[str]:
+    """`module::item` for every `pub` item of :data:`GUARD_MODULES`, tests excluded.
+
+    `pub(crate)` is deliberately not matched: it is not surface, and the three items this stage
+    widened to it — `shellwrap::SHELL_KEYWORDS`, `leakguard::CHARTER_PROGS` and
+    `heredoc::Line::chars` — are hidden for exactly that reason.
+    """
+    out = []
+    src = REPO / "crates" / "charter-core" / "src"
+    for mod in GUARD_MODULES:
+        text = (src / f"{mod}.rs").read_text(encoding="utf-8")
+        text = text.split("\n#[cfg(test)]")[0]   # a module's own tests are not its surface
+        out += [f"{mod}::{n}" for n in _PUB_RE.findall(_LINE_COMMENT_RE.sub("", text))]
+    return out
+
+
+def surface() -> list[str]:
+    """What is wrong with the evidence's COVERAGE OF THE SURFACE, as a list of sentences.
+
+    Two directions, because both have gone wrong here. An item the example never reaches and
+    that :data:`COVERED_ELSEWHERE` does not name is a rule with no evidence — the defect stage 1
+    found by mutation. A row of `COVERED_ELSEWHERE` naming an item that no longer exists is the
+    same failure with the sign flipped: the list stops being a statement about the code and
+    starts being a story about it.
+    """
+    example = _LINE_COMMENT_RE.sub("", (
+        REPO / "crates" / "charter-core" / "examples" / "shellseg_oracle.rs"
+    ).read_text(encoding="utf-8"))
+    items = _pub_items()
+    bad = []
+    for item in items:
+        name = item.split("::", 1)[1]
+        if re.search(rf"\b{re.escape(name)}\b", example):
+            continue
+        if item not in COVERED_ELSEWHERE:
+            bad.append(f"{item}: the example never reaches it and COVERED_ELSEWHERE does not "
+                       f"name the key that does")
+    known = set(items)
+    for item in COVERED_ELSEWHERE:
+        if item not in known:
+            bad.append(f"{item}: COVERED_ELSEWHERE names it and no module has it any more")
+    return bad
 
 
 #: The branches of `_leak_reason` a run has to REACH for its size to be evidence, and the
@@ -1226,13 +1948,79 @@ def reached(cmd: str) -> set[str]:
                 hit.add("walker-excluded")
             if hooks._walks_into_guarded_state(prog, args, cwd) is not None:
                 hit.add("walk-hit")
+    hit |= reached4(cmd)
+    return hit
+
+
+def reached4(cmd: str) -> set[str]:
+    """The branches of stage 4's four arms a case REACHES.
+
+    Kept apart from `reached` only because it walks the RAW command where the leak guard walks
+    the stripped one; it is the same measurement and the same reason for it — a big number over
+    uninteresting inputs is not evidence, and the two generators added for this stage exist
+    because the numbers below were 0 without them.
+    """
+    hit: set[str] = set()
+    segs = hooks._segment_argv(cmd)
+    befores = hooks._exported_env(segs)
+    if any(before for before in befores):
+        hit.add("a2-inherited-env")
+    for toks, before in zip(segs, befores):
+        prog, seg_env, argv = hooks._split_env(toks)
+        args = argv[1:]
+        env = before + seg_env
+        base = os.path.basename(prog).lower()
+        if base == "git":
+            hit.add("a2-git")
+            if any(hooks._GIT_SSH_ENV_RE.match(e) for e in env):
+                hit.add("a2-ssh-env")
+            if hooks._has_git_config_env_sshcommand(env):
+                hit.add("a2-key-env")
+            if hooks._has_ssh_command_config(args):
+                hit.add("a2-c-config")
+            if hooks._has_config_env_sshcommand(args):
+                hit.add("a2-config-env")
+            if hooks._git_subcommand(args) == "config" and hooks._is_sshcommand_config_write(args):
+                hit.add("a2-config-write")
+        elif base == "ssh":
+            hit.add("a2-ssh-prog")
+        if hooks._charter_words(prog, argv) is not None:
+            hit.add("a6-charter-words")
+    if hooks._single_credential_hit(cmd):
+        hit.add("a2-denied")
+        if hooks._single_credential_hit(cmd)[0] == "git <ssh-url>":
+            hit.add("a2-ssh-url")
+        if hooks._single_credential_hit(cmd)[0].endswith(("-S", "-s", "--sign", "--gpg-sign",
+                                                          "gpgsign=true")):
+            hit.add("a2-signing")
+    if hooks._release_floor_reason(cmd, {"permission_mode": hooks.UNATTENDED_MODE}):
+        hit.add("a4-denied")
+    if hooks._live_substitution(cmd):
+        hit.add("live-sub")
+    if hooks._forge_prose_command(cmd):
+        hit.add("a5-pair")
+    if hooks._forge_substitution_hit(cmd):
+        hit.add("a5-denied")
+    if hooks._charter_prose_command(cmd):
+        hit.add("a6-pair")
+    if hooks._charter_substitution_hit(cmd):
+        hit.add("a6-denied")
+    # The heredoc half of the quoting walk, which is where the prose guards were argued to be
+    # weakest: an EXPANDING body is the `--body-file -` spelling of the same defect.
+    if hooks._heredoc_substitution(cmd):
+        hit.add("a5-body-live")
     return hit
 
 
 COVERAGE_BRANCHES = ("heredoc-stripped", "unparseable", "raw-reveal", "raw-read",
                      "chdir-builtin", "wrapper-chdir", "redirect-reads", "redirect-reads-hit",
                      "charter", "reveal", "reader", "reader-hit", "gh", "gh-file", "walker",
-                     "walker-excluded", "walk-hit", "denied")
+                     "walker-excluded", "walk-hit", "denied",
+                     # ---- stage 4
+                     "a2-inherited-env", "a2-git", "a2-ssh-env", "a2-key-env", "a2-c-config",
+                     "a2-config-env", "a2-config-write", "a2-ssh-prog", "a2-ssh-url",
+                     "a2-signing", "a2-denied", "a4-denied", "live-sub", "a5-body-live",
+                     "a5-pair", "a5-denied", "a6-charter-words", "a6-pair", "a6-denied")
 
 
 def attribute(want: dict, got: dict) -> list[str]:
@@ -1249,11 +2037,47 @@ def main() -> int:
                     help="cases per subprocess call; the run's memory bound")
     ap.add_argument("--record", action="store_true", help="rewrite the curated corpus")
     ap.add_argument("--check", action="store_true", help="fail if the curated corpus moved")
+    ap.add_argument("--dump-oracle", type=Path, default=None,
+                    help="write what the PYTHON says about this run's cases and stop. The "
+                         "Python side of a run is the same every time, so a mutation sweep that "
+                         "re-derives it per mutation spends four fifths of itself proving the "
+                         "oracle has not changed.")
+    ap.add_argument("--against", type=Path, default=None,
+                    help="compare the Rust against a --dump-oracle file instead of deriving the "
+                         "Python answers again. The file carries the cases, so the seed and the "
+                         "count come from it; a case list that no longer matches is refused "
+                         "rather than silently compared against the wrong answers.")
+    ap.add_argument("--surface", action="store_true",
+                    help="check only that every `pub` item of the nine modules is reached by "
+                         "this harness or accounted for in COVERED_ELSEWHERE — no Python oracle "
+                         "and no binary needed")
     ap.add_argument("--coverage", action="store_true",
                     help="which of the guard's branches the generated cases REACH, and how "
                          "often — run this before believing a case count")
     args = ap.parse_args()
+    # Resolved BEFORE the `chdir` below, all three of them: the run stands in the fixture root,
+    # so a relative path on the command line would otherwise be written into a temporary
+    # directory that is deleted with it.
     args.binary = args.binary.resolve()
+    if args.dump_oracle is not None:
+        args.dump_oracle = args.dump_oracle.resolve()
+    if args.against is not None:
+        args.against = args.against.resolve()
+
+    # **What is compared, before anything is compared.** Every mode runs this, because a run that
+    # answers 200,000 cases about the part of the surface it happens to reach is the failure
+    # three stages have each found one instance of by mutation. It is cheap — nine file reads —
+    # and it is the only check here that can go red without any Python at all.
+    wrong = surface()
+    if wrong:
+        print("the evidence does not cover the surface:", file=sys.stderr)
+        for line in wrong:
+            print(f"  {line}", file=sys.stderr)
+        return 1
+    if args.surface:
+        print(f"{len(_pub_items())} pub items, every one reached or accounted for")
+        return 0
+
     # Both sides stand in the fixture root: `realpath` resolves a relative operand against the
     # PROCESS's directory, so an answer about `.` is only the same answer from the same place.
     # Every path this script holds was resolved at import.
@@ -1291,8 +2115,36 @@ def main() -> int:
             f"{args.binary} is not built — "
             f"`cargo build -p charter-core --example shellseg_oracle`"
         )
-    rng = random.Random(args.seed)
-    cases = CURATED + [a_case(rng) for _ in range(max(0, args.cases - len(CURATED)))]
+    # **The Python side of a run never changes, and a mutation sweep pays for it every time.**
+    # `--dump-oracle` writes it once and `--against` reads it back, which is four fifths of a
+    # sweep's wall clock. It is a CACHE and it is treated as one: the file carries its own cases,
+    # they are compared to the ones this run would generate, and a mismatch is refused rather
+    # than answered — a stale cache that silently compared the Rust against the wrong questions
+    # would report a mutation as caught for a reason that is not the rule.
+    # BY POSITION, not by command: a generated case really can repeat (a short fragment join
+    # produces the same handful of strings often), and a lookup keyed on the text would quietly
+    # drop the duplicates and answer `len(cases)` questions from fewer answers.
+    cached: list[dict] | None = None
+    if args.against is not None:
+        rows = [json.loads(line) for line in
+                args.against.read_text(encoding="utf-8").splitlines() if line]
+        cases = [row["cmd"] for row in rows]
+        cached = [{k: v for k, v in row.items() if k != "cmd"} for row in rows]
+        rng = random.Random(args.seed)
+        want_cases = CURATED + [a_case(rng) for _ in range(max(0, len(cases) - len(CURATED)))]
+        if want_cases != cases:
+            sys.exit(f"{args.against} is stale: it holds {len(cases)} cases that are not the "
+                     f"ones this harness generates now — dump it again")
+    else:
+        rng = random.Random(args.seed)
+        cases = CURATED + [a_case(rng) for _ in range(max(0, args.cases - len(CURATED)))]
+
+    if args.dump_oracle is not None:
+        args.dump_oracle.write_text(
+            "".join(json.dumps({"cmd": c, **oracle(c)}, sort_keys=True) + "\n" for c in cases),
+            encoding="utf-8")
+        print(f"wrote what the Python says about {len(cases)} cases to {args.dump_oracle}")
+        return 0
 
     bad = 0
     by_function: dict[str, int] = {}
@@ -1301,8 +2153,8 @@ def main() -> int:
     # memory bound and changes no answer: each case is independent.
     for lo in range(0, len(cases), args.batch):
         chunk = cases[lo:lo + args.batch]
-        for cmd, got in zip(chunk, ask_rust(args.binary, chunk), strict=True):
-            want = oracle(cmd)
+        for k, (cmd, got) in enumerate(zip(chunk, ask_rust(args.binary, chunk), strict=True)):
+            want = cached[lo + k] if cached is not None else oracle(cmd)
             if want == got:
                 continue
             bad += 1
