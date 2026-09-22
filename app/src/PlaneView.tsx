@@ -49,6 +49,7 @@ import { useWorkspaceState } from "./workspaceState";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame, RegionToggle } from "./RegionFrame";
 import { useDoctor } from "./Doctor";
+import { PaneGauge } from "./ChatGauge";
 import { usePin, useUpdates } from "./Updates";
 import { StatusLine, type Alerts } from "./StatusLine";
 import {
@@ -74,7 +75,7 @@ import {
 import { ChatState } from "./NeedsYou";
 import { EndingChat } from "./EndingChat";
 import { Panels } from "./Panels";
-import { movedAt, quietOnes, stateOf, useChatStates } from "./chatState";
+import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
 import { fitting, LEAST, useRoom } from "./fits";
 import type { Ending } from "./QuitWarning";
 
@@ -1476,6 +1477,7 @@ export function PlaneView({
                 onFocus={(pane) => change((tabs) => focusPane(tabs, pane))}
                 offerFor={by}
                 onPaneDoes={onPaneDoes}
+                states={states}
               />
             ) : tabs.order.length > 0 ? (
               // Chats are running — just not in the workspace being looked at. Saying
@@ -1823,6 +1825,7 @@ function LayoutPanes({
   onFocus,
   offerFor,
   onPaneDoes,
+  states,
 }: {
   /** Which plane's sessions these panes are showing. A session number belongs to a plane,
    *  and every command a pane makes carries it. */
@@ -1833,17 +1836,35 @@ function LayoutPanes({
   /** The catalogue, by row id. There is one list of actions and the panes read it too. */
   offerFor: (id: string) => Offer | undefined;
   onPaneDoes: (pane: number, offer: Offer | undefined) => void;
+  /** What every chat is doing, for the gauge in each pane's corner: it reads its record
+   *  again when its chat moves, and keeps reading while the chat is mid-turn. */
+  states: ChatStates;
 }) {
   if (layout.kind === "pane") {
     return (
-      <div className="pane-holder">
+      // The frame holds the terminal and what charter draws over it side by side, so neither
+      // is ever a child of the element xterm draws into.
+      <div className="pane-frame">
         <SessionPane
           plane={plane}
           session={layout.session}
           focused={layout.pane === focused}
           onFocus={() => onFocus(layout.pane)}
         />
-        <PaneDoing pane={layout.pane} offerFor={offerFor} onPaneDoes={onPaneDoes} />
+        {/* **One corner, one row, because two changes landed in it at once.** The gauge
+            (M6.10) and these controls were each written as the thing in the pane's top-right,
+            and absolutely positioned there they would sit on top of each other. A row lays
+            them out side by side without either having to know the other's width — and the
+            gauge keeps the corner, because it is always drawn and the controls are not. */}
+        <div className="pane-corner">
+          <PaneDoing pane={layout.pane} offerFor={offerFor} onPaneDoes={onPaneDoes} />
+          <PaneGauge
+            plane={plane}
+            session={layout.session}
+            moved={movedAt(states, layout.session)}
+            running={stateOf(states, layout.session) === "running"}
+          />
+        </div>
       </div>
     );
   }
@@ -1876,6 +1897,7 @@ function LayoutPanes({
               onFocus={onFocus}
               offerFor={offerFor}
               onPaneDoes={onPaneDoes}
+              states={states}
             />
           </Panel>
         </Fragment>

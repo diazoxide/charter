@@ -15,6 +15,7 @@ mod planes;
 mod sessions;
 mod slowstart;
 mod updates;
+mod usage;
 mod worktrees;
 
 use std::path::PathBuf;
@@ -1087,6 +1088,7 @@ fn commands() -> Builder<tauri::Wry> {
             extensions::forget_extension,
             extensions::extension_themes,
             doctor::plane_doctor,
+            usage::chat_usage,
             pin::plane_pin,
         ])
         // What `update://checked` carries. It crosses on an event rather than a command, so it

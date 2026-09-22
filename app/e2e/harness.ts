@@ -350,10 +350,25 @@ function theProfilesProgram(program: string): string {
     "# id (ADR 0024). A real Claude Code reports the id it was given; this stand-in has",
     "# to as well, so it reads the flag off its own command line and puts it where a",
     "# hook looks. Everything else is dropped, which is what a wrapper profile does.",
+    "#",
+    "# The session id, the settings charter armed this session with, and the hook socket are",
+    "# also written down, per chat, for `gauge.e2e.ts`: a real Claude Code runs the",
+    "# `statusLine` those settings name, and the fake harness runs nothing, so the scenario",
+    "# runs it itself — the command charter armed, with the environment this chat has.",
+    `SEEN=""`,
+    `if [ -n "\${CHARTER_ROOT:-}" ] && [ -n "\${CHARTER_CHAT:-}" ]; then`,
+    '  SEEN="$CHARTER_ROOT/.charter/scenario-harness"',
+    '  mkdir -p "$SEEN"',
+    `  printf '%s' "\${CHARTER_HOOK_SOCKET:-}" > "$SEEN/socket-$CHARTER_CHAT"`,
+    "fi",
     "while [ $# -gt 0 ]; do",
     '  if [ "$1" = "--session-id" ]; then',
     "    CLAUDE_CODE_SESSION_ID=$2",
     "    export CLAUDE_CODE_SESSION_ID",
+    `    [ -n "$SEEN" ] && printf '%s' "$2" > "$SEEN/session-$CHARTER_CHAT"`,
+    "  fi",
+    '  if [ "$1" = "--settings" ]; then',
+    `    [ -n "$SEEN" ] && printf '%s' "$2" > "$SEEN/settings-$CHARTER_CHAT"`,
     "  fi",
     "  shift",
     "done",
@@ -520,4 +535,25 @@ export function anEmptyRecord(plane: string): void {
  */
 export function aConfigHomeOfItsOwn(): string {
   return mkdtempSync(join(THE_RUNS_TREE, "config-"));
+}
+
+/**
+ * Gives `home` a Claude Code status line of its own — a `$HOME/.claude/settings.json` with a
+ * `statusLine` in it.
+ *
+ * **What it is for.** charter arms its own `statusLine` for a chat only where nothing else
+ * fills the line (`charter_core::footerclaim`, the operator's ruling of 2026-09-22), and this
+ * is how a scenario puts something there. The Finder launcher uses it, because that launch
+ * already has a `$HOME` of its own.
+ *
+ * **Through `$HOME` and not `$CLAUDE_CONFIG_DIR`**: charter's wiring probe reads that variable
+ * too, and pointing it at a directory with no plugin in it makes a wired harness read as
+ * unwired — measured, by a chat that then would not start.
+ */
+export function writeAStatusLineOfTheirOwn(home: string, command: string): void {
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(
+    join(home, ".claude", "settings.json"),
+    JSON.stringify({ statusLine: { type: "command", command } }),
+  );
 }

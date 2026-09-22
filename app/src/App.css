@@ -628,15 +628,6 @@ button.bare:focus-visible {
   opacity: 0.6;
 }
 
-/* A pane and the controls that belong to it. The holder exists so the buttons can be
-   positioned against the pane without going inside the element xterm draws into. */
-.pane-holder {
-  position: relative;
-  height: 100%;
-  width: 100%;
-  min-height: 0;
-}
-
 .pane {
   height: 100%;
   width: 100%;
@@ -646,6 +637,73 @@ button.bare:focus-visible {
 
 .pane.focused {
   border-color: var(--accent-base);
+}
+
+/* A pane and what charter draws over it. Everything in the corner is a SIBLING of the element
+   xterm draws into, never a child of it, so nothing charter draws is ever inside the terminal's
+   own DOM — and the frame is what those siblings are positioned against. */
+.pane-frame {
+  position: relative;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+}
+
+/* **The corner itself, as one row — because two changes landed in it at once.** The gauge
+   (M6.10) and the pane's own controls were each written as "the thing in the pane's top-right",
+   and each absolutely positioned there they would sit on top of each other. A row lays them out
+   side by side without either having to know the other's width.
+
+   **The gauge keeps the corner and the controls sit inside it**, which is the right way round:
+   the gauge is always drawn and the controls appear only under the pointer, so the thing that
+   is always there is the thing that keeps its place. */
+.pane-corner {
+  position: absolute;
+  top: 3px;
+  right: 8px;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.3rem;
+}
+
+/* **A chat's `ctx`/`cache` gauge** (`app/src/ChatGauge.tsx`): small, in the pane's top-right
+   corner, over the terminal rather than taking a row from it. The corner is where a harness's
+   header leaves the most room, and a strip across every pane would cost every chat a line to
+   carry three numbers. Raised and bordered so it reads as charter's and not as the program's
+   output.
+
+   **It no longer places itself**: `.pane-corner` above is what holds the corner now, because
+   the pane's controls arrived in the same corner and two absolutely positioned things at one
+   `top`/`right` are one thing on top of the other. Everything else about it is unchanged. */
+.chat-gauge {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0 0.35rem;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  background: var(--surface-raised);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  opacity: 0.92;
+}
+
+.gauge-label {
+  color: var(--text-muted);
+}
+
+.gauge-ok {
+  color: var(--state-success);
+}
+
+.gauge-warn {
+  color: var(--state-waiting);
+}
+
+.gauge-bad {
+  color: var(--state-failed);
 }
 
 /* **A pane's own controls, in its top right corner** — the operator: *"harnesses panes should
@@ -667,10 +725,6 @@ button.bare:focus-visible {
    which is the ordinary case. A pane the operator is not in shows nothing until the pointer
    is over it. */
 .pane-doing {
-  position: absolute;
-  top: 0.25rem;
-  right: 0.25rem;
-  z-index: 2;
   display: flex;
   gap: 0.15rem;
   padding: 0.1rem;
@@ -680,8 +734,8 @@ button.bare:focus-visible {
   visibility: hidden;
 }
 
-.pane-holder:hover > .pane-doing,
-.pane-holder:focus-within > .pane-doing {
+.pane-frame:hover .pane-doing,
+.pane-frame:focus-within .pane-doing {
   visibility: visible;
 }
 

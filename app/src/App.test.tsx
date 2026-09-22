@@ -108,7 +108,7 @@ async function endChat(name: string) {
  * "press Split right" no longer names a target, and this is what names one.
  */
 function paneDoing(session: number) {
-  const holder = screen.getByText(`session ${session}`).closest(".pane-holder");
+  const holder = screen.getByText(`session ${session}`).closest(".pane-frame");
   if (!holder) throw new Error(`no pane is showing session ${session}`);
   return within(holder as HTMLElement);
 }

@@ -206,15 +206,27 @@ pub enum StateHooks {
 }
 
 impl Harness {
-    /// How this harness is asked to report its state, with `charter` at `binary`.
-    pub fn state_hooks(self, binary: &std::path::Path) -> StateHooks {
+    /// How this harness is asked to report its state, with `charter` at `binary`, for a chat
+    /// that will run in `cwd`.
+    ///
+    /// `cwd` decides one thing only: whether charter may also fill Claude Code's status line
+    /// for this chat ([`crate::footerclaim`]). It is the chat's own directory because project
+    /// settings are read from the session's own directory and the host does not walk up.
+    pub fn state_hooks(
+        self,
+        binary: &std::path::Path,
+        cwd: Option<&std::path::Path>,
+    ) -> StateHooks {
         match self {
             // `--settings` MERGES with the settings files already in force rather than
             // replacing them — measured on claude 2.1.276 by planting a project hook beside
             // one of these and watching both fire. That is what makes this safe: the charter
             // plugin's guard hooks keep running exactly as they were.
             Self::ClaudeCode => StateHooks::ThisSessionOnly {
-                args: words(["--settings", &claude_code_settings(binary)]),
+                args: words([
+                    "--settings",
+                    &claude_code_settings(binary, crate::footerclaim::status_line(cwd).free()),
+                ]),
                 cannot_report: Vec::new(),
             },
             // **Measured on codex-cli 0.147.0, and it refutes what this arm used to say** —
@@ -286,7 +298,7 @@ impl Harness {
 /// On the argument and not in a file: a file would have to be written somewhere, cleaned up
 /// when the chat ends, and cleaned up again after an app that crashed. What is in it is a
 /// path and six event names — nothing secret, so `ps` showing it costs nothing.
-fn claude_code_settings(binary: &std::path::Path) -> String {
+fn claude_code_settings(binary: &std::path::Path, may_fill_the_footer: bool) -> String {
     let hooks: serde_json::Map<String, serde_json::Value> = CLAUDE_CODE_STATE_EVENTS
         .iter()
         .map(|(event, word)| {
@@ -304,12 +316,56 @@ fn claude_code_settings(binary: &std::path::Path) -> String {
             )
         })
         .collect();
-    serde_json::Value::Object(
+    let mut settings: serde_json::Map<String, serde_json::Value> =
         [("hooks".to_owned(), serde_json::Value::Object(hooks))]
             .into_iter()
-            .collect(),
-    )
-    .to_string()
+            .collect();
+    // **Only where nothing else fills it.** The key is one value and the flag is the last
+    // writer, so arming it where the operator has their own would stop theirs running
+    // ([`crate::footerclaim`], measured on 2.1.280). Where charter does not arm it, the chat
+    // records no turns and its `ctx`/`cache` gauge stays dark — which `doctor` reports.
+    if may_fill_the_footer {
+        settings.insert("statusLine".to_owned(), claude_code_status_line(binary));
+    }
+    serde_json::Value::Object(settings).to_string()
+}
+
+/// Claude Code's `statusLine`, pointed at `charter statusline` — for THIS session only.
+///
+/// **This is how a chat's `ctx`/`cache` history gets written at all, and without it the app's
+/// gauge is a renderer with nothing to render.** Claude Code hands `context_window` — the
+/// context percentage and the cache numbers — to its `statusLine` command and to nothing
+/// else: no hook payload carries them (charter ADR 0019, measured). `charter statusline`
+/// is the command that writes them down (`usage::record`), on every render, whether or not
+/// it draws anything. And since charter 0.57.0 (#895) nothing puts that command in a
+/// session's settings any more, while the app arms only hooks — so, measured on 2026-09-22,
+/// the operator's own plane had not had a turn recorded since 2026-09-04, and every chat the
+/// app started ran with no gauge on any surface.
+///
+/// **What the chat SEES does not change by default.** Inside the app `charter statusline`
+/// prints an empty line (ADR 0019 transposed, `charter-cli/src/statusline.rs`), which is
+/// the footer the app's chats were already meant to have — and ADR 0029's per-chat checkbox,
+/// which sets `CHARTER_FOOTER=show`, draws charter's footer instead. That checkbox was a
+/// switch on a command nothing invoked; this is what makes it one.
+///
+/// **It is armed only where the operator fills the line with nothing**, and that is the
+/// operator's own ruling of 2026-09-22. `--settings` merges key by key and `statusLine` is one
+/// key, so arming it over somebody's own command would stop theirs from running, silently, for
+/// every chat the app starts — measured on 2.1.280, four cells, one launch each
+/// ([`crate::footerclaim`], which holds the measurement and the rule). Where something else
+/// fills it, charter arms nothing, leaves their configuration alone, and lets `doctor` say why
+/// the gauge is dark. Nothing here wraps or chains their command: charter would then own its
+/// failures and its latency, every turn.
+///
+/// **What it costs otherwise, said:** nothing is written to any file, their own `claude` in a
+/// terminal is untouched, and a command costs one process per footer render — which Claude
+/// Code runs at startup and once per submitted turn, not on a timer (measured: zero
+/// invocations over thirty idle seconds).
+fn claude_code_status_line(binary: &std::path::Path) -> serde_json::Value {
+    serde_json::json!({
+        "type": "command",
+        "command": format!("{} statusline", shell_quoted(&binary.display().to_string())),
+    })
 }
 
 /// The `-c` pairs that arm Codex's state hooks on one session.
@@ -578,7 +634,11 @@ mod tests {
         // `--settings` MERGES rather than replaces (measured on claude 2.1.276), which is the
         // whole reason this is safe: the charter plugin's guard hooks keep running. If this
         // ever became a replacement, arming state here would silently disarm the guard.
-        let hooks = Harness::ClaudeCode.state_hooks(std::path::Path::new("/usr/local/bin/charter"));
+        let empty = tempfile::tempdir().expect("a directory with no settings in it");
+        let hooks = Harness::ClaudeCode.state_hooks(
+            std::path::Path::new("/usr/local/bin/charter"),
+            Some(empty.path()),
+        );
 
         let StateHooks::ThisSessionOnly {
             args,
@@ -621,6 +681,62 @@ mod tests {
     }
 
     #[test]
+    fn a_claude_code_chat_runs_charter_statusline_so_its_turns_are_recorded() {
+        // Claude Code hands the context and cache numbers to its `statusLine` command and to
+        // nothing else, so a chat whose settings name none records nothing and the app's
+        // gauge has nothing to draw. Quoted as a hook command is, because Claude Code runs it
+        // through `/bin/sh -c` too.
+        let empty = tempfile::tempdir().expect("a directory with no settings in it");
+        let hooks = Harness::ClaudeCode.state_hooks(
+            std::path::Path::new("/home/o'brien/charter"),
+            Some(empty.path()),
+        );
+        let StateHooks::ThisSessionOnly { args, .. } = hooks else {
+            panic!("armed per session");
+        };
+        let settings: serde_json::Value = serde_json::from_str(&args[1]).expect("JSON");
+
+        assert_eq!(
+            settings["statusLine"],
+            serde_json::json!({
+                "type": "command",
+                "command": r"'/home/o'\''brien/charter' statusline",
+            })
+        );
+    }
+
+    #[test]
+    fn a_chat_whose_directory_already_fills_the_footer_is_armed_with_hooks_alone() {
+        // The operator's ruling: charter never replaces a `statusLine` somebody else wrote.
+        // The hooks are armed exactly as before — only the footer key is left off.
+        let dir = tempfile::tempdir().expect("a directory");
+        std::fs::create_dir_all(dir.path().join(".claude")).expect(".claude");
+        std::fs::write(
+            dir.path().join(".claude/settings.json"),
+            r#"{"statusLine": {"type": "command", "command": "my-own-line"}}"#,
+        )
+        .expect("their settings");
+
+        let hooks =
+            Harness::ClaudeCode.state_hooks(std::path::Path::new("/bin/charter"), Some(dir.path()));
+
+        let StateHooks::ThisSessionOnly { args, .. } = hooks else {
+            panic!("armed per session");
+        };
+        let settings: serde_json::Value = serde_json::from_str(&args[1]).expect("JSON");
+        assert!(
+            settings.get("statusLine").is_none(),
+            "charter armed a statusLine over the operator's: {}",
+            args[1]
+        );
+        assert_eq!(
+            settings["hooks"].as_object().expect("an object").len(),
+            6,
+            "the state hooks are not armed for a chat that keeps its own footer"
+        );
+    }
+
+    #[test]
     fn no_guard_hook_is_ever_armed_by_the_app() {
         // **Still true after M3.1, and for a different reason than before.** It used to be
         // that the guard was not this milestone's to answer; the Bash guard is now ported
@@ -637,7 +753,11 @@ mod tests {
         //
         // The guard reaches a chat the way it always has: the plugin's `hooks.json` names
         // `charter` by the bare word, and `programs::chat_path` decides which one that is.
-        let hooks = Harness::ClaudeCode.state_hooks(std::path::Path::new("/bin/charter"));
+        // The cwd is where `footerclaim` looks for a status line already in force; an
+        // empty directory is a chat with none, which is what this test is about.
+        let empty = tempfile::tempdir().expect("a directory with no settings in it");
+        let hooks = Harness::ClaudeCode
+            .state_hooks(std::path::Path::new("/bin/charter"), Some(empty.path()));
         let StateHooks::ThisSessionOnly { args, .. } = hooks else {
             panic!("armed per session");
         };
@@ -658,7 +778,11 @@ mod tests {
     #[test]
     fn a_path_with_a_quote_in_it_cannot_break_out_of_the_hook_command() {
         // Claude Code runs the command through `/bin/sh -c`.
-        let hooks = Harness::ClaudeCode.state_hooks(std::path::Path::new("/home/o'brien/charter"));
+        let empty = tempfile::tempdir().expect("a directory with no settings in it");
+        let hooks = Harness::ClaudeCode.state_hooks(
+            std::path::Path::new("/home/o'brien/charter"),
+            Some(empty.path()),
+        );
         let StateHooks::ThisSessionOnly { args, .. } = hooks else {
             panic!("armed per session");
         };
@@ -673,7 +797,7 @@ mod tests {
     /// Codex's `-c` pairs as (dotted key, parsed TOML value), failing on anything else.
     fn codex_flags(binary: &str) -> Vec<(String, toml::Value)> {
         let StateHooks::ThisSessionOnly { args, .. } =
-            Harness::Codex.state_hooks(std::path::Path::new(binary))
+            Harness::Codex.state_hooks(std::path::Path::new(binary), None)
         else {
             panic!("Codex's hooks are armed per session");
         };
@@ -727,7 +851,7 @@ mod tests {
         // Codex has no `Notification`. It fires `PermissionRequest` when it asks for an
         // approval — measured — but that hook decides a permission, and the app arms none
         // (the guard test below). So the one event missing is named, not hidden.
-        let hooks = Harness::Codex.state_hooks(std::path::Path::new("/bin/charter"));
+        let hooks = Harness::Codex.state_hooks(std::path::Path::new("/bin/charter"), None);
 
         let StateHooks::ThisSessionOnly { cannot_report, .. } = hooks else {
             panic!("armed per session");
