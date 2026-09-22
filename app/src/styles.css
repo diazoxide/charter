@@ -1,0 +1,72 @@
+/* The window's stylesheet: Tailwind on top of charter's tokens, and `App.css` under it.
+ *
+ * **Tailwind does not own a single colour here.** Every entry in the `@theme` block below is
+ * `var(--<token>)`, and those custom properties are written onto the document by
+ * `src/theme/theme.ts` from a theme file. Tailwind's `@theme` is CSS-variable-native, which is
+ * the whole reason v4 was picked: it can sit on top of a token layer instead of being one.
+ *
+ * Three decisions are made in this file and `docs/design-system.md` holds the reasons.
+ *
+ * **Tailwind's own palette is deleted.** `--color-*: initial` clears the namespace, so
+ * `bg-red-500`, `text-slate-300` and the other 250-odd palette utilities do not exist in this
+ * app. That is the "semantic, not palette" rule enforced by the build rather than by review:
+ * a class naming a colour cannot compile, because there is no such colour. `transparent` and
+ * `current` are put back, because they are not colours — they are the absence of one and the
+ * inherited one.
+ *
+ * **Preflight is not imported.** Tailwind's reset would restyle 1,330 lines of `App.css` in one
+ * commit, and the spec's required scenario tests read the real DOM. The layer order below is
+ * what a reset would have been for: `App.css` is imported INTO a layer, so a utility beats it
+ * without `!important` and without specificity games. Preflight is a separate decision for
+ * whoever converts a component, not a side effect of wiring the tokens up.
+ *
+ * **The Tailwind colour name IS the token name**, stutter and all — `text-text-primary`,
+ * `border-border-subtle`. A prettier alias would be a second vocabulary, and a second
+ * vocabulary is the defect this whole layer exists to remove.
+ */
+
+@layer theme, base, charter, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+@import "./App.css" layer(charter);
+
+@theme {
+  --color-*: initial;
+  --color-transparent: transparent;
+  --color-current: currentColor;
+
+  --color-surface-base: var(--surface-base);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-surface-deep: var(--surface-deep);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-overlay: var(--surface-overlay);
+  --color-surface-hover: var(--surface-hover);
+  --color-control-base: var(--control-base);
+  --color-control-hover: var(--control-hover);
+  --color-control-aimed: var(--control-aimed);
+  --color-control-count: var(--control-count);
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-strong: var(--border-strong);
+  --color-accent-base: var(--accent-base);
+  --color-accent-surface: var(--accent-surface);
+  --color-focus-ring: var(--focus-ring);
+  --color-tab-active: var(--tab-active);
+  --color-needs-you-base: var(--needs-you-base);
+  --color-needs-you-text: var(--needs-you-text);
+  --color-danger-base: var(--danger-base);
+  --color-danger-surface: var(--danger-surface);
+  --color-danger-text: var(--danger-text);
+  --color-danger-wash: var(--danger-wash);
+  --color-state-running: var(--state-running);
+  --color-state-waiting: var(--state-waiting);
+  --color-state-waiting-glow: var(--state-waiting-glow);
+  --color-state-failed: var(--state-failed);
+  --color-state-success: var(--state-success);
+  --color-state-unreadable: var(--state-unreadable);
+  --color-overlay-scrim: var(--overlay-scrim);
+  --color-overlay-shadow: var(--overlay-shadow);
+}
