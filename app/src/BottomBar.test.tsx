@@ -444,6 +444,8 @@ describe("the bottom bar", () => {
       "three",
     ]);
     expect(rows[0]).toHaveTextContent("fix/login");
+    // `two` is on a branch called `two`: the name already says it, so it is not said twice.
+    expect(rows[1].querySelector(".branch")).toBeNull();
     expect(rows[1]).toHaveTextContent("unwired");
     // Stale says stale and nothing else: a directory that is gone is not also "unwired".
     expect(rows[2]).toHaveTextContent("stale");

@@ -230,7 +230,12 @@ function RepoRows({
                 <li key={piece.piece}>
                   <GitBranch className="node-icon" />
                   <span className="piece">{piece.piece}</span>
-                  {piece.branch && <code className="branch">{piece.branch}</code>}
+                  {/* The branch only when it says something the name does not. charter cuts a
+                      piece on a branch of its own name by default, and `perf perf` down a
+                      whole column is the same word twice on every row. */}
+                  {piece.branch && piece.branch !== piece.piece && (
+                    <code className="branch">{piece.branch}</code>
+                  )}
                   {/* The same two states the count above totals, said here of the one tree
                       they are true of. A total answers "is anything wrong in this clone";
                       a row answers "which one". */}
