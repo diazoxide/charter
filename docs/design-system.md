@@ -127,6 +127,12 @@ fully tested against garbage; the command that supplies `raw` is the only missin
   and `text-slate-300` are not classes — they are typos. That is the "semantic, not palette"
   rule enforced by the build rather than by whoever reviews the diff. `transparent` and
   `current` are put back, because they are the absence of a colour and the inherited one.
+  Checked, because deleting a namespace is the sort of thing that takes a neighbour with it:
+  `ring-2` still compiles and now falls back to `currentcolor`, which is the token-driven text
+  colour and is better than the blue it used to default to. **`shadow-md` and its siblings are
+  the one leak**: they carry their own `rgb(0 0 0 / 0.1)` rather than reading `overlay.shadow`,
+  so a shadow utility is a colour a theme cannot reach. Use the token in CSS until somebody
+  maps `--shadow-*` in `@theme` as well.
 - **Preflight is not imported, and `App.css` is imported into a layer.** A reset would restyle
   1,330 lines in one commit, and `scenario tests` read the real DOM. The layer order —
   `theme, base, charter, components, utilities` — is what the reset would have been for:
@@ -135,6 +141,17 @@ fully tested against garbage; the command that supplies `raw` is the only missin
 
 **The Tailwind colour name is the token name**, stutter and all: `text-text-primary`,
 `border-border-subtle`. A prettier alias would be a second vocabulary.
+
+> **One asymmetry the layer order does not cover, measured rather than assumed.** xterm's own
+> stylesheet is imported from `SessionPane.tsx`, not from `styles.css`, so it lands **unlayered**
+> — and unlayered CSS beats every layer, including `utilities`. Nothing collides today: it sets
+> `cursor`, `position` and `user-select` on `.xterm`, and charter's rule sets `height` and
+> `padding`, so no declaration is contested. But the next stylesheet imported from a component
+> will outrank the whole stack silently. The fix, when something does collide, is one line —
+> move the import into `styles.css` as `@import "@xterm/xterm/css/xterm.css" layer(vendor);` and
+> put `vendor` before `charter` in the layer list — and it is deliberately not taken here,
+> because it changes which rules win in the terminal and that cannot be checked without running
+> the app.
 
 **shadcn/ui: the conventions, and components when something needs one.** `cn` is at
 `app/src/lib/utils.ts`, at shadcn's address with shadcn's two dependencies, so a component
