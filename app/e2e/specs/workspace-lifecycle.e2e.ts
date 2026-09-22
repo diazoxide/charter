@@ -164,6 +164,20 @@ describe("making a workspace and deleting one", function () {
     }
   });
 
+  it("answers a right-click on a workspace tab with charter's own menu", async () => {
+    // A measurement as much as an assertion: whether a WebView context menu opens under
+    // WebDriver is not something this repo had established, and the answer belongs in a run
+    // rather than in a claim. The rows themselves are `Menus.test.tsx`'s.
+    const tab = await $(`${WORKSPACES} [role="tab"]`);
+    await tab.click({ button: "right" });
+
+    const menu = await $('[role="menu"]');
+    await menu.waitForDisplayed({ timeout: 20_000 });
+    await expect(menu).toHaveText("New workspace…", { containing: true });
+    await expect(menu).toHaveText("Delete workspace", { containing: true });
+    await browser.keys(["Escape"]);
+  });
+
   it("makes a workspace with the baseline charter gives it, and puts it on the strip", async () => {
     await runRow("New workspace", "New workspace…");
 
@@ -270,7 +284,7 @@ describe("making a workspace and deleting one", function () {
     await $("button=Delete workspace").click();
     await (await $('[role="alertdialog"] [role="alert"]')).waitForDisplayed({ timeout: 30_000 });
 
-    const force = await $('[role="alertdialog"] button*=anyway');
+    const force = await dialog.$("button*=anyway");
     await force.waitForDisplayed({ timeout: 20_000 });
     // It names what it is about to discard, by the name the guard used.
     await expect(force).toHaveText("svc", { containing: true });
@@ -278,20 +292,6 @@ describe("making a workspace and deleting one", function () {
 
     await stripBecomes(["beta", "gamma"]);
     expect(existsSync(join(mine, "workspaces", "doomed"))).toBe(false);
-  });
-
-  it("answers a right-click on a workspace tab with charter's own menu", async () => {
-    // A measurement as much as an assertion: whether a WebView context menu opens under
-    // WebDriver is not something this repo had established, and the answer belongs in a run
-    // rather than in a claim. The rows themselves are `Menus.test.tsx`'s.
-    const tab = await $(`${WORKSPACES} [role="tab"]`);
-    await tab.click({ button: "right" });
-
-    const menu = await $('[role="menu"]');
-    await menu.waitForDisplayed({ timeout: 20_000 });
-    await expect(menu).toHaveText("New workspace…", { containing: true });
-    await expect(menu).toHaveText("Delete workspace", { containing: true });
-    await browser.keys(["Escape"]);
   });
 });
 
