@@ -185,4 +185,27 @@ describe("an app opened from Finder", () => {
     );
     expect(existsSync(asked) ? readFileSync(asked, "utf8") : "").toContain("hook sessionstart");
   });
+
+  it("has a doctor that answers for the app, with the PATH Finder gave it", async () => {
+    // The incident `app/src-tauri/src/doctor.rs` exists for. The doctor was ported and CLI
+    // only, so the one way to ask it was a terminal — whose shell has the operator's whole
+    // PATH and cannot reproduce a Finder launch. Asked from the window, it runs in the app's
+    // own process: the PATH it reports is the four-directory one, and the built-in `claude`
+    // it lists is the one only charter's fixed search (charter-app#134) could find.
+    const button = await $('[data-testid="status-doctor"]');
+    await button.waitForExist({ timeout: 30_000 });
+    await button.click();
+
+    await expect(dialog()).toBeDisplayed();
+    await browser.waitUntil(async () => (await dialog().getText()).includes("profile claude"), {
+      timeout: 60_000,
+      interval: 250,
+      timeoutMsg: "the full doctor, opened from the window, listed no built-in claude profile",
+    });
+    await expect(dialog()).toHaveText(expect.stringContaining(A_FINDER_LAUNCHS_PATH));
+    await expect(dialog()).toHaveText(expect.stringContaining("each harness profile probed"));
+
+    await browser.keys(["Escape"]);
+    await expect(dialog()).not.toBeDisplayed();
+  });
 });
