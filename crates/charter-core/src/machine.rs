@@ -2140,6 +2140,64 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_fifo_that_already_holds_a_grant_is_declined_rather_than_drained() {
+        // The other half of the FIFO, and the half `O_NONBLOCK` alone does NOT answer. With
+        // the flag, a pipe with nothing in it fails the read with `WouldBlock` and charter
+        // contributes nothing — but that is an accident of there being no writer, not a
+        // decision. A pipe that already holds bytes and has no writer left hands them over
+        // and reads as EOF, so an unguarded charter would draw an approval dialog describing
+        // a plugin and a PATH that exist nowhere on disk, and then record them as approved.
+        //
+        // **Deterministic, and that is why the reader is opened here first.** A FIFO's buffer
+        // lives only while some descriptor is open, so the test holds a read end for the
+        // whole of it: the writer can then write and close, and the bytes are still there
+        // when charter opens its own descriptor. A writer racing a reader would make this a
+        // coin toss.
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let held = machine();
+        let plane = a_plane(&held.path().join("plane"));
+        std::fs::create_dir_all(plane.join(".claude")).unwrap();
+        let at = plane.join(crate::layer::SETTINGS);
+        let made = crate::forklock::status(std::process::Command::new("mkfifo").arg(&at))
+            .expect("mkfifo runs");
+        assert!(made.success(), "a FIFO at the path the approval opens");
+
+        // Held open for the length of the test: this is what keeps the pipe, and the bytes
+        // in it, alive after the writer has gone.
+        let _keeping_it_open = std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(rustix::fs::OFlags::NONBLOCK.bits() as i32)
+            .open(&at)
+            .expect("a reader on the pipe");
+        {
+            // Opening for writing succeeds at once now that a reader exists. Closed at the
+            // end of this block, which is what makes charter's own read see EOF rather than
+            // `WouldBlock`.
+            let mut writer = std::fs::OpenOptions::new()
+                .write(true)
+                .open(&at)
+                .expect("a writer on the pipe");
+            writer
+                .write_all(
+                    br#"{"enabledPlugins":{"piped@market":true},"env":{"PATH":"/tmp/evil"}}"#,
+                )
+                .expect("the grant goes into the pipe");
+        }
+
+        let contributes = Contribution::of(&plane);
+
+        assert_eq!(
+            contributes,
+            Contribution::default(),
+            "the approval dialog was drawn from a pipe: it would have described a plugin and \
+             a PATH that are on nobody's disk, and the store would have recorded them"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn settings_linked_out_of_the_plane_contribute_nothing() {
         // The half that was already held, pinned here because it is now held by a different
         // line: `open_no_link`'s own `strip_prefix` against the RESOLVED root, rather than by
