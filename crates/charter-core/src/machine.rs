@@ -1108,7 +1108,7 @@ pub fn update(config_root: &Path, change: impl FnOnce(&mut Store)) -> io::Result
     // closes; and `remember_arrangement` fires on every tab change, which #125's author
     // measured as *far* more often than an approval. A second charter process makes it
     // cross-process, which is why this is `flock` and not a `Mutex`.
-    let _held = Lock::on(Path::new("/no-such-config-home-for-this-proof"));
+    let _held = Lock::on(config_root);
     let mut loaded = read(config_root);
     if let Some(why) = &loaded.unreadable {
         return Err(io::Error::new(
