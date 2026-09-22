@@ -60,6 +60,7 @@ so the rule is written down: a `pub` item in neither list is a rule with no evid
     ./shellseg.py --surface            # ...and which `pub` items it reaches AT ALL
     ./shellseg.py --record             # rewrite the checked-in curated corpus
     ./shellseg.py --check              # ...and fail if it moved
+    ./shellseg.py --shard 2/4          # the same 200,000, split four ways across runners
 
 The Rust side is `cargo run --example shellseg_oracle -p charter-core`, which reads a
 JSON-encoded command line per line and writes a JSON answer per line. It is an example rather
@@ -2035,6 +2036,12 @@ def attribute(want: dict, got: dict) -> list[str]:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--cases", type=int, default=200_000)
+    ap.add_argument("--shard", default=None, metavar="I/N",
+                    help="run only shard I of N (1-based) of the cases this run would generate. "
+                         "The 200,000 are the SAME 200,000 — the list is built whole and then "
+                         "sliced — so N shards together ask exactly what one run asks, and the "
+                         "seed, the corpus check and the --against staleness check are all "
+                         "unaffected. It exists because this step is 21 of CI's 30 minutes.")
     ap.add_argument("--seed", type=int, default=20260920)
     ap.add_argument("--binary", type=Path, default=DEFAULT_BINARY)
     ap.add_argument("--batch", type=int, default=10_000,
@@ -2059,6 +2066,20 @@ def main() -> int:
                     help="which of the guard's branches the generated cases REACH, and how "
                          "often — run this before believing a case count")
     args = ap.parse_args()
+
+    # Validated HERE, before anything is built, generated or asked — a typo in a CI matrix is
+    # worth one second and a clear sentence, not twenty minutes and a confusing total.
+    slice_of: tuple[int, int] | None = None
+    if args.shard is not None:
+        parts = args.shard.split("/")
+        if len(parts) != 2 or not all(part.strip().lstrip("+").isdigit() for part in parts):
+            sys.exit(f"--shard {args.shard!r} is not I/N, as in --shard 2/4")
+        i, n = (int(part) for part in parts)
+        if n < 1:
+            sys.exit(f"--shard {args.shard!r}: N must be at least 1")
+        if not 1 <= i <= n:
+            sys.exit(f"--shard {args.shard!r}: I is 1-based and must be between 1 and {n}")
+        slice_of = (i, n)
     # Resolved BEFORE the `chdir` below, all three of them: the run stands in the fixture root,
     # so a relative path on the command line would otherwise be written into a temporary
     # directory that is deleted with it.
@@ -2150,6 +2171,19 @@ def main() -> int:
         print(f"wrote what the Python says about {len(cases)} cases to {args.dump_oracle}")
         return 0
 
+    # Sliced HERE and nowhere earlier: `--against` compares the cache against the whole
+    # generated list above, and `--record`/`--check`/`--dump-oracle` have already returned. A
+    # shard is a slice of the finished list, so it can never change which questions get asked.
+    shard = ""
+    if slice_of is not None:
+        i, n = slice_of
+        # Strided, not contiguous: the curated corpus sits at the front of the list and a
+        # contiguous first shard would swallow all of it while the last shard got none.
+        cases = cases[i - 1::n]
+        if cached is not None:
+            cached = cached[i - 1::n]
+        shard = f" (shard {i} of {n})"
+
     bad = 0
     by_function: dict[str, int] = {}
     # In BATCHES, because stage 2's answer is about 1.5 kB and 200,000 of them is 300 MB of
@@ -2169,7 +2203,7 @@ def main() -> int:
                 for fn in attribute(want, got):
                     print(f"    {fn}: python={want[fn]!r}")
                     print(f"    {fn}:   rust={got[fn]!r}")
-    print(f"{len(cases)} cases, {bad} divergences")
+    print(f"{len(cases)} cases{shard}, {bad} divergences")
     if bad:
         print(f"by function: {by_function}")
         return 1
