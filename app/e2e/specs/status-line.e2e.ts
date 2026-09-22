@@ -271,6 +271,23 @@ describe("the status line", () => {
     await untilTheButtonSays("Alerts: none");
   });
 
+  it("carries the updater as a quiet icon, and no pin item for a plane that pins nothing", async () => {
+    // A scenario build never checks on its own (`charter_core::updates::checks_on_its_own`),
+    // so nothing is on offer: the button is the way in to the channel, with no words. The
+    // fixture plane pins no charter version, so `charter version` reports no drift and the
+    // pin item — which is drawn only on drift — is not there at all.
+    await untilTheStripIsRead();
+
+    const update = await $('[data-testid="status-update"]');
+    await update.waitForExist({ timeout: 20_000 });
+    await browser.waitUntil(
+      async () => ((await update.getAttribute("aria-label")) ?? "").includes("channel"),
+      { timeout: 20_000, timeoutMsg: "the update button never said which channel it is on" },
+    );
+    expect(await update.getAttribute("aria-label")).toContain("nothing new known");
+    expect(await $('[data-testid="status-pin"]').isExisting()).toBe(false);
+  });
+
   it("stays at the bottom when every region is put away", async () => {
     // It is not in the arrangement, so nothing about it changes when the arrangement does —
     // and the window that is left is the panes and this line.
