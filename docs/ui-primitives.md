@@ -490,7 +490,10 @@ class, because the class is how a pane is drawn and this is what it means.
 **A scenario cannot carry this claim.** WebDriver does not deliver a modifier chord here —
 `browser.keys(["Shift", "Tab"])` arrives with `shiftKey` unset, measured in #176 and recorded
 above — so a key claim is evaluated in jsdom, where the real event can be dispatched and what
-happened to it asserted. `Palette.test.tsx`'s *"a chord the chat's own terminal would encode"*
+happened to it asserted. The missing modifier is one symptom of a larger one, measured in #186
+and written up above: **this driver dispatches a synthetic DOM keydown and performs no default
+action at all**, which is also why no key it sends presses a button and why Tab does not move
+the focus even between two text boxes. `Palette.test.tsx`'s *"a chord the chat's own terminal would encode"*
 is where the rule is pinned, including the half that matters most: the keystroke reaches the
 document **unprevented**, which is what reaching the shell actually means.
 
