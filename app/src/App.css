@@ -580,6 +580,30 @@ body {
   color: var(--state-failed);
 }
 
+/* The trend: a bar per turn, filled in the tone its class names — the same three tokens the
+   numbers use, so a green 98% and its bar can never be two greens. */
+.gauge-trend {
+  width: 3rem;
+  height: 0.75rem;
+  align-self: center;
+}
+
+.gauge-trend .gauge-ok {
+  fill: var(--state-success);
+}
+
+.gauge-trend .gauge-warn {
+  fill: var(--state-waiting);
+}
+
+.gauge-trend .gauge-bad {
+  fill: var(--state-failed);
+}
+
+.gauge-trend .gauge-unknown {
+  fill: var(--text-muted);
+}
+
 /* The handle between two panes: thin, and easier to hit than it looks. */
 [data-separator] {
   background: var(--border-subtle);

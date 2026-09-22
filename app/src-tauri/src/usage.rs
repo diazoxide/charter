@@ -70,6 +70,23 @@ pub struct ChatUsage {
     /// `cache NN%`: the share of the last turn's input served from cache.
     pub cache: Option<Percent>,
     pub rebuilds: Option<Rebuilds>,
+    /// The session's recorded turns, oldest first, at most sixteen — the trend charter ADR
+    /// 0038 names beside the gauge: the whole history rather than this turn.
+    pub turns: Vec<UsageTurn>,
+    /// How many turns in a row the cache has been cold, once that is three or more
+    /// (`_cache_hint`'s threshold) — the prefix churning, which is the expensive failure.
+    pub cold: Option<u32>,
+}
+
+/// One turn of the trend.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct UsageTurn {
+    /// The share of that turn's input served from cache, in its tone.
+    pub cache: Option<Percent>,
+    /// The context percentage that turn recorded, in its tone.
+    pub context: Option<Percent>,
+    /// What that turn wrote to the cache, as charter spells tokens.
+    pub written: Option<String>,
 }
 
 /// What one chat's recorded usage says, or nothing.
@@ -103,7 +120,8 @@ pub fn chat_usage(
 /// The gauge for Claude Code's session `conversation` on `plane`. The command is this after
 /// it has asked the board which conversation the chat holds.
 pub(crate) fn of(plane: &std::path::Path, conversation: &str) -> Option<ChatUsage> {
-    let drawn = usage::gauge(&usage::history(plane, conversation));
+    let history = usage::history(plane, conversation);
+    let drawn = usage::gauge(&history);
     let percent = |(value, tone): (i64, Tone)| Percent {
         value: i32::try_from(value).unwrap_or(if value < 0 { i32::MIN } else { i32::MAX }),
         tone: tone.into(),
@@ -116,8 +134,23 @@ pub(crate) fn of(plane: &std::path::Path, conversation: &str) -> Option<ChatUsag
             cost,
             tone: tone.into(),
         }),
+        turns: usage::trend(&history)
+            .into_iter()
+            .map(|turn| UsageTurn {
+                cache: turn.hit.map(|hit| percent((hit, usage::cache_tone(hit)))),
+                context: turn
+                    .context
+                    .map(|pct| percent((pct, usage::context_tone(pct)))),
+                written: turn.written.map(usage::tokens),
+            })
+            .collect(),
+        cold: usage::cold(&history).map(|n| u32::try_from(n).unwrap_or(u32::MAX)),
     };
-    (found.context.is_some() || found.cache.is_some() || found.rebuilds.is_some()).then_some(found)
+    (found.context.is_some()
+        || found.cache.is_some()
+        || found.rebuilds.is_some()
+        || !found.turns.is_empty())
+    .then_some(found)
 }
 
 #[cfg(test)]
@@ -163,6 +196,24 @@ mod tests {
                 tone: GaugeTone::Bad
             })
         );
+    }
+
+    #[test]
+    fn the_trend_carries_every_turn_in_its_tone_and_the_cold_streak_from_three() {
+        let (_dir, root) = plane_with("900,100,90,12\n10,90,10,20\n10,90,10,30\n20,80,20,40\n");
+
+        let drawn = of(&root, SID).expect("a gauge");
+
+        assert_eq!(drawn.turns.len(), 4);
+        assert_eq!(
+            drawn.turns[0].cache,
+            Some(Percent {
+                value: 90,
+                tone: GaugeTone::Ok
+            })
+        );
+        assert_eq!(drawn.turns[3].written.as_deref(), Some("80"));
+        assert_eq!(drawn.cold, Some(3));
     }
 
     #[test]

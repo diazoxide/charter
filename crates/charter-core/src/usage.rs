@@ -467,7 +467,8 @@ fn last_context(history: &[Sample]) -> Option<i64> {
     history
         .iter()
         .rev()
-        .filter(|s| s.fields >= 4)
+        // No `fields >= 4` filter: a shorter row has no fourth field, so its `context` is
+        // already `None` — Python's `len(p) < 4` skip, by construction.
         .find_map(|s| s.context)
 }
 
@@ -476,7 +477,7 @@ fn last_context(history: &[Sample]) -> Option<i64> {
 pub fn hits(history: &[Sample]) -> Vec<i64> {
     history
         .iter()
-        .filter(|s| s.fields >= 3)
+        // `len(p) >= 3` needs no filter: a shorter row has no third field to be a hit.
         .filter_map(|s| s.hit)
         .collect()
 }
@@ -509,6 +510,52 @@ fn rebuilds(pairs: &[(i64, i64)]) -> (usize, i64) {
         }
     }
     (n, cost)
+}
+
+/// One turn of the trend, as a reader draws it: its cache-hit share, the context percentage
+/// it recorded, and what it wrote to the cache. `None` for a field the row could not give.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrendTurn {
+    pub hit: Option<i64>,
+    pub context: Option<i64>,
+    pub written: Option<i64>,
+}
+
+/// The session's recorded turns, oldest first — the TREND, where [`gauge`] is the last turn.
+///
+/// charter ADR 0038 names it separately from the gauge — *"the trend over a session's turns
+/// rather than this turn's percentage"* — and Python never drew it as a picture; it used it
+/// for the cold-streak hint and the rebuild count. This is the same rows, handed over whole.
+/// A row too short to be a turn (`len(p) < 3`, which every Python reader skips) is not one.
+///
+/// **Empty wherever [`gauge`] is empty**, for the same reason: an unreadable token count is
+/// a file charter cannot vouch for, and a trend drawn from it would be the one picture on
+/// screen that contradicts the blank gauge beside it.
+pub fn trend(history: &[Sample]) -> Vec<TrendTurn> {
+    if pairs(history).is_none() {
+        return Vec::new();
+    }
+    history
+        .iter()
+        .filter(|s| s.fields >= 3)
+        .map(|s| TrendTurn {
+            hit: s.hit,
+            // A row shorter than four fields has no fourth to read, so this is `None` for it by
+            // construction — `_last_ctx_of`'s `len(p) < 4` needs no second spelling here.
+            context: s.context,
+            written: s.write,
+        })
+        .collect()
+}
+
+/// The cold streak worth saying — `_cache_hint`'s gate: [`COLD_STREAK`] or more cold turns in a
+/// row at the end, else `None`. One cold turn is normal (a model switch, a `/compact`, warming
+/// up); a sustained one is the prefix churning, which is the expensive failure.
+pub fn cold(history: &[Sample]) -> Option<usize> {
+    // A file the gauge will not vouch for says no streak either.
+    pairs(history)?;
+    let streak = cold_streak(&hits(history));
+    (streak >= COLD_STREAK).then_some(streak)
 }
 
 /// How many turns in a row, most recent last, were cache-cold. `_cold_streak`.
@@ -937,6 +984,62 @@ mod tests {
         assert_eq!(
             drawn(&["0,150000,0,1", "100000,1000,99,2", "1000,60000,2,3"]),
             (Some(3), Some(2), 2, Some("210k".into()), 1)
+        );
+    }
+
+    #[test]
+    fn the_trend_is_every_readable_turn_and_the_cold_streak_is_said_only_from_three() {
+        let h = rows(&[
+            "900,100",
+            "10,90,10,1",
+            "900,100,90",
+            "10,90,10,3",
+            "10,90,10,4",
+            "20,80,20,",
+        ]);
+
+        let t = trend(&h);
+
+        // The two-field row is not a turn; a three-field row has no percentage.
+        assert_eq!(t.len(), 5);
+        assert_eq!(
+            t[1],
+            TrendTurn {
+                hit: Some(90),
+                context: None,
+                written: Some(100)
+            }
+        );
+        assert_eq!(
+            t[4],
+            TrendTurn {
+                hit: Some(20),
+                context: None,
+                written: Some(80)
+            }
+        );
+        // The oracle's `_cold_streak` for these hits is 3, which is `_cache_hint`'s threshold.
+        assert_eq!(cold(&h), Some(3));
+        assert_eq!(
+            cold(&rows(&["10,90,10,1", "10,90,10,2"])),
+            None,
+            "two is not a streak"
+        );
+    }
+
+    #[test]
+    fn a_file_the_gauge_will_not_vouch_for_has_no_trend_either() {
+        let h = rows(&["900,100,90,12", "x,20,98,14"]);
+
+        assert!(trend(&h).is_empty());
+        assert_eq!(
+            cold(&rows(&[
+                "10,90,10,1",
+                "10,90,10,2",
+                "10,90,10,3",
+                "y,1,1,1"
+            ])),
+            None
         );
     }
 
