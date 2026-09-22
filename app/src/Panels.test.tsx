@@ -1,3 +1,6 @@
+/// <reference types="node" />
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
@@ -173,5 +176,64 @@ describe("the right-hand region", () => {
     expect(screen.queryByTestId("panel-repos")).not.toBeInTheDocument();
     expect(screen.queryByTestId("panel-ci")).not.toBeInTheDocument();
     expect(screen.queryByTestId("repo-svc")).not.toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------------------------------
+  // The personas, and the count that is the point of the window (M6.6)
+  // ---------------------------------------------------------------------------------------
+
+  it("marks every persona as one, and the plane's default with a star beside its word", () => {
+    draw();
+
+    const personas = within(screen.getByTestId("panel-personas")).getAllByRole("listitem");
+    for (const row of personas) expect(row.querySelector("svg.lucide-user-round")).not.toBeNull();
+    const [devops, steward] = personas;
+    expect(steward).toHaveClass("is-default");
+    expect(steward.querySelector(".default svg.lucide-star")).not.toBeNull();
+    expect(devops).not.toHaveClass("is-default");
+    expect(devops.querySelector("svg.lucide-star")).toBeNull();
+  });
+
+  it("draws the count of chats waiting as a number of its own, inside the sentence", () => {
+    draw({ queue: [3, 7, 9] });
+
+    const queue = screen.getByLabelText("Needs you");
+    // The number is emphasised by being its own element, and the sentence is still one
+    // phrase — "3 need you" — for anyone who is read to rather than shown.
+    expect(queue.querySelector(".needs-you-number")?.textContent).toBe("3");
+    expect(queue.querySelector(".needs-you-count")?.textContent).toBe("3 need you");
+    // Every row names its chat and nothing else; the terminal mark is unread.
+    expect(
+      within(queue).getByRole("button", { name: "ide.7" }).querySelector("svg"),
+    ).not.toBeNull();
+  });
+});
+
+/**
+ * **The count's colour is only ever on a pair the contrast suite measures.**
+ *
+ * `needs-you.base` is `#b85050` in charter-dark, which is 3.64:1 on `surface.base` — under AA
+ * for words. It was split from `danger.base` precisely because white on the old shared value
+ * failed AA on this very badge. So the words beside the count are `text.primary`, and the
+ * number is `needs-you.text` FILLED with `needs-you.base`, which is the pair
+ * `contrast.test.ts` holds at 4.5:1. jsdom computes no colour, so this reads the rules.
+ */
+describe("the needs-you count's colours", () => {
+  const css = readFileSync(join(process.cwd(), "src/App.css"), "utf8").replace(
+    /\/\*[\s\S]*?\*\//g,
+    "",
+  );
+  const rule = (selector: string) =>
+    new RegExp(`(?:^|\\})\\s*${selector.replace(/[.]/g, "\\.")}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ??
+    "";
+
+  it("never writes the sentence in needs-you.base", () => {
+    expect(rule(".needs-you-count")).toMatch(/(?:^|[;\s])color:\s*var\(--text-primary\)/);
+    expect(rule(".needs-you-count")).not.toMatch(/(?:^|[;\s])color:\s*var\(--needs-you-base\)/);
+  });
+
+  it("fills the number with needs-you.base under needs-you.text, the measured pair", () => {
+    expect(rule(".needs-you-number")).toMatch(/background:\s*var\(--needs-you-base\)/);
+    expect(rule(".needs-you-number")).toMatch(/(?:^|[;\s])color:\s*var\(--needs-you-text\)/);
   });
 });
