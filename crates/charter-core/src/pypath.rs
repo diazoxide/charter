@@ -67,6 +67,45 @@ pub fn join(a: &str, b: &str) -> String {
     format!("{a}/{b}")
 }
 
+/// `str(pathlib.PurePosixPath(path))` — the string a `Path` object is.
+///
+/// **Not [`normpath`].** `pathlib` collapses spurious slashes and single dots and nothing else:
+/// `..` is kept (`a/b/..` stays three components, because `b` may be a symlink), a trailing slash
+/// goes, and an empty path is `.`. The one thing it shares with `normpath` is POSIX's leading
+/// pair: exactly two leading slashes are kept as a root of their own, three or more mean one.
+///
+/// The plane-root guards hand `Path` objects around and compare what `realpath` makes of their
+/// strings, so a port that normalised with `normpath` instead would collapse a `..` before the
+/// filesystem was asked about the symlink under it — a different directory.
+pub fn pure_path(path: &str) -> String {
+    let root = if path.starts_with("//") && !path.starts_with("///") {
+        "//"
+    } else if path.starts_with('/') {
+        "/"
+    } else {
+        ""
+    };
+    let parts: Vec<&str> = path
+        .split('/')
+        .filter(|p| !p.is_empty() && *p != ".")
+        .collect();
+    let out = format!("{root}{}", parts.join("/"));
+    if out.is_empty() { ".".to_string() } else { out }
+}
+
+/// `str(Path(a) / b)` — `pathlib`'s join: an absolute `b` replaces `a`, and the result is a
+/// [`pure_path`] string. `a` is expected to be one already.
+pub fn path_div(a: &str, b: &str) -> String {
+    if b.starts_with('/') {
+        return pure_path(b);
+    }
+    if a.ends_with('/') {
+        pure_path(&format!("{a}{b}"))
+    } else {
+        pure_path(&format!("{a}/{b}"))
+    }
+}
+
 /// `os.path.normpath` on posix — `posixpath.normpath`, collapsing `//`, `/./` and `a/b/..`.
 ///
 /// CPython runs this in C (`posix._path_normpath`) and the pure-Python fallback beside it is
