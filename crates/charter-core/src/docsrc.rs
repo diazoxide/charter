@@ -145,6 +145,39 @@ mod tests {
         );
     }
 
+    /// charter-app#119. The pages that describe `charter init` describe THIS init.
+    ///
+    /// ADR 0035 and spec decision 27 reversed the default at the top of a git repository, and
+    /// these two pages went on printing the old one — `charter init --clone-this-repo`, an
+    /// option this binary does not have — because the corpus check held them byte for byte
+    /// against a frozen Python charter that still has it. `tests/differential/run.py`'s
+    /// `DOCS_DIVERGE` is what lets them be right; this is the cheap half of the same claim,
+    /// in the suite a person runs before pushing rather than in the job that takes minutes.
+    ///
+    /// It asks about the OPTION rather than about a sentence, because the sentence is the
+    /// part that is allowed to be rewritten and the option is the part that must never come
+    /// back: `--clone-this-repo` in a page charter-app ships is a page telling an operator to
+    /// type something that will not run.
+    #[test]
+    fn no_page_offers_an_init_option_this_charter_does_not_have() {
+        for topic in topics() {
+            let page = read(topic).expect("a topic the binary offers is a page it carries");
+            assert!(
+                !page.contains("--clone-this-repo"),
+                "docs/{topic}.md offers `charter init --clone-this-repo`, which ADR 0035 \
+                 replaced — see DOCS_DIVERGE in tests/differential/run.py"
+            );
+        }
+        for topic in ["control-plane", "install"] {
+            let page = read(topic).expect("a page this charter has always shipped");
+            assert!(
+                page.contains("--plane-is-this-repo"),
+                "docs/{topic}.md describes `charter init` in a repository and never names the \
+                 opt-in that makes it write anything"
+            );
+        }
+    }
+
     #[test]
     fn a_topic_that_is_a_path_names_no_page() {
         // `charter docs show ../../etc/passwd` must not be a file read wearing a
