@@ -49,6 +49,33 @@ impl Made {
         std::fs::create_dir_all(at.parent().expect("a parent")).expect("the directory");
         std::fs::write(at, text).expect("the file");
     }
+
+    /// An extension contributing one theme and declaring `state` as the one directory charter
+    /// does not read.
+    fn with_state(&self, state: &str) -> PathBuf {
+        self.manifest(&format!(
+            r#"{{"version":1,"id":"solarized","name":"Solarized","state":"{state}",
+                "contributes":{{"themes":[{{"name":"Solarized Dark","file":"dark.json"}}]}}}}"#
+        ));
+        self.file(
+            "dark.json",
+            r#"{"name":"Solarized Dark","appearance":"dark","tokens":{}}"#,
+        );
+        self.at()
+    }
+
+    /// The fingerprint of what is on disk right now, for a test that only cares whether it
+    /// moved.
+    fn now(&self) -> String {
+        read_at(&self.at()).expect("an extension").fingerprint
+    }
+
+    #[cfg(unix)]
+    fn chmod(&self, name: &str, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(self.at().join(name), std::fs::Permissions::from_mode(mode))
+            .expect("the mode");
+    }
 }
 
 // -------------------------------------------------------------------------------------
@@ -241,6 +268,21 @@ fn a_declared_file_that_walks_up_out_of_the_extension_is_refused_by_the_manifest
 }
 
 #[test]
+fn a_manifest_that_declares_itself_is_refused() {
+    // The manifest is already a part of the digest, over the bytes that were parsed. Declaring
+    // it as a theme asks for those bytes back as theme text, which the walk does not keep — so
+    // the theme would be dropped in silence, which reads as a theme that did nothing wrong.
+    let made = Made::new();
+    made.ordinary();
+    made.manifest(&format!(
+        r#"{{"version":1,"id":"x","contributes":{{"themes":[{{"file":"{MANIFEST}"}}]}}}}"#
+    ));
+
+    let why = read_at(&made.at()).expect_err("no extension");
+    assert!(why.contains("is the manifest itself"), "{why}");
+}
+
+#[test]
 fn a_declared_file_that_is_absolute_is_refused() {
     let made = Made::new();
     made.ordinary();
@@ -413,6 +455,486 @@ fn a_declared_program_is_hashed_but_its_bytes_are_not_kept() {
     let found = read_at(&made.at()).expect("an extension");
 
     assert!(found.theme_text.is_empty(), "{:?}", found.theme_text);
+}
+
+// -------------------------------------------------------------------------------------
+// The fingerprint covers the DIRECTORY (charter-app#152), and the carve-out is one
+// directory that cannot hold code
+// -------------------------------------------------------------------------------------
+
+#[test]
+fn an_undeclared_sibling_changing_changes_the_fingerprint() {
+    // **charter-app#152 itself, and the test to read first.** Before the tree hash this file
+    // was invisible: the manifest did not name it, so nothing hashed it, and the dialog's
+    // "charter has read this extension's files" was false about exactly the kind of file a
+    // program loads — a `.dylib` beside it, a script it sources, a config it reads.
+    let made = Made::new();
+    made.ordinary();
+    made.file("helper.dylib", "the bytes the operator approved");
+    let before = made.now();
+
+    made.file("helper.dylib", "the bytes nobody was asked about");
+
+    assert_ne!(
+        before,
+        made.now(),
+        "an undeclared sibling changed and the fingerprint did not"
+    );
+}
+
+#[test]
+fn a_file_added_changes_the_fingerprint() {
+    // The set of PATHS is hashed, not only the contents of the paths that were there. An
+    // extension that gains a file after approval has gained something nobody was asked about,
+    // and a hash over contents alone cannot see it arrive.
+    let made = Made::new();
+    made.ordinary();
+    let before = made.now();
+
+    made.file("added.js", "");
+
+    assert_ne!(before, made.now(), "a file appeared and nothing noticed");
+}
+
+#[test]
+fn a_file_taken_away_changes_the_fingerprint() {
+    // The other half of the same property, and the one a content hash gets wrong quietly: a
+    // file removed is a change to what the operator approved, not an absence of change.
+    let made = Made::new();
+    made.ordinary();
+    made.file("extra.json", "{}");
+    let before = made.now();
+
+    std::fs::remove_file(made.at().join("extra.json")).expect("the file");
+
+    assert_ne!(before, made.now(), "a file went away and nothing noticed");
+}
+
+#[test]
+fn renaming_a_file_changes_the_fingerprint() {
+    // **The sharp version of "the set of paths is hashed", and the one a sweep needed.** A test
+    // that only ADDS a file passes against a hash that frames every part under the same name,
+    // because the extra part is still an extra part — measured, it survived. A rename changes
+    // nothing but the name: same count, same kinds, same bytes. Only a digest that has the path
+    // in it can tell the two apart, and `config.json` renamed to `preload.js` is exactly the
+    // kind of change that means something.
+    let made = Made::new();
+    made.ordinary();
+    made.file("one.json", "the same bytes either way");
+    let before = made.now();
+
+    std::fs::rename(made.at().join("one.json"), made.at().join("two.json")).expect("renamed");
+
+    assert_ne!(
+        before,
+        made.now(),
+        "a file was renamed and the fingerprint did not move"
+    );
+}
+
+#[test]
+fn an_empty_directory_appearing_changes_the_fingerprint() {
+    // A directory is a part with no bytes, so it is in the hash by name. Without that, an
+    // extension could be reshaped — a tree of empty directories is a shape — with nothing to
+    // see.
+    let made = Made::new();
+    made.ordinary();
+    let before = made.now();
+
+    std::fs::create_dir(made.at().join("plugins")).expect("the directory");
+
+    assert_ne!(
+        before,
+        made.now(),
+        "a directory appeared and nothing noticed"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn making_a_file_runnable_changes_the_fingerprint() {
+    // The smallest edit that turns data into something a shell will run, and it does not touch
+    // a byte of the file. The executable bit is in the part's NAME for exactly this.
+    let made = Made::new();
+    made.ordinary();
+    made.file("run.sh", "#!/bin/sh\necho one\n");
+    made.chmod("run.sh", 0o644);
+    let before = made.now();
+
+    made.chmod("run.sh", 0o755);
+
+    assert_ne!(
+        before,
+        made.now(),
+        "a file became runnable and the fingerprint did not move"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_out_of_the_tree_is_hashed_as_a_link_and_never_followed() {
+    // **What a symlink IS to the hash**, decided rather than left to whatever `read_dir`
+    // happens to do: it is its own kind, its TARGET STRING is what is hashed, and nothing is
+    // read through it. So a link that leaves the extension reads nothing out there — the file
+    // it points at can change without the fingerprint moving, because that file was never part
+    // of the extension — and re-pointing the link is a change to the extension, which it is.
+    //
+    // Refusing links outright was the alternative and is the wrong one: `node_modules/.bin/`
+    // is a tree of them, and "charter refuses my extension over a file I didn't write" is the
+    // reaction the operator ruled against.
+    let made = Made::new();
+    made.ordinary();
+    let outside = made.dir.path().join("outside.txt");
+    std::fs::write(&outside, "one").expect("a file outside");
+    let elsewhere = made.dir.path().join("elsewhere.txt");
+    std::fs::write(&elsewhere, "other").expect("another file outside");
+    std::os::unix::fs::symlink(&outside, made.at().join("points-out")).expect("a link");
+    let before = made.now();
+
+    std::fs::write(&outside, "two").expect("the file outside changed");
+    assert_eq!(
+        before,
+        made.now(),
+        "charter followed a link out of the extension and hashed what it found"
+    );
+
+    std::fs::remove_file(made.at().join("points-out")).expect("the link");
+    std::os::unix::fs::symlink(&elsewhere, made.at().join("points-out")).expect("a link");
+    assert_ne!(
+        before,
+        made.now(),
+        "the link was re-pointed and the fingerprint did not move"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_loop_does_not_hang_the_walk() {
+    // A loop is only a hang for a walk that goes THROUGH a link. This one records links and
+    // descends into nothing but directories it saw itself, so the loop is two ordinary parts.
+    // This test hangs, rather than fails, if that stops being true — which is worth more than
+    // a passing assertion, because a launch that never finishes is the failure it stands for.
+    let made = Made::new();
+    made.ordinary();
+    std::os::unix::fs::symlink("round", made.at().join("about")).expect("a link");
+    std::os::unix::fs::symlink("about", made.at().join("round")).expect("the other link");
+
+    let found = read_at(&made.at()).expect("an extension with a loop in it");
+
+    assert_eq!(found.fingerprint.len(), 64, "{}", found.fingerprint);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_directory_symlinked_into_itself_does_not_walk_for_ever() {
+    // The shape that actually recurses: a link at a directory pointing back at its own parent.
+    // A walk that followed it would descend `deep/up/deep/up/…` until the budget or the stack
+    // ran out.
+    let made = Made::new();
+    made.ordinary();
+    std::fs::create_dir(made.at().join("deep")).expect("the directory");
+    std::os::unix::fs::symlink(made.at(), made.at().join("deep/up")).expect("a link back up");
+
+    let found = read_at(&made.at()).expect("an extension");
+
+    assert_eq!(found.fingerprint.len(), 64, "{}", found.fingerprint);
+}
+
+#[test]
+fn more_files_than_charter_reads_is_refused_with_what_to_do() {
+    // A directory walk is attacker-influenced input and a bound is not optional: the read
+    // happens on the path that draws the window. The refusal has to say what to do about it,
+    // because "too big" with no yardstick is a launch telling the operator nothing.
+    let made = Made::new();
+    made.ordinary();
+    for n in 0..=MOST_TREE_ENTRIES {
+        made.file(&format!("f{n}"), "");
+    }
+
+    let why = read_at(&made.at()).expect_err("no extension past the bound");
+    assert!(why.contains("files and directories"), "{why}");
+    assert!(
+        why.contains("a directory holding the extension and nothing else"),
+        "the refusal must say what to do: {why}"
+    );
+}
+
+#[test]
+fn more_bytes_than_charter_hashes_is_refused_with_what_to_do() {
+    // The other bound: one file can be as large as the disk, and the entry count would not
+    // see it. Refused on the length the DESCRIPTOR reports, before a byte is read, so a
+    // planted giant costs a `stat` rather than a launch.
+    let made = Made::new();
+    made.ordinary();
+    std::fs::write(
+        made.at().join("giant"),
+        vec![0u8; MOST_TREE_BYTES as usize + 1],
+    )
+    .expect("a giant");
+
+    let why = read_at(&made.at()).expect_err("no extension past the bound");
+    assert!(why.contains("bytes charter would hash"), "{why}");
+    assert!(
+        why.contains("a directory holding the extension and nothing else"),
+        "the refusal must say what to do: {why}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn something_that_is_not_a_file_a_directory_or_a_link_is_refused_rather_than_skipped() {
+    // Skipping it would be a hole in the tree hash with no name on it: anything charter cannot
+    // hash is something that can change without the fingerprint moving.
+    let made = Made::new();
+    made.ordinary();
+    let at = made.at().join("pipe");
+    let made_it = crate::forklock::status(std::process::Command::new("mkfifo").arg(&at))
+        .expect("mkfifo runs");
+    assert!(made_it.success(), "the test needs a fifo to plant");
+
+    let why = read_at(&made.at()).expect_err("no extension");
+    assert!(
+        why.contains("cannot fingerprint what it cannot read"),
+        "{why}"
+    );
+}
+
+#[test]
+fn the_state_directory_is_the_one_place_that_does_not_ask_again() {
+    // **The reason the carve-out exists.** An extension that keeps a cache or a log beside
+    // itself would otherwise re-prompt at every launch, and a consent dialog people click
+    // through is worse than no dialog at all.
+    let made = Made::new();
+    let at = made.with_state("state");
+    let found = install(&made.config(), &at).expect("installed");
+    approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
+
+    std::fs::create_dir_all(made.at().join("state/deep")).expect("the state directory");
+    std::fs::write(made.at().join("state/log"), "a line\n").expect("a log");
+    std::fs::write(made.at().join("state/deep/cache"), "bytes").expect("a cache");
+
+    let now = read_at(&made.at()).expect("an extension");
+    assert_eq!(
+        read(&made.config()).standing(&now),
+        Standing::Approved,
+        "an extension that wrote its own state re-prompted the operator"
+    );
+}
+
+#[test]
+fn a_state_directory_that_is_not_there_yet_is_not_itself_a_change() {
+    // First launch has written nothing. If the exclusion depended on the directory existing,
+    // the extension's first write would be the change that asks — which is the same prompt
+    // fatigue with one more step in front of it.
+    let made = Made::new();
+    let at = made.with_state("state");
+    let found = install(&made.config(), &at).expect("installed");
+    approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
+
+    std::fs::create_dir(made.at().join("state")).expect("the state directory");
+    std::fs::write(made.at().join("state/first"), "").expect("its first file");
+
+    let now = read_at(&made.at()).expect("an extension");
+    assert_eq!(read(&made.config()).standing(&now), Standing::Approved);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_program_in_the_state_directory_is_refused_rather_than_excluded() {
+    // **The enforcement the carve-out has to carry.** The state directory is the one place
+    // charter does not look, so a `.dylib` or a script there would be code the operator is
+    // never asked about — which hands back the whole property the tree hash exists for.
+    let made = Made::new();
+    made.with_state("state");
+    std::fs::create_dir(made.at().join("state")).expect("the state directory");
+    made.file("state/helper", "#!/bin/sh\n");
+    made.chmod("state/helper", 0o755);
+
+    let why = read_at(&made.at()).expect_err("no extension with a program in its state");
+    assert!(why.contains("can be run"), "{why}");
+    assert!(
+        why.contains("Move it out of 'state'"),
+        "the refusal must say what to do: {why}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_in_the_state_directory_is_refused() {
+    // A link there names code from anywhere without naming it here, which is the same hole
+    // through a different door.
+    let made = Made::new();
+    made.with_state("state");
+    std::fs::create_dir(made.at().join("state")).expect("the state directory");
+    std::os::unix::fs::symlink("/bin/sh", made.at().join("state/sh")).expect("a link");
+
+    let why = read_at(&made.at()).expect_err("no extension with a link in its state");
+    assert!(
+        why.contains("is a symlink inside the state directory"),
+        "{why}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_state_directory_that_is_itself_a_symlink_is_refused() {
+    // charter does not read what is in there, so a link at the state directory itself puts
+    // "the one place this extension may write" wherever it points — and the dialog names a
+    // directory the operator can look in.
+    let made = Made::new();
+    made.with_state("state");
+    let outside = made.dir.path().join("outside");
+    std::fs::create_dir(&outside).expect("a directory outside");
+    std::os::unix::fs::symlink(&outside, made.at().join("state")).expect("a link");
+
+    let why = read_at(&made.at()).expect_err("no extension");
+    assert!(why.contains("state directory and is a symlink"), "{why}");
+}
+
+#[test]
+fn a_state_directory_that_is_a_file_is_refused() {
+    let made = Made::new();
+    made.with_state("state");
+    made.file("state", "not a directory");
+
+    let why = read_at(&made.at()).expect_err("no extension");
+    assert!(why.contains("is not a directory"), "{why}");
+}
+
+#[test]
+fn a_state_directory_that_is_not_one_plain_name_is_refused() {
+    // One segment, so the carve-out is visible in a directory listing rather than buried at
+    // `build/tmp/state`. A hole the operator cannot see is a hole charter is keeping from them.
+    for bad in ["../elsewhere", "build/tmp", "/abs", ".", "..", ""] {
+        let made = Made::new();
+        made.ordinary();
+        made.manifest(&format!(
+            r#"{{"version":1,"id":"x","state":{},
+                "contributes":{{"themes":[{{"file":"dark.json"}}]}}}}"#,
+            serde_json::Value::String(bad.to_owned())
+        ));
+
+        let why = read_at(&made.at()).expect_err("no extension for the state {bad:?}");
+        assert!(why.contains("state directory"), "{bad:?}: {why}");
+    }
+}
+
+#[test]
+fn a_declared_file_inside_the_state_directory_is_refused() {
+    // Otherwise a theme or a program is exempt from the fingerprint by declaration, which is
+    // charter-app#152 with the hole moved rather than closed.
+    let made = Made::new();
+    made.ordinary();
+    made.manifest(
+        r#"{"version":1,"id":"x","state":"state",
+            "contributes":{"themes":[{"file":"state/dark.json"}]}}"#,
+    );
+    made.file("state/dark.json", "{}");
+
+    let why = read_at(&made.at()).expect_err("no extension");
+    assert!(why.contains("inside its state directory"), "{why}");
+}
+
+#[test]
+fn the_state_directory_is_excluded_only_at_the_top() {
+    // `state` is one segment and it names the directory beside the manifest. A directory
+    // called `state` further down is an ordinary directory and is hashed — otherwise the
+    // carve-out would be a name an extension could sprinkle anywhere.
+    let made = Made::new();
+    made.with_state("state");
+    made.file("deep/state/kept", "one");
+    let before = made.now();
+
+    made.file("deep/state/kept", "two");
+
+    assert_ne!(
+        before,
+        made.now(),
+        "a directory named 'state' below the top was treated as the carve-out"
+    );
+}
+
+#[test]
+fn the_prompt_says_which_directory_charter_does_not_read() {
+    // The exception goes where the operator consents. `FINGERPRINTED` says charter read every
+    // file in the directory; if that is true of everything but one directory, the one
+    // directory is the operator's to weigh and not a doc comment's to keep.
+    let made = Made::new();
+    let found = read_at(&made.with_state("cache")).expect("an extension");
+
+    let asked = prompt(&found, Standing::New);
+    let said = asked.state_note.expect("a state note");
+    assert_eq!(said, state_note("cache"));
+    assert!(said.contains("'cache/'"), "{said}");
+    assert!(
+        said.contains(
+            "cannot stop a program it has already read from treating its own data as \
+                       code"
+        ),
+        "the note must not claim more than the check does: {said}"
+    );
+}
+
+#[test]
+fn an_extension_with_no_state_directory_has_no_exception_to_state() {
+    let made = Made::new();
+    let found = read_at(&made.ordinary()).expect("an extension");
+
+    assert_eq!(prompt(&found, Standing::New).state_note, None);
+}
+
+#[test]
+fn the_fingerprint_note_says_the_whole_directory_and_not_only_what_is_declared() {
+    // The sentence charter-app#152 was opened over. It said "this extension's files", which
+    // the operator reads as all of them and which the code meant as the declared ones.
+    let made = Made::new();
+    let found = read_at(&made.ordinary()).expect("an extension");
+
+    let said = prompt(&found, Standing::New).fingerprint_note;
+    assert!(
+        said.contains("every file in this extension's directory"),
+        "{said}"
+    );
+    assert!(said.contains("not only the ones it declares"), "{said}");
+    assert!(said.contains("added or taken away"), "{said}");
+}
+
+#[test]
+#[ignore = "a measurement, not a guard: cargo test -p charter-core -- --ignored --nocapture"]
+fn what_the_re_hash_costs_at_launch() {
+    // charter-app#150's point 6 left this unmeasured and the operator asked for it. The
+    // numbers this prints are the ones in #152's PR body; it is here rather than in a
+    // benchmark harness so that the next person to widen the hash can re-run it in one
+    // command against the code as it actually is.
+    for (files, bytes) in [
+        // A theme extension as one actually ships: a manifest and a few hundred hex strings.
+        (4usize, 16usize << 10),
+        (100, 1 << 20),
+        (1_000, 50 << 20),
+        // At the bound, with room for the sixteen directories and the two declared files.
+        (MOST_TREE_ENTRIES - 32, MOST_TREE_BYTES as usize - (1 << 20)),
+    ] {
+        let made = Made::new();
+        made.ordinary();
+        let each = bytes / files;
+        for n in 0..files {
+            let at = made.at().join(format!("d{}/f{n}", n % 16));
+            std::fs::create_dir_all(at.parent().expect("a parent")).expect("the directory");
+            std::fs::write(&at, vec![b'x'; each]).expect("the file");
+        }
+        // Once to warm the page cache, which is the state a second launch is in.
+        read_at(&made.at()).expect("an extension");
+        let began = std::time::Instant::now();
+        let rounds = 5;
+        for _ in 0..rounds {
+            read_at(&made.at()).expect("an extension");
+        }
+        let each_took = began.elapsed() / rounds;
+        println!(
+            "{files} files / {} MiB: {each_took:?} per re-hash",
+            bytes >> 20
+        );
+    }
 }
 
 // -------------------------------------------------------------------------------------

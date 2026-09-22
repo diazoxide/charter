@@ -90,8 +90,14 @@ does NOT share with the four dialogs, both because it is a menu and not a questi
   would answer a question by accident. A menu has no answer to lose, and every menu on every
   platform closes this way.
 
-Its measurement of what does not fit lives in `app/src/offscreen.ts` and is
-`IntersectionObserver`, not a scroll handler reading fifty rects.
+It is on all three strips — projects, workspaces and chats — because the operator's ruling of
+2026-09-22 was about all of them: a strip that has more than it can draw collapses the rest into
+this menu rather than scrolling. What decides how many fit lives in `app/src/fits.ts` and is
+arithmetic over one measured width per strip, not a measurement of fifty tabs: every tab takes an
+equal share of its strip and is never drawn narrower than a floor, exactly as a browser sizes its
+own tabs, so `n` tabs fit in `width` when `width / n >= least`. It replaced an
+`IntersectionObserver` over every tab, which is the right question about a strip that scrolls and
+a loop on a strip that collapses.
 
 And the **alerts drawer** (`app/src/AlertsDrawer.tsx`, M6.5): `@radix-ui/react-dialog` drawn as a
 sheet from the right, over the whole window, opened from the status line. It is the primitive

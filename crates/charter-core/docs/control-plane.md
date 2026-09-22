@@ -126,24 +126,35 @@ than clones. It was removed — see [ADR 0007](adr/0007-one-plane-shape.md) — 
 plane exercised exactly one of the two, so the other was carried on trust. An existing
 `shape` key is simply ignored.
 
-`charter init` therefore produces the same plane wherever it runs. Being inside a git repo
-no longer changes what you get; it changes only what init *offers*, which is to clone that
-repo into your first workspace:
+`charter init` therefore produces the same plane wherever it runs. Being at the top of a git
+repo no longer changes what you get; it changes whether init writes anything at all. It
+writes nothing, and says what the two ways on are:
 
 ```
 $ charter init --forge github --owner acme
-✓ Initialized control plane (schema 1) → charter.toml, personas/, …
-• You are standing in the git repo 'myapp'. Work happens in a workspace, not in the plane
-  root — clone it into the first one:
-      charter init --clone-this-repo
+✗ this is the git repo 'myapp', and `charter init` does not make a repository into a
+  control plane unless you ask it to. Nothing was written.
+• A plane is a directory of its own, and this repo is the first clone in it:
+      mkdir ../myapp-plane && cd ../myapp-plane
+      charter init --forge github --owner acme
+      charter discover && charter clone myapp
+• To make THIS repo the plane instead, ask for it by name:
+      charter init --plane-is-this-repo --forge github --owner acme
 ```
 
-That is an offer, not a prompt: charter never reads stdin (it runs inside hooks, where
-blocking would hang the turn), so the second command *is* the acceptance — the same shape
-`charter report` uses for consent. Run it and you get `workspaces/default/myapp/`, cloned
-from the repo you are standing in and pointed at the same `origin` it has; ignore it and
-the plane is complete as it stands. Either way the control plane itself is identical, and
-nothing is written to your repo's git state.
+That is a refusal, not a prompt: charter never reads stdin (it runs inside hooks, where
+blocking would hang the turn), so naming the option *is* the acceptance — the same shape
+`charter report` uses for consent. Take the first way and you get
+`workspaces/default/myapp/`, cloned from the repo you were standing in and pointed at the
+same `origin` it has; take the second and this repo becomes the plane. Either way the
+control plane itself is identical, and until you choose, nothing is written to your repo at
+all.
+
+**This page describes charter-app**, whose default here is the opposite of the Python
+charter's, which scaffolds a plane into the repo and *offers* to clone it into the first
+workspace. See [ADR 0035](adr/0035-a-plane-is-untrusted-until-the-operator-opens-it.md) and
+charter-app spec decision 27 for why it was reversed. `charter init` anywhere that is not the
+top of a git repo is unchanged.
 
 ### The plane root is not a place to work
 
@@ -203,9 +214,9 @@ $ charter workspace create feature-x
 Its branch is the workspace name unless you pass `--branch`.
 
 A solo user with one repo used to be able to `charter init` and carry on working in that
-repo, because `default` *was* the plane root. It no longer is (ADR 0007), so their path is
-`charter init --clone-this-repo` — the offer above — and then work in
-`workspaces/default/<repo>/`.
+repo, because `default` *was* the plane root. It no longer is (ADR 0007), so their path is a
+plane in a directory of its own and then `charter clone <repo>` — the first way out of the
+refusal above — and then work in `workspaces/default/<repo>/`.
 
 **Selecting a workspace with no tree is refused**, because it would put you on the same
 files as every other workspace — the thing workspaces exist to prevent. `charter workspace

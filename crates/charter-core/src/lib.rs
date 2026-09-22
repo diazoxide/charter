@@ -43,6 +43,7 @@ pub mod pieces;
 pub mod plane;
 pub mod planegit;
 pub mod planeroot;
+pub mod process;
 pub mod profiles;
 pub mod profiletrust;
 pub mod programs;
