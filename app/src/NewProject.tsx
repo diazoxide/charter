@@ -23,12 +23,17 @@ import { commands } from "./bindings";
  * repository, which is why the option is here at all — and it is never the default, and never
  * ticked for the operator.
  *
- * **What this dialog does NOT do is adopt the repo as the plane's first clone.** That is the
- * other half of ADR 0035's default and it needs `charter clone`, which applies charter's git
- * policy — a security-critical part that is not ported (spec decision 16), so `init
- * --clone-this-repo` refuses rather than clones in this charter too. The refusal the operator
- * reads is the core's, it names the three commands that finish the job, and the gap is filed
- * rather than half-implemented: a clone made without the policy is worse than one not made.
+ * **Adopting a repository is the other half, and it is the one ADR 0035 calls the default**
+ * (charter-app#175). The record's sentence is that `charter init` on an existing repo *"adopts
+ * that repo as the plane's first clone and makes the plane beside it"*, so this asks for two
+ * directories rather than showing a refusal about them: where the plane goes, and which repo
+ * it starts with. The repo is cloned into `workspaces/<default>/<name>/` with charter's git
+ * policy applied to the clone, and **nothing is written into the repo itself** — it is read,
+ * and only read.
+ *
+ * The two answers are separate boxes because they are separate answers. Deriving the plane's
+ * directory from the repo's (`../<name>-plane`) would put charter's guess where the operator's
+ * decision belongs, on the one field this dialog exists to collect.
  *
  * Whatever is scaffolded is then opened **through the trust gate** — see `create_project`. A
  * plane charter has just made is still a plane this machine has approved nothing about, so the
@@ -44,22 +49,27 @@ export function NewProject({
 }: {
   trouble?: string;
   making: boolean;
-  onCreate: (path: string, planeIsThisRepo: boolean) => void;
+  onCreate: (path: string, planeIsThisRepo: boolean, adopt: string) => void;
   onCancel: () => void;
 }) {
   const [path, setPath] = useState("");
+  const [adopt, setAdopt] = useState("");
   const [planeIsThisRepo, setPlaneIsThisRepo] = useState(false);
   const pathId = useId();
+  const adoptId = useId();
   const repoId = useId();
   const box = useRef<HTMLInputElement>(null);
   const ready = path.trim() !== "" && !making;
 
-  const pick = useCallback(() => {
+  // One picker, told where to put its answer. Both fields ask the same question of the same
+  // file dialog — which directory — and two copies of it would be two places to fix the day
+  // a cancelled pick stops answering null.
+  const pick = useCallback((into: (chosen: string) => void) => {
     void commands
       .pickProject()
       .then((answer) => {
         // A cancelled dialog is null and is not a failure: nothing is said and nothing moves.
-        if (answer.status === "ok" && answer.data) setPath(answer.data);
+        if (answer.status === "ok" && answer.data) into(answer.data);
       })
       .catch(() => undefined);
   }, []);
@@ -92,7 +102,11 @@ export function NewProject({
             className="asks"
             onSubmit={(event) => {
               event.preventDefault();
-              if (ready) onCreate(path.trim(), planeIsThisRepo);
+              // The box and the adopt field are two answers to one question — which
+              // repository this plane starts from — so a ticked box sends no repo, rather
+              // than sending both and letting the core rank them.
+              if (ready)
+                onCreate(path.trim(), planeIsThisRepo, planeIsThisRepo ? "" : adopt.trim());
             }}
           >
             <label htmlFor={pathId}>Folder</label>
@@ -106,12 +120,35 @@ export function NewProject({
                 placeholder="/where/it/goes"
                 onChange={(event) => setPath(event.target.value)}
               />
-              <button type="button" onClick={pick}>
+              <button type="button" onClick={() => pick(setPath)}>
                 Browse…
               </button>
             </div>
             <p className="came-back">
               It does not have to exist yet. charter makes it, and writes the plane into it.
+            </p>
+
+            {/* ADR 0035's default, as a second directory rather than a refusal about one. */}
+            <label htmlFor={adoptId}>Repository to adopt</label>
+            <div className="picking">
+              <input
+                id={adoptId}
+                value={adopt}
+                autoComplete="off"
+                spellCheck={false}
+                disabled={planeIsThisRepo}
+                placeholder="/where/the/repo/is (optional)"
+                onChange={(event) => setAdopt(event.target.value)}
+              />
+              <button type="button" disabled={planeIsThisRepo} onClick={() => pick(setAdopt)}>
+                Browse…
+              </button>
+            </div>
+            <p className="came-back">
+              Optional, and the way ADR 0035 means a project to start: the plane goes in the folder
+              above and this repository becomes its first clone, in <code>workspaces/</code>.
+              Nothing is written into the repository — it is read, and only read. Leave it empty for
+              a plane with no clones yet.
             </p>
 
             {/* The one decision, and it is the operator's. Radix's checkbox, per

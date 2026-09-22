@@ -136,8 +136,7 @@ $ charter init --forge github --owner acme
   control plane unless you ask it to. Nothing was written.
 • A plane is a directory of its own, and this repo is the first clone in it:
       mkdir ../myapp-plane && cd ../myapp-plane
-      charter init --forge github --owner acme
-      charter discover && charter clone myapp
+      charter init --forge github --owner acme --adopt ../myapp
 • To make THIS repo the plane instead, ask for it by name:
       charter init --plane-is-this-repo --forge github --owner acme
 ```
@@ -215,7 +214,7 @@ Its branch is the workspace name unless you pass `--branch`.
 
 A solo user with one repo used to be able to `charter init` and carry on working in that
 repo, because `default` *was* the plane root. It no longer is (ADR 0007), so their path is a
-plane in a directory of its own and then `charter clone <repo>` — the first way out of the
+plane in a directory of its own and `charter init --adopt <repo>` — the first way out of the
 refusal above — and then work in `workspaces/default/<repo>/`.
 
 **Selecting a workspace with no tree is refused**, because it would put you on the same

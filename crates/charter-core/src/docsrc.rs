@@ -154,27 +154,36 @@ mod tests {
     /// `DOCS_DIVERGE` is what lets them be right; this is the cheap half of the same claim,
     /// in the suite a person runs before pushing rather than in the job that takes minutes.
     ///
-    /// It asks about the OPTION rather than about a sentence, because the sentence is the
-    /// part that is allowed to be rewritten and the option is the part that must never come
-    /// back: `--clone-this-repo` in a page charter-app ships is a page telling an operator to
-    /// type something that will not run.
+    /// It asks about the OPTIONS rather than about a sentence, because the sentence is the
+    /// part that is allowed to be rewritten and the option is the part that must be right:
+    /// `--clone-this-repo` is the flow ADR 0035 reversed — scaffold into the repo, then
+    /// accept an offer — and a page that prints it is a page describing the Python charter
+    /// under charter-app's name.
+    ///
+    /// **Both halves of the new default are named**, which is the half charter-app#175 was
+    /// filed about: `--plane-is-this-repo` is the opt-in that writes into the repo, and
+    /// `--adopt` is the one that does what ADR 0035 actually decided — the plane beside the
+    /// repo and the repo as its first clone. Until #175 only the refusal existed, and the
+    /// pages ended in three commands the operator typed themselves.
     #[test]
     fn no_page_offers_an_init_option_this_charter_does_not_have() {
         for topic in topics() {
             let page = read(topic).expect("a topic the binary offers is a page it carries");
             assert!(
                 !page.contains("--clone-this-repo"),
-                "docs/{topic}.md offers `charter init --clone-this-repo`, which ADR 0035 \
-                 replaced — see DOCS_DIVERGE in tests/differential/run.py"
+                "docs/{topic}.md offers `charter init --clone-this-repo`, whose flow ADR 0035 \
+                 reversed — see DOCS_DIVERGE in tests/differential/run.py"
             );
         }
         for topic in ["control-plane", "install"] {
             let page = read(topic).expect("a page this charter has always shipped");
-            assert!(
-                page.contains("--plane-is-this-repo"),
-                "docs/{topic}.md describes `charter init` in a repository and never names the \
-                 opt-in that makes it write anything"
-            );
+            for option in ["--plane-is-this-repo", "--adopt"] {
+                assert!(
+                    page.contains(option),
+                    "docs/{topic}.md describes `charter init` in a repository and never names \
+                     `{option}`, one of the two ways on out of its refusal"
+                );
+            }
         }
     }
 

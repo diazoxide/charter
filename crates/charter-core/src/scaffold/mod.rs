@@ -49,10 +49,27 @@
 //!   does not start opencode (`wiring::not_startable`), and a shim whose every hook reaches
 //!   a binary that refuses opencode's tool hooks would block opencode on the whole machine.
 //!   The plane's own `opencode.json` ask rule IS written: it is part of the plane.
-//! - **`--clone-this-repo` refuses rather than clones.** The clone is handed charter's git
-//!   policy (`gitpolicy.apply`), which is a security-critical part not ported yet (spec
-//!   decision 16). The plane itself is still created, as Python creates it before cloning.
+//!
+//! # The other half of ADR 0035's default: adopting the repo
+//!
+//! The refusal above is only half of what ADR 0035 decided. Its sentence is *"`charter init`
+//! on an existing repo **adopts that repo as the plane's first clone** and makes the plane
+//! beside it"*, and until charter-app#175 charter could do the refusing and not the adopting:
+//! `--clone-this-repo` answered with a refusal of its own, on the grounds that the clone is
+//! handed charter's git policy and `gitpolicy.apply` was not ported. **It has been since M2.5
+//! (#64)** — `crates/charter-core/src/gitpolicy.rs` is the whole module, `apply` included —
+//! so that note was stale, and the refusal it justified outlived it.
+//!
+//! So [`InitArgs::adopt`] names the repository to adopt, `firstclone` does the cloning for
+//! both shapes, and `--clone-this-repo` clones rather than refusing. **Where the plane goes is
+//! still typed, never guessed.** ADR 0035 says the plane is made "beside" the repo; it does
+//! not say charter picks that directory, and `init` writing `../<name>-plane` out of a
+//! directory it was pointed at would break this module's own contract — *"It writes nothing
+//! outside the plane"* — for the sake of saving one `mkdir`. The operator names the plane's
+//! directory and `--adopt` names the repo, which is the same two answers the app's dialog asks
+//! for (charter-app#175, step 4).
 
+pub(crate) mod firstclone;
 pub mod planefile;
 pub mod settings;
 pub mod text;
@@ -99,6 +116,18 @@ pub struct InitArgs {
     /// by name (ADR 0035, spec decision 27). It decides nothing outside a repository's top
     /// level, where there is no repository to colonise.
     pub plane_is_this_repo: bool,
+    /// **ADR 0035's default, as the thing charter does rather than the thing it describes**:
+    /// a repository SOMEWHERE ELSE, adopted as this plane's first clone (charter-app#175).
+    ///
+    /// The plane is scaffolded at the directory `init` was pointed at, exactly as it is with
+    /// no flag at all, and then this repo is cloned into the plane's first workspace and left
+    /// otherwise untouched. `--clone-this-repo` is the same act with the source fixed to the
+    /// plane root, so the two are refused together rather than silently ranked.
+    pub adopt: Option<PathBuf>,
+    /// When the first workspace's manifest records it was made — `None` is the wall clock.
+    /// Only a run that adopts or clones writes one, which is why it is an option rather than
+    /// a field every caller has to have an answer for.
+    pub now: Option<chrono::DateTime<chrono::Utc>>,
     /// The front-door persona to scaffold, or `None` for `--no-front-door`.
     pub front_door: Option<String>,
 }
@@ -260,6 +289,17 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
         ));
         return run.outcome(1);
     }
+    // Refused before anything is written, because it is a question about what the run is FOR:
+    // both flags name the source of the first clone, and a charter that silently ranked them
+    // would clone one repo while the operator read the other one's name back.
+    if args.adopt.is_some() && args.clone_this_repo {
+        run.err(
+            "--adopt and --clone-this-repo each name the repository to make this plane's first \
+             clone, and they name different ones: --clone-this-repo is the repo this plane is \
+             being made IN. Ask for one. Nothing was written.",
+        );
+        return run.outcome(1);
+    }
 
     if let Some(refusal) = repo_is_not_a_plane_yet(root, args) {
         return refusal;
@@ -386,7 +426,7 @@ pub fn init(place: &Place, args: &InitArgs) -> Outcome {
     run.info(
         "Next: `charter doctor` to preflight, then `charter discover` to build the inventory.",
     );
-    let code = first_clone_step(&mut run, root, args.clone_this_repo);
+    let code = first_clone_step(&mut run, root, args);
     run.outcome(code)
 }
 
@@ -1020,11 +1060,19 @@ fn repo_is_not_a_plane_yet(root: &Path, args: &InitArgs) -> Option<Outcome> {
         "this is the git repo '{name}', and `charter init` does not make a repository into a \
          control plane unless you ask it to. Nothing was written."
     ));
+    // Two commands, not three, and the second one ADOPTS rather than describing an adoption:
+    // `--adopt` clones this repo into the new plane's first workspace (charter-app#175). The
+    // directory is named rather than guessed — `init` writes nothing outside the plane it was
+    // pointed at, and picking `../<name>-plane` for the operator would be that write.
+    let here = root
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| name.clone());
     run.info(format!(
         "A plane is a directory of its own, and this repo is the first clone in it:\n      \
-         mkdir ../{name}-plane && cd ../{name}-plane\n      charter init{flags}\n      charter \
-         discover && charter clone {name}\n  Nothing in this repo is read or written by any \
-         of that."
+         mkdir ../{name}-plane && cd ../{name}-plane\n      charter \
+         init{flags} --adopt ../{here}\n  That clones this repo into the plane's first \
+         workspace. Nothing here is written by any of it — this repo is read, and only read."
     ));
     // Named in full rather than summarised: this is the line somebody decides on, and "plane
     // scaffolding" is not a list anyone can picture. Built from the same constants the writes
@@ -1061,9 +1109,21 @@ fn already_a_plane(root: &Path) -> bool {
     gate(root, crate::plane::MANIFEST).is_ok_and(|path| path.exists())
 }
 
-/// `commands._first_clone_step`: the one thing being inside a git repo changes about `init`
-/// — what it OFFERS. Nothing is ever cloned that was not asked for by name.
-fn first_clone_step(run: &mut Run, root: &Path, accepted: bool) -> u8 {
+/// `commands._first_clone_step`, plus the source `--adopt` names: the one thing a repository
+/// changes about `init` — what it OFFERS, and now what it can be asked to do. Nothing is ever
+/// cloned that was not asked for by name.
+fn first_clone_step(run: &mut Run, root: &Path, args: &InitArgs) -> u8 {
+    let now = args.now.unwrap_or_else(chrono::Utc::now);
+    if let Some(repo) = &args.adopt {
+        return match adopted(root, repo) {
+            Ok(source) => firstclone::into_first_workspace(run, root, &source, now),
+            Err(why) => {
+                run.err(why);
+                1
+            }
+        };
+    }
+    let accepted = args.clone_this_repo;
     let here = is_repo_top_level(root);
     if !accepted {
         if here {
@@ -1092,14 +1152,50 @@ fn first_clone_step(run: &mut Run, root: &Path, accepted: bool) -> u8 {
         ));
         return 1;
     }
-    run.err(
-        "--clone-this-repo: this charter does not clone the repo you are standing in yet. \
-         `charter clone` does exist, and it applies the git policy — but it clones INTO a \
-         workspace that already exists, and `init` has just made a plane with none. The \
-         control plane itself was still created; clone the repo into a workspace with git, \
-         then run `charter reinit`.",
-    );
-    1
+    firstclone::into_first_workspace(run, root, root, now)
+}
+
+/// The repository `--adopt` may take as the plane's first clone, resolved, or why it may not
+/// be one.
+///
+/// Three refusals, one reason each, and all three are about a path the operator typed or
+/// picked in a dialog rather than one charter derived:
+///
+/// - **Not the top of a git working tree.** `--adopt` clones a repository; a directory that
+///   is merely inside one would clone the whole enclosing repo under the name of a
+///   subdirectory, which is `is_repo_top_level`'s own subject one door along.
+/// - **The plane root itself.** That is `--clone-this-repo`, which already exists and says so;
+///   two spellings of one act is how they drift apart.
+/// - **The plane is INSIDE it.** The clone would then land inside the repository being cloned
+///   — a write into somebody's repo, which is the exact thing ADR 0035 reversed the default
+///   to prevent, arriving through the flag that was supposed to be the safe way.
+fn adopted(root: &Path, repo: &Path) -> Result<PathBuf, String> {
+    let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+    let source = canon(repo);
+    if !is_repo_top_level(&source) {
+        return Err(format!(
+            "--adopt: {} is not the top level of a git working tree, and adopting a repository \
+             is what the flag does. The control plane itself was still created.",
+            source.display()
+        ));
+    }
+    if source == canon(root) {
+        return Err(
+            "--adopt: that is this plane's own directory. To clone the repo the plane is \
+             being made IN, ask for `--clone-this-repo`; `--adopt` is for a repository \
+             somewhere else, with the plane beside it (ADR 0035)."
+                .to_owned(),
+        );
+    }
+    if canon(root).starts_with(&source) {
+        return Err(format!(
+            "--adopt: this plane is inside {}, so cloning that repo would write the clone into \
+             the repository it came from. Make the plane in a directory of its own, beside the \
+             repo. The control plane itself was still created.",
+            source.display()
+        ));
+    }
+    Ok(source)
 }
 
 /// `commands._is_repo_top_level`: `root` is the TOP of a git working tree — not merely
@@ -1165,6 +1261,88 @@ mod tests {
                 "opencode.json (ask: charter handoff)",
             ]
         );
+    }
+
+    /// `InitArgs` as `charter init --forge github --owner acme` builds it.
+    fn plain() -> InitArgs {
+        InitArgs {
+            forge: "github".to_owned(),
+            owner: "acme".to_owned(),
+            host: None,
+            clone_this_repo: false,
+            plane_is_this_repo: false,
+            adopt: None,
+            now: None,
+            front_door: Some("steward".to_owned()),
+        }
+    }
+
+    /// The app reaches `init` with no argument parser in between (`opener::create_project`),
+    /// so clap's `conflicts_with` is not the only thing standing between two flags that name
+    /// two different sources for one first clone. This is the other one, and it refuses
+    /// before the first directory is made.
+    #[test]
+    fn adopt_and_clone_this_repo_together_are_refused_and_nothing_is_written() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = dir.path().join("plane");
+        std::fs::create_dir_all(&root).expect("the plane's directory");
+        let place = Place {
+            root: root.clone(),
+            is_plane: false,
+        };
+
+        let outcome = init(
+            &place,
+            &InitArgs {
+                clone_this_repo: true,
+                adopt: Some(dir.path().join("widget")),
+                ..plain()
+            },
+        );
+
+        assert_eq!(outcome.code, 1);
+        assert!(
+            matches!(outcome.said.first(), Some(Say::Err(why)) if why.contains("Ask for one.")),
+            "{:?}",
+            outcome.said
+        );
+        assert!(!root.join(crate::plane::MANIFEST).exists());
+        assert!(!root.join("personas").exists());
+    }
+
+    /// `--adopt` pointed at a directory that is not a repository: the plane is still made,
+    /// exactly as Python makes it before a first clone that fails.
+    #[test]
+    fn adopt_refuses_a_directory_that_is_not_a_repository_and_still_makes_the_plane() {
+        let dir = tempfile::tempdir().expect("a directory");
+        let root = dir.path().join("plane");
+        let not_a_repo = dir.path().join("papers");
+        for at in [&root, &not_a_repo] {
+            std::fs::create_dir_all(at).expect("a directory");
+        }
+        let place = Place {
+            root: root.clone(),
+            is_plane: false,
+        };
+
+        let outcome = init(
+            &place,
+            &InitArgs {
+                adopt: Some(not_a_repo),
+                ..plain()
+            },
+        );
+
+        assert_eq!(outcome.code, 1);
+        assert!(
+            outcome.said.iter().any(|line| matches!(
+                line,
+                Say::Err(why) if why.contains("is not the top level of a git working tree")
+            )),
+            "{:?}",
+            outcome.said
+        );
+        assert!(root.join(crate::plane::MANIFEST).is_file());
     }
 
     #[test]

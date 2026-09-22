@@ -308,10 +308,10 @@ function App() {
    * A refusal stays IN the dialog rather than behind it: `init`'s refusal in a repository is
    * four lines naming what to do instead, and the operator is still standing at the box.
    */
-  const makeProject = useCallback(async (path: string, planeIsThisRepo: boolean) => {
+  const makeProject = useCallback(async (path: string, planeIsThisRepo: boolean, adopt: string) => {
     setMakingProject(true);
     const answer = await commands
-      .createProject(path, planeIsThisRepo)
+      .createProject(path, planeIsThisRepo, adopt === "" ? null : adopt)
       .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
     setMakingProject(false);
     if (answer.status === "error") {
@@ -866,7 +866,9 @@ function App() {
         <NewProject
           trouble={createTrouble}
           making={makingProject}
-          onCreate={(path, planeIsThisRepo) => void makeProject(path, planeIsThisRepo)}
+          onCreate={(path, planeIsThisRepo, adopt) =>
+            void makeProject(path, planeIsThisRepo, adopt)
+          }
           onCancel={() => {
             setCreating(false);
             setCreateTrouble(undefined);
