@@ -7,7 +7,7 @@ import {
   useRef,
   useState,
 } from "react";
-import { Group, Panel, Separator, usePanelRef } from "react-resizable-panels";
+import { Group, Panel, Separator } from "react-resizable-panels";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import {
   commands,
@@ -34,7 +34,8 @@ import { SessionPane } from "./SessionPane";
 import { Explorer, type Spot } from "./Explorer";
 import { BottomBar } from "./BottomBar";
 import { useWorkspaceState } from "./workspaceState";
-import { REGION_NAMES, useRegions, type Region } from "./regions";
+import { inSlots, SIDES, useArrangement } from "./regions";
+import { RegionFrame, RegionToggle } from "./RegionFrame";
 import {
   byLastActivity,
   closeFocusedPane,
@@ -218,8 +219,11 @@ export function PlaneView({
    * from inside an effect is a second render, and the answer is already here.
    */
   const [pickedSpot, setPickedSpot] = useState<{ workspace: string; spot: Spot }>();
-  /** Which of the four regions are drawn, and how the operator says otherwise (ADR 0038). */
-  const { shown: regions, toggle: toggleRegion } = useRegions();
+  /** How the window is laid out — which regions are drawn, on which side, in what order and
+   *  how big (ADR 0038). Data rather than the shape of the JSX below; `regions.ts` says why. */
+  const { arrangement, toggle: toggleRegion, resized } = useArrangement();
+  /** The arrangement as the slots it draws, which is what both the toggles and the frame read. */
+  const slots = inSlots(arrangement);
 
   // The arrangement as it is right now, so that what a button does is decided here and not
   // inside a state update. React may run an update again, and a session must not be opened or
@@ -1201,15 +1205,18 @@ export function PlaneView({
           <Doer offer={by("pane.close")} onPress={press} />
         </div>
         {/* Which regions are drawn (ADR 0038). Here rather than in each region, because a
-            region that is not drawn has nowhere to put its own way back. `aria-pressed`
-            and not a label that flips between "Show" and "Hide": the name of the thing is
-            what a person looks for, and the state is what the attribute is for. */}
+            region that is not drawn has nowhere to put its own way back.
+
+            **One button per region in the arrangement**, in the order the window draws them —
+            so a region added to the catalogue gets its own way back without anybody
+            remembering to add one, which is the half of this that a list written out by hand
+            kept getting wrong. */}
         <div className="regions-doing">
-          {(["explorer", "aside", "bottom"] as const).map((region) => (
+          {SIDES.flatMap((side) => slots[side]).map((placed) => (
             <RegionToggle
-              key={region}
-              region={region}
-              shown={regions[region]}
+              key={placed.id}
+              id={placed.id}
+              shown={!placed.collapsed}
               onToggle={toggleRegion}
             />
           ))}
@@ -1270,67 +1277,67 @@ export function PlaneView({
         </p>
       ))}
 
-      {/* **The four regions** (charter ADR 0038): the explorer on the left, the panes in the
-          middle, what is asking for you on the right, and what the repos are doing along the
-          bottom. Every one of them resizes, and each of the three around the centre can be
-          put away — the centre cannot, because the terminal panes are the product.
+      {/* **The four regions** (charter ADR 0038): by default the explorer on the left, the
+          panes in the middle, what is asking for you on the right, and what the repos are
+          doing along the bottom. Every one of them resizes, and each of the three around the
+          centre can be put away — the centre cannot, because the terminal panes are the
+          product.
+
+          **By default, and no longer by shape.** Which side each region is on, what order it
+          is in and how big it is are the arrangement (`regions.ts`); this is the content that
+          goes in whichever slot the arrangement names.
 
           One workspace answer for all three (`useWorkspaceState`), not one per region: they
           draw the same workspace, and `workspace_repos` runs `git status` per clone. */}
-      <Group className="regions" orientation="vertical">
-        <Panel id="region-upper" className="region-upper" minSize="30%">
-          <Group className="region-row" orientation="horizontal">
-            <Region id="region-explorer" shown={regions.explorer} size="16%" least="8%">
-              <Explorer
-                workspace={ofWorkspace}
-                state={workspaceState}
-                chats={workspaceChats}
-                states={states}
-                spot={spot}
-                onPick={pickSpot}
-                onShowChat={showChat}
+      <RegionFrame
+        arrangement={arrangement}
+        onResized={resized}
+        content={{
+          explorer: (
+            <Explorer
+              workspace={ofWorkspace}
+              state={workspaceState}
+              chats={workspaceChats}
+              states={states}
+              spot={spot}
+              onPick={pickSpot}
+              onShowChat={showChat}
+            />
+          ),
+          aside: (
+            <Panels
+              workspace={ofWorkspace}
+              state={workspaceState}
+              queue={states.needsYou}
+              quiet={quiet}
+              nameOf={nameOf}
+              showChat={showChat}
+            />
+          ),
+          bottom: <BottomBar workspace={ofWorkspace} state={workspaceState} />,
+        }}
+        centre={
+          <div className="panes">
+            {frontTab ? (
+              <LayoutPanes
+                plane={plane}
+                layout={frontTab.layout}
+                focused={frontTab.focused}
+                onFocus={(pane) => change((tabs) => focusPane(tabs, pane))}
               />
-            </Region>
-            <Edge shown={regions.explorer} />
-            <Panel id="region-centre" className="region-centre" minSize="20%">
-              <div className="panes">
-                {frontTab ? (
-                  <LayoutPanes
-                    plane={plane}
-                    layout={frontTab.layout}
-                    focused={frontTab.focused}
-                    onFocus={(pane) => change((tabs) => focusPane(tabs, pane))}
-                  />
-                ) : tabs.order.length > 0 ? (
-                  // Chats are running — just not in the workspace being looked at. Saying
-                  // "no sessions" here would be charter telling the operator that what it is
-                  // still drawing on the strip above does not exist.
-                  <p className="empty">
-                    No chats in this workspace. Open one with New tab, or pick a workspace above.
-                  </p>
-                ) : (
-                  <p className="empty">No sessions. Open one with New tab.</p>
-                )}
-              </div>
-            </Panel>
-            <Edge shown={regions.aside} />
-            <Region id="region-aside" shown={regions.aside} size="20%" least="10%">
-              <Panels
-                workspace={ofWorkspace}
-                state={workspaceState}
-                queue={states.needsYou}
-                quiet={quiet}
-                nameOf={nameOf}
-                showChat={showChat}
-              />
-            </Region>
-          </Group>
-        </Panel>
-        <Edge shown={regions.bottom} />
-        <Region id="region-bottom" shown={regions.bottom} size="16%" least="6%" most="50%">
-          <BottomBar workspace={ofWorkspace} state={workspaceState} />
-        </Region>
-      </Group>
+            ) : tabs.order.length > 0 ? (
+              // Chats are running — just not in the workspace being looked at. Saying
+              // "no sessions" here would be charter telling the operator that what it is
+              // still drawing on the strip above does not exist.
+              <p className="empty">
+                No chats in this workspace. Open one with New tab, or pick a workspace above.
+              </p>
+            ) : (
+              <p className="empty">No sessions. Open one with New tab.</p>
+            )}
+          </div>
+        }
+      />
 
       {picking && (
         <StartChat
@@ -1521,112 +1528,6 @@ export function Pin({ held, what }: { held: boolean; what: string }) {
     >
       ●
     </span>
-  );
-}
-
-/**
- * One of the three regions around the centre: resizable, and put away without going away.
- *
- * **The panel stays mounted with constraints that never change; the library collapses it.**
- * That is the whole reason this component exists, and neither obvious alternative works.
- * Rendering the `Panel` and its `Separator` conditionally throws — `react-resizable-panels`
- * recalculates a separator's aria values against the group's constraint list, and taking a
- * panel out from under a live separator leaves it indexing past the end
- * (*"Panel constraints not found for index 3"*), from a document listener where no `try` of
- * ours can reach it. Clamping the panel's `minSize`/`maxSize` to zero instead throws the same
- * way, because changing a constraint re-registers the panel and a recalculation lands in the
- * gap. So the constraints are written once and `collapse()`/`expand()` — the library's own
- * way of doing this — is what moves it.
- *
- * **Its content is unmounted all the same**, which is the part that has to be true for more
- * than tidiness: a region squeezed to zero pixels with its markup still in the document is
- * still in the tab order and still read out in full by a screen reader, so "put away" would
- * mean "invisible and in the way". Nothing in a region is state worth keeping across that —
- * what they draw is read fresh from the plane every time a workspace is focused, because the
- * plane is a directory the operator also edits by hand.
- */
-function Region({
-  id,
-  shown,
-  size,
-  least,
-  most = "45%",
-  children,
-}: {
-  id: string;
-  shown: boolean;
-  /** How big it is when nothing has been dragged. */
-  size: string;
-  /** How small a drag may make it before it is unreadable. */
-  least: string;
-  /** How much of the window it may take. */
-  most?: string;
-  children: React.ReactNode;
-}) {
-  const panel = usePanelRef();
-  useEffect(() => {
-    if (shown) panel.current?.expand();
-    else panel.current?.collapse();
-  }, [panel, shown]);
-  return (
-    <Panel
-      id={id}
-      className={id}
-      panelRef={panel}
-      // **Every one of these is constant for the life of the group, and that is the point.**
-      // See this component's docstring: changing a panel's constraints re-registers it, and a
-      // separator that recalculates in between indexes past the end of the constraint list.
-      collapsible
-      collapsedSize="0%"
-      defaultSize={size}
-      minSize={least}
-      maxSize={most}
-    >
-      {shown ? children : null}
-    </Panel>
-  );
-}
-
-/** The handle between a region and the centre. It stays in the group when its region is put
- *  away — see `Region` for why — and draws nothing, so there is no line to drag. */
-function Edge({ shown }: { shown: boolean }) {
-  return <Separator className={shown ? undefined : "edge-gone"} />;
-}
-
-/**
- * The button that puts a region away and brings it back (charter ADR 0038).
- *
- * **Not a row of the catalogue**, deliberately, and this is the one place in this bar where
- * that is true. The catalogue is what a project can DO — open a chat, split a pane, remove a
- * worktree — and every one of its rows is also a palette row, because the palette is the
- * primary input. Whether the operator has the explorer on screen is not a thing to do to the
- * plane; it is how this window is laid out, it is remembered in `localStorage` and not on the
- * plane, and a palette full of "Explorer", "Attention", "State" would be three rows of noise
- * in front of a hundred real ones at ADR 0026's limits.
- */
-function RegionToggle({
-  region,
-  shown,
-  onToggle,
-}: {
-  region: Region;
-  shown: boolean;
-  onToggle: (region: Region) => void;
-}) {
-  return (
-    <button
-      type="button"
-      className="region-toggle"
-      aria-pressed={shown}
-      title={
-        shown
-          ? `Put the ${REGION_NAMES[region]} region away`
-          : `Bring the ${REGION_NAMES[region]} region back`
-      }
-      onClick={() => onToggle(region)}
-    >
-      {REGION_NAMES[region]}
-    </button>
   );
 }
 

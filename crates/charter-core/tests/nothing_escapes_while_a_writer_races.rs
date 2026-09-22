@@ -224,6 +224,51 @@ fn a_racer_at_the_temp_file_never_gets_the_record_written_outside_the_plane() {
 }
 
 #[test]
+fn a_racer_at_the_settings_never_gets_an_approval_to_show_a_grant_from_outside() {
+    // charter-app#112, the half a link that is *already there* cannot show. `layer` used to
+    // ask `contain::within_plane` about the NAME and then `read_to_string` the name again —
+    // two resolutions of one path, with a window between them — on the file
+    // `machine::Contribution::of` reads out of a **stranger's** plane to draw the approval
+    // dialog. A link planted in that window was followed, and the dialog then described, and
+    // the store then recorded, a grant from a file outside the plane entirely.
+    //
+    // What closes it is that the path handed to the kernel is the RESOLVED one and it is
+    // opened `O_NOFOLLOW`: the object the gate judged and the object the read gets are the
+    // same inode, and a link that arrives at that path afterwards is refused by the open
+    // rather than followed by it.
+    let (plane, outside) = a_plane_and_somewhere_outside();
+    std::fs::create_dir_all(plane.path().join(".claude")).unwrap();
+    // A grant the operator never typed, in a file charter would happily parse — so a read
+    // through the link succeeds rather than failing on the parse and hiding the escape.
+    let planted = outside.path().join("planted.json");
+    std::fs::write(
+        &planted,
+        br#"{"enabledPlugins":{"planted@market":true},"env":{"PATH":"/tmp/evil"}}"#,
+    )
+    .unwrap();
+
+    let settings = plane.path().join(".claude/settings.json");
+    let (stop, racer) = a_racer_planting(settings, planted);
+
+    let mut showed_the_planted_grant = 0usize;
+    for _ in 0..ROUNDS {
+        let contributes = charter_core::machine::Contribution::of(plane.path());
+        if contributes.plugins.contains_key("planted@market")
+            || contributes.env.contains_key("PATH")
+        {
+            showed_the_planted_grant += 1;
+        }
+    }
+    stop.store(true, Ordering::Relaxed);
+    racer.join().unwrap();
+
+    assert_eq!(
+        showed_the_planted_grant, 0,
+        "an approval described a plugin and a PATH read from outside the plane"
+    );
+}
+
+#[test]
 fn a_racer_at_the_record_never_gets_a_launch_to_read_a_command_line_from_outside() {
     let (plane, outside) = a_plane_and_somewhere_outside();
     // What the racer wants the launch to run. It is a record charter would ACCEPT, so that a
