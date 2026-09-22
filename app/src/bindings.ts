@@ -318,10 +318,11 @@ export const commands = {
 	/**
 	 *  What has contributed what to this window.
 	 * 
-	 *  It reads the disk — every installed extension's manifest and every file it declares, to
-	 *  re-take the fingerprint — because an approval is of bytes and the bytes are what may have
-	 *  changed since. ADR 0041 names that cost: *the fingerprint is a hash of code, checked at
-	 *  each launch*. Off the UI thread for exactly that reason.
+	 *  It reads the disk — every installed extension's whole directory, to re-take the fingerprint
+	 *  — because an approval is of bytes and the bytes are what may have changed since. ADR 0041
+	 *  names that cost: *the fingerprint is a hash of code, checked at each launch*, and
+	 *  charter-app#152 widened it from the declared list to the tree. Off the UI thread for exactly
+	 *  that reason, and the cost is measured in #152's PR body rather than left as an estimate.
 	 */
 	installedExtensions: () => typedError<InstalledExtensions, string>(__TAURI_INVOKE("installed_extensions")),
 	/**
@@ -367,6 +368,16 @@ export const commands = {
 	 *  this command only shapes it.
 	 */
 	extensionThemes: () => typedError<ExtensionTheme[], string>(__TAURI_INVOKE("extension_themes")),
+	/**
+	 *  Every row `charter doctor` would print for this plane, run inside the app.
+	 * 
+	 *  On a blocking thread: every git question a row asks has a five-second deadline
+	 *  (`doctor::CHECK_TIMEOUT`), and the full doctor runs a harness per profile. A window that
+	 *  waited on that would stop drawing.
+	 */
+	planeDoctor: (plane: PlaneId, full: boolean) => typedError<DoctorReport, string>(__TAURI_INVOKE("plane_doctor", { plane, full })),
+	/**  The pin report for this plane. */
+	planePin: (plane: PlaneId) => typedError<PinReport, string>(__TAURI_INVOKE("plane_pin", { plane })),
 };
 
 /* Types */
@@ -429,16 +440,58 @@ export type ChatWorktree = {
 	stale: boolean,
 };
 
+/**  What the doctor said, and what it was asked with. */
+export type DoctorReport = {
+	/**  Every row, in the order `charter doctor` prints them. */
+	rows: DoctorRow[],
+	/**  Whether the harness profiles were probed — the full doctor, not the preflight. */
+	full: boolean,
+	/**
+	 *  The `PATH` this process has, which is the one every row that looks for a program was
+	 *  answered with.
+	 * 
+	 *  **Not a row, and not the doctor's**: `charter doctor` prints no such line, and this is
+	 *  not dressed as one. It is here for the incident this module exists for — a Finder
+	 *  launch hands the app a four-directory `PATH`, and a built-in profile the doctor does
+	 *  not list (it lists one only when it finds its program) makes no sense until you can see
+	 *  the `PATH` it was looked for on. `None` when the process has none at all, which is
+	 *  itself the answer.
+	 */
+	path: string | null,
+};
+
+/**  One doctor row: the four fields `charter doctor --json` prints, and one it does not. */
+export type DoctorRow = {
+	name: string,
+	status: DoctorStatus,
+	detail: string,
+	hint: string,
+	/**
+	 *  Whether this build runs this check at all ([`Row::deferred`]).
+	 * 
+	 *  `false` is about twenty rows on every plane, each a WARN that says *not checked (…not
+	 *  ported…)*. They are drawn, because a doctor that dropped them would read as those
+	 *  problems being fixed — but a summary that COUNTED them would draw a warning count that
+	 *  never moves, and the one real warning among them would be invisible on its first day.
+	 */
+	checked: boolean,
+};
+
+/**  A row's verdict, as the window draws it. */
+export type DoctorStatus = "ok" | "warn" | "fail";
+
 /**
  *  The question charter asks before an extension contributes anything.
  * 
  *  A mirror of [`extension::Prompt`] rather than the thing itself, because `charter-core` never
  *  depends on the app and the app's wire types are generated into TypeScript.
  * 
- *  **The two sentences travel with it rather than being written in the dialog.** That is the
- *  point of carrying them: a window that composed its own words about what an extension can
+ *  **charter's own sentences travel with it rather than being written in the dialog.** That is
+ *  the point of carrying them: a window that composed its own words about what an extension can
  *  reach could drift kinder than the truth one edit at a time, and the truth here is
- *  uncomfortable enough that kinder is the likely direction.
+ *  uncomfortable enough that kinder is the likely direction. Since charter-app#152 there are
+ *  three of them, because the fingerprint note acquired an exception and an exception the window
+ *  worded itself would be the same drift through a smaller door.
  */
 export type ExtensionAsk = {
 	/**  The id the record is keyed by, and the id the yes is recorded against. */
@@ -469,6 +522,16 @@ export type ExtensionAsk = {
 	 *  boundary.
 	 */
 	fingerprint_note: string,
+	/**
+	 *  `extension::state_note` — which one directory charter does NOT read, when this
+	 *  extension declares one, and `null` when it declares none (charter-app#152).
+	 * 
+	 *  It travels for the same reason the other two do. The fingerprint note says charter read
+	 *  every file in the directory; the exception to that sentence belongs on the same screen
+	 *  as the sentence, in the core's words, or the wording has the defect #152 was opened over
+	 *  one carve-out later.
+	 */
+	state_note: string | null,
 };
 
 /**  One row of "what has contributed what to this window". */
@@ -606,6 +669,24 @@ export type Moved = {
 	moved_at: number,
 };
 
+/**  One news entry, as the pin's dialog lists it. */
+export type NewsItem = {
+	version: string,
+	headline: string,
+};
+
+/**  What a check found, for the window and for the notification. */
+export type Offer = {
+	/**  The version on offer. */
+	version: string,
+	/**  The version running now. */
+	current: string,
+	/**  The channel it came from, so a surface never has to guess which manifest was read. */
+	channel: string,
+	/**  The release notes, as the manifest carries them. */
+	notes: string,
+};
+
 /**  One chat the app has open, as the UI draws it and as the quit warning lists it. */
 export type OpenChat = {
 	session: number,
@@ -699,6 +780,22 @@ export type Piece = {
 	wired: boolean,
 	/**  Set when git still has a registration whose directory is gone. */
 	stale: boolean,
+};
+
+/**  What the plane's pin says against this charter. */
+export type PinReport = {
+	/**  `charter version`'s verdict: its exit status was 1. The only thing the line keys on. */
+	drift: boolean,
+	/**  The release this charter brought (`news::shipped_version`). */
+	brought: string,
+	/**  `[charter] version` as written, or none. */
+	pinned: string | null,
+	/**  What `charter version` said, line by line, in its own words. */
+	said: string[],
+	/**  What came between the pin and what this charter brought — only when it drifts. */
+	news: NewsItem[],
+	/**  How many more entries there were than `news` carries. */
+	more_news: number,
 };
 
 /**

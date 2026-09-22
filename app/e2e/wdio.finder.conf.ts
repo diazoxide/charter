@@ -7,7 +7,7 @@ import {
   copyFixturePlane,
   theRunsEnvironment,
   writeAHarnessOnlyAShellWouldFind,
-  writeShell,
+  writeAPluginHookingShell,
 } from "./harness.js";
 import { PANIC_LOG } from "./processes.js";
 
@@ -30,16 +30,28 @@ import { PANIC_LOG } from "./processes.js";
  * A run of its own, because this is the app's environment and WebdriverIO's Tauri service
  * keeps one app process for a whole run. `wdio.conf.ts` excludes this spec by name.
  */
-const plane = copyFixturePlane();
+// Through the environment, and made only if it is not already there: WebdriverIO's worker
+// imports this file again, and `launch.finder.e2e.ts` has to read the SAME plane and `$HOME`
+// the launcher gave the app — the chat's recorded `PATH` is in one, and charter-app#136's
+// `~/.local/bin/charter` goes in the other. A fresh copy per import would be a spec reading a
+// tree the app never saw.
+const plane = (process.env.CHARTER_FINDER_PLANE ??= copyFixturePlane());
 // No `declareAProfile`: the profile under test is charter's own built-in, and declaring one
 // would hand the app an absolute path and test nothing. What the plane gets instead is a
 // `$HOME` with the harness in it — installed, findable by a shell, invisible to `PATH`.
-// `writeShell` and not `built("fake-harness")`: the fake harness only prints the sentinel a
-// spec waits for when it is given `--synthetic/--sentinel/--interactive`, and that argument
-// list lives in one place. The profile's program drops its own arguments (charter puts
-// `--session-id`/`--name` on a Claude Code line), so the flags have to be inside what it
-// execs.
-const home = writeAHarnessOnlyAShellWouldFind(writeShell(built("fake-harness")));
+// A shell script and not `built("fake-harness")`: the fake harness only prints the sentinel a
+// spec waits for when it is given `--synthetic/--sentinel/--interactive`, and the profile's
+// program drops its own arguments (charter puts `--session-id`/`--name` on a Claude Code
+// line), so the flags have to be inside what it execs.
+//
+// And it runs a hook the way the charter PLUGIN spells one — `charter hook sessionstart`, the
+// bare word (charter-app#136). The hooks charter arms on the chat itself name its binary by an
+// absolute path and never needed `PATH`; the plugin's and a plane's own cannot, because those
+// files travel to other machines. So what this run can see is whether a chat started from
+// Finder can find `charter` at all.
+const home = (process.env.CHARTER_FINDER_HOME ??= writeAHarnessOnlyAShellWouldFind(
+  writeAPluginHookingShell(built("fake-harness")),
+));
 
 export const config: WebdriverIO.Config = {
   ...base,

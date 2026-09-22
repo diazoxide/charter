@@ -173,6 +173,19 @@ class Scenario:
     stdout_cut_at: str = ""
     #: Why that cut is where it is.
     stdout_cut_why: str = ""
+    #: `(charter's words, charter-app's words, why)` triples: a DECIDED difference inside an
+    #: otherwise byte-for-byte stdout. charter's words are replaced by charter-app's in
+    #: charter's stdout, in order and once each, and the result must equal the Rust side's
+    #: stdout exactly — so everything the triples do not name is still compared as it always
+    #: was.
+    #:
+    #: `alert_rewrite`'s shape, widened from one row to a whole render, and held to the same
+    #: rule: **both halves must be there**, charter's in charter's output and charter-app's in
+    #: charter-app's, so a note cannot outlive the difference it records. It is `stdout_differs`
+    #: turned inside out — that one says "not yet" about the whole render and passes the day
+    #: the two agree; this one says what the difference IS and fails the day it stops being
+    #: that. `DOCS_DIVERGE` is what fills it (charter-app#119).
+    stdout_rewrite: list = field(default_factory=list)
     #: Whether the Rust side takes `--now`. A read command does not.
     pins_the_clock: bool = True
     #: Run against each plane copy before the command, for a starting state the fixtures
@@ -199,6 +212,21 @@ class Scenario:
     #: that panics on every input satisfies it, and one did — three containment scenarios
     #: reported `ok` against a shim that ran nothing at all.
     refusal: str = ""
+    #: What a `PreToolUse` DENIAL must say, as a substring of the `permissionDecisionReason`
+    #: — checked on BOTH sides' stdout.
+    #:
+    #: A hook refuses by PRINTING, not by exiting: the verdict is one JSON object on stdout
+    #: and the status is 0 either way (`hooks.py:_deny`). So `refusal`, which reads stderr
+    #: and declares the command failed, cannot say anything about one — and without this a
+    #: guard scenario where NEITHER side fires is green while proving nothing, which is the
+    #: `refusal` docstring's own objection one field over. Both sides are checked, so an arm
+    #: that stops firing on the ORACLE goes red too.
+    denies: str = ""
+    #: The mirror, for the case that matters most: both sides must print NOTHING, which is
+    #: how a `PreToolUse` hook says `allow`. A guard is only a guard if something gets
+    #: through it, and "the canonical spelling still passes" is not a claim any denial
+    #: scenario can make.
+    allows: bool = False
     #: Why the two stderrs are not expected to match. charter's refusals are prose and the
     #: Rust CLI's are not, so a refusal scenario states its own shape via `refusal` instead.
     stderr_differs: str = ""
@@ -220,6 +248,11 @@ class Scenario:
     #: the part charter wrote — so this hides a known quotation, never a difference of
     #: charter's own words.
     stderr_mask: list = field(default_factory=list)
+    #: The same, for STDOUT. Separate from the field above rather than one list applied to
+    #: both, because a mask is a claim about one stream: a pattern that is right for a
+    #: refusal sentence is not automatically right for a render, and a guard's whole verdict
+    #: is on stdout where every other scenario's words are on stderr.
+    stdout_mask: list = field(default_factory=list)
     #: `(regex, why)` pairs naming ITEMS Python lists in `init`'s inventory that the Rust
     #: binary does not write, with the reason. Each matching item is taken out of Python's
     #: stderr before the comparison — out of a `+ item` line (and the headline's count with
@@ -4348,6 +4381,251 @@ DOCS_SOURCE_MASK = [
 ]
 
 
+@dataclass(frozen=True)
+class PageDiverges:
+    """A vendored page charter-app deliberately holds a DIFFERENT version of.
+
+    `Divergence` for the docs corpus rather than for a command, and the same refusal to be a
+    waiver (charter-app#119). `check_docs_corpus` holds the two copies of every page byte for
+    byte, which is exactly what it is for; a page describing behaviour ADR 0035 reversed
+    cannot pass that and cannot be corrected where it lives, because spec decision 17 freezes
+    the Python charter and a frozen oracle documenting behaviour it does not have would be
+    worse than the drift.
+
+    Skipping the page would have been the cheap answer and the wrong one: a skipped page is
+    one nothing compares, so the NEXT drift in it — anywhere in it, for any reason — lands in
+    silence. So this does not skip. It states what charter's copy says and what charter-app's
+    says instead, the run rewrites the oracle's page with those pairs, and the result is
+    compared byte for byte. Everything the divergence does not name is held to the bar it
+    always was.
+
+    It fails loudly in both directions, which is the point:
+
+    - **`why` must cite the record** — an ADR and a spec decision — because in six months the
+      only thing between this and two copies nobody can explain is a sentence with a number
+      in it.
+    - **charter must still say its half.** A `theirs` that has left the oracle's page is a
+      divergence FROM something that is gone: the direction a reviewer forgets, and the one
+      that rots first.
+    - **charter-app must say its half**, so a declaration cannot outlive the edit it records.
+    - **the two copies must still differ.** If the pages ever match again the divergence is
+      over, and the run says so instead of passing quietly.
+
+    `docs show` prints the page's bytes, so the same pairs drive the per-topic scenario's
+    stdout through `Scenario.stdout_rewrite`. One table, both comparisons — the alternative is
+    a corpus check and a render check that can disagree about which page is the right one.
+    """
+
+    #: Prose naming the records that decided it. Must cite an ADR and a spec decision.
+    why: str
+    #: `(charter's words, charter-app's words)`, applied in order, once each.
+    rewrites: tuple[tuple[str, str], ...]
+
+
+#: Why both diverged pages diverge. One string, because it is one decision and a second copy
+#: of it would be a second thing to keep true.
+DOCS_DIVERGE_WHY = (
+    "ADR 0035 reversed `charter init`'s default at the top of an existing git repository: the "
+    "plane goes in a directory of its own and the repo becomes its first clone, with "
+    "`--plane-is-this-repo` as the opt-in. charter-app spec decision 27 carries it, and "
+    "`INIT_IN_A_REPO_DIVERGES` is the same decision holding the BEHAVIOUR apart — this is its "
+    "documentation. Each page says in its own text which implementation it describes, which is "
+    "the condition charter-app#119 puts on holding a different copy at all."
+)
+
+#: The pages charter-app holds its own version of, and exactly what differs in each.
+#:
+#: Read `PageDiverges` before changing anything here, and ADR 0035 before deciding it should
+#: not exist. Adding a page to this table is a decision with a record behind it, never a way
+#: to make a red `docs-corpus` green.
+DOCS_DIVERGE: dict[str, PageDiverges] = {
+    "control-plane": PageDiverges(
+        why=DOCS_DIVERGE_WHY,
+        rewrites=(
+            (
+                """\
+
+`charter init` therefore produces the same plane wherever it runs. Being inside a git repo
+no longer changes what you get; it changes only what init *offers*, which is to clone that
+repo into your first workspace:
+
+""",
+                """\
+
+`charter init` therefore produces the same plane wherever it runs. Being at the top of a git
+repo no longer changes what you get; it changes whether init writes anything at all. It
+writes nothing, and says what the two ways on are:
+
+""",
+            ),
+            (
+                """\
+$ charter init --forge github --owner acme
+✓ Initialized control plane (schema 1) → charter.toml, personas/, …
+• You are standing in the git repo 'myapp'. Work happens in a workspace, not in the plane
+  root — clone it into the first one:
+      charter init --clone-this-repo
+```
+
+That is an offer, not a prompt: charter never reads stdin (it runs inside hooks, where
+blocking would hang the turn), so the second command *is* the acceptance — the same shape
+`charter report` uses for consent. Run it and you get `workspaces/default/myapp/`, cloned
+from the repo you are standing in and pointed at the same `origin` it has; ignore it and
+the plane is complete as it stands. Either way the control plane itself is identical, and
+nothing is written to your repo's git state.
+
+""",
+                """\
+$ charter init --forge github --owner acme
+✗ this is the git repo 'myapp', and `charter init` does not make a repository into a
+  control plane unless you ask it to. Nothing was written.
+• A plane is a directory of its own, and this repo is the first clone in it:
+      mkdir ../myapp-plane && cd ../myapp-plane
+      charter init --forge github --owner acme
+      charter discover && charter clone myapp
+• To make THIS repo the plane instead, ask for it by name:
+      charter init --plane-is-this-repo --forge github --owner acme
+```
+
+That is a refusal, not a prompt: charter never reads stdin (it runs inside hooks, where
+blocking would hang the turn), so naming the option *is* the acceptance — the same shape
+`charter report` uses for consent. Take the first way and you get
+`workspaces/default/myapp/`, cloned from the repo you were standing in and pointed at the
+same `origin` it has; take the second and this repo becomes the plane. Either way the
+control plane itself is identical, and until you choose, nothing is written to your repo at
+all.
+
+**This page describes charter-app**, whose default here is the opposite of the Python
+charter's, which scaffolds a plane into the repo and *offers* to clone it into the first
+workspace. See [ADR 0035](adr/0035-a-plane-is-untrusted-until-the-operator-opens-it.md) and
+charter-app spec decision 27 for why it was reversed. `charter init` anywhere that is not the
+top of a git repo is unchanged.
+
+""",
+            ),
+            (
+                """\
+A solo user with one repo used to be able to `charter init` and carry on working in that
+repo, because `default` *was* the plane root. It no longer is (ADR 0007), so their path is
+`charter init --clone-this-repo` — the offer above — and then work in
+`workspaces/default/<repo>/`.
+
+""",
+                """\
+A solo user with one repo used to be able to `charter init` and carry on working in that
+repo, because `default` *was* the plane root. It no longer is (ADR 0007), so their path is a
+plane in a directory of its own and then `charter clone <repo>` — the first way out of the
+refusal above — and then work in `workspaces/default/<repo>/`.
+
+""",
+            ),
+        ),
+    ),
+    "install": PageDiverges(
+        why=DOCS_DIVERGE_WHY,
+        rewrites=(
+            (
+                """\
+`--forge` is `gitlab` (the default) or `github`; `--owner` is the GitLab group or GitHub
+org/user whose repos this control plane tracks. Run inside an existing git repo, `init`
+also *offers* to clone that repo into your first workspace — accept with `charter init
+--clone-this-repo`, because work happens in a workspace, never in the plane root.
+
+""",
+                """\
+`--forge` is `gitlab` (the default) or `github`; `--owner` is the GitLab group or GitHub
+org/user whose repos this control plane tracks. Run at the top of an existing git repo,
+`init` writes nothing at all and says so: a plane is a directory of its own and that repo
+becomes its first clone (`charter clone <repo>`), because work happens in a workspace, never
+in the plane root. To make that repo the plane instead, ask for it by name with `charter
+init --plane-is-this-repo`. That default is charter-app's and is the opposite of the Python
+charter's, which scaffolds the plane into the repo — ADR 0035, and charter-app spec
+decision 27.
+
+""",
+            ),
+        ),
+    ),
+}
+
+#: Ask the ORACLE for one page's bytes, the way `_DOCS_DIGEST` asks it for its digests: what a
+#: divergence is measured against is the page `docs show` would print, not a file this
+#: repository happens to have a copy of.
+_DOCS_PAGE = (
+    "import sys\n"
+    "from charter import docsrc\n"
+    "root = docsrc.source()\n"
+    "sys.stdout.buffer.write((root / (sys.argv[1] + '.md')).read_bytes())\n"
+)
+
+
+def _oracle_page(topic: str) -> "str | None":
+    """What charter's own `docs/` holds for *topic*, or `None` if it could not be read."""
+    said = subprocess.run([sys.executable, "-c", _DOCS_PAGE, topic],
+                          capture_output=True, text=True)
+    return said.stdout if said.returncode == 0 else None
+
+
+def _opening(words: str) -> str:
+    """The first non-empty line of a rewrite's half, for a problem line to quote."""
+    return next((line for line in words.splitlines() if line.strip()), words)
+
+
+def _declared_page_problems(topic: str) -> list[str]:
+    """Check one `PageDiverges` in full — see its docstring for why each clause is here."""
+    declared = DOCS_DIVERGE[topic]
+    problems = []
+    if "ADR" not in declared.why or "decision" not in declared.why:
+        problems.append(
+            f"    {topic}.md: this divergence's `why` names no record — it must cite the ADR "
+            "and the spec decision that decided it"
+        )
+    theirs = _oracle_page(topic)
+    if theirs is None:
+        return problems + [f"    {topic}.md: the oracle could not print its own page"]
+    ours = (DOCS_DIR / f"{topic}.md").read_text()
+    if theirs == ours:
+        return problems + [
+            f"    {topic}.md: the two copies are identical again, so this divergence is over "
+            "— delete it and let the digest hold the page"
+        ]
+    rewritten = theirs
+    for was, now in declared.rewrites:
+        if was not in rewritten:
+            problems.append(
+                f"    {topic}.md: charter no longer says {_opening(was)!r}, so this divergence "
+                "is a divergence FROM something that is gone"
+            )
+            continue
+        if now not in ours:
+            problems.append(
+                f"    {topic}.md: charter-app does not say {_opening(now)!r}, which this "
+                "divergence declares it says instead"
+            )
+        rewritten = rewritten.replace(was, now, 1)
+    if rewritten != ours:
+        problems.append(f"    {topic}.md: differs BEYOND what this divergence declares:")
+        problems.extend(
+            f"      {line}" for line in difflib.unified_diff(
+                rewritten.splitlines(), ours.splitlines(),
+                "charter, rewritten as declared", "charter-app", lineterm="", n=1)
+        )
+    return problems
+
+
+def _docs_stdout_rewrite(topic: str) -> list:
+    """The same pairs, for the scenario that compares what `docs show <topic>` PRINTS.
+
+    Python's `docs show` prints the page's text, so a page's divergence is its render's — and
+    driving both off one table is what stops the corpus check and the scenario disagreeing
+    about which copy is the right one.
+    """
+    declared = DOCS_DIVERGE.get(topic)
+    if declared is None:
+        return []
+    return [(was, now, declared.why) for was, now in declared.rewrites]
+
+
 def check_docs_corpus() -> bool:
     """The vendored `docs/` and the pages the oracle serves are the same pages, byte for byte.
 
@@ -4360,6 +4638,10 @@ def check_docs_corpus() -> bool:
     the whole answer. There is no frontmatter here that a rendered body leaves out, which is
     what makes this simpler than `news`'s — the digest is belt to the scenarios' braces only
     for the corpus's SHAPE, not for a part of the page nothing renders.
+
+    **A page in `DOCS_DIVERGE` is compared through its declaration instead of through its
+    digest** (charter-app#119) — not skipped: see `PageDiverges` for what is still held, and
+    for why skipping was the wrong answer.
     """
     said = subprocess.run([sys.executable, "-c", _DOCS_DIGEST], capture_output=True, text=True)
     if said.returncode != 0:
@@ -4378,9 +4660,19 @@ def check_docs_corpus() -> bool:
         problems.append(f"    only charter has: docs/{topic}.md")
     for topic in sorted(set(ours) - set(theirs)):
         problems.append(f"    only charter-app has: crates/charter-core/docs/{topic}.md")
-    for topic in sorted(set(theirs) & set(ours)):
-        if theirs[topic] != ours[topic]:
+    both = set(theirs) & set(ours)
+    for topic in sorted(both):
+        if topic in DOCS_DIVERGE:
+            problems.extend(_declared_page_problems(topic))
+        elif theirs[topic] != ours[topic]:
             problems.append(f"    differs: {topic}.md")
+    for topic in sorted(set(DOCS_DIVERGE) - both):
+        # A declaration about a page one side does not carry is a declaration about nothing,
+        # and it would otherwise sit here reading as a check.
+        problems.append(
+            f"    a divergence is declared for {topic}.md, which is not a page both "
+            "implementations carry"
+        )
     print(("ok   " if not problems else "DIFF ") + f"docs-corpus ({len(theirs)} pages)")
     for line in problems:
         print(line)
@@ -4421,6 +4713,9 @@ DOCS_SCENARIOS = [
             plane="daily",
             python=["docs", "show", topic],
             pins_the_clock=False,
+            # Empty for every page but the two `DOCS_DIVERGE` names, so this reads as the
+            # byte-for-byte comparison it has always been everywhere else.
+            stdout_rewrite=_docs_stdout_rewrite(topic),
         )
         for topic in _docs_topics()
     ],
@@ -4667,6 +4962,31 @@ def _root_with_a_memory_commit_awaiting_a_pull_request(root: Path) -> None:
     _push_record(root, outcome="branched", landed="charter/1a2b3c4d", branch="main")
 
 
+def _root_ahead_of_its_upstream(root: Path) -> None:
+    """The plane root with one commit its upstream has and one it does not.
+
+    What **A3b** needs, and nothing less does. That guard "only speaks when it has measured that
+    something really would be lost", and the measurement is
+    `git rev-list --count HEAD --not <target> @{upstream}` — so the root needs a real upstream
+    ref and a real commit ahead of it. `_a_plane_root_repo` deliberately has no remote, which
+    makes `@{upstream}` fail and the guard silent: a scenario built on it is green while
+    measuring nothing, which is how it was first written here.
+
+    The remote is a bare repository BESIDE the plane copy: `file://` needs no network and no
+    credential, and it sits outside the tree the scenario compares. `.git` is in
+    `ROOT_REPO_IGNORES`, so the two sides' different absolute remote paths are not compared.
+    """
+    _a_plane_root_repo(root)
+    side = root.parent
+    remote = side / "origin.git"
+    _git(side, "init", "-q", "--bare", str(remote))
+    _git(side, "remote", "add", "origin", str(remote), cwd=root)
+    _git(side, "push", "-q", "-u", "origin", "main", cwd=root)
+    (root / "notes.md").write_text("# notes\n\na commit that reached no remote\n")
+    _git(side, "add", "-A", cwd=root)
+    _git(side, "commit", "-q", "-m", "unpushed", cwd=root)
+
+
 def _root_dirty_off_its_branch_with_a_memory_never_pushed(root: Path) -> None:
     """Every finding at once: they share ONE row, in charter's order."""
     _root_off_its_branch(root)
@@ -4789,7 +5109,199 @@ ALERT_SCENARIOS = [
 ]
 
 
+# --------------------------------------------------------------------------- #
+# `charter hook pretooluse`: the Bash guard, as a PROCESS, on both sides         #
+# --------------------------------------------------------------------------- #
+#
+# M3.1 stage 6. Every other differential in this repository compares a guard ARM against the
+# Python function it was ported from (`tests/differential/shellseg.py`, `planeroot.py`). These
+# compare the whole hook: the same payload on stdin, the same fixture plane, and then the exit
+# status, the JSON on stdout byte for byte, and the two planes afterwards.
+#
+# **They are what measures the ORDER.** Eight arms, and which of two that both fire is the one
+# the chat is told about is a fact about `pretooluse` rather than about any arm — no per-function
+# harness can see it, and it is the whole subject of `toolgate.rs`. `denies` names the arm by the
+# sentence it opens with, checked on BOTH sides, so an order that drifted on either shows up as
+# the wrong sentence rather than as a silent agreement.
+#
+# **The bookkeeping is IGNORED, narrowly and by name.** `pretooluse` writes three things the port
+# does not: a guard sighting, the persona tool-gate's session snapshot, and a trace row. None
+# changes a verdict, all are declared gaps in `toolgate.rs`'s header, and each is listed with the
+# reason rather than the whole of `.charter/` being waved through — a wide ignore here would hide
+# the arms that really do write, which is what a guard differential must not do.
+GUARD_IGNORES = {
+    ".charter/guard-seen.json": "`_mark_guard_seen` — the sighting `doctor` and the status line "
+    "read back to say the guard is live under this harness. Not ported: it is a fact about a "
+    "plane's bookkeeping, not a verdict (charter-core `toolgate`'s header lists it)",
+    ".charter/sessions": "`_turn_bump` and the persona tool-gate's per-session snapshot "
+    "(`<sid>.tools`, `<sid>.gate`, charter#432). The ALLOW half of `pretooluse` is not ported "
+    "at all, so nothing here has a snapshot to freeze",
+    ".charter/persona-state": "`_trace` — one row per verdict. The `Verdict` carries its "
+    "`reason` and `shape` so a later stage can write them; nothing writes them yet",
+}
+
+#: The plane root, as a denial that names it spells it. Each side's copy is at its own absolute
+#: path, so the PATH is what neither implementation decides; everything the denial says around it
+#: still has to match byte for byte.
+GUARD_PLANE_PATH = (r"(?<=git -C )\S+", "each side's plane copy lives at its own absolute path")
+
+#: The payload a harness sends, with only the fields the guard reads.
+#:
+#: **`cwd` defaults to `"."`, and that is not a placeholder.** It is where the COMMAND would run,
+#: which A, A3 and A3b all resolve their paths against — and the plane root is a different
+#: absolute path on each side (`<scratch>/python/plane` against `<scratch>/rust/plane`), so no
+#: literal could name it in a payload both sides are handed. Both processes stand in their own
+#: root, so `"."` is the same answer computed on each side. A scenario that needs the command to
+#: run somewhere else passes `cwd=` itself.
+def _tool_call(command: str, **extra) -> str:
+    return json.dumps({
+        "session_id": SESSION,
+        "cwd": ".",
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        **extra,
+    })
+
+
+def _guard(name: str, command: str, *, denies: str = "", allows: bool = False,
+           plane: str = "daily", setup=None, ignore=None, env=None,
+           stdout_mask=None, local_origin_why: str = "", **payload) -> Scenario:
+    """One `charter hook pretooluse`, put to both implementations.
+
+    `$CHARTER_HARNESS` is set on every one of them: A7 reads it to decide whether an `agent_id`
+    means a sub-agent, and a scenario that left it to the environment would answer differently
+    on a developer's machine than in CI.
+    """
+    return Scenario(
+        name=f"pretooluse-{name}",
+        plane=plane,
+        setup=setup,
+        python=["hook", "pretooluse"],
+        stdin=_tool_call(command, **payload),
+        # A guard reads a command line and a payload; it takes no clock and writes nothing that
+        # carries a stamp, so `hook` has no `--now` to be given one.
+        pins_the_clock=False,
+        denies=denies,
+        allows=allows,
+        stdout_mask=stdout_mask or [],
+        local_origin_why=local_origin_why,
+        ignore={**GUARD_IGNORES, **(ignore or {})},
+        env={"CHARTER_HARNESS": "claude-code", **(env or {})},
+    )
+
+
+PRETOOLUSE_SCENARIOS = [
+    # ---- the two answers that are not a denial at all. First, because every scenario below
+    # would pass against a guard that refused everything.
+    _guard("allows-an-ordinary-command", "git status", allows=True),
+    _guard("allows-the-canonical-handoff",
+           "charter handoff beta <<'BRIEF'\nship it\nBRIEF", allows=True),
+
+    # ---- A: the leak guard. Ungated, and first.
+    _guard("leak", "cat .charter/vaults/db.json",
+           denies="reads a vault/secret file directly"),
+    # ---- A2: the golden rule.
+    _guard("golden-rule", "git clone git@github.com:o/r.git",
+           denies="The control plane is **token-only**"),
+    # ---- A3 and A3b: the plane root is one shared working tree. Both need a real repository
+    # underneath, which is what `_a_plane_root_repo` is for.
+    _guard("plane-root-branch", "git checkout -b side",
+           setup=_a_plane_root_repo, ignore=ROOT_REPO_IGNORES,
+           denies="The plane root is one working tree every session shares"),
+    _guard("plane-root-reset", "git reset --hard HEAD~1",
+           setup=_root_ahead_of_its_upstream, ignore=ROOT_REPO_IGNORES,
+           # A3b's denial names the root so the operator can look at what would go, and each
+           # side's root is its own absolute path. The masked comparison is still exact
+           # everywhere else, which is where the count and the upstream's name are.
+           stdout_mask=[GUARD_PLANE_PATH],
+           local_origin_why="A3b's whole condition is `@{upstream}`, so the root needs a "
+                            "remote it is ahead of. It is a bare repository beside the plane "
+                            "copy: no forge is involved and none is being measured",
+           denies="that is not on origin/main"),
+    # ...and the half that says A3b is a MEASUREMENT and not a word match: the same command in
+    # the same root, with nothing ahead of the upstream, is allowed.
+    _guard("plane-root-reset-with-nothing-at-risk", "git reset --hard HEAD~1",
+           setup=_a_plane_root_repo, ignore=ROOT_REPO_IGNORES, allows=True),
+    # ---- A4: an unattended run may not publish. Both sides of the gate, because "unattended"
+    # is the whole condition and an attended answer that started denying is a guard that
+    # reached the operator.
+    _guard("release-floor", "gh release create v1.0.0",
+           permission_mode="bypassPermissions",
+           denies="Publishing is on charter's floor"),
+    _guard("release-floor-is-attended-only", "gh release create v1.0.0", allows=True),
+    # ---- A5 and A6: a live substitution in prose that gets published.
+    _guard("forge-substitution", 'gh issue create --body "$(cat notes)"',
+           denies="`gh issue create` publishes prose"),
+    _guard("charter-substitution", 'charter persona remember devops "$(cat notes)"',
+           denies="`charter persona remember` takes text"),
+    # ---- A7: all four rows.
+    _guard("handoff-spelling", "python3 -m charter handoff beta <<'BRIEF'\nx\nBRIEF",
+           denies="must be spelled exactly that"),
+    _guard("handoff-brief-source", "charter handoff beta",
+           denies="takes its brief from a QUOTED heredoc"),
+    _guard("handoff-shell-string", "eval 'charter handoff beta'",
+           denies="inside a string or a heredoc a shell runs"),
+    _guard("handoff-subagent", "charter handoff beta <<'BRIEF'\nx\nBRIEF",
+           agent_id="sub-1",
+           denies="refused from inside a sub-agent"),
+    _guard("handoff-unattended", "charter handoff beta <<'BRIEF'\nx\nBRIEF",
+           permission_mode="bypassPermissions",
+           denies="refused in an unattended run"),
+    # ...and the harness nobody measured, where an `agent_id` means nothing and the canonical
+    # spelling still goes through. The gap this pins is a REFUSAL that must not happen.
+    _guard("handoff-from-an-unmeasured-harness",
+           "charter handoff beta <<'BRIEF'\nship it\nBRIEF",
+           agent_id="sub-1", env={"CHARTER_HARNESS": "opencode"}, allows=True),
+
+    # ---- the ORDER, which is the only thing no per-arm harness can see.
+    # A before everything: a line that leaks AND hands off is explained by the leak.
+    _guard("leak-outranks-the-handoff-guard",
+           "cat .charter/vaults/db.json && charter handoff beta",
+           denies="reads a vault/secret file directly"),
+    # A5 before A6: a line that is both is explained by the guard that publishes to a forge.
+    _guard("the-forge-guard-outranks-charters-own",
+           'charter persona remember d "$(x)" && gh issue create --body "$(x)"',
+           denies="`gh issue create` publishes prose"),
+    # A7's own order: a sub-agent is asked before an unattended run, and both before the
+    # spelling. One command, three payloads, three different sentences.
+    _guard("a-sub-agent-is-asked-before-an-unattended-run",
+           "python3 -m charter handoff beta",
+           agent_id="sub-1", permission_mode="bypassPermissions",
+           denies="refused from inside a sub-agent"),
+    _guard("an-unattended-run-is-asked-before-the-spelling",
+           "python3 -m charter handoff beta",
+           permission_mode="bypassPermissions",
+           denies="refused in an unattended run"),
+
+    # ---- the plane gate. `plane=""` is a directory that is not a plane, which is where the
+    # five gated arms denied in every unrelated repository on the machine (charter#852).
+    _guard("outside-a-plane-the-golden-rule-is-silent", "git clone git@github.com:o/r.git",
+           plane="", allows=True),
+    _guard("outside-a-plane-the-handoff-guard-is-silent", "charter handoff beta",
+           plane="", allows=True),
+    # ...and the two that are NOT gated, in the same directory: a fact about the shell is a
+    # fact about the shell wherever it is typed.
+    _guard("outside-a-plane-the-charter-prose-guard-still-refuses",
+           'charter persona remember devops "$(cat notes)"',
+           plane="", denies="`charter persona remember` takes text"),
+    _guard("outside-a-plane-the-leak-guard-still-refuses", "cat .charter/vaults/db.json",
+           plane="", denies="reads a vault/secret file directly"),
+
+    # ---- the payloads a guard has to survive. A hook that crashed on one of these would
+    # block every tool call in the session it was armed on.
+    _guard("a-payload-with-no-command", "", allows=True),
+]
+
+# Exactly one of the two, on every one of them: a guard scenario that asserts neither is a
+# scenario where both sides can allow and nothing is proved. This is the `refusal` field's own
+# objection, applied to the field that replaces it.
+for _s in PRETOOLUSE_SCENARIOS:
+    assert bool(_s.denies) != _s.allows, f"{_s.name} says neither what it denies nor that it allows"
+
+
 SCENARIOS = [
+    *PRETOOLUSE_SCENARIOS,
     *INIT_SCENARIOS,
     *LADDER_SCENARIOS,
     *NEWS_SCENARIOS,
@@ -5453,6 +5965,25 @@ SCENARIOS = [
 ]
 
 
+def _decision(stdout: str) -> str | None:
+    """The `permissionDecisionReason` a `PreToolUse` hook printed, or `None`.
+
+    Read rather than string-matched, so a scenario's `denies` is about the FIELD the harness
+    acts on and not about a sentence that happens to be somewhere in the output. A hook that
+    printed something other than a deny — a `systemMessage`, an allow — answers `None`, which
+    is the same failure as printing nothing.
+    """
+    if not stdout.strip():
+        return None
+    try:
+        out = json.loads(stdout)["hookSpecificOutput"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    if out.get("permissionDecision") != "deny":
+        return None
+    return out.get("permissionDecisionReason")
+
+
 def _env(root: Path, home: Path, pins: Path) -> dict[str, str]:
     """A FRESH environment, never the caller's.
 
@@ -5760,8 +6291,13 @@ def _declared(scenario: Scenario, py: subprocess.CompletedProcess,
 
 
 def _masked(text: str, scenario: Scenario) -> str:
-    """*text* with each of the scenario's masks blanked — what neither side's words decide."""
-    for pattern, _why in scenario.stderr_mask:
+    """*text* with each of the scenario's STDERR masks blanked — what neither side's words
+    decide."""
+    return _mask_with(text, scenario.stderr_mask)
+
+
+def _mask_with(text: str, masks: list) -> str:
+    for pattern, _why in masks:
         text = re.sub(pattern, "<masked>", text)
     return text
 
@@ -5955,10 +6491,60 @@ def check(scenario: Scenario, binary: Path) -> bool:
                     problems.append(f"    stdout differs before {cut!r}:")
                     problems.append(f"      python {want!r}")
                     problems.append(f"      rust   {got!r}")
-        elif py.stdout != rs.stdout:
-            problems.append("    stdout differs:")
-            problems.append(f"      python {py.stdout!r}")
-            problems.append(f"      rust   {rs.stdout!r}")
+        elif scenario.stdout_rewrite:
+            want, trouble = _rewritten_stdout(scenario, py.stdout, rs.stdout)
+            problems.extend(trouble)
+            if want != rs.stdout:
+                problems.append(
+                    "    stdout differs BEYOND what this scenario's rewrites declare:"
+                )
+                problems.extend(
+                    f"      {line}" for line in difflib.unified_diff(
+                        want.splitlines(), rs.stdout.splitlines(),
+                        "python, rewritten as declared", "rust", lineterm="", n=1)
+                )
+        else:
+            # `stdout_mask` is empty for every scenario that does not set it, so this is the
+            # plain comparison for all of them and a masked one only where one is declared.
+            want = _mask_with(py.stdout, scenario.stdout_mask)
+            got = _mask_with(rs.stdout, scenario.stdout_mask)
+            if want != got:
+                problems.append("    stdout differs:")
+                problems.append(f"      python {want!r}")
+                problems.append(f"      rust   {got!r}")
+
+        # A hook's verdict is on STDOUT, so the check above — "the two match" — is satisfied by
+        # two sides that both allowed. These two say WHICH, on each side separately, so a guard
+        # that stopped firing is red rather than symmetrically silent.
+        if scenario.denies:
+            for side, out in (("python", py.stdout), ("rust", rs.stdout)):
+                said = _decision(out)
+                if said is None:
+                    problems.append(
+                        f"    {side} printed no PreToolUse denial at all: {out!r}"
+                    )
+                elif scenario.denies not in said:
+                    problems.append(
+                        f"    {side} denied with something else — wanted {scenario.denies!r}, "
+                        f"got {said!r}"
+                    )
+        if scenario.allows:
+            if scenario.denies:
+                problems.append(
+                    "    this scenario says both `allows` and `denies`, which cannot both be "
+                    "what the hook answered"
+                )
+            for side, out in (("python", py.stdout), ("rust", rs.stdout)):
+                if out:
+                    problems.append(f"    {side} did not allow — it printed {out!r}")
+
+        if scenario.stdout_rewrite and (scenario.stdout_differs or scenario.stdout_cut_at):
+            # Both of those take precedence in the chain above, so the rewrites would be
+            # declaring a difference that nothing compares.
+            problems.append(
+                "    stdout_rewrite is set beside stdout_differs or stdout_cut_at, and those "
+                "answer first — so these rewrites assert nothing"
+            )
 
         if scenario.alerts is not None:
             problems.extend(_alert_rows(scenario, py.stdout, rs.stdout))
@@ -5982,6 +6568,31 @@ ALERT_MARK = "⚠\x1b[0m "
 
 def _alert_lines(stdout: str) -> list[str]:
     return [line for line in stdout.splitlines() if ALERT_MARK in line]
+
+
+def _rewritten_stdout(scenario: Scenario, py_out: str, rs_out: str) -> "tuple[str, list[str]]":
+    """charter's stdout with charter-app's words in it — see `Scenario.stdout_rewrite`.
+
+    Both halves are held to being there. Without the first check a rewrite would go on
+    "allowing" a difference charter had stopped making; without the second it would allow one
+    charter-app had stopped making, which is the same rot in the other direction.
+    """
+    problems = []
+    text = py_out
+    for theirs, ours, why in scenario.stdout_rewrite:
+        if theirs not in text:
+            problems.append(
+                f"    python no longer prints what a rewrite replaces, so it is a rewrite of "
+                f"nothing: {_opening(theirs)!r} ({why})"
+            )
+            continue
+        if ours not in rs_out:
+            problems.append(
+                f"    rust does not print what a rewrite replaces it with, so the declaration "
+                f"has outlived the difference: {_opening(ours)!r} ({why})"
+            )
+        text = text.replace(theirs, ours, 1)
+    return text, problems
 
 
 def _rewritten(line: str, theirs: str, ours: str) -> str:
@@ -6082,10 +6693,15 @@ def main() -> int:
     wanted = everything
     if args.scenario:
         names = {s.name for s in everything}
-        unknown = [n for n in args.scenario if n not in names]
+        # An exact name, or a PREFIX of one. The prefix is what makes a family runnable while
+        # it is being written — `--scenario pretooluse` is 25 scenarios — and it cannot
+        # silently select nothing, because a word that matches no name is still an error.
+        unknown = [n for n in args.scenario
+                   if n not in names and not any(m.startswith(n) for m in names)]
         if unknown:
             ap.error(f"no such scenario: {', '.join(unknown)} (have {', '.join(sorted(names))})")
-        wanted = [s for s in everything if s.name in set(args.scenario)]
+        wanted = [s for s in everything
+                  if any(s.name == n or s.name.startswith(n) for n in args.scenario)]
 
     # Before the scenarios, and whichever of them were asked for: a corpus that has drifted makes
     # every `news --for` scenario report a difference in a rendered body, and this names the file.

@@ -213,6 +213,33 @@ fn every_deferred_row_says_it_did_not_check_and_why() {
     }
 }
 
+#[test]
+fn a_deferred_row_is_told_apart_from_a_check_that_ran_and_could_not_finish() {
+    // The app's status line counts warnings, and a deferred row is a fact about this build:
+    // about twenty of them, on every plane. Counting them would draw a warning count that
+    // never goes down. A check that RAN and could not finish is a real warning and has to be
+    // counted — so the two answers have to differ.
+    assert!(deferred::row("vaults", deferred::VAULTS).deferred());
+    assert!(deferred::python3().deferred());
+    assert!(!Row::not_checked("git", "git timed out").deferred());
+    assert!(!Row::warn("x", "y", "z").deferred());
+    assert!(!Row::ok("x", "y").deferred());
+    assert!(!Row::fail("x", "y", "z").deferred());
+
+    // And across a whole run: every row the table says it did not check because of this
+    // build is deferred, and no ported row is.
+    let (_d, root) = plane("schema = 1\n");
+    let rows = doctor(&root).run();
+    let deferred: Vec<&str> = rows
+        .iter()
+        .filter(|r| r.deferred())
+        .map(|r| r.name.as_str())
+        .collect();
+    assert!(deferred.contains(&"vaults"), "{deferred:?}");
+    assert!(!deferred.contains(&"charter.toml"), "{deferred:?}");
+    assert!(!deferred.contains(&"schema"), "{deferred:?}");
+}
+
 // ---- forges ---------------------------------------------------------------------------------
 
 #[test]

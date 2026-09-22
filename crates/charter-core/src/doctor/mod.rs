@@ -96,6 +96,23 @@ pub struct Row {
 }
 
 impl Row {
+    /// Whether this row is one this binary does not run at all — a check that belongs to a
+    /// part not ported yet ([`deferred`]), printed as a WARN so its silence is never read as
+    /// a pass.
+    ///
+    /// **A different claim from a check that ran and could not finish** ([`Row::not_checked`]).
+    /// That one is a real warning about this machine: charter tried, and a git timed out or a
+    /// tree was unreadable. A deferred row is a fact about this BUILD, identical on every
+    /// machine and every plane — about twenty of them, every run. A surface that summarises
+    /// the table (the app's status line) has to tell the two apart, or it draws "20 warnings"
+    /// forever and the one real warning among them is furniture on its first day.
+    ///
+    /// Asked of the hint, because that is the one thing [`deferred::row`] writes and nothing
+    /// else does: a row cannot be deferred without it, and no ported check says it.
+    pub fn deferred(&self) -> bool {
+        self.hint == deferred::DEFERRED_HINT
+    }
+
     pub(crate) fn ok(name: &str, detail: impl Into<String>) -> Self {
         Self::new(name, Status::Ok, detail, "")
     }

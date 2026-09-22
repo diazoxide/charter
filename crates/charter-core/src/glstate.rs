@@ -117,7 +117,8 @@ pub struct When<'a> {
     pub now: f64,
     /// Where [`NO_BACKGROUND_CHECKS`] is read from.
     pub env: &'a dyn Fn(&str) -> Option<String>,
-    /// Whether a pid is a live process — [`alive`] in anything that is not a test.
+    /// Whether a pid is a live process — [`crate::process::alive`] in anything that is not a
+    /// test.
     pub alive: &'a dyn Fn(u32) -> bool,
 }
 
@@ -236,32 +237,6 @@ pub fn stale(cache: &Map<String, Value>, trees: &[PathBuf], now: f64) -> bool {
     })
 }
 
-/// Whether `pid` is a live process — `charter/glstate.py:_alive`.
-///
-/// The null signal checks for existence without delivering anything. `EPERM` means it exists
-/// and belongs to somebody else, which is still "in flight" for this purpose; `ESRCH` means it
-/// is gone. Anything else is read as gone, so an answer charter cannot make sense of unblocks
-/// the refresh rather than wedging it.
-#[cfg(unix)]
-pub fn alive(pid: u32) -> bool {
-    let Ok(pid) = i32::try_from(pid) else {
-        return false;
-    };
-    let Some(pid) = rustix::process::Pid::from_raw(pid) else {
-        return false;
-    };
-    match rustix::process::test_kill_process(pid) {
-        Ok(()) => true,
-        Err(rustix::io::Errno::PERM) => true,
-        Err(_) => false,
-    }
-}
-
-#[cfg(not(unix))]
-pub fn alive(_pid: u32) -> bool {
-    false
-}
-
 /// What [`maybe_spawn`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refreshing {
@@ -293,7 +268,7 @@ pub fn maybe_spawn(plane: &Path, workspace: &str, trees: &[PathBuf], binary: &Pa
         trees,
         now,
         env: &|name| std::env::var(name).ok(),
-        alive: &alive,
+        alive: &crate::process::alive,
     });
     if decided != Decided::Due {
         return Refreshing::Declined(decided);
@@ -381,18 +356,19 @@ fn epoch_seconds(when: SystemTime) -> f64 {
 mod tests {
     use super::*;
 
+    /// The pid check this module leans on, asked where the whole core now asks it.
+    ///
+    /// charter-app#102 moved the answer to [`crate::process`], because `news` was asking the
+    /// same question and getting the opposite one off unix. What that answer MEANS here is
+    /// still this module's, and it is held by
+    /// `past_the_cooldown_a_refresh_that_is_still_running_suppresses_a_second` and
+    /// `a_refresh_whose_process_is_gone_does_not_suppress_the_next_one` in
+    /// `tests/when_the_forge_cache_is_refreshed.rs`, which drive [`When::alive`] directly.
+    /// This is the wire between the two.
     #[test]
-    fn this_process_is_alive_and_one_that_has_been_reaped_is_not() {
-        assert!(alive(std::process::id()));
-
-        let mut gone =
-            crate::forklock::spawn(std::process::Command::new("/bin/sh").args(["-c", "exit 0"]))
-                .expect("a program starts");
-        let pid = gone.id();
-        gone.wait().expect("it ends");
-
-        assert!(!alive(pid), "a reaped pid is not a refresh in flight");
-        assert!(!alive(0), "pid 0 is not a process charter may ask about");
+    fn the_liveness_a_lock_is_read_against_is_the_cores_one_answer() {
+        assert!(crate::process::alive(std::process::id()));
+        assert!(!crate::process::alive(0));
     }
 
     #[test]

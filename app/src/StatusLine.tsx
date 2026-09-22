@@ -1,5 +1,8 @@
 import { Bell } from "lucide-react";
 import type { WorkspaceState } from "./workspaceState";
+import { Health, type DoctorState } from "./Doctor";
+import { PinItem, UpdateItem, type Updates } from "./Updates";
+import type { PinReport } from "./bindings";
 
 /**
  * **charter's status line**: one line at the very bottom of the window, under everything.
@@ -64,7 +67,9 @@ import type { WorkspaceState } from "./workspaceState";
  *
  * **What is left off, and why.** The `ctx`/`cache` gauges and the usage trend are per-chat and
  * have no renderer ported — ADR 0038 names both as open, and a window-wide gauge would be one
- * conversation's number under fifty. News and `doctor` have no Tauri command at all. Repos and
+ * conversation's number under fifty. `doctor` is one button here (`Doctor.tsx` argues why the
+ * frame and not a region); the update offer and the plane's pin are two more (`Updates.tsx`).
+ * Repos and
  * CI are the bottom region's, and a status line that drew them would be a second bottom bar
  * one line below the first.
  */
@@ -75,6 +80,9 @@ export function StatusLine({
   workspaces,
   state,
   alerts,
+  doctor,
+  updates,
+  pin,
 }: {
   /** The project's root directory — the path that used to sit in the top-right corner. */
   plane: string;
@@ -109,6 +117,14 @@ export function StatusLine({
    * on its own says so rather than offering a button that answers a press with nothing.
    */
   alerts?: Alerts;
+  /** What the doctor last said about this project, run inside the app (`Doctor.tsx`). Absent
+   *  draws no button — a caller that has no doctor to offer offers none. */
+  doctor?: DoctorState;
+  /** The updater, as the window knows it (`Updates.tsx`). Absent draws no button. */
+  updates?: Updates;
+  /** What `charter version` says about this plane's pin, and a way to ask again. The item
+   *  is drawn only when it drifts. */
+  pin?: { pin?: PinReport; again: () => void };
 }) {
   const todos = todoCount(state);
   const pieces = pieceCount(state);
@@ -150,6 +166,12 @@ export function StatusLine({
       )}
 
       <AlertsButton alerts={alerts} />
+
+      {doctor && <Health doctor={doctor} />}
+
+      {updates && <UpdateItem updates={updates} />}
+
+      {pin && <PinItem pin={pin.pin} again={pin.again} />}
 
       {/* The project directory. `code`, because it is a path and the operator copies it out of
           here; the whole path rather than the directory's name, because two projects can share

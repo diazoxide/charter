@@ -8,13 +8,16 @@
 //! `_REDIRECT_RE`, `_REDIRECT_READ_RE`, `_REDIRECTIONS`, `_REDIRECT_READS` and
 //! `_GIT_VALUE_OPTS`.
 //!
-//! # Nothing calls this yet, on purpose
+//! # Where this is called from
 //!
-//! `charter hook pretooluse` is ONE switch, and [`crate::shellseg`]'s header says why it does
-//! not move until every arm is ported. **This is stage 2 of six and is wired to nothing.** It
-//! comes in with the heredoc layout ([`crate::heredoc`]) because `_line_pipelines` names each
-//! pipeline's program through `_split_env`, which is this.
+//! [`crate::toolgate`] — `charter/hooks.py:pretooluse`'s eight refusals, in its order — and
+//! through it `charter hook pretooluse` (M3.1 stage 6).
 //!
+//! Until that stage the switch was closed: `main.rs`'s `is_a_tool_hook` answered every word in
+//! the `pretooluse`/`posttooluse` namespace with exit 2 — *block* — because a PARTIAL guard on
+//! the switch turns fail-closed into allow-everything-except-the-arm-that-is-ported. It moved
+//! once all eight arms were standing, and never earlier. The other eight words in that
+//! namespace still block, for the same reason they always did.
 //! # Why the program is not token 0
 //!
 //! Every refusal above this reads `prog` from token 0 of a segment. Three things sit in front of
