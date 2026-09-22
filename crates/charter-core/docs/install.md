@@ -422,9 +422,13 @@ charter claude            # or charter opencode, or charter codex
 ```
 
 `--forge` is `gitlab` (the default) or `github`; `--owner` is the GitLab group or GitHub
-org/user whose repos this control plane tracks. Run inside an existing git repo, `init`
-also *offers* to clone that repo into your first workspace — accept with `charter init
---clone-this-repo`, because work happens in a workspace, never in the plane root.
+org/user whose repos this control plane tracks. Run at the top of an existing git repo,
+`init` writes nothing at all and says so: a plane is a directory of its own and that repo
+becomes its first clone (`charter clone <repo>`), because work happens in a workspace, never
+in the plane root. To make that repo the plane instead, ask for it by name with `charter
+init --plane-is-this-repo`. That default is charter-app's and is the opposite of the Python
+charter's, which scaffolds the plane into the repo — ADR 0035, and charter-app spec
+decision 27.
 
 `discover` and `clone` go through the forge's own CLI — `gh` for GitHub, `glab` for
 GitLab — which nothing above installs and which must be authenticated. `charter doctor`

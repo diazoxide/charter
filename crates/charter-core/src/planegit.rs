@@ -258,10 +258,16 @@ pub fn record_push(root: &Path, res: PushResult, head: &str) -> PushResult {
     // about this file. `private_dir` refuses a state directory that is a symlink, and
     // `write_private` writes beside the record and renames over it — so a link planted AT the
     // record is replaced rather than written through.
+    //
+    // The state directory is what the containment walk is ROOTED at, for that same reason:
+    // it is the deepest thing here charter already trusts, `private_dir` has just refused it
+    // as a link, and the walk then covers the temp file the bytes actually land on
+    // (charter-app#113).
     if let Some(dir) = path.parent()
         && crate::profiletrust::private_dir(dir).is_ok()
     {
         let _ = crate::profiletrust::write_private(
+            dir,
             &path,
             crate::pyjson::dumps_indent2(&doc).as_bytes(),
         );

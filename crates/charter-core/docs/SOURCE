@@ -9,6 +9,25 @@ coincidence and it is not documentation: it is the only thing tying the two copi
 that drifts here, or is dropped, or is added, turns the differential red rather than printing
 a page charter would not have printed.
 
+TWO PAGES ARE DELIBERATELY NOT THE ORACLE'S, AND THAT IS DECLARED
+
+`control-plane.md` and `install.md` describe what `charter init` does at the top of an existing
+git repository, and ADR 0035 reversed that for charter-app: the plane goes in a directory of
+its own, the repo becomes its first clone, and `--plane-is-this-repo` is the opt-in. The Python
+charter is frozen (spec decision 17), so the pages cannot be corrected upstream — and a frozen
+oracle documenting behaviour it does not have would be worse than the drift. Each page says in
+its own text which implementation it is describing, which is the condition charter-app#119 puts
+on holding a different copy at all.
+
+`DOCS_DIVERGE` in `tests/differential/run.py` is where that is declared, page by page and
+passage by passage. It is NOT a skip: the run rewrites the oracle's page with the declared
+passages and compares the result byte for byte, so everything the declaration does not name is
+held to exactly the bar it always was — and the declaration itself fails loudly if charter stops
+saying its half, if charter-app stops saying its half, or if the two copies ever agree again.
+
+`docsrc.rs` carries the cheap half of the same claim, so a page that offers
+`charter init --clone-this-repo` fails `cargo test` rather than waiting for the differential.
+
 THE WHEEL, NOT THE REPOSITORY
 
 `charter/docsrc.py` resolves `charter/_docs` first and falls back to the repository's own

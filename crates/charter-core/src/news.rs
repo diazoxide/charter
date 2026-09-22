@@ -1106,31 +1106,19 @@ fn outer_probe() -> Option<u32> {
     if pid == 0 || pid == std::process::id() {
         return None;
     }
-    alive(pid).then_some(pid)
-}
-
-#[cfg(unix)]
-fn alive(pid: u32) -> bool {
-    let Ok(raw) = i32::try_from(pid) else {
-        return false;
-    };
-    let Some(pid) = rustix::process::Pid::from_raw(raw) else {
-        return false;
-    };
-    // `kill(pid, 0)` asks whether it exists; it sends nothing. Alive-and-not-ours-to-signal is
-    // still a probe, so ESRCH — no such process — is the only answer that is a no.
-    !matches!(
-        rustix::process::test_kill_process(pid),
-        Err(rustix::io::Errno::SRCH)
-    )
-}
-
-#[cfg(not(unix))]
-fn alive(_pid: u32) -> bool {
-    // Off POSIX the marker is taken at its word, as `charter/news.py` does: a stale one costs
-    // `unknown` — which is loud, and says why — where getting this wrong costs somebody else's
-    // process.
-    true
+    // **[`crate::process::alive`], and not an answer of this module's own** (charter-app#102).
+    // This used to carry its own pair of arms, and off POSIX they said the opposite of
+    // `glstate`'s: every marker read as live, so a stale one would have suppressed the check
+    // for ever — the exact failure the paragraph above says the PID is here to prevent. On
+    // POSIX the two also read an unplaceable errno differently, which no run could provoke and
+    // nothing had noticed. One question, one answer, and the reason is written once where the
+    // answer is.
+    //
+    // What it costs THIS caller is named there rather than hidden: off POSIX a descendant
+    // would not decline a mutation inside a probe it cannot see. That is a round of the check
+    // being wrong; believing a stale marker is every round on that machine being wrong, with
+    // nothing to clear it.
+    crate::process::alive(pid).then_some(pid)
 }
 
 /// Is an entry's `check:` running right now — here, or in a process above this one?
