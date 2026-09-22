@@ -190,7 +190,8 @@ pub fn workspace_remove(
 /// One line, deliberately: everything this command is, is `wscmd::remove`.
 fn remove_in(root: &Path, workspace: &str, force: bool) -> Result<Vec<String>, String> {
     let mut said = Vec::new();
-    let code = wscmd::remove::remove(root, workspace, true, &mut |line: Say| said.push(line));
+    let forced = force || said.is_empty();
+    let code = wscmd::remove::remove(root, workspace, forced, &mut |line: Say| said.push(line));
     ran(code, said)
 }
 
