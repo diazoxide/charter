@@ -185,9 +185,15 @@ describe("a window holding more than one project", function () {
   it("opens a second project beside the first, through the same trust gate", async () => {
     await stripBecomes([{ path: first, front: true }]);
 
-    // `+` on the strip, which is the catalogue's own row drawn as a button. Taken by position
-    // rather than by its words: it is the one button on the strip that is not a tab's.
-    await $(`${PROJECTS} > button`).click();
+    // `+` on the strip, which is the catalogue's own row drawn as a button.
+    //
+    // **By its accessible name, not by its position.** It was `${PROJECTS} > button`, the one
+    // direct-child button of the strip — which stopped matching anything the moment the
+    // strip's own controls were gathered into an element of their own, and a selector that
+    // matches nothing is a spec that fails with "element not displayed" and says nothing
+    // about why. The `+` carries the catalogue's words in `aria-label` precisely so that it
+    // can be reached by what it means, and that is what an operator gets from it too.
+    await $(`${PROJECTS} button[aria-label="Open a project…"]`).click();
     const box = await $("#open-by-path");
     await box.waitForDisplayed({ timeout: 20_000 });
     await box.addValue(second);
