@@ -78,6 +78,31 @@ async function focus(workspace: string): Promise<void> {
   throw new Error(`no ${workspace} on the strip; it lists ${(await listed()).join(", ")}`);
 }
 
+/**
+ * Sends the `contextmenu` a right-click sends, to the first element matching `selector`.
+ *
+ * Answers whether it found one, so a selector that stopped matching fails as itself rather
+ * than as a menu that never opened. The coordinates are the element's own centre, because
+ * Radix anchors the menu to the point the event carries. The same helper
+ * `workspace-lifecycle.e2e.ts` uses, and its docstring has the measurement behind it.
+ */
+async function sendContextMenu(selector: string): Promise<boolean> {
+  return browser.execute((css: string) => {
+    const el = document.querySelector(css);
+    if (!(el instanceof HTMLElement)) return false;
+    const box = el.getBoundingClientRect();
+    el.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: Math.round(box.left + box.width / 2),
+        clientY: Math.round(box.top + box.height / 2),
+      }),
+    );
+    return true;
+  }, selector);
+}
+
 describe("the explorer", () => {
   it("lists the focused workspace's clones", async () => {
     await onAlpha();
@@ -102,6 +127,32 @@ describe("the explorer", () => {
     const cut = await $('[data-testid="piece-svc-fix-login"]');
     await cut.waitForExist({ timeout: 20_000 });
     await expect(cut).toHaveText(expect.stringContaining("unwired"));
+  });
+
+  it("answers a right-click on a piece with the catalogue's rows for that piece", async () => {
+    // charter-app#174, against the real core: the rows in this menu exist because the plane
+    // on disk has `fix-login` cut off `svc` and `worktree_list` said so — nothing here is
+    // stubbed, and a catalogue built from a plane that had not been read would draw no menu
+    // at all. What the rows SAY is `src/Menus.test.tsx`'s and `src/actions.test.ts`'s.
+    //
+    // **The event is dispatched rather than right-clicked**, for the reason
+    // `workspace-lifecycle.e2e.ts` measures at length: a WebDriver right-click is a
+    // synthesised pointer sequence and raises no `contextmenu` on either engine, so what is
+    // sent here is the event the platform would have sent.
+    await onAlpha();
+    await $('[data-testid="piece-svc-fix-login"]').waitForExist({ timeout: 20_000 });
+
+    const sent = await sendContextMenu('[data-testid="piece-svc-fix-login"] .spot');
+    expect(sent).toBe(true);
+
+    const menu = await $('[role="menu"]');
+    await menu.waitForDisplayed({ timeout: 20_000 });
+    await expect(menu).toHaveText("Merge worktree fix-login into svc", { containing: true });
+    await expect(menu).toHaveText("Remove worktree fix-login in svc", { containing: true });
+    // Closed again, because one app process serves the whole run and a menu left up is over
+    // every row the specs after this one reach for.
+    await browser.keys(["Escape"]);
+    await menu.waitForDisplayed({ timeout: 20_000, reverse: true });
   });
 
   it("says a clone has no worktrees rather than drawing nothing under it", async () => {

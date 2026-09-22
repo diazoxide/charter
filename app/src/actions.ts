@@ -106,8 +106,20 @@ export type Does =
    *  discards work with nobody warned — the same objection `worktree.discard` records. */
   | { verb: "removeWorkspace"; workspace: string }
   | { verb: "showChat"; session: number }
-  | { verb: "removeWorktree"; force: boolean }
-  | { verb: "mergeWorktree" }
+  /** Opens the card the right-hand panel draws for one persona — what #173 put there.
+   *
+   *  It reads a definition and changes nothing. It is a row here rather than only a click on
+   *  the panel because a menu is a third reader of this list (`Menus.tsx`) and the persona
+   *  rows had nothing in it to read (charter-app#174). */
+  | { verb: "showPersona"; persona: string }
+  /** **Names the worktree it acts on**, and never "whichever one is in front".
+   *
+   *  It used to carry only `force`, which made `worktree.remove` a row about the chat in
+   *  front and left the explorer's own rows with nothing to offer (charter-app#174). The
+   *  front chat's row still exists and still says "this chat's" — it now simply spells out
+   *  the piece it means, the same way `tab.close:<id>` spells out its tab. */
+  | { verb: "removeWorktree"; cut: Cut; force: boolean }
+  | { verb: "mergeWorktree"; cut: Cut }
   /** Shows the opener, so another project can be opened into this window beside the ones it
    *  already holds. It opens nothing by itself — the trust gate is the opener's (ADR 0035). */
   | { verb: "openProject" }
@@ -183,6 +195,26 @@ export type Now = {
   focused?: string;
   /** Where the chat in front is working, when it is working in a charter worktree. */
   worktree?: ChatWorktree;
+  /**
+   * The focused workspace's worktrees, as the explorer lists them (charter-app#174).
+   *
+   * **This is the ~100 rows the issue put a number on**, and it is the price of the
+   * explorer's rows having a menu at all: two rows per piece, at ADR 0026's ten clones with
+   * five pieces each. `menuRows` is what pays it per render, and it stopped scanning for it
+   * — see [`catalogued`].
+   *
+   * Only the FOCUSED workspace's, because that is the only one any surface draws: the
+   * explorer, the bottom bar and this list all answer about one workspace, and carrying every
+   * workspace's pieces would multiply the number above by the workspace count to serve rows
+   * nothing can right-click.
+   */
+  pieces?: readonly Cut[];
+  /**
+   * The plane's personas, as the right-hand panel lists them.
+   *
+   * One row each, and they are cheap: a plane has a handful, not a workspace's worth.
+   */
+  personas?: readonly string[];
   /** The plane's root. Every worktree command needs it, and there may not be one. */
   plane?: string;
   /**
@@ -194,8 +226,15 @@ export type Now = {
    * pointer, and at eight projects the palette is faster than the strip.
    */
   projects?: readonly Project[];
-  /** A refusal `worktree.remove` gave and the operator has not answered yet. */
-  refusal?: string;
+  /**
+   * The ROW whose refusal the operator has not answered yet, by id.
+   *
+   * It was the refusal's words, and only presence was ever read. Now that a removal names its
+   * piece there are as many removals as there are pieces, and the discard row has to appear
+   * beside the one that was refused rather than beside all of them — so what the window hands
+   * over is which row spoke, and this module matches the ids it wrote itself.
+   */
+  refused?: string;
   /** The chats asking for you, oldest first. */
   needsYou: readonly number[];
   /**
@@ -239,8 +278,13 @@ export type Doing = {
    *  core's guard. */
   removeWorkspace: (workspace: string) => void;
   showChat: (session: number) => void;
-  removeWorktree: (force: boolean) => Promise<Ran>;
-  mergeWorktree: () => Promise<Ran>;
+  /** Opens the card the right-hand panel draws for one persona. It reads a definition and
+   *  changes nothing, so it answers no `Ran`. */
+  showPersona: (persona: string) => void;
+  /** Each takes the piece it acts on. The window no longer decides which worktree a removal
+   *  meant by looking at what happens to be in front (charter-app#174). */
+  removeWorktree: (cut: Cut, force: boolean) => Promise<Ran>;
+  mergeWorktree: (cut: Cut) => Promise<Ran>;
   sendKey: (key: string) => Promise<Ran>;
   openProject: () => void;
   /** Opens the new-project dialog. Nothing is scaffolded and nothing is opened until it is
@@ -251,6 +295,22 @@ export type Doing = {
   closeProject: (plane: string) => Promise<Ran>;
   quit: () => void;
 };
+
+/**
+ * One worktree charter cut, named the way every worktree command names one.
+ *
+ * Three parts and not a path: `worktree_remove` and `worktree_merge` take the workspace, the
+ * clone and the piece, so this is what a row carries and nothing here ever joins a path
+ * together. The workspace is part of it because the chat in front may be working in a piece of
+ * a workspace that is not the one focused.
+ */
+export type Cut = { workspace: string; repo: string; piece: string };
+
+/** The id `Cut` gets inside a row: the clone and the piece, which is unique within one
+ *  workspace and is what the explorer's row can name without looking anything up. */
+function idOf(cut: Cut): string {
+  return `${cut.repo}/${cut.piece}`;
+}
 
 /** One project a window holds, as the strip and the palette both name it. */
 export type Project = {
@@ -364,6 +424,17 @@ export const PIN_NOTE = "Draws it first on its strip. Yours, on this machine onl
 
 /** And the same said the other way, so unpinning is not a row with no consequence on it. */
 export const UNPIN_NOTE = "Puts it back in the plane's own order.";
+
+/**
+ * What removing a worktree costs, said on the row that does it (charter-app#174).
+ *
+ * The half that is worth saying is the half nobody expects: **the branch stays**. `git
+ * worktree remove` takes the directory and leaves the ref, so "remove" here is not the same
+ * word it is on a workspace, and a row that popped up under the pointer saying only `Remove
+ * worktree fix-it` reads as the harsher of the two. What IS lost is what was never committed,
+ * and the core refuses over that rather than this row warning about it.
+ */
+export const KEEPS_THE_BRANCH = "Takes the tree, not the branch. The branch stays where it is.";
 
 /** Nothing happened worth saying, which is the ordinary answer. */
 const DID: Ran = { ok: true };
@@ -535,15 +606,49 @@ export function catalogue(now: Now): Offer[] {
   const projects = projectRows(now.projects ?? [], now.plane, pinned.projects);
   offers.push(projects.open, projects.create, ...projects.switchTo, ...projects.pin);
 
+  // **The plane's personas, one row each** (charter-app#174). What the row opens is the card
+  // #173 put on the panel, and this is the whole of what charter can do to a persona today:
+  // a definition is a file an operator edits, and nothing in this window writes one. A row
+  // that only READS is still a row — it is how the persona rows get a menu without a second
+  // list being invented for them, and it is how a persona is reachable from the palette.
+  for (const persona of now.personas ?? []) {
+    offers.push(
+      can(
+        `persona.show:${persona}`,
+        `Show what ${persona} is`,
+        { verb: "showPersona", persona },
+        persona,
+      ),
+    );
+  }
+
   // The worktree of the chat in front. Merging is not destructive — it is fast-forward only
   // and never pushes — so it sits above the line; removing is below it.
-  const why = whyNoWorktree(now, front !== undefined);
+  const inFront = frontWorktree(now, front !== undefined);
   const merge = "Merge this chat's worktree into its clone";
   offers.push(
-    why === undefined
-      ? can("worktree.merge", merge, { verb: "mergeWorktree" })
-      : cannot("worktree.merge", merge, why),
+    "cut" in inFront
+      ? can("worktree.merge", merge, { verb: "mergeWorktree", cut: inFront.cut })
+      : cannot("worktree.merge", merge, inFront.why),
   );
+
+  // **And one row per piece of the focused workspace** (charter-app#174). The explorer's rows
+  // had no menu because the two rows above are about THE CHAT IN FRONT, and a piece nothing
+  // is running in is not in front of anything. These name the piece, exactly as
+  // `tab.close:<id>` names its tab and for the same reason: a destructive row whose target
+  // the operator has to work out from somewhere else on the page is the defect, not the
+  // feature. The merges are here, above the line; the removes are below with the rest.
+  const pieces = now.pieces ?? [];
+  const noPlane =
+    now.plane === undefined ? "charter found no plane, so it cannot reach a worktree." : undefined;
+  for (const cut of pieces) {
+    const title = `Merge worktree ${cut.piece} into ${cut.repo}`;
+    offers.push(
+      noPlane === undefined
+        ? can(`worktree.merge:${idOf(cut)}`, title, { verb: "mergeWorktree", cut }, cut.piece)
+        : cannot(`worktree.merge:${idOf(cut)}`, title, noPlane, cut.piece),
+    );
+  }
 
   // ----- destructive, and therefore last -----
 
@@ -574,10 +679,34 @@ export function catalogue(now: Now): Offer[] {
 
   const remove = "Remove this chat's worktree";
   offers.push(
-    why === undefined
-      ? can("worktree.remove", remove, { verb: "removeWorktree", force: false })
-      : cannot("worktree.remove", remove, why),
+    "cut" in inFront
+      ? {
+          ...can("worktree.remove", remove, {
+            verb: "removeWorktree",
+            cut: inFront.cut,
+            force: false,
+          }),
+          note: KEEPS_THE_BRANCH,
+        }
+      : cannot("worktree.remove", remove, inFront.why),
   );
+
+  for (const cut of pieces) {
+    const title = `Remove worktree ${cut.piece} in ${cut.repo}`;
+    offers.push(
+      noPlane === undefined
+        ? {
+            ...can(
+              `worktree.remove:${idOf(cut)}`,
+              title,
+              { verb: "removeWorktree", cut, force: false },
+              cut.piece,
+            ),
+            note: KEEPS_THE_BRANCH,
+          }
+        : cannot(`worktree.remove:${idOf(cut)}`, title, noPlane, cut.piece),
+    );
+  }
 
   // **The one row that is absent rather than refused.** Every other unavailable action is
   // listed with its reason, because an operator cannot ask about an option they cannot see.
@@ -585,12 +714,28 @@ export function catalogue(now: Now): Offer[] {
   // it is the operator's answer to a sentence they have read. A row permanently offering to
   // force is a destructive action nobody was warned about; there is nothing to warn about
   // until the refusal exists, and then the row appears beside it.
-  if (now.refusal !== undefined && why === undefined) {
+  //
+  // **And it is beside THE ROW THAT WAS REFUSED**, not beside every removal there is. With
+  // one removal per piece, a discard row that appeared for all of them would be fifty offers
+  // to throw work away raised by one refusal about one piece.
+  if (now.refused === "worktree.remove" && "cut" in inFront) {
     offers.push(
       can("worktree.discard", "Discard that work and remove the worktree anyway", {
         verb: "removeWorktree",
+        cut: inFront.cut,
         force: true,
       }),
+    );
+  }
+  for (const cut of pieces) {
+    if (now.refused !== `worktree.remove:${idOf(cut)}` || noPlane !== undefined) continue;
+    offers.push(
+      can(
+        `worktree.discard:${idOf(cut)}`,
+        `Discard that work and remove ${cut.piece} anyway`,
+        { verb: "removeWorktree", cut, force: true },
+        cut.piece,
+      ),
     );
   }
 
@@ -683,10 +828,13 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "showChat":
       doing.showChat(does.session);
       return DID;
+    case "showPersona":
+      doing.showPersona(does.persona);
+      return DID;
     case "removeWorktree":
-      return doing.removeWorktree(does.force);
+      return doing.removeWorktree(does.cut, does.force);
     case "mergeWorktree":
-      return doing.mergeWorktree();
+      return doing.mergeWorktree(does.cut);
     case "sendKey":
       return doing.sendKey(does.key);
     case "openProject":
@@ -728,13 +876,22 @@ function nothingSaidSoFar(quiet: readonly string[]): string {
   return `Nothing has said it needs you — and ${who}.`;
 }
 
-/** Why there is no worktree to act on, or nothing when there is one. */
-function whyNoWorktree(now: Now, inFront: boolean): string | undefined {
-  if (!inFront) return "No chat is in front.";
-  if (now.plane === undefined) return "charter found no plane, so it cannot reach a worktree.";
+/**
+ * The worktree the chat in front is working in, or why there is none.
+ *
+ * **The piece and the reason in one answer, rather than a reason and a second look at
+ * `now.worktree`** (charter-app#174). A row about a worktree now carries the worktree, so
+ * "can this row run" and "which piece does it mean" are the same question asked once — two
+ * checks would let a row be available while carrying no piece, which is a defect nothing on
+ * screen could show.
+ */
+function frontWorktree(now: Now, inFront: boolean): { cut: Cut } | { why: string } {
+  if (!inFront) return { why: "No chat is in front." };
+  if (now.plane === undefined)
+    return { why: "charter found no plane, so it cannot reach a worktree." };
   if (now.worktree === undefined)
-    return "The chat in front is not working in a worktree charter cut.";
-  return undefined;
+    return { why: "The chat in front is not working in a worktree charter cut." };
+  return { cut: now.worktree };
 }
 
 /** The tab holding a session, or nothing when no tab does. */
@@ -837,6 +994,11 @@ export type MenuOn =
   | { on: "chat"; tab: number }
   | { on: "workspace"; workspace: string }
   | { on: "project"; plane: string }
+  /** One worktree of the focused workspace, as the explorer's rows name it — the clone and
+   *  the piece. Not a `Cut`: the workspace is the focused one on every surface that draws
+   *  these, so carrying it would be a third copy of an answer the window already has. */
+  | { on: "worktree"; repo: string; piece: string }
+  | { on: "persona"; persona: string }
   /** The panes — the centre of the window, where a chat is. Not about any one pane: a split
    *  acts on the pane that has the keyboard, which is what the bar's buttons act on too. */
   | { on: "pane" };
@@ -885,6 +1047,22 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
         ],
         below: [`project.close:${what.plane}`],
       };
+    case "worktree": {
+      const at = `${what.repo}/${what.piece}`;
+      return {
+        above: [`worktree.merge:${at}`],
+        // The discard row is listed and is almost never found: it exists only while a removal
+        // of THIS piece has been refused and not answered. That is the whole reason a menu
+        // lists ids rather than rows — nothing here has to know when it exists.
+        below: [`worktree.remove:${at}`, `worktree.discard:${at}`],
+      };
+    }
+    case "persona":
+      // One row, because reading the definition is the only thing charter can do to a persona
+      // from this window: a persona is a file on disk that `charter persona create` writes and
+      // an operator edits. A menu with one honest row is the answer; a menu with three
+      // invented ones is the defect this module exists to prevent (charter-app#174).
+      return { above: [`persona.show:${what.persona}`], below: [] };
     case "pane":
       return {
         above: ["chat.new", "pane.split.right", "pane.split.down", PASS_THROUGH_ID],
@@ -894,23 +1072,56 @@ export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
 }
 
 /**
+ * The catalogue with its rows reachable by id: what a menu, a strip and a button look one up
+ * in.
+ *
+ * **Built once for the window, not once per surface that asks.** `menuRows` scanned the array,
+ * and a scan is per menu per render: at ADR 0026's limits the chat strip draws fifty menus of
+ * three ids each, over a catalogue that #174 grew from 183 rows to 291. Measured for one
+ * render of that strip, min of ten batches with each arm in its own process:
+ *
+ * | one strip render | offers touched | scanning  | through this map |
+ * |------------------|----------------|-----------|------------------|
+ * | 183 rows         | 13,375         | 0.047 ms  | 0.017 ms         |
+ * | 291 rows         | 16,275         | 0.049 ms  | 0.017 ms         |
+ *
+ * **31 µs is not a speed anybody feels, and that is not the argument.** CLAUDE.md says
+ * optimise only against the spec's limits, and charter-app#133 measured a similar scan at
+ * 22 µs and changed nothing. What is different here is the shape rather than the size: a scan
+ * costs what the catalogue is long, and #174 is the change that made it longer — a third more
+ * comparisons for the same fifty menus. This does not move when the list does. It is also
+ * less code than the closure it replaces, which is the priority above speed.
+ *
+ * **It is not a memo and it is not a cache.** It is a value derived from `offers` and held
+ * exactly where `offers` is held (`PlaneView`, `App`), so a surface handed one cannot be
+ * holding a stale copy of a catalogue — the same reason an offer cannot: neither holds a copy
+ * of anything. `Map` keeps insertion order, so nothing read back out of it is in a different
+ * order from the array.
+ */
+export type Catalogued = ReadonlyMap<string, Offer>;
+
+/** The catalogue, indexed. */
+export function catalogued(offers: readonly Offer[]): Catalogued {
+  return new Map(offers.map((offer) => [offer.id, offer]));
+}
+
+/**
  * The rows a context menu on that item draws: the catalogue's own offers, in menu order.
  *
  * **A row the catalogue does not have is dropped rather than invented**, which is `Doer`'s
  * rule for the bar's buttons and is the property that makes one catalogue enough. A menu on
  * the strip of chats outside every workspace has no pin row because the catalogue has no
- * `workspace.pin:outside/every/workspace`; nothing here had to be told about that case.
+ * `workspace.pin:outside/every/workspace`; nothing here had to be told about that case. It is
+ * also how a worktree's `Discard that work…` row is in every worktree menu and is drawn in
+ * none of them until the core has refused that piece's removal.
  *
  * **A row that cannot run is kept, with its reason**, exactly as the palette keeps it: an
  * operator cannot ask about an option they cannot see, and "It is already in front." on a
  * greyed row is an answer where a missing row is a mystery.
  */
-export function menuRows(
-  what: MenuOn,
-  offers: readonly Offer[],
-): { above: Offer[]; below: Offer[] } {
-  const byId = (id: string) => offers.find((offer) => offer.id === id);
-  const found = (ids: readonly string[]) => ids.map(byId).filter((row) => row !== undefined);
+export function menuRows(what: MenuOn, offers: Catalogued): { above: Offer[]; below: Offer[] } {
+  const found = (ids: readonly string[]) =>
+    ids.map((id) => offers.get(id)).filter((row) => row !== undefined);
   const { above, below } = menuOn(what);
   return { above: found(above), below: found(below) };
 }
