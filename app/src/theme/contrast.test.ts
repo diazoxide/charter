@@ -54,6 +54,10 @@ const PAIRS: [Token, Token, number][] = [
   ["text.secondary", "surface.base", 4.5],
   ["text.muted", "surface.base", 4.5],
   ["text.muted", "surface.overlay", 4.5],
+  // The three strips are three surfaces, and a tab that is not the selected one is muted on
+  // whichever its strip sits on. A pane's own controls are muted on `surface.raised` too.
+  ["text.muted", "surface.deep", 4.5],
+  ["text.muted", "surface.raised", 4.5],
   // The alerts drawer is `surface.overlay`: its details are secondary text on it.
   ["text.secondary", "surface.overlay", 4.5],
   ["needs-you.text", "needs-you.base", 4.5],
