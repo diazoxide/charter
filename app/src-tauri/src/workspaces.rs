@@ -281,14 +281,24 @@ mod tests {
 
         create_in(&root, "alpha", Some("  ship the thing  ")).expect("created");
         create_in(&root, "beta", Some("   ")).expect("created");
+        create_in(&root, "gamma", None).expect("created");
 
-        let alpha = std::fs::read_to_string(root.join("workspaces/alpha/workspace.md")).unwrap();
-        assert!(alpha.contains("ship the thing"), "{alpha}");
-        let beta = std::fs::read_to_string(root.join("workspaces/beta/workspace.md")).unwrap();
-        assert!(
-            !beta.contains("## Vision\n\n\n"),
-            "an empty box records nothing: {beta}"
-        );
+        // Read back the way charter reads it, which answers "" for its own placeholder — so
+        // "no vision" is the core's own judgement and not this test's reading of a file.
+        let vision = |name: &str| {
+            charter_core::workspaces::Plane::open(&root)
+                .workspace(name)
+                .expect("a workspace")
+                .vision()
+                .trim()
+                .to_owned()
+        };
+        assert_eq!(vision("alpha"), "ship the thing");
+        // **An empty box is no vision, not a vision that is empty.** Recorded, it would fill
+        // `## Vision` with whitespace and charter would read it back as one somebody wrote —
+        // and stop nagging for the one thing a fork inherits.
+        assert_eq!(vision("beta"), "");
+        assert_eq!(vision("gamma"), "");
     }
 
     #[test]

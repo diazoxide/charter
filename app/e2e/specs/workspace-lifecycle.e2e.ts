@@ -35,6 +35,7 @@ import { anEmptyRecord, cloneTheFixtureRepos, copyFixturePlane } from "../harnes
  * repo has never taken and a claim in a PR is not one.
  */
 
+const PROJECTS = '[role="tablist"][aria-label="Projects"]';
 const WORKSPACES = '[role="tablist"][aria-label="Workspaces"]';
 const PALETTE = '[role="dialog"][aria-label="Command palette"]';
 
@@ -94,8 +95,14 @@ async function stripBecomes(want: string[]): Promise<void> {
   );
 }
 
-/** Runs one catalogue row by name, through the palette, with no pointer. */
-async function runRow(title: string): Promise<void> {
+/**
+ * Runs one catalogue row through the palette, with no pointer.
+ *
+ * `query` and `title` are two arguments because they are two things: what is TYPED, which is
+ * ASCII on purpose — `New workspace…` ends in an ellipsis and a run must not depend on a
+ * WebDriver sending one — and what the row READS, which is what proves the right row is first.
+ */
+async function runRow(query: string, title: string): Promise<void> {
   await browser.keys(["F2"]);
   await (await $(PALETTE)).waitForDisplayed({ timeout: 20_000 });
   const box = await $("#palette-query");
@@ -103,9 +110,9 @@ async function runRow(title: string): Promise<void> {
     timeout: 10_000,
     timeoutMsg: "the palette did not take the keyboard when it opened",
   });
-  // The whole title, which `narrow` puts first as an exact match — so Enter runs this row and
-  // not whichever row happens to share its letters.
-  await box.addValue(title);
+  // `narrow` ranks charter's own words above any row that merely carries a name, so a verb
+  // typed in full comes first — and the wait below is what insists on it rather than assuming.
+  await box.addValue(query);
   await browser.waitUntil(
     async () =>
       (await browser.execute(
@@ -128,13 +135,20 @@ describe("making a workspace and deleting one", function () {
 
   before(async () => {
     first = (await ask<string[]>("open_planes"))[0];
-    const opened = await ask<{ plane: string | null }>("open_plane", { path: mine });
-    // The fixture plane has never been approved on this run's store, so the first open asks.
-    if (opened.plane === null) {
-      const question = await $('[role="dialog"]');
-      await question.waitForDisplayed({ timeout: 30_000 });
-      await $("button=Open project").click();
-    }
+    // **Through the opener, not through the command.** A window learns it holds a project by
+    // opening one; a driver that invoked `open_plane` itself would attach the plane in the
+    // core and leave the strip showing the launch's project — and every assertion below would
+    // be about the wrong plane. `projects.e2e.ts` opens a second project the same way.
+    await $(`${PROJECTS} > button`).click();
+    const box = await $("#open-by-path");
+    await box.waitForDisplayed({ timeout: 20_000 });
+    await box.addValue(mine);
+    await $("button=Open").click();
+    // A plane nobody has approved is described and not opened; there is no third way in
+    // (ADR 0035). This run's store is its own, so this is always a first ask.
+    const question = await $('[role="dialog"]');
+    await question.waitForDisplayed({ timeout: 30_000 });
+    await $("button=Open project").click();
     await browser.waitUntil(async () => (await ask<string[]>("open_planes")).includes(mine), {
       timeout: 30_000,
       timeoutMsg: "this spec's project never opened",
@@ -151,7 +165,7 @@ describe("making a workspace and deleting one", function () {
   });
 
   it("makes a workspace with the baseline charter gives it, and puts it on the strip", async () => {
-    await runRow("New workspace…");
+    await runRow("New workspace", "New workspace…");
 
     const dialog = await $('[role="dialog"]');
     await dialog.waitForDisplayed({ timeout: 20_000 });
@@ -174,7 +188,7 @@ describe("making a workspace and deleting one", function () {
     // The window validates no name of its own: `workspace_create` runs `wscmd::ensure`, which
     // is where `contain::workspace_name_ok` is. `../escape` is what a second answer would get
     // wrong, and it would get it wrong by writing outside the plane.
-    await runRow("New workspace…");
+    await runRow("New workspace", "New workspace…");
     const dialog = await $('[role="dialog"]');
     await dialog.waitForDisplayed({ timeout: 20_000 });
     const name = await $('[role="dialog"] input');
@@ -194,7 +208,7 @@ describe("making a workspace and deleting one", function () {
     // **The guard, for real.** `workspaces/alpha/tool` is a git repository with an
     // uncommitted file in it, put there by `cloneTheFixtureRepos`. `wscmd::work_at_risk` is
     // what sees that, inside `wscmd::remove`, and the sentence below is the one it wrote.
-    await runRow("Delete workspace alpha");
+    await runRow("Delete workspace alpha", "Delete workspace alpha");
 
     const dialog = await $('[role="alertdialog"]');
     await dialog.waitForDisplayed({ timeout: 20_000 });
@@ -222,7 +236,7 @@ describe("making a workspace and deleting one", function () {
     // say, and the same button — the one that passes `force: false` — goes through.
     commit(join(mine, "workspaces", "alpha", "tool"));
 
-    await runRow("Delete workspace alpha");
+    await runRow("Delete workspace alpha", "Delete workspace alpha");
     const dialog = await $('[role="alertdialog"]');
     await dialog.waitForDisplayed({ timeout: 20_000 });
     await expect(dialog).toHaveText("no uncommitted or unpushed work", { containing: true });
@@ -236,14 +250,14 @@ describe("making a workspace and deleting one", function () {
   it("offers a force only after a refusal, and it discards what it named", async () => {
     // A second workspace with work at risk, so the force path is exercised on something this
     // test made rather than on whatever is left of another one.
-    await runRow("New workspace…");
+    await runRow("New workspace", "New workspace…");
     await (await $('[role="dialog"]')).waitForDisplayed({ timeout: 20_000 });
     await (await $('[role="dialog"] input')).setValue("doomed");
     await $("button=Create workspace").click();
     await stripBecomes(["beta", "gamma", "doomed"]);
     aRepoWithWorkInIt(join(mine, "workspaces", "doomed", "svc"));
 
-    await runRow("Delete workspace doomed");
+    await runRow("Delete workspace doomed", "Delete workspace doomed");
     const dialog = await $('[role="alertdialog"]');
     await dialog.waitForDisplayed({ timeout: 20_000 });
     // **No way to force is on screen yet.** There is nothing to warn about until the refusal
