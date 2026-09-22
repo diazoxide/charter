@@ -628,6 +628,7 @@ name = "charter-app"
 version = "0.1.0"
 dependencies = [
  "charter-core",
+ "chrono",
  "serde",
  "serde_json",
  "specta",

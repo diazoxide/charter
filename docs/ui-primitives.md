@@ -6,12 +6,12 @@ This is a rule and not a preference, so the rest of this file is the reasons for
 to follow it.
 
 **Its sibling is [`design-system.md`](design-system.md), which says what the window is drawn
-*in*: a theme is a data file, every colour is a semantic token, and a literal anywhere outside
+_in_: a theme is a data file, every colour is a semantic token, and a literal anywhere outside
 `app/src/theme/` fails the build. Read that one before writing a rule with a colour in it, and
 for what a copied-in shadcn/ui component has to satisfy.**
 
-**Where the rule is decided.** charter **ADR 0037**, *charter takes the behaviour and keeps the
-look*, and its amendment of 2026-09-22, which settled the conflict this file used to flag. That
+**Where the rule is decided.** charter **ADR 0037**, _charter takes the behaviour and keeps the
+look_, and its amendment of 2026-09-22, which settled the conflict this file used to flag. That
 record is authoritative; this file is its code-side expression, and where the two disagree this
 file is the defect.
 
@@ -28,7 +28,7 @@ file is the defect.
   steps. The test is at the **call site**: can the next person see which primitive this is and
   reach its props?
 - **A component's source copied into this repo is neither of those, and is allowed.** Until
-  2026-09-22 the rule above read *"do not write a wrapper layer around them"*, which forbade a
+  2026-09-22 the rule above read _"do not write a wrapper layer around them"_, which forbade a
   shadcn/ui component — a shadcn component is literally a thin wrapper around a Radix primitive.
   The operator settled it: that rule was written against **a dependency that owns your markup**,
   and a file in `app/src/components/ui/` is ours, editable line by line, and visible in the diff
@@ -98,6 +98,42 @@ equal share of its strip and is never drawn narrower than a floor, exactly as a 
 own tabs, so `n` tabs fit in `width` when `width / n >= least`. It replaced an
 `IntersectionObserver` over every tab, which is the right question about a strip that scrolls and
 a loop on a strip that collapses.
+
+And the **context menus** (`app/src/Menus.tsx`): `@radix-ui/react-context-menu`, on the project
+tabs, the workspace tabs, the chat tabs and the panes. Three things about them are decisions and
+not details:
+
+- **A menu is a third reader of `app/src/actions.ts`**, after the palette and the bar.
+  `actions.menuRows` filters the one catalogue to the item the menu was opened on, and a row the
+  catalogue does not have is not in the menu — which is how the strip of chats outside every
+  workspace gets a menu with no pin and no delete in it without anything in `Menus.tsx` knowing
+  that strip exists. A menu with a list of its own is the defect the tmux frame shipped:
+  `frame/tabmenu.py` and its palette grew two answers to "what can I do to this".
+- **Not modal, and a click outside closes it**, exactly as the show-more menu above. It is a
+  menu, not a question.
+- **A row's accessible name is the catalogue's title alone** (`aria-label`), and its note — what
+  the row costs — is its `aria-describedby`. Left to the content, every row would announce as a
+  paragraph: _"End chat 3 steward Ends the program it runs. There is no undo."_
+
+And with them, **the WebView's own menu is taken away from the whole window**
+(`useNoBrowserMenu`), because a shipped app that answers a right-click with `Reload` and
+`Inspect Element` is showing the operator the browser it is built on. Two properties of that one
+listener are load-bearing:
+
+- **It is on the BUBBLE phase.** Radix opens its menu from an `onContextMenu` composed with
+  `composeEventHandlers`, which skips its own handler when the event is already
+  `defaultPrevented`. React 19 attaches its delegated listeners to the root container, which is
+  below `window`, so a capturing listener there would run first and silently stop every context
+  menu in the app from ever opening.
+- **It leaves an `input`, a `textarea` and a contenteditable alone.** That menu is the platform's
+  Cut/Copy/Paste and it is the only pointer route to the clipboard this window has. The
+  inspector is off in a release build anyway.
+
+And the **delete-a-workspace dialog** (`app/src/DeleteWorkspace.tsx`):
+`@radix-ui/react-alert-dialog`, the first use of that primitive here. It is `Dialog`'s sibling
+for a question whose answer destroys something — `role="alertdialog"`, so what a screen reader
+is handed first is the sentence about what is about to be lost; Cancel focused by the primitive;
+Escape meaning Cancel. It keeps the four dialogs' rule that a click outside answers nothing.
 
 And the **alerts drawer** (`app/src/AlertsDrawer.tsx`, M6.5): `@radix-ui/react-dialog` drawn as a
 sheet from the right, over the whole window, opened from the status line. It is the primitive
@@ -172,6 +208,22 @@ roving focus is an `onKeyDown` on the content element rather than a `keydown` li
 is `Strip.test.tsx`'s "moves between its rows with the arrow keys", which was written to fail and
 passed first time. The rule the next primitive inherits is therefore **check, per primitive**:
 the question is where Radix listens, and only a primitive that listens on `document` has this.
+
+**A scenario run cannot right-click, on either engine — so a context menu is driven by the
+event and not by the pointer.** `element.click({ button: "right" })` is a W3C pointer sequence;
+`contextmenu` is a platform default action the engine raises from a native right-click, below
+where a synthesised sequence lands. Measured in charter's own window with a listener on the
+element: **0 `contextmenu` events after a WebDriver right-click, 1 after a dispatched
+`MouseEvent`** (webkit 605.1.15 on macOS, 2026-09-22), and run 35771806598 was red the same way
+on WebKitGTK 605.1.15. `e2e/specs/workspace-lifecycle.e2e.ts` therefore dispatches the event,
+and says so where the dispatch is.
+
+**That is a driver limit and not a product one, and the discriminator is a jsdom test.**
+`src/Menus.test.tsx`, _"a real contextmenu event, with the suppressor live"_, dispatches one
+`MouseEvent` at a real workspace tab of the real `App` with `useNoBrowserMenu` mounted and no
+WebDriver anywhere, and charter's menu opens. Making that suppressor capture-phase — the one way
+charter could swallow the event — turns that test and only that test red. Put the question where
+the driver is not, before changing a spec that cannot answer it.
 
 **A modal dialog really is modal, and the tests notice.** Radix marks everything outside the
 open dialog `aria-hidden`, so a `getByRole` for anything behind it finds nothing, and a scenario
@@ -327,12 +379,12 @@ component library gets added on.
   handle behave the same way and are styled once.
 - **Putting a region away is the library's `collapse()`/`expand()`, not a conditional
   `<Panel>`.** Taking a panel out of a live group throws from a document listener where no
-  `try` can reach it — *"Panel constraints not found for index 3"* — because a separator
+  `try` can reach it — _"Panel constraints not found for index 3"_ — because a separator
   recalculates its aria values against a constraint list the panel has just left.
   `RegionFrame`'s `Slot` holds the reasoning. What the constraints are is written once and
   never changed; only the collapse moves.
 - **The layout is data, and the panels are slots** (`app/src/regions.ts`). The frame renders the
-  same four panels for the life of a window — left, centre, right, bottom — and an *arrangement*
+  same four panels for the life of a window — left, centre, right, bottom — and an _arrangement_
   says which slot each region's content goes in, in what order, whether it is drawn and how big
   its slot starts. That is what makes the rule above survivable: a region can move side while
   the window is up, because moving it adds nothing to the group and takes nothing out. Adding a
@@ -343,7 +395,7 @@ component library gets added on.
 - **A slot that starts with nothing in it starts at `0%`, and that is how the flash was fixed.**
   charter-app#141 sized a hidden region normally and collapsed it from a `useEffect`, which runs
   after the browser has painted, so every launch drew it for one frame. The obvious repair —
-  `useLayoutEffect` — **throws**, *"Group &lt;id&gt; not found"*: the group registers itself in
+  `useLayoutEffect` — **throws**, _"Group &lt;id&gt; not found"_: the group registers itself in
   its own layout effect, and React runs a child's layout effects before its parent's, so there
   is no hook inside a group that runs after the group exists. The first layout is made right
   instead; the library snaps `0%` to `collapsedSize`, and the effect is left to handle only what
@@ -351,7 +403,7 @@ component library gets added on.
 - **jsdom never lays a group out.** Every element measures zero, so the library defers its
   layout and no `defaultSize` is ever applied — which means a unit test cannot read a panel's
   width out of the DOM. `RegionFrame.sizes.test.tsx` mocks the library to assert what it was
-  *told*; `RegionFrame.test.tsx` and `FourRegions.test.tsx` use the real one for everything that
+  _told_; `RegionFrame.test.tsx` and `FourRegions.test.tsx` use the real one for everything that
   is about the tree. A size is only really checked by the scenario tests.
 - **The explorer's repo groups are `<details>`**, per the rule above: the browser has a
   collapsible, and `@radix-ui/react-collapsible` is not installed because nothing needs it.
