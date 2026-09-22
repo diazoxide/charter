@@ -11,6 +11,7 @@ mod panics;
 mod planes;
 mod sessions;
 mod slowstart;
+mod updates;
 mod worktrees;
 
 use std::path::PathBuf;
@@ -1012,6 +1013,10 @@ fn commands() -> Builder<tauri::Wry> {
         worktrees::worktree_list,
         worktrees::worktree_remove,
         worktrees::worktree_merge,
+        updates::update_channel,
+        updates::set_update_channel,
+        updates::check_for_update,
+        updates::install_update,
         extensions::installed_extensions,
         extensions::pick_extension,
         extensions::install_extension,
@@ -1086,7 +1091,10 @@ pub fn run() {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_notification::init());
+        .plugin(tauri_plugin_notification::init())
+        // Registered in every build so a broken updater config fails CI's app build, and
+        // inert until asked: nothing checks unless `updates::watch` or a command does.
+        .plugin(tauri_plugin_updater::Builder::new().build());
 
     // What the scenario tests drive the window through. The feature is off in every build
     // anyone is given, so nothing here can be reached in one.
@@ -1162,6 +1170,10 @@ pub fn run() {
             // any headless one — must still get its chats back, so a tray that cannot be
             // built is reported and the app carries on without one. Quit still lives in the
             // menu, and closing the window still hides it.
+            // The automatic half of updating: a timer that checks, never one that installs.
+            // Off in a test build and a development build (`updates::watch` says why).
+            updates::watch(app.handle());
+
             if let Err(why) = lifecycle::tray(app.handle()) {
                 eprintln!("charter: no tray icon ({why}); the window is reached from the dock");
             }

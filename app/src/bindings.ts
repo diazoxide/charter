@@ -292,6 +292,17 @@ export const commands = {
 	worktreeRemove: (plane: PlaneId, workspace: string, repo: string, piece: string, force: boolean) => typedError<null, string>(__TAURI_INVOKE("worktree_remove", { plane, workspace, repo, piece, force })),
 	/**  Land a piece in its clone, fast-forward only. Never pushes. */
 	worktreeMerge: (plane: PlaneId, workspace: string, repo: string, piece: string) => typedError<Merged, string>(__TAURI_INVOKE("worktree_merge", { plane, workspace, repo, piece })),
+	/**  Which channel this machine takes charter from: `stable` or `dev`. */
+	updateChannel: () => __TAURI_INVOKE<string>("update_channel"),
+	/**  Put this machine on a channel. A word charter does not know is refused, not guessed at. */
+	setUpdateChannel: (channel: string) => typedError<null, string>(__TAURI_INVOKE("set_update_channel", { channel })),
+	/**  Look for a newer charter now. The answer arrives as [`CHECKED`] or [`FAILED`]. */
+	checkForUpdate: () => __TAURI_INVOKE<void>("check_for_update"),
+	/**
+	 *  Install the newer charter. The answer arrives as [`INSTALLED`] or [`FAILED`]; charter has
+	 *  to be relaunched after it, and says so rather than doing it under the operator's sessions.
+	 */
+	installUpdate: () => __TAURI_INVOKE<void>("install_update"),
 	/**
 	 *  What has contributed what to this window.
 	 * 

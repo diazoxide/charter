@@ -14,7 +14,7 @@
 //! a Reporter with several planes would be asked repeatedly until the safeguard became a
 //! reflex."* charter-app also already writes its panic log to Tauri's `app_log_dir()`.
 //!
-//! **Four things, and nothing else:**
+//! **Five things, and nothing else:**
 //!
 //! - **the planes recently opened**, so the opener has something to offer;
 //! - **whether the operator approved each one**, and *what it would do when opened* at the
@@ -23,14 +23,30 @@
 //!   the window set;
 //! - **how the operator arranged what this file already names** — which of those planes are
 //!   pinned, and which workspaces inside them ([`Recent::pinned`],
-//!   [`Recent::pinned_workspaces`]).
+//!   [`Recent::pinned_workspaces`]);
+//! - **which stream this machine takes charter from** ([`Store::channel`]).
 //!
-//! **The fourth was three until charter ADR 0040, and the count is load-bearing.** That
-//! record is the amendment: the operator ruled on 2026-09-22 that a pin is how one operator
-//! likes their window rather than a fact about the plane, so it cannot be committed to
-//! `charter.toml`, where it would arrive with every clone and put somebody else's workspace
-//! first on a strip its operator never arranged. The whole value of "and nothing else" is
-//! that the fourth had to be argued for; if it can be appended to, it is not a limit.
+//! **The fourth was three until charter ADR 0040, and the fifth is newer still; the count is
+//! load-bearing.** Those records are the amendments: the operator ruled on 2026-09-22 that a
+//! pin is how one operator likes their window rather than a fact about the plane, so it
+//! cannot be committed to `charter.toml`, where it would arrive with every clone and put
+//! somebody else's workspace first on a strip its operator never arranged. The whole value of
+//! "and nothing else" is that each addition had to be argued for; if it can be appended to,
+//! it is not a limit.
+//!
+//! **The fifth is the first entry here that is not about planes at all, so it is argued
+//! separately.** The update channel is a fact about *this installation of the app* — which of
+//! two release streams it takes its next version from. It is not a copy of anything a plane
+//! answers, so the rule the other four are held to (never a second answer to a question the
+//! plane already answers) has nothing to catch; and there is no plane it could belong to,
+//! because one binary serves every plane on the machine and cannot be on two channels at
+//! once. What was weighed against putting it here was a second small file beside this one,
+//! and that lost on two counts: it would duplicate this module's hardened read — the
+//! `open_no_link`, the `fstat` of the descriptor, the size bound, the `0700` directory — in a
+//! second place that has to get containment right a second time, and it would need a lock of
+//! its own, because the app and a `charter` in a terminal both write it. [`update`]'s `flock`
+//! already makes this file's read-modify-write one act across processes, which is exactly the
+//! problem a second file would reintroduce.
 //!
 //! **Never plane content.** A chat, a memory, a workspace, a persona, a profile: all of those
 //! belong to a plane and stay in it. Each plane's own `.charter/app/reopen.json` still
@@ -740,6 +756,11 @@ pub struct Store {
     /// Most recently opened first.
     pub recents: Vec<Recent>,
     pub windows: Vec<Window>,
+    /// Which stream this machine takes charter from ([`crate::updates::Channel`]).
+    ///
+    /// The fifth thing, and the first that is not about planes at all — the module note above
+    /// says why it is here and why the count had to be argued again.
+    pub channel: crate::updates::Channel,
 }
 
 impl Store {
@@ -963,6 +984,9 @@ pub enum Dropped {
     Window { plane: String, why: String },
     /// One pinned workspace, inside a plane that was itself taken.
     Pin { workspace: String, why: String },
+    /// The update channel, because the word is not one charter writes. The machine stays on
+    /// the default, which is stable.
+    Channel { named: String },
 }
 
 impl std::fmt::Display for Dropped {
@@ -972,6 +996,12 @@ impl std::fmt::Display for Dropped {
             Self::Recent { plane, why } => write!(f, "the remembered plane '{plane}' {why}"),
             Self::Window { plane, why } => write!(f, "the open plane '{plane}' {why}"),
             Self::Pin { workspace, why } => write!(f, "the pinned workspace '{workspace}' {why}"),
+            Self::Channel { named } => write!(
+                f,
+                "'{named}' is not an update channel charter knows, so this machine stays on \
+                 {}",
+                crate::updates::Channel::default().name()
+            ),
         }
     }
 }
@@ -1464,7 +1494,11 @@ fn load(doc: &serde_json::Value, dropped: &mut Vec<Dropped>) -> Store {
         });
     }
 
-    Store { recents, windows }
+    Store {
+        recents,
+        windows,
+        channel: channel_of(doc.get("channel"), dropped),
+    }
 }
 
 /// The pinned workspace names off one entry, with every refusal recorded.
@@ -1503,6 +1537,39 @@ fn pinned_workspaces_of(
         kept.insert(name.to_owned());
     }
     kept
+}
+
+/// Which stream the file says this machine is on, defaulting to stable and saying when it did.
+///
+/// **Every way of not knowing lands on stable**, because the two directions are not
+/// symmetric. Reading a corrupt file as *stable* costs an operator who had chosen dev one
+/// trip back to the setting; reading it as *dev* puts a machine on a stream cut from any
+/// green `main` without anybody asking for it. A file charter did not write must never be
+/// able to do the second, and the safe answer is also the default answer, so nothing has to
+/// remember which it was.
+///
+/// The word is [`crate::updates::Channel::named`]'s, which is exact: no trimming, no case
+/// folding. What is dropped is recorded, so a store hand-edited to `"Dev"` says why it did
+/// not take rather than silently doing nothing.
+fn channel_of(
+    raw: Option<&serde_json::Value>,
+    dropped: &mut Vec<Dropped>,
+) -> crate::updates::Channel {
+    let Some(value) = raw else {
+        // No field at all is the ordinary case: the store charter wrote before channels
+        // existed, and the store it writes for every machine on the default.
+        return crate::updates::Channel::default();
+    };
+    let named = value.as_str().unwrap_or_default();
+    match crate::updates::Channel::named(named) {
+        Some(channel) => channel,
+        None => {
+            dropped.push(Dropped::Channel {
+                named: named.to_owned(),
+            });
+            crate::updates::Channel::default()
+        }
+    }
 }
 
 /// One approval off the file, or `None` for anything that is not one.
@@ -1565,6 +1632,12 @@ struct OnDisk {
     at: u64,
     recents: Vec<RecentOnDisk>,
     windows: Vec<WindowOnDisk>,
+    /// Left out on the default, exactly as `pinned` is, so a machine that never chose a
+    /// channel writes the file it wrote before channels existed — byte for byte. An older
+    /// charter reading this ignores the field; this one reads its absence as stable, which is
+    /// what was true.
+    #[serde(skip_serializing_if = "is_the_default_channel")]
+    channel: &'static str,
 }
 
 #[derive(serde::Serialize)]
@@ -1598,6 +1671,11 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// Whether the channel is the one an absent field already means.
+fn is_the_default_channel(value: &&'static str) -> bool {
+    *value == crate::updates::Channel::default().name()
+}
+
 #[derive(serde::Serialize)]
 struct WindowOnDisk {
     planes: Vec<String>,
@@ -1612,6 +1690,7 @@ impl From<&Store> for OnDisk {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|since| since.as_secs())
                 .unwrap_or_default(),
+            channel: store.channel.name(),
             recents: store
                 .recents
                 .iter()
@@ -1738,6 +1817,135 @@ mod tests {
         assert_eq!(back.store, store);
         assert_eq!(back.dropped, Vec::new());
         assert_eq!(back.unreadable, None);
+    }
+
+    // The fifth thing this file holds (charter ADR 0042): which stream the app updates from.
+
+    #[test]
+    fn a_machine_that_never_chose_a_channel_is_on_stable_and_its_file_says_nothing() {
+        let machine = machine();
+        let store = one_plane();
+        assert_eq!(store.channel, crate::updates::Channel::Stable);
+
+        write(machine.path(), &store).unwrap();
+
+        let text = std::fs::read_to_string(file(machine.path())).unwrap();
+        assert!(
+            !text.contains("channel"),
+            "the default is written into the file: {text}"
+        );
+        assert_eq!(
+            read(machine.path()).store.channel,
+            crate::updates::Channel::Stable
+        );
+    }
+
+    #[test]
+    fn the_channel_survives_a_write_and_a_read() {
+        let machine = machine();
+        let mut store = one_plane();
+        store.channel = crate::updates::Channel::Dev;
+
+        write(machine.path(), &store).unwrap();
+
+        let text = std::fs::read_to_string(file(machine.path())).unwrap();
+        assert!(text.contains(r#""channel": "dev""#), "{text}");
+        let back = read(machine.path());
+        assert_eq!(back.store.channel, crate::updates::Channel::Dev);
+        assert_eq!(back.store, store, "the rest of the store moved with it");
+        assert_eq!(back.dropped, Vec::new());
+    }
+
+    #[test]
+    fn a_channel_charter_did_not_write_leaves_the_machine_on_stable_and_says_so() {
+        // The direction matters and is the whole test: a store somebody else edited, or one
+        // that is corrupt, must not be able to move a machine onto a stream cut from any
+        // green `main`. Every one of these is a way of being wrong, and all of them are
+        // stable.
+        for junk in [
+            r#""dev ""#,
+            r#""DEV""#,
+            r#""Dev""#,
+            r#""nightly""#,
+            r#""""#,
+            "7",
+            "true",
+            "null",
+            r#"["dev"]"#,
+            r#"{"name":"dev"}"#,
+        ] {
+            let machine = machine();
+            let dir = private_dir(machine.path()).unwrap();
+            std::fs::write(
+                dir.join(FILE),
+                format!(
+                    r#"{{"version":{VERSION},"at":0,"recents":[],"windows":[],"channel":{junk}}}"#
+                ),
+            )
+            .unwrap();
+
+            let back = read(machine.path());
+
+            assert_eq!(
+                back.store.channel,
+                crate::updates::Channel::Stable,
+                "{junk} moved the machine off stable"
+            );
+            assert_eq!(back.dropped.len(), 1, "{junk} was taken in silence");
+            assert!(
+                back.dropped[0]
+                    .to_string()
+                    .contains("is not an update channel charter knows"),
+                "{:?}",
+                back.dropped[0]
+            );
+        }
+    }
+
+    #[test]
+    fn a_store_with_no_channel_field_at_all_is_not_a_dropped_row() {
+        // Every store charter wrote before this field existed, and every store it writes for
+        // a machine on the default. An absent field is an answer, not a fault.
+        let machine = machine();
+        let dir = private_dir(machine.path()).unwrap();
+        std::fs::write(
+            dir.join(FILE),
+            format!(r#"{{"version":{VERSION},"at":0,"recents":[],"windows":[]}}"#),
+        )
+        .unwrap();
+
+        let back = read(machine.path());
+
+        assert_eq!(back.store.channel, crate::updates::Channel::Stable);
+        assert_eq!(
+            back.dropped,
+            Vec::new(),
+            "an absent field was called a fault"
+        );
+    }
+
+    #[test]
+    fn a_second_charter_changing_the_channel_does_not_drop_what_the_app_recorded() {
+        // `update` is what makes this one act across processes, and the channel is the first
+        // field in this file that a `charter` in a terminal writes while the app is running.
+        let machine = machine();
+        update(machine.path(), |store| {
+            store.remember(Path::new("/planes/one"), 1);
+        })
+        .unwrap();
+
+        update(machine.path(), |store| {
+            store.channel = crate::updates::Channel::Dev;
+        })
+        .unwrap();
+
+        let back = read(machine.path());
+        assert_eq!(back.store.channel, crate::updates::Channel::Dev);
+        assert_eq!(
+            back.store.recents.len(),
+            1,
+            "changing the channel dropped the recents"
+        );
     }
 
     #[test]
