@@ -3,6 +3,7 @@
 
 mod alerts;
 mod chats;
+mod doctor;
 mod extensions;
 mod hooks;
 mod lifecycle;
@@ -1063,6 +1064,7 @@ fn commands() -> Builder<tauri::Wry> {
         extensions::approve_extension,
         extensions::forget_extension,
         extensions::extension_themes,
+        doctor::plane_doctor,
     ])
 }
 
