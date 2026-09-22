@@ -32,11 +32,13 @@ import {
 } from "./bindings";
 import {
   catalogue,
+  catalogued,
   OUTSIDE,
   OUTSIDE_TITLE,
   perform,
   PASS_THROUGH_BYTES,
   PASS_THROUGH_KEY,
+  type Cut,
   type Doing,
   type Offer,
   type Project,
@@ -187,6 +189,16 @@ export function PlaneView({
    * read again, rather than the window editing its own copy of what it thinks is there.
    */
   const [replan, setReplan] = useState(0);
+  /**
+   * Asked again when a worktree row this window ran changed what the focused workspace holds.
+   *
+   * `replan` re-reads the SIDEBAR, which is workspaces and chats; this re-reads the one
+   * workspace record the three regions share, which is where the clones, their git state and
+   * their pieces live. They are two asks and a worktree removal invalidates only the second —
+   * the piece is off the tree and `git status` in that clone now says something else
+   * (charter-app#174).
+   */
+  const [rereadWorkspace, setRereadWorkspace] = useState(0);
   /** Whether the new-workspace dialog is up, why the last attempt made nothing, and whether
    *  charter is making one right now. */
   const [makingWorkspace, setMakingWorkspace] = useState(false);
@@ -273,6 +285,16 @@ export function PlaneView({
    * from inside an effect is a second render, and the answer is already here.
    */
   const [pickedSpot, setPickedSpot] = useState<{ workspace: string; spot: Spot }>();
+  /**
+   * The persona whose card is open on the right-hand panel, if any (#173).
+   *
+   * **Held here rather than in the row that draws it**, because opening that card is a
+   * catalogue row now (`persona.show:<name>`, charter-app#174) and a catalogue row is carried
+   * out by `perform` against `Doing` — which is assembled here. One state, so the menu, the
+   * palette and the row's own click are three ways to do the same thing rather than three
+   * things that look the same.
+   */
+  const [shownPersona, setShownPersona] = useState<string>();
   /** How the window is laid out — which regions are drawn, on which side, in what order and
    *  how big (ADR 0038). Data rather than the shape of the JSX below; `regions.ts` says why. */
   const { arrangement, toggle: toggleRegion, resized } = useArrangement();
@@ -477,7 +499,7 @@ export function PlaneView({
    *  outside every workspace is not a workspace on the plane, so there is no directory to
    *  read and every region says so rather than drawing another workspace's answer. */
   const ofWorkspace = focused === OUTSIDE ? undefined : focused;
-  const workspaceState = useWorkspaceState(plane, ofWorkspace);
+  const workspaceState = useWorkspaceState(plane, ofWorkspace, rereadWorkspace);
   /** What `charter doctor` says about this project, run inside the app: the preflight when
    *  the project opens, the full doctor when the operator opens it (`Doctor.tsx`). */
   const doctor = useDoctor(plane);
@@ -879,24 +901,33 @@ export function PlaneView({
   // answer is simply not this chat's.
   const worktree = located?.cwd === frontCwd ? located.piece : undefined;
 
-  /** Removes the piece the chat in front works in. The core's refusal travels back whole. */
+  /**
+   * Removes the piece THE ROW NAMED. The core's refusal travels back whole.
+   *
+   * **It reads nothing off the window to work out which worktree was meant**
+   * (charter-app#174). It used to take only `force` and act on whatever the chat in front was
+   * working in, which is exactly why the explorer's rows had nothing to offer: a piece nobody
+   * is running in is not in front of anything. The piece arrives on the row, so the front
+   * chat's row and an explorer row are the same code with a different `cut` in them.
+   */
   const removeWorktree = useCallback(
-    async (force: boolean): Promise<Ran> => {
-      if (!worktree) return { ok: false, refused: "There is no worktree in front to remove." };
+    async (cut: Cut, force: boolean): Promise<Ran> => {
       const answer = await commands
-        .worktreeRemove(plane, worktree.workspace, worktree.repo, worktree.piece, force)
+        .worktreeRemove(plane, cut.workspace, cut.repo, cut.piece, force)
         .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
       // Verbatim. The sentence names the repair, and an operator shown a reworded version of
       // it can neither follow that repair nor search for it.
       if (answer.status === "error") return { ok: false, refused: answer.error };
-      // The core is asked again rather than the window assuming what it now says.
+      // The core is asked again rather than the window assuming what it now says — both about
+      // where the chat in front is working, and about the workspace, because the explorer and
+      // the bottom bar are still drawing the row that has just gone.
       setRelocate((asked) => asked + 1);
-      return {
-        ok: true,
-        said: `The worktree ${worktree.piece} is gone. The branch ${worktree.branch ?? worktree.piece} stays.`,
-      };
+      setRereadWorkspace((asked) => asked + 1);
+      // The branch is not named any more: a row about a piece nothing is running in carries
+      // no branch, and "its branch stays" is true of every worktree charter cuts.
+      return { ok: true, said: `The worktree ${cut.piece} is gone. Its branch stays.` };
     },
-    [plane, worktree],
+    [plane],
   );
 
   /** Asks for a new workspace. It makes nothing: the dialog is what asks, and
@@ -1006,18 +1037,22 @@ export function PlaneView({
     [plane],
   );
 
-  /** Lands the piece in its clone, fast-forward only. The core never pushes. */
-  const mergeWorktree = useCallback(async (): Promise<Ran> => {
-    if (!worktree) return { ok: false, refused: "There is no worktree in front to merge." };
-    const answer = await commands
-      .worktreeMerge(plane, worktree.workspace, worktree.repo, worktree.piece)
-      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
-    if (answer.status === "error") return { ok: false, refused: answer.error };
-    return {
-      ok: true,
-      said: `${answer.data.branch} landed: ${answer.data.was} → ${answer.data.now}`,
-    };
-  }, [plane, worktree]);
+  /** Lands the piece the row named in its clone, fast-forward only. The core never pushes. */
+  const mergeWorktree = useCallback(
+    async (cut: Cut): Promise<Ran> => {
+      const answer = await commands
+        .worktreeMerge(plane, cut.workspace, cut.repo, cut.piece)
+        .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+      if (answer.status === "error") return { ok: false, refused: answer.error };
+      // The clone has moved, so what the bottom bar says about it is a commit behind.
+      setRereadWorkspace((asked) => asked + 1);
+      return {
+        ok: true,
+        said: `${answer.data.branch} landed: ${answer.data.was} → ${answer.data.now}`,
+      };
+    },
+    [plane],
+  );
 
   /**
    * Hands a key the palette claimed to the chat in front.
@@ -1104,6 +1139,7 @@ export function PlaneView({
       createWorkspace,
       removeWorkspace,
       showChat,
+      showPersona: setShownPersona,
       removeWorktree,
       mergeWorktree,
       sendKey,
@@ -1157,6 +1193,33 @@ export function PlaneView({
   );
 
   /**
+   * The focused workspace's worktrees, as the catalogue names them (charter-app#174).
+   *
+   * **The clones in the plane's own order, and the pieces in git's** — the order the explorer
+   * draws them in, so a palette listing them and a tree showing them agree. Held on the two
+   * objects the core's answers arrive as (`panels`, `pieces`), both of which keep their
+   * identity until the plane is read again, so this is rebuilt when a listing lands and on no
+   * other render. That is what keeps ~100 more catalogue rows off the per-keystroke path.
+   */
+  const pieces = useMemo<Cut[]>(
+    () =>
+      ofWorkspace === undefined
+        ? []
+        : (workspaceState.panels?.repos ?? []).flatMap((repo) =>
+            (workspaceState.pieces[repo] ?? []).map((piece) => ({
+              workspace: ofWorkspace,
+              repo,
+              piece: piece.piece,
+            })),
+          ),
+    [ofWorkspace, workspaceState.panels, workspaceState.pieces],
+  );
+
+  /** The plane's personas, straight off the plane's own answer — the array, not a copy of it,
+   *  so the catalogue is rebuilt when the plane is read again and not per render. */
+  const personas = workspaceState.panels?.personas;
+
+  /**
    * Every action this project's window can do, in one list.
    *
    * **The bar's buttons are rows of THIS list, not a second one.** The tmux frame kept a
@@ -1179,12 +1242,15 @@ export function PlaneView({
             workspaces: strips,
             focused,
             worktree,
+            pieces,
+            personas,
             plane,
             projects,
-            // Only a refusal the REMOVAL gave, and only while it is still on screen: the
-            // discard row is the operator's answer to a sentence they have read.
-            refusal:
-              report?.refused && report.from === "worktree.remove" ? report.words : undefined,
+            // WHICH row was refused and is still on screen. The catalogue matches the ids it
+            // wrote itself, so the discard row appears beside the removal that was refused and
+            // beside no other — with one removal per piece that is the difference between one
+            // offer to throw work away and fifty.
+            refused: report?.refused ? report.from : undefined,
             needsYou: states.needsYou,
             quiet,
             nameOf,
@@ -1196,6 +1262,8 @@ export function PlaneView({
       focused,
       inFront,
       nameOf,
+      personas,
+      pieces,
       pinnedChats,
       pinnedProjects,
       pinnedWorkspaces,
@@ -1210,7 +1278,20 @@ export function PlaneView({
     ],
   );
 
-  const by = useCallback((id: string) => offers.find((offer) => offer.id === id), [offers]);
+  /**
+   * The catalogue by id, built once per catalogue rather than scanned per lookup.
+   *
+   * Every surface in this window that draws ONE row asks here: the tab strip (two lookups per
+   * tab), the workspace strip, the show-more menus, each pane's own controls — and, since
+   * #172, a context menu on every one of them, which is `menuRows` scanning the whole list
+   * three times per tab per render. One render of a fifty-tab strip was 0.047 ms of scanning
+   * and is 0.017 ms through this; what the 31 µs buys is not a speed anybody feels but a cost
+   * that stops tracking the catalogue's length, which #174 is the change that grew.
+   * `actions.catalogued` has the table and the method.
+   */
+  const found = useMemo(() => catalogued(offers), [offers]);
+
+  const by = useCallback((id: string) => found.get(id), [found]);
 
   /** Carries a row out and keeps what it answered. Everything below this line has already
    *  been asked about, where asking was owed. */
@@ -1382,7 +1463,7 @@ export function PlaneView({
                 <Menued
                   key={workspace}
                   on={{ on: "workspace", workspace }}
-                  offers={offers}
+                  offers={found}
                   onPress={press}
                 >
                   <button
@@ -1436,7 +1517,7 @@ export function PlaneView({
                No `data-tab` and no scroll-into-view ref any more: #171 deleted `offscreen.ts`
                and the strip collapses rather than scrolls, so there is nothing to scroll a
                tab into and nothing measuring tabs through the markup. */
-            <Menued key={id} on={{ on: "chat", tab: id }} offers={offers} onPress={press}>
+            <Menued key={id} on={{ on: "chat", tab: id }} offers={found} onPress={press}>
               <span className="tab">
                 <button
                   role="tab"
@@ -1615,6 +1696,8 @@ export function PlaneView({
               spot={spot}
               onPick={pickSpot}
               onShowChat={showChat}
+              offers={found}
+              onPress={press}
             />
           ),
           aside: (
@@ -1626,6 +1709,10 @@ export function PlaneView({
               quiet={quiet}
               nameOf={nameOf}
               showChat={showChat}
+              offers={found}
+              onPress={press}
+              shownPersona={shownPersona}
+              onShowPersona={setShownPersona}
             />
           ),
           bottom: <BottomBar workspace={ofWorkspace} state={workspaceState} />,
@@ -1635,7 +1722,7 @@ export function PlaneView({
              tab, the two splits, the key the palette claimed, and — under the line — ending
              this pane's chat. `asChild` again: the panes' box is measured, and it must not
              gain a wrapper. */
-          <Menued on={{ on: "pane" }} offers={offers} onPress={press}>
+          <Menued on={{ on: "pane" }} offers={found} onPress={press}>
             <div className="panes">
               {frontTab ? (
                 <LayoutPanes

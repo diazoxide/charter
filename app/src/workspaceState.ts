@@ -31,6 +31,11 @@ import {
  *   a test rather than described — `workspaceState.test.ts`, "asks git for the pieces once
  *   per clone".
  *
+ * **And once more each time the window says it changed the workspace** — `again` below
+ * (charter-app#174). That is the only thing that re-runs any of this short of focusing
+ * elsewhere, and what moves it is a worktree row the operator ran, which is not a per-render
+ * or per-keystroke event.
+ *
  * A late answer for a workspace that is no longer focused is dropped three times over — by
  * the cleanup, by the name the answer itself carries, and by the state being keyed on the
  * workspace, so nothing left over from the last one is ever drawn under this one's heading.
@@ -69,7 +74,25 @@ type Answer = {
 
 const NOTHING_YET = { pieces: {}, piecesRefused: {} };
 
-export function useWorkspaceState(plane: PlaneId, workspace: string | undefined): WorkspaceState {
+export function useWorkspaceState(
+  plane: PlaneId,
+  workspace: string | undefined,
+  /**
+   * Bumped by the window when something it did makes this record wrong.
+   *
+   * **It exists because the explorer's rows can now act on what they draw**
+   * (charter-app#174). Removing a worktree takes a row off the tree and changes what `git
+   * status` says about its clone; without this the window went on drawing the piece it had
+   * just deleted until the operator focused another workspace and came back — and the row
+   * still there is indistinguishable from a removal that silently failed.
+   *
+   * A counter rather than a `reread()` callback, because it belongs in a dependency array:
+   * one number, and both asks below run again exactly when it changes. Asking again costs
+   * what focusing a workspace costs, which is the right price after a destructive act and
+   * the wrong one on anything that happens per keystroke.
+   */
+  again = 0,
+): WorkspaceState {
   const [answer, setAnswer] = useState<Answer>();
 
   useEffect(() => {
@@ -118,7 +141,7 @@ export function useWorkspaceState(plane: PlaneId, workspace: string | undefined)
     return () => {
       gone = true;
     };
-  }, [plane, workspace]);
+  }, [again, plane, workspace]);
 
   const mine = answer?.workspace === workspace ? answer : undefined;
   /**
@@ -162,7 +185,7 @@ export function useWorkspaceState(plane: PlaneId, workspace: string | undefined)
     return () => {
       gone = true;
     };
-  }, [clones, plane, workspace]);
+  }, [again, clones, plane, workspace]);
 
   return {
     panels: mine?.panels,

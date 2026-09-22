@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render as renderBare, screen, within } from "@testi
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
-import { catalogue, menuRows, OUTSIDE, type Now } from "./actions";
+import { catalogue, catalogued, menuRows, OUTSIDE, type Now } from "./actions";
 import { Menued, useNoBrowserMenu } from "./Menus";
 import { noTabs, openTab } from "./tabs";
 
@@ -43,7 +43,7 @@ function now(over: Partial<Now> = {}): Now {
 
 /** The rows a menu would draw, as their titles — above the line, then below it. */
 function titles(what: Parameters<typeof menuRows>[0], over: Partial<Now> = {}) {
-  const rows = menuRows(what, catalogue(now(over)));
+  const rows = menuRows(what, catalogued(catalogue(now(over))));
   return {
     above: rows.above.map((row) => row.title),
     below: rows.below.map((row) => row.title),
@@ -89,6 +89,49 @@ describe("what a menu lists", () => {
     expect(chat.below).toEqual(["End chat 3 steward"]);
   });
 
+  it("offers a worktree's own verbs on the explorer's rows (charter-app#174)", () => {
+    // The surface #172 could not reach, and the reason it could not: the catalogue had two
+    // worktree rows and both were about the chat in front. These are about this piece.
+    const cut = { workspace: "alpha", repo: "svc", piece: "fix-it" };
+    const shown = titles(
+      { on: "worktree", repo: "svc", piece: "fix-it" },
+      {
+        plane: "/plane",
+        pieces: [cut],
+      },
+    );
+
+    expect(shown.above).toEqual(["Merge worktree fix-it into svc"]);
+    expect(shown.below).toEqual(["Remove worktree fix-it in svc"]);
+  });
+
+  it("draws the discard row on the piece whose removal was refused, and on no other", () => {
+    // Listed in every worktree menu by `menuOn` and found in one, because the catalogue only
+    // builds it beside the removal the core has just refused. Nothing in `Menus.tsx` or in
+    // `menuOn` knows that — it is the same drop that leaves `Outside every workspace` with
+    // no pin row.
+    const pieces = [
+      { workspace: "alpha", repo: "svc", piece: "fix-it" },
+      { workspace: "alpha", repo: "svc", piece: "other" },
+    ];
+    const over = { plane: "/plane", pieces, refused: "worktree.remove:svc/fix-it" };
+
+    expect(titles({ on: "worktree", repo: "svc", piece: "fix-it" }, over).below).toEqual([
+      "Remove worktree fix-it in svc",
+      "Discard that work and remove fix-it anyway",
+    ]);
+    expect(titles({ on: "worktree", repo: "svc", piece: "other" }, over).below).toEqual([
+      "Remove worktree other in svc",
+    ]);
+  });
+
+  it("offers the one thing charter can do to a persona, and nothing below the line", () => {
+    const shown = titles({ on: "persona", persona: "steward" }, { personas: ["steward"] });
+
+    expect(shown.above).toEqual(["Show what steward is"]);
+    expect(shown.below).toEqual([]);
+  });
+
   it("offers the pane's own verbs in the centre of the window", () => {
     const pane = titles({ on: "pane" }, { tabs: openTab(noTabs(), 7, "one") });
 
@@ -106,7 +149,7 @@ describe("what a menu lists", () => {
     // see, and a greyed row saying why is an answer where a missing row is a mystery.
     const rows = menuRows(
       { on: "workspace", workspace: "alpha" },
-      catalogue(now({ workspaces: ["alpha"], focused: "alpha", plane: "/plane" })),
+      catalogued(catalogue(now({ workspaces: ["alpha"], focused: "alpha", plane: "/plane" }))),
     );
 
     const focus = rows.above[0];
@@ -119,7 +162,7 @@ describe("a menu on screen", () => {
   /** A trigger with one chat's rows on it, and what was pressed. */
   function aMenu() {
     const pressed: string[] = [];
-    const offers = catalogue(now({ tabs: openTab(noTabs(), 7, "3 steward") }));
+    const offers = catalogued(catalogue(now({ tabs: openTab(noTabs(), 7, "3 steward") })));
     render(
       <Menued
         on={{ on: "chat", tab: 1 }}
