@@ -1,6 +1,7 @@
 //! The app's Rust side: what the UI can ask the core to do, as commands generated into
 //! TypeScript by `tauri-specta`, so no shape is written by hand on either side.
 
+mod alerts;
 mod chats;
 mod extensions;
 mod hooks;
@@ -394,6 +395,39 @@ async fn workspace_repos(
     tauri::async_runtime::spawn_blocking(move || panels::repo_states(&root, &workspace))
         .await
         .map_err(|err| format!("reading the workspace's repos did not finish: {err}"))?
+}
+
+/// What is wrong in every project this process holds, project by project, for the alerts
+/// drawer.
+///
+/// **Every project, never one**: an alert is about a plane rather than the workspace on
+/// screen, and the drawer exists because alerts cross projects — so the command takes no plane,
+/// and cannot be wired to the one in front by mistake.
+///
+/// On a blocking thread, because the plane-root alert asks git for a status per project and a
+/// window that waited on eight of them would miss its frame.
+#[tauri::command]
+#[specta::specta]
+async fn alerts_everywhere(
+    planes: tauri::State<'_, Planes>,
+) -> Result<Vec<alerts::PlaneAlerts>, String> {
+    // Resolved here, so the blocking half carries paths and not a registry handle. A project
+    // let go of between the listing and the lookup is simply not in the answer.
+    let held: Vec<(PlaneId, PathBuf)> = planes
+        .open_now()
+        .into_iter()
+        .filter_map(|plane| {
+            let root = planes.held(&plane).ok()?.root().to_path_buf();
+            Some((plane, root))
+        })
+        .collect();
+    tauri::async_runtime::spawn_blocking(move || {
+        held.into_iter()
+            .map(|(plane, root)| alerts::of(plane, &root))
+            .collect()
+    })
+    .await
+    .map_err(|err| format!("reading the alerts did not finish: {err}"))
 }
 
 /// One row of the profile picker: what it runs, where charter read it, and what pressing
@@ -1006,6 +1040,7 @@ fn commands() -> Builder<tauri::Wry> {
         plane_sidebar,
         workspace_panels,
         workspace_repos,
+        alerts_everywhere,
         start_options,
         approve_profile,
         start_chat,

@@ -11,12 +11,15 @@ import {
   type Project,
   type Ran,
 } from "./actions";
+import { countOf, useAlerts } from "./alerts";
+import { AlertsDrawer } from "./AlertsDrawer";
 import { ApprovePlane } from "./ApprovePlane";
 import { Extensions } from "./Extensions";
 import { Opener } from "./Opener";
 import { Palette } from "./Palette";
 import { QuitWarning, type Ending } from "./QuitWarning";
 import { Closer, Doer, Pin, PlaneView, type PlaneReport, type WindowDoing } from "./PlaneView";
+import type { Alerts } from "./StatusLine";
 import { noTabs } from "./tabs";
 
 /**
@@ -86,6 +89,29 @@ function App() {
   useEffect(() => {
     if (planes.length > 0) setHeldSomething(true);
   }, [planes.length]);
+
+  /**
+   * charter's alerts, for every project this window holds, and whether their drawer is up.
+   *
+   * **The window's, not a project's** — the operator's correction that moved alerts out of
+   * the right-hand region: an alert is about a plane, and the plane that matters is usually
+   * not the one on screen. So the reading and the drawer live up here, and every project's
+   * status line draws the same count. Opening the drawer asks again, so what it lists is what
+   * is true when it is looked at rather than up to a minute ago.
+   */
+  const { reading: alertsRead, reread: rereadAlerts } = useAlerts(planes);
+  const [alertsOpen, setAlertsOpen] = useState(false);
+  const alertCount = countOf(alertsRead, planes);
+  const alerts = useMemo<Alerts>(
+    () => ({
+      count: alertCount,
+      open: () => {
+        rereadAlerts();
+        setAlertsOpen(true);
+      },
+    }),
+    [alertCount, rereadAlerts],
+  );
 
   /** The projects, as the strip and the palette name them. */
   const projects = useMemo<Project[]>(
@@ -627,8 +653,19 @@ function App() {
           pinnedProjects={pinnedProjects}
           window={windowDoes}
           onReport={onReport}
+          alerts={alerts}
         />
       ))}
+
+      {/* What charter says is wrong in every project this window holds — over the whole
+          window, opened from the status line's Alerts button. Drawn only while it is open. */}
+      <AlertsDrawer
+        open={alertsOpen}
+        onOpenChange={setAlertsOpen}
+        reading={alertsRead}
+        planes={planes}
+        nameOf={calledOn}
+      />
 
       {/* No project in front: the opener, and nothing else. "No sessions" would be true and
           useless — there is nowhere to open one, and the thing the operator needs is the way
