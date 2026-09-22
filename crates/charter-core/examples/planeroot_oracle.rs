@@ -26,7 +26,8 @@ use charter_core::shellwrap;
 use serde_json::{Value, json};
 
 fn main() {
-    let base = PathBuf::from(std::env::var("PLANEROOT_BASE").expect("PLANEROOT_BASE names the fixture"));
+    let base =
+        PathBuf::from(std::env::var("PLANEROOT_BASE").expect("PLANEROOT_BASE names the fixture"));
     let mut input = String::new();
     std::io::stdin()
         .read_to_string(&mut input)
@@ -65,7 +66,11 @@ fn main() {
 
 fn strs(v: &Value) -> Vec<String> {
     v.as_array()
-        .map(|a| a.iter().map(|x| x.as_str().unwrap_or_default().to_string()).collect())
+        .map(|a| {
+            a.iter()
+                .map(|x| x.as_str().unwrap_or_default().to_string())
+                .collect()
+        })
         .unwrap_or_default()
 }
 
@@ -73,15 +78,18 @@ fn opt(v: Option<String>) -> Value {
     v.map_or(Value::Null, Value::String)
 }
 
-/// The tables, as DATA — the harness's `tables()`, in its order.
-fn tables(cmd: &str) -> Value {
+/// The tables, as DATA — the harness's `tables()`, in its order, rotated by the case's `rot`.
+fn tables(rot: usize) -> Value {
     let mut known: Vec<&str> = planeroot::GIT_KNOWN_SUBCOMMANDS.to_vec();
     known.sort_unstable();
-    let n = cmd.chars().count();
+    let n = rot;
     let rotated: Vec<&str> = (0..4).map(|k| known[(n + k) % known.len()]).collect();
     let mut restore: Vec<&str> = planeroot::RESTORE_OPTS.to_vec();
     restore.sort_unstable();
-    let mut shorts: Vec<String> = planeroot::RESTORE_SHORTS.chars().map(String::from).collect();
+    let mut shorts: Vec<String> = planeroot::RESTORE_SHORTS
+        .chars()
+        .map(String::from)
+        .collect();
     shorts.sort_unstable();
     let mut creators: Vec<&str> = planeroot::BRANCH_CREATOR_OPTS.to_vec();
     creators.sort_unstable();
@@ -95,7 +103,10 @@ fn tables(cmd: &str) -> Value {
         shorts,
         planeroot::MAX_CHECKOUT_OPERANDS,
         planeroot::RESET_TREE_MODES,
-        planeroot::GIT_DIR_ENV.iter().map(|(k, v)| json!([k, v])).collect::<Vec<_>>(),
+        planeroot::GIT_DIR_ENV
+            .iter()
+            .map(|(k, v)| json!([k, v]))
+            .collect::<Vec<_>>(),
         [json!(known.len()), json!(rotated)],
         planeroot::MAX_ALIAS_HOPS,
         gitconfig::MAX_CONFIG_BYTES,
@@ -109,7 +120,10 @@ fn derive(post: &[String]) -> (Vec<String>, Vec<OptKind>, Vec<String>) {
         .filter(|a| a.starts_with('-') && *a != "-" && *a != "--")
         .cloned()
         .collect();
-    let classes = opts.iter().map(|o| planeroot::checkout_opt_kind(o)).collect();
+    let classes = opts
+        .iter()
+        .map(|o| planeroot::checkout_opt_kind(o))
+        .collect();
     let wants = post
         .iter()
         .filter(|a| *a == "-" || !a.starts_with('-'))
@@ -128,10 +142,13 @@ fn config_probe(dir: &Path, text: &str, as_pointer: bool) -> Value {
         std::fs::create_dir_all(dir.join(".git")).expect("scratch is writable");
         std::fs::write(dir.join(".git").join("config"), text).expect("scratch is writable");
     }
-    opt(gitconfig::configured_work_tree(dir.to_str().expect("utf-8 fixture"), None))
+    opt(gitconfig::configured_work_tree(
+        dir.to_str().expect("utf-8 fixture"),
+        None,
+    ))
 }
 
-fn answer(case: &Value, scratch: &Path) -> Value {
+pub fn answer(case: &Value, scratch: &Path) -> Value {
     let cmd = case["cmd"].as_str().expect("cmd");
     let cwd = case["cwd"].as_str().expect("cwd");
     let root_cfg = case["root"].as_str().expect("root");
@@ -153,7 +170,10 @@ fn answer(case: &Value, scratch: &Path) -> Value {
             .into_iter()
             .map(|(k, v)| json!([k, v]))
             .collect();
-        gt.push(json!([planeroot::git_target(cwd, &pre, &inherited), aliases]));
+        gt.push(json!([
+            planeroot::git_target(cwd, &pre, &inherited),
+            aliases
+        ]));
     }
     let prg = planeroot::plane_root_git(cmd, cwd, &root);
     let cok: Vec<Value> = strs(&case["opts"])
@@ -193,7 +213,7 @@ fn answer(case: &Value, scratch: &Path) -> Value {
         .collect();
 
     let mut out = json!({
-        "tbl": tables(cmd),
+        "tbl": tables(case["rot"].as_u64().expect("rot") as usize),
         "cok": cok,
         "gt": gt,
         "prg": prg.iter().map(|i| json!([i.sub, i.post, i.pre])).collect::<Vec<_>>(),

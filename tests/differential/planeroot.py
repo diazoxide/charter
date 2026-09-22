@@ -105,6 +105,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 CORPUS = REPO / "fixtures" / "corpora" / "planeroot-oracle.jsonl"
+FIXTURE = REPO / "fixtures" / "corpora" / "planeroot-fixture.json"
 DEFAULT_BINARY = REPO / "target" / "debug" / "examples" / "planeroot_oracle"
 
 B = "@B@"   # the fixture's base directory, in a case and in a normalised answer
@@ -148,42 +149,58 @@ PLANE = BASE / "plane"
 PLANES = [PLANE, BASE / "plane-master", BASE / "plane-trunk", BASE / "plane-nodefault"]
 
 
-def g(cwd: Path, *args: str) -> None:
-    """One git call that BUILDS the fixture. Signing is off whatever `HOME` says."""
-    subprocess.run(["git", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false",
-                    "-c", "user.name=t", "-c", "user.email=t@t", *args],
-                   cwd=cwd, check=True, capture_output=True)
+#: The fixture as DATA: every directory, file, link and git call, in order, with the base directory
+#: written `@B@`. The harness runs it; so does the Rust replay of the recorded corpus
+#: (`crates/charter-core/tests/the_plane_root_guards_answer_what_the_python_answers.rs`), from the
+#: checked-in copy `--record` writes beside the corpus — so the two fixtures cannot drift apart
+#: without `--check` saying so.
+STEPS: list[dict] = []
+
+#: Every fixture git call runs with these: signing off whatever `HOME` says, and an identity.
+FIXTURE_GIT = ["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false",
+               "-c", "user.name=t", "-c", "user.email=t@t"]
 
 
-def build_fixture() -> None:
-    HOME.mkdir(parents=True)
-    (HOME / ".gitconfig").write_text("[alias]\n\tgsw = switch\n\tglob = checkout -q\n",
-                                     encoding="utf-8")
-    (XDG / "git").mkdir(parents=True)
-    (XDG / "git" / "config").write_text("[alias]\n\txdgco = checkout\n", encoding="utf-8")
+def g(cwd: str, *args: str) -> None:
+    STEPS.append({"git": cwd, "args": [*FIXTURE_GIT, *args]})
+
+
+def mkdir(rel: str) -> None:
+    STEPS.append({"mkdir": rel})
+
+
+def write(rel: str, text: str) -> None:
+    STEPS.append({"write": rel, "text": text})
+
+
+def symlink(rel: str, target: str) -> None:
+    STEPS.append({"symlink": rel, "target": target})
+
+
+def fixture_steps() -> None:
+    write("home/.gitconfig", "[alias]\n\tgsw = switch\n\tglob = checkout -q\n")
+    write("xdg/git/config", "[alias]\n\txdgco = checkout\n")
 
     # ---- the cloned-shaped plane
-    up = BASE / "up.git"
-    g(BASE, "init", "-q", "--bare", "-b", "main", str(up))
-    PLANE.mkdir()
-    g(PLANE, "init", "-q", "-b", "main", ".")
+    g(".", "init", "-q", "--bare", "-b", "main", f"{B}/up.git")
+    mkdir("plane")
+    g("plane", "init", "-q", "-b", "main", ".")
     for rel, text in (("README", "r\n"), ("charter.toml", "schema = 1\n"), ("docs/a.md", "a\n"),
                       ("both", "b\n"), ("a b", "s\n"), ("sub/deep/f", "f\n")):
-        (PLANE / rel).parent.mkdir(parents=True, exist_ok=True)
-        (PLANE / rel).write_text(text, encoding="utf-8")
-    g(PLANE, "add", "-A")
-    g(PLANE, "commit", "-q", "-m", "one")
-    g(PLANE, "branch", "feature")
-    g(PLANE, "branch", "both")
-    g(PLANE, "tag", "v1")
-    g(PLANE, "remote", "add", "origin", str(up))
-    g(PLANE, "push", "-q", "-u", "origin", "main", "feature")
-    g(PLANE, "branch", "lonely")
-    g(PLANE, "push", "-q", "origin", "lonely")
-    g(PLANE, "branch", "-D", "lonely")          # remote-only: git's DWIM would create it
-    g(PLANE, "remote", "set-head", "origin", "main")
-    g(PLANE, "commit", "-q", "--allow-empty", "-m", "unpushed one")
-    g(PLANE, "commit", "-q", "--allow-empty", "-m", "unpushed two")
+        write(f"plane/{rel}", text)
+    g("plane", "add", "-A")
+    g("plane", "commit", "-q", "-m", "one")
+    g("plane", "branch", "feature")
+    g("plane", "branch", "both")
+    g("plane", "tag", "v1")
+    g("plane", "remote", "add", "origin", f"{B}/up.git")
+    g("plane", "push", "-q", "-u", "origin", "main", "feature")
+    g("plane", "branch", "lonely")
+    g("plane", "push", "-q", "origin", "lonely")
+    g("plane", "branch", "-D", "lonely")          # remote-only: git's DWIM would create it
+    g("plane", "remote", "set-head", "origin", "main")
+    g("plane", "commit", "-q", "--allow-empty", "-m", "unpushed one")
+    g("plane", "commit", "-q", "--allow-empty", "-m", "unpushed two")
     for name, body in (
         ("co", "checkout"), ("ck", "co"), ("sw", "switch -c"), ("wipe", "reset --hard"),
         ("hard", "reset --hard HEAD~2"), ("soft", "reset --soft"), ("sh", "!sh -c 'echo x'"),
@@ -193,73 +210,86 @@ def build_fixture() -> None:
         ("Mixed", "checkout"), ("bang", "!"), ("gitonly", "!git"), ("sp", "  checkout   "),
         ("rs", "reset"), ("dash", "checkout --detach"),
     ):
-        g(PLANE, "config", f"alias.{name}", body)
+        g("plane", "config", f"alias.{name}", body)
     # An alias body that is not UTF-8: Python's strict decode raises and the resolver stands
-    # aside; a lossy reader would resolve it to `checkout`.
-    with open(PLANE / ".git" / "config", "ab") as fh:
-        fh.write(b"[alias]\n\tnu = checkout \xff\n")
+    # aside; a lossy reader would resolve it to `checkout`. The one step that is BYTES.
+    STEPS.append({"append_hex": "plane/.git/config",
+                  "hex": b"[alias]\n\tnu = checkout \xff\n".hex()})
 
     # ---- `master`, no remote
-    p = PLANES[1]
-    p.mkdir()
-    g(p, "init", "-q", "-b", "master", ".")
-    (p / "README").write_text("m\n", encoding="utf-8")
-    g(p, "add", "-A")
-    g(p, "commit", "-q", "-m", "one")
-    g(p, "branch", "feature")
+    mkdir("plane-master")
+    g("plane-master", "init", "-q", "-b", "master", ".")
+    write("plane-master/README", "m\n")
+    g("plane-master", "add", "-A")
+    g("plane-master", "commit", "-q", "-m", "one")
+    g("plane-master", "branch", "feature")
 
     # ---- origin/HEAD -> trunk, and a stale local `main`
-    up2 = BASE / "up2.git"
-    g(BASE, "init", "-q", "--bare", "-b", "trunk", str(up2))
-    p = PLANES[2]
-    p.mkdir()
-    g(p, "init", "-q", "-b", "trunk", ".")
-    (p / "README").write_text("t\n", encoding="utf-8")
-    g(p, "add", "-A")
-    g(p, "commit", "-q", "-m", "one")
-    g(p, "branch", "main")
-    g(p, "branch", "feature")
-    g(p, "remote", "add", "origin", str(up2))
-    g(p, "push", "-q", "-u", "origin", "trunk")
-    g(p, "remote", "set-head", "origin", "trunk")
+    g(".", "init", "-q", "--bare", "-b", "trunk", f"{B}/up2.git")
+    mkdir("plane-trunk")
+    g("plane-trunk", "init", "-q", "-b", "trunk", ".")
+    write("plane-trunk/README", "t\n")
+    g("plane-trunk", "add", "-A")
+    g("plane-trunk", "commit", "-q", "-m", "one")
+    g("plane-trunk", "branch", "main")
+    g("plane-trunk", "branch", "feature")
+    g("plane-trunk", "remote", "add", "origin", f"{B}/up2.git")
+    g("plane-trunk", "push", "-q", "-u", "origin", "trunk")
+    g("plane-trunk", "remote", "set-head", "origin", "trunk")
 
     # ---- no default at all
-    p = PLANES[3]
-    p.mkdir()
-    g(p, "init", "-q", "-b", "dev", ".")
-    (p / "README").write_text("d\n", encoding="utf-8")
-    g(p, "add", "-A")
-    g(p, "commit", "-q", "-m", "one")
-    g(p, "branch", "feature")
+    mkdir("plane-nodefault")
+    g("plane-nodefault", "init", "-q", "-b", "dev", ".")
+    write("plane-nodefault/README", "d\n")
+    g("plane-nodefault", "add", "-A")
+    g("plane-nodefault", "commit", "-q", "-m", "one")
+    g("plane-nodefault", "branch", "feature")
 
     # ---- the directories a workspace clone can be. Their `.git` is written by hand: the guard
     # never runs git in them, it only READS their config (`gitconfig`).
-    def fake(rel: str, config: str | None, pointer: str | None = None) -> None:
-        d = BASE / rel
-        d.mkdir(parents=True, exist_ok=True)
-        if pointer is not None:
-            (d / ".git").write_text(pointer, encoding="utf-8")
-        if config is not None:
-            (d / ".git").mkdir(exist_ok=True)
-            (d / ".git" / "config").write_text(config, encoding="utf-8")
-
-    fake("ws/clone", "[core]\n\trepositoryformatversion = 0\n")
-    fake("ws/redirected", f"[core]\n\tworktree = {PLANE}\n")
-    fake("ws/relredirect", "[core]\n\tworktree = ../../../plane\n")
-    fake("ws/linked-gd", f"[core]\n\tWorkTree = {PLANE}\n")
-    fake("ws/linked", None, pointer="gitdir: ../linked-gd\n")
-    fake("ws/subsec", f'[core "x"]\n\tworktree = {PLANE}\n')
-    fake("ws/quoted", f'[CORE]\n\tworktree = "{PLANE}" ; a comment\n')
-    fake("ws/oneline", f"[core] worktree = {PLANE}\n")
-    fake("ws/continued", f"[core]\n\tworktree = {str(PLANE)[:5]}\\\n{str(PLANE)[5:]}\n")
-    (BASE / "ws" / "clone" / "deep").mkdir()
-    (BASE / "elsewhere").mkdir()
-    (BASE / "link-to-plane").symlink_to(PLANE)
-    (BASE / "ws" / "up").symlink_to("..")
-    (BASE / "dangling").symlink_to(BASE / "nowhere")
+    write("ws/clone/.git/config", "[core]\n\trepositoryformatversion = 0\n")
+    write("ws/redirected/.git/config", f"[core]\n\tworktree = {B}/plane\n")
+    write("ws/relredirect/.git/config", "[core]\n\tworktree = ../../../plane\n")
+    write("ws/linked-gd/config", f"[core]\n\tWorkTree = {B}/plane\n")
+    write("ws/linked/.git", "gitdir: ../linked-gd\n")
+    write("ws/subsec/.git/config", f'[core "x"]\n\tworktree = {B}/plane\n')
+    write("ws/quoted/.git/config", f'[CORE]\n\tworktree = "{B}/plane" ; a comment\n')
+    write("ws/oneline/.git/config", f"[core] worktree = {B}/plane\n")
+    write("ws/continued/.git/config", f"[core]\n\tworktree = {B}/pl\\\nane\n")
+    mkdir("ws/clone/deep")
+    mkdir("elsewhere")
+    symlink("link-to-plane", f"{B}/plane")
+    symlink("ws/up", "..")
+    symlink("dangling", f"{B}/nowhere")
 
 
-build_fixture()
+fixture_steps()
+
+
+def run_steps(steps: list[dict]) -> None:
+    """Build the fixture from its steps — the executor the Rust replay mirrors line for line."""
+    def at(rel: str) -> Path:
+        return BASE / rel
+
+    for s in steps:
+        if "git" in s:
+            subprocess.run(["git", *(a.replace(B, str(BASE)) for a in s["args"])],
+                           cwd=at(s["git"]), check=True, capture_output=True)
+        elif "mkdir" in s:
+            at(s["mkdir"]).mkdir(parents=True, exist_ok=True)
+        elif "write" in s:
+            at(s["write"]).parent.mkdir(parents=True, exist_ok=True)
+            at(s["write"]).write_text(s["text"].replace(B, str(BASE)), encoding="utf-8")
+        elif "append_hex" in s:
+            with open(at(s["append_hex"]), "ab") as fh:
+                fh.write(bytes.fromhex(s["hex"]))
+        elif "symlink" in s:
+            at(s["symlink"]).symlink_to(s["target"].replace(B, str(BASE)))
+        else:
+            raise ValueError(f"a fixture step nothing runs: {s}")
+
+
+run_steps(STEPS)
 ORIGINAL_CWD = Path.cwd()
 os.chdir(BASE)      # both sides stand here: a relative path resolves against the PROCESS's cwd
 os.environ["CHARTER_HOME"] = str(PLANE / ".charter")
@@ -314,10 +344,16 @@ CWT_PROBES = [(c, None) for c in CWDS] + [
 ]
 
 #: Operands `_checkout_operand_kind` is asked about besides the case's own.
+#:
+#: **No re-cased names** (`BOTH`, `readme`), and that is a limit, stated: on a case-insensitive
+#: filesystem git answers them as `both` and `README` (a loose ref is a file, and `git init` sets
+#: `core.ignorecase`), on Linux it does not, and the recorded corpus has to be one file on both.
+#: The fuzz would compare the two implementations on ONE machine either way — the corpus is what
+#: cannot carry them.
 OPERANDS = ["feature", "main", "master", "trunk", "dev", "README", "both", "lonely", "nosuch",
             "-", "HEAD", "HEAD~1", "origin/main", "v1", ".", "docs/a.md", "docs/*.md", ":/",
             "a b", "charter.toml", "@{upstream}", "--", "-q", "sub", "README^", "feature:README",
-            "origin/lonely", "BOTH", "readme", "$BR", "*", ""]
+            "origin/lonely", "$BR", "*", ""]
 
 #: Reset targets `_unpushed_at_risk` is asked about besides the case's own.
 TARGETS = ["origin/main", "HEAD", "HEAD~1", "HEAD~2", "HEAD~3", "README", "feature", "nosuch",
@@ -328,9 +364,9 @@ PATHS = ["", ".", "..", "/", "//", "///", "a", "a/", "a//b", "a/./b", "./a", "a/
          "/a/b/../c", "a/.", ".//", "/.", "//.", "../a/", "a b/c"]
 
 
-def rotation(cmd: str, table: list, count: int) -> list:
-    """`count` rows of `table` starting at the case's length — so a run sweeps every row."""
-    n = len(cmd)
+def rotation(n: int, table: list, count: int) -> list:
+    """`count` rows of `table` starting at `n` — the length of the case AS WRITTEN, with `@B@`
+    in it, so the rows a case is probed with are the same on every machine."""
     return [table[(n + k) % len(table)] for k in range(count)]
 
 
@@ -355,7 +391,7 @@ def normalise(v):
 # The oracle                                                                     #
 # --------------------------------------------------------------------------- #
 
-def tables(cmd: str) -> list:
+def tables(rot: int) -> list:
     # The frozensets have no order and the Rust's arrays have the source's, so every set is
     # compared SORTED. Order is not part of what any of them means: each is only ever asked
     # "is this in you".
@@ -369,7 +405,7 @@ def tables(cmd: str) -> list:
         hooks._MAX_CHECKOUT_OPERANDS,
         list(hooks._RESET_TREE_MODES),
         [[k, v] for k, v in hooks._GIT_DIR_ENV.items()],
-        [len(known), rotation(cmd, known, 4)],
+        [len(known), rotation(rot, known, 4)],
         hooks._MAX_ALIAS_HOPS,
         gitconfig.MAX_CONFIG_BYTES,
     ]
@@ -406,12 +442,14 @@ def request(case: dict) -> dict:
     for _sub, post, _pre in prg:
         ops += [a for a in post if a == "-" or not a.startswith("-")][:3]
         targets += [a for a in post if not a.startswith("-")][:2]
-    ops = (ops[:4] + rotation(cmd, OPERANDS, 2))
-    targets = (targets[:2] + rotation(cmd, TARGETS, 1))
+    rot = len(case["cmd"])
+    ops = (ops[:4] + rotation(rot, OPERANDS, 2))
+    targets = (targets[:2] + rotation(rot, TARGETS, 1))
     toks = [t for seg in segs for t in seg][:3]
-    pp = [[a, b] for a, b in zip(toks + rotation(cmd, PATHS, 2), rotation(cmd[::-1], PATHS, 5))]
-    cwt = [[sub_base(d), sub_base(n)] for d, n in rotation(cmd, CWT_PROBES, 2)]
-    return {"cmd": cmd, "cwd": cwd, "root": root, "cfg": case["cfg"], "git": case["git"],
+    pp = [[a, b] for a, b in zip(toks + rotation(rot, PATHS, 2), rotation(rot + 7, PATHS, 5))]
+    cwt = [[sub_base(d), sub_base(n)] for d, n in rotation(rot, CWT_PROBES, 2)]
+    return {"cmd": cmd, "cwd": cwd, "root": root, "cfg": sub_base(case["cfg"]), "git": case["git"],
+            "rot": rot,
             "opts": opts, "ops": ops, "targets": targets, "pp": pp, "cwt": cwt}
 
 
@@ -431,7 +469,7 @@ def oracle(req: dict) -> dict:
                    [[k, v] for k, v in hooks._inline_aliases(pre).items()]])
     prg = list(hooks._plane_root_git(cmd, cwd, root))
     out = {
-        "tbl": tables(cmd),
+        "tbl": tables(req["rot"]),
         "cok": [[o, hooks._checkout_opt_kind(o)] for o in req["opts"]],
         "gt": gt,
         "prg": [[s, list(p), list(pre)] for s, p, pre in prg],
@@ -1006,18 +1044,29 @@ def main() -> int:
         return 0
 
     if args.record or args.check:
-        rows = [json.dumps({"case": c, "answer": oracle(request(c))}, sort_keys=True,
-                           ensure_ascii=False) for c in CURATED]
+        # The REQUEST is recorded beside the answer: its probes are derived by the Python, and
+        # the Rust replay has no Python to derive them with.
+        rows = []
+        for c in CURATED:
+            req = request(c)
+            rows.append(json.dumps({"case": c, "request": normalise(req), "answer": oracle(req)},
+                                   sort_keys=True, ensure_ascii=False))
         text = "".join(r + "\n" for r in rows)
+        steps = json.dumps(STEPS, indent=1, ensure_ascii=False) + "\n"
         if args.record:
             CORPUS.parent.mkdir(parents=True, exist_ok=True)
             CORPUS.write_text(text, encoding="utf-8")
-            print(f"wrote {len(rows)} cases to {CORPUS}")
+            FIXTURE.write_text(steps, encoding="utf-8")
+            print(f"wrote {len(rows)} cases to {CORPUS} and {len(STEPS)} steps to {FIXTURE}")
             return 0
         if CORPUS.read_text(encoding="utf-8") != text:
             print(f"{CORPUS} is not what the oracle says; run --record", file=sys.stderr)
             return 1
-        print(f"{CORPUS}: {len(rows)} cases, unchanged")
+        if FIXTURE.read_text(encoding="utf-8") != steps:
+            print(f"{FIXTURE} is not the fixture this harness builds; run --record",
+                  file=sys.stderr)
+            return 1
+        print(f"{CORPUS}: {len(rows)} cases, unchanged; {FIXTURE}: {len(STEPS)} steps, unchanged")
         return 0
 
     if args.coverage:

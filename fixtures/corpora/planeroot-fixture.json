@@ -1,0 +1,1048 @@
+[
+ {
+  "write": "home/.gitconfig",
+  "text": "[alias]\n\tgsw = switch\n\tglob = checkout -q\n"
+ },
+ {
+  "write": "xdg/git/config",
+  "text": "[alias]\n\txdgco = checkout\n"
+ },
+ {
+  "git": ".",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "init",
+   "-q",
+   "--bare",
+   "-b",
+   "main",
+   "@B@/up.git"
+  ]
+ },
+ {
+  "mkdir": "plane"
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "init",
+   "-q",
+   "-b",
+   "main",
+   "."
+  ]
+ },
+ {
+  "write": "plane/README",
+  "text": "r\n"
+ },
+ {
+  "write": "plane/charter.toml",
+  "text": "schema = 1\n"
+ },
+ {
+  "write": "plane/docs/a.md",
+  "text": "a\n"
+ },
+ {
+  "write": "plane/both",
+  "text": "b\n"
+ },
+ {
+  "write": "plane/a b",
+  "text": "s\n"
+ },
+ {
+  "write": "plane/sub/deep/f",
+  "text": "f\n"
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "add",
+   "-A"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "commit",
+   "-q",
+   "-m",
+   "one"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "branch",
+   "feature"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "branch",
+   "both"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "tag",
+   "v1"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "remote",
+   "add",
+   "origin",
+   "@B@/up.git"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "push",
+   "-q",
+   "-u",
+   "origin",
+   "main",
+   "feature"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "branch",
+   "lonely"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "push",
+   "-q",
+   "origin",
+   "lonely"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "branch",
+   "-D",
+   "lonely"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "remote",
+   "set-head",
+   "origin",
+   "main"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "commit",
+   "-q",
+   "--allow-empty",
+   "-m",
+   "unpushed one"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "commit",
+   "-q",
+   "--allow-empty",
+   "-m",
+   "unpushed two"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.co",
+   "checkout"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.ck",
+   "co"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.sw",
+   "switch -c"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.wipe",
+   "reset --hard"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.hard",
+   "reset --hard HEAD~2"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.soft",
+   "reset --soft"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.sh",
+   "!sh -c 'echo x'"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.gco",
+   "!git checkout"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.gsh",
+   "!git status"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.st",
+   "status"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.lpa",
+   "lpb"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.lpb",
+   "lpa"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.d1",
+   "d2"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.d2",
+   "d3"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.d3",
+   "d4"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.d4",
+   "d5"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.d5",
+   "checkout"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.empty",
+   ""
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.bad",
+   "checkout 'unterminated"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.Mixed",
+   "checkout"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.bang",
+   "!"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.gitonly",
+   "!git"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.sp",
+   "  checkout   "
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.rs",
+   "reset"
+  ]
+ },
+ {
+  "git": "plane",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "config",
+   "alias.dash",
+   "checkout --detach"
+  ]
+ },
+ {
+  "append_hex": "plane/.git/config",
+  "hex": "5b616c6961735d0a096e75203d20636865636b6f757420ff0a"
+ },
+ {
+  "mkdir": "plane-master"
+ },
+ {
+  "git": "plane-master",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "init",
+   "-q",
+   "-b",
+   "master",
+   "."
+  ]
+ },
+ {
+  "write": "plane-master/README",
+  "text": "m\n"
+ },
+ {
+  "git": "plane-master",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "add",
+   "-A"
+  ]
+ },
+ {
+  "git": "plane-master",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "commit",
+   "-q",
+   "-m",
+   "one"
+  ]
+ },
+ {
+  "git": "plane-master",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "branch",
+   "feature"
+  ]
+ },
+ {
+  "git": ".",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "init",
+   "-q",
+   "--bare",
+   "-b",
+   "trunk",
+   "@B@/up2.git"
+  ]
+ },
+ {
+  "mkdir": "plane-trunk"
+ },
+ {
+  "git": "plane-trunk",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "init",
+   "-q",
+   "-b",
+   "trunk",
+   "."
+  ]
+ },
+ {
+  "write": "plane-trunk/README",
+  "text": "t\n"
+ },
+ {
+  "git": "plane-trunk",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "add",
+   "-A"
+  ]
+ },
+ {
+  "git": "plane-trunk",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "commit",
+   "-q",
+   "-m",
+   "one"
+  ]
+ },
+ {
+  "git": "plane-trunk",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "branch",
+   "main"
+  ]
+ },
+ {
+  "git": "plane-trunk",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "branch",
+   "feature"
+  ]
+ },
+ {
+  "git": "plane-trunk",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "remote",
+   "add",
+   "origin",
+   "@B@/up2.git"
+  ]
+ },
+ {
+  "git": "plane-trunk",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "push",
+   "-q",
+   "-u",
+   "origin",
+   "trunk"
+  ]
+ },
+ {
+  "git": "plane-trunk",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "remote",
+   "set-head",
+   "origin",
+   "trunk"
+  ]
+ },
+ {
+  "mkdir": "plane-nodefault"
+ },
+ {
+  "git": "plane-nodefault",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "init",
+   "-q",
+   "-b",
+   "dev",
+   "."
+  ]
+ },
+ {
+  "write": "plane-nodefault/README",
+  "text": "d\n"
+ },
+ {
+  "git": "plane-nodefault",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "add",
+   "-A"
+  ]
+ },
+ {
+  "git": "plane-nodefault",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "commit",
+   "-q",
+   "-m",
+   "one"
+  ]
+ },
+ {
+  "git": "plane-nodefault",
+  "args": [
+   "-c",
+   "commit.gpgsign=false",
+   "-c",
+   "tag.gpgsign=false",
+   "-c",
+   "user.name=t",
+   "-c",
+   "user.email=t@t",
+   "branch",
+   "feature"
+  ]
+ },
+ {
+  "write": "ws/clone/.git/config",
+  "text": "[core]\n\trepositoryformatversion = 0\n"
+ },
+ {
+  "write": "ws/redirected/.git/config",
+  "text": "[core]\n\tworktree = @B@/plane\n"
+ },
+ {
+  "write": "ws/relredirect/.git/config",
+  "text": "[core]\n\tworktree = ../../../plane\n"
+ },
+ {
+  "write": "ws/linked-gd/config",
+  "text": "[core]\n\tWorkTree = @B@/plane\n"
+ },
+ {
+  "write": "ws/linked/.git",
+  "text": "gitdir: ../linked-gd\n"
+ },
+ {
+  "write": "ws/subsec/.git/config",
+  "text": "[core \"x\"]\n\tworktree = @B@/plane\n"
+ },
+ {
+  "write": "ws/quoted/.git/config",
+  "text": "[CORE]\n\tworktree = \"@B@/plane\" ; a comment\n"
+ },
+ {
+  "write": "ws/oneline/.git/config",
+  "text": "[core] worktree = @B@/plane\n"
+ },
+ {
+  "write": "ws/continued/.git/config",
+  "text": "[core]\n\tworktree = @B@/pl\\\nane\n"
+ },
+ {
+  "mkdir": "ws/clone/deep"
+ },
+ {
+  "mkdir": "elsewhere"
+ },
+ {
+  "symlink": "link-to-plane",
+  "target": "@B@/plane"
+ },
+ {
+  "symlink": "ws/up",
+  "target": ".."
+ },
+ {
+  "symlink": "dangling",
+  "target": "@B@/nowhere"
+ }
+]
