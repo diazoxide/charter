@@ -55,6 +55,7 @@ function doing(): Doing & { calls: string[] } {
       return { ok: true as const };
     }),
     openProject: note("openProject"),
+    showExtensions: note("showExtensions"),
     selectProject: note("selectProject"),
     closeProject: vi.fn(async (plane: string) => {
       calls.push(`closeProject:${plane}`);
@@ -474,6 +475,7 @@ describe("carrying out a row", () => {
         "mergeWorktree",
         "sendKey:F2",
         "openProject",
+        "showExtensions",
         // Three pin verbs and not one, because they are three stores (charter ADR 0040).
         "pinTab:1,true",
         "pinTab:2,true",
@@ -606,9 +608,9 @@ describe("the palette at fifty chats", () => {
     // merely carries a name, so the rows these crowd are other names and not the verbs.
     expect(offers.filter((row) => row.id.startsWith("tab.pin:"))).toHaveLength(50);
     expect(offers.filter((row) => row.id.startsWith("workspace.pin:"))).toHaveLength(6);
-    // 174 rows: 50 chats three times over, 6 workspaces twice, 2 in the queue, and the ten
-    // verbs. It was 118 before the pins.
-    expect(offers).toHaveLength(174);
+    // 175 rows: 50 chats three times over, 6 workspaces twice, 2 in the queue, and the eleven
+    // verbs. It was 118 before the pins and 174 before the extension list (charter ADR 0041).
+    expect(offers).toHaveLength(175);
   });
 });
 

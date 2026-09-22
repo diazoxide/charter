@@ -2,6 +2,7 @@
 //! TypeScript by `tauri-specta`, so no shape is written by hand on either side.
 
 mod chats;
+mod extensions;
 mod hooks;
 mod lifecycle;
 mod opener;
@@ -1011,6 +1012,12 @@ fn commands() -> Builder<tauri::Wry> {
         worktrees::worktree_list,
         worktrees::worktree_remove,
         worktrees::worktree_merge,
+        extensions::installed_extensions,
+        extensions::pick_extension,
+        extensions::install_extension,
+        extensions::approve_extension,
+        extensions::forget_extension,
+        extensions::extension_themes,
     ])
 }
 

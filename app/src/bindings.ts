@@ -292,6 +292,58 @@ export const commands = {
 	worktreeRemove: (plane: PlaneId, workspace: string, repo: string, piece: string, force: boolean) => typedError<null, string>(__TAURI_INVOKE("worktree_remove", { plane, workspace, repo, piece, force })),
 	/**  Land a piece in its clone, fast-forward only. Never pushes. */
 	worktreeMerge: (plane: PlaneId, workspace: string, repo: string, piece: string) => typedError<Merged, string>(__TAURI_INVOKE("worktree_merge", { plane, workspace, repo, piece })),
+	/**
+	 *  What has contributed what to this window.
+	 * 
+	 *  It reads the disk — every installed extension's manifest and every file it declares, to
+	 *  re-take the fingerprint — because an approval is of bytes and the bytes are what may have
+	 *  changed since. ADR 0041 names that cost: *the fingerprint is a hash of code, checked at
+	 *  each launch*. Off the UI thread for exactly that reason.
+	 */
+	installedExtensions: () => typedError<InstalledExtensions, string>(__TAURI_INVOKE("installed_extensions")),
+	/**
+	 *  The folder picker, for an extension this machine does not have.
+	 * 
+	 *  **By path, by the operator, from nowhere.** ADR 0041 rejects a registry and a fetch by name
+	 *  — *the moment charter resolves an extension name over the network it owns a supply chain* —
+	 *  so this is the only way one arrives, and it is the same picker `pick_project` uses.
+	 */
+	pickExtension: () => typedError<string | null, string>(__TAURI_INVOKE("pick_extension")),
+	/**
+	 *  Read the extension at `path`, write it into the record **unapproved**, and hand back the
+	 *  question to ask about it.
+	 * 
+	 *  An extension charter cannot read is an error here rather than a silent nothing: the
+	 *  operator pointed at a directory and is owed the reason it is not one.
+	 */
+	installExtension: (path: string) => typedError<ExtensionAsk, string>(__TAURI_INVOKE("install_extension", { path })),
+	/**
+	 *  The operator's answer to [`ExtensionAsk`]: yes.
+	 * 
+	 *  `fingerprint` is the one the dialog drew, handed straight back — charter-app#123's fix
+	 *  applied before the defect can be copied. What is recorded is the bytes that were on screen,
+	 *  so a write between the drawing and the click is not consented to; it makes the next launch
+	 *  ask again, which is the whole of the mechanism.
+	 * 
+	 *  **This is a separate click from the one that installed it, and it has to be.**
+	 */
+	approveExtension: (id: string, path: string, fingerprint: string) => typedError<null, string>(__TAURI_INVOKE("approve_extension", { id, path, fingerprint })),
+	/**
+	 *  Take an extension out of the record.
+	 * 
+	 *  Its own files are not charter's and are not deleted: ADR 0041's *an extension is
+	 *  re-installable by name; its state is its own problem*. What goes is the path and the
+	 *  approval, which is exactly what ADR 0034 says deleting this machine's state must cost.
+	 */
+	forgetExtension: (id: string) => typedError<null, string>(__TAURI_INVOKE("forget_extension", { id })),
+	/**
+	 *  Every theme in force: the ones approved extensions contribute, and nothing else.
+	 * 
+	 *  An extension that is new, changed or unreadable contributes nothing here. That is the
+	 *  registry doing its one job — [`extension::Surveyed::themes_in_force`] is what answers, and
+	 *  this command only shapes it.
+	 */
+	extensionThemes: () => typedError<ExtensionTheme[], string>(__TAURI_INVOKE("extension_themes")),
 };
 
 /* Types */
@@ -334,6 +386,114 @@ export type ChatWorktree = {
 	branch: string | null,
 	wired: boolean,
 	stale: boolean,
+};
+
+/**
+ *  The question charter asks before an extension contributes anything.
+ * 
+ *  A mirror of [`extension::Prompt`] rather than the thing itself, because `charter-core` never
+ *  depends on the app and the app's wire types are generated into TypeScript.
+ * 
+ *  **The two sentences travel with it rather than being written in the dialog.** That is the
+ *  point of carrying them: a window that composed its own words about what an extension can
+ *  reach could drift kinder than the truth one edit at a time, and the truth here is
+ *  uncomfortable enough that kinder is the likely direction.
+ */
+export type ExtensionAsk = {
+	/**  The id the record is keyed by, and the id the yes is recorded against. */
+	id: string,
+	/**  What to call it, as its own manifest does. */
+	name: string,
+	/**
+	 *  Where it is. Shown and not merely carried: an extension is approved at a path, and one
+	 *  re-installed from another directory is a different question.
+	 */
+	path: string,
+	/**  Every contribution it declares, in charter's own words, one line each. */
+	declares: string[],
+	/**
+	 *  The fingerprint of the bytes that were read to build this question. It goes back to
+	 *  [`approve_extension`] untouched, so the yes is for what was shown.
+	 */
+	fingerprint: string,
+	/**  Whether this is a first ask rather than a re-ask. */
+	first: boolean,
+	/**
+	 *  `extension::RUNS_AS_YOU` — that a plugin runs with the operator's own access and that
+	 *  the list above is a declaration, not a limit.
+	 */
+	runs_as_you: string,
+	/**
+	 *  `extension::FINGERPRINTED` — that the fingerprint catches a change and is not a
+	 *  boundary.
+	 */
+	fingerprint_note: string,
+};
+
+/**  One row of "what has contributed what to this window". */
+export type ExtensionRow = {
+	id: string,
+	/**  What to call it: its manifest's name when charter could read one, else its id. */
+	name: string,
+	path: string,
+	/**  `approved`, `new` or `changed`. */
+	standing: string,
+	/**
+	 *  The themes it is contributing **right now** — empty unless it is approved, so the row
+	 *  says what is in force rather than what was asked for.
+	 */
+	themes_in_force: string[],
+	/**  Every contribution it declares, whether or not any of it is in force. */
+	declares: string[],
+	/**
+	 *  Why charter could not read it, when it could not. A row that contributes nothing says
+	 *  why rather than going quiet.
+	 */
+	refused: string | null,
+	/**  The question to ask about it, when there is one to ask. */
+	ask: ExtensionAsk | null,
+};
+
+/**  One theme an approved extension is contributing, as the window receives it. */
+export type ExtensionTheme = {
+	/**  The extension it came from, so the window can say whose theme it is drawing. */
+	extension: string,
+	/**  What to call it, as the manifest does. */
+	name: string,
+	/**
+	 *  The file's **text**, unparsed.
+	 * 
+	 *  **The vocabulary is `theme.ts`'s and the parser is `theme.ts`'s**, and this crate
+	 *  deliberately does not grow a second one. `TOKENS` is the closed vocabulary charter owns
+	 *  (ADR 0041 property 1) and `load` is the parse-and-re-emit that keeps a theme's bytes out
+	 *  of a stylesheet (property 4); both are already written and already tested. A Rust parser
+	 *  here would be a second vocabulary, and two vocabularies drift — which is property 1
+	 *  turning into a lie by accident rather than by decision.
+	 * 
+	 *  It is the text the fingerprint was taken over, handed on rather than fetched again.
+	 */
+	text: string,
+};
+
+/**
+ *  What has contributed what to this window — charter ADR 0041's item 2, and the thing every
+ *  later decision about extensions is read off.
+ */
+export type InstalledExtensions = {
+	/**
+	 *  charter's own themes, which are compiled into the window and are never asked about.
+	 *  Listed so that the answer to "what is contributing" is one list rather than one per
+	 *  source.
+	 */
+	built_in_themes: string[],
+	extensions: ExtensionRow[],
+	/**
+	 *  Why the record could not be read, when it could not — in which case nothing an
+	 *  extension declares is in force and `extensions` is empty.
+	 */
+	unreadable: string | null,
+	/**  Rows the record held and charter dropped, with the reason for each. */
+	dropped: string[],
 };
 
 /**
