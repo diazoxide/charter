@@ -38,6 +38,14 @@ pub const INDEX: &str = "MEMORY.md";
 /// Every run of characters outside `[a-z0-9]` becomes one `-`, the ends are trimmed, and
 /// only then is the result cut to 48 characters — so a cut can leave a trailing `-`, and
 /// charter keeps it.
+///
+/// **And the stem has to travel** (charter-app#96). A note titled "NUL" slugs to `nul`, and
+/// a persona memory carries no `YYYYMMDD-HHMMSS-` prefix, so the file is `nul.md` — the null
+/// device on Windows, where the write succeeds and the note is gone. The fix is here rather
+/// than a refusal because this name is charter's own derivation and not one the operator
+/// typed: the brief for #96 is that charter must not silently rename a WORKSPACE, and it has
+/// always chosen this filename itself. Declared against the frozen Python, which writes
+/// `nul.md`, in `tests/differential/run.py`.
 pub fn slug(title: &str) -> String {
     let lowered = title.to_lowercase();
     let mut out = String::with_capacity(lowered.len());
@@ -56,10 +64,16 @@ pub fn slug(title: &str) -> String {
     // trimming had just removed from the end of the whole string.
     let cut: String = trimmed.chars().take(48).collect();
     if cut.is_empty() {
-        "note".to_string()
-    } else {
-        cut
+        return "note".to_string();
     }
+    // The alphabet above is `[a-z0-9-]` with the ends trimmed, so of everything
+    // `contain::mintable` refuses only a DOS device stem can reach here — `nul`, `con`,
+    // `com1`. `-note` rather than a number, because a number is what the collision loop in
+    // `write` appends and this is not a collision.
+    if crate::contain::mintable(&cut).is_err() {
+        return format!("{cut}-note");
+    }
+    cut
 }
 
 /// The title `write` derives from a body: its first non-blank line, stripped, capped at 72.
@@ -1036,6 +1050,47 @@ mod tests {
     fn the_cut_to_48_happens_after_trimming_so_it_can_leave_a_trailing_dash() {
         assert_eq!(slug(&"a".repeat(60)), "a".repeat(48));
         assert_eq!(slug(&"x ".repeat(30)), "x-".repeat(24));
+    }
+
+    #[test]
+    fn a_title_whose_filename_would_be_a_device_gets_one_that_travels() {
+        // charter-app#96. A persona memory carries no timestamp prefix, so `nul.md` is the
+        // whole filename — and on Windows that is the null device: the write succeeds, and
+        // the note the operator just wrote is gone. Declared against the frozen Python,
+        // which writes `nul.md`, in `tests/differential/run.py`.
+        assert_eq!(slug("NUL"), "nul-note");
+        assert_eq!(slug("con"), "con-note");
+        assert_eq!(slug("COM1"), "com1-note");
+        assert_eq!(slug("Aux"), "aux-note");
+        assert_eq!(slug("lpt9"), "lpt9-note");
+        // The alphabet already made `com1.txt` into `com1-txt`, whose stem is not a device,
+        // and a name that merely begins like one was never one.
+        assert_eq!(slug("com1.txt"), "com1-txt");
+        assert_eq!(slug("console"), "console");
+        assert_eq!(slug("com10"), "com10");
+    }
+
+    #[test]
+    fn every_filename_this_store_mints_travels() {
+        // The pairing `worktree::name` keeps between its slug and its gate, kept here too:
+        // the derivation is a convenience and the rule is the containment, and a test is
+        // what stops the two drifting into a gap.
+        for title in [
+            "NUL",
+            "con",
+            "COM\u{00b9}",
+            "Ship the widget",
+            "!!!",
+            "",
+            "\u{00dc}n\u{00ef}c\u{00f6}d\u{00e9} f\u{00e4}ncy",
+            &"a".repeat(60),
+        ] {
+            let name = format!("{}.md", slug(title));
+            assert!(
+                crate::contain::mintable(&name).is_ok(),
+                "a memory titled {title:?} is filed as {name:?}, which does not travel"
+            );
+        }
     }
 }
 

@@ -99,6 +99,129 @@ fn drive_qualified(name: &str) -> bool {
     matches!((chars.next(), chars.next()), (Some(c), Some(':')) if c.is_ascii_alphabetic())
 }
 
+/// Why a name charter is about to MINT would not name the same entry on the next machine
+/// (charter-app#96).
+///
+/// Each sentence says what is wrong and what to use instead, because this is a refusal and
+/// not a rewrite: charter does not quietly rename a directory the operator will have to live
+/// with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum Elsewhere {
+    #[error(
+        "it cannot name one entry in a directory: no '/' or '\\', no '.' or '..', no NUL, and \
+         nothing absolute or drive-qualified"
+    )]
+    NotOneEntry,
+    #[error(
+        "its stem is a DOS device name — 'con', 'prn', 'aux', 'nul', 'com0'-'com9' or \
+         'lpt0'-'lpt9', in any case and whatever follows the first '.'. On Windows 'nul.md' \
+         opens the null device, so the write succeeds and the bytes are gone. Put a letter or \
+         a digit beside it: 'nul-notes' rather than 'nul'"
+    )]
+    Device,
+    #[error(
+        "it ends in '.' or a space, and Windows strips both — 'alpha.' and 'alpha' are one \
+         directory there, so a plane naming both has two entries that are one. Drop the last \
+         character"
+    )]
+    Stripped,
+    #[error(
+        "it holds ':', which opens an alternate data stream on Windows — 'alpha:evil' is \
+         content stored inside 'alpha' that no walk over the plane ever lists. Use '-' instead"
+    )]
+    Stream,
+    #[error(
+        "it holds a character Windows has no file of that name for: one of '<' '>' '\"' '|' \
+         '?' '*', or a control character. Use letters, digits, '.', '_' and '-'"
+    )]
+    Unspellable,
+    #[error(
+        "it holds '~', which is the shape of an 8.3 short name ('PROGRA~1') — a name that \
+         stands for whatever Windows aliased rather than for itself, and one a shell expands \
+         when it leads a path. Use '-' instead"
+    )]
+    ShortName,
+}
+
+/// [`segment_ok`], **and** the name means the same entry on every machine the plane reaches.
+///
+/// # Why this is a second function and not a tightening of [`segment_ok`]
+///
+/// A plane is committed and travels — [`SEPARATORS`] says so four lines up, and that is the
+/// whole argument for this gate. But the same sentence forbids putting it on the read path:
+/// a plane that already holds `workspaces/alpha.` was minted by some charter, and a charter
+/// that refuses to LIST it has locked the operator out of their own plane rather than
+/// protected them. So the rule goes where a name is first written down and nowhere else, and
+/// [`segment_ok`] stays exactly what its own doc comment says it is — *can this string name
+/// one entry* — for every caller that is asking about a name it did not choose.
+///
+/// # The device rule is the rule, not a longer list
+///
+/// Windows resolves a device by the name's **stem**: everything before the first `.`, with
+/// trailing spaces dropped, compared without case. That is why `com1.txt` is the serial port
+/// and why a table of literal filenames is the wrong shape — it would have to hold every
+/// extension anyone might ever append. The device table itself is `CON PRN AUX NUL`,
+/// `COM0`–`COM9` and `LPT0`–`LPT9`, plus the superscript spellings `COM¹ COM² COM³`
+/// (U+00B9, U+00B2, U+00B3), which modern Windows folds onto 1, 2 and 3.
+///
+/// # What this deliberately does not decide
+///
+/// **Case.** `DevOps` and `devops` are one directory on a case-insensitive filesystem, and
+/// that is a rule about a PAIR of names rather than about one — [`persona_name_ok`] already
+/// answers it for personas by admitting no capital, and charter-app#94 is where a workspace's
+/// answer belongs. Nothing here contradicts either: a name this accepts is still whatever
+/// the alphabet beside it says about case.
+pub fn mintable(name: &str) -> Result<(), Elsewhere> {
+    if !segment_ok(name) {
+        return Err(Elsewhere::NotOneEntry);
+    }
+    if dos_device(name) {
+        return Err(Elsewhere::Device);
+    }
+    if name.ends_with('.') || name.ends_with(' ') {
+        return Err(Elsewhere::Stripped);
+    }
+    if name.contains(':') {
+        return Err(Elsewhere::Stream);
+    }
+    if name.contains(['<', '>', '"', '|', '?', '*']) || name.contains(char::is_control) {
+        return Err(Elsewhere::Unspellable);
+    }
+    if name.contains('~') {
+        return Err(Elsewhere::ShortName);
+    }
+    Ok(())
+}
+
+/// Does Windows read `name` as one of its devices?
+///
+/// The stem — up to the first `.`, trailing spaces dropped — against the device table. See
+/// [`mintable`] for why it is spelled as a rule rather than as a list of filenames.
+fn dos_device(name: &str) -> bool {
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches(' ')
+        .to_ascii_lowercase();
+    if matches!(stem.as_str(), "con" | "prn" | "aux" | "nul") {
+        return true;
+    }
+    // One port number, and only one: `com10` is an ordinary name. The superscripts are here
+    // because they are the half of this rule a literal table always misses.
+    for port in ["com", "lpt"] {
+        if let Some(number) = stem.strip_prefix(port) {
+            let mut digits = number.chars();
+            if let (Some(c), None) = (digits.next(), digits.next())
+                && (c.is_ascii_digit() || matches!(c, '¹' | '²' | '³'))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Can `name` name a workspace this plane contains?
 ///
 /// Containment first, then the alphabet: `^[A-Za-z0-9][A-Za-z0-9._-]*$`. The alphabet is the
@@ -219,6 +342,92 @@ mod tests {
         ] {
             assert!(!persona_name_ok(name), "{name:?} must not name a persona");
         }
+    }
+
+    /// Measured against `origin/main` on macOS on 2026-09-22, by calling these functions
+    /// rather than by reading them: every one of these was `true`. charter-app#96.
+    #[test]
+    fn a_name_the_next_machine_reads_as_something_else_is_never_minted() {
+        for (name, why) in [
+            // A device stem, in the case charter's own alphabet admits…
+            ("nul", Elsewhere::Device),
+            ("NUL", Elsewhere::Device),
+            ("con", Elsewhere::Device),
+            ("aux", Elsewhere::Device),
+            ("lpt9", Elsewhere::Device),
+            ("com0", Elsewhere::Device),
+            // …and the same stem with anything at all after the first '.', which is the half
+            // a list of literal filenames never covers.
+            ("com1.txt", Elsewhere::Device),
+            ("nul.md", Elsewhere::Device),
+            ("aux .backup", Elsewhere::Device),
+            // The superscript ports modern Windows folds onto 1, 2 and 3.
+            ("com¹", Elsewhere::Device),
+            ("COM³.log", Elsewhere::Device),
+            // Stripped at the end: two names, one directory.
+            ("alpha.", Elsewhere::Stripped),
+            ("alpha ", Elsewhere::Stripped),
+            // A stream: content inside `alpha` that a walk over the plane never sees.
+            ("alpha:evil", Elsewhere::Stream),
+            // An 8.3 alias, and a leading one a shell would expand as well.
+            ("PROGRA~1", Elsewhere::ShortName),
+            ("~root", Elsewhere::ShortName),
+            // Characters Windows has no file for at all.
+            ("what?", Elsewhere::Unspellable),
+            ("a*b", Elsewhere::Unspellable),
+            ("a\u{1}b", Elsewhere::Unspellable),
+            // And everything `segment_ok` already refused, under one name.
+            ("..", Elsewhere::NotOneEntry),
+            ("a/b", Elsewhere::NotOneEntry),
+            ("C:x", Elsewhere::NotOneEntry),
+            ("", Elsewhere::NotOneEntry),
+        ] {
+            assert_eq!(mintable(name), Err(why), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn a_name_charter_would_mint_today_still_passes() {
+        // The gate is worth nothing if it refuses the names charter actually writes down:
+        // every shape in this repo's own plane, plus the ones the device rule sits closest
+        // to without touching.
+        for name in [
+            "alpha",
+            "my-repo.v2",
+            "a_b-c",
+            "charter-app",
+            "20260504-113217-the-importer-drops-rows",
+            "fixture-session-1",
+            "8f14e45f-ceea-467a-9d3f-1b2c3d4e5f60",
+            "_shared",
+            // Near misses, all ordinary names: a longer port number, a device name with
+            // something joined to it, and a stem that only starts like one.
+            "com10",
+            "com1x",
+            "nul-notes",
+            "console",
+            "auxiliary",
+            "lpt",
+            "alpha.beta",
+        ] {
+            assert_eq!(mintable(name), Ok(()), "{name:?} is a name charter mints");
+        }
+    }
+
+    #[test]
+    fn a_plane_that_already_holds_one_of_these_names_can_still_be_read() {
+        // The gate is on minting ALONE (charter-app#96). `segment_ok` and the two alphabets
+        // are what every reader asks, and a charter that refused to list `workspaces/alpha.`
+        // would have locked the operator out of a plane some other charter minted rather
+        // than protected them.
+        for name in ["nul", "alpha.", "com1.txt", "PROGRA~1"] {
+            assert!(
+                segment_ok(name),
+                "{name:?} must still name one entry to a reader"
+            );
+        }
+        assert!(workspace_name_ok("alpha."));
+        assert!(persona_name_ok("nul"));
     }
 }
 

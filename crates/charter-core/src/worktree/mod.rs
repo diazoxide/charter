@@ -41,6 +41,14 @@ pub enum Refusal {
         "'{0}' does not name a piece (letters, digits, '.', '_', '-', starting with a letter or digit)"
     )]
     BadPiece(String),
+    #[error(
+        "charter will not cut a worktree called '{piece}': {why}. A piece's directory name is \
+         recorded in the clone's git config and reaches every machine the branch does"
+    )]
+    PieceGoesElsewhere {
+        piece: String,
+        why: crate::contain::Elsewhere,
+    },
     #[error("{0}")]
     BadBranch(#[from] name::BadBranch),
     #[error("'{0}' is not a name git will accept for a branch")]
@@ -283,6 +291,14 @@ pub fn add(
 ) -> Result<Added, Refusal> {
     relocation_refusal(plane)?;
     let path = path_for(plane, ws, repo, piece)?;
+    // `add` is the MINT, and `path_for` — which `list`, `remove` and `merge` also call — is
+    // not: a piece cut by an earlier charter under a name Windows resolves elsewhere still
+    // has to be listable and removable here (charter-app#96). `piece_name_ok`'s alphabet
+    // admits `nul` and `alpha.`, so the rule is asked once, here.
+    crate::contain::mintable(piece).map_err(|why| Refusal::PieceGoesElsewhere {
+        piece: piece.to_string(),
+        why,
+    })?;
     let asked = branch.unwrap_or(piece);
     name::branch_name_ok(asked)?;
 
