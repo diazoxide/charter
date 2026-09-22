@@ -1,3 +1,6 @@
+/// <reference types="node" />
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup, render, screen, within } from "@testing-library/react";
 import { BottomBar } from "./BottomBar";
@@ -354,6 +357,192 @@ describe("the bottom bar", () => {
 
     expect(screen.getByText("No workspace focused.")).toBeInTheDocument();
     expect(screen.queryByTestId("repo-svc")).not.toBeInTheDocument();
+  });
+
+  // ---------------------------------------------------------------------------------------
+  // Columns, a worktree tree, and pipelines that move (M6.6)
+  // ---------------------------------------------------------------------------------------
+
+  it("lays the repos out in named columns, one row per repo", () => {
+    render(
+      <BottomBar
+        workspace="alpha"
+        state={state({
+          repos: {
+            workspace: "alpha",
+            cache_refused: null,
+            repos: [repo("svc", { tracked: 3 }), repo("tool")],
+          },
+        })}
+      />,
+    );
+
+    // The operator's "add tabs columns": a column question — which of these is dirty — is
+    // answered by reading down, and a screen reader says which column a value is in.
+    expect(screen.getAllByRole("columnheader").map((one) => one.textContent)).toEqual([
+      "Repo",
+      "Branch",
+      "Changes",
+      "Worktrees",
+      "Pipeline",
+    ]);
+    expect(screen.getAllByRole("rowheader").map((one) => one.textContent)).toEqual(["svc", "tool"]);
+    const cells = within(row("svc")).getAllByRole("cell");
+    expect(cells.map((one) => one.className.split(" ")[0])).toEqual([
+      "branch",
+      "dirt",
+      "worktrees",
+      "ci",
+    ]);
+    expect(cells[1]).toHaveTextContent("3 changed");
+  });
+
+  it("gives every row the same five columns, whatever charter could read of it", () => {
+    render(
+      <BottomBar
+        workspace="alpha"
+        state={state({
+          panels: { ...PANELS, repos: ["svc", "tool", "gone"], absent: ["later"] },
+          repos: {
+            workspace: "alpha",
+            cache_refused: null,
+            repos: [repo("svc"), repo("tool", { unreadable: "could not read it" })],
+          },
+        })}
+      />,
+    );
+
+    // A row one column short draws the next repo's pipeline under this one's worktrees.
+    const width = (tr: HTMLElement) =>
+      [...tr.children].reduce((sum, cell) => sum + Number(cell.getAttribute("colspan") ?? 1), 0);
+    for (const name of ["svc", "tool", "gone", "later"]) expect(width(row(name))).toBe(5);
+  });
+
+  it("draws a clone's worktrees as a tree under its row, each with its branch and state", () => {
+    render(
+      <BottomBar
+        workspace="alpha"
+        state={state({
+          pieces: {
+            svc: [
+              piece("one", { branch: "fix/login" }),
+              piece("two", { wired: false }),
+              piece("three", { stale: true, wired: false }),
+            ],
+            tool: [],
+          },
+          repos: { workspace: "alpha", cache_refused: null, repos: [repo("svc"), repo("tool")] },
+        })}
+      />,
+    );
+
+    const tree = screen.getByTestId("worktree-tree-svc");
+    const rows = within(tree).getAllByRole("listitem");
+    expect(rows.map((one) => one.querySelector(".piece")?.textContent)).toEqual([
+      "one",
+      "two",
+      "three",
+    ]);
+    expect(rows[0]).toHaveTextContent("fix/login");
+    // `two` is on a branch called `two`: the name already says it, so it is not said twice.
+    expect(rows[1].querySelector(".branch")).toBeNull();
+    expect(rows[1]).toHaveTextContent("unwired");
+    // Stale says stale and nothing else: a directory that is gone is not also "unwired".
+    expect(rows[2]).toHaveTextContent("stale");
+    expect(rows[2]).not.toHaveTextContent("unwired");
+    // A clone with nothing cut off it has no tree — the row already says "no worktrees".
+    expect(screen.queryByTestId("worktree-tree-tool")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["success", "lucide-circle-check", false],
+    ["failed", "lucide-circle-x", false],
+    ["running", "lucide-loader-circle", true],
+    ["pending", "lucide-loader-circle", true],
+    ["manual", "lucide-hand", false],
+    ["canceled", "lucide-circle-slash", false],
+    ["skipped", "lucide-skip-forward", false],
+  ])(
+    "marks a %s pipeline with its own shape, moving only if it is still going",
+    (ci, mark, moves) => {
+      render(
+        <BottomBar
+          workspace="alpha"
+          state={state({
+            repos: {
+              workspace: "alpha",
+              cache_refused: null,
+              repos: [repo("svc", { ci, fetched_seconds_ago: 60, not_fetched: null })],
+            },
+          })}
+        />,
+      );
+
+      const cell = screen.getByTestId("ci-svc");
+      expect(cell).toHaveTextContent(ci);
+      const svg = cell.querySelector(`svg.${mark}`);
+      expect(svg).not.toBeNull();
+      expect(svg?.classList.contains("spinning")).toBe(moves);
+    },
+  );
+
+  it("draws an answer it does not recognise as a fetch that names nothing, and keeps still", () => {
+    render(
+      <BottomBar
+        workspace="alpha"
+        state={state({
+          repos: {
+            workspace: "alpha",
+            cache_refused: null,
+            repos: [repo("svc", { ci: "exploded", fetched_seconds_ago: 60, not_fetched: null })],
+          },
+        })}
+      />,
+    );
+
+    const cell = screen.getByTestId("ci-svc");
+    expect(cell.querySelector("svg.lucide-circle-dashed")).not.toBeNull();
+    expect(cell.querySelector(".spinning")).toBeNull();
+  });
+
+  /**
+   * **No table cell in the bottom bar is ever a flex container.** A `<td>` given `display: flex`
+   * stops being a table-cell, and the column it was laid out in goes with it — which is the whole
+   * reason this region is a table. Everything inside a cell is laid out inline. jsdom lays out
+   * nothing, so this reads the stylesheet, and it is what stops the obvious "just flex the icon
+   * and the text" fix from quietly un-aligning every column.
+   */
+  describe("the bottom bar's stylesheet", () => {
+    const css = readFileSync(join(process.cwd(), "src/App.css"), "utf8").replace(
+      /\/\*[\s\S]*?\*\//g,
+      "",
+    );
+    const rules = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].map(([, selector, body]) => ({
+      selectors: selector.split(",").map((one) => one.trim()),
+      body,
+    }));
+    // What a cell is, in this region: the row's own cells, and the classes a cell carries.
+    const CELL = /^\.state-bar (?:\.repo-row > (?:td|th)|\.repo|\.branch|\.dirt|\.worktrees|\.ci)$/;
+
+    it("reaches the cells it styles", () => {
+      expect(rules.some(({ selectors }) => selectors.some((one) => CELL.test(one)))).toBe(true);
+    });
+
+    it("never makes a cell a flex or grid container", () => {
+      const flexed = rules
+        .filter(({ body }) => /(?:^|[;\s])display\s*:\s*(?:inline-)?(?:flex|grid)/.test(body))
+        .flatMap(({ selectors }) => selectors.filter((one) => CELL.test(one)));
+      expect(flexed).toEqual([]);
+    });
+
+    it("draws the worktree tree's guides with borders only, like the explorer's", () => {
+      const guides = rules.filter(({ selectors }) =>
+        selectors.some((one) => /\.worktree-tree.*::(?:before|after)/.test(one)),
+      );
+      expect(guides.length).toBeGreaterThan(0);
+      for (const { body } of guides)
+        expect(body).not.toMatch(/(?:^|[;\s])background(?:-color)?\s*:/);
+    });
   });
 
   // ---------------------------------------------------------------------------------------

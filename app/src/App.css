@@ -926,23 +926,117 @@ body {
 /* The bottom region: what the focused workspace's repos are doing. Nothing in it can be
    pressed, which is the half of ADR 0038's reading a test can hold. */
 .state-bar {
+  height: 100%;
+  overflow: auto;
   padding: 0.35rem 0.6rem;
   font-size: 0.8rem;
 }
 
+/* **Columns, because "which of these is dirty" is a column question.** `BottomBar.tsx` has the
+   argument; what matters here is that no cell is ever given `display: flex`. A `<td>` told to
+   be a flex container stops being a table-cell, and the columns it was laid out in go with it
+   — which is the whole reason this is a table and not four `<span>`s in a row. Everything
+   inside a cell is laid out inline, with margins. */
 .state-bar .repo-states {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+  width: 100%;
+  border-collapse: collapse;
 }
 
-.state-bar .repo-row {
-  padding: 0.1rem 0;
+.state-bar thead th {
+  padding: 0 0.6rem 0.2rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.state-bar .repo-row > th,
+.state-bar .repo-row > td {
+  padding: 0.2rem 0.6rem 0.2rem 0;
+  text-align: left;
+  vertical-align: top;
+  font-weight: normal;
   overflow-wrap: anywhere;
+}
+
+/* A hairline between clones — between the GROUPS, so a repo and its own worktree tree are
+   never parted by one. */
+.state-bar tbody + tbody .repo-row > th,
+.state-bar tbody + tbody .repo-row > td {
+  border-top: 1px solid var(--border-subtle);
 }
 
 .state-bar .repo {
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.state-bar .node-icon {
+  margin-inline-end: 0.3rem;
+  color: var(--text-muted);
+}
+
+.state-bar .branch .upstream,
+.state-bar .branch .gap,
+.state-bar .worktrees .label,
+.state-bar .worktree-tree .label,
+.state-bar .worktree-tree .branch {
+  margin-inline-start: 0.4rem;
+}
+
+.state-bar .branch .upstream,
+.state-bar .branch .gap {
+  color: var(--text-muted);
+}
+
+/* **The worktrees, as a tree here too** (the operator asked for it in both regions). Same
+   guides as the explorer's, and for the same reason drawn by the rows: this region can be
+   moved to another side and sits on whatever surface that side has. */
+.state-bar .worktree-tree-row > td {
+  padding: 0 0 0.3rem 0;
+}
+
+.state-bar .worktree-tree {
+  list-style: none;
+  margin: 0;
+  padding-inline-start: 1.7rem;
+}
+
+.state-bar .worktree-tree > li {
+  position: relative;
+  padding: 0.05rem 0;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.state-bar .worktree-tree > li::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: -0.85rem;
+  border-inline-start: 1px solid var(--border-subtle);
+}
+
+.state-bar .worktree-tree > li:last-child::before {
+  inset-block-end: auto;
+  height: 0.75em;
+}
+
+.state-bar .worktree-tree > li::after {
+  content: "";
+  position: absolute;
+  inset-inline-start: -0.85rem;
+  inset-block-start: 0.75em;
+  width: 0.55rem;
+  border-block-start: 1px solid var(--border-subtle);
+}
+
+.state-bar .worktree-tree .branch {
+  color: var(--text-muted);
 }
 
 .state-bar .absent,
@@ -962,7 +1056,17 @@ body {
   color: var(--state-unreadable);
 }
 
-/* Never colour alone: the state's own word is the text of the cell. */
+.state-bar .unreadable .node-icon {
+  color: inherit;
+}
+
+/* Never colour alone: the state's own word is the text of the cell, and the mark beside it is
+   a different SHAPE per state — a tick, a cross, a spinner — so the cell survives a display
+   that renders no colour at all. */
+.state-bar .ci-state {
+  white-space: nowrap;
+}
+
 .state-bar .ci-success {
   color: var(--state-success);
 }
@@ -976,9 +1080,28 @@ body {
   color: var(--state-waiting);
 }
 
+.state-bar .ci-manual,
+.state-bar .ci-canceled,
+.state-bar .ci-skipped {
+  color: var(--text-muted);
+}
+
+.state-bar .ci-state .node-icon {
+  color: inherit;
+}
+
 .state-bar .trouble {
+  display: flex;
+  gap: 0.35rem;
+  align-items: flex-start;
   color: var(--state-failed);
   margin: 0.25rem 0;
+}
+
+.state-bar .trouble .node-icon,
+.state-bar .pending .node-icon {
+  color: inherit;
+  margin-block-start: 0.15em;
 }
 
 /* What a chat that was put back says about itself: resumed, or new and why. */
