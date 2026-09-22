@@ -32,7 +32,7 @@ mod inventory;
 mod memory;
 mod plane;
 mod profiles;
-mod session;
+pub(crate) mod session;
 
 /// Python's truthiness of a TOML value, for `crate::alerts`, which reads the same manifest
 /// sections through the same `(cfg.get(name) or {})` idiom.

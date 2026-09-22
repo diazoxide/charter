@@ -159,11 +159,19 @@ impl Chats {
     }
 
     /// The arguments that arm this harness's state hooks on this session alone, if any.
-    fn state_hook_args(&self, harness: Option<Harness>) -> Vec<String> {
+    ///
+    /// `cwd` is the chat's own directory, which decides whether charter may also fill Claude
+    /// Code's status line for it (`charter_core::footerclaim`): project settings are read from
+    /// the session's own directory, so that is the directory the question is asked about.
+    fn state_hook_args(
+        &self,
+        harness: Option<Harness>,
+        cwd: Option<&std::path::Path>,
+    ) -> Vec<String> {
         let (Some(harness), Some(binary)) = (harness, self.binary.as_ref()) else {
             return Vec::new();
         };
-        match harness.state_hooks(binary) {
+        match harness.state_hooks(binary, cwd) {
             StateHooks::ThisSessionOnly { args, .. } => args,
             // Nothing is added to the command line, and nothing of the operator's is written
             // behind their back. The chat shows `unknown`.
@@ -272,7 +280,7 @@ impl Chats {
         // Charter's own words first, and the state hooks before even those: a harness reads
         // its settings before it reads anything else on the line, and a chat's own recorded
         // arguments may end in a positional prompt that nothing may come after.
-        let mut all = self.state_hook_args(harness);
+        let mut all = self.state_hook_args(harness, chat.cwd.as_deref());
         all.extend(args);
         // The directories charter searched for the harness, then the `charter` the hooks
         // above name by absolute path — so a hook the plugin or the plane spells as the bare
