@@ -140,8 +140,30 @@ component library gets added on.
   `<Panel>`.** Taking a panel out of a live group throws from a document listener where no
   `try` can reach it — *"Panel constraints not found for index 3"* — because a separator
   recalculates its aria values against a constraint list the panel has just left.
-  `PlaneView`'s `Region` holds the reasoning. What the constraints are is written once and
+  `RegionFrame`'s `Slot` holds the reasoning. What the constraints are is written once and
   never changed; only the collapse moves.
+- **The layout is data, and the panels are slots** (`app/src/regions.ts`). The frame renders the
+  same four panels for the life of a window — left, centre, right, bottom — and an *arrangement*
+  says which slot each region's content goes in, in what order, whether it is drawn and how big
+  its slot starts. That is what makes the rule above survivable: a region can move side while
+  the window is up, because moving it adds nothing to the group and takes nothing out. Adding a
+  region is a line in the catalogue and a piece of content; no JSX moves. A slot's
+  `minSize`/`maxSize` therefore belong to the **slot** and not to the regions in it — a bound
+  derived from the current occupants would change the moment one moved, which is the second half
+  of the same throw.
+- **A slot that starts with nothing in it starts at `0%`, and that is how the flash was fixed.**
+  charter-app#141 sized a hidden region normally and collapsed it from a `useEffect`, which runs
+  after the browser has painted, so every launch drew it for one frame. The obvious repair —
+  `useLayoutEffect` — **throws**, *"Group &lt;id&gt; not found"*: the group registers itself in
+  its own layout effect, and React runs a child's layout effects before its parent's, so there
+  is no hook inside a group that runs after the group exists. The first layout is made right
+  instead; the library snaps `0%` to `collapsedSize`, and the effect is left to handle only what
+  changes while the window is up.
+- **jsdom never lays a group out.** Every element measures zero, so the library defers its
+  layout and no `defaultSize` is ever applied — which means a unit test cannot read a panel's
+  width out of the DOM. `RegionFrame.sizes.test.tsx` mocks the library to assert what it was
+  *told*; `RegionFrame.test.tsx` and `FourRegions.test.tsx` use the real one for everything that
+  is about the tree. A size is only really checked by the scenario tests.
 - **The explorer's repo groups are `<details>`**, per the rule above: the browser has a
   collapsible, and `@radix-ui/react-collapsible` is not installed because nothing needs it.
 - **Picking a spot in the explorer is `aria-current`, not `aria-selected`.** `aria-selected`
