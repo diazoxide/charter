@@ -1,0 +1,150 @@
+# Mutants charter-core does not catch yet — the backlog the nightly measures against.
+#
+# `.github/workflows/mutants.yml`'s `survivors` job is red when it finds a survivor that is
+# NOT in this file. Without that, it would be red every single night and mean nothing: the
+# run of 2026-09-21 found 141 survivors in the 38% of the crate it managed to test before
+# GitHub killed it, and the whole crate is likely to hold two or three times that.
+#
+# So this file is the difference between "charter-core has a coverage backlog", which is a
+# fact about today, and "something got worse last night", which is news. Only the second one
+# turns the nightly red.
+#
+# **It is a backlog and not an absolution.** Every line is a change to charter-core that no
+# test notices, including fourteen in `leakguard.rs`, which is the guard that stops a
+# credential reaching a model. Deleting a line by writing the test is the point of the file.
+#
+# Three rules:
+#
+#   * A line is `<file>: <the mutation, as cargo-mutants describes it>` — deliberately NOT
+#     `file:line:col`, so that editing above a mutant does not make it look new.
+#   * Adding a line is a decision with a reason, made in the PR that adds it. A mutation that
+#     genuinely cannot change any answer does not belong here at all: prove it, and say so in
+#     the source where the next reader will be standing. `realpath` in `pypath.rs` carries the
+#     worked example — and the lesson that its three "inert" mutations were catchable once a
+#     redundant guard stopped absorbing them.
+#   * Removing a line is free and never red. The `survivors` job lists the ones a test has
+#     started catching so they can be pruned.
+#
+# Seeded from run 35580456628 (2026-09-21), shards 0, 1 and 3 — 38% coverage, so the first
+# run that finishes the whole crate WILL report a large batch of genuinely untested mutants.
+# That run's summary attaches the full set as `mutants-survivors.current.txt`; re-seeding from
+# it is a copy, and it is a decision to make deliberately rather than a chore to automate.
+
+crates/charter-core/src/active.rs: delete ! in python_str
+crates/charter-core/src/active.rs: delete match arm toml::Value::Boolean(false) in python_str
+crates/charter-core/src/active.rs: delete match arm toml::Value::Boolean(true) in python_str
+crates/charter-core/src/active.rs: delete match arm toml::Value::Float(f) in python_str
+crates/charter-core/src/active.rs: delete match arm toml::Value::Integer(n) in python_str
+crates/charter-core/src/active.rs: replace && with || in python_str
+crates/charter-core/src/active.rs: replace > with == in read_a_name
+crates/charter-core/src/active.rs: replace > with >= in read_a_name
+crates/charter-core/src/active.rs: replace Ids::from_env -> Self with Default::default()
+crates/charter-core/src/active.rs: replace from_env -> Option<String> with None
+crates/charter-core/src/active.rs: replace from_env -> Option<String> with Some("xyzzy".into())
+crates/charter-core/src/active.rs: replace from_env -> Option<String> with Some(String::new())
+crates/charter-core/src/active.rs: replace match guard ids.terminal.is_none() with false in workspace_source
+crates/charter-core/src/active.rs: replace match guard ids.terminal.is_none() with true in workspace_source
+crates/charter-core/src/active.rs: replace tty_name -> Option<String> with None
+crates/charter-core/src/active.rs: replace tty_name -> Option<String> with Some("xyzzy".into())
+crates/charter-core/src/active.rs: replace tty_name -> Option<String> with Some(String::new())
+crates/charter-core/src/active.rs: replace workspace_source -> String with "xyzzy".into()
+crates/charter-core/src/active.rs: replace workspace_source -> String with String::new()
+crates/charter-core/src/active.rs: replace || with && in read_a_name
+crates/charter-core/src/adopt.rs: replace build_version -> &'static str with ""
+crates/charter-core/src/adopt.rs: replace build_version -> &'static str with "xyzzy"
+crates/charter-core/src/cistate.rs: replace && with || in Cache::age_of
+crates/charter-core/src/cistate.rs: replace > with == in read
+crates/charter-core/src/cistate.rs: replace > with >= in Cache::about
+crates/charter-core/src/cistate.rs: replace > with >= in read
+crates/charter-core/src/cistate.rs: replace match guard why.kind() == std::io::ErrorKind::NotFound with true in read
+crates/charter-core/src/hookwire.rs: replace * with +
+crates/charter-core/src/hookwire.rs: replace Listener::bind -> io::Result<Self> with Ok(Default::default())
+crates/charter-core/src/hookwire.rs: replace Listener::each -> Reading with Default::default()
+crates/charter-core/src/hookwire.rs: replace Listener::path -> &std::path::Path with Box::leak(Box::new(Default::default()))
+crates/charter-core/src/hookwire.rs: replace match guard err.kind() == io::ErrorKind::AlreadyExists with true in private_directory
+crates/charter-core/src/hookwire.rs: replace match guard err.kind() == io::ErrorKind::NotFound with true in Listener::bind
+crates/charter-core/src/hookwire.rs: replace no_channel -> io::Error with Default::default()
+crates/charter-core/src/hookwire.rs: replace send -> io::Result<()> with Ok(())
+crates/charter-core/src/inventory.rs: delete ! in root_default_branch
+crates/charter-core/src/inventory.rs: delete match arm Some(Value::String(s)) in record
+crates/charter-core/src/inventory.rs: replace == with != in merge
+crates/charter-core/src/inventory.rs: replace == with != in namespace
+crates/charter-core/src/inventory.rs: replace == with != in repos
+crates/charter-core/src/inventory.rs: replace match guard truthy(v) with false in record
+crates/charter-core/src/inventory.rs: replace match guard truthy(v) with true in record
+crates/charter-core/src/inventory.rs: replace record -> Value with Default::default()
+crates/charter-core/src/inventory.rs: replace root_default_branch -> String with "xyzzy".into()
+crates/charter-core/src/inventory.rs: replace root_default_branch -> String with String::new()
+crates/charter-core/src/inventory.rs: replace || with && in classify_kind
+crates/charter-core/src/inventory.rs: replace || with && in classify_stack
+crates/charter-core/src/inventory.rs: replace || with && in repos
+crates/charter-core/src/layer.rs: replace == with != in publish_io
+crates/charter-core/src/layer.rs: replace Record::names -> bool with false
+crates/charter-core/src/layer.rs: replace Record::names -> bool with true
+crates/charter-core/src/layer.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with false in publish_io
+crates/charter-core/src/layer.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with true in publish_io
+crates/charter-core/src/leakguard.rs: replace + with * in gh_file_operands
+crates/charter-core/src/leakguard.rs: replace + with - in gh_file_operands
+crates/charter-core/src/leakguard.rs: replace += with *= in gh_file_operands
+crates/charter-core/src/leakguard.rs: replace += with -= in gh_file_operands
+crates/charter-core/src/leakguard.rs: replace < with <= in gh_file_operands
+crates/charter-core/src/leakguard.rs: replace == with != in excluded_names
+crates/charter-core/src/leakguard.rs: replace == with != in guarded_state_entries
+crates/charter-core/src/leakguard.rs: replace == with != in walks_directories
+crates/charter-core/src/leakguard.rs: replace > with >= in glob_selects_inside
+crates/charter-core/src/leakguard.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with false in guarded_state_entries
+crates/charter-core/src/leakguard.rs: replace match guard e.kind() == std::io::ErrorKind::NotFound with true in guarded_state_entries
+crates/charter-core/src/leakguard.rs: replace || with && in walks_directories
+crates/charter-core/src/machine.rs: delete ! in load
+crates/charter-core/src/machine.rs: replace && with || in load
+crates/charter-core/src/machine.rs: replace <impl std::fmt::Display for Change>::fmt -> std::fmt::Result with Ok(Default::default())
+crates/charter-core/src/machine.rs: replace > with >= in read_text
+crates/charter-core/src/machine.rs: replace Change::name -> &str with ""
+crates/charter-core/src/machine.rs: replace Change::name -> &str with "xyzzy"
+crates/charter-core/src/machine.rs: replace config_root -> Option<PathBuf> with None
+crates/charter-core/src/machine.rs: replace config_root -> Option<PathBuf> with Some(Default::default())
+crates/charter-core/src/machine.rs: replace supported -> io::Result<()> with Ok(())
+crates/charter-core/src/machine.rs: replace tests::one_plane -> Store with Default::default()
+crates/charter-core/src/manifest.rs: replace match guard stored == digest(&doc) with true in ownership
+crates/charter-core/src/wiring.rs: replace && with || in hook_handlers
+crates/charter-core/src/wiring.rs: replace == with != in hook_handlers
+crates/charter-core/src/wiring.rs: replace || with && in hook_handlers
+crates/charter-core/src/workspaces.rs: delete ! in Plane::is_live
+crates/charter-core/src/workspaces.rs: delete ! in Workspace::remember_titled
+crates/charter-core/src/workspaces.rs: delete ! in Workspace::scaffold_memory
+crates/charter-core/src/workspaces.rs: delete match arm Some("commit") in Plane::memory_share
+crates/charter-core/src/workspaces.rs: delete match arm Some("push") in Plane::memory_share
+crates/charter-core/src/workspaces.rs: replace && with || in Plane::personas
+crates/charter-core/src/workspaces.rs: replace && with || in Workspace::remember_titled
+crates/charter-core/src/workspaces.rs: replace && with || in Workspace::scaffold_memory
+crates/charter-core/src/workspaces.rs: replace && with || in parse_entry
+crates/charter-core/src/workspaces.rs: replace << with >> in scratch_tag
+crates/charter-core/src/workspaces.rs: replace == with != in Plane::is_live
+crates/charter-core/src/workspaces.rs: replace == with != in Plane::read_workspaces
+crates/charter-core/src/workspaces.rs: replace == with != in Workspace::scaffold_charter
+crates/charter-core/src/workspaces.rs: replace Plane::is_live -> bool with false
+crates/charter-core/src/workspaces.rs: replace Plane::is_live -> bool with true
+crates/charter-core/src/workspaces.rs: replace Plane::memory_share -> &'static str with ""
+crates/charter-core/src/workspaces.rs: replace Plane::memory_share -> &'static str with "xyzzy"
+crates/charter-core/src/workspaces.rs: replace Workspace::name -> &str with ""
+crates/charter-core/src/workspaces.rs: replace Workspace::name -> &str with "xyzzy"
+crates/charter-core/src/workspaces.rs: replace ^ with | in scratch_tag
+crates/charter-core/src/workspaces.rs: replace match guard !found.is_dir() with false in Plane::read_workspaces
+crates/charter-core/src/workspaces.rs: replace match guard e.kind() == io::ErrorKind::AlreadyExists with false in Workspace::scaffold_charter
+crates/charter-core/src/workspaces.rs: replace match guard e.kind() == io::ErrorKind::AlreadyExists with true in Workspace::scaffold_charter
+crates/charter-core/src/workspaces.rs: replace match guard e.kind() == io::ErrorKind::NotFound with false in Plane::read_workspaces
+crates/charter-core/src/workspaces.rs: replace match guard e.kind() == io::ErrorKind::NotFound with true in Plane::read_workspaces
+crates/charter-core/src/workspaces.rs: replace match guard e.kind() == io::ErrorKind::NotFound with true in read_dir_sorted
+crates/charter-core/src/worktree/mod.rs: replace && with || in list
+crates/charter-core/src/worktree/mod.rs: replace && with || in remove
+crates/charter-core/src/worktree/mod.rs: replace unwired_warning -> String with "xyzzy".into()
+crates/charter-core/src/worktree/mod.rs: replace unwired_warning -> String with String::new()
+crates/charter-core/src/worktree/mod.rs: replace || with && in head_of
+crates/charter-core/src/wscmd/mod.rs: delete ! in git_user
+crates/charter-core/src/wscmd/mod.rs: replace && with || in live_line
+crates/charter-core/src/wscmd/mod.rs: replace && with || in work_at_risk
+crates/charter-core/src/wscmd/mod.rs: replace > with >= in work_at_risk
+crates/charter-core/src/wscmd/mod.rs: replace cannot_check_workspace -> String with "xyzzy".into()
+crates/charter-core/src/wscmd/mod.rs: replace cannot_check_workspace -> String with String::new()
+crates/charter-core/src/wscmd/mod.rs: replace git_user -> String with "xyzzy".into()
+crates/charter-core/src/wscmd/mod.rs: replace git_user -> String with String::new()

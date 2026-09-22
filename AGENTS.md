@@ -46,4 +46,20 @@ Two that have each cost a red `main`:
   there is one copy to change.
 
 Mutation testing runs nightly on `charter-core` only (`.github/workflows/mutants.yml`) and never
-gates a PR.
+gates a PR. It is a report, so the only thing that matters about it is that its red is readable:
+
+- **`baseline` red** — charter-core's own tests do not pass. Nothing else in the run is evidence.
+- **`core (N)` red** — shard N did not finish. Its verdict says whether the budget was too small
+  (add shards; the crate went from 3,640 mutants to 6,555 in a day in September) or the runner
+  went away.
+- **`survivors` red** — a change to charter-core that no test notices, and that was NOT there
+  before. This is the one to read. The table is on the run's summary page.
+
+`.github/mutants-survivors.txt` is the backlog of survivors already known, and only a survivor
+missing from it turns `survivors` red. Adding a line to it is a decision with a reason, not a
+way to make a run green — and a mutation that provably cannot change any answer does not go in
+it at all: prove it and write it into the source, as `realpath` in `pypath.rs` does.
+
+When the nightly is not clean it keeps one issue in this repo up to date, and closes it when the
+nightly is clean again. Five consecutive red nights went unread in September 2026 while fifty
+PRs merged past them; that is what the issue is for.
