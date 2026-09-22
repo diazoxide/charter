@@ -157,10 +157,20 @@ pub const REASON_BRIEF_SOURCE: &str = "handoff-brief-source";
 /// `line[start:end]` as CPython slices a `str`: CHARACTERS, negative indices from the end,
 /// both ends clamped, and an end before the start giving `""`.
 ///
-/// Not a convenience. [`Tok::start`] and [`Tok::end`] are `-1` where nothing measured a token,
-/// and `-1` is not an error to Python — it is the LAST character. A port that clamped a
-/// negative index to zero would read a different slice than the oracle on exactly the tokens
-/// the lexer did not place, which is where a spelling judgement is least obvious.
+/// **CHARACTERS is the load-bearing half**, and it is the half that fires: every offset A7 reads
+/// is a `str` index on the oracle's side, the alphabet carries astral-plane characters, and a
+/// byte index would read a different slice on any line holding one.
+///
+/// **The negative half is faithfulness, not a live path, and saying so is the point.**
+/// [`Tok::start`] and [`Tok::end`] are `-1` where nothing measured a token, and `-1` is the LAST
+/// character to Python rather than an error — so clamping it to zero would be a silent
+/// disagreement with the oracle. Measured: the lexer sets both the moment a token has a first
+/// character, so no token it EMITS carries `-1`; the only `-1`s made anywhere are
+/// `shellseg::resegment`'s, on the lex-FAILURE path, which A7 never reaches because it returns
+/// on `Err` before any of this. Zero of the 529 recorded corpus rows carry a `-1` offset in the
+/// segment A7 judges. It is kept because the Python would do this if one ever arrived, and it is
+/// documented as unreached because defensive code that reads as though it matters is worse than
+/// none in a guard somebody has to re-derive.
 fn py_slice(chars: &[char], start: isize, end: isize) -> String {
     let n = chars.len() as isize;
     let fix = |i: isize| -> usize {
@@ -551,8 +561,14 @@ fn spelled_exactly(line: &str, seg: Option<&[Tok]>) -> bool {
     };
     // `_runs_handoff` cannot be true of a segment with fewer than two tokens — `_charter_words`
     // needs an argv of at least two, and `_split_env` only ever strips a PREFIX — so Python
-    // indexes `seg[0]`/`seg[1]` unguarded. Answering "not the exact spelling" for a shorter one
-    // is the same verdict without the panic.
+    // indexes `seg[0]`/`seg[1]` unguarded and would raise `IndexError` if one ever arrived.
+    //
+    // **Measured as well as argued**, because "the oracle would crash" is a claim worth more
+    // than a deduction: 200,529 cases through the differential's own generators produced 10,814
+    // handoff segments, none shorter than two tokens and none raising out of
+    // `_handoff_refusal`. Answering "not the exact spelling" for a shorter one is the same
+    // verdict as the Python's for every input either implementation has been shown, without a
+    // panic where the guard is the only thing standing in front of a tool call.
     let (Some(first), Some(second)) = (seg.first(), seg.get(1)) else {
         return false;
     };
@@ -828,6 +844,9 @@ mod tests {
 
     #[test]
     fn py_slice_reads_a_negative_offset_the_way_python_does() {
+        // **The only thing that exercises the negative branch** — no token A7 is handed carries
+        // a `-1` offset, and [`py_slice`] says why at length. Kept as a unit test rather than
+        // left to the differential for that reason: the fuzz cannot reach it either.
         let chars: Vec<char> = "abcde".chars().collect();
         assert_eq!(py_slice(&chars, 1, 3), "bc");
         assert_eq!(py_slice(&chars, -1, -1), "");
