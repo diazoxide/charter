@@ -451,3 +451,56 @@ component library gets added on.
   list. Radix has no tree or listbox primitive, and native buttons are not hand-rolled markup.
 - **The region buttons are `aria-pressed` toggles**, which is what the platform has for a
   control that is on or off.
+
+## Which keys belong to the chat, and which to the window
+
+Every pane in this window is a terminal running somebody's shell, and a shell's line editor has
+bindings of its own. So "the window takes this key" is never free: it is taken out of the
+program the operator is typing into. `F2` cost that once (charter-app#47) and `Ctrl-K` cost it
+again (charter-app#106), which is enough to write the rule down rather than decide it a third
+time per key.
+
+> **A chord a terminal encodes belongs to the chat whenever a chat has the keyboard, unless the
+> window claims it there deliberately — and a key claimed from under a focused chat must have a
+> way to hand it back.**
+
+Three keys, three answers, one rule. It is `Palette.opensIt` and `Palette.theChatKeepsIt` that
+implement it, in that order: the first says whether this is the palette's chord at all, the
+second whether the chat keeps it anyway.
+
+- **`F2` is claimed from under the chat, and hands it back.** A second `F2` closes the palette
+  and sends `ESC O Q` to the chat in front, through the catalogue's own `pane.sendkey` row.
+  That is tmux's `send-prefix`, and it is the only reason claiming the key is defensible.
+- **`⌘K` is claimed everywhere, and takes nothing.** Measured in the pinned `@xterm/xterm`
+  6.0.0: `evaluateKeyboardEvent` answers a `⌘`-chord with `SELECT_ALL` for `⌘A` and with no
+  bytes at all for anything else, so a pane that received `⌘K` would send nothing. There is
+  nothing to hand back and nothing was taken.
+- **`Ctrl-K` is the chat's while the chat has the keyboard.** xterm maps `Ctrl` with a key code
+  in 65..90 to `String.fromCharCode(code - 64)`, so `Ctrl-K` is `\x0b` — readline's
+  kill-to-end-of-line. From anywhere else in the window it still opens the palette, because on
+  Linux there is no `⌘` and dropping the chord outright would take the desktop's own key away
+  on the platform that has only it.
+
+**How the window knows.** A capture listener on the window runs before the focus has had any
+say, so the only thing it can ask is where the keystroke was *delivered*: `e.target`. A pane
+marks itself with `actions.CHAT_KEYBOARD` (`data-chat-keyboard`) and xterm's textarea is a
+descendant of it, so `target.closest()` is the whole test. An attribute and not the `.pane`
+class, because the class is how a pane is drawn and this is what it means.
+
+**A scenario cannot carry this claim.** WebDriver does not deliver a modifier chord here —
+`browser.keys(["Shift", "Tab"])` arrives with `shiftKey` unset, measured in #176 and recorded
+above — so a key claim is evaluated in jsdom, where the real event can be dispatched and what
+happened to it asserted. `Palette.test.tsx`'s *"a chord the chat's own terminal would encode"*
+is where the rule is pinned, including the half that matters most: the keystroke reaches the
+document **unprevented**, which is what reaching the shell actually means.
+
+**What is still eaten, and where.** The palette's window listener is the only place the
+front-end claims a key, and after #106 it claims no readline binding. The application menu is
+the other claimant, and on Linux and Windows its accelerators are `Ctrl` chords — muda 0.19.3
+gives the predefined items `CmdOrCtrl` — where on macOS they are `⌘` chords and harmless:
+`Ctrl-C` (copy, against SIGINT), `Ctrl-A` (select all, against beginning-of-line), `Ctrl-Z`
+(undo, against SUSP), `Ctrl-Y` (redo, against `yank`), `Ctrl-V` (paste, against
+`quoted-insert`), `Ctrl-X` (cut, against readline's `C-x` prefix), `Ctrl-H` (hide, against
+backward-delete-char) and charter's own `Ctrl-Q` (quit). Whether GTK hands an accelerator to
+the menu before the WebKitGTK webview sees it is **not measured**, so this is a list to check
+and not a list of confirmed defects; charter-app#187 is where it is being checked.

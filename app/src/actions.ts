@@ -61,6 +61,21 @@ export const PASS_THROUGH_ID = "pane.sendkey";
 export const PASS_THROUGH_BYTES = "\u001bOQ";
 
 /**
+ * The mark a pane puts on itself to say the chat has the keyboard in here.
+ *
+ * **It is what makes "whose key is this?" answerable at all.** The window claims its keys on
+ * the window, capture-phase, which is before the focus has had any say — so the only thing a
+ * listener up there can ask about the chat is where the keystroke was DELIVERED. xterm reads
+ * from its own textarea, and that textarea is a descendant of the pane holding it, so a
+ * keydown inside a marked element is a keydown the operator aimed at a shell
+ * (`Palette.theChatKeepsIt`, charter-app#106).
+ *
+ * An attribute rather than the pane's class, because the class is how the pane is DRAWN and
+ * this is what it MEANS: a rule that reads `.pane` is one restyling away from being wrong.
+ */
+export const CHAT_KEYBOARD = "data-chat-keyboard";
+
+/**
  * The strip a chat working outside every workspace appears on.
  *
  * The sidebar has always shown those chats rather than dropping them, and a strip that shows
