@@ -59,6 +59,19 @@ import type { WorkspaceState } from "./workspaceState";
  * states that change what starting a chat there would mean, and the row above it keeps the
  * counts. It is the "list of branches" this component's own docstring has always promised,
  * finally drawn as the thing it is.
+ *
+ * ## A cell that names something is one line
+ *
+ * The same rule the explorer takes, asked of both regions by the operator: a row never folds,
+ * and the region scrolls sideways instead. Here it replaces `overflow-wrap: anywhere`, which
+ * broke `origin/main` in the middle of a word to make it fit — and a table cell is as tall as
+ * its ROW, so one folded cell made all five of them two lines tall and the column question
+ * this table exists to answer took two passes again.
+ *
+ * **The two cells that hold a SENTENCE still wrap**: a tree charter could not read, and a
+ * pipeline nobody fetched, each say why in charter's own words. Held on one line, either would
+ * push the region's horizontal scroll out past every column it has. `regions.e2e.ts` holds
+ * both halves, in a real WebView, because jsdom lays nothing out.
  */
 export function BottomBar({
   workspace,

@@ -72,6 +72,21 @@ async function untilTheStripIsRead(): Promise<void> {
   );
 }
 
+/**
+ * A persona's row in the right-hand region, by its own name.
+ *
+ * By text across the section's buttons rather than `button=<name>`: the row carries a mark
+ * and, for the plane's default, the word `default` and a star, so an exact-text match finds
+ * none of them and a window-wide match would pick whichever came first.
+ */
+async function personaRow(persona: string) {
+  const rows = await $$('[data-testid="panel-personas"] button').getElements();
+  for (const row of rows) {
+    if ((await row.getText()).startsWith(persona)) return row;
+  }
+  throw new Error(`no ${persona} among the personas the panel lists`);
+}
+
 describe("the bottom bar", () => {
   it("lists the focused workspace's repos with the branch each is on", async () => {
     await onAlpha();
@@ -130,6 +145,122 @@ describe("the bottom bar", () => {
     await untilSays("repo-svc", "main");
   });
 
+  /**
+   * **The rows stay rows when the region is narrow, and jsdom cannot say so.**
+   *
+   * The operator asked for it of every tree in the window: a row names one thing and never
+   * folds, and the region scrolls sideways instead. Down here that is the repo table's naming
+   * cells and the worktree tree under each clone. A used height and a `scrollWidth` are the
+   * only evidence for either, and jsdom gives every box a size of zero — so this is the only
+   * place it can be asked. It also catches a rule that emitted no CSS at all.
+   *
+   * The one cell that holds a SENTENCE — a tree charter could not read, a fetch that did not
+   * happen — still wraps, and the next test is the one that holds it to that.
+   *
+   * **A cell's own height says nothing here**, which cost this spec a red run: a table cell is
+   * as tall as its ROW, so the pipeline cell wrapping — as it is meant to — made every other
+   * cell in that row two lines tall. What is measured is a `Range` over each cell's CONTENT,
+   * whose bounding box is one line box when nothing folded and two when something did,
+   * whatever the row around it is doing.
+   */
+  it("keeps a repo's naming cells and its worktrees on one line, and scrolls sideways", async () => {
+    await onAlpha();
+    await untilSays("repo-svc", "main");
+
+    const measured = await browser.execute(() => {
+      const bar = document.querySelector<HTMLElement>('[data-testid="bottom-bar"]');
+      if (!bar) throw new Error("no bottom region to narrow");
+      // **The region's own box is narrowed.** The bottom region is the full width of the
+      // window — its slot's size is a HEIGHT — so there is no separator that makes it narrow,
+      // and the question is about this scroll container at a width narrower than its content.
+      const was = bar.getAttribute("style") ?? "";
+      bar.style.width = "200px";
+
+      /** One line of this element's own font, plus half a line and four pixels of slack — a
+       *  row that wrapped is a WHOLE line taller than that, and a row that did not can still
+       *  run a few pixels over its own line box because a chip in it carries a border. */
+      const limitOf = (el: Element) => {
+        const css = getComputedStyle(el);
+        const line = Number.parseFloat(css.lineHeight);
+        const one = Number.isFinite(line) ? line : Number.parseFloat(css.fontSize) * 1.5;
+        return one * 1.5 + 4;
+      };
+      const named = (el: Element, what: string) =>
+        `${what} (${(el.textContent ?? "").slice(0, 40)})`;
+
+      /** How tall a cell's CONTENT is, which is not how tall the cell is. */
+      const content = (el: Element, what: string) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        return {
+          what: named(el, what),
+          height: range.getBoundingClientRect().height,
+          limit: limitOf(el),
+        };
+      };
+
+      const rows = [
+        ...[
+          ...bar.querySelectorAll(".repo-row > .repo, .repo-row > .dirt, .repo-row > .worktrees"),
+        ].map((cell) => content(cell, "a naming cell")),
+        // A worktree row is not a table cell, so its own box is the answer for it.
+        ...[...bar.querySelectorAll(".worktree-tree > li")].map((li) => ({
+          what: named(li, "a worktree row"),
+          height: li.getBoundingClientRect().height,
+          limit: limitOf(li) + Number.parseFloat(getComputedStyle(li).paddingTop) * 2,
+        })),
+      ];
+      // And as the engine resolved them: a rule that emitted no CSS at all — the trap
+      // `docs/design-system.md` names — reads `normal` here.
+      const naming = [
+        ...bar.querySelectorAll(".repo-row > .repo, .repo-row > .dirt, .repo-row > .worktrees"),
+      ].map((el) => getComputedStyle(el).whiteSpace);
+
+      const answer = {
+        scrollWidth: bar.scrollWidth,
+        clientWidth: bar.clientWidth,
+        over: 0,
+        rows,
+        naming,
+      };
+      bar.scrollLeft = 10_000;
+      answer.over = bar.scrollLeft;
+      bar.scrollLeft = 0;
+
+      bar.setAttribute("style", was);
+      return answer;
+    });
+
+    expect(measured.rows.length).toBeGreaterThan(3);
+    const wrapped = measured.rows
+      .filter((row) => row.height > row.limit)
+      .map((row) => `${row.what}: ${row.height}px, and one line of it is ${row.limit}px`);
+    expect(wrapped).toEqual([]);
+    expect(measured.naming.length).toBeGreaterThan(2);
+    expect([...new Set(measured.naming)]).toEqual(["nowrap"]);
+    expect(measured.scrollWidth).toBeGreaterThan(measured.clientWidth);
+    expect(measured.over).toBeGreaterThan(0);
+  });
+
+  it("lets the cell that holds a sentence wrap, because a refusal is not a name", async () => {
+    // A pipeline cell with nothing to name says why, in charter's own words and at charter's
+    // own length — `not fetched — <reason>`, or `no pipeline recorded` once a refresher this
+    // very run has written an entry that names none. Both are `.none`, and which of the two
+    // is on screen depends on whether a refresh has landed yet, so this waits for the cell
+    // rather than for either sentence. Held on one line, either would push the region's
+    // horizontal scroll out past every column it has.
+    await onAlpha();
+    const cell = await $('[data-testid="ci-tool"] .none');
+    await cell.waitForExist({ timeout: 30_000 });
+
+    const wraps = await browser.execute(() => {
+      const said = document.querySelector('[data-testid="ci-tool"] .none');
+      return said === null ? null : getComputedStyle(said).whiteSpace;
+    });
+
+    expect(wraps).toBe("normal");
+  });
+
   it("has nothing in it to press, because the bottom is what is true and not what you do", async () => {
     // charter ADR 0038's reading — *"the bottom is where you read what is true and do not
     // touch it"* — as far as a test can hold it.
@@ -170,6 +301,76 @@ describe("the right-hand region", () => {
     await $('[data-testid="panels"]').waitForExist({ timeout: 20_000 });
 
     expect(await $('[data-testid="panel-alerts"]').isExisting()).toBe(false);
+  });
+
+  /**
+   * **A persona row opens**, against the real app and the fixture plane's two real
+   * definitions: `devops` (`vault: devops`, a `delegate-when`, a role) and `steward`
+   * (`vault: none`, and the plane's default).
+   *
+   * The operator: *"personas list in right sidebar is just texts, without click action, we
+   * can on clicking show some info about persona."* What it shows is what the core already
+   * reads off `personas/<name>/persona.md` — nothing here invents a field.
+   */
+  it("opens a persona's own definition when its row is clicked", async () => {
+    await onAlpha();
+    await untilSays("panel-personas", "devops");
+
+    await (await personaRow("devops")).click();
+
+    const card = await $('[data-testid="persona-details-devops"]');
+    await card.waitForExist({ timeout: 20_000 });
+    await browser.waitUntil(async () => (await card.getText()).includes("DevOps Engineer"), {
+      timeout: 20_000,
+      timeoutMsg: "the card never said what the fixture's `devops` declares as its role",
+    });
+    const said = await card.getText();
+    // `delegate-when` is what makes a persona findable, and what a router reads.
+    expect(said).toContain("k8s deploys");
+    expect(said).toContain("personas/devops/persona.md");
+
+    // **The vault, asked of the element that holds it and not of the card's text.** A
+    // mutation that replaced the vault's name with a fixed word left `toContain("devops")`
+    // green, because the card is headed `devops` — the persona is called that too. What the
+    // card says about a vault is a NAME, which is the whole of what charter will ever put on
+    // a panel about one, so the name is what is read back.
+    const vault = await browser.execute(() => {
+      const names = document.querySelectorAll('[data-testid="persona-details-devops"] code');
+      return [...names].map((name) => name.textContent);
+    });
+    expect(vault).toEqual(["devops", "personas/devops/persona.md"]);
+
+    await browser.keys("Escape");
+    await browser.waitUntil(async () => !(await card.isExisting()), {
+      timeout: 20_000,
+      timeoutMsg: "the card did not close on Escape",
+    });
+  });
+
+  it("says a persona holds no credentials where its definition says so", async () => {
+    // The fixture's `steward` declares `vault: none` — deliberately nothing, which is not
+    // the same answer as a definition that names no vault at all.
+    await onAlpha();
+    await untilSays("panel-personas", "steward");
+
+    await (await personaRow("steward")).click();
+
+    const card = await $('[data-testid="persona-details-steward"]');
+    await card.waitForExist({ timeout: 20_000 });
+    await browser.waitUntil(async () => (await card.getText()).includes("no credentials"), {
+      timeout: 20_000,
+      timeoutMsg: "the card never said what `vault: none` means",
+    });
+
+    // **Not modal**: the queue this region exists for is still reachable while a card is up.
+    // A Radix dialog would have marked it `aria-hidden` and this would find nothing.
+    expect(await $('[data-testid="panels"] [aria-label="Needs you"]').isExisting()).toBe(true);
+
+    await browser.keys("Escape");
+    await browser.waitUntil(async () => !(await card.isExisting()), {
+      timeout: 20_000,
+      timeoutMsg: "the card did not close on Escape",
+    });
   });
 
   it("no longer holds the repos or the CI, which went to the bottom bar", async () => {

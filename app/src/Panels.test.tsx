@@ -2,13 +2,21 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import { userEvent } from "@testing-library/user-event";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import { Panels } from "./Panels";
-import type { Panels as PanelsModel } from "./bindings";
+import type { Panels as PanelsModel, PersonaDetails } from "./bindings";
 import type { WorkspaceState } from "./workspaceState";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  clearMocks();
+});
+
+/** The project these answers are for. A persona belongs to a plane, and a window holds
+ *  several: two of them can both have a `steward`. */
+const PLANE = "/home/dev/plane";
 
 const PANELS: PanelsModel = {
   workspace: "alpha",
@@ -45,6 +53,7 @@ function draw(
 ) {
   render(
     <Panels
+      plane={PLANE}
       workspace={"workspace" in on ? on.workspace : "alpha"}
       state={on.state ?? state()}
       queue={on.queue ?? []}
@@ -226,5 +235,183 @@ describe("the needs-you count's colours", () => {
   it("fills the number with needs-you.base under needs-you.text, the measured pair", () => {
     expect(rule(".needs-you-number")).toMatch(/background:\s*var\(--needs-you-base\)/);
     expect(rule(".needs-you-number")).toMatch(/(?:^|[;\s])color:\s*var\(--needs-you-text\)/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// What a persona row opens (the operator: *"personas list in right sidebar is just texts,
+// without click action"*)
+// ---------------------------------------------------------------------------------------
+
+/** A definition the core would have answered with. */
+function definition(on: Partial<PersonaDetails> = {}): PersonaDetails {
+  return {
+    name: "devops",
+    role: "DevOps Engineer",
+    delegate_when: "CI/CD pipelines, k8s deploys",
+    tools: ["kubectl", "glab"],
+    vault: "devops",
+    declares_no_vault: false,
+    lineage: ["devops"],
+    file: "personas/devops/persona.md",
+    ...on,
+  };
+}
+
+/** The core, answering `persona_details` and counting what it was asked. */
+function core(answer: (persona: string) => unknown): { asked: Record<string, unknown>[] } {
+  const asked: Record<string, unknown>[] = [];
+  mockIPC((cmd, args) => {
+    const given = (args ?? {}) as Record<string, unknown>;
+    if (cmd !== "persona_details") return undefined;
+    asked.push(given);
+    return answer(String(given.persona));
+  });
+  return { asked };
+}
+
+/** Opens a persona's row and waits for the card it opens. */
+async function open(persona: string): Promise<HTMLElement> {
+  const user = userEvent.setup();
+  await user.click(
+    within(screen.getByTestId("panel-personas")).getByRole("button", { name: new RegExp(persona) }),
+  );
+  return waitFor(() => screen.getByTestId(`persona-details-${persona}`));
+}
+
+describe("a persona's details", () => {
+  it("shows what the definition says: its role, when to delegate to it, its tools and its vault", async () => {
+    core(() => definition());
+    draw();
+
+    const card = await open("devops");
+
+    expect(card).toHaveTextContent("DevOps Engineer");
+    expect(card).toHaveTextContent("CI/CD pipelines, k8s deploys");
+    expect(card).toHaveTextContent("kubectl, glab");
+    expect(card).toHaveTextContent("devops");
+    expect(card).toHaveTextContent("personas/devops/persona.md");
+  });
+
+  it("asks the core about this plane's persona, and asks again the next time it is opened", async () => {
+    // A definition is a file an operator edits while charter is running — `charter persona
+    // create` is how one arrives — so a card that answered from the first read would show a
+    // role that was corrected an hour ago.
+    const { asked } = core(() => definition());
+    draw();
+
+    await open("devops");
+    await userEvent.setup().keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByTestId("persona-details-devops")).toBeNull());
+    await open("devops");
+
+    expect(asked).toEqual([
+      { plane: PLANE, persona: "devops" },
+      { plane: PLANE, persona: "devops" },
+    ]);
+  });
+
+  it("says a persona holds no credentials only where it says so itself", async () => {
+    // **Three answers and not two.** `vault: none` is a declaration; no `vault:` line at all
+    // is charter-app not having looked — charter's own `vault_of` falls back to the vault
+    // registry, and nothing in Rust reads that yet. Rounding the second down to the first
+    // would have the window claim a persona holds no credentials on nobody's authority.
+    core((persona) =>
+      persona === "steward"
+        ? definition({ name: "steward", vault: null, declares_no_vault: true })
+        : definition({ name: "devops", vault: null, declares_no_vault: false }),
+    );
+    draw();
+
+    expect(await open("steward")).toHaveTextContent("holds no credentials");
+    await userEvent.setup().keyboard("{Escape}");
+
+    const devops = await open("devops");
+    expect(devops).toHaveTextContent("not declared");
+    expect(devops).not.toHaveTextContent("holds no credentials");
+  });
+
+  it("names the vault and nothing that is in it", async () => {
+    // charter refuses a secret by kind and never echoes one, and a panel gets no exception:
+    // the card says WHICH vault a chat as this persona would open, and the word beside it
+    // says that is all it says.
+    core(() => definition({ vault: "devops" }));
+    draw();
+
+    const card = await open("devops");
+
+    expect(card.querySelector("code")?.textContent).toBe("devops");
+    expect(card).toHaveTextContent("what is in it is never shown here");
+  });
+
+  it("draws the chain a persona inherits from, child first, and only when there is one", async () => {
+    core((persona) =>
+      persona === "devops"
+        ? definition({ lineage: ["devops", "base"] })
+        : definition({ name: "steward", lineage: ["steward"] }),
+    );
+    draw();
+
+    expect(await open("devops")).toHaveTextContent("devops → base");
+    await userEvent.setup().keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByTestId("persona-details-devops")).toBeNull());
+
+    expect(await open("steward")).not.toHaveTextContent("Inherits");
+  });
+
+  it("says a definition that declares no delegate-when routes nothing to itself", async () => {
+    // `delegate-when` is what makes a persona findable: it becomes the description whoever
+    // is routing reads. A card that drew nothing there would look like a persona that had
+    // one rather than a persona that needs one.
+    core(() => definition({ delegate_when: null }));
+    draw();
+
+    expect(await open("devops")).toHaveTextContent("nothing declared");
+  });
+
+  it("draws the core's own refusal rather than an empty card", async () => {
+    core(() => {
+      throw new Error("persona 'devops' does not load from personas/devops/persona.md");
+    });
+    draw();
+
+    const card = await open("devops");
+
+    expect(within(card).getByRole("alert")).toHaveTextContent("does not load from");
+  });
+
+  it("says the plane's default is the one a chat started here adopts", async () => {
+    core(() => definition({ name: "steward" }));
+    draw();
+
+    expect(await open("steward")).toHaveTextContent("default");
+  });
+
+  it("is not modal, so the queue this region exists for stays reachable", async () => {
+    // charter ADR 0038: nothing in this region may compete with the needs-you queue. A Radix
+    // DIALOG marks everything outside itself `aria-hidden`, which would take the queue off
+    // the accessibility tree while somebody read a persona's role.
+    core(() => definition());
+    draw({ queue: [3] });
+
+    await open("devops");
+
+    expect(
+      within(screen.getByLabelText("Needs you")).getByRole("button", { name: "ide.3" }),
+    ).toBeInTheDocument();
+  });
+
+  it("closes on Escape and puts the keyboard back on the row", async () => {
+    core(() => definition());
+    draw();
+
+    const row = within(screen.getByTestId("panel-personas")).getByRole("button", {
+      name: /devops/,
+    });
+    await open("devops");
+    await userEvent.setup().keyboard("{Escape}");
+
+    await waitFor(() => expect(screen.queryByTestId("persona-details-devops")).toBeNull());
+    expect(row).toHaveFocus();
   });
 });
