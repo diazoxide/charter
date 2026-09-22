@@ -720,6 +720,14 @@ fn declarable(file: &str) -> Result<(), String> {
     if file.is_empty() {
         return Err("is empty".into());
     }
+    // The manifest is already a part of the digest, taken over the bytes that were parsed rather
+    // than a second read of the same name (charter-app#123, and [`tree`]'s manifest arm). A
+    // manifest that declared ITSELF as a theme would ask for those bytes back as theme text,
+    // which the tree walk does not keep — and the theme would then be dropped without a word,
+    // which looks exactly like a theme that did nothing wrong.
+    if file == MANIFEST {
+        return Err("is the manifest itself, which charter already reads as the manifest".into());
+    }
     if file.contains('\0') {
         return Err("holds a NUL, which ends the string inside the C library".into());
     }

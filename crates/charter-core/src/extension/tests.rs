@@ -268,6 +268,21 @@ fn a_declared_file_that_walks_up_out_of_the_extension_is_refused_by_the_manifest
 }
 
 #[test]
+fn a_manifest_that_declares_itself_is_refused() {
+    // The manifest is already a part of the digest, over the bytes that were parsed. Declaring
+    // it as a theme asks for those bytes back as theme text, which the walk does not keep — so
+    // the theme would be dropped in silence, which reads as a theme that did nothing wrong.
+    let made = Made::new();
+    made.ordinary();
+    made.manifest(&format!(
+        r#"{{"version":1,"id":"x","contributes":{{"themes":[{{"file":"{MANIFEST}"}}]}}}}"#
+    ));
+
+    let why = read_at(&made.at()).expect_err("no extension");
+    assert!(why.contains("is the manifest itself"), "{why}");
+}
+
+#[test]
 fn a_declared_file_that_is_absolute_is_refused() {
     let made = Made::new();
     made.ordinary();
