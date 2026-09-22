@@ -80,9 +80,10 @@ export function useDoctor(plane: PlaneId): DoctorState {
         .then((answer) => {
           if (mine !== newest.current) return;
           if (answer.status === "ok") {
-            // A core that answered nothing at all (a test's mock, an older core) is not a
-            // report, and drawing one out of it would be a verdict made of nothing.
-            if (answer.data) {
+            // Something that is not a report — nothing at all, or a test's catch-all `[]` — is
+            // not drawn: a verdict made out of it would be a verdict made of nothing, and a
+            // missing `rows` would take the whole window down with it.
+            if (Array.isArray(answer.data?.rows)) {
               setReport(answer.data);
               setTrouble(undefined);
             }
@@ -165,8 +166,12 @@ function Rows({ rows }: { rows: readonly DoctorRow[] }) {
           </span>
           <span className="doctor-name">{row.name}</span>
           <span className="doctor-detail">{row.detail}</span>
-          {/* A green row's hint is carried and never drawn, as the table does. */}
-          {row.status !== "ok" && row.hint && <span className="doctor-hint">{row.hint}</span>}
+          {/* A green row's hint is carried and never drawn, as the table does. A deferred
+              row's hint is the same sentence on every one of them, so it is said once, over
+              the list, rather than twenty-four times inside it. */}
+          {row.status !== "ok" && row.checked && row.hint && (
+            <span className="doctor-hint">{row.hint}</span>
+          )}
         </li>
       ))}
     </ul>
@@ -252,6 +257,8 @@ export function Health({ doctor }: { doctor: DoctorState }) {
               {groups.unchecked.length > 0 && (
                 <details className="doctor-unchecked">
                   <summary>Not checked by this build ({groups.unchecked.length})</summary>
+                  {/* The one hint every deferred row carries, once. */}
+                  <p className="doctor-hint">{groups.unchecked[0].hint}</p>
                   <Rows rows={groups.unchecked} />
                 </details>
               )}

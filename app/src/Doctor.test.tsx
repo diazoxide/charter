@@ -127,6 +127,24 @@ describe("the doctor's dialog", () => {
     expect(within(dialog).getByText("schema fix")).toBeInTheDocument();
   });
 
+  it("says the unported rows' shared hint once, not once a row", async () => {
+    // Seen on the real app: twenty-four rows each repeating the same two sentences.
+    const same = { hint: "This charter does not run this check yet." };
+    const rows = [
+      row("vaults", "warn", { ...same, checked: false }),
+      row("mcp", "warn", { ...same, checked: false }),
+      row("plugin", "warn", { ...same, checked: false }),
+    ];
+    render(<Health doctor={state({ report: report(rows) })} />);
+
+    await userEvent.click(button());
+
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getAllByText("This charter does not run this check yet.")).toHaveLength(
+      1,
+    );
+  });
+
   it("shows the PATH the app was answered with, which is what a Finder launch gets wrong", async () => {
     render(<Health doctor={state({ report: report([row("git", "ok")]) })} />);
 
@@ -169,6 +187,18 @@ describe("useDoctor", () => {
     // Every whole-window test in this repo mocks the core with `return null` for a command it
     // does not care about. A verdict drawn out of that null would be a doctor made of nothing.
     mockIPC(() => null);
+
+    const { result } = renderHook(() => useDoctor(PLANE));
+    await waitFor(() => expect(result.current.running).toBe(false));
+
+    expect(result.current.report).toBeUndefined();
+  });
+
+  it("makes no report out of an answer that is not one", async () => {
+    // `App.test.tsx` answers every command it does not care about with `[]`. That reached the
+    // verdict as a report with no rows and took the window down on CI (and not locally —
+    // it lost a race there).
+    mockIPC(() => []);
 
     const { result } = renderHook(() => useDoctor(PLANE));
     await waitFor(() => expect(result.current.running).toBe(false));
