@@ -1,40 +1,181 @@
 name: release
 
-# The build a person installs and double-clicks.
+# The build a person installs, and the two update channels the installed app reads.
 #
 # `ci.yml`'s `app` job proves the app COMPILES on both platforms; it builds `--debug
 # --no-bundle`, so it produces nothing anyone can run. This workflow is the only place that
-# uses the release profile and the only place Tauri's bundler runs. Everything it makes is
-# UNSIGNED — see "M4" below for what has to be added before anyone but the operator installs
-# it, and read the run's job summary for what to type to get past Gatekeeper meanwhile.
+# uses the release profile, the only place Tauri's bundler runs, and the only place anything is
+# signed or published (charter ADR 0042).
 #
-# `workflow_dispatch` is the operator asking for a build of a branch, on demand. A `v*` tag is
-# what M4 cuts a public release from: the same job, with the signing steps filled in.
+# Three ways in, and what each one makes:
+#
+#   a `v*` tag             -> the STABLE channel: a GitHub Release for that tag, `latest.json`
+#                             beside its bundles. Only the operator pushes a `v*` tag.
+#   `ci` green on `main`   -> the DEV channel: the bundles and `dev.json` replace the assets of
+#                             the one prerelease named `dev`.
+#   `workflow_dispatch`    -> a build of any branch, uploaded as run artifacts and published
+#                             NOWHERE. The operator asking for something to try.
+#
+# **Nothing here creates, moves or deletes a tag.** The stable release is created with
+# `--verify-tag`, which refuses unless the tag the operator pushed is already on the remote;
+# the dev release is found by name and only has its assets replaced, and if it does not exist
+# the run stops and prints the one command that creates it. That is the standing rule — the
+# release is prepared unasked and tagged only on the operator's word — kept by construction.
+#
+# **Two signatures, and they do different jobs.**
+#   minisign (TAURI_SIGNING_PRIVATE_KEY) — mandatory, free, and the thing the updater checks
+#     before it installs anything. No key, no publish: the `plan` job refuses first, and
+#     `release-manifest` refuses again over the actual bytes against the key the app ships.
+#   Developer ID (APPLE_CERTIFICATE…) — what macOS checks. Required for a publish; verified on
+#     the built bundle rather than assumed from the secret being set.
+# **Apple notarization is declined** (ADR 0042), so no APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID
+# / APPLE_API_* is passed anywhere, and a first install from a browser meets Gatekeeper. The
+# job summary says what that looks like and what to do about it.
 
 on:
   workflow_dispatch:
   push:
     tags: ["v*"]
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
 
 concurrency:
-  # No `cancel-in-progress`: a cancelled release build leaves nothing to download, and two of
-  # them racing costs runner minutes and nothing else.
-  group: release-${{ github.ref }}
+  # No `cancel-in-progress`: a cancelled publish can leave the dev release holding half of one
+  # build's assets. Two dev builds queue instead, and the later one's assets win.
+  group: release-${{ github.event.workflow_run.head_branch || github.ref }}
 
 permissions:
   contents: read
-  # M4 — creating the GitHub Release a tag publishes, and putting the updater's `latest.json`
-  # beside the bundles, needs `contents: write` here. It is `read` while nothing is published.
 
 env:
   CARGO_TERM_COLOR: always
   # Deliberately NOT `RUSTFLAGS: -D warnings`, which ci.yml sets. Warnings are gated on every
-  # PR; a new warning out of a dependency must not be the thing that stops the operator
-  # getting a build they can run.
+  # PR; a new warning out of a dependency must not be the thing that stops a release.
 
 jobs:
+  plan:
+    name: what this run makes
+    runs-on: ubuntu-24.04
+    # `workflow_run` fires for every `ci` completion, red ones included, and for a `ci` run
+    # started by ANY event whose branch is called `main` — including a pull request from a
+    # fork whose branch happens to be named `main`. Only a green `ci` on a PUSH to THIS
+    # repository's `main` may produce a signed dev build; anything else would sign a
+    # stranger's code with the operator's key.
+    if: >-
+      github.event_name != 'workflow_run' || (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository
+      )
+    outputs:
+      channel: ${{ steps.plan.outputs.channel }}
+      publish: ${{ steps.plan.outputs.publish }}
+      version: ${{ steps.plan.outputs.version }}
+      sha: ${{ steps.plan.outputs.sha }}
+      tag: ${{ steps.plan.outputs.tag }}
+      signed: ${{ steps.plan.outputs.signed }}
+      skip: ${{ steps.plan.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Channel, version, and whether anything is published
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        run: |
+          set -euo pipefail
+          # The one version every crate shares, and the one `tauri.conf.json` carries (a test
+          # in app/src-tauri holds the two together).
+          base=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"$/\1/p' Cargo.toml)
+          [ -n "$base" ] || { echo "::error::no [workspace.package] version in Cargo.toml"; exit 1; }
+          case "$EVENT" in
+            push)
+              tag="$GITHUB_REF_NAME"
+              version="${tag#v}"
+              # The manifest announces this number and the app compares its own against it,
+              # so a tag that is not the version the code says it is would publish a release
+              # that no installed app can place. Bump Cargo.toml, merge, THEN tag.
+              if [ "$version" != "$base" ]; then
+                echo "::error::the tag $tag says $version and Cargo.toml says $base — bump the workspace version, merge it, then tag"
+                exit 1
+              fi
+              channel=stable; publish=true ;;
+            workflow_run)
+              # `main` holds the version that will be released NEXT (bumped right after each
+              # release), so a dev build is a prerelease OF it: newer than every stable
+              # release before it, older than the stable release it becomes. The run number
+              # only ever grows, so each dev build is newer than the last.
+              tag=""; version="$base-dev.$GITHUB_RUN_NUMBER"
+              channel=dev; publish=true ;;
+            *)
+              tag=""; version="$base-dev.$GITHUB_RUN_NUMBER"
+              channel=dev; publish=false ;;
+          esac
+          skip=false
+          # Before the operator has generated the updater key, every merge to `main` would
+          # otherwise start a twenty-minute build that fails red at the end. The automatic
+          # trigger builds NOTHING instead and says why, once per merge, as a warning. This
+          # skips a publish; it does not weaken one — nothing unsigned is built or published.
+          # A `v*` tag is different: it is the operator's deliberate act, and a tag that
+          # quietly did nothing would be worse than a red run, so it still fails below.
+          if [ "$EVENT" = workflow_run ] && [ "$HAS_UPDATER_KEY" != "true" ]; then
+            echo "::warning::no TAURI_SIGNING_PRIVATE_KEY yet, so this green main is not published to the dev channel. docs/updating.md is the setup."
+            skip=true; publish=false
+          fi
+          {
+            echo "channel=$channel"; echo "publish=$publish"; echo "version=$version"
+            echo "sha=$SHA"; echo "tag=$tag"; echo "signed=$HAS_UPDATER_KEY"; echo "skip=$skip"
+          } >> "$GITHUB_OUTPUT"
+          echo "channel=$channel publish=$publish version=$version sha=$SHA updater-key=$HAS_UPDATER_KEY"
+
+      # Everything a publish needs that a human has to provide, checked BEFORE twenty minutes
+      # of building, each failure naming the one thing to do. See docs/updating.md.
+      - name: A publish has everything the operator must provide
+        if: steps.plan.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ steps.plan.outputs.channel }}
+          HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          HAS_APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' && secrets.APPLE_SIGNING_IDENTITY != '' }}
+        run: |
+          set -euo pipefail
+          fail=0
+          if [ "$HAS_UPDATER_KEY" != "true" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set. Without it the bundler signs nothing, in silence, and no app could verify this release. See docs/updating.md, step 1."
+            fail=1
+          fi
+          pubkey=$(jq -r '.plugins.updater.pubkey' app/src-tauri/tauri.conf.json)
+          if [ "$pubkey" = "UNSET-THE-OPERATOR-GENERATES-THIS-SEE-docs-updating.md" ] || [ -z "$pubkey" ]; then
+            echo "::error::tauri.conf.json still carries the placeholder updater public key. An app built from it refuses every update. See docs/updating.md, step 2."
+            fail=1
+          fi
+          if [ "$HAS_APPLE_CERT" != "true" ]; then
+            echo "::error::APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD and APPLE_SIGNING_IDENTITY must all be set: a published macOS build is Developer ID signed (ADR 0042). See docs/updating.md, step 3."
+            fail=1
+          fi
+          if [ "$CHANNEL" = "dev" ]; then
+            # The dev channel's address is a prerelease named `dev`. It is created ONCE, by the
+            # operator, because nothing in CI creates a tag.
+            if ! pre=$(gh release view dev --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq .isPrerelease 2>/dev/null); then
+              echo "::error::there is no release named 'dev', so the dev channel has nowhere to publish. The operator creates it once — see docs/updating.md, step 4."
+              fail=1
+            elif [ "$pre" != "true" ]; then
+              echo "::error::the release named 'dev' is not a prerelease, so GitHub's 'latest' pointer could resolve to it and stable machines would take dev builds. Mark it a prerelease: gh release edit dev --prerelease"
+              fail=1
+            fi
+          fi
+          exit $fail
+
   build:
     name: ${{ matrix.name }}
+    needs: plan
+    if: needs.plan.outputs.skip != 'true'
     strategy:
       # Neither platform's bundle is worth losing because the other one broke.
       fail-fast: false
@@ -42,20 +183,28 @@ jobs:
         include:
           - os: macos-latest
             name: macOS (.app, .dmg)
-            # `app` is the bundle itself and always has to work. `dmg` is a nicety whose
-            # bundler drives Finder through AppleScript on a machine with nobody logged in,
-            # so it is built separately and allowed to fail.
+            # `app` is the bundle itself and always has to work; the updater's `.app.tar.gz`
+            # is made from it. `dmg` is a nicety whose bundler drives Finder through
+            # AppleScript on a machine with nobody logged in, so it is allowed to fail.
             bundles: app
             extra_bundles: dmg
+            extra_required: false
           - os: ubuntu-24.04
             name: Linux (.deb, AppImage)
             # `deb` is plain `ar` + `tar` and is reliable. `appimage` downloads linuxdeploy at
-            # build time, so it is the one that breaks when something upstream moves.
+            # build time, so it is the one that breaks when something upstream moves — but it
+            # is also the only Linux bundle the updater can replace, so a publish needs it.
             bundles: deb
             extra_bundles: appimage
+            extra_required: true
     runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      PUBLISH: ${{ needs.plan.outputs.publish }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
 
       - name: Tauri's Linux build dependencies
         if: runner.os == 'Linux'
@@ -80,22 +229,20 @@ jobs:
           set -euo pipefail
           triple=$(rustc -vV | sed -n 's/^host: //p')
           case "$triple" in
-            aarch64-apple-darwin) slug=macos-arm64 ;;
-            x86_64-apple-darwin) slug=macos-x86_64 ;;
-            x86_64-unknown-linux-gnu) slug=linux-x86_64 ;;
-            aarch64-unknown-linux-gnu) slug=linux-arm64 ;;
-            *) slug=$triple ;;
+            aarch64-apple-darwin) slug=macos-arm64; updater=darwin-aarch64 ;;
+            x86_64-unknown-linux-gnu) slug=linux-x86_64; updater=linux-x86_64-appimage ;;
+            *) echo "::error::$triple has no updater target in charter_core::updates::TARGETS"; exit 1 ;;
           esac
           echo "triple=$triple" >> "$GITHUB_OUTPUT"
           echo "slug=$slug" >> "$GITHUB_OUTPUT"
-          echo "artifact=charter-$slug-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+          echo "updater=$updater" >> "$GITHUB_OUTPUT"
+          echo "artifact=charter-$slug-${VERSION}" >> "$GITHUB_OUTPUT"
 
       # The `charter` binary hooks run, built with the same profile and shipped INSIDE the
       # bundle. The app looks for it beside its own executable and deliberately ignores PATH
       # (`charter_binary()` in app/src-tauri/src/lib.rs): the charter on PATH may be an older
       # install or the Python one, and a hook pointed at either answers a different program's
-      # idea of these events. An app launched from Finder has no shell PATH to read anyway, so
-      # without this every chat in the shipped app would sit at `unknown` forever.
+      # idea of these events. An app launched from Finder has no shell PATH to read anyway.
       - name: The charter binary the app's hooks run
         run: cargo build --release --locked -p charter-cli
 
@@ -105,29 +252,65 @@ jobs:
           mkdir -p app/src-tauri/binaries
           cp target/release/charter "app/src-tauri/binaries/charter-${{ steps.names.outputs.triple }}"
 
-      # `tauri.release.conf.json` adds only `bundle.externalBin`, so what ships is the app
-      # `tauri.conf.json` describes — same identifier, same CSP, same window, same
-      # capabilities. It is a separate file for the same reason `tauri.e2e.conf.json` is: the
-      # sidecar does not exist in a plain checkout, and ci.yml's `app` job has to keep
-      # building without anyone staging one.
+      # `tauri.release.conf.json` adds only `bundle.externalBin`; this run adds the version it
+      # announces. The bundle's version is what the installed app compares a manifest against,
+      # and what `tauri build` writes into each signature's trusted comment — the pairing
+      # `requireSignedVersion` and `release-manifest` both check.
       #
+      # One exception, and it is the ONLY way this workflow ever builds without updater
+      # artifacts: a `workflow_dispatch` build on a repository with no signing key yet. It
+      # publishes nothing, its summary says it is unsigned, and `release-manifest` never sees
+      # it. A publish with no key never gets here — `plan` refused it.
+      - name: This build's config
+        env:
+          SIGNED: ${{ needs.plan.outputs.signed }}
+        run: |
+          set -euo pipefail
+          if [ "$PUBLISH" != "true" ] && [ "$SIGNED" != "true" ]; then
+            echo "::warning::no TAURI_SIGNING_PRIVATE_KEY — this on-demand build makes no updater artifacts and is published nowhere"
+            jq --arg v "$VERSION" '. + {version: $v} | .bundle.createUpdaterArtifacts = false' \
+              app/src-tauri/tauri.release.conf.json > app/src-tauri/tauri.build.conf.json
+          else
+            jq --arg v "$VERSION" '. + {version: $v}' \
+              app/src-tauri/tauri.release.conf.json > app/src-tauri/tauri.build.conf.json
+          fi
+          cat app/src-tauri/tauri.build.conf.json
+
+      # Only the variables that are SET reach the bundler. Tauri reads the Apple variables'
+      # presence as "sign", so an empty APPLE_CERTIFICATE makes it try to import nothing and
+      # fail; exporting only what exists keeps an on-demand build on a repository with no
+      # secrets working, while `plan` has already required all of them for a publish.
+      #
+      # Deliberately absent: APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID, APPLE_API_KEY,
+      # APPLE_API_ISSUER, APPLE_API_KEY_PATH. Those are notarization, which ADR 0042 declines.
+      - name: Signing material
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          set -euo pipefail
+          for name in TAURI_SIGNING_PRIVATE_KEY TAURI_SIGNING_PRIVATE_KEY_PASSWORD \
+                      APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY; do
+            value="${!name}"
+            if [ -n "$value" ]; then
+              # A multi-line value (the Tauri key is one line of base64, the certificate too,
+              # but nothing guarantees it) goes through GITHUB_ENV's heredoc form.
+              delim="EOF_$(openssl rand -hex 8)"
+              { echo "$name<<$delim"; echo "$value"; echo "$delim"; } >> "$GITHUB_ENV"
+              echo "$name: set"
+            else
+              echo "$name: not set"
+            fi
+          done
+
       # No `--debug`, so this is the release profile. No `--features e2e`: that feature puts a
       # WebDriver server inside the app and belongs in no build anyone is given.
       - name: Build the app
         working-directory: app
-        run: npx tauri build --config src-tauri/tauri.release.conf.json --bundles ${{ matrix.bundles }}
-        # M4 — signing and notarization go HERE, as `env:` on this step. Tauri's bundler does
-        # the whole of it when these are set and skips it in silence when they are not, which
-        # is exactly why they are not wired to empty secrets today: a half-wired signing step
-        # produces an unsigned build that everyone downstream reads as signed.
-        #   macOS:   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY;
-        #            for notarization APPLE_ID + APPLE_PASSWORD + APPLE_TEAM_ID, or
-        #            APPLE_API_KEY + APPLE_API_ISSUER + APPLE_API_KEY_PATH.
-        #   updater: TAURI_SIGNING_PRIVATE_KEY (+ _PASSWORD) makes the bundler write the
-        #            `.sig` beside each artifact. It needs `plugins.updater.pubkey` in
-        #            tauri.conf.json and the updater plugin in the app crate first — neither
-        #            exists yet, and the key alone signs nothing.
-        # Until all of that lands, every artifact here is unsigned and every message says so.
+        run: npx tauri build --config src-tauri/tauri.build.conf.json --bundles ${{ matrix.bundles }}
 
       # Both targets, not just the extra one: Tauri DELETES a bundle it had to build only as
       # an intermediate. Asking for `dmg` alone builds `charter.app`, wraps it, then prints
@@ -135,22 +318,38 @@ jobs:
       # this workflow lost the .app it had already built. Naming both keeps both.
       - name: Build the extra bundle
         id: extra
-        continue-on-error: true
+        continue-on-error: ${{ !(matrix.extra_required && needs.plan.outputs.publish == 'true') }}
         working-directory: app
-        run: npx tauri build --config src-tauri/tauri.release.conf.json --bundles ${{ matrix.bundles }},${{ matrix.extra_bundles }}
+        run: npx tauri build --config src-tauri/tauri.build.conf.json --bundles ${{ matrix.bundles }},${{ matrix.extra_bundles }}
 
+      # Fixed names, so the dev release's assets are REPLACED build after build rather than
+      # accumulating one per version, and so a manifest's url never has to guess a bundler's
+      # file-naming scheme.
+      #
       # `.app` is a DIRECTORY, and actions/upload-artifact zips what it is given with a zip
-      # that drops the executable bit. An operator unpacking that gets a bundle macOS refuses
-      # to launch, with no useful error anywhere. `ditto -c -k` writes the archive Apple's own
-      # tools read back, permissions and all, so what is uploaded is already a single file.
+      # that drops the executable bit. `ditto -c -k` writes the archive Apple's own tools read
+      # back, permissions and all.
       - name: Collect what was built (macOS)
         if: runner.os == 'macOS'
         run: |
           set -euo pipefail
           mkdir -p dist
+          slug=${{ steps.names.outputs.slug }}; up=${{ steps.names.outputs.updater }}
           ditto -c -k --sequesterRsrc --keepParent \
-            target/release/bundle/macos/charter.app dist/charter.app.zip
-          cp target/release/bundle/dmg/*.dmg dist/ 2>/dev/null || echo "no .dmg — its bundler failed, see the step above"
+            target/release/bundle/macos/charter.app "dist/charter-$slug.app.zip"
+          for dmg in target/release/bundle/dmg/*.dmg; do
+            [ -e "$dmg" ] && cp "$dmg" "dist/charter-$slug.dmg"
+          done
+          [ -e "dist/charter-$slug.dmg" ] || echo "no .dmg — its bundler failed, see the step above"
+          # The updater's own artifact and the signature over it. The name inside the
+          # signature's trusted comment is the bundler's; minisign does not check it, and the
+          # version beside it is what `release-manifest` does check.
+          if [ -e target/release/bundle/macos/charter.app.tar.gz ]; then
+            cp target/release/bundle/macos/charter.app.tar.gz "dist/charter-$up.app.tar.gz"
+          fi
+          if [ -e target/release/bundle/macos/charter.app.tar.gz.sig ]; then
+            cp target/release/bundle/macos/charter.app.tar.gz.sig "dist/charter-$up.app.tar.gz.sig"
+          fi
           ls -l dist
 
       - name: Collect what was built (Linux)
@@ -158,9 +357,50 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp target/release/bundle/deb/*.deb dist/
-          cp target/release/bundle/appimage/*.AppImage dist/ 2>/dev/null || echo "no AppImage — its bundler failed, see the step above"
+          slug=${{ steps.names.outputs.slug }}; up=${{ steps.names.outputs.updater }}
+          for deb in target/release/bundle/deb/*.deb; do cp "$deb" "dist/charter-$slug.deb"; done
+          # The AppImage is both what a person runs and what the updater replaces: Tauri signs
+          # it directly, so the same file carries the `.sig`.
+          for img in target/release/bundle/appimage/*.AppImage; do
+            [ -e "$img" ] || continue
+            cp "$img" "dist/charter-$up.AppImage"
+            [ -e "$img.sig" ] && cp "$img.sig" "dist/charter-$up.AppImage.sig"
+          done
+          [ -e "dist/charter-$up.AppImage" ] || echo "no AppImage — its bundler failed, see the step above"
           ls -l dist
+
+      # A publish carries the signed updater artifact, or this build is not one. The manifest
+      # step would refuse later anyway; this says which platform, while its log is on screen.
+      - name: The updater artifact and its signature are both here
+        if: needs.plan.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          up=${{ steps.names.outputs.updater }}
+          art=""
+          for f in dist/charter-"$up".*; do [[ $f == *.sig ]] || art="$f"; done
+          [ -n "$art" ] || { echo "::error::no updater artifact for $up in dist/"; exit 1; }
+          [ -s "$art.sig" ] || { echo "::error::$art has no .sig beside it — the bundler signed nothing"; exit 1; }
+          echo "$art and $art.sig"
+
+      # The Developer ID decision, checked on the thing that was built. A certificate secret
+      # that is set but wrong — expired, the wrong identity, an Apple Development cert instead
+      # of Developer ID — produces a bundle that is signed with something else, or ad-hoc, and
+      # nothing downstream notices until an operator's Mac does.
+      - name: The macOS bundle is Developer ID signed, sidecar included
+        if: runner.os == 'macOS' && needs.plan.outputs.publish == 'true'
+        run: |
+          set -euo pipefail
+          bundle=target/release/bundle/macos/charter.app
+          codesign --verify --deep --strict --verbose=2 "$bundle"
+          for path in "$bundle" "$bundle/Contents/MacOS/charter"; do
+            info=$(codesign -dv --verbose=2 "$path" 2>&1)
+            echo "$info" | grep -E '^(Authority|TeamIdentifier|Signature)=' || true
+            echo "$info" | grep -q '^Authority=Developer ID Application:' \
+              || { echo "::error::$path is not signed with a Developer ID Application certificate"; exit 1; }
+          done
+          # Declined, and said so: a notarized build would print a stapled ticket here.
+          echo "notarization: not requested (ADR 0042) — expect 'Unnotarized Developer ID' from spctl:"
+          spctl -a -vv -t exec "$bundle" 2>&1 || true
 
       # Honest evidence for "does this start on a machine with no developer tools". It cannot
       # prove it — every runner here has Xcode — but a binary that links only what ships with
@@ -170,28 +410,16 @@ jobs:
           set -euo pipefail
           if [ "$RUNNER_OS" = "macOS" ]; then
             bundle=target/release/bundle/macos/charter.app
-            # Read the executable's name rather than assuming it: Tauri takes it from the
-            # cargo binary name unless `mainBinaryName` overrides, and the whole sidecar
-            # scheme depends on it NOT being `charter`.
             exe=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$bundle/Contents/Info.plist")
             echo "### $bundle/Contents/MacOS (CFBundleExecutable is '$exe')"
             ls -l "$bundle/Contents/MacOS"
-            echo
-            echo "otool -L of the app:"
-            otool -L "$bundle/Contents/MacOS/$exe"
-            echo
-            echo "otool -L of the charter binary its hooks run:"
-            otool -L "$bundle/Contents/MacOS/charter"
-            echo
-            echo "codesign of the bundle (expect unsigned, or ad-hoc from the linker):"
-            codesign -dv --verbose=2 "$bundle" 2>&1 || true
+            echo; echo "otool -L of the app:"; otool -L "$bundle/Contents/MacOS/$exe"
+            echo; echo "otool -L of the charter binary its hooks run:"; otool -L "$bundle/Contents/MacOS/charter"
+            echo; echo "codesign of the bundle:"; codesign -dv --verbose=2 "$bundle" 2>&1 || true
           else
             echo "### what the .deb ships"
-            # No leading slash: dpkg -c prints paths as `usr/bin/charter`, not `/usr/bin/…`.
             dpkg -c dist/*.deb | grep -E 'usr/bin/|\.desktop' || true
-            echo
-            echo "ldd of the app:"
-            ldd target/release/charter-app || true
+            echo; echo "ldd of the app:"; ldd target/release/charter-app || true
           fi
 
       - name: Upload
@@ -200,118 +428,100 @@ jobs:
           name: ${{ steps.names.outputs.artifact }}
           path: dist/
           if-no-files-found: error
-          # Long enough to stay useful across a couple of months of M2 work.
           retention-days: 90
 
-      - name: What the operator types to run it
+      - name: What a person sees when they install it
         if: always()
         env:
           ARTIFACT: ${{ steps.names.outputs.artifact }}
+          SLUG: ${{ steps.names.outputs.slug }}
+          CHANNEL: ${{ needs.plan.outputs.channel }}
+          SIGNED: ${{ needs.plan.outputs.signed }}
         run: |
           set -euo pipefail
           {
-            echo "## ${{ matrix.name }} — \`$ARTIFACT\`"
+            echo "## ${{ matrix.name }} — charter $VERSION"
             echo
-            echo "Built from \`${GITHUB_REF_NAME}\` at \`${GITHUB_SHA}\`, **release profile, unsigned**."
+            if [ "$PUBLISH" = "true" ]; then
+              echo "Built from \`${{ needs.plan.outputs.sha }}\`, **release profile, published to the \`$CHANNEL\` channel**."
+            else
+              echo "Built from \`${GITHUB_REF_NAME}\` at \`${GITHUB_SHA}\`, release profile, **published nowhere** — download it from this run's **Artifacts** section (\`$ARTIFACT.zip\`)."
+            fi
             echo
-            echo "Download it from the **Artifacts** section at the bottom of this run's page."
-            echo "GitHub hands you \`$ARTIFACT.zip\`; everything below starts from that file in \`~/Downloads\`."
-            echo
-            echo '```sh'
-            echo "cd ~/Downloads"
-            echo "unzip -o $ARTIFACT.zip -d $ARTIFACT"
-            echo "cd $ARTIFACT"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$RUNNER_OS" = "macOS" ]; then
-            dmg=$(cd dist && ls *.dmg 2>/dev/null | head -1 || true)
-            {
-              echo ""
-              echo "# charter.app.zip is a ditto archive; unpack it with ditto, not Finder"
-              echo "ditto -x -k charter.app.zip ."
-              echo ""
-              echo "# This build is not signed and not notarized. macOS flags anything that"
-              echo "# came from the internet as quarantined, and Gatekeeper answers an unsigned"
-              echo "# quarantined app with a dialog that offers no way past it. Stripping the"
-              echo "# flag is what makes it launch:"
-              echo "xattr -dr com.apple.quarantine charter.app"
-              echo ""
-              echo "open charter.app"
-              echo '```'
-              echo ""
-              echo "To keep it: \`mv charter.app /Applications/\` — before the \`xattr\` line, or run \`xattr\` again after."
-            } >> "$GITHUB_STEP_SUMMARY"
-            if [ -n "$dmg" ]; then
+            if [ "$PUBLISH" = "true" ]; then
+              cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ### A first install on macOS meets Gatekeeper, and this is expected
+
+          This build is **signed with a Developer ID and not notarized** (charter ADR 0042). A
+          browser marks everything it downloads as quarantined, and macOS 15 and later answer a
+          quarantined app that Apple has not notarized with a dialog — **"charter" Not Opened**,
+          *Apple could not verify "charter" is free of malware* — offering only *Done* and
+          *Move to Trash*. Nothing is wrong with the download. To open it the first time:
+
+          1. Drag `charter.app` into `/Applications`, open it once, and click **Done**.
+          2. Open **System Settings → Privacy & Security**, scroll to **Security**, and click
+             **Open Anyway** beside the line about charter. Confirm with your password.
+          3. charter opens, and macOS does not ask again.
+
+          Or, in a terminal, before the first launch:
+
+          ```sh
+          xattr -dr com.apple.quarantine /Applications/charter.app
+          ```
+
+          **This happens once.** charter updates itself in place after that, and an update
+          does not meet this dialog: the quarantine flag is set by the browser that downloaded
+          a file, and charter's updater downloads into memory, verifies the minisign signature
+          and unpacks the new bundle itself — nothing it writes is quarantined.
+          EOF
+            else
               {
-                echo ""
-                echo "Or from the disk image (same app, same quarantine flag):"
-                echo ""
                 echo '```sh'
-                echo "hdiutil attach $dmg"
-                echo "cp -R /Volumes/charter/charter.app /Applications/"
-                echo "hdiutil detach /Volumes/charter"
-                echo "xattr -dr com.apple.quarantine /Applications/charter.app"
-                echo "open /Applications/charter.app"
+                echo "cd ~/Downloads && unzip -o $ARTIFACT.zip -d $ARTIFACT && cd $ARTIFACT"
+                echo "ditto -x -k charter-$SLUG.app.zip ."
+                echo "# not published, so not necessarily signed: strip the flag the browser set"
+                echo "xattr -dr com.apple.quarantine charter.app"
+                echo "open charter.app"
                 echo '```'
               } >> "$GITHUB_STEP_SUMMARY"
-            else
-              echo "" >> "$GITHUB_STEP_SUMMARY"
-              echo "_No \`.dmg\` in this run — its bundler failed; the \`.app\` above is unaffected._" >> "$GITHUB_STEP_SUMMARY"
             fi
           else
-            deb=$(cd dist && ls *.deb 2>/dev/null | head -1 || true)
-            img=$(cd dist && ls *.AppImage 2>/dev/null | head -1 || true)
-            # Read the app's command from the package rather than assuming it: Tauri takes it
-            # from the cargo binary name, and `charter` is the sidecar, not the app.
-            appbin=$(dpkg -c "dist/$deb" 2>/dev/null | grep -o '[[:space:]]usr/bin/[^/][^/]*$' | sed 's|.*/||' | grep -v '^charter$' | head -1 || true)
-            {
-              echo ""
-              echo "# the .deb also puts \`charter\`, the binary hooks run, on PATH"
-              echo "sudo apt install ./$deb"
-              echo "${appbin:-charter-app}"
-            } >> "$GITHUB_STEP_SUMMARY"
-            if [ -n "$img" ]; then
-              {
-                echo ""
-                echo "# or install nothing (the zip drops the executable bit, hence chmod)"
-                echo "chmod +x $img"
-                echo "./$img"
-              } >> "$GITHUB_STEP_SUMMARY"
-            fi
-            {
-              echo '```'
-              echo ""
-              echo "Needs \`libwebkit2gtk-4.1-0\`: the \`.deb\` declares it, the AppImage carries it."
-            } >> "$GITHUB_STEP_SUMMARY"
+            cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          \`\`\`sh
+          # the AppImage: runs from anywhere, and is what charter's updater replaces
+          chmod +x charter-linux-x86_64-appimage.AppImage && ./charter-linux-x86_64-appimage.AppImage
+
+          # or the .deb, which also puts \`charter\`, the binary hooks run, on PATH
+          sudo apt install ./charter-$SLUG.deb
+          \`\`\`
+
+          **A \`.deb\` install is not updated by charter** — \`dpkg\` owns it, and the manifest
+          deliberately has no entry a \`.deb\` install would match. Install the next \`.deb\`
+          from the release page, or use the AppImage to get updates.
+          Needs \`libwebkit2gtk-4.1-0\`: the \`.deb\` declares it, the AppImage carries it.
+          EOF
           fi
-          {
-            echo ""
-            echo "**Unsigned.** Nothing here is code-signed, notarized or updater-signed — M4 adds that."
-            echo "Do not hand these files to anyone who would take them for a release."
-          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$SIGNED" != "true" ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "**No updater key on this repository yet**, so nothing here is updater-signed and no app could update to it. docs/updating.md says what the operator sets up." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       # Last, so a build that is wrong is still downloadable and still says it is wrong. The
       # app resolves the binary its hooks run as `<the directory of my own exe>/charter`. A
-      # missing sidecar leaves every chat in this build at `unknown` with no hook ever firing;
-      # a sidecar that IS the app's own executable makes every hook launch a second GUI. Both
-      # are invisible until someone runs it, so they are checked here.
+      # missing sidecar leaves every chat at `unknown`; a sidecar that IS the app's own
+      # executable makes every hook launch a second GUI. Both are invisible until run.
       - name: The charter binary really is beside the app, and is not the app
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = "Linux" ]; then
-            # Listed ONCE into a variable, and every check reads it as a here-string. Piping
-            # `dpkg -c` into `grep -q` makes grep exit at the first match and close the pipe,
-            # dpkg-deb dies of SIGPIPE, and `pipefail` then reports the whole pipeline as
-            # failed — so the check fails loudly on a .deb that is perfectly correct. It did
-            # exactly that in run 35511509471.
+            # Listed ONCE into a variable: piping `dpkg -c` into `grep -q` SIGPIPEs dpkg-deb
+            # and `pipefail` then fails a perfectly correct .deb (run 35511509471).
             listing=$(dpkg -c dist/*.deb)
-            echo "the .deb ships:"
-            # `dpkg -c` prints `usr/bin/charter`, with no leading slash and no `./`.
             grep '[[:space:]]usr/bin/' <<<"$listing" || true
             grep -q '[[:space:]]usr/bin/charter$' <<<"$listing" \
               || { echo "FAIL: no usr/bin/charter in the .deb — no hook would ever fire"; exit 1; }
-            # Two of them: the app and the sidecar. One means the names collided and the
-            # bundler wrote one over the other. `[^/][^/]*$` rather than `[^/]*$` so the
-            # `usr/bin/` DIRECTORY entry, which ends in a slash, is not counted as a binary.
             n=$(grep -c '[[:space:]]usr/bin/[^/][^/]*$' <<<"$listing" || true)
             [ "$n" -ge 2 ] || { echo "FAIL: only $n binary in usr/bin — the sidecar IS the app"; exit 1; }
             exit 0
@@ -324,3 +534,92 @@ jobs:
           [ "$(shasum -a 256 "$dir/charter" | cut -d' ' -f1)" != "$(shasum -a 256 "$exe" | cut -d' ' -f1)" ] \
             || { echo "FAIL: the sidecar IS the app — every hook would launch the GUI"; exit 1; }
           "$dir/charter" --version
+
+  publish:
+    name: publish to the ${{ needs.plan.outputs.channel }} channel
+    needs: [plan, build]
+    if: needs.plan.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    # The only job that can write to the repository, and what it writes is release assets.
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      CHANNEL: ${{ needs.plan.outputs.channel }}
+      VERSION: ${{ needs.plan.outputs.version }}
+      TAG: ${{ needs.plan.outputs.tag }}
+      SHA: ${{ needs.plan.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/download-artifact@v7
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Every guard is in `crates/release-manifest`, with tests: a signature present, made by
+      # the key tauri.conf.json carries, over these exact bytes, for this exact version, for
+      # every platform charter publishes and no other. It refuses rather than write a manifest
+      # any app would reject.
+      - name: The manifest, and every check it has to pass first
+        run: |
+          set -euo pipefail
+          ls -l dist
+          if [ "$CHANNEL" = stable ]; then
+            base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+            notes="charter $VERSION. What it brought: https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
+          else
+            base="https://github.com/$GITHUB_REPOSITORY/releases/download/dev"
+            notes="charter $VERSION, a dev build of $SHA."
+          fi
+          cargo run --locked --release -p release-manifest -- \
+            --channel "$CHANNEL" --version "$VERSION" \
+            --pub-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --notes "$notes" \
+            --dir dist --base-url "$base" \
+            --entry darwin-aarch64=charter-darwin-aarch64.app.tar.gz \
+            --entry linux-x86_64-appimage=charter-linux-x86_64-appimage.AppImage \
+            --tauri-config app/src-tauri/tauri.conf.json \
+            --out .
+          cat ./*.json
+
+      # **Assets first, manifest last.** A machine that reads the manifest between the two
+      # would otherwise be pointed at a file that is not there yet, or at the previous build's
+      # file under the new build's signature — which fails verification and installs nothing,
+      # but is still an error an operator sees. Ordered, the window is gone for a new release
+      # and a few seconds wide for the dev one.
+      - name: Stable — the release for the operator's tag
+        if: needs.plan.outputs.channel == 'stable'
+        run: |
+          set -euo pipefail
+          assets=()
+          for f in dist/*; do [[ $f == *.json ]] || assets+=("$f"); done
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${assets[@]}"
+          else
+            # `--verify-tag`: refuse unless the tag already exists on the remote. This command
+            # can never create a tag, which is the operator's rule enforced by the tool.
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+              --title "charter $VERSION" --notes "charter $VERSION" "${assets[@]}"
+          fi
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber latest.json
+
+      - name: Dev — replace the assets of the one `dev` prerelease
+        if: needs.plan.outputs.channel == 'dev'
+        run: |
+          set -euo pipefail
+          assets=()
+          for f in dist/*; do [[ $f == *.json ]] || assets+=("$f"); done
+          # `upload --clobber` and `edit --notes` only: neither touches the tag the release
+          # hangs on, so `dev` stays wherever the operator created it and only the assets move.
+          gh release upload dev --repo "$GITHUB_REPOSITORY" --clobber "${assets[@]}"
+          gh release upload dev --repo "$GITHUB_REPOSITORY" --clobber dev.json
+          gh release edit dev --repo "$GITHUB_REPOSITORY" \
+            --notes "The rolling dev channel. Now: charter $VERSION, built from $SHA. Not a release — see the stable releases for those."
+          {
+            echo "## dev channel now serves charter $VERSION"
+            echo "Built from \`$SHA\`. Machines on the dev channel find it at their next check."
+          } >> "$GITHUB_STEP_SUMMARY"

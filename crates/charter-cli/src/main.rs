@@ -268,6 +268,9 @@ enum Command {
         /// Also move this plane's pin. Refused: the pin names a published charter-cp release.
         #[arg(long)]
         bump: bool,
+        /// Put the app on this machine on a release channel: `stable` (the default) or `dev`.
+        #[arg(long, value_name = "stable|dev")]
+        channel: Option<String>,
     },
 
     /// Which charter this is, what this control plane pins, and whether they agree.
@@ -2002,7 +2005,14 @@ fn main() -> ExitCode {
             };
             return emit(&news_report(news, &probes));
         }
-        Command::Update { to, bump } => {
+        Command::Update { to, bump, channel } => {
+            let config_root = charter_core::machine::config_root();
+            if let Some(word) = channel {
+                return emit(&charter_core::adopt::set_channel_report(
+                    config_root.as_deref(),
+                    word,
+                ));
+            }
             let probes = Probes {
                 tree: command_tree(),
             };
@@ -2013,7 +2023,12 @@ fn main() -> ExitCode {
                 bump: *bump,
             };
             let root = place.is_plane.then_some(place.root.as_path());
-            return emit(&charter_core::adopt::update_report(root, &args, &probes));
+            return emit(&charter_core::adopt::update_report_with_channel(
+                root,
+                config_root.as_deref(),
+                &args,
+                &probes,
+            ));
         }
         _ => {}
     }

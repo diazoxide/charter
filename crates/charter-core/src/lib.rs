@@ -62,6 +62,7 @@ pub mod start;
 pub mod state;
 pub mod trace;
 pub mod tui;
+pub mod updates;
 pub mod usage;
 pub mod version;
 pub mod wiring;
