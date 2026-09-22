@@ -229,6 +229,18 @@ export const commands = {
 	 */
 	workspaceRepos: (plane: PlaneId, workspace: string) => typedError<RepoStates, string>(__TAURI_INVOKE("workspace_repos", { plane, workspace })),
 	/**
+	 *  What is wrong in every project this process holds, project by project, for the alerts
+	 *  drawer.
+	 * 
+	 *  **Every project, never one**: an alert is about a plane rather than the workspace on
+	 *  screen, and the drawer exists because alerts cross projects — so the command takes no plane,
+	 *  and cannot be wired to the one in front by mistake.
+	 * 
+	 *  On a blocking thread, because the plane-root alert asks git for a status per project and a
+	 *  window that waited on eight of them would miss its frame.
+	 */
+	alertsEverywhere: () => typedError<PlaneAlerts[], string>(__TAURI_INVOKE("alerts_everywhere")),
+	/**
 	 *  What the picker draws: every profile this machine has, every one charter will not use,
 	 *  and the plane's personas.
 	 * 
@@ -366,6 +378,24 @@ export const commands = {
 };
 
 /* Types */
+/**  One alert, as the drawer draws it. */
+export type AlertRow = {
+	/**
+	 *  `warn` or `bad` — charter's two accents above plain text. `bad` is the one that loses
+	 *  work if it is left: a nested plane, a memory commit that reached no remote.
+	 */
+	severity: string,
+	/**
+	 *  What it is about, in charter's word for it: `charter`, `front door`, `reinit`,
+	 *  `nested plane`, `plane root`.
+	 */
+	subject: string,
+	/**  What is wrong. */
+	detail: string,
+	/**  The command, or the step, that fixes it. */
+	remedy: string,
+};
+
 /**
  *  The trust ask: what this plane will put in force, in the words the operator reads.
  * 
@@ -744,6 +774,19 @@ export type Pins = {
 	 *  own hazard for a trust entry keyed on a path, one scope down.
 	 */
 	missing: string[],
+};
+
+/**  One open project's alerts. */
+export type PlaneAlerts = {
+	plane: PlaneId,
+	alerts: AlertRow[],
+	/**
+	 *  Why charter stopped looking before the last alert, or null when it looked at every one.
+	 *  **The alerts above stand, and their number is not this project's number of alerts** —
+	 *  a count drawn from a reading that stopped would be smaller than the truth with nothing
+	 *  on it saying so.
+	 */
+	stopped: string | null,
 };
 
 /**

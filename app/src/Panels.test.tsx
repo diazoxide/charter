@@ -92,26 +92,17 @@ describe("the right-hand region", () => {
   });
 
   // ---------------------------------------------------------------------------------------
-  // Alerts, which have a region and nothing to draw
+  // Alerts, which are the window's now
   // ---------------------------------------------------------------------------------------
 
-  it("says the alert row is not ported rather than showing an empty alert area", () => {
-    // charter ADR 0038 assigns alerts here and there is no source: `_alerts` lives in
-    // `charter/statusline.py` and nothing ports it. An empty area under the heading would
-    // claim charter had looked — the same lie `footer.rs` refuses to tell.
-    draw();
-
-    const alerts = screen.getByTestId("panel-alerts");
-    expect(alerts).toHaveTextContent("Not drawn by this build");
-    expect(alerts).not.toHaveTextContent("No alerts");
-  });
-
-  it("invents no alert state even when everything else has been read", () => {
+  it("holds no alerts section, because alerts cross projects and this region is one project's", () => {
+    // They moved to the window's drawer, opened from the status line (`AlertsDrawer.tsx`). A
+    // second, per-project copy here would be a count of one plane's alerts drawn beside a
+    // button counting all of them — two numbers for one question.
     draw({ state: state() });
 
-    expect(screen.getByTestId("panel-alerts")).toHaveTextContent(
-      /cannot tell you whether anything is alerting/,
-    );
+    expect(screen.queryByTestId("panel-alerts")).toBeNull();
+    expect(screen.getByTestId("panels")).not.toHaveTextContent(/alert/i);
   });
 
   // ---------------------------------------------------------------------------------------

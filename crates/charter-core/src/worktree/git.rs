@@ -288,6 +288,40 @@ pub const CREDENTIAL_ENV: [&str; 23] = [
     "SSL_CERT_DIR",
 ];
 
+/// The variables that say WHERE git's configuration is — passed through to [`run_as_session`]
+/// only.
+///
+/// A guard that asks git "what would this command do" has to ask the git the COMMAND will run,
+/// and that git reads its global and system config through these. The one that decides a verdict
+/// is an alias: `co = checkout` in `$XDG_CONFIG_HOME/git/config`, or in the file
+/// `GIT_CONFIG_GLOBAL` names, or in `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>`
+/// — and a guard whose git cannot see the alias reads `git co feature` as a subcommand it has
+/// never heard of and stands aside while the plane root's branch moves. Python's `_git_in`
+/// inherits its whole environment, so it sees all of them; the cleared environment every other
+/// call here gets would see none.
+///
+/// **What an attacker who can set them gains is nothing `HOME` does not already give.** Each one
+/// only relocates a config FILE, or supplies config entries directly, and `HOME` — which every
+/// call keeps, because the global config and every credential helper live under it — relocates
+/// the global config already. The keys that run a program on the verbs a guard uses are still
+/// turned off on the command line by [`NO_PROGRAMS`], and git documents that `-c` overrides the
+/// environment's entries as well as every file's. `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`
+/// and the rest of the REPOSITORY-locating family stay out, as Python's `util.run` keeps them
+/// out: they would answer for a different repository than the `-C` names.
+pub const CONFIG_LOCATION_ENV: [&str; 6] = [
+    "XDG_CONFIG_HOME",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_CONFIG_NOSYSTEM",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+];
+
+/// The most `GIT_CONFIG_KEY_<n>`/`GIT_CONFIG_VALUE_<n>` pairs passed through. git reads as many as
+/// `GIT_CONFIG_COUNT` says; past this bound the count itself is withheld rather than truncated,
+/// so git is never told to read a pair that was not passed (it refuses a missing one outright).
+const MAX_CONFIG_PAIRS: usize = 64;
+
 /// What one spawn adds to the fixed hardening.
 #[derive(Default)]
 struct Extra {
@@ -295,6 +329,52 @@ struct Extra {
     config: Vec<String>,
     /// Whether [`CREDENTIAL_ENV`] reaches the child.
     credentials: bool,
+    /// Variables passed through by name, with their values as this process holds them.
+    pass: Vec<(String, std::ffi::OsString)>,
+}
+
+/// The [`CONFIG_LOCATION_ENV`] variables `lookup` holds, with the numbered pairs
+/// `GIT_CONFIG_COUNT` names — or without the count and its pairs when it is not a number up to
+/// [`MAX_CONFIG_PAIRS`], or a pair it names is missing.
+fn config_location_env(
+    lookup: impl Fn(&str) -> Option<std::ffi::OsString>,
+) -> Vec<(String, std::ffi::OsString)> {
+    let mut out = Vec::new();
+    for name in CONFIG_LOCATION_ENV {
+        let Some(value) = lookup(name) else { continue };
+        if name != "GIT_CONFIG_COUNT" {
+            out.push((name.to_string(), value));
+            continue;
+        }
+        let Some(count) = value.to_str().and_then(|v| v.trim().parse::<usize>().ok()) else {
+            continue;
+        };
+        if count > MAX_CONFIG_PAIRS {
+            continue;
+        }
+        let mut pairs = Vec::with_capacity(count * 2);
+        for n in 0..count {
+            let (key, val) = (
+                format!("GIT_CONFIG_KEY_{n}"),
+                format!("GIT_CONFIG_VALUE_{n}"),
+            );
+            match (lookup(&key), lookup(&val)) {
+                (Some(k), Some(v)) => {
+                    pairs.push((key, k));
+                    pairs.push((val, v));
+                }
+                _ => {
+                    pairs.clear();
+                    break;
+                }
+            }
+        }
+        if pairs.len() == count * 2 {
+            out.push((name.to_string(), value));
+            out.extend(pairs);
+        }
+    }
+    out
 }
 
 fn spawn(dir: &Path, args: &[&str]) -> Result<Child, GitUnavailable> {
@@ -321,6 +401,9 @@ fn spawn_with(dir: &Path, args: &[&str], extra: &Extra) -> Result<Child, GitUnav
                 cmd.env(name, value);
             }
         }
+    }
+    for (name, value) in &extra.pass {
+        cmd.env(name, value);
     }
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -350,6 +433,36 @@ pub fn run(dir: &Path, args: &[&str], timeout: Duration) -> Result<Run, GitUnava
     Ok(wait(spawn(dir, args)?, timeout)?)
 }
 
+/// What one git call answered, as the BYTES it wrote. `code` is `None` when the deadline passed.
+///
+/// For a caller that must tell "git wrote something that is not UTF-8" from "git wrote U+FFFD",
+/// which [`Run`]'s lossy strings cannot: Python decodes a child's output strictly and RAISES on
+/// the first, so a port that decoded lossily would answer where its oracle had refused to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RawRun {
+    pub code: Option<i32>,
+    pub out: Vec<u8>,
+    pub err: Vec<u8>,
+}
+
+/// Run `git -C <dir> <args>` with a deadline, as the SESSION's git would read its config.
+///
+/// The same hardening as [`run`] — a constructed environment, no hooks, no fsmonitor — plus
+/// [`CONFIG_LOCATION_ENV`], so an alias or a setting the operator keeps in a relocated global
+/// config is one this call sees too. For the plane-root guards, which ask git what a command the
+/// session is about to run will do; nothing that ACTS goes through here.
+pub fn run_as_session(
+    dir: &Path,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<RawRun, GitUnavailable> {
+    let extra = Extra {
+        pass: config_location_env(|name| std::env::var_os(name)),
+        ..Extra::default()
+    };
+    Ok(wait_raw(spawn_with(dir, args, &extra)?, timeout)?)
+}
+
 /// Run `git -C <dir> <args>` across a network, under the one-credential rule.
 ///
 /// `helper` is the credential helper the forge's own CLI provides — `!'/abs/gh' auth
@@ -367,6 +480,7 @@ pub fn run_network(dir: &Path, helper: Option<&str>, args: &[&str]) -> Result<Ru
     let extra = Extra {
         config,
         credentials: true,
+        ..Extra::default()
     };
     Ok(wait(spawn_with(dir, args, &extra)?, NETWORK)?)
 }
@@ -375,7 +489,17 @@ pub fn run_network(dir: &Path, helper: Option<&str>, args: &[&str]) -> Result<Ru
 ///
 /// Shared with the forge CLI runner (`crate::forge`), which has the same two hazards: an
 /// undrained pipe that deadlocks the wait, and a child that never answers.
-pub(crate) fn wait(mut child: Child, timeout: Duration) -> std::io::Result<Run> {
+pub(crate) fn wait(child: Child, timeout: Duration) -> std::io::Result<Run> {
+    let raw = wait_raw(child, timeout)?;
+    Ok(Run {
+        code: raw.code,
+        out: String::from_utf8_lossy(&raw.out).into_owned(),
+        err: String::from_utf8_lossy(&raw.err).into_owned(),
+    })
+}
+
+/// [`wait`], keeping the bytes.
+fn wait_raw(mut child: Child, timeout: Duration) -> std::io::Result<RawRun> {
     let mut stdout = child.stdout.take().expect("stdout is piped");
     let mut stderr = child.stderr.take().expect("stderr is piped");
     let (out_tx, out_rx) = std::sync::mpsc::channel();
@@ -417,16 +541,75 @@ pub(crate) fn wait(mut child: Child, timeout: Duration) -> std::io::Result<Run> 
     };
     let out = collect(out_rx);
     let err = collect(err_rx);
-    Ok(Run {
-        code,
-        out: String::from_utf8_lossy(&out).into_owned(),
-        err: String::from_utf8_lossy(&err).into_owned(),
-    })
+    Ok(RawRun { code, out, err })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn lookup_in<'a>(
+        vars: &'a [(&'a str, &'a str)],
+    ) -> impl Fn(&str) -> Option<std::ffi::OsString> + 'a {
+        move |name| {
+            vars.iter()
+                .find(|(k, _)| *k == name)
+                .map(|(_, v)| std::ffi::OsString::from(*v))
+        }
+    }
+
+    #[test]
+    fn a_session_git_sees_the_config_the_session_relocated_and_nothing_else() {
+        let vars = [
+            ("XDG_CONFIG_HOME", "/x"),
+            ("GIT_CONFIG_GLOBAL", "/g"),
+            ("GIT_DIR", "/elsewhere/.git"),
+            ("GIT_EXEC_PATH", "/evil"),
+            ("GIT_CONFIG_COUNT", "1"),
+            ("GIT_CONFIG_KEY_0", "alias.co"),
+            ("GIT_CONFIG_VALUE_0", "checkout"),
+        ];
+        let got: Vec<String> = config_location_env(lookup_in(&vars))
+            .into_iter()
+            .map(|(k, v)| format!("{k}={}", v.to_string_lossy()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                "XDG_CONFIG_HOME=/x",
+                "GIT_CONFIG_GLOBAL=/g",
+                "GIT_CONFIG_COUNT=1",
+                "GIT_CONFIG_KEY_0=alias.co",
+                "GIT_CONFIG_VALUE_0=checkout",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_config_count_naming_a_pair_that_is_not_there_is_withheld_whole() {
+        let vars = [
+            ("GIT_CONFIG_COUNT", "2"),
+            ("GIT_CONFIG_KEY_0", "a.b"),
+            ("GIT_CONFIG_VALUE_0", "c"),
+        ];
+        assert!(config_location_env(lookup_in(&vars)).is_empty());
+        let vars = [("GIT_CONFIG_COUNT", "65")];
+        assert!(config_location_env(lookup_in(&vars)).is_empty());
+        let vars = [("GIT_CONFIG_COUNT", "x")];
+        assert!(config_location_env(lookup_in(&vars)).is_empty());
+    }
+
+    #[test]
+    fn a_session_git_keeps_bytes_that_are_not_utf8() {
+        let dir = repo();
+        let config = dir.path().join(".git").join("config");
+        let mut text = std::fs::read(&config).unwrap();
+        text.extend_from_slice(b"[alias]\n\tco = checkout \xff\n");
+        std::fs::write(&config, text).unwrap();
+        let raw = run_as_session(dir.path(), &["config", "--get", "alias.co"], READ).unwrap();
+        assert_eq!(raw.code, Some(0));
+        assert_eq!(raw.out, b"checkout \xff\n");
+    }
 
     fn repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
