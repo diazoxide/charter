@@ -209,11 +209,20 @@ describe("the right-hand region", () => {
       timeoutMsg: "the card never said what the fixture's `devops` declares as its role",
     });
     const said = await card.getText();
-    // `delegate-when` is what makes a persona findable, and the vault is named — the NAME,
-    // which is the whole of what charter will ever say about a vault on a panel.
+    // `delegate-when` is what makes a persona findable, and what a router reads.
     expect(said).toContain("k8s deploys");
-    expect(said).toContain("devops");
     expect(said).toContain("personas/devops/persona.md");
+
+    // **The vault, asked of the element that holds it and not of the card's text.** A
+    // mutation that replaced the vault's name with a fixed word left `toContain("devops")`
+    // green, because the card is headed `devops` — the persona is called that too. What the
+    // card says about a vault is a NAME, which is the whole of what charter will ever put on
+    // a panel about one, so the name is what is read back.
+    const vault = await browser.execute(() => {
+      const names = document.querySelectorAll('[data-testid="persona-details-devops"] code');
+      return [...names].map((name) => name.textContent);
+    });
+    expect(vault).toEqual(["devops", "personas/devops/persona.md"]);
 
     await browser.keys("Escape");
     await browser.waitUntil(async () => !(await card.isExisting()), {
