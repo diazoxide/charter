@@ -244,6 +244,39 @@ export const commands = {
 	 */
 	workspacePanels: (plane: PlaneId, workspace: string) => typedError<Panels, string>(__TAURI_INVOKE("workspace_panels", { plane, workspace })),
 	/**
+	 *  Make a workspace: `charter workspace create <name>`, with the vision when one was typed.
+	 * 
+	 *  **The name is checked by the core and by nothing in the window.** `wscmd::create` runs
+	 *  `wscmd::ensure`, which is where `contain::workspace_name_ok` is, so the app refuses exactly
+	 *  the names a terminal refuses and says the same sentence about them. A second alphabet in
+	 *  the dialog would be a second answer to what a workspace may be called, and the two would
+	 *  drift the first time either moved.
+	 * 
+	 *  LOCAL, never LIVE, and it selects nothing: `--live` commits a workspace's manifest and
+	 *  memory into the plane's own git, and `--use` writes a session lock that belongs to a
+	 *  terminal. Neither is a default the window may take on the operator's behalf; both are
+	 *  `charter workspace live` and `charter workspace use`, which still exist.
+	 */
+	workspaceCreate: (plane: PlaneId, name: string, vision: string | null) => typedError<string[], string>(__TAURI_INVOKE("workspace_create", { plane, name, vision })),
+	/**
+	 *  What deleting this workspace would discard, for the dialog to show **before** anything is
+	 *  pressed.
+	 * 
+	 *  The core's own guard, read for drawing. It decides nothing: [`workspace_remove`] asks again,
+	 *  inside `wscmd::remove`, against the disk as it is at the moment of the delete. A window that
+	 *  treated this answer as the decision would be deciding on a reading that is already old — and
+	 *  worse, one taken while the operator read a dialog.
+	 */
+	workspaceAtRisk: (plane: PlaneId, workspace: string) => typedError<AtRisk[], string>(__TAURI_INVOKE("workspace_at_risk", { plane, workspace })),
+	/**
+	 *  Delete a workspace and its clones: `charter workspace remove <name> [--force]`.
+	 * 
+	 *  **This is the one delete, and the guard is inside it.** See this module's header. `force` is
+	 *  the operator saying to discard work the core found — it is never passed on their behalf, and
+	 *  the window asks for it only after showing them the refusal the core gave.
+	 */
+	workspaceRemove: (plane: PlaneId, workspace: string, force: boolean) => typedError<string[], string>(__TAURI_INVOKE("workspace_remove", { plane, workspace, force })),
+	/**
 	 *  What git says about each of the focused workspace's clones, and what the forge cache
 	 *  last recorded for the branch each is on.
 	 * 
@@ -303,39 +336,6 @@ export const commands = {
 	 *  environment its harness was started with, and no later click can change it.
 	 */
 	startChat: (plane: PlaneId, profile: string, persona: string | null, cwd: string | null, name: string, showFooter: boolean, columns: number, rows: number) => typedError<Started, string>(__TAURI_INVOKE("start_chat", { plane, profile, persona, cwd, name, showFooter, columns, rows })),
-	/**
-	 *  Make a workspace: `charter workspace create <name>`, with the vision when one was typed.
-	 * 
-	 *  **The name is checked by the core and by nothing in the window.** `wscmd::create` runs
-	 *  `wscmd::ensure`, which is where `contain::workspace_name_ok` is, so the app refuses exactly
-	 *  the names a terminal refuses and says the same sentence about them. A second alphabet in
-	 *  the dialog would be a second answer to what a workspace may be called, and the two would
-	 *  drift the first time either moved.
-	 * 
-	 *  LOCAL, never LIVE, and it selects nothing: `--live` commits a workspace's manifest and
-	 *  memory into the plane's own git, and `--use` writes a session lock that belongs to a
-	 *  terminal. Neither is a default the window may take on the operator's behalf; both are
-	 *  `charter workspace live` and `charter workspace use`, which still exist.
-	 */
-	workspaceCreate: (plane: PlaneId, name: string, vision: string | null) => typedError<string[], string>(__TAURI_INVOKE("workspace_create", { plane, name, vision })),
-	/**
-	 *  What deleting this workspace would discard, for the dialog to show **before** anything is
-	 *  pressed.
-	 * 
-	 *  The core's own guard, read for drawing. It decides nothing: [`workspace_remove`] asks again,
-	 *  inside `wscmd::remove`, against the disk as it is at the moment of the delete. A window that
-	 *  treated this answer as the decision would be deciding on a reading that is already old — and
-	 *  worse, one taken while the operator read a dialog.
-	 */
-	workspaceAtRisk: (plane: PlaneId, workspace: string) => typedError<AtRisk[], string>(__TAURI_INVOKE("workspace_at_risk", { plane, workspace })),
-	/**
-	 *  Delete a workspace and its clones: `charter workspace remove <name> [--force]`.
-	 * 
-	 *  **This is the one delete, and the guard is inside it.** See this module's header. `force` is
-	 *  the operator saying to discard work the core found — it is never passed on their behalf, and
-	 *  the window asks for it only after showing them the refusal the core gave.
-	 */
-	workspaceRemove: (plane: PlaneId, workspace: string, force: boolean) => typedError<string[], string>(__TAURI_INVOKE("workspace_remove", { plane, workspace, force })),
 	/**
 	 *  The piece a chat's working directory sits in, or `None`.
 	 * 
@@ -434,6 +434,8 @@ export const commands = {
 	 *  waited on that would stop drawing.
 	 */
 	planeDoctor: (plane: PlaneId, full: boolean) => typedError<DoctorReport, string>(__TAURI_INVOKE("plane_doctor", { plane, full })),
+	/**  The pin report for this plane. */
+	planePin: (plane: PlaneId) => typedError<PinReport, string>(__TAURI_INVOKE("plane_pin", { plane })),
 };
 
 /* Types */
@@ -738,6 +740,24 @@ export type Moved = {
 	moved_at: number,
 };
 
+/**  One news entry, as the pin's dialog lists it. */
+export type NewsItem = {
+	version: string,
+	headline: string,
+};
+
+/**  What a check found, for the window and for the notification. */
+export type Offer = {
+	/**  The version on offer. */
+	version: string,
+	/**  The version running now. */
+	current: string,
+	/**  The channel it came from, so a surface never has to guess which manifest was read. */
+	channel: string,
+	/**  The release notes, as the manifest carries them. */
+	notes: string,
+};
+
 /**  One chat the app has open, as the UI draws it and as the quit warning lists it. */
 export type OpenChat = {
 	session: number,
@@ -831,6 +851,22 @@ export type Piece = {
 	wired: boolean,
 	/**  Set when git still has a registration whose directory is gone. */
 	stale: boolean,
+};
+
+/**  What the plane's pin says against this charter. */
+export type PinReport = {
+	/**  `charter version`'s verdict: its exit status was 1. The only thing the line keys on. */
+	drift: boolean,
+	/**  The release this charter brought (`news::shipped_version`). */
+	brought: string,
+	/**  `[charter] version` as written, or none. */
+	pinned: string | null,
+	/**  What `charter version` said, line by line, in its own words. */
+	said: string[],
+	/**  What came between the pin and what this charter brought — only when it drifts. */
+	news: NewsItem[],
+	/**  How many more entries there were than `news` carries. */
+	more_news: number,
 };
 
 /**
