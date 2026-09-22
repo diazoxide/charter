@@ -101,7 +101,14 @@ export function Extensions({ onClose }: { onClose: () => void }) {
         <Dialog.Overlay className="asking" />
         <Dialog.Content className="warning extensions" aria-labelledby="extensions">
           <Dialog.Title id="extensions">Extensions</Dialog.Title>
-          <button type="button" onClick={() => void add()}>
+          {/* `tabIndex={0}` on every button in this dialog, per `docs/ui-primitives.md`
+              (charter-app#186), and this is the surface where it mattered most. Its controls
+              are `Add an extension…`, then a `Review` and a `Remove` per installed row, then
+              `Done` — so Radix's focus scope covered the first and the last, and every row's
+              two buttons sat in the middle, on an engine that will not tab to a `<button>`
+              whose `tabindex` is not written down. Reviewing or removing an extension was a
+              mouse-only act, on the one surface in the window that is about trust. */}
+          <button type="button" tabIndex={0} onClick={() => void add()}>
             Add an extension…
           </button>
 
@@ -138,11 +145,11 @@ export function Extensions({ onClose }: { onClose: () => void }) {
                   <span className="in-force">Drawing: {row.themes_in_force.join(", ")}</span>
                 )}
                 {row.ask && (
-                  <button type="button" onClick={() => setAsking(row.ask)}>
+                  <button type="button" tabIndex={0} onClick={() => setAsking(row.ask)}>
                     Review
                   </button>
                 )}
-                <button type="button" onClick={() => void forget(row.id)}>
+                <button type="button" tabIndex={0} onClick={() => void forget(row.id)}>
                   Remove
                 </button>
               </li>
@@ -169,7 +176,7 @@ export function Extensions({ onClose }: { onClose: () => void }) {
           )}
 
           <div className="doing">
-            <button type="button" onClick={onClose}>
+            <button type="button" tabIndex={0} onClick={onClose}>
               Done
             </button>
           </div>

@@ -36,20 +36,22 @@ import { ENDS_IT, type Offer } from "./actions";
  * answer is never the one a stray Return finds, which matters most on the one dialog that
  * appears without being asked for.
  *
- * **Exactly two answers, in that order, and it is load-bearing rather than tidy.** Radix's
- * `FocusScope` intercepts Tab only at the EDGES of the scope: on the first tabbable it acts on
- * Shift+Tab and moves the focus to the last itself, on the last it acts on Tab and moves to the
- * first, and in between it does nothing and the engine decides. **The engine here is WebKit on
- * both platforms charter's scenarios run on, and WebKit does not put a `<button>` in the tab
- * sequence at all** unless "tab to all controls" is on.
+ * **Two answers, in that order, and both carrying `tabIndex={0}`.** Radix's `FocusScope`
+ * intercepts Tab only at the EDGES of the scope: on the first tabbable it acts on Shift+Tab and
+ * moves the focus to the last itself, on the last it acts on Tab and moves to the first, and in
+ * between it does nothing and the engine decides. **The engine here is WebKit on both platforms
+ * charter ships to, and WebKit leaves a `<button>` out of the tab sequence** unless "tab to all
+ * controls" is on — **or the button's `tabindex` is written down**, which is the whole of the
+ * fix and is the engine's own rule rather than a workaround
+ * (`HTMLFormControlElement::isKeyboardFocusable`; `docs/ui-primitives.md` cites the change).
  *
- * So the confirm is reachable by keyboard *because* these two are the only tabbables and the
- * confirm is the second: Cancel IS the first edge and the confirm IS the last, and Shift+Tab
- * from Cancel is Radix's own `focus()` call rather than the engine's tab sequence. **A third
- * focusable between them would be unreachable by keyboard** — the engine will not tab to it and
- * Radix only handles the edges. `App.test.tsx` fails on a third rather than leaving it to a
- * scenario run to find, and charter-app#186 carries the same question for the window's other
- * modals.
+ * Until charter-app#186 this dialog was whole for a narrower reason: these two are the only
+ * tabbables and the confirm is the second, so Cancel IS the first edge and the confirm IS the
+ * last, and Shift+Tab from Cancel was Radix's own `focus()` call rather than the engine's tab
+ * sequence. That is a property of the *number of buttons*, and it made "the keyboard works
+ * here" something a third control could take away in silence. It does not any more. The order
+ * still matters and `App.test.tsx` still pins it — Cancel first, so a Return pressed by reflex
+ * cancels — but the order is now about which answer a reflex finds and not about reachability.
  *
  * **What the above is NOT is the reason a scenario cannot press these buttons**, and an earlier
  * version of this comment said it was. Measured in charter-app#176 with a keydown trace in the
@@ -101,12 +103,19 @@ export function EndingChat({
           {/* The catalogue's own sentence, not a second one written here. It is the same
               string the `×`'s tooltip has carried since charter-app#130. */}
           <Alert.Description className="honest mid-turn">{ENDS_IT}</Alert.Description>
+          {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186). This
+              dialog was already whole, because its two answers ARE the two edges Radix's
+              focus scope handles — but that made a property of the keyboard depend on the
+              number of buttons, and the attribute is what makes Tab move between them the way
+              it does in every other window on the machine. */}
           <div className="answer">
             <Alert.Cancel asChild>
-              <button ref={cancel}>Cancel</button>
+              <button ref={cancel} tabIndex={0}>
+                Cancel
+              </button>
             </Alert.Cancel>
             <Alert.Action asChild>
-              <button className="ends-it" onClick={onEnd}>
+              <button className="ends-it" tabIndex={0} onClick={onEnd}>
                 {offer.title}
               </button>
             </Alert.Action>

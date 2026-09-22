@@ -95,11 +95,15 @@ export function ApproveExtension({
           <p className="came-back">{ask.fingerprint_note}</p>
           {ask.state_note ? <p className="came-back">{ask.state_note}</p> : null}
 
+          {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186): WebKit
+              leaves a `<button>` out of the tab sequence unless its `tabindex` is written
+              down. A consent surface an operator cannot reach with the keyboard is one they
+              answer with the mouse or not at all. */}
           <div className="doing">
-            <button type="button" onClick={() => onApprove(ask)}>
+            <button type="button" tabIndex={0} onClick={() => onApprove(ask)}>
               {ask.first ? "Trust it" : "Trust it anyway"}
             </button>
-            <button type="button" ref={cancel} onClick={onCancel}>
+            <button type="button" tabIndex={0} ref={cancel} onClick={onCancel}>
               Cancel
             </button>
           </div>

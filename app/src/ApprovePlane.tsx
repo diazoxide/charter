@@ -163,11 +163,15 @@ export function ApprovePlane({
             todos are text a model will read and act on, and charter makes no judgement about them.
           </p>
 
+          {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186): WebKit
+              leaves a `<button>` out of the tab sequence unless its `tabindex` is written
+              down, and a dialog should not depend on having exactly two answers to be
+              reachable. */}
           <div className="doing">
-            <button type="button" onClick={() => onApprove(ask)}>
+            <button type="button" tabIndex={0} onClick={() => onApprove(ask)}>
               {ask.first ? "Open project" : "Open it anyway"}
             </button>
-            <button type="button" ref={cancel} onClick={onCancel}>
+            <button type="button" tabIndex={0} ref={cancel} onClick={onCancel}>
               Cancel
             </button>
           </div>
