@@ -10,6 +10,15 @@ import {
 import { Group, Panel, Separator } from "react-resizable-panels";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import {
+  ChevronDown,
+  FolderPlus,
+  Pin as PinMark,
+  Plus,
+  SquareSplitHorizontal,
+  SquareSplitVertical,
+  X,
+} from "lucide-react";
+import {
   commands,
   type ChatWorktree,
   type OpenChat,
@@ -1417,16 +1426,40 @@ const STARTING_SIZE = { columns: 80, rows: 24 };
  *  place for the words to live. */
 export function Doer({ offer, onPress }: { offer?: Offer; onPress: (offer: Offer) => void }) {
   if (!offer) return null;
+  const Mark = MARKS[offer.id];
   return (
     <button
+      className={offer.id === "pane.close" ? "ends-a-chat" : undefined}
       disabled={!offer.available}
       title={offer.reason || offer.note || undefined}
       onClick={() => onPress(offer)}
     >
+      {Mark && <Mark />}
       {offer.title}
     </button>
   );
 }
+
+/**
+ * The icon beside each of the bar's own buttons, by catalogue row.
+ *
+ * **Beside the words, never instead of them.** An icon-only bar is a bar an operator has to
+ * learn, and the words are what `pressOnly("New tab")` and a screen reader find — Lucide hides
+ * a nameless icon from assistive technology by itself, so each button's name is its title
+ * exactly as before. A row with no entry here draws its words alone, which is the right way to
+ * fail: a missing icon is cosmetic, a missing button is not.
+ *
+ * `pane.close` ends a chat, so its mark is the same `X` a tab's close carries and it gets the
+ * same danger hover (`App.css`, `.ends-a-chat`) — an icon may not make ending a chat look
+ * lighter than it is.
+ */
+export const MARKS: Record<string, typeof Plus> = {
+  "chat.new": Plus,
+  "pane.split.right": SquareSplitHorizontal,
+  "pane.split.down": SquareSplitVertical,
+  "pane.close": X,
+  "project.open": FolderPlus,
+};
 
 /**
  * The show-more menu: the tabs the strip is not showing, most recently moved first.
@@ -1495,6 +1528,7 @@ export function ShowMore({
           onClick={() => setOpen((up) => !up)}
         >
           {hidden.length} more
+          <ChevronDown />
         </button>
       </Menu.Trigger>
       <Menu.Portal>
@@ -1530,6 +1564,11 @@ export function ShowMore({
  * for. So the rows live in `actions.ts` like every other action, the palette is where they
  * are run, and this says which things carry one.
  *
+ * **Lucide's pin, and not the `📌` this comment used to refuse.** The objection was to an
+ * emoji — drawn by the operating system at its own size and in its own colours, louder than
+ * the state dot beside it. A Lucide icon is none of those: a stroke in `currentColor` at
+ * `1em`, so it is the accent colour the old dot was, at the size of the text it sits in.
+ *
  * It is inside the tab's own button, so it can never be a second thing to click by accident
  * and there is no interactive element inside an interactive element for a screen reader to
  * have to explain. The glyph is decorative; `aria-label` is what carries the meaning, the
@@ -1544,7 +1583,7 @@ export function Pin({ held, what }: { held: boolean; what: string }) {
       aria-label={`pinned ${what}`}
       title={`Pinned. Unpin it from the palette — yours, on this machine only.`}
     >
-      ●
+      <PinMark />
     </span>
   );
 }
@@ -1565,7 +1604,7 @@ export function Closer({ offer, onPress }: { offer?: Offer; onPress: (offer: Off
       title={offer.note ? `${offer.title} — ${offer.note}` : offer.title}
       onClick={() => onPress(offer)}
     >
-      ×
+      <X />
     </button>
   );
 }
