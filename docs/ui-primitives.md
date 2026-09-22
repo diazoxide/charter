@@ -269,6 +269,34 @@ when writing a spec: **a scenario cannot press a button by keyboard at all, by a
 why Escape works in these specs where nothing aimed at a button does — Radix listens for Escape on
 `document` — and why the palette's own Enter works, since the palette handles it in JavaScript.
 
+**A third face of the rig's finding, and it is the same fact underneath — measured in
+charter-app#186 while trying to prove the fix below in a real window.** The two above read like
+two unrelated quirks; they are one. **This driver dispatches a synthetic DOM keydown and performs
+no default action whatsoever.** The decisive measurement is a control nobody can argue with: two
+plain text `<input>`s, injected into an open dialog in the running app, with the focus on the
+first.
+
+```
+PROBE start: input "probe-one"
+PROBE after Tab from text box: input "probe-one"
+PROBE keys seen: ["Tab shift=false on INPUT prevented=false"]
+```
+
+**Tab did not move the focus between two text boxes.** WebKit tabs between text fields with full
+keyboard access off — that is ordinary Safari, and `TextFieldInputType::isKeyboardFocusable`
+never consults the gate at all — so there is nothing left for this to be but the driver. The
+keydown arrived, unprevented, and nothing followed it. That explains all three symptoms at once:
+no activation from `Enter`, no focus navigation from `Tab`, and no `shiftKey` on a chord, because
+a synthetic dispatch carries none of them.
+
+So, for whoever writes the next spec: **the keyboard half of a scenario can only assert what the
+app does in JavaScript.** Escape, `F2`, the palette's own Enter — all handled by a listener — are
+fair game. Anything the *engine* would have done in response to a key is not, and asking for it
+produces a red that looks like an app defect and is not one. The reachability half of
+charter-app#186 therefore stayed in jsdom, where the engine's rule is written down and modelled
+explicitly; `picker.e2e.ts` keeps the half a scenario really can prove, which is that the
+attribute the rule needs survives the build and is on the element in the shipped app.
+
 Three things follow, and the last is the one a reviewer should hold us to:
 
 - **Shift+Tab from the first answer is Radix's own `focus()` call**, not the engine's tab

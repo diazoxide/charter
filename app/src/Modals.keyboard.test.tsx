@@ -58,13 +58,24 @@ import { PinItem, UpdateItem } from "./Updates";
  * platform's answer rather than charter's, and leaves the primitives' own behaviour untouched
  * (charter ADR 0037). `docs/ui-primitives.md` holds the reasoning.
  *
- * **Why this is measured here and not in a scenario.** A scenario cannot answer it. Measured in
- * charter-app#176: WebDriver key actions carry no implicit activation, so no key a spec sends
- * will ever press a button, and `browser.keys(["Shift", "Tab"])` is not delivered as a chord —
- * the Tab arrives with `shiftKey` unset, so Radix's edge handling never fires either. A
- * scenario can neither confirm nor refute reachability. jsdom can, as long as the engine's
- * rule is spelled rather than inherited — which is what {@link inWebKitsTabSequence} is, and
- * it is the one assumption in this file worth attacking.
+ * **Why this is measured here and not in a scenario — which was tried, in a real window, and
+ * cannot be done.** The obvious objection to this whole file is that jsdom is not WebKit, so a
+ * spec was written to walk the picker with `browser.keys(["Tab"])` and read
+ * `document.activeElement` — an unmodified key and a DOM read, neither of which runs into what
+ * charter-app#176 measured. It reported that Tab reached nothing at all, including the radio
+ * rows, which have carried an explicit `tabindex` from Radix's roving focus since long before
+ * this change and were never in doubt. That was the tell. Two plain text `<input>`s injected
+ * into the running app settled it: **Tab does not move the focus between them either**, while
+ * the keydown arrives unprevented. This driver dispatches a synthetic DOM event and performs no
+ * default action of any kind, which is one fact wearing the three faces #176 caught it in.
+ * `docs/ui-primitives.md` has the trace.
+ *
+ * So a scenario can neither confirm nor refute reachability, and the half it CAN prove is kept
+ * in `picker.e2e.ts`: that the attribute the engine's rule needs survives the build and is on
+ * the element in the shipped app, which is the one thing jsdom cannot see. What is left
+ * unproven anywhere is the step between the two — that WebKit, handed the attribute, then tabs
+ * to it. That is {@link inWebKitsTabSequence}, it is read from the engine's source rather than
+ * measured in a running one, and it is the one assumption in this file worth attacking.
  */
 
 afterEach(() => {

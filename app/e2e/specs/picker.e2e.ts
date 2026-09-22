@@ -41,6 +41,50 @@ describe("starting a chat", () => {
     expect(await $$('[data-testid="pane"]').getElements()).toHaveLength(panes);
   });
 
+  it("ships every answer with the tabindex the engine's tab sequence needs", async () => {
+    // **Half of charter-app#186's fix, checked where jsdom cannot see it: in the built app.**
+    //
+    // The fix is one attribute. WebKit leaves a `<button>` out of the tab sequence unless full
+    // keyboard access is on **or** its `tabindex` is written down —
+    // `HTMLFormControlElement::isKeyboardFocusable` hands over to
+    // `Element::isKeyboardFocusable` the moment `tabIndexSetExplicitly()`, and never consults
+    // the gate. `Modals.keyboard.test.tsx` walks every modal against a model of that rule.
+    //
+    // **What a model cannot tell you is whether the attribute survives the build.** A jsdom
+    // test renders the components; an operator gets a Vite bundle inside a WKWebView, and an
+    // attribute that a transform dropped would leave every one of those tests green and the
+    // window exactly as broken as before. This asserts the other half: the real app, the real
+    // bundle, the real DOM.
+    //
+    // **What it deliberately does NOT assert is that Tab then moves.** That was tried and it
+    // cannot be: this driver delivers a keydown and performs no default action at all, so Tab
+    // does not move the focus here even between two plain text `<input>`s — measured, and
+    // written up in `docs/ui-primitives.md` as the third face of the finding that already
+    // explains why a synthesised `Enter` does not press a button. Whether WebKit honours a
+    // written-down `tabindex` is WebKit's rule, cited in that file; whether charter writes one
+    // down is this test.
+    await pressOnly("New tab");
+    await harnessRowsDrawn();
+
+    const answers = await browser.execute(() => {
+      const box = document.querySelector('[role="dialog"]');
+      if (!box) return ["(the picker was not on screen)"];
+      // The footer checkbox and the two answers — every control in this dialog that is a
+      // `<button>` without a roving `tabindex` of its own, which is to say every one the
+      // engine would otherwise skip.
+      return [...box.querySelectorAll(".box, .answer button")].map(
+        (el) =>
+          `${(el.textContent || el.getAttribute("role") || "").trim() || "checkbox"}=${el.getAttribute("tabindex")}`,
+      );
+    });
+
+    // Every one of them, and the failure names which lost it rather than saying "false".
+    expect(answers.filter((said) => !said.endsWith("=0"))).toEqual([]);
+
+    await browser.keys(["Escape"]);
+    await expect(dialog()).not.toBeDisplayed();
+  });
+
   it("shows the command of a profile charter has never run, and asks before running it", async () => {
     // The file is gitignored, so an edit to it leaves no diff for a reviewer to catch —
     // which is why the ask is about the words that are about to run, not the profile's name.

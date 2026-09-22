@@ -1,4 +1,4 @@
-import { $, expect } from "@wdio/globals";
+import { $, browser, expect } from "@wdio/globals";
 
 /**
  * Opening a chat, as the operator does it since M1.2: press, pick, start.
@@ -40,6 +40,31 @@ export const HARNESS_ROWS = '[aria-labelledby="pick-harness"] [role="radio"]';
 /** Waits until the picker has drawn the harness it is offering. */
 export async function harnessRowsDrawn(): Promise<void> {
   await $(HARNESS_ROWS).waitForExist({ timeout: 20_000 });
+}
+
+/**
+ * Where the keyboard is, named the way somebody looking for that control would name it.
+ *
+ * **A DOM read and not a gesture, which is what makes it usable here at all.** A scenario
+ * cannot press a button by keyboard — a synthesised `Enter` carries no activation
+ * (charter-app#176) — but where the focus IS after a key is a property of the document, and
+ * reading it costs nothing the harness cannot do.
+ *
+ * It names a control by its role and its accessible words, in the same vocabulary
+ * `Modals.keyboard.test.tsx` uses, so the real engine's answer and jsdom's can be read side by
+ * side. A radio row and a checkbox have their words in a `<label for>` rather than inside them,
+ * which is why that is consulted before the element's own text: without it, half the picker
+ * comes back as `checkbox ""`.
+ */
+export async function whereTheKeyboardIs(): Promise<string> {
+  return browser.execute(() => {
+    const on = document.activeElement;
+    if (!on || on === document.body) return "(nothing)";
+    const labelled = on.id ? document.querySelector(`label[for="${CSS.escape(on.id)}"]`) : null;
+    const named = on.getAttribute("aria-label") ?? labelled?.textContent ?? on.textContent ?? "";
+    const role = on.getAttribute("role") ?? on.tagName.toLowerCase();
+    return `${role} ${JSON.stringify(named.trim().slice(0, 40))}`;
+  });
 }
 
 /** Presses a button by the words on it, or by its accessible name. */
