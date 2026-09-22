@@ -1,6 +1,6 @@
 import { browser, expect, $, $$ } from "@wdio/globals";
 import { READY } from "../harness.js";
-import { pressAndStart, pressOnly } from "../opening.js";
+import { endChat, pressAndStart } from "../opening.js";
 
 /**
  * **A terminal fills the centre region, top to bottom** — with one pane, with a split, and
@@ -161,7 +161,7 @@ describe("the terminal in the centre region", () => {
     for (let round = 0; round < 5; round++) {
       const mine = (await tabNames()).filter((tab) => !wereAlreadyOpen.includes(tab));
       if (mine.length === 0) break;
-      for (const name of mine) await pressOnly(`End chat ${name}`);
+      for (const name of mine) await endChat(`End chat ${name}`);
       await browser.pause(500);
     }
     await browser.waitUntil(

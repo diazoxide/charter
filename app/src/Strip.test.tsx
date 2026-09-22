@@ -185,6 +185,21 @@ const menuNames = () =>
 /** Every close button the strip is drawing, left to right. */
 const closers = () => within(strip()).queryAllByRole("button", { name: /^End chat / });
 
+/**
+ * Ends the chat of the tab `closer` belongs to: press, then answer.
+ *
+ * **Ending a chat asks first** (`EndingChat.tsx`, the operator's *"closing session should ask
+ * confirmation"*), from every surface that can ask for it. The dialog's own answer carries the
+ * row's words, so this reads the button it is about to press rather than assuming which chat
+ * the question is about.
+ */
+async function endChat(closer: HTMLElement): Promise<void> {
+  const name = closer.getAttribute("aria-label") ?? "";
+  await userEvent.click(closer);
+  const asking = await screen.findByRole("alertdialog");
+  await userEvent.click(within(asking).getByRole("button", { name }));
+}
+
 describe("the chat strip when it holds more than it has room for", () => {
   let room: Room;
 
@@ -324,7 +339,7 @@ describe("the chat strip when it holds more than it has room for", () => {
 
     for (let pressed = 0; pressed < 16 && closers().length > 0; pressed++) {
       const drawn = closers();
-      await userEvent.click(drawn[drawn.length - 1]);
+      await endChat(drawn[drawn.length - 1]);
     }
 
     expect([...ended].sort()).toEqual([1, 2, 3, 4]);
@@ -397,7 +412,7 @@ describe("the chat strip when it holds more than it has room for", () => {
     room.roomFor(1);
     await screen.findByRole("button", { name: "Show 3 tabs the strip is not showing" });
 
-    await userEvent.click(within(strip()).getByRole("button", { name: "End chat ide.1" }));
+    await endChat(within(strip()).getByRole("button", { name: "End chat ide.1" }));
 
     expect(
       await screen.findByRole("button", { name: "Show 2 tabs the strip is not showing" }),

@@ -81,6 +81,38 @@ async function splitInto(which: "Split right" | "Split down") {
   await userEvent.click(await screen.findByRole("button", { name: "Start" }));
 }
 
+/**
+ * Ends a chat the way the operator does now: press, then answer.
+ *
+ * **Every route to ending one asks first** (`EndingChat.tsx`, the operator's *"closing
+ * session should ask confirmation"*) — a tab's `×`, a pane's `×` and the palette's rows all
+ * go through one place. So every test that ends a chat comes through here, which is also
+ * what keeps the rule from being quietly removed: take the question out and every one of
+ * these fails with a chat that ended without being asked about.
+ *
+ * `name` is the row's own words, which are the dialog's too, so this presses the answer that
+ * belongs to the chat under test rather than whichever button happens to be second.
+ */
+async function endChat(name: string) {
+  await userEvent.click(screen.getByRole("button", { name }));
+  const asking = await screen.findByRole("alertdialog");
+  await userEvent.click(within(asking).getByRole("button", { name }));
+}
+
+/**
+ * The controls in one pane's corner, found by the session that pane is showing.
+ *
+ * **There is one set per pane now**, which is the operator's whole point: `Split right` and
+ * `End this pane's chat` used to be single buttons on the bar acting on whichever pane was
+ * focused, and a window split four ways gave no sign of which that was. So a test that says
+ * "press Split right" no longer names a target, and this is what names one.
+ */
+function paneDoing(session: number) {
+  const holder = screen.getByText(`session ${session}`).closest(".pane-holder");
+  if (!holder) throw new Error(`no pane is showing session ${session}`);
+  return within(holder as HTMLElement);
+}
+
 /** Answers every command the app sends, and records what it was asked. */
 function core(): { asked: { cmd: string; args: unknown }[] } {
   const asked: { cmd: string; args: unknown }[] = [];
@@ -306,7 +338,7 @@ describe("App", () => {
     await openAChat();
     await splitInto("Split right");
 
-    await userEvent.click(screen.getByRole("button", { name: "End chat 1 steward" }));
+    await endChat("End chat 1 steward");
 
     expect(screen.queryAllByTestId("pane")).toEqual([]);
     // The plane travels with the session, because a session number alone names a chat in
@@ -323,12 +355,68 @@ describe("App", () => {
     await openAChat();
     await splitInto("Split down");
 
-    await userEvent.click(screen.getByRole("button", { name: "End this pane's chat" }));
+    await userEvent.click(paneDoing(2).getByRole("button", { name: "End this pane's chat" }));
+    const asking = await screen.findByRole("alertdialog");
+    await userEvent.click(within(asking).getByRole("button", { name: "End this pane's chat" }));
 
     expect(panes()).toEqual(["session 1"]);
     expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
       { plane: "/home/dev/plane", session: 2 },
     ]);
+  });
+
+  it("ends the chat of the pane the button is ON, not the focused one", async () => {
+    // **The operator's reason for moving these onto the panes**, as a test: *"this will be
+    // clear for spliting — user will know what pane is spliting."* A split leaves the NEW
+    // pane focused, so pressing the older pane's own `×` is precisely the case a bar button
+    // gets wrong — it would end session 2 and leave the pane the operator aimed at.
+    const { asked } = core();
+    render(<App />);
+    await openAChat();
+    await splitInto("Split right");
+
+    await userEvent.click(paneDoing(1).getByRole("button", { name: "End this pane's chat" }));
+    const asking = await screen.findByRole("alertdialog");
+    await userEvent.click(within(asking).getByRole("button", { name: "End this pane's chat" }));
+
+    expect(panes()).toEqual(["session 2"]);
+    expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
+      { plane: "/home/dev/plane", session: 1 },
+    ]);
+  });
+
+  it("splits the pane the button is ON, not the focused one", async () => {
+    // The same rule for the other two controls. After one split the second pane is focused;
+    // splitting from the FIRST pane's button has to divide the first pane, which is what an
+    // operator aiming at it means and what the bar's button could not express.
+    core();
+    render(<App />);
+    await openAChat();
+    await splitInto("Split right");
+
+    await userEvent.click(paneDoing(1).getByRole("button", { name: "Split down" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Start" }));
+
+    // Session 3 is beside session 1 and not beside session 2: the pane that was pressed is
+    // the one that divided. Read off the DOM order, which is the layout's own order.
+    expect(panes()).toEqual(["session 1", "session 3", "session 2"]);
+  });
+
+  it("asks before it ends a chat, and ends nothing if the answer is no", async () => {
+    // The operator's *"closing session should ask confirmation"*. The half worth testing is
+    // the cancel: a dialog that ends the chat whichever button is pressed is worse than no
+    // dialog, because it teaches the operator that the question is a formality.
+    const { asked } = core();
+    render(<App />);
+    await openAChat();
+
+    await userEvent.click(screen.getByRole("button", { name: "End chat 1 steward" }));
+    const asking = await screen.findByRole("alertdialog");
+    await userEvent.click(within(asking).getByRole("button", { name: "Cancel" }));
+
+    expect(panes()).toEqual(["session 1"]);
+    expect(asked.filter(({ cmd }) => cmd === "close_session")).toEqual([]);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   it("ends a session it opened for a split whose tab closed while it was starting", async () => {
@@ -361,7 +449,7 @@ describe("App", () => {
     // `×` the only way there is — by leaving the picker first. Escape does not call the start
     // back; it is already in flight, which is exactly the race this test is about.
     await userEvent.keyboard("{Escape}");
-    await userEvent.click(screen.getByRole("button", { name: "End chat 1 steward" }));
+    await endChat("End chat 1 steward");
     letTheSecondSessionStart();
 
     await vi.waitFor(() =>

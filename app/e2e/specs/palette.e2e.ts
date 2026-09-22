@@ -1,5 +1,5 @@
 import { browser, expect, $, $$ } from "@wdio/globals";
-import { pickAndStart, pressAndStart, pressOnly } from "../opening.js";
+import { endChat, pickAndStart, pressAndStart, pressOnly } from "../opening.js";
 
 /**
  * The command palette against the real app, driven by the keyboard and nothing else.
@@ -101,7 +101,7 @@ describe("the command palette", () => {
   // assertion fails on a session it never typed into. A first run proved it.
   after(async () => {
     for (const name of (await tabNames()).filter((tab) => !wereAlreadyOpen.includes(tab))) {
-      await pressOnly(`End chat ${name}`);
+      await endChat(`End chat ${name}`);
     }
     await browser.waitUntil(
       async () => (await tabNames()).every((tab) => wereAlreadyOpen.includes(tab)),

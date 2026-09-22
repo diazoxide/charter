@@ -108,6 +108,22 @@ drawer asks nothing and a stray click cannot answer anything. Radix hands focus 
 `Dialog.Trigger`, and the button that opens this lives in a project's status line while the drawer
 is the window's, so the drawer remembers where the keyboard was and puts it back itself.
 
+And the **question before a chat ends** (`app/src/EndingChat.tsx`):
+`@radix-ui/react-alert-dialog`, the operator's *"closing session should ask confirmation"*. It is
+the fifth modal surface and the first that is **not** a `Dialog`, and the reason is the role: an
+alert dialog is `role="alertdialog"`, announced as an interruption rather than as a surface, and
+the primitive requires a `Cancel` that focus goes to. The four below are questions the operator
+went looking for; this one arrives *because of* something they did, which is the distinction the
+role exists for. Two consequences worth knowing before the next one:
+
+- **`AlertDialogContent` takes no `onInteractOutside`.** It refuses outside interaction itself,
+  so the rule the four `Dialog`s write out by hand is the primitive here. A reviewer looking for
+  the missing line should find this paragraph rather than a hole.
+- **It is asked in one place** — `PlaneView`'s `run`, which carries out a catalogue row from
+  whichever surface pressed it — so a tab's `×`, a pane's `×` and the palette's rows all ask.
+  A confirmation on one surface and not another is the second answer the catalogue exists to
+  not have.
+
 Two decisions those four share, taken once so they do not have to be taken again per dialog:
 
 - **A click outside answers nothing.** `onInteractOutside` is prevented on all four, which is

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { pressAndStart } from "../opening.js";
+import { endEveryChat, pressAndStart } from "../opening.js";
 import { browser, expect, $ } from "@wdio/globals";
 import { READY } from "../harness.js";
 
@@ -108,7 +108,7 @@ describe("the window over a day", () => {
 
   after(async () => {
     // Left as found: the next spec file shares this app process.
-    for (const name of await tabNames()) await press(`End chat ${name}`);
+    await endEveryChat();
     await browser.waitUntil(async () => (await tabNames()).length === 0, {
       timeout: 15_000,
       timeoutMsg: "the tabs this spec opened were still there",

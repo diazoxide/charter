@@ -633,6 +633,15 @@ button.bare:focus-visible {
   opacity: 0.6;
 }
 
+/* A pane and the controls that belong to it. The holder exists so the buttons can be
+   positioned against the pane without going inside the element xterm draws into. */
+.pane-holder {
+  position: relative;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+}
+
 .pane {
   height: 100%;
   width: 100%;
@@ -642,6 +651,80 @@ button.bare:focus-visible {
 
 .pane.focused {
   border-color: var(--accent-base);
+}
+
+/* **A pane's own controls, in its top right corner** — the operator: *"harnesses panes should
+   each have close button and spliting buttons in pane right top corner — and its visible when
+   hovering harness only … buttons should not have texts — only tooltips on hovering"*. They
+   replace `Split right`, `Split down` and `End this pane's chat` on the bar, which all acted
+   on the focused pane and gave no sign of which that was.
+
+   **`visibility` and not `opacity`, which is the whole of the accessibility of this.** An
+   `opacity: 0` button is still under the pointer and still in the tab order: a stray press on
+   an invisible `End this pane's chat` is the defect charter-app#130 was about, made invisible.
+   `visibility: hidden` takes it out of hit-testing, out of the tab order and out of the
+   accessibility tree — so a hidden control cannot be pressed by accident or found by a reader
+   that cannot see it either.
+
+   **And they are drawn for the FOCUSED pane as well as the hovered one**, because hover-only
+   is a control that does not exist without a pointer. The focused pane is where a keyboard
+   is, so `:focus-within` is true there — including while the terminal itself has the keyboard,
+   which is the ordinary case. A pane the operator is not in shows nothing until the pointer
+   is over it. */
+.pane-doing {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  z-index: 2;
+  display: flex;
+  gap: 0.15rem;
+  padding: 0.1rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  visibility: hidden;
+}
+
+.pane-holder:hover > .pane-doing,
+.pane-holder:focus-within > .pane-doing {
+  visibility: visible;
+}
+
+.pane-doing button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6rem;
+  padding: 0.15rem;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.pane-doing button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text-primary);
+}
+
+.pane-doing button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+.pane-doing button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Ending a chat is the danger colour here as it is on a tab's `×`, and for the same reason:
+   it does the same thing. It asks first now, and a confirmation is not a licence for the
+   control to look lighter than what it does. */
+.pane-doing .ends-a-chat:hover:not(:disabled) {
+  background: var(--danger-surface);
+  color: var(--danger-text);
 }
 
 /* The handle between two panes: thin, and easier to hit than it looks. */

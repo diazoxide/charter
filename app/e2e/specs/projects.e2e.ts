@@ -2,7 +2,7 @@ import { realpathSync, renameSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { $, $$, browser, expect } from "@wdio/globals";
 import { anEmptyRecord, copyFixturePlane } from "../harness.js";
-import { pressAndStart } from "../opening.js";
+import { answerTheAsk, pressAndStart } from "../opening.js";
 
 /**
  * A window holding more than one project, in the built app (charter ADR 0033, decision 23).
@@ -179,7 +179,12 @@ describe("a window holding more than one project", function () {
     }
     if (!mine) return;
     const closer = await $(`${TABS} button[aria-label^="End chat "]`);
-    if (await closer.isExisting()) await closer.click();
+    if (!(await closer.isExisting())) return;
+    // Ending a chat asks first, and a spec that leaves the question on screen hands the
+    // next spec file a modal it never opened — one app process serves the whole run.
+    const name = (await closer.getAttribute("aria-label")) ?? "";
+    await closer.click();
+    await answerTheAsk(name);
   });
 
   it("opens a second project beside the first, through the same trust gate", async () => {
