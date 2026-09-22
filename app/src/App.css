@@ -266,8 +266,8 @@ body {
 }
 
 /* The tabs are the one thing on the bar that gives way: they shrink and scroll, and
-   everything else keeps its width. A strip that could not shrink pushed the splits, the
-   region buttons and the plane's path off the window at about thirty chats. It does not
+   everything else keeps its width. A strip that could not shrink pushed the splits and the
+   region buttons off the window at about thirty chats. It does not
    GROW, so a window with two chats looks as it always did. */
 .tabs {
   flex: 0 1 auto;
@@ -276,8 +276,7 @@ body {
 .bar > .adding,
 .bar > .more,
 .bar > .doing,
-.bar > .regions-doing,
-.bar > .plane {
+.bar > .regions-doing {
   flex: none;
 }
 
@@ -395,8 +394,10 @@ body {
   background: var(--tab-active);
 }
 
+/* The project's directory. It used to be the last thing on `header.bar`; it is on the status
+   line at the bottom of the window now, and this is the only place it is drawn. It is the one
+   item on that line allowed to shrink — see `.status-line`. */
 .plane {
-  margin-left: auto;
   opacity: 0.7;
   overflow: hidden;
   white-space: nowrap;
@@ -1553,6 +1554,99 @@ body {
    and the handle goes to nothing so there is no line to drag and nothing to hit. */
 [data-separator].edge-gone {
   display: none;
+}
+
+/* **charter's status line**: one line at the very bottom of the window, under the bottom
+   region and under everything else (`app/src/StatusLine.tsx`, which argues why it is not one
+   of ADR 0038's four regions). `surface.deep` is defined by the theme as the topmost strip and
+   the bottom of the window, so this and the projects strip are the two ends of the same frame.
+
+   `flex: none` on the line and on every item in it: the window is a flex column and the
+   regions take what is left, and a status line that grew or shrank with the window would be a
+   second bottom bar. */
+.status-line {
+  display: flex;
+  flex: none;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.15rem 0.6rem;
+  font-size: 0.8rem;
+  white-space: nowrap;
+  overflow: hidden;
+  background: var(--surface-deep);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.status-line > * {
+  flex: none;
+}
+
+/* The project's path is the ONE thing on the line allowed to give way, and it gives way last:
+   everything to its left is a count that is unreadable when it is half-drawn, and a path is
+   still a path with its head cut off. `min-width: 0` is what lets a flex item shrink below its
+   content at all; the whole path is on the element's `title` either way. */
+.status-line > .plane {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: 0.25rem;
+}
+
+/* Where I am: charter's own mark, and the workspace's name in the weight the footer gives it
+   (`crates/charter-core/src/footer.rs`, zone 1). */
+.status-glyph {
+  color: var(--accent-base);
+}
+
+.status-workspace {
+  font-weight: 600;
+}
+
+/* A count's label. Quiet, because the number is the thing being read and the label only says
+   what it counts. */
+.status-label {
+  color: var(--text-muted);
+}
+
+.status-cell {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The alerts button, and the auto margin that divides the line: what is true of where you are
+   on the left, what you can open and which project it is on the right. */
+.status-alerts {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  margin-left: auto;
+  color: var(--text-primary);
+  background: var(--control-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0.05rem 0.4rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.status-alerts:hover:not(:disabled) {
+  border-color: var(--accent-base);
+}
+
+/* Not ported, so not pressable — and drawn as such rather than as a live control that answers
+   a press with nothing. `StatusLine.tsx` says why that is the honest state and a `0` is not. */
+.status-alerts:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.status-unknown {
+  color: var(--text-muted);
+}
+
+.status-count {
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--control-count);
+  font-variant-numeric: tabular-nums;
 }
 
 /* The extension list (charter ADR 0041 item 5: what is in force, after approval and not only
