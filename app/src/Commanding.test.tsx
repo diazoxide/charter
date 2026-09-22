@@ -187,6 +187,21 @@ const arrangement = () => ({
     .map((pane) => `${pane.textContent} focused=${pane.dataset.focused}`),
 });
 
+/**
+ * Answers the question charter asks before it ends a chat (`EndingChat.tsx`).
+ *
+ * **Every route to ending one asks first** — a tab's `×`, a pane's `×` and the palette's
+ * rows all go through one place (the operator's *"closing session should ask confirmation"*).
+ * A test that presses one of them and does not answer is a test of a dialog still on screen.
+ *
+ * `name` is the row's own words, which are the dialog's too, so this presses the answer that
+ * belongs to the chat under test rather than whichever button happens to be second.
+ */
+async function answerTheAsk(name: string) {
+  const asking = await screen.findByRole("alertdialog");
+  await userEvent.click(within(asking).getByRole("button", { name }));
+}
+
 describe("the palette reaching what the window can do", () => {
   it("opens on a keystroke and lists the window's actions", async () => {
     core();
@@ -271,6 +286,7 @@ describe("the palette reaching what the window can do", () => {
     await openAChat();
 
     await runFromPalette("end chat 1 steward");
+    await answerTheAsk("End chat 1 steward");
 
     expect(screen.queryAllByTestId("pane")).toEqual([]);
     expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
@@ -286,6 +302,7 @@ describe("the palette reaching what the window can do", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Start" }));
 
     await runFromPalette("end this pane");
+    await answerTheAsk("End this pane's chat");
 
     expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
       { plane: "/home/dev/plane", session: 2 },
@@ -404,16 +421,26 @@ describe("one list, two surfaces", () => {
     }
   });
 
-  it("disables a button whose row cannot run, for the row's own reason", async () => {
+  it("lists a row that cannot run, with its reason, where the button for it has gone", async () => {
+    // **This used to be about a disabled `Split right` button on the bar**, and the bar has
+    // no such button any more: the splits and the pane close are on the panes now, and with
+    // no chat in front there are no panes to put them on. That is right, and it is also the
+    // moment the guarantee could have been lost — *"an operator cannot ask about an option
+    // they cannot see"* (`actions.ts`).
+    //
+    // It is not lost, and this is where it now lives: the palette lists every unavailable
+    // row with the reason it cannot run. The palette is also the keyboard's route to these
+    // three, which is the other half of moving them onto a hover surface.
     core();
     render(<App />);
     await screen.findByText(/No sessions/);
 
-    expect(screen.getByRole("button", { name: "Split right" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Split right" })).toHaveAttribute(
-      "title",
-      "No chat is in front, so there is no pane to split.",
-    );
+    await palette("split right");
+
+    const row = screen.getByRole("option", { name: /Split right/ });
+    expect(row).toHaveAttribute("aria-disabled", "true");
+    expect(row).toHaveTextContent("No chat is in front, so there is no pane to split.");
+    expect(screen.queryByRole("button", { name: "Split right" })).toBeNull();
   });
 
   it("ends in the same state whether a split came from the palette or from its button", async () => {

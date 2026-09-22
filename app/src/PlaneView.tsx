@@ -77,6 +77,7 @@ import {
   type Tabs,
 } from "./tabs";
 import { ChatState } from "./NeedsYou";
+import { EndingChat } from "./EndingChat";
 import { Panels } from "./Panels";
 import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
 import { fitting, LEAST, useRoom } from "./fits";
@@ -1211,12 +1212,9 @@ export function PlaneView({
 
   const by = useCallback((id: string) => offers.find((offer) => offer.id === id), [offers]);
 
-  /** What every surface does with a row: carry it out, and keep what it answered.
-   *
-   *  One function for the bar and for the palette. It is called from an event handler and
-   *  never while rendering, which is what lets the verbs it dispatches to reach the window's
-   *  live arrangement rather than a copy taken when the row was built. */
-  const run = useCallback(
+  /** Carries a row out and keeps what it answered. Everything below this line has already
+   *  been asked about, where asking was owed. */
+  const carryOut = useCallback(
     async (offer: Offer): Promise<Ran> => {
       const answer = await perform(offer, doing);
       setReport(
@@ -1231,11 +1229,69 @@ export function PlaneView({
     [doing],
   );
 
+  /**
+   * The row waiting on an answer, when the operator has asked for something that ends a chat.
+   *
+   * Held here and not in the dialog, because the dialog is drawn only while there is one:
+   * a component that is not mounted cannot be holding the question it is about to ask.
+   */
+  const [endingChat, setEndingChat] = useState<Offer>();
+
+  /**
+   * What every surface does with a row: ask first where a chat is about to end, then carry
+   * it out.
+   *
+   * One function for the bar, the panes, the tabs and the palette. It is called from an
+   * event handler and never while rendering, which is what lets the verbs it dispatches to
+   * reach the window's live arrangement rather than a copy taken when the row was built.
+   *
+   * **The confirmation is HERE rather than on each button** (the operator: *"closing session
+   * should ask confirmation"*). There are four ways to end a chat — a tab's `×`, a pane's
+   * `×`, the palette's row and the palette's pane row — and a guard on three of them is a
+   * guard an operator learns to trust and then walks past on the fourth.
+   *
+   * **It answers `{ ok: true }` for a row it has only ASKED about**, which is true: nothing
+   * was refused and nothing has happened yet. The palette reads this answer to say what a row
+   * did, and "nothing to say" is the right thing to say about a question still on screen.
+   */
+  const run = useCallback(
+    async (offer: Offer): Promise<Ran> => {
+      if (offer.available && ENDS_A_CHAT.has(offer.does.verb)) {
+        setEndingChat(offer);
+        return { ok: true };
+      }
+      return carryOut(offer);
+    },
+    [carryOut, setEndingChat],
+  );
+
   const press = useCallback(
     (offer: Offer) => {
       void run(offer);
     },
     [run],
+  );
+
+  /**
+   * A pane's own button: that pane becomes the focused one, and then the row runs.
+   *
+   * **The row is the bar's row unchanged**, which is what keeps one list of actions. A split
+   * and a close act on the focused pane (`tabs.ts`), and pressing a control ON a pane is the
+   * operator saying "this one" — exactly what clicking anywhere in the pane already says. So
+   * the target is not a new parameter on three catalogue rows; it is the focus, moved first.
+   *
+   * **The two are one update, not a race.** `change` is applied to a ref synchronously before
+   * it reaches React state (see it above), so the row that runs on the next line reads the
+   * pane this button belongs to. A `setState` here would leave the split acting on whatever
+   * was focused before, which is the defect the operator is asking to be rid of.
+   */
+  const onPaneDoes = useCallback(
+    (pane: number, offer: Offer | undefined) => {
+      if (!offer?.available) return;
+      change((tabs) => focusPane(tabs, pane));
+      press(offer);
+    },
+    [change, press],
   );
 
   // **`scrollIntoView` on the selected tab is gone with the scroller.** It was how a chat
@@ -1448,11 +1504,20 @@ export function PlaneView({
         <div className="adding">
           <Doer offer={by("chat.new")} onPress={press} iconOnly />
         </div>
-        <div className="doing">
-          <Doer offer={by("pane.split.right")} onPress={press} />
-          <Doer offer={by("pane.split.down")} onPress={press} />
-          <Doer offer={by("pane.close")} onPress={press} />
-        </div>
+        {/* **`Split right`, `Split down` and `End this pane's chat` were here and are on the
+            panes now** — the operator: *"harnesses panes should each have close button and
+            spliting buttons in pane right top corner … so this will fully replace separate
+            buttons Split right, Split left, Exit this pane's chat buttons, and this will be
+            clear for spliting — user will know what pane is spliting."*
+
+            The argument is the one he gives. All three act on THE FOCUSED PANE, and with a
+            window split four ways the bar gives no sign of which that is: the operator reads
+            the layout, works out where the keyboard went last, and presses a button somewhere
+            else entirely. A control on the pane names its own target.
+
+            They are still catalogue rows and still in the palette, which is what a keyboard
+            without a pointer uses: the palette acts on the focused pane, and a pane's own
+            button focuses that pane before it runs the same row. */}
         {/* Which regions are drawn (ADR 0038). Here rather than in each region, because a
             region that is not drawn has nowhere to put its own way back.
 
@@ -1578,6 +1643,8 @@ export function PlaneView({
                   layout={frontTab.layout}
                   focused={frontTab.focused}
                   onFocus={(pane) => change((tabs) => focusPane(tabs, pane))}
+                  offerFor={by}
+                  onPaneDoes={onPaneDoes}
                   states={states}
                 />
               ) : tabs.order.length > 0 ? (
@@ -1644,6 +1711,20 @@ export function PlaneView({
         />
       )}
 
+      {/* The one question charter asks before it ends a chat, wherever the row was pressed
+          (the operator: *"closing session should ask confirmation"*). */}
+      {endingChat && (
+        <EndingChat
+          offer={endingChat}
+          onEnd={() => {
+            const ending = endingChat;
+            setEndingChat(undefined);
+            void carryOut(ending);
+          }}
+          onCancel={() => setEndingChat(undefined)}
+        />
+      )}
+
       {picking && (
         <StartChat
           options={picking.options}
@@ -1699,6 +1780,16 @@ export type WindowDoing = {
 
 /** The size a session starts at. The pane it lands in tells it the real one at once. */
 const STARTING_SIZE = { columns: 80, rows: 24 };
+
+/**
+ * The verbs that end a chat, and therefore the ones that are asked about first.
+ *
+ * **By verb and not by row id**, so a row added to the catalogue that ends a chat is asked
+ * about without anybody remembering to add it here — the same rule the region toggles follow.
+ * `closeProject` is deliberately not one of them: it ends every chat in a project and has its
+ * own sentence on its own row, and the window is where that question belongs.
+ */
+const ENDS_A_CHAT = new Set(["closeTab", "closePane"]);
 
 /** A button that IS a row of the catalogue: its words, its availability and its reason.
  *
@@ -1931,6 +2022,8 @@ function LayoutPanes({
   layout,
   focused,
   onFocus,
+  offerFor,
+  onPaneDoes,
   states,
 }: {
   /** Which plane's sessions these panes are showing. A session number belongs to a plane,
@@ -1939,14 +2032,17 @@ function LayoutPanes({
   layout: Layout;
   focused: number;
   onFocus: (pane: number) => void;
+  /** The catalogue, by row id. There is one list of actions and the panes read it too. */
+  offerFor: (id: string) => Offer | undefined;
+  onPaneDoes: (pane: number, offer: Offer | undefined) => void;
   /** What every chat is doing, for the gauge in each pane's corner: it reads its record
    *  again when its chat moves, and keeps reading while the chat is mid-turn. */
   states: ChatStates;
 }) {
   if (layout.kind === "pane") {
     return (
-      // The frame holds the terminal and the gauge side by side, so the gauge is never a
-      // child of the element xterm draws into.
+      // The frame holds the terminal and what charter draws over it side by side, so neither
+      // is ever a child of the element xterm draws into.
       <div className="pane-frame">
         <SessionPane
           plane={plane}
@@ -1954,19 +2050,43 @@ function LayoutPanes({
           focused={layout.pane === focused}
           onFocus={() => onFocus(layout.pane)}
         />
-        <PaneGauge
-          plane={plane}
-          session={layout.session}
-          moved={movedAt(states, layout.session)}
-          running={stateOf(states, layout.session) === "running"}
-        />
+        {/* **One corner, one row, because two changes landed in it at once.** The gauge
+            (M6.10) and these controls were each written as the thing in the pane's top-right,
+            and absolutely positioned there they would sit on top of each other. A row lays
+            them out side by side without either having to know the other's width — and the
+            gauge keeps the corner, because it is always drawn and the controls are not. */}
+        <div className="pane-corner">
+          <PaneDoing pane={layout.pane} offerFor={offerFor} onPaneDoes={onPaneDoes} />
+          <PaneGauge
+            plane={plane}
+            session={layout.session}
+            moved={movedAt(states, layout.session)}
+            running={stateOf(states, layout.session) === "running"}
+          />
+        </div>
       </div>
     );
   }
   return (
     <Group orientation={layout.direction === "row" ? "horizontal" : "vertical"}>
       {layout.children.map((child, side) => (
-        <Fragment key={nameOfLayout(child)}>
+        /* **Keyed by which side of the split it is, not by what is in it.**
+         *
+         * It used to be keyed by the panes underneath (`split-pane-3`), so a pane that
+         * became a split changed its own key — React took the `Panel` out of a live `Group`
+         * and put a new one back, and `react-resizable-panels` threw *"Panel constraints not
+         * found for index 2"* from a document listener where no `try` can reach it. That is
+         * the same hazard `docs/ui-primitives.md` records for the regions, and the same fix:
+         * nothing is added to or removed from a live group.
+         *
+         * It was reachable before the panes got their own controls — click a pane that is
+         * not the newest, then split from the bar or the palette — but it took three
+         * deliberate steps and nobody had. A `+` on every pane makes it one press, which is
+         * how it was found.
+         *
+         * A split has exactly two children and they never swap, so the side IS the identity.
+         */
+        <Fragment key={side}>
           {side === 1 && <Separator />}
           <Panel>
             <LayoutPanes
@@ -1974,6 +2094,8 @@ function LayoutPanes({
               layout={child}
               focused={focused}
               onFocus={onFocus}
+              offerFor={offerFor}
+              onPaneDoes={onPaneDoes}
               states={states}
             />
           </Panel>
@@ -1983,10 +2105,60 @@ function LayoutPanes({
   );
 }
 
-/** What a part of the layout is called, so that it keeps its place — and its pane keeps its
- *  terminal — when what is beside it changes. */
-function nameOfLayout(layout: Layout): string {
-  return layout.kind === "pane"
-    ? `pane-${layout.pane}`
-    : `split-${nameOfLayout(layout.children[0])}`;
+/**
+ * The controls in a pane's top right corner: split it two ways, and end its chat.
+ *
+ * **The operator's, in his own words**: *"harnesses panes should each have close button and
+ * spliting buttons in pane right top corner — and its visible when hovering harness only …
+ * buttons should not have texts — only tooltips on hovering — so this will fully replace
+ * separate buttons Split right, Split left, Exit this pane's chat buttons, and this will be
+ * clear for spliting — user will know what pane is spliting."*
+ *
+ * **Three things he did not say, which the rest of this repo does:**
+ *
+ * - **A tooltip is not an accessible name.** `title` is what a pointer gets and a screen
+ *   reader may or may not read it; `aria-label` is what a keyboard and `pressOnly()` find.
+ *   Both carry the catalogue's own words, so there is still one place they are written down.
+ * - **Hover-only is invisible without a pointer**, so these are drawn for the FOCUSED pane as
+ *   well as the hovered one. `App.css` has the rule and the reason it is `visibility` rather
+ *   than `opacity`: an invisible button that can still be clicked is `End this pane's chat`
+ *   under a stray press.
+ * - **The close is the danger colour**, as the tab's `×` and the bar's button were, because
+ *   it does the same thing. It asks first now (`EndingChat`), which is new and is not a
+ *   licence for it to look lighter.
+ *
+ * Every button is a row of the catalogue, and the row is the same one the palette lists.
+ * Nothing is drawn for a row the catalogue no longer has.
+ */
+function PaneDoing({
+  pane,
+  offerFor,
+  onPaneDoes,
+}: {
+  pane: number;
+  offerFor: (id: string) => Offer | undefined;
+  onPaneDoes: (pane: number, offer: Offer | undefined) => void;
+}) {
+  const rows = ["pane.split.right", "pane.split.down", "pane.close"];
+  return (
+    <div className="pane-doing">
+      {rows.map((id) => {
+        const offer = offerFor(id);
+        if (!offer) return null;
+        const Mark = MARKS[offer.id];
+        return (
+          <button
+            key={id}
+            className={offer.id === "pane.close" ? "ends-a-chat" : undefined}
+            disabled={!offer.available}
+            aria-label={offer.title}
+            title={offer.reason || (offer.note ? `${offer.title} — ${offer.note}` : offer.title)}
+            onClick={() => onPaneDoes(pane, offer)}
+          >
+            {Mark && <Mark />}
+          </button>
+        );
+      })}
+    </div>
+  );
 }

@@ -1,7 +1,7 @@
 import process from "node:process";
 import { $, $$, browser, expect } from "@wdio/globals";
 import { READY, built } from "../harness.js";
-import { pressAndStart } from "../opening.js";
+import { answerTheAsk, pressAndStart } from "../opening.js";
 import { type Sample, harnessesRunning, logLine, running, sample } from "../processes.js";
 
 /**
@@ -140,7 +140,13 @@ async function closeEveryTab(): Promise<void> {
       if (buttons.length === 0) {
         break;
       }
-      await buttons[buttons.length - 1].click();
+      // **Answered, not only pressed.** Ending a chat asks first now, and the question is
+      // modal: a second press with the dialog up reaches nothing, so a loop that skipped the
+      // answer would spend its whole budget clicking an inert strip.
+      const closing = buttons[buttons.length - 1];
+      const ending = (await closing.getAttribute("aria-label")) ?? "";
+      await closing.click();
+      await answerTheAsk(ending);
     }
     expect(await closeButtons()).toHaveLength(0);
     // **And nothing left behind the button**, which is the assertion the collapse added. An

@@ -1,4 +1,4 @@
-import { pressAndStart } from "../opening.js";
+import { endChat, pressAndStart } from "../opening.js";
 import { browser, expect, $, $$ } from "@wdio/globals";
 import { READY } from "../harness.js";
 import { harnessesRunning } from "../processes.js";
@@ -40,16 +40,6 @@ async function until(pane: Pane, text: string): Promise<void> {
     );
   } catch {
     throw new Error(`the pane never showed ${JSON.stringify(text)}; it showed ${last}`);
-  }
-}
-
-/** Presses the button a person would read as `name`: its label, or the text on it. */
-async function press(name: string): Promise<void> {
-  const labelled = await $(`button[aria-label="${name}"]`);
-  if (await labelled.isExisting()) {
-    await labelled.click();
-  } else {
-    await $(`button=${name}`).click();
   }
 }
 
@@ -308,7 +298,7 @@ describe("the window", () => {
     const names = await tabNames();
     const closing = names[names.length - 1];
 
-    await press(`End chat ${closing}`);
+    await endChat(`End chat ${closing}`);
 
     await browser.waitUntil(async () => harnessesRunning() === running - 1, {
       timeout: 15_000,

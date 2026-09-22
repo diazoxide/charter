@@ -81,6 +81,38 @@ async function splitInto(which: "Split right" | "Split down") {
   await userEvent.click(await screen.findByRole("button", { name: "Start" }));
 }
 
+/**
+ * Ends a chat the way the operator does now: press, then answer.
+ *
+ * **Every route to ending one asks first** (`EndingChat.tsx`, the operator's *"closing
+ * session should ask confirmation"*) — a tab's `×`, a pane's `×` and the palette's rows all
+ * go through one place. So every test that ends a chat comes through here, which is also
+ * what keeps the rule from being quietly removed: take the question out and every one of
+ * these fails with a chat that ended without being asked about.
+ *
+ * `name` is the row's own words, which are the dialog's too, so this presses the answer that
+ * belongs to the chat under test rather than whichever button happens to be second.
+ */
+async function endChat(name: string) {
+  await userEvent.click(screen.getByRole("button", { name }));
+  const asking = await screen.findByRole("alertdialog");
+  await userEvent.click(within(asking).getByRole("button", { name }));
+}
+
+/**
+ * The controls in one pane's corner, found by the session that pane is showing.
+ *
+ * **There is one set per pane now**, which is the operator's whole point: `Split right` and
+ * `End this pane's chat` used to be single buttons on the bar acting on whichever pane was
+ * focused, and a window split four ways gave no sign of which that was. So a test that says
+ * "press Split right" no longer names a target, and this is what names one.
+ */
+function paneDoing(session: number) {
+  const holder = screen.getByText(`session ${session}`).closest(".pane-frame");
+  if (!holder) throw new Error(`no pane is showing session ${session}`);
+  return within(holder as HTMLElement);
+}
+
 /** Answers every command the app sends, and records what it was asked. */
 function core(): { asked: { cmd: string; args: unknown }[] } {
   const asked: { cmd: string; args: unknown }[] = [];
@@ -306,7 +338,7 @@ describe("App", () => {
     await openAChat();
     await splitInto("Split right");
 
-    await userEvent.click(screen.getByRole("button", { name: "End chat 1 steward" }));
+    await endChat("End chat 1 steward");
 
     expect(screen.queryAllByTestId("pane")).toEqual([]);
     // The plane travels with the session, because a session number alone names a chat in
@@ -323,12 +355,152 @@ describe("App", () => {
     await openAChat();
     await splitInto("Split down");
 
-    await userEvent.click(screen.getByRole("button", { name: "End this pane's chat" }));
+    await userEvent.click(paneDoing(2).getByRole("button", { name: "End this pane's chat" }));
+    const asking = await screen.findByRole("alertdialog");
+    await userEvent.click(within(asking).getByRole("button", { name: "End this pane's chat" }));
 
     expect(panes()).toEqual(["session 1"]);
     expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
       { plane: "/home/dev/plane", session: 2 },
     ]);
+  });
+
+  it("ends the chat of the pane the button is ON, not the focused one", async () => {
+    // **The operator's reason for moving these onto the panes**, as a test: *"this will be
+    // clear for spliting — user will know what pane is spliting."* A split leaves the NEW
+    // pane focused, so pressing the older pane's own `×` is precisely the case a bar button
+    // gets wrong — it would end session 2 and leave the pane the operator aimed at.
+    const { asked } = core();
+    render(<App />);
+    await openAChat();
+    await splitInto("Split right");
+
+    await userEvent.click(paneDoing(1).getByRole("button", { name: "End this pane's chat" }));
+    const asking = await screen.findByRole("alertdialog");
+    await userEvent.click(within(asking).getByRole("button", { name: "End this pane's chat" }));
+
+    expect(panes()).toEqual(["session 2"]);
+    expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
+      { plane: "/home/dev/plane", session: 1 },
+    ]);
+  });
+
+  it("splits the pane the button is ON, not the focused one", async () => {
+    // The same rule for the other two controls. After one split the second pane is focused;
+    // splitting from the FIRST pane's button has to divide the first pane, which is what an
+    // operator aiming at it means and what the bar's button could not express.
+    core();
+    render(<App />);
+    await openAChat();
+    await splitInto("Split right");
+
+    await userEvent.click(paneDoing(1).getByRole("button", { name: "Split down" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Start" }));
+
+    // Session 3 is beside session 1 and not beside session 2: the pane that was pressed is
+    // the one that divided. Read off the DOM order, which is the layout's own order.
+    expect(panes()).toEqual(["session 1", "session 3", "session 2"]);
+  });
+
+  it("asks before it ends a chat, and ends nothing if the answer is no", async () => {
+    // The operator's *"closing session should ask confirmation"*. The half worth testing is
+    // the cancel: a dialog that ends the chat whichever button is pressed is worse than no
+    // dialog, because it teaches the operator that the question is a formality.
+    const { asked } = core();
+    render(<App />);
+    await openAChat();
+
+    await userEvent.click(screen.getByRole("button", { name: "End chat 1 steward" }));
+    const asking = await screen.findByRole("alertdialog");
+    await userEvent.click(within(asking).getByRole("button", { name: "Cancel" }));
+
+    expect(panes()).toEqual(["session 1"]);
+    expect(asked.filter(({ cmd }) => cmd === "close_session")).toEqual([]);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("asks with two answers, Cancel focused and the confirm at the other edge", async () => {
+    // **The shape the keyboard route depends on, pinned because the route is not obvious.**
+    //
+    // Radix's `FocusScope` intercepts Tab only at the EDGES of the scope
+    // (`@radix-ui/react-focus-scope`, `handleKeyDown`): on the FIRST tabbable it acts on
+    // Shift+Tab and moves the focus to the last itself; on the LAST it acts on Tab and moves
+    // to the first. In between it does nothing and the platform decides — and a WKWebView on
+    // macOS does not put a `<button>` in the tab sequence unless Full Keyboard Access is on,
+    // which is what sent `palette.e2e.ts` back red pressing plain Tab (charter-app#176).
+    //
+    // So the confirm is reachable by keyboard on every platform exactly while these two are
+    // the only tabbables and the confirm is the second: then Cancel IS the first edge and the
+    // confirm IS the last, and Shift+Tab is Radix's own `focus()` call rather than the
+    // browser's tab sequence. **A third focusable added between them would take that away
+    // silently on one platform**, and this is what fails instead.
+    core();
+    render(<App />);
+    await openAChat();
+
+    await userEvent.click(screen.getByRole("button", { name: "End chat 1 steward" }));
+    const asking = await screen.findByRole("alertdialog");
+
+    // Read off the DOM rather than asked for by name: "the only two, in this order" is the
+    // claim, and `getByRole` for each would pass with a third between them.
+    const answers = within(asking).getAllByRole("button");
+    expect(answers.map((answer) => answer.textContent)).toEqual(["Cancel", "End chat 1 steward"]);
+    // Cancel first, so a Return pressed by reflex cancels. The dialog itself is not in the
+    // sequence — Radix gives the content `tabIndex={-1}`.
+    expect(answers[0]).toHaveFocus();
+
+    await userEvent.tab({ shift: true });
+
+    expect(answers[1]).toHaveFocus();
+  });
+
+  it("ends the chat when the confirm is pressed by the keyboard alone", async () => {
+    // **This is the claim `palette.e2e.ts` used to carry, tested where it can be evaluated.**
+    //
+    // The scenario cannot press it. Measured in charter-app#176 with a keydown trace in the
+    // real WebView: the engine delivers the key TO the focused button, unprevented —
+    // `Enter on <button> "Cancel"` — and does not activate it. Synthesised WebDriver key
+    // events carry no implicit activation, so no key a scenario can send will ever press a
+    // button. jsdom does implement activation, which makes this the only place the claim can
+    // be put to the test at all.
+    //
+    // A reader who wants the other half — that the question is reachable and answerable by
+    // keyboard in the first place — wants the test above: `Cancel` focused, the confirm one
+    // Shift+Tab away, nothing in between.
+    const { asked } = core();
+    render(<App />);
+    await openAChat();
+
+    await userEvent.click(screen.getByRole("button", { name: "End chat 1 steward" }));
+    const asking = await screen.findByRole("alertdialog");
+    // To the confirm and no further, by the key Radix handles at the scope's first edge.
+    await userEvent.tab({ shift: true });
+    expect(within(asking).getByRole("button", { name: "End chat 1 steward" })).toHaveFocus();
+
+    await userEvent.keyboard("{Enter}");
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryAllByTestId("pane")).toEqual([]);
+    expect(asked.filter(({ cmd }) => cmd === "close_session").map(({ args }) => args)).toEqual([
+      { plane: "/home/dev/plane", session: 1 },
+    ]);
+  });
+
+  it("answers the question with Escape, and Escape means no", async () => {
+    // `docs/ui-primitives.md`'s rule for every modal in this window: Escape answers, with the
+    // NON-destructive answer. It matters most on this one, because this is the only modal
+    // that appears without being asked for — a keyboard user's reflex must not end a chat.
+    const { asked } = core();
+    render(<App />);
+    await openAChat();
+
+    await userEvent.click(screen.getByRole("button", { name: "End chat 1 steward" }));
+    await screen.findByRole("alertdialog");
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(panes()).toEqual(["session 1"]);
+    expect(asked.filter(({ cmd }) => cmd === "close_session")).toEqual([]);
   });
 
   it("ends a session it opened for a split whose tab closed while it was starting", async () => {
@@ -361,7 +533,7 @@ describe("App", () => {
     // `×` the only way there is — by leaving the picker first. Escape does not call the start
     // back; it is already in flight, which is exactly the race this test is about.
     await userEvent.keyboard("{Escape}");
-    await userEvent.click(screen.getByRole("button", { name: "End chat 1 steward" }));
+    await endChat("End chat 1 steward");
     letTheSecondSessionStart();
 
     await vi.waitFor(() =>
