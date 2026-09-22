@@ -53,6 +53,58 @@ pub(crate) struct Panels {
     persona: Option<String>,
 }
 
+/// What one persona says about itself, for the row a reader clicked.
+///
+/// **The vault is a NAME and nothing else.** charter refuses a secret by kind and never
+/// echoes one, and a panel is the last place that rule should get a special case: this struct
+/// carries the word `vault: <name>` puts in the definition, so the window can say which vault
+/// a chat as this persona would open. Nothing here ever reads the vault.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub(crate) struct PersonaDetails {
+    name: String,
+    /// `role:`, inherited-inclusive.
+    role: Option<String>,
+    /// `delegate-when:` — the work that should come to this persona, which is what makes it
+    /// findable and what a router reads.
+    delegate_when: Option<String>,
+    /// `tools:`, the union down the `extends:` chain.
+    tools: Vec<String>,
+    /// The vault's name, where the definition declares one.
+    vault: Option<String>,
+    /// Whether the definition declares `vault: none` — that it holds no credentials at all.
+    ///
+    /// **Separate from `vault` being absent, and the window must keep them apart.** charter's
+    /// own `vault_of` falls back to a vault tagged with this persona in the registry, and
+    /// nothing in Rust reads that registry yet — so "no `vault:` line" means charter-app has
+    /// not looked, not that there is nothing. Drawing the two the same way would have the
+    /// window claim a persona holds no credentials on the strength of a file nobody read.
+    declares_no_vault: bool,
+    /// The `extends:` chain, child first. One name long for a persona that extends nothing.
+    lineage: Vec<String>,
+    /// The definition file, relative to the plane.
+    file: String,
+}
+
+/// What a persona's definition says, or charter's own sentence saying why it will not answer.
+pub(crate) fn persona(root: &Path, name: &str) -> Result<PersonaDetails, String> {
+    let shown = charter_core::personas::details(root, name)?;
+    let (vault, declares_no_vault) = match shown.vault {
+        charter_core::personas::Vault::Named(name) => (Some(name), false),
+        charter_core::personas::Vault::DeclaredNone => (None, true),
+        charter_core::personas::Vault::Undeclared => (None, false),
+    };
+    Ok(PersonaDetails {
+        name: shown.name,
+        role: shown.role,
+        delegate_when: shown.delegate_when,
+        tools: shown.tools,
+        vault,
+        declares_no_vault,
+        lineage: shown.lineage,
+        file: shown.file,
+    })
+}
+
 /// One clone's git state, and what the forge cache last recorded for its branch.
 #[derive(Debug, Clone, Default, serde::Serialize, specta::Type)]
 pub(crate) struct RepoState {
