@@ -47,6 +47,7 @@ import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame, RegionToggle } from "./RegionFrame";
 import { StatusLine } from "./StatusLine";
 import { useDoctor } from "./Doctor";
+import { usePin, useUpdates } from "./Updates";
 import {
   byLastActivity,
   closeFocusedPane,
@@ -438,6 +439,9 @@ export function PlaneView({
   /** What `charter doctor` says about this project, run inside the app: the preflight when
    *  the project opens, the full doctor when the operator opens it (`Doctor.tsx`). */
   const doctor = useDoctor(plane);
+  /** The updater's offer (the whole app's) and this plane's pin (`Updates.tsx`). */
+  const updates = useUpdates();
+  const pin = usePin(plane);
 
   /**
    * The piece the explorer has picked, when it is still a piece of the workspace on screen.
@@ -1369,6 +1373,8 @@ export function PlaneView({
         workspaces={sidebar?.workspaces.length}
         state={workspaceState}
         doctor={doctor}
+        updates={updates}
+        pin={pin}
       />
 
       {picking && (
