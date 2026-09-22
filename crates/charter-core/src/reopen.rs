@@ -90,12 +90,42 @@ pub struct Chat {
     /// written before pins existed. `show_footer` above is the same move under ADR 0029, and
     /// is the precedent rather than an analogy.
     pub pinned: bool,
+    /// The number this chat answers to in its plane, where the record knows one.
+    ///
+    /// **This is the chat's identity on disk, and that is charter-app#90.** The number is
+    /// what `$CHARTER_SESSION_ID` carries and what `.charter/sessions/<sid>.workspace` and
+    /// `<sid>.lock` are keyed on (charter-app#63). Before this field the number was dealt
+    /// again at every launch, in the order [`Record::chats`] happened to be in — so closing
+    /// one chat shifted every later one down by one at the next relaunch, and each surviving
+    /// chat read the workspace pointer and held the session lock of the chat that used to sit
+    /// above it. Recording it makes the number outlive the process that dealt it, which is
+    /// the only thing that makes the pointer mean this chat.
+    ///
+    /// `None` is a record written before this field, where nothing says which chat was
+    /// which; those are dealt in order at the next launch, exactly as they always were, and
+    /// carry numbers from then on. It is not a format change for the same reason `pinned`
+    /// was not: a bump drops every operator's open chats, and this field's absence reads as
+    /// the behaviour every record without it was written under.
+    pub number: Option<u32>,
 }
 
-/// Every chat that was open.
+/// Every chat that was open, and the numbers this plane has already spent.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Record {
     pub chats: Vec<Chat>,
+    /// The highest chat number this plane has ever dealt, open or closed — charter-app#90.
+    ///
+    /// **A number is never dealt twice, and this is what remembers that across a quit.**
+    /// [`Chat::number`] alone would keep a chat that came back on its own pointer, but it
+    /// could not stop a NEW chat inheriting a closed one's: close chat 3 and the record holds
+    /// 1 and 2, so the highest number it names is 2 and the next chat is 3 again — reading
+    /// the workspace that a stranger selected and taking the lock they held. The closed
+    /// chat's pointer is still on disk; `wscmd::select`'s prune only drops it at 30 days.
+    ///
+    /// So the counter is carried rather than derived from the chats. It never goes backwards
+    /// while the record is readable: the conversion both ways holds it at or above every
+    /// number the record names, so a hand-edited file cannot re-deal one it still lists.
+    pub dealt: u32,
 }
 
 /// How a chat came back, which is what the pane showing it says.
@@ -367,8 +397,17 @@ pub fn read_or_refusal(plane_root: &Path) -> Result<Record, std::io::Error> {
     if on_disk.version != VERSION {
         return Ok(Record::default());
     }
-    Ok(Record {
+    let record = Record {
         chats: on_disk.chats.into_iter().map(Chat::from).collect(),
+        dealt: on_disk.dealt,
+    };
+    // Held to the same invariant on the way in as on the way out: a file whose counter sits
+    // below a number it still names — hand-edited, or written by a charter that did not know
+    // about numbers — would otherwise deal that number to a second chat, which is the defect
+    // (charter-app#90). Raising it here costs a gap in the counting and nothing else.
+    Ok(Record {
+        dealt: highest_dealt(&record),
+        ..record
     })
 }
 
@@ -385,6 +424,11 @@ struct OnDisk {
     /// because a record nobody can date is one nobody can debug.
     at: u64,
     chats: Vec<ChatOnDisk>,
+    /// The highest chat number this plane has dealt — see [`Record::dealt`]. Absent in every
+    /// record written before chats kept their numbers, and `0` reads as "nothing dealt that
+    /// this file does not already name", which is what was true of those.
+    #[serde(default)]
+    dealt: u32,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -422,6 +466,12 @@ struct ChatOnDisk {
     /// existed, and `false` is what was true of those — see [`Chat::pinned`].
     #[serde(default)]
     pinned: bool,
+    /// The chat's number in its plane, or `0` where the record does not know one — see
+    /// [`Chat::number`]. Zero rather than a missing key because that is the value serde
+    /// defaults to, and because zero is not a number any chat is ever dealt: [`Chat::number`]
+    /// counts from one.
+    #[serde(default)]
+    number: u32,
 }
 
 impl From<&Record> for OnDisk {
@@ -458,10 +508,26 @@ impl From<&Record> for OnDisk {
                         String::new()
                     },
                     pinned: chat.pinned,
+                    number: chat.number.unwrap_or_default(),
                 })
                 .collect(),
+            dealt: highest_dealt(record),
         }
     }
+}
+
+/// The counter a record goes to disk with: what it carries, never below a number it names.
+///
+/// The two could only disagree through a caller that built a [`Record`] by hand — but the
+/// one thing this counter must never do is come back smaller than a number still in the
+/// file, because that is the whole of charter-app#90 handed back. It is cheaper to hold the
+/// invariant here, where every write passes, than to trust each caller with it.
+fn highest_dealt(record: &Record) -> u32 {
+    record
+        .chats
+        .iter()
+        .filter_map(|chat| chat.number)
+        .fold(record.dealt, u32::max)
 }
 
 impl From<ChatOnDisk> for Chat {
@@ -481,6 +547,11 @@ impl From<ChatOnDisk> for Chat {
             // the app did before ADR 0029 and what a record written before it says.
             show_footer: chat.footer == crate::start::FOOTER_SHOW,
             pinned: chat.pinned,
+            // Zero is "this record does not say", and so is any value a chat could not have
+            // been dealt. Nothing else is held against it: the number keys a path component
+            // that `contain::segment_ok` would pass for any integer, and a record that names
+            // a number no chat here holds costs at most a gap in the counting.
+            number: (chat.number > 0).then_some(chat.number),
         }
     }
 }
@@ -502,6 +573,7 @@ mod tests {
             persona: None,
             show_footer: false,
             pinned: false,
+            number: None,
         }
     }
 
@@ -512,6 +584,7 @@ mod tests {
         let plane = tempfile::tempdir().unwrap();
         let record = Record {
             chats: vec![claude("ide.7", Some(ID)), claude("ide.8", None)],
+            ..Default::default()
         };
 
         write(plane.path(), &record).expect("the record is written");
@@ -542,6 +615,7 @@ mod tests {
             plane.path(),
             &Record {
                 chats: vec![claude("ide.7", Some(ID))],
+                ..Default::default()
             },
         )
         .unwrap();
@@ -570,6 +644,7 @@ mod tests {
             plane.path(),
             &Record {
                 chats: vec![claude("ide.7", Some(ID))],
+                ..Default::default()
             },
         )
         .unwrap();
@@ -731,6 +806,7 @@ mod tests {
             plane.path(),
             &Record {
                 chats: vec![claude("ide.7", Some(ID))],
+                ..Default::default()
             },
         )
         .unwrap();
@@ -749,6 +825,7 @@ mod tests {
             plane.path(),
             &Record {
                 chats: vec![claude("ide.7", Some(ID))],
+                ..Default::default()
             },
         )
         .unwrap();
@@ -757,6 +834,7 @@ mod tests {
             plane.path(),
             &Record {
                 chats: vec![claude("ide.8", None)],
+                ..Default::default()
             },
         )
         .unwrap();
@@ -778,6 +856,7 @@ mod tests {
             plane.path(),
             &Record {
                 chats: vec![claude("ide.7", None), front],
+                ..Default::default()
             },
         )
         .unwrap();
@@ -808,6 +887,7 @@ mod tests {
 
     fn one_chat() -> Record {
         Record {
+            dealt: 0,
             chats: vec![Chat {
                 program: "/bin/sh".into(),
                 args: vec!["-c".into(), "touch /tmp/pwned".into()],
@@ -819,6 +899,7 @@ mod tests {
                 persona: None,
                 show_footer: false,
                 pinned: false,
+                number: None,
             }],
         }
     }
@@ -996,6 +1077,7 @@ mod tests {
     fn a_pinned_chat_comes_back_pinned() {
         let plane = tempfile::tempdir().unwrap();
         let record = Record {
+            dealt: 0,
             chats: vec![
                 Chat {
                     pinned: true,
@@ -1045,5 +1127,105 @@ mod tests {
         .unwrap();
 
         assert_eq!(read(plane.path()), Record::default());
+    }
+
+    // ----- the number a chat keeps, and the numbers the plane has spent (charter-app#90) --
+
+    #[test]
+    fn a_chat_comes_back_under_the_number_it_was_recorded_with() {
+        // Without this the number is the chat's POSITION in the record, which changes the
+        // moment another chat is closed — and the number is the key
+        // `.charter/sessions/<n>.workspace` and `<n>.lock` are written at.
+        let plane = tempfile::tempdir().unwrap();
+        let record = Record {
+            chats: vec![
+                Chat {
+                    number: Some(2),
+                    ..claude("ide.7", Some(ID))
+                },
+                Chat {
+                    number: Some(5),
+                    ..claude("ide.8", None)
+                },
+            ],
+            dealt: 5,
+        };
+
+        write(plane.path(), &record).expect("the record is written");
+
+        assert_eq!(read(plane.path()), record);
+    }
+
+    #[test]
+    fn a_record_written_before_chats_kept_their_numbers_says_nothing_about_them() {
+        // Every operator has one of these at the first launch after this change. Reading a
+        // missing key as "no number" is what lets the launch deal them in order, which is
+        // what it always did; inventing one would file a chat under a stranger's pointer on
+        // purpose.
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(plane.path().join(".charter/app")).unwrap();
+        std::fs::write(
+            path(plane.path()),
+            br#"{"version":1,"at":0,"chats":[{"program":"claude","name":"ide.7"}]}"#,
+        )
+        .unwrap();
+
+        let back = read(plane.path());
+
+        assert_eq!(back.chats[0].number, None);
+        assert_eq!(back.dealt, 0);
+    }
+
+    #[test]
+    fn a_number_of_zero_is_read_as_no_number_at_all() {
+        // Zero is what serde defaults the key to and is no chat's number: `Sessions` counts
+        // from one. A record that says zero is a record that says nothing.
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(plane.path().join(".charter/app")).unwrap();
+        std::fs::write(
+            path(plane.path()),
+            br#"{"version":1,"at":0,"chats":[{"program":"claude","name":"i","number":0}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(read(plane.path()).chats[0].number, None);
+    }
+
+    #[test]
+    fn the_counter_written_down_is_never_below_a_number_the_record_names() {
+        // A caller that built a record by hand, or one field updated and not the other,
+        // would otherwise write a counter that hands the next launch a number two chats
+        // answer to.
+        let plane = tempfile::tempdir().unwrap();
+
+        write(
+            plane.path(),
+            &Record {
+                chats: vec![Chat {
+                    number: Some(6),
+                    ..claude("ide.7", None)
+                }],
+                dealt: 1,
+            },
+        )
+        .expect("the record is written");
+
+        assert_eq!(read(plane.path()).dealt, 6);
+    }
+
+    #[test]
+    fn a_record_whose_counter_was_edited_below_its_chats_is_read_with_it_raised() {
+        // The same invariant on the way in. This file is one anybody who can write the
+        // plane's state directory can write, and the one thing a counter must never do is
+        // come back smaller than a number still in the file.
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(plane.path().join(".charter/app")).unwrap();
+        std::fs::write(
+            path(plane.path()),
+            br#"{"version":1,"at":0,"dealt":1,"chats":[{"program":"claude","name":"i","number":4}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(read(plane.path()).dealt, 4);
     }
 }

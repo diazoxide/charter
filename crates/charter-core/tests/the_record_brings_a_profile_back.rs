@@ -26,6 +26,7 @@ fn a_chat_on(profile: &str, persona: Option<&str>) -> Chat {
         persona: persona.map(str::to_owned),
         show_footer: false,
         pinned: false,
+        number: None,
     }
 }
 
@@ -34,6 +35,7 @@ fn the_profile_and_the_persona_survive_a_quit_and_come_back() {
     let dir = tempfile::tempdir().unwrap();
     let record = Record {
         chats: vec![a_chat_on("claude-work", Some("steward"))],
+        ..Default::default()
     };
 
     reopen::write(dir.path(), &record).unwrap();
@@ -53,6 +55,7 @@ fn the_record_never_holds_the_environment_that_names_an_account() {
         dir.path(),
         &Record {
             chats: vec![a_chat_on("claude-work", None)],
+            ..Default::default()
         },
     )
     .unwrap();
@@ -134,6 +137,7 @@ fn a_chats_footer_choice_survives_a_quit_and_comes_back_with_it() {
         dir.path(),
         &Record {
             chats: vec![asked, a_chat_on("claude-work", None)],
+            ..Default::default()
         },
     )
     .unwrap();

@@ -58,6 +58,13 @@ pub struct Reporting {
 /// Every session the app is running, by the id the UI calls it by.
 pub struct Sessions {
     running: Mutex<HashMap<u32, Running>>,
+    /// The highest number dealt so far, and never a count of what is open.
+    ///
+    /// It only ever rises — a session that ends does not give its number back, and a number
+    /// put back from the record raises it past itself. That is what makes a number NAME a
+    /// chat rather than its position in a list (charter-app#90): the number is the key of
+    /// `.charter/sessions/<sid>.workspace` and `<sid>.lock`, so a second chat under it reads
+    /// the first one's workspace and holds the lock it took.
     opened: AtomicU32,
     /// Where sessions are told to report, when the app is listening. None is an app that
     /// could not open its channel: every chat then shows `unknown`, which is honest.
@@ -103,14 +110,31 @@ impl Sessions {
     /// would miss it — for a chat that is then idle, waiting for a first prompt, no second
     /// event ever comes and it reads `unknown` for the rest of the run. A review found that
     /// on the relaunch path, where a whole record's worth of chats start at once.
-    pub fn open(&self, opening: &Opening, announce: &dyn Fn(u32)) -> Result<u32, String> {
+    ///
+    /// `wanted` is the number this chat ALREADY answers to, where it has one. A relaunch
+    /// hands the number the record kept for each chat, so the chat comes back on its own
+    /// `.charter/sessions/<sid>.workspace` and `<sid>.lock` rather than on whichever the
+    /// order of the record would have dealt it (charter-app#90). `None` is a chat that has
+    /// no number yet, which is every chat the operator starts.
+    ///
+    /// A number a session is **already running under** is refused and a fresh one taken
+    /// instead: a record that names one twice — hand-edited, or two records concatenated —
+    /// would otherwise give two live chats one key, which is this same defect pointed the
+    /// other way. Whichever number is chosen, the counter is raised past it, so nothing
+    /// dealt later can land on it either.
+    pub fn open(
+        &self,
+        wanted: Option<u32>,
+        opening: &Opening,
+        announce: &dyn Fn(u32),
+    ) -> Result<u32, String> {
         let program = opening.program.clone().unwrap_or_else(shell);
         let mut spec = Spec::new(program, opening.size).args(&opening.args);
         spec.cwd = opening.cwd.as_ref().map(Into::into);
         // The id is chosen BEFORE the program starts, because the program's own hooks have
         // to carry it: a chat that learned its number afterwards would have a first turn
         // nothing could attribute.
-        let id = self.opened.fetch_add(1, Ordering::Relaxed) + 1;
+        let id = self.number_for(wanted);
         spec.env = opening
             .env
             .iter()
@@ -173,6 +197,46 @@ impl Sessions {
             },
         );
         Ok(id)
+    }
+
+    /// The number a session opens under: `wanted` where it can still be had, else the next.
+    ///
+    /// The counter is raised past whatever is chosen, under the same lock that answers
+    /// whether `wanted` is free — two chats starting at once would otherwise both read the
+    /// counter, both add one, and both get the same number.
+    ///
+    /// **Two callers asking for the SAME `wanted` at the same moment would still collide**,
+    /// because a session is only in `running` once its program has been spawned. Nothing
+    /// does that: a `wanted` comes from the record and `Chats::put_back` walks it one chat
+    /// at a time, and every chat the operator starts asks for no number at all. Written down
+    /// rather than guarded, because the guard would be a second copy of `running` kept in
+    /// step with it for a caller that does not exist.
+    fn number_for(&self, wanted: Option<u32>) -> u32 {
+        let running = lock(&self.running);
+        // Zero is no chat's number: `active::session_id` reads the value as a path
+        // component, and a record that says zero is one that says nothing.
+        let id = match wanted {
+            Some(wanted) if wanted > 0 && !running.contains_key(&wanted) => wanted,
+            _ => self.opened.load(Ordering::Relaxed) + 1,
+        };
+        self.opened.fetch_max(id, Ordering::Relaxed);
+        id
+    }
+
+    /// Says `dealt` numbers have already gone out in this plane, so none of them is dealt
+    /// again — charter-app#90.
+    ///
+    /// A launch calls this with what the record kept, BEFORE putting any chat back. The
+    /// numbers above what is in the record are the ones that matter: a chat that was closed
+    /// before the quit is not in the record at all, and its `.charter/sessions/<n>.workspace`
+    /// and `<n>.lock` are still on disk for the 30 days `wscmd::select`'s prune leaves them.
+    pub fn already_dealt(&self, dealt: u32) {
+        self.opened.fetch_max(dealt, Ordering::Relaxed);
+    }
+
+    /// The highest number this plane has dealt, for the record to keep.
+    pub fn dealt(&self) -> u32 {
+        self.opened.load(Ordering::Relaxed)
     }
 
     /// Ends a session and everything it started. Its views end with it.
@@ -400,7 +464,11 @@ mod tests {
     fn a_view_is_sent_what_the_session_prints() {
         let sessions = Sessions::new();
         let id = sessions
-            .open(&opening("printf 'output for the pane'; sleep 600"), &|_| {})
+            .open(
+                None,
+                &opening("printf 'output for the pane'; sleep 600"),
+                &|_| {},
+            )
             .expect("the session opens");
 
         let (_view, seen) = watching(&sessions, id);
@@ -413,6 +481,7 @@ mod tests {
         let sessions = Sessions::new();
         let id = sessions
             .open(
+                None,
                 &opening("read line; printf 'you typed %s' \"$line\"; sleep 600"),
                 &|_| {},
             )
@@ -429,6 +498,7 @@ mod tests {
         let sessions = Sessions::new();
         let id = sessions
             .open(
+                None,
                 &opening("read _; printf 'after the pane went away'; sleep 600"),
                 &|_| {},
             )
@@ -450,7 +520,11 @@ mod tests {
     fn a_pane_is_told_when_the_program_it_is_showing_has_ended() {
         let sessions = Sessions::new();
         let id = sessions
-            .open(&opening("printf 'the last thing it printed'"), &|_| {})
+            .open(
+                None,
+                &opening("printf 'the last thing it printed'"),
+                &|_| {},
+            )
             .expect("the session opens");
 
         let (_view, seen) = watching(&sessions, id);
@@ -468,6 +542,7 @@ mod tests {
         let sessions = Sessions::new();
         let id = sessions
             .open(
+                None,
                 &opening("read _; printf 'the last thing it printed'"),
                 &|_| {},
             )
@@ -489,6 +564,7 @@ mod tests {
             .map(|_| {
                 let id = sessions
                     .open(
+                        None,
                         &opening("trap '' HUP; echo guarded; while :; do sleep 600; done"),
                         &|_| {},
                     )
@@ -530,7 +606,7 @@ mod tests {
     fn a_resize_reaches_the_program() {
         let sessions = Sessions::new();
         let id = sessions
-            .open(&opening("read _; stty size; sleep 600"), &|_| {})
+            .open(None, &opening("read _; stty size; sleep 600"), &|_| {})
             .expect("the session opens");
         let (_view, seen) = watching(&sessions, id);
 
@@ -552,7 +628,7 @@ mod tests {
     fn a_view_is_told_the_size_the_screen_it_opened_on_was_drawn_for() {
         let sessions = Sessions::new();
         let id = sessions
-            .open(&opening("sleep 600"), &|_| {})
+            .open(None, &opening("sleep 600"), &|_| {})
             .expect("it opens");
         let bigger = Size {
             columns: 120,
@@ -576,6 +652,7 @@ mod tests {
             .map(|n| {
                 let id = sessions
                     .open(
+                        None,
                         &opening(&format!("printf 'session {n} is running'; sleep 600")),
                         &|_| {},
                     )
@@ -595,7 +672,7 @@ mod tests {
     fn a_closed_session_is_no_longer_running() {
         let sessions = Sessions::new();
         let id = sessions
-            .open(&opening("sleep 600"), &|_| {})
+            .open(None, &opening("sleep 600"), &|_| {})
             .expect("it opens");
         assert_eq!(sessions.running(), vec![id]);
 
@@ -621,7 +698,7 @@ mod tests {
         let mut opening = opening("true");
         opening.program = Some("/definitely/not/a/program".to_owned());
 
-        assert!(sessions.open(&opening, &|_| {}).is_err());
+        assert!(sessions.open(None, &opening, &|_| {}).is_err());
     }
 
     // --- the chat's own session id (charter-app#63) ------------------------------------ //
@@ -634,6 +711,7 @@ mod tests {
     fn session_id_of_a_chat(sessions: &Sessions) -> (u32, String) {
         let id = sessions
             .open(
+                None,
                 &opening("printf 'sid=<%s>' \"$CHARTER_SESSION_ID\"; sleep 600"),
                 &|_| {},
             )
@@ -734,6 +812,94 @@ mod tests {
 
         assert_ne!(first_id, second_id);
         assert_ne!(first, second, "two chats would read one another's pointers");
+    }
+
+    // --- the number a chat already answers to (charter-app#90) ------------------------- //
+
+    #[test]
+    fn a_session_opens_under_the_number_it_is_asked_for() {
+        // A relaunch asks for each chat's recorded number, so the chat comes back on its own
+        // `.charter/sessions/<n>.workspace` rather than on wherever the order put it.
+        let sessions = Sessions::new();
+
+        let id = sessions
+            .open(Some(9), &opening("sleep 600"), &|_| {})
+            .expect("the session opens");
+
+        assert_eq!(id, 9);
+        sessions.close(id).expect("it closes");
+    }
+
+    #[test]
+    fn a_number_that_was_asked_for_is_not_handed_out_again_afterwards() {
+        // The counter is a high water mark, so a number put back from the record cannot
+        // collide with one dealt later in the same run.
+        let sessions = Sessions::new();
+        let put_back = sessions
+            .open(Some(9), &opening("sleep 600"), &|_| {})
+            .expect("the session opens");
+
+        let next = sessions
+            .open(None, &opening("sleep 600"), &|_| {})
+            .expect("the session opens");
+
+        assert_eq!(put_back, 9);
+        assert_eq!(next, 10);
+        sessions.close(put_back).expect("it closes");
+        sessions.close(next).expect("it closes");
+    }
+
+    #[test]
+    fn a_number_a_session_is_already_running_under_is_refused() {
+        // A record that names one number twice would otherwise give two live chats one key,
+        // which is charter-app#90 pointed the other way: they would share a workspace
+        // pointer and fight over one session lock.
+        let sessions = Sessions::new();
+        let first = sessions
+            .open(Some(4), &opening("sleep 600"), &|_| {})
+            .expect("the session opens");
+
+        let second = sessions
+            .open(Some(4), &opening("sleep 600"), &|_| {})
+            .expect("the session opens");
+
+        assert_eq!(first, 4);
+        assert_ne!(second, 4, "two sessions were given one session id");
+        sessions.close(first).expect("it closes");
+        sessions.close(second).expect("it closes");
+    }
+
+    #[test]
+    fn numbers_a_plane_has_already_spent_are_not_dealt_to_a_new_chat() {
+        // What `Record::dealt` buys: the chats it names are not the only numbers spent. One
+        // the operator closed before quitting is in no record, and its pointer and lock sit
+        // on disk for the 30 days `wscmd::select`'s prune leaves them.
+        let sessions = Sessions::new();
+        sessions.already_dealt(7);
+
+        let id = sessions
+            .open(None, &opening("sleep 600"), &|_| {})
+            .expect("the session opens");
+
+        assert_eq!(id, 8);
+        assert_eq!(sessions.dealt(), 8);
+        sessions.close(id).expect("it closes");
+    }
+
+    #[test]
+    fn a_session_that_ends_does_not_give_its_number_back() {
+        let sessions = Sessions::new();
+        let first = sessions
+            .open(None, &opening("sleep 600"), &|_| {})
+            .expect("the session opens");
+        sessions.close(first).expect("it closes");
+
+        let second = sessions
+            .open(None, &opening("sleep 600"), &|_| {})
+            .expect("the session opens");
+
+        assert_ne!(second, first);
+        sessions.close(second).expect("it closes");
     }
 
     #[test]
