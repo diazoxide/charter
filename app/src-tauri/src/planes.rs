@@ -327,11 +327,6 @@ impl Planes {
         id
     }
 
-    /// Puts back what the plane held, which **starts the programs its record names**.
-    ///
-    /// Private, and it takes [`Approved`] — a value nothing outside this module can build.
-    /// That is the gate: [`Planes::open`] above attaches a plane and has no way to reach
-    /// this, so a plane the operator has not said yes to cannot run anything.
     /// The record of a plane this registry is already holding, read against the root the
     /// registry settled on.
     ///
@@ -347,6 +342,14 @@ impl Planes {
         }
     }
 
+    /// Puts back what the plane held, which **starts the programs its record names**.
+    ///
+    /// Private, and it takes [`Approved`] — a value nothing outside this module can build.
+    /// That is the gate: [`Planes::open`] above attaches a plane and has no way to reach
+    /// this, so a plane the operator has not said yes to cannot run anything.
+    ///
+    /// `record` is the bytes the caller decided on, never a path for this to read: see
+    /// [`Held::reopen`] and charter-app#123.
     fn reopen(&self, plane: &PlaneId, _yes: &Approved, record: Read) {
         // The handle is taken and the lock dropped BEFORE anything starts: reopening runs
         // programs, and a program that dies at once tells the board, which tells the window,
