@@ -159,12 +159,44 @@ pasted from shadcn finds what it expects. Nothing else is here yet, deliberately
 components nothing renders is dead code, and `class-variance-authority` arrives with the first
 component that has variants.
 
-> **A conflict for the operator to settle.** `docs/ui-primitives.md` says *"Do not write a
-> wrapper layer around them. No `<Modal>`, no `<Field>`, no house component library."* A
-> shadcn component is literally a thin wrapper around a Radix primitive. The two rules can be
-> reconciled — a pasted file is *ours*, editable, and visible in review, which is not what that
-> rule was written against — but the reconciliation is a decision, not a reading. Until it is
-> made, paste a shadcn component only when a ticket calls for it and say so in the PR.
+> **Settled by the operator on 2026-09-22 — copy shadcn components in.** This file used to flag
+> a conflict here: `docs/ui-primitives.md` said *"Do not write a wrapper layer around them. No
+> `<Modal>`, no `<Field>`, no house component library,"* and a shadcn component is literally a
+> thin wrapper around a Radix primitive. The ruling is that those are two different things
+> wearing one word. A component library is **a dependency that owns your markup** — an upstream
+> you cannot edit, an API you are stuck with, a look you fight. **A copied-in component is our
+> own code in our own repo, editable line by line.** The rule is now *no library between you and
+> the primitive, and no indirection you cannot read*, and copied-in source is neither. charter
+> **ADR 0037**'s amendment of 2026-09-22 holds the decision and the reasoning, and is
+> authoritative over both this file and `ui-primitives.md`.
+
+**What a copied component has to satisfy.** This file rather than `ui-primitives.md` has the say
+on the first three, because they are about what the window is drawn *in*:
+
+- **Every Tailwind colour class has to be renamed to this vocabulary, by hand, and nothing will
+  tell you if you forget.** A shadcn component ships `bg-background`, `text-foreground`,
+  `bg-destructive` — names from shadcn's own token set, which this app does not have. They are
+  not classes here: the palette is deleted above and these were never in it, so each one emits
+  **no CSS at all**. Nothing goes red. `literals.test.ts` catches a hex literal and an arbitrary
+  value; it does not catch a class that does not exist, and `tailwind.test.ts` checks that the
+  palette is gone rather than that a source file avoided it. The result of missing one is an
+  element rendered undressed — which is exactly the `claudeclaudeclaudebuilt-indefault` defect
+  charter ADR 0037 was written about. **Read the copied file's classes against the `@theme` block
+  in `app/src/styles.css` before the PR, and look at the component running.**
+  `bg-surface-base text-text-primary` is the shape they should end up in.
+- **No arbitrary value survives the paste** — `text-[13px]`, `rounded-[6px]`, `bg-[#fff]`. This
+  one *is* mechanical: `literals.test.ts` reads the real source tree and fails on it.
+- **No colour literal**, in the same test, for the same reason as everything else in this file.
+- **It goes at shadcn's address**, `app/src/components/ui/`, and it is **edited freely**. That is
+  the condition rather than a permission: a copy kept pristine "because upstream will fix it" is
+  a dependency with worse ergonomics and no version, and there is no upstream once it is copied.
+- **Say where it came from, and at what version, in the file.** No manifest records a copied
+  file, so the file is the only place its provenance can live.
+
+Still refused, unchanged by the ruling: a component library as a **dependency**, and a house
+abstraction layer over Radix — `<ConfirmModal open onConfirm>` — whether it is written here or
+copied from somewhere. Copying it would not launder it; what is refused is a charter API in
+front of the primitive.
 
 **Lucide** is the icon set (`lucide-react`). The property that matters is that it draws with
 `stroke="currentColor"` and `fill="none"`, so an icon takes the colour of the text it sits in

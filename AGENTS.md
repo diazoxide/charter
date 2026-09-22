@@ -18,8 +18,11 @@ charter repo (linked from `README.md`). ADR 0025 there holds the reasons.
 - **The plane on disk has the Python charter's format.** Never change it here without the
   plane-format spec changing first.
 - **No `unsafe`** (`unsafe_code = "forbid"` workspace-wide).
-- **UI is built from Radix primitives, never hand-rolled markup**, and never behind a wrapper
-  layer of our own. `docs/ui-primitives.md` says which, why, and what it costs.
+- **UI is built from Radix primitives, never hand-rolled markup**, and never behind a charter API
+  of our own — no `<Modal>`, no `<Field>`. A shadcn/ui component's source **copied into the repo
+  is allowed** and is not that layer (charter ADR 0037, amended 2026-09-22).
+  `docs/ui-primitives.md` says which, why, and what it costs; `docs/design-system.md` says what a
+  copy has to satisfy.
 - **No colour is written anywhere but `app/src/theme/`.** A theme is a data file; the CSS
   custom properties and xterm's theme object are both generated from it. Semantic tokens only,
   no arbitrary Tailwind values, and a test fails the build on either.
