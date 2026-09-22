@@ -197,4 +197,113 @@ describe("putting a region away", () => {
     await (await $('button[aria-pressed="false"]=Explorer')).click();
     await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
   });
+
+  it("leaves the slot in the group, collapsed rather than removed", async () => {
+    // charter-app#141: taking a panel out of a live group throws *"Panel constraints not found
+    // for index 3"* from a document listener, so a slot that is put away stays and is collapsed
+    // to nothing. jsdom never lays a group out, so this is the only place the real library is
+    // asked — and a width of zero with the content gone is what "put away" has to mean.
+    await untilTheStripIsRead();
+    await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
+
+    await (await $('button[aria-pressed="true"]=Explorer')).click();
+    await browser.waitUntil(async () => !(await $('[data-testid="explorer"]').isExisting()), {
+      timeout: 20_000,
+      timeoutMsg: "the explorer did not go away when it was put away",
+    });
+
+    const slot = await $('[data-panel][id="region-left"]');
+    await expect(slot).toBeExisting();
+    expect((await slot.getSize("width")) as number).toBe(0);
+
+    await (await $('button[aria-pressed="false"]=Explorer')).click();
+    await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
+  });
+});
+
+/**
+ * **The arrangement drives the window** (`app/src/regions.ts`), against the real app.
+ *
+ * jsdom gives every element a size of zero, so `react-resizable-panels` defers its layout there
+ * and no unit test can read a region's width. These are the assertions that need a window that
+ * really lays out.
+ */
+describe("the layout as data", () => {
+  it("draws each region in the slot the arrangement names", async () => {
+    await untilTheStripIsRead();
+    await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
+
+    // The default arrangement (charter ADR 0038), read off the real DOM rather than off the
+    // JSX: the explorer in the left slot, what is asking for you in the right, the repo state
+    // along the bottom.
+    await expect(await $('[data-panel][id="region-left"] [data-testid="explorer"]')).toBeExisting();
+    await expect(await $('[data-panel][id="region-right"] [data-testid="panels"]')).toBeExisting();
+    await expect(
+      await $('[data-panel][id="region-bottom"] [data-testid="bottom-bar"]'),
+    ).toBeExisting();
+  });
+
+  it("gives a slot the width the arrangement asks for, and not an equal share", async () => {
+    // The sizes are the arrangement's — a slot laid out at a third of the window would mean the
+    // library never read them. The explorer is 16% of its row by default and the right-hand
+    // side 20%, so the centre is much the widest thing in the window.
+    await untilTheStripIsRead();
+    await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
+
+    const width = async (id: string) =>
+      (await (await $(`[data-panel][id="${id}"]`)).getSize("width")) as number;
+    const [left, centre, right] = await Promise.all([
+      width("region-left"),
+      width("region-centre"),
+      width("region-right"),
+    ]);
+
+    expect(centre).toBeGreaterThan(left + right);
+    expect(left).toBeGreaterThan(0);
+    expect(right).toBeGreaterThan(left);
+  });
+
+  it("remembers how wide a slot was dragged, and brings it back that wide", async () => {
+    // What charter-app#141 deferred: only WHICH regions were drawn was remembered, never how
+    // big. A drag settles, the width is written down, and putting the region away and bringing
+    // it back comes back to the dragged width rather than to the library's minimum.
+    await untilTheStripIsRead();
+    await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
+    const slot = await $('[data-panel][id="region-left"]');
+    const before = (await slot.getSize("width")) as number;
+
+    // The handle between the explorer and the centre, moved with the keyboard: a drag in
+    // pixels is a pointer path a CI runner times differently, and the arrow keys are a resize
+    // the library reports exactly as it reports a drag.
+    const handle = await $('[role="separator"][aria-controls="region-left"]');
+    await handle.click();
+    for (let step = 0; step < 6; step++) await browser.keys(["ArrowRight"]);
+    await browser.waitUntil(async () => ((await slot.getSize("width")) as number) > before, {
+      timeout: 20_000,
+      timeoutMsg: "the explorer's slot never got wider",
+    });
+    const dragged = (await slot.getSize("width")) as number;
+
+    await (await $('button[aria-pressed="true"]=Explorer')).click();
+    await browser.waitUntil(async () => !(await $('[data-testid="explorer"]').isExisting()), {
+      timeout: 20_000,
+      timeoutMsg: "the explorer did not go away when it was put away",
+    });
+    await (await $('button[aria-pressed="false"]=Explorer')).click();
+    await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
+
+    await browser.waitUntil(
+      async () => Math.abs(((await slot.getSize("width")) as number) - dragged) <= 2,
+      {
+        timeout: 20_000,
+        timeoutMsg: `the explorer came back at a different width than the ${dragged}px it was dragged to`,
+      },
+    );
+
+    // One app process serves the whole scenario run, and this spec is the only one that changes
+    // a width — so it puts it back, rather than leaving every spec after it looking at a window
+    // this one rearranged.
+    await handle.click();
+    for (let step = 0; step < 6; step++) await browser.keys(["ArrowLeft"]);
+  });
 });
