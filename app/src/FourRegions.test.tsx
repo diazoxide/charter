@@ -284,6 +284,20 @@ describe("the four regions", () => {
     expect(screen.queryByTestId("panels")).not.toBeInTheDocument();
   });
 
+  it("gives every region in the arrangement its own way back", async () => {
+    // The buttons are drawn from the arrangement, so a region added to the catalogue cannot
+    // arrive with nowhere to bring it back from — which a list written out by hand allowed.
+    core();
+    render(<App />);
+    await screen.findByLabelText("Explorer");
+
+    expect(
+      within(document.querySelector(".regions-doing") as HTMLElement)
+        .getAllByRole("button")
+        .map((one) => one.textContent),
+    ).toEqual(["Explorer", "Attention", "State"]);
+  });
+
   it("keeps a chat in another workspace running while the explorer is used", async () => {
     // #125's guarantee, one scope down: nothing in this region ends anything.
     const { asked } = core();
@@ -297,5 +311,81 @@ describe("the four regions", () => {
 
     expect(asked.filter((one) => one.cmd === "close_session")).toEqual([]);
     expect(screen.getAllByTestId("pane")).toHaveLength(1);
+  });
+});
+
+/**
+ * **The arrangement, against the whole window** (`regions.ts`).
+ *
+ * The four regions used to be the shape of `PlaneView`'s JSX. They are a stored document now,
+ * and these are the assertions that say the window really reads it — a layout that is only data
+ * in one module is not configurable.
+ */
+describe("the window the stored arrangement asks for", () => {
+  /** What the window reads before it renders. */
+  const arrange = (regions: unknown) =>
+    globalThis.localStorage.setItem("charter.layout", JSON.stringify({ regions }));
+
+  const inSlot = (side: string) => within(screen.getByTestId(`region-${side}`));
+
+  it("draws a region on the side the document names, with no JSX moved", async () => {
+    arrange([
+      { id: "explorer", side: "left", order: 0, collapsed: false },
+      { id: "aside", side: "right", order: 0, collapsed: false },
+      { id: "bottom", side: "right", order: 1, collapsed: false },
+    ]);
+    core();
+    render(<App />);
+    await screen.findByLabelText("Repository state");
+
+    expect(inSlot("right").getByLabelText("Repository state")).toBeInTheDocument();
+    expect(inSlot("bottom").queryByLabelText("Repository state")).not.toBeInTheDocument();
+  });
+
+  it("stacks two regions in one slot in the order the document gives them", async () => {
+    arrange([
+      { id: "explorer", side: "left", order: 0, collapsed: false },
+      { id: "bottom", side: "left", order: -1, collapsed: false },
+      { id: "aside", side: "right", order: 0, collapsed: false },
+    ]);
+    core();
+    render(<App />);
+    await screen.findByLabelText("Repository state");
+
+    const drawn = inSlot("left").getAllByTestId(/^(explorer|bottom-bar)$/);
+    expect(drawn.map((one) => one.dataset.testid)).toEqual(["bottom-bar", "explorer"]);
+  });
+
+  it("launches with a region away, and its slot is still in the group", async () => {
+    // A slot that is put away is collapsed and never removed — charter-app#141's throw. What
+    // the operator loses is the content, which is unmounted so it is out of the tab order too.
+    arrange([
+      { id: "explorer", side: "left", order: 0, collapsed: true },
+      { id: "aside", side: "right", order: 0, collapsed: false },
+      { id: "bottom", side: "bottom", order: 0, collapsed: false },
+    ]);
+    core();
+    render(<App />);
+    await screen.findByTestId("panels");
+
+    expect(screen.queryByTestId("explorer")).not.toBeInTheDocument();
+    expect(screen.getByTestId("region-left")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Explorer", pressed: false })).toBeInTheDocument();
+  });
+
+  it("writes what the operator did back where the next launch will read it", async () => {
+    core();
+    render(<App />);
+    await screen.findByLabelText("Explorer");
+
+    await userEvent.click(screen.getByRole("button", { name: "Explorer", pressed: true }));
+
+    expect(JSON.parse(globalThis.localStorage.getItem("charter.layout") ?? "null")).toEqual({
+      regions: [
+        { id: "explorer", side: "left", order: 0, collapsed: true },
+        { id: "aside", side: "right", order: 0, collapsed: false },
+        { id: "bottom", side: "bottom", order: 0, collapsed: false },
+      ],
+    });
   });
 });

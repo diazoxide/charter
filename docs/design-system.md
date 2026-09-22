@@ -115,6 +115,28 @@ has. Nothing about this needs ADR 0040 amended again.
 was built on. The seam is `load(raw: unknown)`, which takes whatever `JSON.parse` gave and is
 fully tested against garbage; the command that supplies `raw` is the only missing piece.
 
+### The window's layout is not a file, and the difference is the first frame
+
+A theme and a **layout** — which regions are drawn, on which side, in what order and how big
+(`app/src/regions.ts`) — are both "how one operator likes their window", and they are stored in
+different places on purpose.
+
+A theme can be deferred behind a Tauri command because a built-in theme is compiled into the
+bundle and `main.tsx` applies it before React renders: the window is never unpainted and never
+painted wrong, and a file read that arrives later only improves it. **A layout has no such
+stand-in.** The operator's arrangement *is* the thing; reading it after the window has painted
+means painting the default arrangement first and re-laying-out — which is exactly the flash
+charter-app#141 left and this work removed. Web storage is the only store a webview answers
+synchronously, so that is where the layout is, under `charter.layout`.
+
+It is not in the machine store either. charter ADR 0040 amended ADR 0034 for *"how the operator
+arranged what this file already names"* — the planes it holds and the workspaces inside them. A
+region arrangement names nothing that file holds, and 0034's limit is worth more than a fifth
+field. If a layout ever has to be shared, hand-edited or contributed by a plugin (charter ADR
+0041), the file route is open — but it would have to be **injected into the window at creation**
+rather than fetched from it, for the reason above. The seam is `load(raw: unknown)`, the same
+shape this page describes for the theme.
+
 ## Tailwind, shadcn and Lucide
 
 **Tailwind v4**, wired in `app/src/styles.css`. Three decisions there, each with a test in

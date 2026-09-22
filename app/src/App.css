@@ -424,22 +424,25 @@ body {
 .region-upper,
 .region-row,
 .region-centre,
-.region-explorer,
-.region-aside,
-.region-bottom {
+.region-slot {
   height: 100%;
   min-height: 0;
 }
 
-.region-explorer {
+/* **A slot's look is the slot's, not the region's in it.** Which side of the window something
+   is on is what decides whether it has a line on its left or on its right, and `surface.deep`
+   is defined by the theme as the topmost strip and the bottom of the window — see
+   `app/src/theme/theme.ts`. So a region moved to another side takes on that side's look, which
+   is what it means for the arrangement to be data (`app/src/regions.ts`). */
+.slot-left {
   border-right: 1px solid var(--border-subtle);
 }
 
-.region-aside {
+.slot-right {
   border-left: 1px solid var(--border-subtle);
 }
 
-.region-bottom {
+.slot-bottom {
   border-top: 1px solid var(--border-subtle);
   background: var(--surface-deep);
 }
@@ -1320,7 +1323,7 @@ body {
   opacity: 0.6;
 }
 
-/* A region that is put away keeps its handle in the group — `PlaneView`'s `Region` says why —
+/* A slot with nothing in it keeps its handle in the group — `RegionFrame`'s `Slot` says why —
    and the handle goes to nothing so there is no line to drag and nothing to hit. */
 [data-separator].edge-gone {
   display: none;
