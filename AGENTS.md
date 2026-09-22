@@ -20,6 +20,10 @@ charter repo (linked from `README.md`). ADR 0025 there holds the reasons.
 - **No `unsafe`** (`unsafe_code = "forbid"` workspace-wide).
 - **UI is built from Radix primitives, never hand-rolled markup**, and never behind a wrapper
   layer of our own. `docs/ui-primitives.md` says which, why, and what it costs.
+- **No colour is written anywhere but `app/src/theme/`.** A theme is a data file; the CSS
+  custom properties and xterm's theme object are both generated from it. Semantic tokens only,
+  no arbitrary Tailwind values, and a test fails the build on either.
+  `docs/design-system.md` says why.
 
 ## Checks
 

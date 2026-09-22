@@ -1,0 +1,170 @@
+# The window's design system
+
+**A theme is a data file. Every colour in charter comes from one, and nothing else may write
+one down.** `docs/ui-primitives.md` says what the window is built *out of*; this file says what
+it is *drawn in*.
+
+The rule, in one line each:
+
+- **No colour literal outside `app/src/theme/`.** Not in CSS, not in TypeScript, not in a
+  comment that becomes code. `app/src/theme/literals.test.ts` fails the build on one.
+- **No arbitrary Tailwind value** — `text-[13px]`, `bg-[#fff]`, `w-[42rem]`. Same test, same
+  reason: a theme cannot reach inside a bracket.
+- **Semantic names only.** A token is `surface.raised`, never `gray-800`.
+- **Both built-in themes get every new token**, or the window will not start.
+
+## Why a theme is data and not CSS
+
+Before this layer, charter had two colour systems. `App.css` had five custom properties and
+thirty hex literals scattered through 1,330 lines; `SessionPane.tsx` built its xterm terminal
+with `theme: { background: "#181818", foreground: "#d8d8d8" }` — which is `--paper` and `--ink`
+written out a second time, in a second language, with nothing making them agree. The terminal's
+other eighteen colours were the library's defaults and were not charter's at all.
+
+**The two cannot be unified in CSS**, and that is the constraint that decides the design. xterm
+is handed a JavaScript object of sixteen ANSI colours plus a background, a foreground, a cursor
+and a selection; a CSS custom property cannot be given to it. Unifying in JavaScript instead
+would make the stylesheet a copy of the script.
+
+So the shared thing is neither: it is a **file**. `app/src/theme/*.json` holds semantic tokens;
+`theme.ts` writes CSS custom properties from a theme **and** builds xterm's object from the same
+theme. One source, two consumers, and no way for them to drift. This is VS Code's model and
+Zed's, and it is the only one that can colour the terminal at all.
+
+## The vocabulary
+
+`TOKENS` in `app/src/theme/theme.ts` is the list, with a comment on each group saying what it
+means. Fifty-four names in eleven groups:
+
+| group | tokens | what it is |
+| --- | --- | --- |
+| `surface.*` | `base` `sunken` `deep` `raised` `overlay` `hover` | the layers of the window, deepest first |
+| `control.*` | `base` `hover` `aimed` `count` | things that are pressed; `aimed` is where the keyboard is, which is not where the pointer is |
+| `text.*` | `primary` `secondary` `muted` | |
+| `border.*` | `subtle` `strong` | |
+| `accent.*`, `focus.ring`, `tab.active` | `base` `surface` | what charter is drawing attention to |
+| `needs-you.*` | `base` `text` | the one signal this app exists for |
+| `danger.*` | `base` `surface` `text` `wash` | an answer that cannot be taken back |
+| `state.*` | `running` `waiting` `waiting-glow` `failed` `success` `unreadable` | what a chat, or a check on a branch, is doing |
+| `overlay.*` | `scrim` `shadow` | what goes over the window when something is modal |
+| `terminal.*` | `background` `foreground` `cursor` `cursor-accent` `selection` | |
+| `terminal.ansi.*` | the eight, and the eight bright | |
+
+**Two tokens may hold the same value and still be two tokens.** `needs-you.base` and
+`danger.base` are the same red in both built-ins. They stay separate because they are separate
+meanings — one marks a chat that wants the operator, the other marks an answer that cannot be
+undone — and a theme that wanted the first to shout and the second to whisper has to be able to
+say so. A test in `theme.test.ts` fails if somebody merges them.
+
+**The chat states and the CI states share a group on purpose.** `.ci-pending` is
+`var(--state-waiting)` because amber means "not finished" in both, and a theme author who wants
+to change that changes one value rather than hunting for the second one.
+
+## What a theme file looks like
+
+```json
+{
+  "name": "charter-dark",
+  "appearance": "dark",
+  "tokens": {
+    "surface.base": "#181818",
+    "terminal.ansi.red": "#ff7b72"
+  }
+}
+```
+
+- **`appearance` is `dark` or `light`.** It decides two things: which built-in fills in the
+  tokens this file does not name, and what `color-scheme` the document gets, which is what
+  makes the platform's own scrollbars and form controls match.
+- **A value is hex and only hex** — `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`. This is a security
+  boundary, not a style preference: a value is written straight into a CSS declaration, so
+  `red; } body { display: none` in a theme file would be a stylesheet somebody else wrote. The
+  grammar removes the question rather than answering it, and every value it allows is one xterm
+  also accepts. Converting an `rgb(0 0 0 / 55%)` to `#0000008c` costs an author one lookup.
+- **A partial theme is normal.** Name the tokens you are changing; the rest come from the
+  built-in of the same appearance.
+- **Nothing in a theme file can stop the window.** A token that is missing, misspelled or
+  malformed falls back and the substitution is reported. `load` always answers with a complete
+  theme, because ADR 0026 holds cold start at 2 s and a window that will not come up because a
+  colour was spelled wrong is worse than every possible wrong colour.
+
+### Where a user's theme lives
+
+`$CHARTER_CONFIG_HOME`, else `$XDG_CONFIG_HOME`, else `~/.config` — then `charter/theme.json`.
+That is `machine.rs`'s ladder, rung for rung, and the argument is the one charter ADR 0040 made
+for pins: **a theme is how one operator likes their window, not a fact about the plane.** A
+theme committed to `charter.toml` would arrive with every clone and repaint somebody else's
+window in colours they never chose.
+
+**It is a file beside `machine.json`, not a fifth thing inside it.** `machine.rs` says four
+things and nothing else, and says the count is load-bearing; `charter report`'s publish consent
+is already a second file in that same directory, so a third is the shape the directory already
+has. Nothing about this needs ADR 0040 amended again.
+
+**Reading it is not in this change.** It needs a Tauri command, a Tauri command needs
+`app/src/bindings.ts` regenerated, and that is `cargo`, which does not run on the machine this
+was built on. The seam is `load(raw: unknown)`, which takes whatever `JSON.parse` gave and is
+fully tested against garbage; the command that supplies `raw` is the only missing piece.
+
+## Tailwind, shadcn and Lucide
+
+**Tailwind v4**, wired in `app/src/styles.css`. Three decisions there, each with a test in
+`app/src/theme/tailwind.test.ts` that fails if it is undone:
+
+- **Tailwind owns no colour.** Every entry in `@theme` is `var(--<token>)`. v4's `@theme` is
+  CSS-variable-native, which is why v4 and not v3: it sits on top of the token layer instead of
+  being one.
+- **Tailwind's palette is deleted.** `--color-*: initial` clears the namespace, so `bg-red-500`
+  and `text-slate-300` are not classes — they are typos. That is the "semantic, not palette"
+  rule enforced by the build rather than by whoever reviews the diff. `transparent` and
+  `current` are put back, because they are the absence of a colour and the inherited one.
+- **Preflight is not imported, and `App.css` is imported into a layer.** A reset would restyle
+  1,330 lines in one commit, and `scenario tests` read the real DOM. The layer order —
+  `theme, base, charter, components, utilities` — is what the reset would have been for:
+  unlayered CSS beats layered CSS, so `App.css` had to go *into* a layer or no utility could
+  ever override it. Turning preflight on is its own change, with its own evidence.
+
+**The Tailwind colour name is the token name**, stutter and all: `text-text-primary`,
+`border-border-subtle`. A prettier alias would be a second vocabulary.
+
+**shadcn/ui: the conventions, and components when something needs one.** `cn` is at
+`app/src/lib/utils.ts`, at shadcn's address with shadcn's two dependencies, so a component
+pasted from shadcn finds what it expects. Nothing else is here yet, deliberately: copying in
+components nothing renders is dead code, and `class-variance-authority` arrives with the first
+component that has variants.
+
+> **A conflict for the operator to settle.** `docs/ui-primitives.md` says *"Do not write a
+> wrapper layer around them. No `<Modal>`, no `<Field>`, no house component library."* A
+> shadcn component is literally a thin wrapper around a Radix primitive. The two rules can be
+> reconciled — a pasted file is *ours*, editable, and visible in review, which is not what that
+> rule was written against — but the reconciliation is a decision, not a reading. Until it is
+> made, paste a shadcn component only when a ticket calls for it and say so in the PR.
+
+**Lucide** is the icon set (`lucide-react`). The property that matters is that it draws with
+`stroke="currentColor"` and `fill="none"`, so an icon takes the colour of the text it sits in
+and a theme reaches it without an icon ever naming a colour. `app/src/lib/icons.test.tsx` pins
+that. No icon is on a button yet; that is a separate ticket, on top of this one.
+
+## What it costs
+
+Measured on this branch, against `origin/main`:
+
+| | main | this | delta |
+| --- | --- | --- | --- |
+| JS bundle | 749.64 kB (214.12 kB gz) | 755.44 kB (215.85 kB gz) | +5.80 kB (+1.73 kB gz) |
+| CSS | 18.08 kB (4.24 kB gz) | 23.52 kB (5.23 kB gz) | +5.44 kB (+0.99 kB gz) |
+
+Almost all of the CSS growth is `var(--control-base)` being fifteen characters longer than
+`#222`, repeated fifty-odd times; gzip takes most of it back. Tailwind's own contribution to the
+built stylesheet is **995 bytes**, because it emits only what a utility uses and no utility is
+used yet.
+
+**Cold start is untouched, by construction.** ADR 0026 gives it 2 s. Nothing is read from disk
+on the way to the first frame: the built-in themes are compiled into the bundle, and `main.tsx`
+calls `drawIn(DEFAULT_THEME)` before `createRoot`, so no frame is ever painted in one theme and
+repainted in another. That call is fifty-four `setProperty` calls on one element and measures
+**0.60 ms median, 0.85 ms p95** under jsdom — 0.03% of the budget, and jsdom's CSSOM is slower
+than a real engine's, so it is an upper bound. Parsing a theme file measures 0.0035 ms.
+
+When the user theme lands it must stay off that path: apply the built-in synchronously, read the
+file after, repaint if it differs.

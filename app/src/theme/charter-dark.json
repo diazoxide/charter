@@ -1,0 +1,69 @@
+{
+  "name": "charter-dark",
+  "appearance": "dark",
+  "tokens": {
+    "surface.base": "#181818",
+    "surface.sunken": "#101010",
+    "surface.deep": "#131313",
+    "surface.raised": "#171717",
+    "surface.overlay": "#1c1c1c",
+    "surface.hover": "#202020",
+
+    "control.base": "#222222",
+    "control.hover": "#2a2a2a",
+    "control.aimed": "#232323",
+    "control.count": "#333333",
+
+    "text.primary": "#d8d8d8",
+    "text.secondary": "#c8c8c8",
+    "text.muted": "#999999",
+
+    "border.subtle": "#303030",
+    "border.strong": "#3f3f3f",
+
+    "accent.base": "#6a9fb5",
+    "accent.surface": "#1f2a2f",
+    "focus.ring": "#6a9fb5",
+    "tab.active": "#2b3338",
+
+    "needs-you.base": "#c05c5c",
+    "needs-you.text": "#ffffff",
+
+    "danger.base": "#c05c5c",
+    "danger.surface": "#2a1a1a",
+    "danger.text": "#f2a0a0",
+    "danger.wash": "#c05c5c1f",
+
+    "state.running": "#2f81f7",
+    "state.waiting": "#d29922",
+    "state.waiting-glow": "#d2992259",
+    "state.failed": "#f85149",
+    "state.success": "#3fb950",
+    "state.unreadable": "#f0883e",
+
+    "overlay.scrim": "#0000008c",
+    "overlay.shadow": "#00000099",
+
+    "terminal.background": "#181818",
+    "terminal.foreground": "#d8d8d8",
+    "terminal.cursor": "#d8d8d8",
+    "terminal.cursor-accent": "#181818",
+    "terminal.selection": "#6a9fb555",
+    "terminal.ansi.black": "#484f58",
+    "terminal.ansi.red": "#ff7b72",
+    "terminal.ansi.green": "#3fb950",
+    "terminal.ansi.yellow": "#d29922",
+    "terminal.ansi.blue": "#58a6ff",
+    "terminal.ansi.magenta": "#bc8cff",
+    "terminal.ansi.cyan": "#39c5cf",
+    "terminal.ansi.white": "#b1bac4",
+    "terminal.ansi.bright-black": "#6e7681",
+    "terminal.ansi.bright-red": "#ffa198",
+    "terminal.ansi.bright-green": "#56d364",
+    "terminal.ansi.bright-yellow": "#e3b341",
+    "terminal.ansi.bright-blue": "#79c0ff",
+    "terminal.ansi.bright-magenta": "#d2a8ff",
+    "terminal.ansi.bright-cyan": "#56d4dd",
+    "terminal.ansi.bright-white": "#ffffff"
+  }
+}

@@ -5,6 +5,12 @@
 This is a rule and not a preference, so the rest of this file is the reasons for it and the way
 to follow it.
 
+**Its sibling is [`design-system.md`](design-system.md), which says what the window is drawn
+*in*: a theme is a data file, every colour is a semantic token, and a literal anywhere outside
+`app/src/theme/` fails the build. Read that one before writing a rule with a colour in it —
+and note that it flags one conflict with the "no wrapper layer" rule below that the operator
+has yet to settle.**
+
 ## The rule
 
 - A dialog, a radio group, a checkbox, a menu, a popover, a tooltip, a collapsible section, a
@@ -17,7 +23,8 @@ to follow it.
   back into hand-rolled markup with extra steps.
 - Charter's own look, always. Radix ships **no CSS at all** — every primitive is an unstyled
   element with `data-state` attributes to hang rules off. `App.css` stays the one place the
-  window is drawn.
+  window is drawn — but **no colour is written in it**: every one is `var(--<token>)` and the
+  values live in `app/src/theme/`. See `design-system.md`.
 - Native HTML that already does the job is not hand-rolled markup and does not need replacing:
   `<details>/<summary>`, `<label for>`, `<button>`. Reach for a primitive when the browser has
   no element for what you mean — a modal that traps focus, a listbox, a menu.
