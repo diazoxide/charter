@@ -1583,6 +1583,10 @@ body {
 .panels .personas .default .node-icon {
   color: var(--accent-base);
 }
+/* The star follows the word it decorates; flush against it, it read as one glyph. */
+.panels .personas .default .node-icon {
+  margin-inline-start: 0.25rem;
+}
 
 /* A todo's mark is a ring and not a tick: nothing in this panel is done, by definition — it
    lists what is open — and a tick beside an open todo would be the panel contradicting
