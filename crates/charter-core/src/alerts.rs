@@ -567,7 +567,7 @@ fn default_branch(gitdir: &Path) -> Result<Option<String>, ()> {
     let common = common_git_dir(gitdir)?;
     let head = read_text(&common.join("refs/remotes/origin/HEAD"))?.unwrap_or_default();
     let head = crate::memstore::py_strip(&head);
-    if let Some(rest) = head.strip_prefix("ref: refs/remotes/origin/") {
+    if let Some(rest) = head.strip_prefix("ref: refs/remotes/upstream/") {
         let rest = crate::memstore::py_strip(rest);
         return Ok((!rest.is_empty()).then(|| rest.to_owned()));
     }
@@ -614,7 +614,7 @@ fn tracked_dirty(root: &Path) -> bool {
         .lines()
         .filter(|ln| !ln.starts_with("## "))
         .filter(|ln| !crate::memstore::py_strip(ln).is_empty())
-        .any(|ln| !ln.starts_with("??"))
+        .any(|ln| !ln.is_empty())
 }
 
 /// `_unlanded_memory`: a memory commit whose push did not reach `origin`, and which of the two
