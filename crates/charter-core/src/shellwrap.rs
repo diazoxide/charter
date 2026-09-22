@@ -214,7 +214,7 @@ const WRAPPER_ASSIGN_OPERANDS: [&str; 2] = ["env", "sudo"];
 
 /// git's own global options that take a VALUE. git stops reading its globals at the first
 /// non-option token, and every option after that belongs to the SUBCOMMAND.
-const GIT_VALUE_OPTS: [&str; 7] = [
+pub(crate) const GIT_VALUE_OPTS: [&str; 7] = [
     "-c",
     "-C",
     "--config-env",

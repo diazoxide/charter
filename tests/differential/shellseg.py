@@ -1841,6 +1841,10 @@ COVERED_ELSEWHERE = {
     # ---- the one `pypath` answer with no key: it takes a `&Path` where `realpath` takes a `&str`
     # and is what the guarded-state walk resolves with, so `rp` compares the walk it is under.
     "pypath::realpath_of": "wigs0, gseg — `walk_into_guarded_state` resolves every target with it",
+    # ---- stage 5's `pathlib` string arithmetic, which only the plane-root guards use. Its
+    # evidence is the OTHER harness: `planeroot.py`'s `pp` compares both on every case.
+    "pypath::pure_path": "planeroot.py pp, gt, cwt — `str(Path(x))`",
+    "pypath::path_div": "planeroot.py pp, gt, cwt — `str(Path(a) / b)`",
 }
 
 #: The Rust modules this harness is the evidence for.
