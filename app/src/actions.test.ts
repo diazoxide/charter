@@ -3,10 +3,13 @@ import {
   aim,
   catalogue,
   ENDS_IT,
+  KEEPS_THE_BRANCH,
   matches,
+  menuRows,
   narrow,
   OUTSIDE,
   perform,
+  type Cut,
   type Doing,
   type Now,
   type Offer,
@@ -44,12 +47,15 @@ function doing(): Doing & { calls: string[] } {
       calls.push(`pinProject:${plane},${pinned}`);
       return { ok: true as const };
     }),
-    removeWorktree: vi.fn(async (force: boolean) => {
-      calls.push(`removeWorktree:${force}`);
+    showPersona: note("showPersona"),
+    // The piece is part of what was called, because "which worktree did that row mean" is the
+    // whole of what charter-app#174 changed here.
+    removeWorktree: vi.fn(async (cut: Cut, force: boolean) => {
+      calls.push(`removeWorktree:${cut.repo}/${cut.piece},${force}`);
       return { ok: true as const };
     }),
-    mergeWorktree: vi.fn(async () => {
-      calls.push("mergeWorktree");
+    mergeWorktree: vi.fn(async (cut: Cut) => {
+      calls.push(`mergeWorktree:${cut.repo}/${cut.piece}`);
       return { ok: true as const };
     }),
     sendKey: vi.fn(async (key: string) => {
@@ -263,7 +269,9 @@ describe("the one list of actions", () => {
 
     await run(offers, "worktree.remove", hands);
 
-    expect(hands.calls).toEqual(["removeWorktree:false"]);
+    // And it names the piece the chat in front is in, rather than leaving the window to work
+    // out what "this chat's worktree" meant after the row was pressed (charter-app#174).
+    expect(hands.calls).toEqual(["removeWorktree:svc/fix-it,false"]);
   });
 
   it("offers no discard row until a refusal has been read", () => {
@@ -279,12 +287,84 @@ describe("the one list of actions", () => {
     const tabs = openTab(noTabs(), 7, "one");
     const hands = doing();
     const offers = catalogue(
-      now({ tabs, plane: "/plane", worktree: PIECE, refusal: "svc/fix-it has changes" }),
+      now({ tabs, plane: "/plane", worktree: PIECE, refused: "worktree.remove" }),
     );
 
     await run(offers, "worktree.discard", hands);
 
-    expect(hands.calls).toEqual(["removeWorktree:true"]);
+    expect(hands.calls).toEqual(["removeWorktree:svc/fix-it,true"]);
+  });
+
+  it("names one merge and one remove per piece of the focused workspace", () => {
+    // charter-app#174: the explorer's rows had no menu because the only worktree rows there
+    // were were about THE CHAT IN FRONT, and a piece nobody is running in is not in front of
+    // anything. These name their piece, which is what makes a row about one possible at all.
+    const cut = { workspace: "alpha", repo: "svc", piece: "fix-it" };
+    const offers = catalogue(now({ plane: "/plane", pieces: [cut] }));
+
+    expect(by(offers, "worktree.merge:svc/fix-it")?.title).toBe("Merge worktree fix-it into svc");
+    expect(by(offers, "worktree.remove:svc/fix-it")?.title).toBe("Remove worktree fix-it in svc");
+    // The clone is in the id and in the title, because two clones of one workspace can each
+    // hold a piece called `fix-it` and a destructive row may not be ambiguous about which.
+    expect(by(offers, "worktree.remove:svc/fix-it")?.name).toBe("fix-it");
+    expect(by(offers, "worktree.remove:svc/fix-it")?.does).toEqual({
+      verb: "removeWorktree",
+      cut,
+      force: false,
+    });
+  });
+
+  it("says on the piece's remove row that the branch is not what goes", () => {
+    // `git worktree remove` takes the directory and leaves the ref, so "remove" here is not
+    // the word it is on a workspace — and this row pops up under the pointer.
+    const offers = catalogue(
+      now({ plane: "/plane", pieces: [{ workspace: "alpha", repo: "svc", piece: "fix-it" }] }),
+    );
+
+    expect(by(offers, "worktree.remove:svc/fix-it")?.note).toBe(KEEPS_THE_BRANCH);
+  });
+
+  it("refuses a piece's rows with charter's reason when there is no plane to reach it in", () => {
+    const offers = catalogue(
+      now({ pieces: [{ workspace: "alpha", repo: "svc", piece: "fix-it" }] }),
+    );
+
+    expect(by(offers, "worktree.remove:svc/fix-it")?.reason).toBe(
+      "charter found no plane, so it cannot reach a worktree.",
+    );
+  });
+
+  it("puts the discard row beside the removal that was refused, and beside no other", () => {
+    // With one removal per piece, a discard row that appeared for all of them would be fifty
+    // offers to throw work away raised by one refusal about one piece.
+    const pieces = [
+      { workspace: "alpha", repo: "svc", piece: "fix-it" },
+      { workspace: "alpha", repo: "svc", piece: "other" },
+    ];
+    const offers = catalogue(
+      now({ plane: "/plane", pieces, refused: "worktree.remove:svc/fix-it" }),
+    );
+
+    expect(by(offers, "worktree.discard:svc/fix-it")?.title).toBe(
+      "Discard that work and remove fix-it anyway",
+    );
+    expect(by(offers, "worktree.discard:svc/other")).toBeUndefined();
+    // And not the front chat's either: that row answers a refusal `worktree.remove` gave.
+    expect(by(offers, "worktree.discard")).toBeUndefined();
+  });
+
+  it("offers one row per persona, which is the only thing charter can do to one", () => {
+    // charter-app#174. A persona is a file `charter persona create` writes and an operator
+    // edits; reading what it says is the whole of what this window can do to one, so it is
+    // the whole of what a menu on a persona row lists.
+    const offers = catalogue(now({ personas: ["steward", "release"] }));
+
+    expect(by(offers, "persona.show:steward")?.title).toBe("Show what steward is");
+    expect(by(offers, "persona.show:steward")?.name).toBe("steward");
+    expect(by(offers, "persona.show:release")?.does).toEqual({
+      verb: "showPersona",
+      persona: "release",
+    });
   });
 
   it("closes a pane that exists and refuses one that does not, by the same rule", () => {
@@ -454,7 +534,11 @@ describe("carrying out a row", () => {
           { plane: "/other", name: "other" },
         ],
         worktree: PIECE,
-        refusal: "something was in the way",
+        refused: "worktree.remove",
+        // The focused workspace's own pieces and the plane's personas, so the rows
+        // charter-app#174 added are reached here too.
+        pieces: [PIECE],
+        personas: ["steward"],
         needsYou: [8],
         nameOf: (s) => String(s),
       }),
@@ -473,9 +557,12 @@ describe("carrying out a row", () => {
         "closePane",
         "closeTab:1",
         "closeTab:2",
-        "removeWorktree:false",
-        "removeWorktree:true",
-        "mergeWorktree",
+        // The same three calls whether the row was the chat in front's or the explorer's:
+        // both name the piece, so both arrive here identically (charter-app#174).
+        "removeWorktree:svc/fix-it,false",
+        "removeWorktree:svc/fix-it,true",
+        "mergeWorktree:svc/fix-it",
+        "showPersona:steward",
         "sendKey:F2",
         "openProject",
         "createProject",
@@ -539,9 +626,37 @@ describe("the catalogue as the tabs change", () => {
  * workspaces out of its browsable list; the rows ahead of the verb under `re` are tabs and
  * close-tab rows almost to the last one, and no version of this list has ever left the tabs
  * out. That is why this is ranking and not filtering.
+ *
+ * ## What charter-app#174 cost this, measured — and what was done about it
+ *
+ * The explorer's rows needed a row per piece to have a menu at all, so the shape below grew
+ * ten clones with five pieces each and the plane's personas — the limits ADR 0026 writes for.
+ * That is 183 rows to **291**, and the first cut of it moved `Remove this chat's worktree`
+ * down the list:
+ *
+ * | typed | before #174 | #174, first cut | #174 as merged |
+ * |-------|-------------|-----------------|----------------|
+ * | `re`  | 4th of 62   | 54th of 164     | **4th of 164** |
+ * | `r`   | 19th of 125 | 77th of 233     | **7th of 233** |
+ * | `rem` | 1st of 7    | 1st of 57       | 1st of 57      |
+ *
+ * **The fifty rows that got in the way were all worktree rows, and that made it a different
+ * defect from #48 with the same shape on screen.** #48 was forty CHAT NAMES containing `re`;
+ * these are fifty merges of named worktrees, every one of them charter's own vocabulary, so
+ * #48's rule could not see them — they pass `byItsWords` exactly as the target does. From the
+ * operator's seat that distinction buys nothing: the row he wanted was 54th either way.
+ *
+ * So `narrow` gained a second rule inside that group — `aboutWhatIsInFront`, the colon in the
+ * id — and the row is back where it was. The `r` column improves on the BEFORE number too
+ * (19th to 7th), because the same rule lifts it above `Delete workspace <name>` and `Switch
+ * to project <name>`, which are rows about things the operator is not looking at either.
+ * Asserted below as a property — the same rank with the pieces and without — so the next row
+ * added about something else has to look at it.
  */
 describe("the palette at fifty chats", () => {
   const WORKSPACES = ["ide", "charter", "release", "statusline", "forge", "reddit"];
+  /** What a plane's personas look like, at the count a real one carries. */
+  const PERSONAS = ["steward", "release", "forge", "reddit", "statusline", "docs", "ops", "qa"];
 
   /** Fifty chats named the way a plane names them: the workspace, then the chat. */
   function fiftyChats(): Tabs {
@@ -552,6 +667,15 @@ describe("the palette at fifty chats", () => {
     return tabs;
   }
 
+  /** The focused workspace at ADR 0026's shape: ten clones, five pieces cut in each. */
+  function fiftyPieces() {
+    const cut = [];
+    for (let repo = 0; repo < 10; repo++)
+      for (let piece = 0; piece < 5; piece++)
+        cut.push({ workspace: "ide", repo: `repo-${repo}`, piece: `piece-${piece}` });
+    return cut;
+  }
+
   const loaded = () =>
     catalogue(
       now({
@@ -560,6 +684,8 @@ describe("the palette at fifty chats", () => {
         focused: "ide",
         plane: "/plane",
         worktree: PIECE,
+        pieces: fiftyPieces(),
+        personas: PERSONAS,
         needsYou: [103, 107],
         nameOf: (session) => `chat ${session}`,
       }),
@@ -577,10 +703,14 @@ describe("the palette at fifty chats", () => {
     expect(verbs).toEqual([
       "New workspace…",
       "New project…",
+      // **Both of the chat in front's rows, then the pieces'.** `aboutWhatIsInFront` is the
+      // second rule inside this group (charter-app#174): a row with no name in its id acts on
+      // what the operator is looking at, and fifty rows about other worktrees do not get to
+      // stand in front of it. Inside each half the catalogue's own order stands.
       "Merge this chat's worktree into its clone",
       "Remove this chat's worktree",
-      "Delete workspace ide",
-      "Delete workspace charter",
+      "Merge worktree piece-0 into repo-0",
+      "Merge worktree piece-1 into repo-0",
     ]);
     // Not a cap and not a filter: every name that matched is still listed, below.
     expect(rows.some((row) => row.title === "Switch to tab release.3")).toBe(true);
@@ -596,6 +726,69 @@ describe("the palette at fifty chats", () => {
     const rows = narrow("re", loaded());
 
     expect(rows[aim(rows)].title).toBe("New workspace…");
+  });
+
+  /**
+   * A hundred rows about other worktrees do not move the row about this one.
+   *
+   * **This is the guard charter-app#174 needed and #48's rule could not give.** #48 split
+   * charter's own words from somebody's name; every row in this fight passes that test, so
+   * the fifty per-piece merges sat in front of `Remove this chat's worktree` on charter's own
+   * vocabulary — 4th of 62 to 54th of 164, measured before it was fixed. `aboutWhatIsInFront`
+   * is the second rule inside that group, and what it buys is asserted as a property rather
+   * than as a rank: **the same place, with the pieces and without them.** A row added about
+   * something the operator is not looking at fails here rather than being found in the
+   * palette at fifty chats.
+   */
+  describe("where the chat in front's own rows land", () => {
+    /** The same window with the pieces and the personas taken out — the catalogue as it was
+     *  before #174, so the two can be compared rather than described. */
+    const before = () =>
+      catalogue(
+        now({
+          tabs: fiftyChats(),
+          workspaces: WORKSPACES,
+          focused: "ide",
+          plane: "/plane",
+          worktree: PIECE,
+          needsYou: [103, 107],
+          nameOf: (session) => `chat ${session}`,
+        }),
+      );
+
+    const at = (typed: string, offers: Offer[]) =>
+      narrow(typed, offers).findIndex((row) => row.title === "Remove this chat's worktree") + 1;
+
+    it("is exactly where it was before a hundred rows were added around it", () => {
+      for (const typed of ["re", "r", "rem", "worktree", "remove"]) {
+        expect({ typed, rank: at(typed, loaded()) }).toEqual({
+          typed,
+          rank: at(typed, before()),
+        });
+      }
+    });
+
+    it("is near the top of what was typed, and not fifty rows down it", () => {
+      // The numbers themselves, so "unchanged" cannot be satisfied by both being bad.
+      expect(at("re", loaded())).toBe(4);
+      expect(at("r", loaded())).toBe(7);
+      expect(at("rem", loaded())).toBe(1);
+    });
+
+    it("leaves every row that was added still findable, because this is ranking", () => {
+      const rows = narrow("re", loaded());
+
+      expect(rows.filter((row) => row.id.startsWith("worktree.merge:"))).toHaveLength(50);
+      expect(rows.filter((row) => row.id.startsWith("worktree.remove:"))).toHaveLength(50);
+    });
+
+    it("puts a piece the operator named in full first, ahead of the row about this chat", () => {
+      // The rule above is about CHARTER'S words. A name typed in full is the operator saying
+      // which piece they mean, and #48's first group has always won over everything.
+      const rows = narrow("Remove worktree piece-3 in repo-7", loaded());
+
+      expect(rows[0].id).toBe("worktree.remove:repo-7/piece-3");
+    });
   });
 
   it("does not reorder anything when every row matched charter's own word", () => {
@@ -627,14 +820,81 @@ describe("the palette at fifty chats", () => {
     // outside every workspace: that strip is not a workspace on the plane, and there is
     // nothing on disk for a delete to name.
     expect(offers.filter((row) => row.id.startsWith("workspace.remove:"))).toHaveLength(6);
-    // 183 rows: 50 chats three times over, 6 workspaces THREE times, 2 in the queue, and the
-    // thirteen verbs. It was 118 before the pins, 174 before the extension list (charter ADR
-    // 0041) and 175 before a workspace could be made and deleted from the window. Six of the
-    // eight added are the deletes, which is the cost of one destructive row per workspace —
-    // paid for the reason `actions.ts` gives: a row that acts on whichever workspace happens
-    // to be focused is a destructive action whose target the operator reads off somewhere
-    // else on the page.
-    expect(offers).toHaveLength(183);
+    // **And two rows per piece of the focused workspace** (charter-app#174), which is what the
+    // explorer's rows needed to have a menu at all. Ten clones with five pieces each is a
+    // hundred rows on a list of 183 — the biggest single thing ever added to it, and the
+    // reason the issue asked for a number before it was allowed to grow. One row per persona
+    // beside them, which is cheap: a plane has a handful.
+    expect(offers.filter((row) => row.id.startsWith("worktree.merge:"))).toHaveLength(50);
+    expect(offers.filter((row) => row.id.startsWith("worktree.remove:"))).toHaveLength(50);
+    expect(offers.filter((row) => row.id.startsWith("persona.show:"))).toHaveLength(8);
+    // 291 rows: 50 chats three times over, 6 workspaces THREE times, 50 pieces TWICE, 8
+    // personas, 2 in the queue, and the fourteen verbs. It was 118 before the pins, 174 before
+    // the extension list (charter ADR 0041), 175 before a workspace could be made and deleted
+    // from the window, and 183 before the explorer's rows had anything to offer. What the
+    // hundred buys is the surface the operator asked for and the menu system could not reach;
+    // what it costs is measured on `narrow` two tests up and on `menuRows` below.
+    expect(offers).toHaveLength(291);
+  });
+
+  /**
+   * What a context menu costs the strip it is on, at the same limits.
+   *
+   * charter-app#174 named this before it allowed the rows above to exist: `menuRows` looked a
+   * row up by scanning the catalogue, and a context menu on a strip is drawn per tab per
+   * render — so one render of a fifty-tab strip was fifty scans of a list the same change was
+   * making 291 long. **Measured on this machine, one render of that strip, min of ten batches
+   * with each arm in its own process:**
+   *
+   * | the catalogue          | offers touched | scanning | through `catalogued` |
+   * |------------------------|----------------|----------|----------------------|
+   * | 183 rows (before #174) | 13,375         | 0.047 ms | 0.017 ms             |
+   * | 291 rows (after)       | 16,275         | 0.049 ms | 0.017 ms             |
+   *
+   * **31 µs is not a speed anybody feels**, and #133 refused a change for less. What is
+   * different is the shape: the scan's cost is the catalogue's length, and #174 is the change
+   * that grew it — a third more comparisons for the same fifty menus, before anything is
+   * added next. A millisecond assertion would be flaky on a shared runner, so what is pinned
+   * below is the work itself, which is the standard #133 set: 150 lookups, and the same 150
+   * whichever catalogue it is.
+   */
+  describe("what a menu on the chat strip costs (charter-app#174)", () => {
+    /** A catalogue that counts what is asked of it. `Map` and not a stand-in, so what is
+     *  counted is what `menuRows` actually does. */
+    class Counting extends Map<string, Offer> {
+      lookups = 0;
+      override get(id: string): Offer | undefined {
+        this.lookups += 1;
+        return super.get(id);
+      }
+    }
+
+    /** One render of the chat strip: every tab draws a menu, and every menu asks. */
+    function strip(offers: Counting) {
+      for (let tab = 1; tab <= 50; tab++) menuRows({ on: "chat", tab }, offers);
+      return offers.lookups;
+    }
+
+    it("asks for three rows per tab and never walks the list", () => {
+      const offers = new Counting(loaded().map((offer) => [offer.id, offer]));
+
+      // 50 tabs × the three ids a chat menu lists. **Not fifty scans of 291 rows**, which is
+      // what this cost before the lookup was built once for the window — and the number that
+      // does not move when the catalogue grows again.
+      expect(strip(offers)).toBe(150);
+    });
+
+    it("is the same 150 whether the catalogue is 183 rows or 291", () => {
+      // The property, not the timing: the cost of a menu is flat in the length of the list it
+      // reads. A scan is not, which is why #174's hundred rows needed this first.
+      const small = new Counting(
+        catalogue(now({ tabs: fiftyChats(), workspaces: WORKSPACES, focused: "ide" })).map(
+          (offer) => [offer.id, offer],
+        ),
+      );
+
+      expect(strip(small)).toBe(150);
+    });
   });
 });
 

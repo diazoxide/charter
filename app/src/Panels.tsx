@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import { CircleDashed, ListTodo, LoaderCircle, Star, UserRound } from "lucide-react";
 import { NeedsYou } from "./NeedsYou";
+import { Menued } from "./Menus";
 import { commands, type PersonaDetails, type PlaneId } from "./bindings";
+import type { Catalogued, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
 
 /**
@@ -35,6 +37,10 @@ export function Panels({
   quiet,
   nameOf,
   showChat,
+  offers,
+  onPress,
+  shownPersona,
+  onShowPersona,
 }: {
   /** Which project's plane the personas belong to. A window holds several, and two of them
    *  can both have a `steward`. */
@@ -48,6 +54,14 @@ export function Panels({
   quiet: readonly string[];
   nameOf: (session: number) => string;
   showChat: (session: number) => void;
+  /** The catalogue by id, which is what a persona row's menu is drawn out of. */
+  offers: Catalogued;
+  onPress: (offer: Offer) => void;
+  /** The persona whose card is open, if any. Held by the window rather than by the row,
+   *  because opening it is a catalogue row now (charter-app#174) and the palette and a
+   *  context menu can run that row from outside this panel. */
+  shownPersona: string | undefined;
+  onShowPersona: (persona: string | undefined) => void;
 }) {
   const { panels, trouble } = state;
   return (
@@ -131,6 +145,10 @@ export function Panels({
                     plane={plane}
                     persona={persona}
                     isDefault={persona === panels.persona}
+                    open={shownPersona === persona}
+                    onOpen={(opening) => onShowPersona(opening ? persona : undefined)}
+                    offers={offers}
+                    onPress={onPress}
                   />
                 ))}
               </ul>
@@ -182,13 +200,23 @@ function PersonaRow({
   plane,
   persona,
   isDefault,
+  open,
+  onOpen,
+  offers,
+  onPress,
 }: {
   plane: PlaneId;
   persona: string;
   /** Whether the plane names this one as the persona a chat started here adopts. */
   isDefault: boolean;
+  /** Whether this row's card is the one open. The window holds it (charter-app#174), so the
+   *  row's own click, the palette's `persona.show:<name>` and this row's context menu are
+   *  three ways to the same state rather than three states that look alike. */
+  open: boolean;
+  onOpen: (opening: boolean) => void;
+  offers: Catalogued;
+  onPress: (offer: Offer) => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [shown, setShown] = useState<PersonaDetails>();
   const [refused, setRefused] = useState<string>();
 
@@ -211,47 +239,63 @@ function PersonaRow({
   }, [open, persona, plane]);
 
   return (
-    <li className={isDefault ? "is-default" : ""}>
-      <Popover.Root
-        open={open}
-        onOpenChange={(opening) => {
-          // Nothing is held from the last time it was open: a definition is a file, and the
-          // row the reader just opened is the one they are asking about.
-          if (opening) {
-            setShown(undefined);
-            setRefused(undefined);
-          }
-          setOpen(opening);
-        }}
-      >
-        <Popover.Trigger asChild>
-          <button type="button" className="persona">
-            <UserRound className="node-icon" />
-            {persona}
-            {isDefault && (
-              <span className="default">
-                {" · default"}
-                <Star className="node-icon" />
-              </span>
-            )}
-          </button>
-        </Popover.Trigger>
-        <Popover.Portal>
-          <Popover.Content
-            className="persona-card"
-            data-testid={`persona-details-${persona}`}
-            side="left"
-            align="start"
-            sideOffset={6}
-            collisionPadding={8}
-            aria-label={`${persona} — what this persona is`}
-          >
-            <PersonaCard persona={persona} isDefault={isDefault} shown={shown} refused={refused} />
-            <Popover.Arrow className="persona-card-arrow" />
-          </Popover.Content>
-        </Popover.Portal>
-      </Popover.Root>
-    </li>
+    /* Right-click is the third reader of the catalogue (`Menus.tsx`), and on a persona it has
+       exactly one honest row to read: what the plane says this persona is. A persona is a file
+       `charter persona create` writes and an operator edits, so reading it is the whole of
+       what this window can do to one — and a menu that offered more would be inventing verbs
+       (charter-app#174).
+
+       On the `<li>` rather than on the button, because the button is already a
+       `Popover.Trigger asChild` and two `asChild` triggers on one element is two primitives
+       cloning the same child. `asChild` here too, so the list gains no element. */
+    <Menued on={{ on: "persona", persona }} offers={offers} onPress={onPress}>
+      <li className={isDefault ? "is-default" : ""}>
+        <Popover.Root
+          open={open}
+          onOpenChange={(opening) => {
+            // Nothing is held from the last time it was open: a definition is a file, and the
+            // row the reader just opened is the one they are asking about.
+            if (opening) {
+              setShown(undefined);
+              setRefused(undefined);
+            }
+            onOpen(opening);
+          }}
+        >
+          <Popover.Trigger asChild>
+            <button type="button" className="persona">
+              <UserRound className="node-icon" />
+              {persona}
+              {isDefault && (
+                <span className="default">
+                  {" · default"}
+                  <Star className="node-icon" />
+                </span>
+              )}
+            </button>
+          </Popover.Trigger>
+          <Popover.Portal>
+            <Popover.Content
+              className="persona-card"
+              data-testid={`persona-details-${persona}`}
+              side="left"
+              align="start"
+              sideOffset={6}
+              collisionPadding={8}
+              aria-label={`${persona} — what this persona is`}
+            >
+              <PersonaCard
+                persona={persona}
+                isDefault={isDefault}
+                shown={shown}
+                refused={refused}
+              />
+              <Popover.Arrow className="persona-card-arrow" />
+            </Popover.Content>
+          </Popover.Portal>
+        </Popover.Root>
+      </li>
+    </Menued>
   );
 }
 

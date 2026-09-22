@@ -11,8 +11,10 @@ import {
 } from "lucide-react";
 import type { OpenChat } from "./bindings";
 import { ChatState } from "./NeedsYou";
+import { Menued } from "./Menus";
 import { WorktreeMark } from "./Worktree";
 import { stateOf, type ChatStates } from "./chatState";
+import type { Catalogued, Offer } from "./actions";
 import type { WorkspaceState } from "./workspaceState";
 
 /**
@@ -38,6 +40,13 @@ import type { WorkspaceState } from "./workspaceState";
  * the core spelled, and a piece carries its own. Making the clone itself pickable needs the
  * core to say where it is, which is a change to `Panels` and to the generated bindings, and
  * it is not in this one.
+ *
+ * **A piece row has a context menu and a clone row does not, for that same gap**
+ * (charter-app#174). A worktree is something charter can act on, and since #174 the rows that
+ * act on one name the piece they mean, so a menu here is the catalogue filtered to this piece
+ * — merge above the line, remove below it. A clone is not: nothing in `actions.ts` is about
+ * one, because nothing this window can do is. A menu there would have to invent a verb, which
+ * is the second list `actions.ts` opens by refusing to have.
  *
  * **It is drawn as a tree, and the lines are drawn by the rows rather than by the lists.**
  * The nesting was always here — workspace, clone, piece, chat — and nothing said so: four
@@ -72,6 +81,8 @@ export function Explorer({
   spot,
   onPick,
   onShowChat,
+  offers,
+  onPress,
 }: {
   /** The focused workspace, or nothing when the strip is on the chats that are in none. */
   workspace: string | undefined;
@@ -83,6 +94,9 @@ export function Explorer({
   spot: Spot | undefined;
   onPick: (spot: Spot | undefined) => void;
   onShowChat: (session: number) => void;
+  /** The catalogue by id, which is what a piece row's menu is drawn out of. */
+  offers: Catalogued;
+  onPress: (offer: Offer) => void;
 }) {
   if (workspace === undefined) {
     return (
@@ -169,18 +183,33 @@ export function Explorer({
                     const picked = spot?.repo === repo && spot.piece === piece.piece;
                     return (
                       <li key={piece.piece} data-testid={`piece-${repo}-${piece.piece}`}>
-                        <button
-                          type="button"
-                          className="spot"
-                          aria-current={picked ? "true" : undefined}
-                          // The whole path, because two clones in one workspace can hold a
-                          // piece of the same name and the row has room for one word.
-                          title={piece.path}
-                          onClick={() => onPick({ repo, piece: piece.piece, path: piece.path })}
+                        {/* **Right-click is what these rows were missing** (charter-app#174).
+                            The menu is the catalogue filtered to this piece — merge above the
+                            line, remove below it, and the discard row that only exists while
+                            the core has refused THIS removal. Nothing here says what those
+                            rows mean; `Menus.tsx` draws whatever `actions.ts` has.
+
+                            On the button and not on the `<li>`: the `<li>` also holds the
+                            chats running in this piece, and each of those is its own row with
+                            its own identity. `asChild`, so the row gains no element. */}
+                        <Menued
+                          on={{ on: "worktree", repo, piece: piece.piece }}
+                          offers={offers}
+                          onPress={onPress}
                         >
-                          <GitBranch className="node-icon" />
-                          <span className="spot-name">{piece.piece}</span>
-                        </button>
+                          <button
+                            type="button"
+                            className="spot"
+                            aria-current={picked ? "true" : undefined}
+                            // The whole path, because two clones in one workspace can hold a
+                            // piece of the same name and the row has room for one word.
+                            title={piece.path}
+                            onClick={() => onPick({ repo, piece: piece.piece, path: piece.path })}
+                          >
+                            <GitBranch className="node-icon" />
+                            <span className="spot-name">{piece.piece}</span>
+                          </button>
+                        </Menued>
                         {/* The branch, and the two states the operator has to see BEFORE they
                           start a chat in a tree: `unwired` and `stale`. The same component
                           the palette's worktree rows are written against. */}

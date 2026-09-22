@@ -25,6 +25,23 @@ import type { WorkspaceState } from "./workspaceState";
  * every control in here and expects to find none. It is the one half of ADR 0038's reading
  * ("the bottom is where you read what is true and do not touch it") that a test can hold.
  *
+ * **And that is why nothing in here has a context menu** (charter-app#174), which left one of
+ * the three surfaces that issue names still without one. Two separate reasons, and both would
+ * have to go:
+ *
+ * - **A repo row has no verb to offer.** Nothing in `actions.ts` is about a clone, because
+ *   nothing this window can do to one is: `workspace_panels` answers with clone NAMES, and a
+ *   menu here would have to invent a verb — the second list `actions.ts` opens by refusing to
+ *   have. The explorer records the same gap about the same rows.
+ * - **The worktree rows under each repo DO have verbs now** — `worktree.merge:<repo>/<piece>`
+ *   and `worktree.remove:<repo>/<piece>` exist, and the explorer's rows draw them. Putting
+ *   them here would put `Remove worktree` in the region ADR 0038 says is for reading, under a
+ *   spec that presses on everything in it expecting to find nothing. That is an amendment to
+ *   ADR 0038, argued on its own, and not a defect fix.
+ *
+ * A right-click down here therefore answers with nothing rather than with the browser's own
+ * menu, which `useNoBrowserMenu` covers for the whole window.
+ *
  * **Nothing here waits on a network.** The CI cell is what a forge refresher last wrote into
  * `.charter/cache/glstate.json`; charter-app reads that file and never fetches. A cell with
  * nothing to show says why, because a blank one reads as "green" to a person in a hurry.
