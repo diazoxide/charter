@@ -95,6 +95,56 @@
 //! pins that. It is in the vocabulary now rather than later for one reason: ADR 0041's
 //! difference from ADR 0035 is that *this fingerprints code*, and a fingerprint tested only over
 //! JSON is a fingerprint nobody has seen do its job.
+//!
+//! # The fingerprint is over the DIRECTORY, not over the declared list (charter-app#152)
+//!
+//! Until #152 the fingerprint covered the manifest and every file the manifest *declared*, which
+//! is ADR 0041's own wording — *"a hash of the executable and of every file it declares"* — and
+//! is a gap in it rather than a deviation from it. **An extension could add or change an
+//! undeclared sibling and the fingerprint said unchanged.** A program loads what it likes: a
+//! `.dylib` beside it, a script it sources, a config it reads. None of those is declared, so
+//! none of them was hashed, and [`FINGERPRINTED`]'s sentence — the one the operator reads before
+//! saying yes — was false about exactly the files that matter once stage 2 starts a program.
+//!
+//! So [`tree`] hashes **every path below the extension's directory**: contents *and* the set of
+//! paths, so a file added or removed changes the fingerprint and not only an edited one. The
+//! operator ruled on 2026-09-22, and the reasoning is the constraint the rest of this section is
+//! designed against.
+//!
+//! **One exclusion, and it is the manifest's own [`Manifest::state`] directory.** Without it, an
+//! extension that keeps a cache or a log beside itself re-prompts at every launch, and **a
+//! consent dialog people click through is worse than no dialog at all** — which is the same
+//! sentence ADR 0041's amendment uses about a prompt that over-promises, pointed the other way.
+//! The carve-out is therefore narrow by construction:
+//!
+//! - it is **one path segment**, so it is visible in a directory listing rather than buried;
+//! - it is **named in the manifest**, which is itself hashed, so the carve-out cannot appear,
+//!   move or widen without the operator being asked again;
+//! - **nothing charter reads may be inside it** — a theme or a program declared under it is
+//!   refused at [`parse`], so charter never opens a byte in there;
+//! - **charter refuses to load an extension whose state directory holds a symlink or a file with
+//!   an executable bit** ([`state_holds_no_code`]). That is the enforcement the exclusion has to
+//!   carry: a state directory that may hold a `.dylib` or a script the program loads has given
+//!   the whole property back.
+//!
+//! **And the limit of that enforcement, stated rather than left to be discovered.** No
+//! filesystem predicate makes a file un-loadable as code: `dlopen` does not need the executable
+//! bit on Linux, and `source` does not need it anywhere. What the check closes is the careless
+//! case and the conventional one — a helper binary cached beside a log — and what it leaves open
+//! is a program the operator approved that reads its own state directory as code. That last one
+//! is the same class as a program that fetches a string and evaluates it, which no fingerprint
+//! anywhere closes, and which ADR 0041 already refuses to pretend about.
+//!
+//! **A symlink inside the tree is hashed as a link and never followed.** Its own target string
+//! is what goes into the hash, so re-pointing it asks again, a link out of the tree reads
+//! nothing out there, and a loop cannot hang the walk because nothing is walked *through*.
+//! Refusing links outright was the alternative and it is the wrong one: `node_modules/.bin/*` is
+//! a tree of them, and "charter refuses my extension over a file I didn't write" is the reaction
+//! the operator explicitly ruled against.
+//!
+//! **`.git` is hashed like anything else, and that is deliberate.** `.git/hooks/` holds
+//! programs. An extension developer working inside a clone will be asked again after a fetch;
+//! an operator running an installed extension will not, because nothing in it moves.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -125,14 +175,41 @@ pub const BUILT_IN_THEMES: [&str; 2] = ["charter-dark", "charter-light"];
 /// path that draws the window — so a planted giant is a launch that never finishes.
 const MOST_MANIFEST_BYTES: u64 = 64 << 10;
 
-/// The most any one declared file may be. A theme is forty-odd hex strings; a program is a
-/// program, and this is the bound on what charter will *hash*, not on what it would run.
+/// The most any one file charter **keeps** may be — a theme's text, which is held in memory and
+/// handed to the window. A theme is forty-odd hex strings.
+///
+/// It stopped being the bound on what charter *hashes* at charter-app#152: the tree is hashed in
+/// chunks and nothing is held, so [`MOST_TREE_BYTES`] bounds that and a declared program is no
+/// longer capped on its own. This is a bound on memory, which is why it belongs to the files that
+/// are kept rather than to the files that are read.
 const MOST_DECLARED_BYTES: u64 = 8 << 20;
 
-/// The most files one extension may declare. The fingerprint reads every one of them at every
-/// launch (ADR 0041's named cost), so the launch's cost is bounded by the record rather than by
-/// whatever a manifest asks for.
+/// The most files one extension may declare. Declaring is what puts a file on the screen and,
+/// for a theme, what keeps its text in memory; the *hash* covers the whole directory either way
+/// ([`MOST_TREE_ENTRIES`]), so this bounds the list the operator is shown rather than the work.
 const MOST_DECLARED_FILES: usize = 64;
+
+/// The most files and directories charter will look at inside one extension — hashed, or merely
+/// checked inside the state directory.
+///
+/// **A directory walk is attacker-influenced input and needs its own bound** (charter-app#152).
+/// The declared list was bounded by the manifest; a tree is bounded by whatever is on the disk,
+/// so a hostile or merely enormous directory would otherwise stall the launch that draws the
+/// window. Directories count as entries too, which is also what bounds the walk's depth without
+/// a second number to keep in step.
+///
+/// Measured rather than guessed at: at this bound a re-hash costs the numbers in #152's PR body.
+const MOST_TREE_ENTRIES: usize = 4096;
+
+/// The most bytes charter will hash inside one extension.
+///
+/// [`MOST_TREE_ENTRIES`] bounds the opens and this bounds the reading, because one file can be
+/// as large as the disk. Nothing is held: files are fed to the hasher in chunks, so this is a
+/// bound on time and not on memory.
+const MOST_TREE_BYTES: u64 = 64 << 20;
+
+/// How many bytes charter reads at a time out of a file it is hashing.
+const CHUNK: usize = 64 << 10;
 
 /// The most the record may be, for the reason [`crate::machine::MAX_BYTES`] has one.
 const MOST_RECORD_BYTES: u64 = 1 << 20;
@@ -167,9 +244,31 @@ pub const RUNS_AS_YOU: &str = "charter does not confine an extension. It runs as
 /// volume: what the ask closes is the accident and the careless change, not an author who set
 /// out to deceive. Said on screen rather than left for whoever first assumes the dialog was a
 /// guarantee.
-pub const FINGERPRINTED: &str = "charter has read this extension's files and will ask again if \
-     any of them change. That catches an extension that changed under you. It is not a \
-     defence against one written to deceive you, and it is not a boundary.";
+///
+/// **"every file in this extension's directory" is load-bearing and is charter-app#152's whole
+/// point.** It used to say "this extension's files", which the operator reads as *all of them*
+/// and which the code meant as *the declared ones*. The sentence is now true of what [`tree`]
+/// does; the one thing it is not true of is the state directory, and that exception is said
+/// where the operator consents — [`state_note`] — rather than left in a doc comment.
+pub const FINGERPRINTED: &str = "charter has read every file in this extension's directory — \
+     not only the ones it declares — and will ask again if any of them changes, or if one is \
+     added or taken away. That catches an extension that changed under you. It is not a defence \
+     against one written to deceive you, and it is not a boundary.";
+
+/// The sentence charter says about the one directory it does not read, when there is one.
+///
+/// **It is on the screen because the exception is the operator's to weigh, not charter's.**
+/// [`FINGERPRINTED`] says charter read everything; if that is true of everything *but* a
+/// directory, the operator has to be told which directory and what charter still guarantees
+/// about it — otherwise the wording has the same defect #152 opened over, one carve-out later.
+pub fn state_note(state: &str) -> String {
+    format!(
+        "charter does not read '{state}/'. That is this extension's state directory: the one \
+         place it may write without charter asking again. charter refuses to load the extension \
+         if that directory holds a link or a program, so what is in there is data — but charter \
+         cannot stop a program it has already read from treating its own data as code."
+    )
+}
 
 /// One theme an extension contributes: what to call it, and the file it is in.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,6 +295,19 @@ pub struct Manifest {
     /// stage; when there is one it will find the declaration already fingerprinted and already
     /// consented to, rather than inventing both at the moment it first needs them.
     pub program: Option<String>,
+    /// The one directory charter does not fingerprint, and the only place this extension may
+    /// write without being asked about again (charter-app#152).
+    ///
+    /// **One segment, directly inside the extension's own directory.** A nested carve-out
+    /// (`build/tmp/state`) would be a hole the operator cannot see from a directory listing, and
+    /// the whole value of the exclusion being declared is that it is readable at a glance and
+    /// hashed along with the rest of the manifest. Nothing this manifest declares may live under
+    /// it, so charter opens nothing in there, and [`state_holds_no_code`] refuses the extension
+    /// if what *is* in there is a link or an executable file.
+    ///
+    /// Absent is the ordinary case: an extension that never writes beside itself declares no
+    /// state directory and has no exclusion at all.
+    pub state: Option<String>,
 }
 
 /// An extension charter has read off the disk, with the fingerprint of the bytes it read.
@@ -209,7 +321,8 @@ pub struct Extension {
     pub path: PathBuf,
     /// Its manifest, as read.
     pub manifest: Manifest,
-    /// sha256, hex, over the manifest and every file it declares. See [`read_parts`].
+    /// sha256, hex, over every path below [`Self::path`] except the state directory. See
+    /// [`tree`].
     pub fingerprint: String,
     /// Each declared theme's file, and the text that was hashed into
     /// [`Self::fingerprint`] — keyed by the file name the manifest declared.
@@ -368,10 +481,17 @@ pub fn read_at(dir: &Path) -> Result<Extension, String> {
         .map_err(|why| format!("'{}' {why}", manifest_at.display()))?;
     let manifest = parse(&text).map_err(|why| format!("'{}' {why}", manifest_at.display()))?;
 
+    // Before the walk, because the walk does not descend into it and this is the only thing
+    // that answers for what is in there (charter-app#152).
+    let mut budget = MOST_TREE_ENTRIES;
+    if let Some(state) = &manifest.state {
+        state_holds_no_code(dir, state, &mut budget)?;
+    }
+
     // The fingerprint is taken over the bytes just read and the bytes about to be read, the
     // declarations handed back come out of the same read, and the theme text the window will
     // draw with is kept from it rather than fetched again. Two reads is charter-app#123.
-    let (fingerprint, theme_text) = read_parts(dir, text.as_bytes(), &manifest)?;
+    let (fingerprint, theme_text) = tree(dir, text.as_bytes(), &manifest, budget)?;
 
     Ok(Extension {
         path: dir.to_path_buf(),
@@ -390,28 +510,42 @@ pub fn read_at(dir: &Path) -> Result<Extension, String> {
 /// earlier. The `fstat` afterwards is of the descriptor the read will use, so the file charter
 /// checked and the file charter reads cannot be two files.
 fn slurp(root: &Path, path: &Path, most: u64) -> Result<String, String> {
-    let mut open = crate::contain::open_no_link(root, path).map_err(|why| match why.kind() {
+    let (mut open, _) = plain_file(root, path, Some(most))?;
+    let mut text = String::new();
+    io::Read::read_to_string(&mut open, &mut text)
+        .map_err(|why| format!("could not be read: {why}"))?;
+    Ok(text)
+}
+
+/// [`slurp`]'s open, alone: the gated open and the checks on the descriptor it returned, with
+/// the length the read may rely on.
+///
+/// Split out for [`tree`], which reads in chunks rather than whole and cannot go through a
+/// `String` — an extension's directory holds binaries, and a `.dylib` is not UTF-8.
+fn plain_file(root: &Path, path: &Path, most: Option<u64>) -> Result<(std::fs::File, u64), String> {
+    let open = crate::contain::open_no_link(root, path).map_err(|why| match why.kind() {
         io::ErrorKind::NotFound => NOT_THERE.to_owned(),
         _ => format!("could not be opened: {why}"),
     })?;
     // A FIFO here is not a slow read, it is a permanent one, and this runs on the path that
-    // draws the window — so the type is asked before a byte is taken.
+    // draws the window — so the type is asked before a byte is taken. It is asked of the
+    // DESCRIPTOR, which is the file the read will use: the gate is on the exact path that was
+    // opened, never on a `stat` of it a moment earlier.
     let found = open
         .metadata()
         .map_err(|why| format!("could not be read: {why}"))?;
     if !found.file_type().is_file() {
         return Err("is not a plain file, and charter reads an extension from nothing else".into());
     }
-    if found.len() > most {
+    if let Some(most) = most
+        && found.len() > most
+    {
         return Err(format!(
             "is {} bytes, and charter reads no more than {most} here",
             found.len()
         ));
     }
-    let mut text = String::new();
-    io::Read::read_to_string(&mut open, &mut text)
-        .map_err(|why| format!("could not be read: {why}"))?;
-    Ok(text)
+    Ok((open, found.len()))
 }
 
 /// A manifest's text, as a manifest, or why it is not one.
@@ -507,15 +641,63 @@ fn parse(text: &str) -> Result<Manifest, String> {
     }
     if themes.len() + usize::from(program.is_some()) > MOST_DECLARED_FILES {
         return Err(format!(
-            "declares more than {MOST_DECLARED_FILES} files, and charter hashes every one of \
-             them at every launch"
+            "declares more than {MOST_DECLARED_FILES} files, and charter puts every one of them \
+             in front of the operator"
         ));
     }
+
+    // The one carve-out in the fingerprint (charter-app#152), and every rule on it is here
+    // rather than at the walk: this is where the string arrives, and a carve-out charter
+    // accepted and then worked around at the walk would be two answers to one question.
+    let state = match doc.get("state") {
+        None => None,
+        Some(value) => {
+            let named = value
+                .as_str()
+                .ok_or("names a 'state' that is not a directory")?;
+            if !crate::contain::segment_ok(named) {
+                return Err(format!(
+                    "names the state directory {named:?}, and a state directory is one plain \
+                     name directly inside the extension — charter will not carve a hole out of \
+                     its fingerprint that cannot be seen in a directory listing"
+                ));
+            }
+            if named == MANIFEST {
+                return Err(format!(
+                    "names {MANIFEST} as its state directory, which is the file charter reads it \
+                     from"
+                ));
+            }
+            // Nothing charter opens may be inside the one directory charter does not read. The
+            // alternative is an extension whose theme or program is exempt from the fingerprint
+            // by declaration, which is #152 with the hole moved rather than closed.
+            for file in themes
+                .iter()
+                .map(|theme| theme.file.as_str())
+                .chain(program.as_deref())
+            {
+                if Path::new(file)
+                    .components()
+                    .next()
+                    .is_some_and(|first| first.as_os_str() == named)
+                {
+                    return Err(format!(
+                        "declares {file:?} inside its state directory {named:?}, which charter \
+                         does not read — so charter would be asked to show the operator a file \
+                         it never hashed"
+                    ));
+                }
+            }
+            Some(named.to_owned())
+        }
+    };
+
     Ok(Manifest {
         id: id.to_owned(),
         name,
         themes,
         program,
+        state,
     })
 }
 
@@ -537,6 +719,14 @@ fn array(value: &serde_json::Value) -> Vec<serde_json::Value> {
 fn declarable(file: &str) -> Result<(), String> {
     if file.is_empty() {
         return Err("is empty".into());
+    }
+    // The manifest is already a part of the digest, taken over the bytes that were parsed rather
+    // than a second read of the same name (charter-app#123, and [`tree`]'s manifest arm). A
+    // manifest that declared ITSELF as a theme would ask for those bytes back as theme text,
+    // which the tree walk does not keep — and the theme would then be dropped without a word,
+    // which looks exactly like a theme that did nothing wrong.
+    if file == MANIFEST {
+        return Err("is the manifest itself, which charter already reads as the manifest".into());
     }
     if file.contains('\0') {
         return Err("holds a NUL, which ends the string inside the C library".into());
@@ -571,85 +761,517 @@ fn declarable(file: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// The sha256, hex, of everything an extension is.
+/// Which scheme the fingerprint was taken under, inside the hash.
 ///
-/// **ADR 0041's difference from ADR 0035, and it costs something.** 0035 fingerprints
-/// *configuration* — two settings keys read out of a file. This fingerprints **code**: the
-/// manifest, every theme it declares, and the program it declares, read whole, at every
-/// launch. An extension's path is not its contents, and an extension that rewrites itself
-/// after approval is the attack the whole record is about. The cost is named here rather than
-/// discovered when the app gets slower: it is bounded by [`MOST_DECLARED_FILES`] files of
-/// [`MOST_DECLARED_BYTES`] each.
+/// `1` was the manifest and the declared list; `2` is the directory tree (charter-app#152).
+/// It is in the digest's first part so that **widening what is hashed re-asks rather than
+/// silently matching**, and it is a number of its own rather than [`VERSION`] because the
+/// manifest's version is a promise to extension authors about a file format and this is a
+/// promise to the operator about what a yes covered. The two must be able to move apart.
 ///
-/// **The parts are length-framed** ([`digest`]), and the honest note about that is there rather
-/// than here: through this function the framing is not currently load-bearing, because the
-/// manifest is itself a part and it names every file the later parts carry. It is defence for
-/// the first part the manifest does not name. The parts are visited in the order the manifest
-/// declares them, and that order is inside the hash for the same reason.
+/// Every extension approved under scheme 1 is asked about once more, and that is correct: the
+/// question being asked is not the one that was answered.
+const FINGERPRINT_SCHEME: u32 = 2;
+
+/// What one entry of an extension's directory is, to the hash.
+///
+/// **A symlink is its own kind and is never followed** (charter-app#152). Its target *string*
+/// is what is hashed, so re-pointing it asks again, a link out of the tree reads nothing out
+/// there, and a loop cannot hang a walk that never walks *through* anything.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Dir,
+    File,
+    Link,
+}
+
+impl Kind {
+    /// The letter this kind contributes to a part's name. Fixed width, so a path that begins
+    /// with a space or a letter cannot be read as a different kind.
+    fn letter(self) -> char {
+        match self {
+            Self::Dir => 'd',
+            Self::File => 'f',
+            Self::Link => 'l',
+        }
+    }
+}
+
+/// One path below an extension's directory, before it is read.
+///
+/// Named for what it is rather than "entry", because [`Entry`] in this module is a row of the
+/// record and the two are a sentence apart everywhere they are both mentioned.
+#[derive(Debug, Clone)]
+struct Found {
+    /// Relative to the extension's own directory, `/`-separated on every platform, so the hash
+    /// does not change with the separator the operator's machine writes.
+    rel: String,
+    kind: Kind,
+    /// Whether any executable bit is set. **In the hash**, so `chmod +x` on a file that was
+    /// already there is a change the operator is asked about — it is the smallest edit that
+    /// turns data into something a shell will run.
+    runnable: bool,
+}
+
+impl Found {
+    /// The name this entry goes into the digest under: kind, executable bit, path — the first
+    /// three characters fixed, so nothing about a path can be read as one of the other two.
+    fn part_name(&self) -> String {
+        let runnable = if self.runnable { 'x' } else { '-' };
+        format!("{}{runnable} {}", self.kind.letter(), self.rel)
+    }
+}
+
+/// The sha256, hex, of everything an extension is: **every path below its directory except its
+/// state directory**, contents and names alike.
+///
+/// **ADR 0041's difference from ADR 0035, widened by charter-app#152, and it costs something.**
+/// 0035 fingerprints *configuration* — two settings keys read out of a file. This fingerprints
+/// **code**, and since #152 it fingerprints the code an extension did not declare as well: a
+/// `.dylib` beside the program, a script it sources, a file added after approval. An
+/// extension's path is not its contents, an extension that rewrites itself after approval is
+/// the attack the whole record is about, and *the declared list was the attacker's to choose*.
+/// The cost is named here rather than discovered when the app gets slower: it is bounded by
+/// [`MOST_TREE_ENTRIES`] and [`MOST_TREE_BYTES`], and it is measured in #152's PR body.
+///
+/// **The set of paths is hashed, not only the contents.** Every entry contributes a part whose
+/// *name* is its kind, its executable bit and its relative path, so a file that is added or
+/// taken away changes the fingerprint exactly as an edited one does. A directory is a part with
+/// no bytes, so an empty directory appearing is a change too.
+///
+/// **The parts are length-framed** ([`Framed`]) and sorted by path, so the fingerprint does not
+/// depend on the order the filesystem happened to hand entries back. Since #152 the framing is
+/// load-bearing in the way [`digest`]'s docstring says it was only waiting to be: the parts are
+/// now paths nothing else names, so `f- a/b` holding `c` and `f- a` holding `b/c`-ish bytes are
+/// exactly the pair the lengths keep apart.
 ///
 /// It hands back the theme text alongside the digest for the reason [`Extension::theme_text`]
 /// gives: the bytes the window draws with must be the bytes that were hashed, and a second read
 /// to fetch them would reopen charter-app#123 one level down.
-fn read_parts(
+fn tree(
     dir: &Path,
     manifest_bytes: &[u8],
     manifest: &Manifest,
+    budget: usize,
 ) -> Result<(String, BTreeMap<String, String>), String> {
-    let mut read: Vec<(String, String)> = Vec::new();
-    let mut theme_text = BTreeMap::new();
-    let declared = manifest
+    let found = survey_tree(dir, manifest.state.as_deref(), budget)?;
+
+    let mut framed = Framed::new();
+    // A domain tag first, so this digest can never equal one taken over the same bytes for
+    // another purpose, and the scheme with it.
+    framed.part("charter-extension", &FINGERPRINT_SCHEME.to_be_bytes());
+
+    let wanted: BTreeMap<&str, ()> = manifest
         .themes
         .iter()
-        .map(|theme| (theme.file.as_str(), true))
-        .chain(manifest.program.as_deref().map(|file| (file, false)));
-    for (file, is_a_theme) in declared {
-        let at = dir.join(file);
-        let text = slurp(dir, &at, MOST_DECLARED_BYTES)
-            .map_err(|why| format!("'{}' {why}", at.display()))?;
-        if is_a_theme {
-            theme_text.insert(file.to_owned(), text.clone());
+        .map(|theme| (theme.file.as_str(), ()))
+        .collect();
+    let declared: Vec<&str> = wanted
+        .keys()
+        .copied()
+        .chain(manifest.program.as_deref())
+        .collect();
+
+    let mut theme_text = BTreeMap::new();
+    let mut seen_the_manifest = false;
+    let mut spent = 0u64;
+    for entry in &found {
+        let at = dir.join(&entry.rel);
+        match entry.kind {
+            Kind::Dir => framed.part(&entry.part_name(), &[]),
+            Kind::Link => {
+                // Read, never followed. `read_link` answers about the last component only, so
+                // what goes into the hash is the link's own target string.
+                let points = std::fs::read_link(&at)
+                    .map_err(|why| format!("'{}' could not be read: {why}", at.display()))?;
+                framed.part(&entry.part_name(), points.as_os_str().as_encoded_bytes());
+            }
+            Kind::File => {
+                let is_the_manifest = entry.rel == MANIFEST;
+                if is_the_manifest {
+                    // **The bytes already read, not a second read of the same name.** The
+                    // declarations handed back and the fingerprint have to come from one read
+                    // or they are charter-app#123: a manifest rewritten between the parse and
+                    // the walk would be consented to without having been shown.
+                    seen_the_manifest = true;
+                    framed.part(&entry.part_name(), manifest_bytes);
+                    continue;
+                }
+                let keeping = wanted.contains_key(entry.rel.as_str());
+                let kept = hash_one(dir, &at, entry, &mut framed, &mut spent, keeping)?;
+                if let Some(text) = kept {
+                    theme_text.insert(entry.rel.clone(), text);
+                }
+            }
         }
-        read.push((file.to_owned(), text));
     }
 
-    // A domain tag first, so this digest can never equal one taken over the same bytes for
-    // another purpose, and the version with it, so widening what is hashed re-asks rather than
-    // silently matching.
-    let tag = VERSION.to_be_bytes();
-    let mut parts: Vec<(&str, &[u8])> =
-        vec![("charter-extension", &tag), (MANIFEST, manifest_bytes)];
-    parts.extend(
-        read.iter()
-            .map(|(file, text)| (file.as_str(), text.as_bytes())),
-    );
-    Ok((digest(&parts), theme_text))
+    if !seen_the_manifest {
+        return Err(format!(
+            "'{}' went away while charter was reading the extension, so charter cannot say what \
+             it just read",
+            dir.join(MANIFEST).display()
+        ));
+    }
+    // A declared file that is not in the tree is not "hashed as absent": putting it there
+    // afterwards would contribute something nobody was asked about. The walk is what tells the
+    // difference, because a declared file that turned out to be a link or a directory was
+    // recorded as one and was never opened as a file.
+    for file in declared {
+        // "not there" and "there, and not a file" are two different things to tell the
+        // operator, and `NOT_THERE`'s wording is the one every other absence in this module
+        // uses. Nothing stranger than a link or a directory reaches this arm: the walk refuses
+        // a FIFO, a socket or a device outright, because charter cannot fingerprint one.
+        match found.iter().find(|entry| entry.rel == file) {
+            Some(entry) if entry.kind == Kind::File => {}
+            Some(_) => {
+                return Err(format!(
+                    "'{}' is declared by this extension and is not a plain file, and charter \
+                     reads an extension from nothing else",
+                    dir.join(file).display()
+                ));
+            }
+            None => {
+                return Err(format!("'{}' {NOT_THERE}", dir.join(file).display()));
+            }
+        }
+    }
+
+    Ok((framed.finish(), theme_text))
 }
 
-/// sha256, hex, over a list of named parts — **length-framed**, so no two different lists can
-/// hash the same.
+/// Hash one plain file, in chunks, and hand back its text when it is one charter keeps.
+///
+/// **Chunks and not a whole read**, so [`MOST_TREE_BYTES`] bounds time rather than memory: an
+/// extension holding one file as large as the disk is refused by the budget without charter
+/// having held it. The length is taken from the DESCRIPTOR and is what goes into the framing,
+/// and a file that turns out to be a different length is refused rather than framed as a length
+/// it did not have.
+fn hash_one(
+    dir: &Path,
+    at: &Path,
+    entry: &Found,
+    framed: &mut Framed,
+    spent: &mut u64,
+    keeping: bool,
+) -> Result<Option<String>, String> {
+    // Every refusal below names the file it is about, and the byte budget names the extension:
+    // "this file is not a plain file" and "this extension is too big to hash" are answers to
+    // two different questions and the operator is owed the right one.
+    let about = |why: String| format!("'{}' {why}", at.display());
+    let (mut open, len) = plain_file(dir, at, None).map_err(about)?;
+    *spent = spent.saturating_add(len);
+    if *spent > MOST_TREE_BYTES {
+        return Err(too_many_bytes(dir));
+    }
+    if keeping && len > MOST_DECLARED_BYTES {
+        return Err(about(format!(
+            "is {len} bytes, and charter holds no more than {MOST_DECLARED_BYTES} of a file it \
+             draws with"
+        )));
+    }
+    framed.begin(&entry.part_name(), len);
+    let mut kept = keeping.then(Vec::new);
+    let mut buffer = vec![0u8; CHUNK];
+    let mut left = len;
+    while left > 0 {
+        let want = usize::try_from(left.min(CHUNK as u64)).unwrap_or(CHUNK);
+        let got = io::Read::read(&mut open, &mut buffer[..want])
+            .map_err(|why| about(format!("could not be read: {why}")))?;
+        if got == 0 {
+            return Err(about(SHRANK.to_owned()));
+        }
+        framed.feed(&buffer[..got]);
+        if let Some(kept) = &mut kept {
+            kept.extend_from_slice(&buffer[..got]);
+        }
+        left -= got as u64;
+    }
+    // The file it framed and the file it read have to be the same length, or the framing is a
+    // claim about bytes that were never hashed.
+    if io::Read::read(&mut open, &mut buffer[..1])
+        .map_err(|why| about(format!("could not be read: {why}")))?
+        != 0
+    {
+        return Err(about(SHRANK.to_owned()));
+    }
+    match kept {
+        None => Ok(None),
+        Some(bytes) => String::from_utf8(bytes)
+            .map(Some)
+            .map_err(|_| about("is drawn as text and is not valid UTF-8".to_owned())),
+    }
+}
+
+/// What charter says about a file that moved under it while it was being hashed.
+const SHRANK: &str = "changed while charter was reading it, so charter cannot say what it read";
+
+/// The refusal when an extension is past a bound, saying **which** bound and what to do.
+///
+/// One sentence of advice for both, because there is only one thing to do about either: an
+/// extension's directory is a directory holding an extension. A refusal that named a number and
+/// stopped there would be the launch telling the operator that something is too big without
+/// telling them what "too big" is measured against.
+fn too_much(dir: &Path, past: &str) -> String {
+    format!(
+        "'{}' holds more than {past}, and charter reads all of it at every launch to see \
+         whether the extension changed. Point charter at a directory holding the extension and \
+         nothing else: a build tree, a virtualenv or a clone of something large belongs outside \
+         it.",
+        dir.display()
+    )
+}
+
+/// [`too_much`] for the entry bound.
+fn too_many_entries(dir: &Path) -> String {
+    too_much(dir, &format!("{MOST_TREE_ENTRIES} files and directories"))
+}
+
+/// [`too_much`] for the byte bound.
+fn too_many_bytes(dir: &Path) -> String {
+    too_much(dir, &format!("{MOST_TREE_BYTES} bytes charter would hash"))
+}
+
+/// Every path below `dir` except `state`, sorted, with nothing read yet.
+///
+/// **The walk descends only into directories it saw with its own `symlink_metadata`**, and it
+/// follows nothing: a symlink is recorded as one and is not a way in, which is what makes a
+/// loop impossible and a link out of the tree unreadable. That the gate is then re-taken on the
+/// exact path each file is *opened* by ([`plain_file`]) rather than on this walk's answer is
+/// ADR 0028's rule and the reason the two are separate passes.
+fn survey_tree(dir: &Path, state: Option<&str>, budget: usize) -> Result<Vec<Found>, String> {
+    let mut found: Vec<Found> = Vec::new();
+    let mut left = budget;
+    // Relative directories still to look inside, the extension's own first.
+    let mut todo = vec![String::new()];
+    while let Some(rel) = todo.pop() {
+        let at = if rel.is_empty() {
+            dir.to_path_buf()
+        } else {
+            dir.join(&rel)
+        };
+        // A directory charter is about to list is a path like any other, so the containment
+        // walk answers about it first. It is a `stat` and not a handle — ADR 0028 — but a
+        // directory swapped for a link between the two is refused at the leaf regardless,
+        // because every file below is opened with `O_NOFOLLOW` through the same gate.
+        crate::contain::no_link_on_the_way(dir, &at)
+            .map_err(|why| format!("'{}' {why}", at.display()))?;
+        let listing = std::fs::read_dir(&at)
+            .map_err(|why| format!("'{}' could not be listed: {why}", at.display()))?;
+        for step in listing {
+            let step =
+                step.map_err(|why| format!("'{}' could not be listed: {why}", at.display()))?;
+            let Some(name) = step.file_name().to_str().map(str::to_owned) else {
+                return Err(format!(
+                    "'{}' holds a name that is not valid UTF-8, and charter records what it \
+                     hashed by name",
+                    at.display()
+                ));
+            };
+            let next = if rel.is_empty() {
+                name.clone()
+            } else {
+                format!("{rel}/{name}")
+            };
+            // The one exclusion, and only at the top: `state` is one segment, so a `cache`
+            // nested inside the tree is an ordinary directory and is hashed.
+            if rel.is_empty() && state == Some(name.as_str()) {
+                continue;
+            }
+            if left == 0 {
+                return Err(too_many_entries(dir));
+            }
+            left -= 1;
+            let found_it = step
+                .path()
+                .symlink_metadata()
+                .map_err(|why| format!("'{}' could not be read: {why}", step.path().display()))?;
+            let kind = if found_it.file_type().is_symlink() {
+                Kind::Link
+            } else if found_it.is_dir() {
+                todo.push(next.clone());
+                Kind::Dir
+            } else if found_it.is_file() {
+                Kind::File
+            } else {
+                return Err(format!(
+                    "'{}' is not a file, a directory or a link, and charter cannot fingerprint \
+                     what it cannot read. Take it out of the extension, or move it into the \
+                     extension's state directory.",
+                    step.path().display()
+                ));
+            };
+            found.push(Found {
+                rel: next,
+                kind,
+                runnable: runnable(&found_it),
+            });
+        }
+    }
+    // Sorted by path, so what the filesystem happened to hand back is not inside the hash.
+    found.sort_by(|one, two| one.rel.cmp(&two.rel));
+    Ok(found)
+}
+
+/// Whether anything may run this, as the filesystem answers it.
+#[cfg(unix)]
+fn runnable(found: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    found.permissions().mode() & 0o111 != 0
+}
+
+/// Windows has no mode bits charter could read this off, and this module refuses on Windows
+/// anyway (ADR 0031, the module docstring, [`supported`]). `false` keeps the hash defined
+/// rather than guessed at.
+#[cfg(not(unix))]
+fn runnable(_found: &std::fs::Metadata) -> bool {
+    false
+}
+
+/// Refuse an extension whose state directory holds anything that could be loaded as code.
+///
+/// **This is the enforcement the carve-out has to carry** (charter-app#152). The state
+/// directory is the one place [`tree`] does not look, so anything in it is a file the operator
+/// will never be asked about — and a state directory that may hold a `.dylib` or a script the
+/// program sources has given back the whole property the tree hash exists for.
+///
+/// What it refuses: a symlink (which would name code from anywhere without naming it here), and
+/// any file with an executable bit. What it costs: one `symlink_metadata` per entry and not one
+/// byte read, so a cache of ten thousand files is checked without being hashed and without
+/// re-prompting anybody.
+///
+/// **Its limit, which belongs beside it and not in a later apology.** No filesystem predicate
+/// makes a file un-loadable as code: `dlopen` does not need the executable bit on Linux and
+/// `source` needs it nowhere. This closes the careless case and the conventional one. What it
+/// leaves open is a program the operator approved choosing to read its own state as code, which
+/// is the same class as one that fetches a string and evaluates it — and [`state_note`] says so
+/// on the screen rather than here alone.
+fn state_holds_no_code(dir: &Path, state: &str, budget: &mut usize) -> Result<(), String> {
+    let root = dir.join(state);
+    match std::fs::symlink_metadata(&root) {
+        // Not there is the ordinary first launch: an extension that has not written anything
+        // yet. The exclusion does not depend on the directory existing, so that the first write
+        // is not itself a change.
+        Err(_) => return Ok(()),
+        Ok(found) if found.file_type().is_symlink() => {
+            return Err(format!(
+                "'{}' is this extension's state directory and is a symlink. charter does not \
+                 read what is in there, so a link would put the one place this extension may \
+                 write wherever it points. Make it a real directory.",
+                root.display()
+            ));
+        }
+        Ok(found) if !found.is_dir() => {
+            return Err(format!(
+                "'{}' is declared as this extension's state directory and is not a directory",
+                root.display()
+            ));
+        }
+        Ok(_) => {}
+    }
+
+    let mut todo = vec![root];
+    while let Some(at) = todo.pop() {
+        let listing = std::fs::read_dir(&at)
+            .map_err(|why| format!("'{}' could not be listed: {why}", at.display()))?;
+        for step in listing {
+            let step =
+                step.map_err(|why| format!("'{}' could not be listed: {why}", at.display()))?;
+            if *budget == 0 {
+                return Err(too_many_entries(dir));
+            }
+            *budget -= 1;
+            let path = step.path();
+            let found = path
+                .symlink_metadata()
+                .map_err(|why| format!("'{}' could not be read: {why}", path.display()))?;
+            if found.file_type().is_symlink() {
+                return Err(format!(
+                    "'{}' is a symlink inside the state directory '{state}', which charter does \
+                     not fingerprint — so it names code the operator would never be asked \
+                     about. Move what it points at into the extension, where charter reads it.",
+                    path.display()
+                ));
+            }
+            if found.is_dir() {
+                todo.push(path);
+                continue;
+            }
+            if runnable(&found) {
+                return Err(format!(
+                    "'{}' can be run and is inside the state directory '{state}', which charter \
+                     does not fingerprint — so it is a program the operator would never be \
+                     asked about. Move it out of '{state}', where charter reads it and asks.",
+                    path.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// sha256 over a list of named parts — **length-framed**, so no two different lists can hash
+/// the same.
 ///
 /// Each part goes in as its name's length, its name, its bytes' length and its bytes.
 /// Concatenating name and content without the lengths would let a part named `a` holding `bc`
 /// collide with one named `ab` holding `c`, and a fingerprint with a collision in it is a
 /// fingerprint that can be changed under the operator without asking again.
 ///
-/// **It is a seam, and the seam is why the framing is testable at all.** Through
-/// [`read_parts`] the framing is currently unreachable: the manifest's own bytes are the
-/// second part and they *name every file the later parts carry*, so any pair of extensions
-/// that would collide already differ in the manifest. That makes the framing defence for a
-/// part the manifest does not name — and the day one is added, nobody will notice it became
-/// load-bearing. `a_name_and_its_contents_cannot_run_together` drives this function directly
-/// rather than through an extension, so dropping the framing reddens a test today.
-fn digest(parts: &[(&str, &[u8])]) -> String {
-    use sha2::Digest as _;
-    let mut hasher = sha2::Sha256::new();
-    for (name, bytes) in parts {
-        hasher.update((name.len() as u64).to_be_bytes());
-        hasher.update(name.as_bytes());
-        hasher.update((bytes.len() as u64).to_be_bytes());
-        hasher.update(bytes);
+/// **It takes a part at a time** so that [`tree`] can feed a file through it in chunks: the
+/// length is known from the descriptor before a byte is read, which is what lets the framing
+/// stay honest without the file being held.
+struct Framed(sha2::Sha256);
+
+impl Framed {
+    fn new() -> Self {
+        use sha2::Digest as _;
+        Self(sha2::Sha256::new())
     }
-    hex(&hasher.finalize())
+
+    /// One whole part.
+    fn part(&mut self, name: &str, bytes: &[u8]) {
+        self.begin(name, bytes.len() as u64);
+        self.feed(bytes);
+    }
+
+    /// A part's name and the length of the bytes that follow, before they are read.
+    fn begin(&mut self, name: &str, len: u64) {
+        use sha2::Digest as _;
+        self.0.update((name.len() as u64).to_be_bytes());
+        self.0.update(name.as_bytes());
+        self.0.update(len.to_be_bytes());
+    }
+
+    /// Some of a part's bytes.
+    fn feed(&mut self, bytes: &[u8]) {
+        use sha2::Digest as _;
+        self.0.update(bytes);
+    }
+
+    fn finish(self) -> String {
+        use sha2::Digest as _;
+        hex(&self.0.finalize())
+    }
+}
+
+/// [`Framed`] over a list, as a function — the seam the framing is tested through.
+///
+/// **It is a seam, and the seam is why the framing is testable at all.** Through [`tree`] a
+/// collision would need two different path sets whose framed encodings agree, which is the
+/// thing the lengths make impossible and which therefore cannot be demonstrated from the
+/// outside. `a_name_and_its_contents_cannot_run_together` drives this function directly, so
+/// dropping the framing reddens a test today rather than the day something relies on it.
+///
+/// It exists **for** that test and is compiled only for it: a second caller would be a second
+/// answer to "how are parts framed", which is the drift [`Framed`] is one struct to prevent.
+#[cfg(test)]
+fn digest(parts: &[(&str, &[u8])]) -> String {
+    let mut framed = Framed::new();
+    for (name, bytes) in parts {
+        framed.part(name, bytes);
+    }
+    framed.finish()
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -1007,10 +1629,11 @@ pub struct Survey {
 /// Answer the one question ADR 0041 says to build before anything else: *what has contributed
 /// what to this window.*
 ///
-/// It reads the disk — every installed extension's manifest and every file it declares, to
-/// re-take the fingerprint — because an approval is of bytes and the bytes are what may have
-/// changed. That is ADR 0041's named cost of fingerprinting code rather than configuration,
-/// and it is bounded by [`MOST_DECLARED_FILES`] and [`MOST_DECLARED_BYTES`] per extension.
+/// It reads the disk — every installed extension's whole directory, to re-take the fingerprint
+/// — because an approval is of bytes and the bytes are what may have changed. That is ADR
+/// 0041's named cost of fingerprinting code rather than configuration, widened by
+/// charter-app#152 from the declared list to the tree, and it is bounded by
+/// [`MOST_TREE_ENTRIES`] and [`MOST_TREE_BYTES`] per extension.
 pub fn survey(config_root: &Path) -> Survey {
     let loaded = read(config_root);
     let mut installed = Vec::new();
@@ -1085,6 +1708,14 @@ pub struct Prompt {
     pub runs_as_you: String,
     /// [`FINGERPRINTED`].
     pub fingerprint_note: String,
+    /// [`state_note`], when this extension declares a state directory, and `None` when it
+    /// declares none — which is the ordinary case and has no exception to state.
+    ///
+    /// **The exception goes where the operator consents, not only into a doc comment**
+    /// (charter-app#152). [`FINGERPRINTED`] says charter read every file in the directory; if
+    /// that is true of everything but one directory, the one directory is the operator's to
+    /// weigh.
+    pub state_note: Option<String>,
 }
 
 /// The question to ask about `found`.
@@ -1113,6 +1744,7 @@ pub fn prompt(found: &Extension, standing: Standing) -> Prompt {
         first: standing != Standing::Changed,
         runs_as_you: RUNS_AS_YOU.to_owned(),
         fingerprint_note: FINGERPRINTED.to_owned(),
+        state_note: found.manifest.state.as_deref().map(state_note),
     }
 }
 

@@ -24,10 +24,12 @@ use tauri_plugin_dialog::DialogExt;
 /// A mirror of [`extension::Prompt`] rather than the thing itself, because `charter-core` never
 /// depends on the app and the app's wire types are generated into TypeScript.
 ///
-/// **The two sentences travel with it rather than being written in the dialog.** That is the
-/// point of carrying them: a window that composed its own words about what an extension can
+/// **charter's own sentences travel with it rather than being written in the dialog.** That is
+/// the point of carrying them: a window that composed its own words about what an extension can
 /// reach could drift kinder than the truth one edit at a time, and the truth here is
-/// uncomfortable enough that kinder is the likely direction.
+/// uncomfortable enough that kinder is the likely direction. Since charter-app#152 there are
+/// three of them, because the fingerprint note acquired an exception and an exception the window
+/// worded itself would be the same drift through a smaller door.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, specta::Type)]
 pub struct ExtensionAsk {
     /// The id the record is keyed by, and the id the yes is recorded against.
@@ -50,6 +52,14 @@ pub struct ExtensionAsk {
     /// `extension::FINGERPRINTED` — that the fingerprint catches a change and is not a
     /// boundary.
     pub fingerprint_note: String,
+    /// `extension::state_note` — which one directory charter does NOT read, when this
+    /// extension declares one, and `null` when it declares none (charter-app#152).
+    ///
+    /// It travels for the same reason the other two do. The fingerprint note says charter read
+    /// every file in the directory; the exception to that sentence belongs on the same screen
+    /// as the sentence, in the core's words, or the wording has the defect #152 was opened over
+    /// one carve-out later.
+    pub state_note: Option<String>,
 }
 
 impl From<extension::Prompt> for ExtensionAsk {
@@ -63,6 +73,7 @@ impl From<extension::Prompt> for ExtensionAsk {
             first: asked.first,
             runs_as_you: asked.runs_as_you,
             fingerprint_note: asked.fingerprint_note,
+            state_note: asked.state_note,
         }
     }
 }
@@ -167,10 +178,11 @@ fn config_root() -> Result<std::path::PathBuf, String> {
 
 /// What has contributed what to this window.
 ///
-/// It reads the disk — every installed extension's manifest and every file it declares, to
-/// re-take the fingerprint — because an approval is of bytes and the bytes are what may have
-/// changed since. ADR 0041 names that cost: *the fingerprint is a hash of code, checked at
-/// each launch*. Off the UI thread for exactly that reason.
+/// It reads the disk — every installed extension's whole directory, to re-take the fingerprint
+/// — because an approval is of bytes and the bytes are what may have changed since. ADR 0041
+/// names that cost: *the fingerprint is a hash of code, checked at each launch*, and
+/// charter-app#152 widened it from the declared list to the tree. Off the UI thread for exactly
+/// that reason, and the cost is measured in #152's PR body rather than left as an estimate.
 #[tauri::command]
 #[specta::specta]
 pub async fn installed_extensions() -> Result<InstalledExtensions, String> {
@@ -339,6 +351,32 @@ mod tests {
         let ask = row.ask.as_ref().expect("a question");
         assert_eq!(ask.runs_as_you, extension::RUNS_AS_YOU);
         assert_eq!(ask.fingerprint_note, extension::FINGERPRINTED);
+        assert_eq!(
+            ask.state_note, None,
+            "an extension with no state directory has no exception to state"
+        );
+    }
+
+    #[test]
+    fn a_state_directory_is_carried_to_the_window_as_the_core_words_it() {
+        // charter-app#152. `fingerprint_note` says charter read every file in the directory;
+        // the one directory it did not read has to reach the same screen, in the core's own
+        // words, or the window is left to word the exception itself.
+        let (_dir, at, config) = made();
+        std::fs::write(
+            at.join(extension::MANIFEST),
+            r#"{"version":1,"id":"solarized","name":"Solarized","state":"cache",
+                "contributes":{"themes":[{"name":"Solarized Dark","file":"dark.json"}]}}"#,
+        )
+        .expect("a manifest with a state directory");
+        extension::install(&config, &at).expect("installed");
+
+        let listed = listed(&extension::survey(&config));
+        let ask = listed.extensions[0].ask.as_ref().expect("a question");
+        assert_eq!(
+            ask.state_note.as_deref(),
+            Some(&*extension::state_note("cache"))
+        );
     }
 
     #[test]

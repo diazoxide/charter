@@ -17,16 +17,23 @@ import type { ExtensionAsk } from "./bindings";
  * dialog**, because a surface that over-promises is one the operator stops reading and then
  * trusts anyway.
  *
- * So the two sentences that say so are `ask.runs_as_you` and `ask.fingerprint_note`, they come
- * from `charter_core::extension`, they are pinned by tests in that crate, and this component
- * renders them **as given**. Nothing here composes a reassurance of its own. Nothing here
- * summarises them shorter.
+ * So the sentences that say so are `ask.runs_as_you`, `ask.fingerprint_note` and — when there is
+ * one — `ask.state_note`, they come from `charter_core::extension`, they are pinned by tests in
+ * that crate, and this component renders them **as given**. Nothing here composes a reassurance
+ * of its own. Nothing here summarises them shorter.
  *
  * The rest follows ADR 0035's first-open prompt, which is the pattern: show what it contributes,
  * ask once per machine, remember the fingerprint, re-ask when what it contributes changes. The
  * one difference, and it is 0041's: **0035 fingerprints configuration and this fingerprints
- * code.** An extension's path is not its contents, so the hash is over the manifest and every
- * file it declares, re-taken at each launch.
+ * code.** An extension's path is not its contents, so the hash is over its whole directory,
+ * re-taken at each launch.
+ *
+ * **`state_note` is the exception to the sentence above it, and it is drawn next to it for that
+ * reason** (charter-app#152). The fingerprint note says charter read every file in the
+ * extension's directory; an extension that declares a state directory has one directory charter
+ * does not read, and which one that is belongs on the screen where the operator says yes rather
+ * than in a doc comment. It is absent for an extension that declares no state directory, which
+ * is the ordinary case and has no exception to state.
  *
  * A Radix dialog (`docs/ui-primitives.md`), so "has to be answered" is a property of the surface
  * rather than a claim about how it was drawn. Escape answers it the way Cancel does: nothing is
@@ -86,6 +93,7 @@ export function ApproveExtension({
             here rewrites, shortens or softens them. */}
           <p className="came-back runs-as-you">{ask.runs_as_you}</p>
           <p className="came-back">{ask.fingerprint_note}</p>
+          {ask.state_note ? <p className="came-back">{ask.state_note}</p> : null}
 
           <div className="doing">
             <button type="button" onClick={() => onApprove(ask)}>

@@ -6,7 +6,10 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
+  type ReactNode,
 } from "react";
+import clsx from "clsx";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import * as Menu from "@radix-ui/react-dropdown-menu";
 import {
@@ -73,8 +76,8 @@ import {
 } from "./tabs";
 import { ChatState } from "./NeedsYou";
 import { Panels } from "./Panels";
-import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
-import { TAB_ATTRIBUTE, useOffscreen } from "./offscreen";
+import { movedAt, quietOnes, stateOf, useChatStates } from "./chatState";
+import { fitting, LEAST, useRoom } from "./fits";
 import type { Ending } from "./QuitWarning";
 
 /**
@@ -529,6 +532,59 @@ export function PlaneView({
     ];
   }, [filedIn, pinnedWorkspaces, sidebar, tabs]);
 
+  /** And which of them the workspace strip has room to draw. The same rule as the chats'
+   *  one level up, because the operator's complaint was about all of them: a strip that
+   *  scrolls says nothing about what is past its edge. */
+  const { strip: workspaceStrip, width: workspaceRoom } = useRoom(strips.length);
+  const workspacesShown = useMemo(
+    () => fitting(strips, focused, workspaceRoom, LEAST.workspace),
+    [focused, strips, workspaceRoom],
+  );
+
+  /**
+   * What a workspace is drawn as: its name, its pin, and the two counts.
+   *
+   * **One definition, used by the strip and by the menu of what the strip has no room for.**
+   * They are the same workspace and a second copy of the markup is a second answer — the
+   * rule the catalogue already follows for words, applied to marks.
+   *
+   * Counted here in the render body, once per workspace, and DELIBERATELY not memoised. It
+   * looks quadratic and it is — ten workspaces × fifty tabs × a scan of the sidebar — so
+   * charter-app#133 measured it at the limits before touching it: **0.022 ms at ADR 0026's
+   * ten workspaces and fifty chats**, against a 16.7 ms frame, and half a percent of the
+   * re-render it sits in. A memo over `tabs` would save that 22 µs on the one event it was
+   * proposed for — `chat-moved` changes neither `tabs` nor `sidebar`, so the memo would hit
+   * every time — and be paid for on every event that does change them. The measurement is
+   * kept as assertions in `tabs.test.ts`, "the workspace strip at fifty chats", where a
+   * third nested scan fails a test instead of being a surprise.
+   */
+  const workspaceMarks = (workspace: string) => {
+    const waiting = states.needsYou.filter((session) => filedIn(session) === workspace).length;
+    const here = tabsIn(tabs, workspace, filedIn).length;
+    const called = workspace === OUTSIDE ? OUTSIDE_TITLE : workspace;
+    return (
+      <>
+        <span className="workspace-name">{called}</span>
+        <Pin held={pinnedWorkspaces.includes(workspace)} what="workspace" />
+        {/* How many chats are open over there. With the strip below showing one workspace's
+            chats, this is the answer to "where are the other forty". */}
+        {here > 0 && (
+          <span className="workspace-count" aria-label={`${here} chats`}>
+            {here}
+          </span>
+        )}
+        {/* And how many of them are asking for you. Scoping the chats to a workspace would
+            otherwise hide a chat that needs you behind a strip nobody is looking at — the
+            same hole the project tabs close one scope up. */}
+        {waiting > 0 && (
+          <span className="workspace-needs" aria-label={`${waiting} chats need you in ${called}`}>
+            {waiting}
+          </span>
+        )}
+      </>
+    );
+  };
+
   /**
    * The chats the strip shows: the focused workspace's.
    *
@@ -537,19 +593,26 @@ export function PlaneView({
    * would be hiding chats that are running — which is worse than a strip that shows them all
    * for the moment before the answer arrives.
    */
-  const shown = useMemo(
+  const onStrip = useMemo(
     () => (sidebar === undefined ? tabs.order : tabsIn(tabs, focused, filedIn, isPinned)),
     [filedIn, focused, isPinned, sidebar, tabs],
   );
 
   /**
-   * The tabs the strip is not showing all of, and the element that scrolls them.
+   * How much room the chat strip has, and therefore which of its tabs it draws.
    *
-   * Measured rather than derived — see `offscreen.ts`. Nothing is taken out of the strip:
-   * these tabs are scrolled past, and every one of them keeps its place, its close button
-   * and its tab stop.
+   * **What does not fit is not drawn** — the operator's call, reversing what ADR 0039 left
+   * open. `fits.ts` holds the whole of why the answer is arithmetic over one measured width
+   * rather than an intersection measurement over fifty tabs, and what it costs.
+   *
+   * The `+` and the show-more button are siblings of this tablist rather than children of
+   * it, so its own width is already what is left for tabs and `controls` goes on nothing.
    */
-  const { strip, offscreen } = useOffscreen(shown);
+  const { strip, width: room } = useRoom(onStrip.length);
+  const { shown, hidden } = useMemo(
+    () => fitting(onStrip, tabs.inFront, room, LEAST.chat),
+    [onStrip, room, tabs.inFront],
+  );
 
   /**
    * When each chat last moved, as the CORE counts it (ADR 0039).
@@ -562,26 +625,23 @@ export function PlaneView({
   const lastMoved = useCallback<LastMoved>((session) => movedAt(states, session), [states]);
 
   /**
-   * What the show-more menu lists: the tabs that are not wholly on screen, **most recently
-   * moved first** — and nothing else.
-   *
-   * Intersected with `shown` rather than trusted: a measurement is one frame behind a tab
-   * closing, so an id that has just gone would otherwise be looked up in `tabs.byId` and
-   * found missing.
+   * What the show-more menu lists: the tabs the strip has no room for, **most recently moved
+   * first** — and nothing else.
    *
    * **The menu is not a find surface** (ADR 0039). It lists what the strip is hiding, not
    * every chat: the palette lists every chat with a search and a ranking over it, it is
    * better at finding than any menu will be, and a menu built as a second one of those is a
    * menu that should not have been built.
+   *
+   * **And now it is the only pointer route to a hidden tab, which is what the amendment to
+   * ADR 0039 had to argue for.** Its rows bring a tab forward, and the tab it brings forward
+   * is drawn on the strip with its own `×` (`fits.ts`, the selected tab is always drawn). So
+   * ending a chat is still two presses and never one from a menu under the cursor, which is
+   * the rule this menu was built with and did not have to change.
    */
   const notShowing = useMemo(
-    () =>
-      byLastActivity(
-        offscreen.filter((id) => shown.includes(id)),
-        tabs,
-        lastMoved,
-      ),
-    [lastMoved, offscreen, shown, tabs],
+    () => byLastActivity(hidden, tabs, lastMoved),
+    [hidden, lastMoved, tabs],
   );
 
   // The tab that was in front on this strip, remembered so that coming back to a workspace
@@ -1173,21 +1233,11 @@ export function PlaneView({
     [run],
   );
 
-  /**
-   * Keeps the tab in front on screen when the strip is wider than the window.
-   *
-   * The strip scrolls rather than growing past the window edge (charter-app#130), and a chat
-   * is brought forward from surfaces that are not the strip at all — the palette, the
-   * needs-you queue, a close taking the tab beside it. So the selected tab comes to the
-   * operator rather than the operator having to find it.
-   *
-   * A callback ref, so it runs on the element that IS selected whenever that changes, with
-   * nothing having to work out which one that is. `scrollIntoView` is called through `?.`
-   * because jsdom does not implement it, and a window must not come down over a nicety.
-   */
-  const intoView = useCallback((tab: HTMLButtonElement | null) => {
-    tab?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-  }, []);
+  // **`scrollIntoView` on the selected tab is gone with the scroller.** It was how a chat
+  // brought forward from somewhere that is not the strip — the palette, the needs-you queue,
+  // a close taking the tab beside it — came back on screen. The strip does not scroll any
+  // more, so there is nowhere to scroll it to; `fits.ts` draws the selected tab instead, and
+  // that is the same promise kept by construction rather than by a side effect.
 
   // The chats still open, in the order the tab bar shows them: what a quit would end, with
   // what each one is doing already resolved. The state has to be looked up HERE, because a
@@ -1253,69 +1303,56 @@ export function PlaneView({
           to one query — for a screen reader and for every scenario spec that reaches the
           sidebar by it. The tablist is what this is. */}
       {strips.length > 0 && (
-        <div className="workspaces-strip" role="tablist" aria-label="Workspaces">
-          {/* Counted here in the render body, once per workspace, and DELIBERATELY not
-              memoised. It looks quadratic and it is — ten workspaces × fifty tabs × a scan of
-              the sidebar — so charter-app#133 measured it at the limits before touching it:
-              **0.022 ms at ADR 0026's ten workspaces and fifty chats**, against a 16.7 ms
-              frame, and half a percent of the re-render it sits in. A memo over `tabs` would
-              save that 22 µs on the one event it was proposed for — `chat-moved` changes
-              neither `tabs` nor `sidebar`, so the memo would hit every time — and be paid for
-              on every event that does change them. The measurement is kept as assertions in
-              `tabs.test.ts`, "the workspace strip at fifty chats", where a third nested scan
-              fails a test instead of being a surprise. */}
-          {strips.map((workspace) => {
-            const offer = by(`workspace.focus:${workspace}`);
-            const waiting = states.needsYou.filter(
-              (session) => filedIn(session) === workspace,
-            ).length;
-            const here = tabsIn(tabs, workspace, filedIn).length;
-            return (
-              /* Right-click is the third reader of the catalogue (`Menus.tsx`): focus, pin,
-                 make one, and — under the line — delete this one. `asChild`, so the strip
-                 gains no wrapper: the trigger IS the tab. */
-              <Menued
-                key={workspace}
-                on={{ on: "workspace", workspace }}
-                offers={offers}
-                onPress={press}
-              >
-                <button
-                  role="tab"
-                  aria-selected={workspace === focused}
-                  title={offer?.title}
-                  onClick={() => {
-                    if (offer?.available) press(offer);
-                  }}
+        <div className="workspaces">
+          <div
+            className="workspaces-strip"
+            role="tablist"
+            aria-label="Workspaces"
+            ref={workspaceStrip}
+            style={{ "--least": `${LEAST.workspace}px` } as CSSProperties}
+          >
+            {workspacesShown.shown.map((workspace) => {
+              const offer = by(`workspace.focus:${workspace}`);
+              return (
+                /* Right-click is the third reader of the catalogue (`Menus.tsx`): focus, pin,
+                   make one, and — under the line — delete this one. `asChild`, so the strip
+                   gains no wrapper: the trigger IS the tab, which is what #171's `flex: 1 1 0`
+                   cells require. */
+                <Menued
+                  key={workspace}
+                  on={{ on: "workspace", workspace }}
+                  offers={offers}
+                  onPress={press}
                 >
-                  <span className="workspace-name">
-                    {workspace === OUTSIDE ? OUTSIDE_TITLE : workspace}
-                  </span>
-                  <Pin held={pinnedWorkspaces.includes(workspace)} what="workspace" />
-                  {/* How many chats are open over there. With the strip below showing one
-                    workspace's chats, this is the answer to "where are the other forty". */}
-                  {here > 0 && (
-                    <span className="workspace-count" aria-label={`${here} chats`}>
-                      {here}
-                    </span>
-                  )}
-                  {/* And how many of them are asking for you. Scoping the chats to a workspace
-                    would otherwise hide a chat that needs you behind a strip nobody is
-                    looking at — the same hole the project tabs close one scope up. */}
-                  {waiting > 0 && (
-                    <span
-                      className="workspace-needs"
-                      aria-label={`${waiting} chats need you in ${
-                        workspace === OUTSIDE ? OUTSIDE_TITLE : workspace
-                      }`}
-                    >
-                      {waiting}
-                    </span>
-                  )}
-                </button>
-              </Menued>
-            );
-          })}
+                  <button
+                    role="tab"
+                    aria-selected={workspace === focused}
+                    title={offer?.title}
+                    onClick={() => {
+                      if (offer?.available) press(offer);
+                    }}
+                  >
+                    {workspaceMarks(workspace)}
+                  </button>
+                </Menued>
+              );
+            })}
+          </div>
+          {/* And what it had no room for. One affordance per strip, with the strip's own
+              noun in it: "workspaces" and not "tabs", because a window drawing three of
+              these owes an operator — and a scenario spec — an answer to WHICH strip is
+              not showing everything. */}
+          <div className="more">
+            <ShowMore
+              noun="workspace"
+              hidden={workspacesShown.hidden.map((workspace) => ({
+                key: workspace,
+                offer: by(`workspace.focus:${workspace}`),
+                children: workspaceMarks(workspace),
+              }))}
+              onPress={press}
+            />
+          </div>
         </div>
       )}
 
@@ -1324,17 +1361,25 @@ export function PlaneView({
             sessions-under-a-workspace was. Named, because the projects and the workspaces
             above are tablists too and a query for `role="tab"` across the whole window
             would mix all three. */}
-        <div className="tabs" role="tablist" aria-label="Tabs" ref={strip}>
+        <div
+          className="tabs"
+          role="tablist"
+          aria-label="Tabs"
+          ref={strip}
+          style={{ "--least": `${LEAST.chat}px` } as CSSProperties}
+        >
           {shown.map((id) => (
-            /* `data-tab` is how `offscreen.ts` finds a tab without knowing this markup.
-               The whole tab is measured, `×` included: a tab whose close button is over the
-               edge is one an operator cannot finish using. */
+            /* Right-click is the third reader of the catalogue (`Menus.tsx`). `asChild`, so
+               the strip gains no wrapper element: the trigger IS the tab.
+
+               No `data-tab` and no scroll-into-view ref any more: #171 deleted `offscreen.ts`
+               and the strip collapses rather than scrolls, so there is nothing to scroll a
+               tab into and nothing measuring tabs through the markup. */
             <Menued key={id} on={{ on: "chat", tab: id }} offers={offers} onPress={press}>
-              <span className="tab" {...{ [TAB_ATTRIBUTE]: id }}>
+              <span className="tab">
                 <button
                   role="tab"
                   aria-selected={id === tabs.inFront}
-                  ref={id === tabs.inFront ? intoView : undefined}
                   // The catalogue's row, not a second copy of it. The tab already in front
                   // has a row that says so and cannot run — a tab is never disabled, because
                   // the selected tab is the one a keyboard has to be able to land on.
@@ -1360,18 +1405,43 @@ export function PlaneView({
             a scroller never did, which is the premise ADR 0036 was missing. It is absent
             when nothing is hidden, because then there is nothing for it to say.
 
-            **Outside the scroller, beside the `+` and for the same reason.** A control that
+            **Outside the strip, beside the `+` and for the same reason.** A control that
             appears exactly when the strip is full must not live inside the thing that is
-            full (charter-app#130/#131). */}
+            full (charter-app#130/#131) — and now that the strip collapses rather than
+            scrolls, "inside" would mean the `+` could be collapsed away. */}
         <div className="more">
-          <ShowMore hidden={notShowing} tabs={tabs} states={states} offerFor={by} onPress={press} />
+          <ShowMore
+            noun="tab"
+            hidden={notShowing.map((id) => ({
+              key: String(id),
+              offer: by(`tab.select:${id}`),
+              children: (
+                <>
+                  <span className="tab-name">{tabs.byId[id].name}</span>
+                  <ChatState state={stateOf(states, panesOf(tabs, id)[0]?.session ?? -1)} />
+                </>
+              ),
+            }))}
+            onPress={press}
+          />
         </div>
-        {/* **Outside the strip that scrolls.** It used to be the strip's last child, so at
-            fifty chats the way to open the fifty-first was to scroll right to find it — the
-            same defect as an unreachable tab, on the one control that is always wanted
-            (charter-app#130). */}
+        {/* **Outside the strip, and now the `+` at the end of it rather than a labelled
+            button** — the operator's words: *"open-project button is not looks like separate
+            button, but it should looks like new tab, without label — just icon"*, said of the
+            project strip's `+` and true of this one too. Its accessible name is still the
+            catalogue's `New tab`, which is what a screen reader reads and what
+            `pressOnly("New tab")` finds.
+
+            **`New tab` stays HERE and did not move onto a pane**, where the splits and the
+            close went. A pane action acts on one pane and a window has several, which is the
+            whole of why those moved; `New tab` acts on the strip and there is one of those.
+            It is the same control as the `+` at the end of the project strip, one level in:
+            the `+` at the end of a strip makes one more of what the strip lists.
+
+            It was the strip's last child once, so at fifty chats the way to open the
+            fifty-first was to scroll right to find it (charter-app#130). */}
         <div className="adding">
-          <Doer offer={by("chat.new")} onPress={press} />
+          <Doer offer={by("chat.new")} onPress={press} iconOnly />
         </div>
         <div className="doing">
           <Doer offer={by("pane.split.right")} onPress={press} />
@@ -1626,18 +1696,41 @@ const STARTING_SIZE = { columns: 80, rows: 24 };
  *  Nothing is drawn for an id the catalogue no longer has. That is the point: the bar cannot
  *  keep offering something the one list has stopped offering, because there is no second
  *  place for the words to live. */
-export function Doer({ offer, onPress }: { offer?: Offer; onPress: (offer: Offer) => void }) {
+export function Doer({
+  offer,
+  onPress,
+  iconOnly,
+}: {
+  offer?: Offer;
+  onPress: (offer: Offer) => void;
+  /**
+   * Drawn as its mark alone, with the row's words carried by `aria-label`.
+   *
+   * **For the `+` at the end of a strip, and nothing else.** `docs/design-system.md` says an
+   * icon goes *beside* words and never instead of them, with one exception — a control whose
+   * accessible name is already `aria-label` — and this is that exception said out loud rather
+   * than a second rule. It is the operator's own instruction for the project strip's opener
+   * ("just icon"), and a `+` at the end of a row of tabs is the one glyph in this window that
+   * every operator already reads, from every browser and from Zed.
+   *
+   * A row with no mark in `MARKS` keeps its words even here: an icon-only button with no icon
+   * is an empty box, and the right way to fail is to look wrong rather than to disappear.
+   */
+  iconOnly?: boolean;
+}) {
   if (!offer) return null;
   const Mark = MARKS[offer.id];
+  const bare = iconOnly && Mark !== undefined;
   return (
     <button
-      className={offer.id === "pane.close" ? "ends-a-chat" : undefined}
+      className={clsx(offer.id === "pane.close" && "ends-a-chat", bare && "bare")}
       disabled={!offer.available}
-      title={offer.reason || offer.note || undefined}
+      aria-label={bare ? offer.title : undefined}
+      title={offer.reason || offer.note || (bare ? offer.title : undefined)}
       onClick={() => onPress(offer)}
     >
       {Mark && <Mark />}
-      {offer.title}
+      {!bare && offer.title}
     </button>
   );
 }
@@ -1686,18 +1779,21 @@ export const MARKS: Record<string, typeof Plus> = {
  * a fifth hand-written `ArrowDown`.
  */
 export function ShowMore({
+  noun,
   hidden,
-  tabs,
-  states,
-  offerFor,
   onPress,
 }: {
-  /** The tabs to list, already in the order they are listed in. */
-  hidden: readonly number[];
-  tabs: Tabs;
-  states: ChatStates;
-  /** The catalogue, by row id. There is one list of actions and this reads it. */
-  offerFor: (id: string) => Offer | undefined;
+  /**
+   * What one of these is, for the button's own words: `tab`, `workspace`, `project`.
+   *
+   * **Three strips, three nouns, one component.** A window drawing three of these owes an
+   * operator — and a scenario spec — an answer to which strip is not showing everything, and
+   * three buttons all saying "Show 3 more" is three answers to one query. `tab` is the chat
+   * strip's, unchanged, because that is the name the operator reads on that strip.
+   */
+  noun: string;
+  /** What to list, already in the order it is listed in. */
+  hidden: readonly Hidden[];
   onPress: (offer: Offer) => void;
 }) {
   /**
@@ -1714,7 +1810,7 @@ export function ShowMore({
   const [open, setOpen] = useState(false);
   // Nothing is hidden, so there is nothing to say there is more OF.
   if (hidden.length === 0) return null;
-  const many = hidden.length === 1 ? "1 tab" : `${hidden.length} tabs`;
+  const many = hidden.length === 1 ? `1 ${noun}` : `${hidden.length} ${noun}s`;
   return (
     // **Not modal.** A modal Radix surface marks the rest of the window `aria-hidden` (which
     // `docs/ui-primitives.md` records the dialogs doing), and this is a menu on a strip, not
@@ -1735,19 +1831,17 @@ export function ShowMore({
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Content className="more-menu" align="end" sideOffset={4} collisionPadding={8}>
-          {hidden.map((id) => {
-            const offer = offerFor(`tab.select:${id}`);
+          {hidden.map(({ key, offer, children }) => {
             if (!offer) return null;
             return (
               <Menu.Item
-                key={id}
+                key={key}
                 className="more-tab"
                 disabled={!offer.available}
                 title={offer.reason || undefined}
                 onSelect={() => onPress(offer)}
               >
-                <span className="tab-name">{tabs.byId[id].name}</span>
-                <ChatState state={stateOf(states, panesOf(tabs, id)[0]?.session ?? -1)} />
+                {children}
               </Menu.Item>
             );
           })}
@@ -1756,6 +1850,17 @@ export function ShowMore({
     </Menu.Root>
   );
 }
+
+/** One row of a show-more menu: what it is drawn as, and the catalogue row it carries out.
+ *
+ *  **The strip and the menu draw the same thing**, so the caller hands the same markup to
+ *  both rather than the menu having a second idea of what a workspace looks like. */
+export type Hidden = {
+  key: string;
+  /** The row that brings it forward. Nothing is listed for an id the catalogue has dropped. */
+  offer?: Offer;
+  children: ReactNode;
+};
 
 /**
  * The mark on something the operator pinned (charter ADR 0039).
