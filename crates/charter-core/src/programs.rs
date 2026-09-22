@@ -11,12 +11,13 @@
 //! then the app inherits the shell's `PATH` — which is why CI, every scenario run and every
 //! agent had passed.
 //!
-//! **Resolution and execution are separate questions, and this module answers only the
-//! first.** What it hands back is an absolute path. Nothing here builds an environment, and
-//! nothing here puts a directory on any child's `PATH`: a chat's environment is
-//! [`crate::start::environment`]'s, a probe's is [`crate::wiring::environment`]'s, and git's
-//! is `worktree::git`'s fixed one. Widening a search is not the same act as widening what a
-//! program can then reach, and keeping them apart is what makes this change reviewable.
+//! **Resolution and execution are separate questions.** [`resolve`] answers the first: what
+//! it hands back is an absolute path, and nothing a child inherits is involved. [`chat_path`]
+//! is the one place this module answers the second, for exactly one kind of child — the
+//! program a CHAT runs — and it says why at length (charter-app#136). A probe's environment
+//! is still [`crate::wiring::environment`]'s, a forge CLI's is still `forge::cli_env`'s, and
+//! git's is still `worktree::git`'s fixed one: widening what a chat can reach is not a reason
+//! to widen what charter's own subprocesses can.
 //!
 //! **Why a fixed, audited list and not a login shell.** Asking `$SHELL -lc 'echo $PATH'`
 //! once at startup was the obvious candidate and it is the wrong one:
@@ -207,6 +208,84 @@ pub fn search_dirs() -> Vec<PathBuf> {
     )
 }
 
+/// The `PATH` a chat's program is started with: exactly the directories [`search_dirs_from`]
+/// searched to find the harness, then the directory of the `charter` the app ships — or none,
+/// where the answer cannot be written as a `PATH` without losing something inherited.
+///
+/// **charter-app#136.** A chat used to inherit the app's own `PATH`, and a Finder-launched
+/// `.app` gets `/usr/bin:/bin:/usr/sbin:/sbin`. The hooks charter arms on a chat itself were
+/// never affected — they name the bundled binary by its absolute path, so a hostile `PATH`
+/// cannot redirect them either, and they stay that way. What broke was everything that names
+/// a program by its bare word from INSIDE the chat: the charter plugin's `hooks.json` and a
+/// plane's own `.claude/settings.json` both say `charter hook …`, because they are files that
+/// travel between machines and cannot carry one machine's path. So every `SessionStart` said
+/// `/bin/sh: charter: command not found`, the plugin's `PreToolUse` guard failed the same way
+/// — which a harness reads as non-blocking, so the tool call ran UNGUARDED — and the model's
+/// own Bash tool could not find `node`, `gh` or `uv` and concluded the machine lacked them.
+///
+/// **Why this list and nothing wider.** It is the list that already chose which harness runs,
+/// so a chat searches exactly where charter searched on its behalf and nowhere else. It is in
+/// the diff and nothing an attacker writes can extend it, and it asks no login shell — the
+/// module docs say why that is ruled out, and it is ruled out here for the same reasons. The
+/// user directories in it are ones the operator's own shell already puts on `PATH`: anything
+/// that can write `~/.local/bin` can write `~/.zshrc`, so no boundary is crossed that a
+/// terminal-launched chat did not already cross.
+///
+/// **Why in this order.** The inherited `PATH` first and in its own order, so the change is
+/// strictly additive: a terminal-launched chat finds every program it found before, the same
+/// one, and a Finder-launched one gains a floor. The fixed list next. The app's own `charter`
+/// LAST, and that is load-bearing rather than taste: the plugin's `hooks.json` belongs to the
+/// Python charter the operator installed, and the app's binary BLOCKS every tool hook it does
+/// not answer (`charter-cli`'s `hook`), so putting it first would refuse every tool call in
+/// every chat of an operator who has both. Last, it answers only where nothing else would —
+/// a machine where the app is the only charter there is.
+///
+/// **What is dropped.** A relative or empty entry: it resolves against the chat's working
+/// directory, which is a repository a chat can write, and "the program is whatever `./git`
+/// is in this checkout" is not a lookup charter hands a chat. A directory named twice keeps
+/// its first place.
+///
+/// **When it answers `None`**, the chat inherits the app's `PATH` exactly as it did before —
+/// an inherited entry that is not UTF-8 cannot ride in the `String` environment a chat is
+/// given, and silently dropping one of the operator's own directories would be a worse
+/// failure than not adding charter's. A fixed-list or `charter` directory that cannot be
+/// written into a `PATH` at all (a `$HOME` with the separator in it) is left out on its own.
+pub fn chat_path_from(
+    path: Option<&OsStr>,
+    home: Option<&Path>,
+    charter: Option<&Path>,
+) -> Option<String> {
+    let mut dirs = search_dirs_from(path, home);
+    if let Some(dir) = charter.and_then(Path::parent)
+        && dir.is_absolute()
+        && !dirs.iter().any(|have| have == dir)
+    {
+        dirs.push(dir.to_path_buf());
+    }
+    let inherited: Vec<PathBuf> = path
+        .map(|p| std::env::split_paths(p).collect())
+        .unwrap_or_default();
+    let mut kept: Vec<&str> = Vec::new();
+    for dir in &dirs {
+        match dir.to_str() {
+            Some(text) if std::env::join_paths([dir]).is_ok() => kept.push(text),
+            // Not ours to drop. The chat keeps the PATH it would have had.
+            _ if inherited.contains(dir) => return None,
+            _ => {}
+        }
+    }
+    std::env::join_paths(kept).ok()?.into_string().ok()
+}
+
+/// [`chat_path_from`] against this process, with the app's own `charter` at `charter`.
+pub fn chat_path(charter: Option<&Path>) -> Option<String> {
+    chat_path_from(
+        std::env::var_os("PATH").as_deref(),
+        crate::profiles::home().as_deref(),
+        charter,
+    )
+}
+
 /// `program` as an absolute path, found in `dirs`.
 pub fn find(program: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
     dirs.iter()
@@ -318,6 +397,124 @@ mod tests {
                 PathBuf::from("/bin")
             ]
         );
+    }
+
+    /// charter-app#136's launch, as a chat's `PATH` came out of it.
+    const FINDER: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
+
+    #[cfg(unix)]
+    #[test]
+    fn a_finder_launched_chat_searches_where_charter_searched_and_then_charters_own_directory() {
+        let home = PathBuf::from("/home/op");
+        let charter = PathBuf::from("/Applications/charter.app/Contents/MacOS/charter");
+        let path =
+            chat_path_from(Some(OsStr::new(FINDER)), Some(&home), Some(&charter)).expect("a PATH");
+        assert_eq!(
+            path,
+            [
+                FINDER,
+                "/home/op/.local/bin:/home/op/bin:/home/op/.opencode/bin:/home/op/.bun/bin",
+                "/home/op/.volta/bin:/home/op/.npm-global/bin",
+                "/opt/homebrew/bin:/usr/local/bin",
+                "/Applications/charter.app/Contents/MacOS",
+            ]
+            .join(":"),
+            "the inherited four, the list that found the harness, then the app's charter"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_terminal_launched_chat_keeps_every_directory_it_inherited_first_and_in_order() {
+        // Strictly additive: whatever a terminal-launched chat found before, it finds the same
+        // one now. `/usr/local/bin` first here is the operator's order, and it stays first.
+        let path = chat_path_from(
+            Some(OsStr::new("/usr/local/bin:/nix/me/bin:/usr/bin")),
+            Some(Path::new("/home/op")),
+            None,
+        )
+        .expect("a PATH");
+        assert!(
+            path.starts_with("/usr/local/bin:/nix/me/bin:/usr/bin:/home/op/.local/bin:"),
+            "{path}"
+        );
+        assert_eq!(
+            path.matches("/usr/local/bin").count(),
+            1,
+            "named twice: {path}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_charter_the_operator_installed_is_found_before_the_apps_own() {
+        // The ORDER is the security property and the correctness one at once. The plugin's
+        // `hooks.json` belongs to the charter the operator installed, and the app's binary
+        // blocks every tool hook it does not answer — so an app `charter` found first would
+        // refuse every tool call in every chat. Asked the way `/bin/sh` asks: first hit wins.
+        let home = tempfile::tempdir().expect("a home");
+        let app = tempfile::tempdir().expect("an app bundle");
+        let installed = home.path().join(".local/bin/charter");
+        let bundled = app.path().join("charter");
+        for binary in [&installed, &bundled] {
+            std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+            std::fs::write(binary, "#!/bin/sh\n").unwrap();
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let path = chat_path_from(Some(OsStr::new(FINDER)), Some(home.path()), Some(&bundled))
+            .expect("a PATH");
+        let dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
+        assert_eq!(find("charter", &dirs), Some(installed));
+
+        // And where nothing else answers, the app's own does — the floor.
+        std::fs::remove_file(home.path().join(".local/bin/charter")).unwrap();
+        assert_eq!(find("charter", &dirs), Some(bundled));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn charters_directory_already_on_the_path_keeps_its_place() {
+        let path = chat_path_from(
+            Some(OsStr::new("/opt/charter:/usr/bin")),
+            None,
+            Some(Path::new("/opt/charter/charter")),
+        )
+        .expect("a PATH");
+        assert_eq!(
+            path,
+            "/opt/charter:/usr/bin:/opt/homebrew/bin:/usr/local/bin:/bin"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_or_empty_entry_is_not_handed_to_a_chat() {
+        // Resolved against the chat's working directory — a checkout a chat can write.
+        let path = chat_path_from(Some(OsStr::new(".::bin:/abs")), None, None).expect("a PATH");
+        assert_eq!(path, "/abs:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_inherited_directory_that_is_not_utf8_leaves_the_chat_its_inherited_path() {
+        // The chat's environment is `String`s. Dropping one of the operator's own directories
+        // to add charter's would be a worse failure than not adding charter's.
+        use std::os::unix::ffi::OsStrExt;
+        let path = OsStr::from_bytes(b"/usr/bin:/op/\xff/bin");
+        assert_eq!(chat_path_from(Some(path), None, None), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_home_that_cannot_be_written_into_a_path_costs_only_its_own_directories() {
+        let path = chat_path_from(
+            Some(OsStr::new("/usr/bin")),
+            Some(Path::new("/home/a:b")),
+            Some(Path::new("/weird:dir/charter")),
+        )
+        .expect("a PATH");
+        assert_eq!(path, "/usr/bin:/opt/homebrew/bin:/usr/local/bin:/bin");
     }
 
     #[test]

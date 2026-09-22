@@ -106,8 +106,20 @@ jobs:
       # them from the charter commit pinned in generate.py and fails if anything moved.
       - run: tests/fixtures/planes/generate.py --check
 
-  differential:
-    name: differential (python charter vs rust)
+  # The differential work is SPLIT ACROSS RUNNERS, and the job named below is the gate.
+  #
+  # Measured on the run for #168: this was 30 of CI's ~31 minutes of wall clock, and 21 of those
+  # 30 were one step — the shell reader's 200,000 generated command lines, run serially. Every
+  # other job in this file finishes in 9 minutes or less, so the differential WAS the length of
+  # a CI run, and `main` is merged one PR at a time behind a green run of it.
+  #
+  # The three pieces below are independent of each other and always were; they shared a job
+  # only because they were written one after another. The shell reader is sharded on top of
+  # that (`--shard I/N` slices the finished case list, so four shards ask exactly the 200,000
+  # one run asked). This trades runner MINUTES for wall CLOCK — six runners now do what one
+  # did — and that is the trade this project wants: the operator's stated order is DX first.
+  differential-planes:
+    name: differential (plane writes)
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -122,28 +134,74 @@ jobs:
       # `--time-preflight`: `charter doctor --preflight` runs at every session start, so what it
       # costs is printed here on every run, for both implementations, on the same plane.
       - run: tests/differential/run.py --time-preflight 20
-      # M3.1 stages 1 to 4: `shellseg`, `shellwrap`, `heredoc`, `leakguard`, `pypath`, `livesub`,
-      # `credguard`, `floorguard` and `proseguard` are what every Bash refusal reads a command
-      # line with — and now most of what it refuses ON — and they are wired to nothing yet. So
-      # they have no CLI surface for `run.py` to drive, and they are compared FUNCTION BY FUNCTION
-      # instead — 200,000 generated command lines through both implementations, EVERY `pub` answer
-      # apiece, in batches so the run's memory is bounded. The example is dev-only; nothing ships
-      # it.
+
+  # M3.1 stages 1 to 4: `shellseg`, `shellwrap`, `heredoc`, `leakguard`, `pypath`, `livesub`,
+  # `credguard`, `floorguard` and `proseguard` are what every Bash refusal reads a command
+  # line with — and now most of what it refuses ON — and they are wired to nothing yet. So
+  # they have no CLI surface for `run.py` to drive, and they are compared FUNCTION BY FUNCTION
+  # instead — 200,000 generated command lines through both implementations, EVERY `pub` answer
+  # apiece, in batches so the run's memory is bounded. The example is dev-only; nothing ships it.
+  differential-shellseg:
+    name: differential (shell reader ${{ matrix.shard }} of 4)
+    runs-on: ubuntu-24.04
+    strategy:
+      # Not fail-fast: when the Rust diverges, WHICH cases diverged is the finding, and three
+      # shards cancelled on the first one's failure throw three quarters of it away.
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v10.1.0
       - name: The shell reader, against the command lines Python answers
         run: |
           cargo build -p charter-core --example shellseg_oracle
           tests/differential/shellseg.py --check
-          tests/differential/shellseg.py
-      # M3.1 stage 5: `planeroot` and `gitconfig` — A3 and A3b, the first guards that ASK GIT —
-      # against a git-repository fixture both implementations run in, with one environment
-      # between them. `--coverage` fails if the generators stop reaching any branch of the two
-      # guards; the plain run compares every answer, the git layer on every tenth case.
+          tests/differential/shellseg.py --shard ${{ matrix.shard }}/4
+
+  # M3.1 stage 5: `planeroot` and `gitconfig` — A3 and A3b, the first guards that ASK GIT —
+  # against a git-repository fixture both implementations run in, with one environment
+  # between them. `--coverage` fails if the generators stop reaching any branch of the two
+  # guards; the plain run compares every answer, the git layer on every tenth case.
+  differential-planeroot:
+    name: differential (plane-root guards)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v10.1.0
       - name: The plane-root guards, against the repository Python answers about
         run: |
           cargo build -p charter-core --example planeroot_oracle
           tests/differential/planeroot.py --check
           tests/differential/planeroot.py --coverage --cases 5000
           tests/differential/planeroot.py
+
+  # The required check, kept under its exact old name so branch protection does not have to be
+  # edited to land this — and so a shard added or removed later never touches it again.
+  #
+  # `if: always()` with an explicit result test, NOT a bare `needs:`. A job that merely `needs`
+  # a failed job is SKIPPED, and a skipped required check is not a red one — it would sit
+  # pending for ever, or, worse, be read as passing. This reports failure as failure.
+  differential:
+    name: differential (python charter vs rust)
+    runs-on: ubuntu-24.04
+    needs: [differential-planes, differential-shellseg, differential-planeroot]
+    if: always()
+    steps:
+      - name: Every piece of the differential passed
+        run: |
+          echo "planes=${{ needs.differential-planes.result }}"
+          echo "shellseg=${{ needs.differential-shellseg.result }}"
+          echo "planeroot=${{ needs.differential-planeroot.result }}"
+          case "${{ needs.differential-planes.result }}:${{ needs.differential-shellseg.result }}:${{ needs.differential-planeroot.result }}" in
+            success:success:success) echo "all three green" ;;
+            *) echo "::error::a differential piece did not pass — open the job above that is red"; exit 1 ;;
+          esac
+
   stress:
     # Evidence for charter-app#16, not a gate: fifty tabs on a shared runner is timing-bound,
     # and a flaky REQUIRED check blocks every merge — including the fix for the bug it watches.
