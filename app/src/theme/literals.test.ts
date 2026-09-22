@@ -41,26 +41,30 @@ const SOURCES: Record<string, string> = Object.fromEntries(
   }).map((path) => [
     // The glob is written from `src/theme`, so Vite hands back `../App.css` for a file beside
     // `src` and collapses this directory's own back to `./theme.test.ts`. Both are said here
-    // as the path from `src`, which is the only spelling the rest of this file has to know.
-    path.startsWith("../") ? path.slice("../".length) : `theme/${path.slice("./".length)}`,
+    // as the path from `app`, which is what a complaint should print and what `join` below
+    // should take.
+    path.startsWith("../") ? `src/${path.slice("../".length)}` : `src/theme/${path.slice(2)}`,
     "",
   ]),
 );
+// The page itself, which is not under `src` and is exactly where somebody fixing a flash of
+// white at launch would reach for a colour. Named by hand because there is one of it.
+SOURCES["index.html"] = "";
 for (const path of Object.keys(SOURCES)) {
-  SOURCES[path] = readFileSync(join(process.cwd(), "src", path), "utf8");
+  SOURCES[path] = readFileSync(join(process.cwd(), path), "utf8");
 }
 
 /** A file that came back with nothing in it is a guard that checked nothing. */
 function nonEmpty(path: string): string {
   const text = SOURCES[path];
-  expect(text?.length ?? 0, `src/${path} read as empty`).toBeGreaterThan(0);
+  expect(text?.length ?? 0, `${path} read as empty`).toBeGreaterThan(0);
   return text;
 }
 
 /** The files the rule covers: everything but the theme's own, which is the exception it makes. */
 function sources(...extensions: string[]): [string, string][] {
   const covered = Object.entries(SOURCES)
-    .filter(([path]) => !path.startsWith("theme/"))
+    .filter(([path]) => !path.startsWith("src/theme/"))
     .filter(([path]) => extensions.some((extension) => path.endsWith(extension)))
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([path]) => [path, nonEmpty(path)] as [string, string]);
@@ -74,14 +78,15 @@ function sources(...extensions: string[]): [string, string][] {
  *  read as the colour `#130`. That confusion is not hypothetical: `App.css` cites eleven
  *  issue numbers, and a guard that tripped on them would have been turned off on day one. */
 function withoutComments(text: string, kind: "css" | "ts"): string {
-  let stripped = text.replace(/\/\*[\s\S]*?\*\//g, " ");
+  let stripped = text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/<!--[\s\S]*?-->/g, " ");
+  // `[^:]` before the slashes so a `https://` in a sentence is not read as the start of one.
   if (kind === "ts") stripped = stripped.replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
   return stripped;
 }
 
 /** Where a complaint is, said the way an editor jumps to it. */
 function at(path: string, text: string, index: number): string {
-  return `src/${path}:${text.slice(0, index).split("\n").length}`;
+  return `${path}:${text.slice(0, index).split("\n").length}`;
 }
 
 /** Everything that is a colour written out by hand. Hex is matched with a boundary at each
@@ -98,7 +103,7 @@ const LITERALS: { what: string; pattern: RegExp }[] = [
 ];
 
 describe("no colour is written outside a theme file", () => {
-  it.each(sources(".css"))("%s holds no colour literal", (path, raw) => {
+  it.each(sources(".css", ".html"))("%s holds no colour literal", (path, raw) => {
     const text = withoutComments(raw, "css");
     const complaints: string[] = [];
     for (const { what, pattern } of LITERALS) {
@@ -129,8 +134,8 @@ describe("a Tailwind class cannot reach past the tokens", () => {
    *  property, so a theme still owns the value. */
   const ARBITRARY = /\b[a-z][a-z0-9-]*-\[[^\]\s]+\]/g;
 
-  it.each(sources(".tsx", ".ts", ".css"))("%s uses no arbitrary value", (path, raw) => {
-    const text = withoutComments(raw, path.endsWith(".css") ? "css" : "ts");
+  it.each(sources(".tsx", ".ts", ".css", ".html"))("%s uses no arbitrary value", (path, raw) => {
+    const text = withoutComments(raw, path.endsWith(".ts") || path.endsWith(".tsx") ? "ts" : "css");
     const complaints = [...text.matchAll(ARBITRARY)].map(
       (hit) => `${at(path, text, hit.index)} has ${hit[0]}`,
     );
@@ -139,8 +144,8 @@ describe("a Tailwind class cannot reach past the tokens", () => {
 });
 
 describe("the stylesheet and the vocabulary agree", () => {
-  const css = nonEmpty("App.css");
-  const bridge = nonEmpty("styles.css");
+  const css = nonEmpty("src/App.css");
+  const bridge = nonEmpty("src/styles.css");
   const used = new Set([...css.matchAll(/var\((--[a-z0-9-]+)/g)].map((hit) => hit[1]));
   const declared = new Set(TOKENS.map(property));
 
