@@ -4680,8 +4680,9 @@ def _root_dirty_off_its_branch_with_a_memory_never_pushed(root: Path) -> None:
 ROOT_REPO_IGNORES = {
     ".git": "the index and the reflogs carry timestamps and inodes; what the row says about "
     "the tree is what is compared",
-    ".charter/cache/repostate.json": "charter's TTL cache of `git status` answers; charter-app "
-    "keeps none, because a status line render is a read and writes nothing",
+    ".charter/cache": "where charter keeps its TTL cache of `git status` answers "
+    "(`repostate.json`), a directory it creates to hold it; charter-app keeps none, because a "
+    "status line render is a read and writes nothing",
 }
 
 

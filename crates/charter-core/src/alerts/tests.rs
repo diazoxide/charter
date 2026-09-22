@@ -336,7 +336,9 @@ fn a_plane_pinned_inside_another_planes_workspaces_says_where_memory_goes() {
     assert_eq!(got[0].severity(), Severity::Bad);
     // Standing anywhere but the inner plane is not the overridden hop.
     assert_eq!(standing_in(&outer), vec![]);
-    // …and a plane nobody nested says nothing.
+    // …and a plane nobody nested says nothing about nesting. (The outer plane's `ide` is a
+    // directory under `workspaces/` with none of a workspace's baseline files, so it IS a
+    // workspace needing a reinit — charter says so too — and that is the only row it has.)
     assert_eq!(
         read(&Asking {
             root: &outer,
@@ -344,7 +346,9 @@ fn a_plane_pinned_inside_another_planes_workspaces_says_where_memory_goes() {
             standing: &outer,
         })
         .alerts,
-        vec![]
+        vec![Alert::Reinit {
+            stale: vec!["ide".into()]
+        }]
     );
 }
 
