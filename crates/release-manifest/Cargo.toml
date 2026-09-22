@@ -1,0 +1,16 @@
+[package]
+name = "release-manifest"
+version.workspace = true
+description = "The updater manifest a release publishes, and the guards it has to pass first"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+charter-core.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
