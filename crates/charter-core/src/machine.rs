@@ -334,13 +334,37 @@ pub struct Contribution {
 }
 
 impl Contribution {
-    /// What opening `plane` would do, right now.
+    /// What opening `plane` would do, right now — for a caller that will not act on the
+    /// record.
+    ///
+    /// Use [`Self::read`] wherever the same act both *shows* the operator a contribution and
+    /// *starts* what it describes: this throws the record away, so such a caller has to read
+    /// it a second time, and a write landing between the two reads is executed without having
+    /// been shown (charter-app#123).
+    pub fn of(plane: &Path) -> Self {
+        Self::read(plane).contributes
+    }
+
+    /// What opening `plane` would do, right now, **and the record that says so**.
     ///
     /// Both halves fail **closed and quiet**: settings charter cannot read contribute nothing,
     /// and a reopen record charter would refuse contributes nothing — because a record the app
     /// refuses is one it starts no chats from either (`lib.rs` logs the refusal and puts back
     /// `Record::default()`). Neither is credited with whatever it might have said.
-    pub fn of(plane: &Path) -> Self {
+    ///
+    /// **The record comes back because it is an execution input** (charter-app#123). What the
+    /// dialog drew is read out of `.charter/app/reopen.json`; what `put_back` starts used to
+    /// be read out of it again, a moment later. Two reads of a file that decides what runs is
+    /// a window, however short, in which a write is executed without having been shown. So the
+    /// bytes this read got are handed back, and `Planes::approve_and_open` passes *those* to
+    /// `put_back` — the window closes by construction rather than by being narrowed.
+    ///
+    /// **Bounded, and the bound is stated rather than implied.** ADR 0035 says of its own
+    /// fingerprint that it is *"not a defence against an agent that set out to forge the
+    /// fingerprint"*, and that sentence is unchanged by this. What closes is the window
+    /// between a human clicking a button and the app reading a file. Nothing here guards an
+    /// approved plane, and nothing here holds the file.
+    pub fn read(plane: &Path) -> Reading {
         let mut out = Self::default();
         if let Some(settings) = crate::layer::plane_settings(plane, crate::layer::SETTINGS) {
             out.plugins = settings
@@ -356,7 +380,8 @@ impl Contribution {
         // Through `reopen`, never by reading the file here: that read is already gated on the
         // exact path it opens, bounded, and refuses a FIFO — and a second reader of the same
         // file would be a second set of rules about it.
-        if let Ok(record) = crate::reopen::read_or_refusal(plane) {
+        let record = crate::reopen::read_or_refusal(plane);
+        if let Ok(record) = &record {
             for chat in &record.chats {
                 let cwd = chat
                     .cwd
@@ -384,7 +409,10 @@ impl Contribution {
                 };
             }
         }
-        out
+        Reading {
+            contributes: out,
+            record,
+        }
     }
 
     /// Every way `now` differs from what this recorded, in a stable order.
@@ -427,6 +455,29 @@ impl Contribution {
         );
         out
     }
+}
+
+/// One read of a plane: what opening it would contribute, and the reopen record those
+/// contributions were taken from.
+///
+/// **The two travel together because they are one answer** (charter-app#123). The record is an
+/// execution input — putting it back starts the programs it names — and the contribution is
+/// what the operator is shown about it. A caller that has the first and re-reads the second is
+/// showing one file and running another, with however many milliseconds between them for a
+/// write to land. Handing both back from one read makes that impossible to write by accident:
+/// `Planes::approve_and_open` passes this record straight to `put_back`.
+///
+/// The record is kept as the `Result` the read gave, not flattened to an `Option`. A record
+/// charter **refused** and a plane with **no record at all** are different things to tell an
+/// operator — `Held::reopen` prints the refusal and says nothing is reopened until it is
+/// repaired — and a reader that lost the reason would have to go back to the disk to find it,
+/// which is the second read this whole type exists to remove.
+#[derive(Debug)]
+pub struct Reading {
+    /// What opening the plane would put in force.
+    pub contributes: Contribution,
+    /// The record as it was read, or why charter would not read it.
+    pub record: Result<crate::reopen::Record, io::Error>,
 }
 
 /// `enabledPlugins` as a name-to-value map, whatever shape the key is in.
@@ -1047,6 +1098,17 @@ fn read_text(config_root: &Path) -> io::Result<Option<String>> {
 /// and clobbering the second destroys the operator's list and their approvals to fix nothing.
 /// So the first is replaced and the second refuses, loudly, with the reason attached.
 pub fn update(config_root: &Path, change: impl FnOnce(&mut Store)) -> io::Result<Loaded> {
+    // **Held across the read AND the write, which is the whole of it** (charter-app#123). This
+    // is a read-modify-write of one small file, and every writer of it rewrites the WHOLE
+    // store — so two of them interleaving does not merge, it drops one. What is dropped is an
+    // approval, a pin, or the list of projects a window had open.
+    //
+    // It was always possible and it is now ordinary. Tauri runs commands on a thread pool, so
+    // two opens racing is two threads; `Records::vouch` fires on every chat that opens or
+    // closes; and `remember_arrangement` fires on every tab change, which #125's author
+    // measured as *far* more often than an approval. A second charter process makes it
+    // cross-process, which is why this is `flock` and not a `Mutex`.
+    let _held = Lock::on(config_root);
     let mut loaded = read(config_root);
     if let Some(why) = &loaded.unreadable {
         return Err(io::Error::new(
@@ -1057,6 +1119,70 @@ pub fn update(config_root: &Path, change: impl FnOnce(&mut Store)) -> io::Result
     change(&mut loaded.store);
     write(config_root, &loaded.store)?;
     Ok(loaded)
+}
+
+/// The lock file's name, beside the store in charter's own `0700` directory.
+///
+/// A separate file and not the store itself: [`write`] replaces the store by `rename`, so a
+/// lock held on the store's inode would be a lock on an inode that is no longer the store the
+/// moment the first writer finished, and the second writer would take a lock on nothing.
+const LOCK: &str = "machine.json.lock";
+
+/// Held for the length of one [`update`], so a read-modify-write of the store is one act.
+///
+/// **Advisory, and every taker of it is in this module** — `update` is the only
+/// read-modify-write, `write` on its own replaces the whole document, and nothing outside this
+/// crate can reach either without going through them. A lock cannot guard a call that does not
+/// take it, and here the calls that must take it are three lines apart.
+///
+/// **Best effort, with the consequence named.** A lock charter could not create or could not
+/// take does not stop the update: the alternative is an app that cannot record an approval
+/// because a `0700` directory is on a filesystem with no `flock` (many network mounts answer
+/// `ENOTSUP`), which trades a rare lost write for a permanent one. What is lost when the lock
+/// is missing is exactly what was lost before it existed, so this can only ever add safety.
+///
+/// It is taken **blocking**. `flock` is released by the kernel when the descriptor closes,
+/// including on a process that was killed, so there is no holder that outlives a couple of
+/// syscalls and nothing here can wedge on a stale lock.
+struct Lock(Option<std::fs::File>);
+
+impl Lock {
+    fn on(config_root: &Path) -> Self {
+        // A platform charter keeps no store on gets no directory made for one either.
+        if supported().is_err() {
+            return Self(None);
+        }
+        let Ok(dir) = private_dir(config_root) else {
+            return Self(None);
+        };
+        // `create` and not `create_new`: the lock file is the *name* two processes agree on,
+        // it holds nothing, and one left behind by a previous run is the ordinary case.
+        let Ok(file) = std::fs::File::create(dir.join(LOCK)) else {
+            return Self(None);
+        };
+        #[cfg(unix)]
+        match rustix::fs::flock(&file, rustix::fs::FlockOperation::LockExclusive) {
+            Ok(()) => Self(Some(file)),
+            Err(_) => Self(None),
+        }
+        // Nothing to lock off unix, and nothing to lose: [`supported`] refuses the store
+        // outright there (ADR 0031, charter-app#98), so `update` never reaches a write.
+        #[cfg(not(unix))]
+        {
+            drop(file);
+            Self(None)
+        }
+    }
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        if let Some(file) = self.0.take() {
+            #[cfg(unix)]
+            let _ = rustix::fs::flock(&file, rustix::fs::FlockOperation::Unlock);
+            drop(file);
+        }
+    }
 }
 
 /// Write the store, creating charter's directory at `0700` if it is not there.
@@ -1883,6 +2009,192 @@ mod tests {
         let plane = a_plane(&held.path().join("plane"));
 
         assert_eq!(Contribution::of(&plane), Contribution::default());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn two_updates_at_once_keep_both_rather_than_one_losing_the_other() {
+        // charter-app#123's third half. `update` is a read-modify-write and every writer
+        // replaces the WHOLE document, so two of them interleaving does not merge — it drops
+        // one, and what is dropped is an approval, a pin, or the projects a window had open.
+        //
+        // It was reachable before the opener and it is ordinary now: Tauri runs commands on a
+        // thread pool, `Records::vouch` fires whenever a chat opens or closes, and #125's
+        // `remember_arrangement` fires on every tab change — its own author's words, *"this
+        // fires far more often than an approval."*
+        //
+        // **Sixteen, and each remembers its own plane**, well inside `MOST_RECENTS`, so the
+        // trim cannot be what is missing. Without the lock this loses entries on every run of
+        // this machine; with it the count is exact.
+        const AT_ONCE: usize = 16;
+        let held = machine();
+        let config = held.path().to_path_buf();
+        // Every thread waits for the last one, so they are inside `update` together rather
+        // than politely one after another.
+        let ready = std::sync::Arc::new(std::sync::Barrier::new(AT_ONCE));
+
+        let racing: Vec<_> = (0..AT_ONCE)
+            .map(|which| {
+                let config = config.clone();
+                let ready = std::sync::Arc::clone(&ready);
+                std::thread::spawn(move || {
+                    let plane = PathBuf::from(format!("/planes/p{which}"));
+                    ready.wait();
+                    update(&config, move |store| store.remember(&plane, 1)).expect("it writes");
+                })
+            })
+            .collect();
+        for thread in racing {
+            thread.join().expect("no writer panicked");
+        }
+
+        let store = read(&config).store;
+        let kept: Vec<String> = store
+            .recents
+            .iter()
+            .map(|entry| entry.plane.display().to_string())
+            .collect();
+        for which in 0..AT_ONCE {
+            assert!(
+                kept.contains(&format!("/planes/p{which}")),
+                "p{which} was written and then lost to another writer's copy of the store: \
+                 {kept:?}"
+            );
+        }
+    }
+
+    /// Settings a stranger's plane could hold, written at the exact path the approval opens.
+    fn settings_of(plane: &Path, text: &str) {
+        std::fs::create_dir_all(plane.join(".claude")).unwrap();
+        std::fs::write(plane.join(crate::layer::SETTINGS), text).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_settings_file_over_the_bound_contributes_nothing_rather_than_being_read_whole() {
+        // charter-app#112. This runs against a directory the operator has just pointed at and
+        // has NOT yet trusted, before the app has a window — and `.charter/` is gitignored
+        // while `.claude/settings.json` is committed by design, so this file is the one half
+        // of a plane's contribution that arrives through an ordinary `git clone`. A sparse
+        // multi-megabyte file packs small in a clone and arrives full size.
+        //
+        // **Valid JSON, and over the bound by padding.** A giant of NUL bytes would answer
+        // `None` from `serde_json` whether or not the bound is there, and prove nothing: the
+        // guard has to be the thing that changes the answer.
+        let held = machine();
+        let plane = a_plane(&held.path().join("plane"));
+        let padding = " ".repeat(usize::try_from(crate::reopen::MAX_BYTES).unwrap());
+        settings_of(
+            &plane,
+            &format!("{{\"env\": {{\"EVIL\": \"yes\"}}{padding}}}"),
+        );
+        assert!(
+            std::fs::metadata(plane.join(crate::layer::SETTINGS))
+                .unwrap()
+                .len()
+                > crate::reopen::MAX_BYTES,
+            "the fixture has to be over the bound for the bound to be what answers"
+        );
+
+        let contributes = Contribution::of(&plane);
+
+        assert_eq!(
+            contributes,
+            Contribution::default(),
+            "a settings file over the bound was read whole and credited with what it said"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_settings_file_that_is_a_fifo_answers_rather_than_blocking_the_approval() {
+        // charter-app#112, and the consequence that has nothing to click on: a FIFO is not a
+        // link, so a containment check waves it through, and `read_to_string` on one with no
+        // writer **never returns**. `lib.rs`'s `setup` runs this before the first frame, so an
+        // unfixed charter pointed at such a directory can only be killed.
+        //
+        // The red is a hang, which is what the watchdog turns into a failure: a test that
+        // simply never finishes reads as an infrastructure fault rather than as this defect.
+        let held = machine();
+        let plane = a_plane(&held.path().join("plane"));
+        std::fs::create_dir_all(plane.join(".claude")).unwrap();
+        let at = plane.join(crate::layer::SETTINGS);
+        let made = crate::forklock::status(std::process::Command::new("mkfifo").arg(&at))
+            .expect("mkfifo runs");
+        assert!(made.success(), "a FIFO at the path the approval opens");
+
+        let (tell, answered) = std::sync::mpsc::channel();
+        let reading = plane.clone();
+        std::thread::spawn(move || {
+            let _ = tell.send(Contribution::of(&reading));
+        });
+
+        let contributes = answered
+            .recv_timeout(std::time::Duration::from_secs(20))
+            .expect(
+                "the approval never came back: a FIFO at the plane's settings blocked it, and \
+                 there is no window yet to cancel it from",
+            );
+        assert_eq!(contributes, Contribution::default());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn settings_linked_out_of_the_plane_contribute_nothing() {
+        // The half that was already held, pinned here because it is now held by a different
+        // line: `open_no_link`'s own `strip_prefix` against the RESOLVED root, rather than by
+        // a `within_plane` call in front of a bare read.
+        let held = machine();
+        let plane = a_plane(&held.path().join("plane"));
+        let outside = held.path().join("outside.json");
+        std::fs::write(&outside, r#"{"env": {"EVIL": "yes"}}"#).unwrap();
+        std::fs::create_dir_all(plane.join(".claude")).unwrap();
+        std::os::unix::fs::symlink(&outside, plane.join(crate::layer::SETTINGS)).unwrap();
+
+        assert_eq!(Contribution::of(&plane), Contribution::default());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn one_read_answers_what_the_plane_contributes_and_what_it_would_start() {
+        // charter-app#123's fix, at the seam it is made at. The contribution the dialog draws
+        // and the record `put_back` executes come out of the SAME read, so there is no second
+        // read for a write to land in front of.
+        let held = machine();
+        let plane = a_plane(&held.path().join("plane"));
+        settings_of(&plane, r#"{"env": {"CHARTER_HARNESS": "claude-code"}}"#);
+        crate::reopen::write(
+            &plane,
+            &crate::reopen::Record {
+                chats: vec![crate::reopen::Chat {
+                    program: "/bin/echo".to_owned(),
+                    args: vec!["shown".to_owned()],
+                    cwd: None,
+                    name: "ide.1".to_owned(),
+                    resume: None,
+                    active: true,
+                    profile: None,
+                    persona: None,
+                    show_footer: false,
+                    pinned: false,
+                }],
+            },
+        )
+        .unwrap();
+
+        let reading = Contribution::read(&plane);
+
+        assert_eq!(
+            reading.contributes.starts.len(),
+            1,
+            "the contribution did not describe what the record would start"
+        );
+        let record = reading.record.expect("the record came back with it");
+        assert_eq!(
+            record.chats.first().map(|chat| chat.args.as_slice()),
+            Some(["shown".to_owned()].as_slice()),
+            "the bytes that were judged are not the bytes that came back"
+        );
     }
 
     #[test]

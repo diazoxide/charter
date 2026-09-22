@@ -262,18 +262,75 @@ pub fn parse_record(text: &str) -> Record {
     out
 }
 
-/// A plane file read as text, gated where it is opened.
+/// A plane file read as text, gated on the exact path the read opens.
 ///
 /// The containment check is on the entry, not on the directory above it.
 ///
-/// [`contain::within_plane`] and **not** `contain::readable`: the latter asks whether a path
-/// lands in one of the plane's DATA directories (`personas/`, `workspaces/`), which
-/// `.claude/settings.json` is not. Asking it here would refuse the whole layer.
+/// **Where a plane's data lands, not where the plane's data directories are.** `within_plane`
+/// and **not** `contain::readable`: the latter asks whether a path lands in one of the plane's
+/// DATA directories (`personas/`, `workspaces/`), which `.claude/settings.json` is not. Asking
+/// it here would refuse the whole layer.
+///
+/// # Why this is not a `read_to_string` (charter-app#112)
+///
+/// It was one, and [`crate::machine::Contribution::of`] calls it against a **stranger's**
+/// plane's `.claude/settings.json` to draw the approval dialog — a directory the operator has
+/// just pointed at and has not yet trusted, read before the app has a window. So the three
+/// hazards every other reader of a plane file in this crate already pays for apply here with
+/// nothing to click on:
+///
+/// * **a FIFO is not a link**, so a containment check waves it through and `read_to_string`
+///   on one never returns. `O_NONBLOCK` — which arrives with [`contain::open_no_link`] — is
+///   what makes the open return, and [`crate::reopen::refuse_unusable`] is what makes charter
+///   decline what it returned;
+/// * **a planted giant** is read whole into memory before anything can reject it, and a
+///   sparse multi-gigabyte file packs small in a clone. Bounded at
+///   [`crate::reopen::MAX_BYTES`], which is Python's own `contain.MAX_BYTES` — and Python
+///   refuses the same two shapes with `NOT_A_FILE` and `TOO_LARGE`, so this is one divergence
+///   from the oracle closed rather than opened;
+/// * **the gate and the open were two different resolutions of one name.** `within_plane`
+///   resolved the path to decide, and `read_to_string` resolved it again to read. A link
+///   planted between the two was followed — ADR 0028's measured window, 1881 escapes in
+///   20,000 reads of the record before `open_no_link` closed it.
+///
+/// **The path that is OPENED is the resolved one**, and that is the whole of the third fix. A
+/// link this function must still follow is followed *here*, by [`contain::resolved`], and what
+/// the kernel is then handed is the place it landed — checked with `strip_prefix` inside
+/// [`contain::no_link_on_the_way`] and opened `O_NOFOLLOW`. So the object the gate judged and
+/// the object the read gets cannot be two files.
+///
+/// **And a contained link is still followed, deliberately.** `personas/` generators link an
+/// agent into `.claude/agents/`, Python's `contain._refused` follows a link whose target is
+/// inside the plane's data, and `a_plane_file_linked_from_inside_the_plane_is_still_mirrored`
+/// pins it. `open_no_link` against the *unresolved* name would refuse every one of those and
+/// take a persona's agent out of every worktree — which is why the resolution happens first
+/// rather than the gate being pointed at the name.
 pub fn readable_text(plane: &Path, path: &Path) -> Option<String> {
-    if !contain::within_plane(plane, path) {
+    use std::io::Read;
+
+    // Both ends, for the reason `within_plane` gives: on macOS a temp plane is under
+    // `/var/folders/…`, itself a link to `/private/var/…`, so a resolved path compared
+    // against an unresolved root refuses everything. `None` is "charter cannot say where this
+    // lands", which is a no rather than a yes.
+    let root = contain::resolved(plane)?;
+    let lands = contain::resolved(path)?;
+    // The containment test is `no_link_on_the_way`'s own `strip_prefix`, which is the same
+    // question `within_plane` asked a line earlier — asked once, of the path being opened.
+    let mut open = contain::open_no_link(&root, &lands).ok()?;
+    // `fstat` of the descriptor the read will use, never of the name: the two cannot be
+    // handed different files.
+    let found = open.metadata().ok()?;
+    if crate::reopen::refuse_unusable(&lands, &found).is_err() {
         return None;
     }
-    std::fs::read_to_string(path).ok()
+    let mut text = String::new();
+    // Bounded again on the way in: `refuse_unusable` asked how big it was, and a writer that
+    // appends between the `fstat` and the read would otherwise still be unbounded.
+    open.by_ref()
+        .take(crate::reopen::MAX_BYTES)
+        .read_to_string(&mut text)
+        .ok()?;
+    Some(text)
 }
 
 /// The plane's settings document at `rel`, read as JSON — `None` when there is none or it
