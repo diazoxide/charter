@@ -139,10 +139,16 @@ describe("the bottom bar", () => {
    * only evidence for either, and jsdom gives every box a size of zero — so this is the only
    * place it can be asked. It also catches a rule that emitted no CSS at all.
    *
-   * The two cells that hold a SENTENCE — a tree charter could not read, a fetch that did not
-   * happen — still wrap, and the next test is the one that holds them to it.
+   * The one cell that holds a SENTENCE — a tree charter could not read, a fetch that did not
+   * happen — still wraps, and the next test is the one that holds it to that.
+   *
+   * **A cell's own height says nothing here**, which cost this spec a red run: a table cell is
+   * as tall as its ROW, so the pipeline cell wrapping — as it is meant to — made every other
+   * cell in that row two lines tall. What is measured is a `Range` over each cell's CONTENT,
+   * whose bounding box is one line box when nothing folded and two when something did,
+   * whatever the row around it is doing.
    */
-  it("keeps a repo's row and its worktrees on one line, and scrolls sideways instead", async () => {
+  it("keeps a repo's naming cells and its worktrees on one line, and scrolls sideways", async () => {
     await onAlpha();
     await untilSays("repo-svc", "main");
 
@@ -153,35 +159,44 @@ describe("the bottom bar", () => {
       // window — its slot's size is a HEIGHT — so there is no separator that makes it narrow,
       // and the question is about this scroll container at a width narrower than its content.
       const was = bar.getAttribute("style") ?? "";
-      bar.style.width = "260px";
+      bar.style.width = "200px";
 
-      /** How tall one line of this element is, plus half a line and four pixels of slack — a
+      /** One line of this element's own font, plus half a line and four pixels of slack — a
        *  row that wrapped is a WHOLE line taller than that, and a row that did not can still
        *  run a few pixels over its own line box because a chip in it carries a border. */
-      const measure = (el: Element, what: string) => {
+      const limitOf = (el: Element) => {
         const css = getComputedStyle(el);
         const line = Number.parseFloat(css.lineHeight);
         const one = Number.isFinite(line) ? line : Number.parseFloat(css.fontSize) * 1.5;
-        const padding = Number.parseFloat(css.paddingTop) + Number.parseFloat(css.paddingBottom);
+        return one * 1.5 + 4;
+      };
+      const named = (el: Element, what: string) =>
+        `${what} (${(el.textContent ?? "").slice(0, 40)})`;
+
+      /** How tall a cell's CONTENT is, which is not how tall the cell is. */
+      const content = (el: Element, what: string) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
         return {
-          what: `${what} (${(el.textContent ?? "").slice(0, 40)})`,
-          height: el.getBoundingClientRect().height,
-          limit: one * 1.5 + padding + 4,
+          what: named(el, what),
+          height: range.getBoundingClientRect().height,
+          limit: limitOf(el),
         };
       };
 
-      // `svc`'s row, and not every row: a table cell is as tall as its ROW, so a row is what
-      // a wrap in any of its cells shows up in — and `tool`'s pipeline cell is the sentence
-      // that is supposed to wrap, which would make its row tall for the right reason.
-      const svc = bar.querySelector('[data-testid="repo-svc"]');
       const rows = [
-        ...(svc === null ? [] : [measure(svc, "svc's row")]),
-        ...[...bar.querySelectorAll(".worktree-tree > li")].map((li) =>
-          measure(li, "a worktree row"),
-        ),
+        ...[
+          ...bar.querySelectorAll(".repo-row > .repo, .repo-row > .dirt, .repo-row > .worktrees"),
+        ].map((cell) => content(cell, "a naming cell")),
+        // A worktree row is not a table cell, so its own box is the answer for it.
+        ...[...bar.querySelectorAll(".worktree-tree > li")].map((li) => ({
+          what: named(li, "a worktree row"),
+          height: li.getBoundingClientRect().height,
+          limit: limitOf(li) + Number.parseFloat(getComputedStyle(li).paddingTop) * 2,
+        })),
       ];
-      // The cells that name something, as the real engine resolved them. A rule that emitted
-      // no CSS — the trap `docs/design-system.md` names — reads `normal` here.
+      // And as the engine resolved them: a rule that emitted no CSS at all — the trap
+      // `docs/design-system.md` names — reads `normal` here.
       const naming = [
         ...bar.querySelectorAll(".repo-row > .repo, .repo-row > .dirt, .repo-row > .worktrees"),
       ].map((el) => getComputedStyle(el).whiteSpace);
@@ -201,7 +216,7 @@ describe("the bottom bar", () => {
       return answer;
     });
 
-    expect(measured.rows.length).toBeGreaterThan(1);
+    expect(measured.rows.length).toBeGreaterThan(3);
     const wrapped = measured.rows
       .filter((row) => row.height > row.limit)
       .map((row) => `${row.what}: ${row.height}px, and one line of it is ${row.limit}px`);
@@ -213,15 +228,19 @@ describe("the bottom bar", () => {
   });
 
   it("lets the cell that holds a sentence wrap, because a refusal is not a name", async () => {
-    // `tool` has no entry in the forge cache, so its pipeline cell says why in charter's own
-    // words and at charter's own length. Held on one line it would push the region's scroll
-    // out past every column it has.
+    // A pipeline cell with nothing to name says why, in charter's own words and at charter's
+    // own length — `not fetched — <reason>`, or `no pipeline recorded` once a refresher this
+    // very run has written an entry that names none. Both are `.none`, and which of the two
+    // is on screen depends on whether a refresh has landed yet, so this waits for the cell
+    // rather than for either sentence. Held on one line, either would push the region's
+    // horizontal scroll out past every column it has.
     await onAlpha();
-    await untilSays("ci-tool", "not fetched");
+    const cell = await $('[data-testid="ci-tool"] .none');
+    await cell.waitForExist({ timeout: 30_000 });
 
     const wraps = await browser.execute(() => {
-      const cell = document.querySelector('[data-testid="ci-tool"] .none');
-      return cell === null ? null : getComputedStyle(cell).whiteSpace;
+      const said = document.querySelector('[data-testid="ci-tool"] .none');
+      return said === null ? null : getComputedStyle(said).whiteSpace;
     });
 
     expect(wraps).toBe("normal");

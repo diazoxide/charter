@@ -219,7 +219,7 @@ describe("the explorer's rows, in a region too narrow for them", () => {
     scrollWidth: number;
     clientWidth: number;
     scrolledTo: number;
-    rows: { what: string; height: number; limit: number }[];
+    rows: { what: string; height: number; limit: number; overflow: number; wraps: string }[];
   }> {
     return browser.execute(() => {
       const explorer = document.querySelector<HTMLElement>('[data-testid="explorer"]');
@@ -246,6 +246,13 @@ describe("the explorer's rows, in a region too narrow for them", () => {
           what,
           height: el.getBoundingClientRect().height,
           limit: height * 1.5 + padding + border + 4,
+          // **What `min-width: max-content` is for, and the only thing that holds it.** A row
+          // told only `white-space: nowrap` also stays on one line — its text simply overflows
+          // its own box — and then the band behind a hovered or current row stops at the
+          // region's edge while the name runs on past it. Zero here is the row's box having
+          // grown to hold its content.
+          overflow: el.scrollWidth - el.clientWidth,
+          wraps: css.whiteSpace,
         };
       };
 
@@ -287,6 +294,15 @@ describe("the explorer's rows, in a region too narrow for them", () => {
       .filter((row) => row.height > row.limit)
       .map((row) => `${row.what}: ${row.height}px, and one line of it is ${row.limit}px`);
     expect(wrapped).toEqual([]);
+    // A row's own box holds its own name, so the band behind a hovered or current row reaches
+    // the end of it rather than stopping at the region's edge.
+    const clipped = measured.rows
+      .filter((row) => row.overflow > 1)
+      .map((row) => `${row.what}: ${row.overflow}px of it is outside its own box`);
+    expect(clipped).toEqual([]);
+    // And the rule that says a name is never broken, as the engine resolved it. A rule that
+    // emitted no CSS at all — the trap `docs/design-system.md` names — reads `normal` here.
+    expect([...new Set(measured.rows.map((row) => row.wraps))]).toEqual(["nowrap"]);
     // Nothing to scroll means the rows were folded to fit instead.
     expect(measured.scrollWidth).toBeGreaterThan(measured.clientWidth);
     // And it really scrolls: a region whose overflow is hidden answers 0 here.

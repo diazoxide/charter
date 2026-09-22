@@ -651,8 +651,17 @@ body {
   padding: 0;
 }
 
-/* Every row that NAMES something: one line, and at least as wide as the region so that the
-   band behind a hovered or current row still reaches its edge.
+/* Every row that NAMES something: one line, and at least as wide as its own name.
+
+   **The two declarations do different jobs, measured rather than assumed.**
+   `min-width: max-content` is what grows the row's own BOX, so the band behind a hovered or
+   current row reaches the end of the name instead of stopping at the region's edge — and it
+   is what gives `.explorer` a `scrollWidth` to scroll through. `white-space: nowrap` is the
+   rule that a name is not prose. With the `min-width` there the row is already as wide as its
+   unwrapped content, so nothing folds either way today; `nowrap` is what keeps that true the
+   day a row's width is constrained by something else. `workspace-explorer.e2e.ts` holds each
+   separately — the box's own overflow for the first, the resolved `white-space` for the
+   second — because a run with only one of them in place still looks right.
 
    **Nothing here touches padding, font size or line height**, and that is deliberate rather
    than incidental: the elbows below are drawn at a fixed offset down each row (`0.9em`,
