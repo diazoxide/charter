@@ -344,9 +344,15 @@ describe("the chat strip at fifty chats (charter-app#130)", () => {
     expect(screen.queryByRole("button", { name: /Close tab/ })).toBeNull();
   });
 
-  it("brings the tab in front into view, so a strip wider than the window is reachable", async () => {
-    // The strip scrolls rather than growing past the window edge, and a chat is brought
-    // forward from surfaces that are not the strip at all. jsdom has no `scrollIntoView`.
+  it("never scrolls a strip, because a strip that does not fit collapses instead", async () => {
+    // **What this test used to hold is gone, and this is what took its place.** The strip
+    // scrolled, so the tab in front was kept on screen with `scrollIntoView` and this asserted
+    // that it was called. The operator ruled the scroller out — *"i noticed that tabs now
+    // scrollable — instead of automatic expanding in show more button"* — so there is nothing
+    // to scroll and the same promise is kept by `fits.ts` drawing the selected tab instead.
+    //
+    // A test that only deleted the old assertion would leave nothing saying the scroller is
+    // gone, and a `scrollIntoView` put back by the next person would pass silently.
     const into = vi.fn();
     Object.defineProperty(Element.prototype, "scrollIntoView", {
       configurable: true,
@@ -362,7 +368,8 @@ describe("the chat strip at fifty chats (charter-app#130)", () => {
       const front = within(screen.getByRole("tablist", { name: "Tabs" })).getByRole("tab", {
         selected: true,
       });
-      expect(into.mock.instances).toContain(front);
+      expect(front).toBeInTheDocument();
+      expect(into).not.toHaveBeenCalled();
     } finally {
       Reflect.deleteProperty(Element.prototype, "scrollIntoView");
     }

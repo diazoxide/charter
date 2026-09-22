@@ -823,20 +823,25 @@ mod tests {
     /// Terminal output as the words on the screen: escape sequences dropped, and the breaks
     /// a terminal inserts — a wrap, a carriage return — read as the single space that was
     /// between the words before it laid them out.
+    ///
+    /// **Every escape, not only CSI** (charter-app#169). This used to drop an `ESC` and then
+    /// step over the sequence only when the next byte was `[`; every other escape lost its
+    /// `ESC` and kept the rest as TEXT. So `ESC 7` — DECSC, save cursor, two bytes — put a
+    /// literal `7` into what this function claims a reader sees, and a redraw landing between
+    /// the stand-in's two writes of its argv turned
+    /// `--resume <id> --name ide.7` into `--resume <id> 7 --name ide.7` and failed a chats
+    /// test that had nothing wrong with it. Seen once on CI, green on a rerun and 8/8
+    /// locally on the same commit, which is what an assertion about a race looks like.
+    ///
+    /// A helper that reports a failure that did not happen is worse than no helper, so this
+    /// consumes the escapes a terminal actually emits rather than the one byte that was
+    /// caught: [`eat_escape`] has the shapes and why each is here.
     fn as_a_reader_sees(raw: &str) -> String {
         let mut out = String::with_capacity(raw.len());
         let mut chars = raw.chars().peekable();
         while let Some(c) = chars.next() {
             if c == '\u{1b}' {
-                // CSI and the rest of the sequence: parameters, then one final byte.
-                if chars.peek() == Some(&'[') {
-                    chars.next();
-                    for c in chars.by_ref() {
-                        if c.is_ascii_alphabetic() || c == '~' {
-                            break;
-                        }
-                    }
-                }
+                eat_escape(&mut chars);
                 continue;
             }
             out.push(if c == '\r' || c == '\n' { ' ' } else { c });
@@ -844,6 +849,91 @@ mod tests {
         // A wrap becomes one space, and so does a run of them, so a command line reads the
         // way it was written however the pane laid it out.
         out.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    /// Step over the rest of one escape sequence, the `ESC` itself already taken.
+    ///
+    /// The four shapes ECMA-48 gives an escape, because a test helper that knows only one of
+    /// them is a helper that invents characters (charter-app#169):
+    ///
+    /// - **CSI** (`ESC [`) — parameter and intermediate bytes, then one final byte. The final
+    ///   byte is `0x40..=0x7e` rather than "a letter or `~`": `ESC [ 2 q` (the cursor shape
+    ///   charter's own engine emits, and the sequence standing next to the `ESC 7` in the
+    ///   failing run) ends on `q`, but `ESC [ 0 c` and the `}`-final forms do not, and a
+    ///   final byte this stopped short of would spill parameters into the text.
+    /// - **string sequences** — OSC (`ESC ]`, a window title), DCS, SOS, PM, APC — run to a
+    ///   string terminator: `ESC \`, or BEL, which every terminal accepts for OSC and which
+    ///   is what `xterm.js` and this engine emit.
+    /// - **nF** — an intermediate byte (`0x20..=0x2f`) then a final one: `ESC ( B` puts
+    ///   US-ASCII into G0, which a harness clearing the screen emits, and `ESC # 8` is DECALN.
+    /// - **everything else is the whole sequence**: `ESC 7`/`ESC 8` (save and restore cursor),
+    ///   `ESC =`/`ESC >` (keypad mode), `ESC M` (reverse index), `ESC c` (full reset). These
+    ///   are the ones that were leaving a character behind.
+    fn eat_escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+        match chars.next() {
+            Some('[') => {
+                for c in chars.by_ref() {
+                    if matches!(c, '\u{40}'..='\u{7e}') {
+                        break;
+                    }
+                }
+            }
+            Some(']' | 'P' | 'X' | '^' | '_') => {
+                let mut closed = None;
+                for c in chars.by_ref() {
+                    if c == '\u{7}' || c == '\u{1b}' {
+                        closed = Some(c);
+                        break;
+                    }
+                }
+                // `ESC \` is the terminator; the `ESC` is consumed above and the `\` here.
+                if closed == Some('\u{1b}') {
+                    chars.next_if_eq(&'\\');
+                }
+            }
+            Some('\u{20}'..='\u{2f}') => {
+                for c in chars.by_ref() {
+                    if !matches!(c, '\u{20}'..='\u{2f}') {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// charter-app#169. `ESC 7` is a saved cursor, and a reader sees nothing of it.
+    #[test]
+    fn a_redraw_between_two_writes_adds_no_character_a_reader_could_see() {
+        // The bytes CI captured (run 35758178617, job 106849600023, PR #168's head), with the
+        // id shortened: a redraw landed between the stand-in's `argv:` and its arguments.
+        let raw = "argv: --resume 1111\u{1b}[K\r\n\u{1b}[1;1H\u{1b}7\u{1b}[2 q\u{1b}[1;52H \
+                   --name ide.7\r\n";
+
+        assert_eq!(as_a_reader_sees(raw), "argv: --resume 1111 --name ide.7");
+    }
+
+    /// Each shape [`eat_escape`] knows, consumed whole — `a` and `b` stay adjacent.
+    #[test]
+    fn every_escape_a_terminal_emits_is_consumed_whole() {
+        for (raw, what) in [
+            ("a\u{1b}7b", "ESC 7, save cursor"),
+            ("a\u{1b}8b", "ESC 8, restore cursor"),
+            ("a\u{1b}=b", "ESC =, application keypad"),
+            ("a\u{1b}>b", "ESC >, normal keypad"),
+            ("a\u{1b}Mb", "ESC M, reverse index"),
+            ("a\u{1b}cb", "ESC c, full reset"),
+            ("a\u{1b}(Bb", "ESC ( B, US-ASCII into G0"),
+            ("a\u{1b}#8b", "ESC # 8, DECALN"),
+            ("a\u{1b}]0;a window title\u{7}b", "OSC closed by BEL"),
+            ("a\u{1b}]0;a window title\u{1b}\\b", "OSC closed by ST"),
+            ("a\u{1b}[1;1Hb", "CSI, cursor home"),
+            ("a\u{1b}[?25lb", "CSI with a private parameter"),
+            ("a\u{1b}[2 qb", "CSI with an intermediate byte"),
+            ("a\u{1b}[0mb", "CSI, reset"),
+        ] {
+            assert_eq!(as_a_reader_sees(raw), "ab", "{what} left something behind");
+        }
     }
 
     /// Chats that write every record they make into `wrote`, newest last.
