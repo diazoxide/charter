@@ -2740,3 +2740,200 @@ button.bare:focus-visible {
   color: var(--text-primary);
   opacity: 1;
 }
+
+/* ---------------------------------------------------------------------------------------
+   The context menus (`Menus.tsx`)
+   ---------------------------------------------------------------------------------------
+
+   Radix ships no CSS at all, so this is the whole of how a context menu is drawn — the same
+   surface the show-more menu above uses, because they are one kind of thing and an operator
+   who has learned one has learned the other. What it does NOT share is the width: a context
+   menu's rows are sentences ("End chat 3 steward"), not tab names. */
+.item-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 14rem;
+  max-width: 24rem;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding: 0.3rem;
+  background: var(--surface-overlay);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  box-shadow: 0 0.5rem 1.5rem var(--overlay-shadow);
+  z-index: 10;
+}
+
+.menu-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.3rem 0.45rem;
+  border-radius: 4px;
+  color: var(--text-primary);
+  cursor: pointer;
+  /* Radix gives a menu item its own roving focus and no outline of its own. */
+  outline: none;
+}
+
+.menu-row[data-highlighted] {
+  background: var(--tab-active);
+}
+
+.menu-row[data-disabled] {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* What a row costs, under its words. Quieter than the row and never instead of it: the title
+   is what the action IS, and this is what it does to you. */
+.menu-note {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* The line under which everything loses something. It is the catalogue's own order made
+   visible: a menu pops up where the operator did not choose the layout, so the boundary
+   between "this moves you" and "this destroys something" is drawn rather than implied. */
+.menu-line {
+  height: 1px;
+  margin: 0.25rem 0.2rem;
+  background: var(--border-subtle);
+}
+
+/* Below the line, in the colour the window keeps for it. `--danger-base` is the same accent
+   a tab's `×` takes on hover, so an operator meets one colour for "this is not reversible". */
+.menu-row.ends-it {
+  color: var(--danger-base);
+}
+
+.menu-row.ends-it[data-highlighted] {
+  background: var(--danger-surface);
+}
+
+/* ---------------------------------------------------------------------------------------
+   The dialogs that make and delete things
+   --------------------------------------------------------------------------------------- */
+
+/* A dialog that ASKS for something rather than describing it: a stack of labels and boxes,
+   each with the sentence that says what it means under it. */
+.asks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-top: 0.75rem;
+}
+
+.asks label {
+  margin-top: 0.6rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  opacity: 0.6;
+}
+
+/* `.choice`'s own label is a row's name and not a section heading, so it keeps `.choice`'s
+   shape rather than taking the one above. */
+.asks .choice label {
+  margin-top: 0;
+  font-size: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+  opacity: 1;
+}
+
+.asks input[type="text"],
+.asks input:not([type]),
+.asks textarea {
+  padding: 0.35rem 0.5rem;
+  color: var(--text-primary);
+  background: var(--surface-sunken);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  font: inherit;
+}
+
+.asks textarea {
+  resize: vertical;
+}
+
+.asks input:focus-visible,
+.asks textarea:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
+}
+
+/* A box with the folder picker beside it. Both are the same answer, typed or chosen. */
+.picking {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.picking input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.picking button {
+  color: var(--text-primary);
+  background: var(--control-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0.25rem 0.7rem;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.picking button:hover {
+  background: var(--border-subtle);
+}
+
+.picking button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+/* charter's own lines, kept as charter wrote them. `init`'s refusal in a repository is four
+   lines with commands in them, and a refusal reflowed into a paragraph is one nobody can
+   follow. */
+.trouble.said-in-full {
+  white-space: pre-wrap;
+}
+
+/* What charter is still finding out, inside a dialog. Not the explorer's spinner: this is one
+   line in a question that is already on screen, and a dialog with a spinner in it reads as a
+   dialog that is loading rather than one that is asking. */
+.warning .pending {
+  margin: 0.5rem 0 0;
+  color: var(--text-muted);
+}
+
+/* What deleting a workspace would discard — the core's own sentences, one per row.
+   `--state-unreadable` is the accent the window already uses for "charter could not read
+   this", and every row here is one charter would refuse over. */
+.at-risk {
+  margin: 0.4rem 0 0.75rem;
+  padding-left: 1.1rem;
+  color: var(--danger-text);
+}
+
+.at-risk li {
+  margin: 0.15rem 0;
+  overflow-wrap: anywhere;
+}
+
+/* The answer that destroys something, marked in the one colour the window keeps for it. It is
+   never the one Return finds — every dialog here focuses Cancel — and the mark is so that a
+   pointer moving towards it has been told. */
+.warning .doing button.ends-it {
+  border-color: var(--danger-base);
+  color: var(--danger-base);
+}
+
+.warning .doing button.ends-it:hover:not(:disabled) {
+  background: var(--danger-surface);
+}

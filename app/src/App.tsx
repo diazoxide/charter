@@ -27,6 +27,8 @@ import { Opener } from "./Opener";
 import { Palette } from "./Palette";
 import { QuitWarning, type Ending } from "./QuitWarning";
 import { fitting, LEAST, useRoom } from "./fits";
+import { Menued, useNoBrowserMenu } from "./Menus";
+import { NewProject } from "./NewProject";
 import {
   Closer,
   Doer,
@@ -59,6 +61,11 @@ import { noTabs } from "./tabs";
  * once.
  */
 function App() {
+  // The WebView's own menu, taken away from the whole window (`Menus.tsx`). One listener, on
+  // the window, so it covers every surface including the ones with no charter menu of their
+  // own — a shipped app that answers a right-click with `Reload` and `Inspect Element` is
+  // showing the operator the browser it is built on.
+  useNoBrowserMenu();
   /** What the launch resolved, asked once. `undefined` while the core has not answered. */
   const [launch, setLaunch] = useState<{ plane: PlaneId | null; here: boolean; reason: string }>();
   /** The projects this window holds, left to right as the strip shows them. */
@@ -84,6 +91,12 @@ function App() {
   /** Whether the palette is up, so what an action answered is said in one place rather than
    *  two: the palette is modal and draws over the line below it. */
   const [paletteOpen, setPaletteOpen] = useState(false);
+  /** Whether the new-project dialog is up, and why the last attempt made nothing. The
+   *  window's, like the opener: what it ends in is a project this window holds. */
+  const [creating, setCreating] = useState(false);
+  const [createTrouble, setCreateTrouble] = useState<string>();
+  /** Whether charter is scaffolding one right now, so the answer cannot be given twice. */
+  const [makingProject, setMakingProject] = useState(false);
   /** Whether the extension list is up. The window's, not a project's: an extension is machine
    *  state, so it is the same list whichever project is in front. */
   const [extensions, setExtensions] = useState(false);
@@ -284,6 +297,40 @@ function App() {
     return { ok: true, said: `charter let go of ${plane}. Nothing in it was changed.` };
   }, []);
 
+  /**
+   * Scaffolds a new project and takes it into this window — **through the same gate**.
+   *
+   * `create_project` writes the plane and then answers with `open_if_approved`'s own answer,
+   * so this handles it exactly as `openInto` handles a recents row: a project, or the question
+   * to ask first. A plane charter has just made is still one this machine has approved nothing
+   * about (ADR 0035), so the ordinary end of this dialog is the trust dialog.
+   *
+   * A refusal stays IN the dialog rather than behind it: `init`'s refusal in a repository is
+   * four lines naming what to do instead, and the operator is still standing at the box.
+   */
+  const makeProject = useCallback(async (path: string, planeIsThisRepo: boolean) => {
+    setMakingProject(true);
+    const answer = await commands
+      .createProject(path, planeIsThisRepo)
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    setMakingProject(false);
+    if (answer.status === "error") {
+      setCreateTrouble(answer.error);
+      return;
+    }
+    setCreating(false);
+    setCreateTrouble(undefined);
+    if (answer.data.plane === null) {
+      const ask = answer.data.ask;
+      if (ask)
+        setApproving((queue) => (queue.some((q) => q.path === ask.path) ? queue : [...queue, ask]));
+      return;
+    }
+    const opened = answer.data.plane;
+    setPlanes((was) => (was.includes(opened) ? was : [...was, opened]));
+    setShowing({ at: "plane", plane: opened });
+  }, []);
+
   const onReport = useCallback((plane: PlaneId, mine: PlaneReport) => {
     setReports((was) => (was[plane] === mine ? was : { ...was, [plane]: mine }));
   }, []);
@@ -291,6 +338,10 @@ function App() {
   const windowDoes = useMemo<WindowDoing>(
     () => ({
       openProject: () => setShowing({ at: "opener" }),
+      createProject: () => {
+        setCreateTrouble(undefined);
+        setCreating(true);
+      },
       showExtensions: () => setExtensions(true),
       selectProject: (plane: string) => setShowing({ at: "plane", plane }),
       closeProject,
@@ -506,6 +557,11 @@ function App() {
       closeTab: () => undefined,
       selectTab: () => undefined,
       focusWorkspace: () => undefined,
+      // Both are rows the catalogue marks unavailable with no plane — there is nowhere to make
+      // a workspace and no workspace to delete — so `perform` refuses them before either of
+      // these is reached. They exist because `Doing` is one shape for every surface.
+      createWorkspace: () => undefined,
+      removeWorkspace: () => undefined,
       showChat: () => undefined,
       pinTab: async () => nowhere(),
       pinWorkspace: async () => nowhere(),
@@ -514,6 +570,7 @@ function App() {
       mergeWorktree: async () => nowhere(),
       sendKey: async () => nowhere(),
       openProject: windowDoes.openProject,
+      createProject: windowDoes.createProject,
       showExtensions: windowDoes.showExtensions,
       selectProject: windowDoes.selectProject,
       closeProject: windowDoes.closeProject,
@@ -541,6 +598,20 @@ function App() {
   const strip = useMemo(
     () => projectRows(drawn, inFront, pinnedProjects),
     [drawn, inFront, pinnedProjects],
+  );
+
+  /**
+   * The project strip's rows as one list, for the context menu on a project tab.
+   *
+   * **The strip's own rows and not a second reading of anything.** `strip` is
+   * `actions.projectRows`, which is what the tabs, the `×` and the palette all draw; the menu
+   * is `menuRows` filtering this same list to the project it was opened on. So a project in
+   * front has "It is already in front." on its greyed row here for the same reason its tab
+   * does not react, and neither fact is written twice.
+   */
+  const stripOffers = useMemo(
+    () => [strip.open, strip.create, ...strip.switchTo, ...strip.pin, ...strip.close],
+    [strip],
   );
 
   /**
@@ -636,22 +707,32 @@ function App() {
           {projectsShown.shown.map((project) => {
             const at = drawn.indexOf(project);
             return (
-              <span className="project" key={project.plane}>
-                <button
-                  role="tab"
-                  aria-selected={project.plane === inFront}
-                  // The path, because two projects can share a directory name and the name is
-                  // all the tab has room for.
-                  title={project.plane}
-                  onClick={() => {
-                    const offer = strip.switchTo[at];
-                    if (offer.available) press(offer);
-                  }}
-                >
-                  {projectMarks(project)}
-                </button>
-                <Closer offer={strip.close[at]} onPress={press} />
-              </span>
+              /* Right-click is the third reader of the same catalogue (`Menus.tsx`). `asChild`,
+                 so the strip gains no wrapper element: this IS the `span` it always was — which
+                 is what #171's `flex: 1 1 0` cells require. */
+              <Menued
+                key={project.plane}
+                on={{ on: "project", plane: project.plane }}
+                offers={stripOffers}
+                onPress={press}
+              >
+                <span className="project">
+                  <button
+                    role="tab"
+                    aria-selected={project.plane === inFront}
+                    // The path, because two projects can share a directory name and the name is
+                    // all the tab has room for.
+                    title={project.plane}
+                    onClick={() => {
+                      const offer = strip.switchTo[at];
+                      if (offer.available) press(offer);
+                    }}
+                  >
+                    {projectMarks(project)}
+                  </button>
+                  <Closer offer={strip.close[at]} onPress={press} />
+                </span>
+              </Menued>
             );
           })}
           {/* The strip's own controls, and the one part of this strip that never collapses.
@@ -775,6 +856,21 @@ function App() {
           onCancel={() =>
             setApproving((queue) => queue.filter((q) => q.path !== approving[0].path))
           }
+        />
+      )}
+
+      {/* Making a project: a plane charter scaffolds, opened through the gate like any other
+          (charter ADR 0035, spec decision 27). The window's, like the opener — what it ends in
+          is a project this window holds — and mounted only while it is up. */}
+      {creating && (
+        <NewProject
+          trouble={createTrouble}
+          making={makingProject}
+          onCreate={(path, planeIsThisRepo) => void makeProject(path, planeIsThisRepo)}
+          onCancel={() => {
+            setCreating(false);
+            setCreateTrouble(undefined);
+          }}
         />
       )}
 
