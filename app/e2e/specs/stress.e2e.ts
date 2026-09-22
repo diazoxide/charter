@@ -105,12 +105,29 @@ async function focusWorkspace(name: string): Promise<boolean> {
   return false;
 }
 
+/** The show-more button on the chat strip, when the strip is hiding anything. */
+async function hiddenTabs(): Promise<number> {
+  const more = await $('.bar button[aria-label^="Show "]');
+  if (!(await more.isExisting())) return 0;
+  const said = await more.getAttribute("aria-label");
+  return Number(/^Show (\d+) tabs? /.exec(said ?? "")?.[1] ?? 0);
+}
+
 /**
  * Closes every tab, last first, and waits for every session's program to be gone.
  *
  * **Every workspace's**, not the focused one's. The chat strip shows one workspace's chats
  * (ADR 0036), and one app process serves the whole run — so a chat another spec left in
  * another workspace is a live harness this spec would otherwise count as a leak.
+ *
+ * **The strip collapses rather than scrolling** (charter ADR 0039, as amended), so at fifty
+ * chats it draws a handful and the rest are behind the show-more button. This loop still
+ * terminates, and the reason is worth writing down because it is the whole of the
+ * reachability argument: closing a drawn tab gives the strip room for a hidden one, so the
+ * hidden tabs flow onto the strip as the drawn ones go. `4 * TABS` presses is four times what
+ * fifty chats need. What would catch it going wrong is the pair of assertions below — no
+ * close buttons AND nothing hidden — rather than the loop running out, and then the wait for
+ * `harnessesRunning() === 0` underneath.
  */
 async function closeEveryTab(): Promise<void> {
   const names: string[] = [];
@@ -126,6 +143,10 @@ async function closeEveryTab(): Promise<void> {
       await buttons[buttons.length - 1].click();
     }
     expect(await closeButtons()).toHaveLength(0);
+    // **And nothing left behind the button**, which is the assertion the collapse added. An
+    // empty strip with forty chats still hidden would otherwise read as "all closed" here and
+    // only fail sixty seconds later, as a leak, with no sign of what leaked.
+    expect(await hiddenTabs()).toBe(0);
   }
   // On a known workspace, so the fifty this spec is about all land on one strip.
   if (names[0] !== undefined) await focusWorkspace(names[0]);

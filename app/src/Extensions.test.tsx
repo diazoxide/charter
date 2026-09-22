@@ -32,9 +32,16 @@ const RUNS_AS_YOU =
   "writing charter's own settings, or changing what your next launch runs. What is listed " +
   "above is what this extension DECLARES, not what it is LIMITED to.";
 const FINGERPRINTED =
-  "charter has read this extension's files and will ask again if any of them change. That " +
-  "catches an extension that changed under you. It is not a defence against one written to " +
-  "deceive you, and it is not a boundary.";
+  "charter has read every file in this extension's directory — not only the ones it " +
+  "declares — and will ask again if any of them changes, or if one is added or taken away. " +
+  "That catches an extension that changed under you. It is not a defence against one written " +
+  "to deceive you, and it is not a boundary.";
+/** `charter_core::extension::state_note("cache")`, for an extension that declares one. */
+const STATE_NOTE =
+  "charter does not read 'cache/'. That is this extension's state directory: the one place " +
+  "it may write without charter asking again. charter refuses to load the extension if that " +
+  "directory holds a link or a program, so what is in there is data — but charter cannot stop " +
+  "a program it has already read from treating its own data as code.";
 
 const ASK = {
   id: "solarized",
@@ -45,6 +52,7 @@ const ASK = {
   first: true,
   runs_as_you: RUNS_AS_YOU,
   fingerprint_note: FINGERPRINTED,
+  state_note: null as string | null,
 };
 
 type Row = {
@@ -180,6 +188,28 @@ describe("the consent surface", () => {
 
     expect(await screen.findByText(RUNS_AS_YOU)).toBeInTheDocument();
     expect(screen.getByText(FINGERPRINTED)).toBeInTheDocument();
+  });
+
+  it("names the one directory charter does not read, when there is one", async () => {
+    // charter-app#152. The fingerprint note says charter read every file in the directory; an
+    // extension with a state directory has one exception to that, and the exception belongs on
+    // the screen where the operator says yes.
+    core({ rows: [{ ...newRow, ask: { ...ASK, state_note: STATE_NOTE } }] });
+    render(<Extensions onClose={() => undefined} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Review" }));
+
+    expect(await screen.findByText(STATE_NOTE)).toBeInTheDocument();
+  });
+
+  it("says nothing about a state directory for an extension that declares none", async () => {
+    // The ordinary case. A dialog that mentioned an exception every extension does not have
+    // would teach the operator to skip the paragraph that matters when one does.
+    core({ rows: [newRow] });
+    render(<Extensions onClose={() => undefined} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Review" }));
+
+    await screen.findByText(FINGERPRINTED);
+    expect(screen.queryByText(/does not read/)).not.toBeInTheDocument();
   });
 
   it("names every contribution it was given", async () => {
