@@ -915,13 +915,13 @@ fn tree(
     }
     // A declared file that is not in the tree is not "hashed as absent": putting it there
     // afterwards would contribute something nobody was asked about. The walk is what tells the
-    // difference, because a declared file that is a link or a FIFO was recorded as one and was
-    // not read as a file.
+    // difference, because a declared file that turned out to be a link or a directory was
+    // recorded as one and was never opened as a file.
     for file in declared {
         // "not there" and "there, and not a file" are two different things to tell the
         // operator, and `NOT_THERE`'s wording is the one every other absence in this module
-        // uses. A declared file that turned out to be a link or a FIFO was recorded as one by
-        // the walk and was never opened, so it reaches here as the second case.
+        // uses. Nothing stranger than a link or a directory reaches this arm: the walk refuses
+        // a FIFO, a socket or a device outright, because charter cannot fingerprint one.
         match found.iter().find(|entry| entry.rel == file) {
             Some(entry) if entry.kind == Kind::File => {}
             Some(_) => {
