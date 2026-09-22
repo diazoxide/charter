@@ -2025,6 +2025,121 @@ body {
   background: var(--control-count);
   font-variant-numeric: tabular-nums;
 }
+/* **The doctor's button** (`app/src/Doctor.tsx`): the same chrome as the alerts button beside
+   it, so the right-hand end of the line reads as "things you can open". Its tone is the
+   verdict's — a blocker in the colour a failed check has everywhere else in the window, a
+   warning in the amber of "not finished" — and a clean doctor is the plain control colour,
+   never green: about twenty checks did not run, and a green word over them is a claim. */
+.status-doctor {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+  color: var(--text-primary);
+  background: var(--control-base);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0.05rem 0.4rem;
+  font: inherit;
+  cursor: pointer;
+}
+
+.status-doctor:hover {
+  border-color: var(--accent-base);
+}
+
+.status-doctor.doctor-tone-fail {
+  border-color: var(--state-failed);
+}
+
+.status-doctor.doctor-tone-fail .doctor-said {
+  color: var(--state-failed);
+}
+
+.status-doctor.doctor-tone-warn .doctor-said {
+  color: var(--state-waiting);
+}
+
+.status-doctor.doctor-tone-unknown {
+  color: var(--text-muted);
+}
+
+/* The dialog. Wider than a consent prompt, because a row's detail is a sentence and its hint is
+   often a command to copy. */
+.warning.doctor {
+  max-width: 48rem;
+  width: calc(100vw - 4rem);
+}
+
+.warning.doctor h3 {
+  margin: 0.75rem 0 0.25rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.doctor-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* One row: the glyph and the name on a line, the detail and the hint under the name. A grid
+   and not a table, because a row's detail can run to several lines (`session root` joins its
+   own with a newline and an arrow, as the CLI table draws it). */
+.doctor-row {
+  display: grid;
+  grid-template-columns: 1.1rem minmax(8rem, max-content) 1fr;
+  column-gap: 0.5rem;
+  padding: 0.2rem 0;
+  font-size: 0.85rem;
+}
+
+.doctor-glyph {
+  font-weight: 700;
+}
+
+.doctor-ok .doctor-glyph {
+  color: var(--state-success);
+}
+
+.doctor-warn .doctor-glyph {
+  color: var(--state-waiting);
+}
+
+.doctor-fail .doctor-glyph {
+  color: var(--state-failed);
+}
+
+.doctor-name {
+  font-weight: 600;
+}
+
+.doctor-detail {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.doctor-hint {
+  grid-column: 3;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.doctor-unchecked {
+  margin-top: 0.75rem;
+  font-size: 0.85rem;
+}
+
+.doctor-unchecked summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.doctor-path {
+  margin: 0.75rem 0 0;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
 
 /* There are alerts: the bell takes the colour charter's footer gives a warning, so the one
    button on the line that is asking for something looks it. The count's own badge stays the
