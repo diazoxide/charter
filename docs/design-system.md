@@ -223,7 +223,31 @@ front of the primitive.
 **Lucide** is the icon set (`lucide-react`). The property that matters is that it draws with
 `stroke="currentColor"` and `fill="none"`, so an icon takes the colour of the text it sits in
 and a theme reaches it without an icon ever naming a colour. `app/src/lib/icons.test.tsx` pins
-that. No icon is on a button yet; that is a separate ticket, on top of this one.
+that.
+
+**The icon layer is one CSS rule and no component.** Lucide puts `lucide` on every `<svg>` it
+draws, and `App.css` sizes that class at `1em` — so an icon is the size of the text it sits in,
+and no call site passes a `size`. Lucide also adds `aria-hidden="true"` to any icon given no
+accessible name of its own, which is what keeps a button's name its words: `New tab` with a `+`
+beside it is still `New tab` to a screen reader and to `pressOnly("New tab")`. Both facts are
+pinned in `icons.test.tsx`, because the whole window leans on them and neither is ours.
+
+The rules an icon has to meet here:
+
+- **Beside words, never instead of them.** An icon-only control is one an operator has to learn.
+  The exception is a control whose accessible name is already carried by `aria-label` — a tab's
+  `×`, whose name is the catalogue's `End chat 3 steward`.
+- **An icon that does not help a reader find something is noise at fifty sessions.** Marks go
+  where they tell two kinds of thing apart (a worktree leaf from a chat leaf) or where they are
+  the state (a pipeline's tick, cross or spinner). Not on every row because rows can have one.
+- **Chosen by what a thing IS, not where it is.** The layout is data (`regions.ts`), so a region
+  toggle drawn as "left panel" would point at the wrong edge the first time the region moved.
+- **Motion means "still happening" and nothing else.** `.spinning` is the one animation in the
+  window: a running pipeline and a listing charter is still waiting for. Nothing settled moves,
+  and `prefers-reduced-motion` stops the spin while leaving the mark.
+- **A contrast floor applies to an icon's colour as it does to text** — 3:1 for a graphic. A
+  state colour that is too weak for words (`needs-you.base` measures 3.64:1 on `surface.base` in
+  charter-dark) may colour the mark beside the words and never the words.
 
 ## What it costs
 

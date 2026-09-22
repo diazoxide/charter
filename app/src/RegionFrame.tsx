@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { Group, Panel, Separator, usePanelRef, type Layout } from "react-resizable-panels";
+import { Activity, BellRing, FolderTree } from "lucide-react";
 import {
   CATALOGUE,
   inSlots,
@@ -221,6 +222,7 @@ export function RegionToggle({
   onToggle: (id: RegionId) => void;
 }) {
   const name = CATALOGUE[id].name;
+  const Mark = REGION_MARKS[id];
   return (
     <button
       type="button"
@@ -229,7 +231,25 @@ export function RegionToggle({
       title={shown ? `Put the ${name} region away` : `Bring the ${name} region back`}
       onClick={() => onToggle(id)}
     >
+      <Mark />
       {name}
     </button>
   );
 }
+
+/**
+ * Each region's mark, by what it IS and not by where it is.
+ *
+ * A panel-left / panel-right icon would be the obvious choice and would be wrong the first
+ * time an operator moved a region: the layout is data (`regions.ts`), so the explorer can be
+ * on the right, and a toggle drawn as "left panel" would then point at the wrong edge of the
+ * window. The explorer is a tree of folders, attention is a bell, state is activity.
+ *
+ * A `Record` over `RegionId`, so a region added to the catalogue without a mark here is a type
+ * error rather than a toggle with a hole in it.
+ */
+const REGION_MARKS: Record<RegionId, typeof FolderTree> = {
+  explorer: FolderTree,
+  aside: BellRing,
+  bottom: Activity,
+};

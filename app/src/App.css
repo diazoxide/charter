@@ -23,6 +23,51 @@ body {
   margin: 0;
 }
 
+/* **Every icon in the window, sized once, from the text it sits in.**
+ *
+ * Lucide puts `lucide` on every `<svg>` it draws, so this one rule is the whole of the icon
+ * layer — there is no wrapper component, nothing to import, and no `size={14}` to get wrong on
+ * the fiftieth call site. `1em` is what makes a 0.8rem row's icons smaller than a 1rem row's
+ * without either row saying so, which is the same argument the tokens make about colour.
+ * `app/src/lib/icons.test.tsx` pins both halves: that the class is there, and that an icon is
+ * `currentColor`, so a theme reaches it without an icon ever naming a colour.
+ *
+ * `flex: none`, because every one of them is in a flex row beside a name that may be
+ * ellipsised, and an icon squeezed to nothing is a row that has lost its mark rather than its
+ * last three characters. */
+.lucide {
+  width: 1em;
+  height: 1em;
+  flex: none;
+  vertical-align: -0.14em;
+}
+
+/* **The one animation in the window, and what it is allowed to mean.**
+ *
+ * It says *this is still happening* — a pipeline that is running, a listing charter has asked
+ * git for and not been answered. That state is otherwise indistinguishable from a stopped one:
+ * the colour is the same amber whether the run is moving or was abandoned an hour ago, and
+ * "running" is a word both of them can carry. Nothing that has already finished spins, because
+ * motion beside a settled answer is only a thing to look at.
+ *
+ * `prefers-reduced-motion` stops it and leaves the mark, which still reads — the mark is a
+ * shape and a word, never the motion alone. */
+@keyframes charter-spin {
+  to {
+    rotate: 1turn;
+  }
+}
+
+.spinning {
+  animation: charter-spin 900ms linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinning {
+    animation: none;
+  }
+}
+
 /* The window is the bar and the panes, and the panes take whatever is left. */
 .window {
   display: flex;
@@ -31,57 +76,157 @@ body {
   overflow: hidden;
 }
 
-/* The projects this window holds, above everything one of them draws (ADR 0033). Darker
-   than the chat tabs under it, so which strip is which is readable at a glance rather than
-   by reading the names. */
-.projects {
+/* **The three strips are tabs, and this is the shape all three share.**
+
+   They were pill-shaped buttons floating on a bar with a gap between them, which is what the
+   operator meant by *"tabs are not looks like a tabs"*. A tab is a CELL of a strip: it reaches
+   the strip's full height, its neighbour is a hairline away rather than a gap away, and the
+   selected one is lit along the edge that faces what it selects. That is the shape Zed has and
+   VS Code has, and it is the shape the tmux frame charter was ported off had before either.
+
+   **One shape, three depths.** Which strip you are looking at is said by the surface it sits
+   on — projects on `surface.deep`, workspaces on `surface.raised`, chats on the bar itself —
+   and never by drawing the three differently. Three different-looking strips would be three
+   things to learn; this is one axis at three levels (ADR 0036). */
+.projects,
+.workspaces-strip,
+.bar .tabs {
   display: flex;
-  gap: 0.25rem;
-  align-items: center;
-  padding: 0.3rem 0.6rem;
+  align-items: stretch;
+  min-height: 1.9rem;
+  gap: 0;
+}
+
+/* The projects this window holds, above everything one of them draws (ADR 0033). */
+.projects {
+  padding-inline: 0.3rem;
   background: var(--surface-deep);
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.project {
-  display: flex;
-  gap: 0.2rem;
-  align-items: center;
-}
-
-/* The workspaces of the project in front: the middle of the three strips (ADR 0036). Lighter
-   than the projects above it and darker than the chats below, so which strip is which is
-   readable at a glance rather than by reading the names. */
+/* The workspaces of the project in front: the middle of the three strips (ADR 0036). */
 .workspaces-strip {
-  display: flex;
-  gap: 0.25rem;
-  align-items: center;
-  padding: 0.25rem 0.6rem;
+  padding-inline: 0.3rem;
   background: var(--surface-raised);
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.workspaces-strip button {
+/* One tab: the cell, and the hairline that parts it from the next. `.project` and `.tab` are
+   wrappers holding a tab and its `×`; a workspace tab is the button itself, because there is
+   nothing about a workspace to close. */
+.projects .project,
+.workspaces-strip [role="tab"],
+.tabs .tab {
+  position: relative;
   display: flex;
-  gap: 0.3rem;
   align-items: center;
-  color: var(--text-primary);
-  background: var(--control-base);
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
-  padding: 0.15rem 0.5rem;
+  gap: 0;
+  flex: none;
+  border-inline-end: 1px solid var(--border-subtle);
+}
+
+/* The lit edge. Drawn on every tab and coloured only on the selected one, so a strip does not
+   shift by two pixels when the selection moves. */
+.projects .project::after,
+.workspaces-strip [role="tab"]::after,
+.tabs .tab::after {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  inset-block-end: 0;
+  height: 2px;
+  background: transparent;
+  pointer-events: none;
+}
+
+/* `:has` is how a wrapper knows its own button is the selected one. Where it is not supported
+   the button alone takes the surface — the same colour, one hairline narrower — which is a
+   floor rather than an undressed tab. */
+.projects .project:has([aria-selected="true"]),
+.tabs .tab:has([aria-selected="true"]),
+.projects [role="tab"][aria-selected="true"],
+.workspaces-strip [role="tab"][aria-selected="true"],
+.tabs [role="tab"][aria-selected="true"] {
+  background: var(--tab-active);
+}
+
+.projects .project:has([aria-selected="true"])::after,
+.tabs .tab:has([aria-selected="true"])::after,
+.workspaces-strip [role="tab"][aria-selected="true"]::after {
+  background: var(--accent-base);
+}
+
+/* The tab itself: flat, because the cell around it is the shape. Quiet until it is the one you
+   are on, which on a strip of fifty is the only thing that may be loud. */
+.projects [role="tab"],
+.workspaces-strip [role="tab"],
+.tabs [role="tab"] {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  gap: 0.35rem;
+  padding: 0.1rem 0.6rem;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text-muted);
   font: inherit;
   cursor: pointer;
   white-space: nowrap;
 }
 
-.workspaces-strip button:hover:not(:disabled) {
-  border-color: var(--accent-base);
+/* Hover never touches the selected tab: it is already the loudest thing on the strip, and a
+   pointer resting on it should not make it change. */
+.projects [role="tab"]:hover:not([aria-selected="true"]),
+.workspaces-strip [role="tab"]:hover:not([aria-selected="true"]),
+.tabs [role="tab"]:hover:not([aria-selected="true"]) {
+  background: var(--surface-hover);
+  color: var(--text-primary);
 }
 
-.workspaces-strip [role="tab"][aria-selected="true"] {
-  border-color: var(--accent-base);
-  background: var(--tab-active);
+.projects [role="tab"][aria-selected="true"],
+.workspaces-strip [role="tab"][aria-selected="true"],
+.tabs [role="tab"][aria-selected="true"] {
+  color: var(--text-primary);
+}
+
+/* Inside the cell, because a ring outside it is clipped by the strip that scrolls. */
+.projects [role="tab"]:focus-visible,
+.workspaces-strip [role="tab"]:focus-visible,
+.tabs [role="tab"]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* A tab's `×`, which ENDS the chat. Flat like the tab it is part of, and it goes to the danger
+   surface on hover rather than lighting up like a close box — the glyph already reads lighter
+   than what it does (charter-app#130), and the one thing the look may not do is agree with the
+   glyph. The accessible name is still the catalogue's `End chat 3 steward`. */
+.tab .closer,
+.project .closer {
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  flex: none;
+  padding: 0 0.4rem;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--text-muted);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tab .closer:hover,
+.project .closer:hover {
+  background: var(--danger-surface);
+  color: var(--danger-text);
+}
+
+.tab .closer:focus-visible,
+.project .closer:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 /* How many chats are open in a workspace that is not the one on screen. With the chat strip
@@ -90,18 +235,25 @@ body {
   padding: 0 0.3rem;
   border-radius: 999px;
   background: var(--control-count);
+  color: var(--text-secondary);
   font-size: 0.85em;
-  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
 }
 
 /* And how many of them are asking for you, which is the hole scoping the chats would
-   otherwise open. The same mark the project tabs carry one scope up. */
-.workspace-needs {
-  padding: 0 0.3rem;
+   otherwise open. The same mark the project tabs carry one scope up — **the count of chats
+   waiting for the operator is the one thing in this window that exists to be seen**, so it is
+   the only mark on a strip drawn in a colour of its own, and it is drawn in the weight of a
+   number rather than the weight of a label. */
+.workspace-needs,
+.project-needs {
+  padding: 0 0.32rem;
   border-radius: 999px;
   background: var(--needs-you-base);
   color: var(--needs-you-text);
   font-size: 0.85em;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
 }
 
 /* **Every strip scrolls rather than growing past the window edge** (charter-app#130). At
@@ -169,10 +321,17 @@ body {
   position: sticky;
   right: 0;
   z-index: 1;
+  align-self: center;
+  margin-inline-start: 0.35rem;
   box-shadow: -0.5rem 0 0.5rem var(--surface-deep);
 }
 
+/* The strip's own controls — today only the `+` that opens another project. A tab overrides
+   every one of these from a more specific selector above; what is left here is a button. */
 .projects button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   color: var(--text-primary);
   background: var(--control-base);
   border: 1px solid var(--border-subtle);
@@ -185,22 +344,6 @@ body {
 
 .projects button:hover:not(:disabled) {
   border-color: var(--accent-base);
-}
-
-.projects [role="tab"][aria-selected="true"] {
-  border-color: var(--accent-base);
-  background: var(--tab-active);
-}
-
-/* How many chats are waiting for you in a project that is NOT on screen. It is the reason a
-   project behind the one in front keeps listening rather than being torn down. */
-.project-needs {
-  margin-left: 0.35rem;
-  padding: 0 0.3rem;
-  border-radius: 999px;
-  background: var(--needs-you-base);
-  color: var(--needs-you-text);
-  font-size: 0.85em;
 }
 
 .bar {
@@ -299,12 +442,6 @@ body {
   white-space: nowrap;
 }
 
-.tab .closer {
-  flex: none;
-  padding: 0.2rem 0.35rem;
-  line-height: 1;
-}
-
 .tab-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -325,7 +462,13 @@ body {
   color: var(--accent-base);
 }
 
+/* The bar's own controls — `+`, the two splits, `End this pane's chat`, the region toggles.
+   Each carries an icon beside its words (`PlaneView`'s `Doer`), so this is a flex row: the
+   words stay, because an icon-only bar is a bar an operator has to learn. */
 .bar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
   color: var(--text-primary);
   background: var(--control-base);
   border: 1px solid var(--border-subtle);
@@ -344,9 +487,12 @@ body {
   cursor: default;
 }
 
-.bar [role="tab"][aria-selected="true"] {
-  border-color: var(--accent-base);
-  background: var(--tab-active);
+/* `End this pane's chat` ends a session, like a tab's `×`, and is drawn with the same weight:
+   the danger surface on hover rather than the accent edge every other bar button gets. */
+.bar .ends-a-chat:hover:not(:disabled) {
+  border-color: var(--danger-base);
+  background: var(--danger-surface);
+  color: var(--danger-text);
 }
 
 /* The project's directory. It used to be the last thing on `header.bar`; it is on the status
@@ -467,6 +613,8 @@ body {
 /* The left region: the repo and worktree explorer, which is the selector WITHIN a workspace
    (charter ADR 0038). */
 .explorer {
+  height: 100%;
+  overflow: auto;
   padding: 0.5rem;
   font-size: 0.85rem;
 }
@@ -479,8 +627,84 @@ body {
   padding: 0;
 }
 
-.explorer .pieces {
-  padding-inline-start: 0.6rem;
+/* **The tree's lines, drawn by the rows and not by the lists.**
+
+   A level is an indent plus a vertical guide, and each row draws its own segment of that guide
+   plus the elbow into its own first line. The last row's segment stops AT its elbow, which is
+   what makes a tree look finished at the bottom of a branch.
+
+   The usual way to do this is one line on the list and a rectangle in the background colour
+   masking its tail. That cannot be used here: **a region moves** (ADR 0038), so the explorer
+   may be sitting on `surface.base` or on `surface.deep`, and a mask has to know which. A row
+   that draws only its own segment never has to know what is behind it. `Explorer.tsx` says the
+   same thing from the other side.
+
+   The elbow's offset differs per level because the rows differ: a clone's first line is a
+   `<summary>`, a piece's is a `.spot` button, and a chat's is a `.chat` button one font step
+   smaller. Each is half a line down its own row. */
+.explorer .clones,
+.explorer .pieces,
+.explorer .here {
+  margin-inline-start: 0.5rem;
+  padding-inline-start: 0.85rem;
+}
+
+.explorer .clones > .clone,
+.explorer .pieces > li,
+.explorer .here > li {
+  position: relative;
+}
+
+.explorer .clones > .clone::before,
+.explorer .pieces > li::before,
+.explorer .here > li::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: -0.85rem;
+  border-inline-start: 1px solid var(--border-subtle);
+}
+
+.explorer .clones > .clone:last-child::before,
+.explorer .pieces > li:last-child::before {
+  inset-block-end: auto;
+  height: 0.9em;
+}
+
+.explorer .here > li:last-child::before {
+  inset-block-end: auto;
+  height: 0.72em;
+}
+
+.explorer .clones > .clone::after,
+.explorer .pieces > li::after,
+.explorer .here > li::after {
+  content: "";
+  position: absolute;
+  inset-inline-start: -0.85rem;
+  width: 0.55rem;
+  border-block-start: 1px solid var(--border-subtle);
+}
+
+.explorer .clones > .clone::after,
+.explorer .pieces > li::after {
+  inset-block-start: 0.9em;
+}
+
+.explorer .here > li::after {
+  inset-block-start: 0.72em;
+}
+
+/* An icon per kind of node, which is what tells the two kinds of leaf apart: a worktree is a
+   branch and a chat is a terminal, and at four levels of indent the indent alone stopped
+   saying which was which. Quiet by default — an icon that competes with the name it sits
+   beside is noise at fifty sessions. */
+.explorer .node-icon {
+  color: var(--text-muted);
+}
+
+.explorer .spot[aria-current="true"] .node-icon {
+  color: var(--accent-base);
 }
 
 /* A spot is what the next chat starts in. The current one is marked with more than colour —
@@ -488,8 +712,8 @@ body {
    the one thing in this region that must never be read wrong. */
 .explorer .spot {
   display: flex;
-  gap: 0.4rem;
-  align-items: baseline;
+  gap: 0.35rem;
+  align-items: center;
   width: 100%;
   text-align: left;
   padding: 0.15rem 0.3rem;
@@ -517,30 +741,115 @@ body {
   opacity: 0.6;
 }
 
+/* A clone's heading. The default disclosure marker goes, because the platform draws it at its
+   own size in its own glyph and the tree already has a column for a twisty. The rule that put
+   a line above every clone goes with it — the tree's own guides say where a branch starts now,
+   and a second horizontal rule through them read as a divider between unrelated things. */
 .explorer .clone > summary {
   display: flex;
-  gap: 0.4rem;
-  align-items: baseline;
+  gap: 0.35rem;
+  align-items: center;
   cursor: pointer;
-  padding: 0.25rem 0.3rem;
-  margin-top: 0.35rem;
-  border-top: 1px solid var(--border-subtle);
+  padding: 0.15rem 0.3rem;
+  border-radius: 2px;
+  list-style: none;
+}
+
+.explorer .clone > summary::-webkit-details-marker {
+  display: none;
+}
+
+.explorer .clone > summary:hover {
+  background: var(--surface-hover);
+}
+
+/* The twisty turns with the disclosure. This is motion that is the direct answer to a click —
+   it says which way the thing just went — and it is the only transition in the window that is
+   not about something still happening. It stops under `prefers-reduced-motion`; the state is
+   carried by the direction the chevron points, never by the turn. */
+.explorer .clone > summary .twisty {
+  color: var(--text-muted);
+  transition: rotate 120ms ease;
+}
+
+.explorer .clone[open] > summary .twisty {
+  rotate: 90deg;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .explorer .clone > summary .twisty {
+    transition: none;
+  }
 }
 
 .explorer .repo {
   font-weight: 600;
+  color: var(--text-primary);
 }
 
+/* How many pieces a clone has, on its heading. A count is a pill; the two things that are not
+   a count — `unreadable`, and the `…` while git has not answered — are words, and `.none` and
+   `.pending` below already draw those. A pill saying "unreadable" would read as a quantity. */
 .explorer .piece-count {
+  margin-inline-start: auto;
   font-size: 0.75rem;
-  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
+}
+
+.explorer .piece-count:not(.none):not(.pending) {
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--control-count);
+  color: var(--text-secondary);
+}
+
+/* What a piece's row says under its name: the branch, and the two states the operator has to
+   read before starting a chat in the tree. It was an unstyled run of spans on the row that
+   matters most for that decision. */
+.explorer .worktree {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-inline-start: 1.5rem;
+  font-size: 0.75rem;
+}
+
+.explorer .worktree .branch {
+  color: var(--text-muted);
+}
+
+/* **The two states that change what starting a chat in a tree would mean**, and until now
+   they had no rule at all — `unwired` was the same grey as the branch beside it, on the one
+   label that says a chat there would run with none of the plane's ask/deny rules. A chip, and
+   never colour alone: each one is its own word, in a box, in its own colour.
+
+   `unwired` is `state.waiting` because it means *not finished* — charter writes the layer when
+   it starts a chat there. `stale` is `state.unreadable` because it means charter cannot make
+   sense of what git is holding, which is what that token says everywhere else. */
+.label {
+  padding: 0 0.25rem;
+  border: 1px solid;
+  border-radius: 3px;
+  color: var(--text-secondary);
+  font-size: 0.9em;
+  white-space: nowrap;
+}
+
+/* **The colour is on the border and never on the word**, which is a contrast decision and not
+   a style one. `state.waiting` as text measures 3.89:1 on `surface.deep` in charter-light —
+   under AA — while the same value as a 1px edge is a graphic, whose bar is 3:1, and clears it
+   in both themes. The word stays `text.secondary`, so it is legible whatever the theme does
+   with the state colours. */
+.label.unwired {
+  border-color: var(--state-waiting);
+}
+
+.label.stale {
+  border-color: var(--state-unreadable);
 }
 
 /* The chats already running at a spot: a button each, which brings that chat forward. */
-.explorer .here {
-  padding-inline-start: 1rem;
-}
-
 .explorer .chat {
   display: inline-flex;
   gap: 0.3rem;
@@ -563,6 +872,9 @@ body {
 
 .explorer .none,
 .explorer .pending {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
   margin: 0.1rem 0 0.1rem 0.6rem;
   opacity: 0.6;
 }
@@ -582,9 +894,24 @@ body {
   opacity: 0.7;
 }
 
+.explorer .absent li {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
+}
+
 .explorer .trouble {
+  display: flex;
+  gap: 0.35rem;
+  align-items: flex-start;
   color: var(--state-failed);
   margin: 0.25rem 0;
+}
+
+/* The mark is on the sentence's first line, not centred on a paragraph that wraps to three. */
+.explorer .trouble .node-icon {
+  color: inherit;
+  margin-block-start: 0.2em;
 }
 
 /* What a chat's harness cannot tell charter (#27). Read as a note on the chat, never as
@@ -599,23 +926,117 @@ body {
 /* The bottom region: what the focused workspace's repos are doing. Nothing in it can be
    pressed, which is the half of ADR 0038's reading a test can hold. */
 .state-bar {
+  height: 100%;
+  overflow: auto;
   padding: 0.35rem 0.6rem;
   font-size: 0.8rem;
 }
 
+/* **Columns, because "which of these is dirty" is a column question.** `BottomBar.tsx` has the
+   argument; what matters here is that no cell is ever given `display: flex`. A `<td>` told to
+   be a flex container stops being a table-cell, and the columns it was laid out in go with it
+   — which is the whole reason this is a table and not four `<span>`s in a row. Everything
+   inside a cell is laid out inline, with margins. */
 .state-bar .repo-states {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+  width: 100%;
+  border-collapse: collapse;
 }
 
-.state-bar .repo-row {
-  padding: 0.1rem 0;
+.state-bar thead th {
+  padding: 0 0.6rem 0.2rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.state-bar .repo-row > th,
+.state-bar .repo-row > td {
+  padding: 0.2rem 0.6rem 0.2rem 0;
+  text-align: left;
+  vertical-align: top;
+  font-weight: normal;
   overflow-wrap: anywhere;
+}
+
+/* A hairline between clones — between the GROUPS, so a repo and its own worktree tree are
+   never parted by one. */
+.state-bar tbody + tbody .repo-row > th,
+.state-bar tbody + tbody .repo-row > td {
+  border-top: 1px solid var(--border-subtle);
 }
 
 .state-bar .repo {
   font-weight: 600;
+  white-space: nowrap;
+}
+
+.state-bar .node-icon {
+  margin-inline-end: 0.3rem;
+  color: var(--text-muted);
+}
+
+.state-bar .branch .upstream,
+.state-bar .branch .gap,
+.state-bar .worktrees .label,
+.state-bar .worktree-tree .label,
+.state-bar .worktree-tree .branch {
+  margin-inline-start: 0.4rem;
+}
+
+.state-bar .branch .upstream,
+.state-bar .branch .gap {
+  color: var(--text-muted);
+}
+
+/* **The worktrees, as a tree here too** (the operator asked for it in both regions). Same
+   guides as the explorer's, and for the same reason drawn by the rows: this region can be
+   moved to another side and sits on whatever surface that side has. */
+.state-bar .worktree-tree-row > td {
+  padding: 0 0 0.3rem 0;
+}
+
+.state-bar .worktree-tree {
+  list-style: none;
+  margin: 0;
+  padding-inline-start: 1.7rem;
+}
+
+.state-bar .worktree-tree > li {
+  position: relative;
+  padding: 0.05rem 0;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.state-bar .worktree-tree > li::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: -0.85rem;
+  border-inline-start: 1px solid var(--border-subtle);
+}
+
+.state-bar .worktree-tree > li:last-child::before {
+  inset-block-end: auto;
+  height: 0.75em;
+}
+
+.state-bar .worktree-tree > li::after {
+  content: "";
+  position: absolute;
+  inset-inline-start: -0.85rem;
+  inset-block-start: 0.75em;
+  width: 0.55rem;
+  border-block-start: 1px solid var(--border-subtle);
+}
+
+.state-bar .worktree-tree .branch {
+  color: var(--text-muted);
 }
 
 .state-bar .absent,
@@ -635,7 +1056,17 @@ body {
   color: var(--state-unreadable);
 }
 
-/* Never colour alone: the state's own word is the text of the cell. */
+.state-bar .unreadable .node-icon {
+  color: inherit;
+}
+
+/* Never colour alone: the state's own word is the text of the cell, and the mark beside it is
+   a different SHAPE per state — a tick, a cross, a spinner — so the cell survives a display
+   that renders no colour at all. */
+.state-bar .ci-state {
+  white-space: nowrap;
+}
+
 .state-bar .ci-success {
   color: var(--state-success);
 }
@@ -649,9 +1080,28 @@ body {
   color: var(--state-waiting);
 }
 
+.state-bar .ci-manual,
+.state-bar .ci-canceled,
+.state-bar .ci-skipped {
+  color: var(--text-muted);
+}
+
+.state-bar .ci-state .node-icon {
+  color: inherit;
+}
+
 .state-bar .trouble {
+  display: flex;
+  gap: 0.35rem;
+  align-items: flex-start;
   color: var(--state-failed);
   margin: 0.25rem 0;
+}
+
+.state-bar .trouble .node-icon,
+.state-bar .pending .node-icon {
+  color: inherit;
+  margin-block-start: 0.15em;
 }
 
 /* What a chat that was put back says about itself: resumed, or new and why. */
@@ -977,10 +1427,14 @@ body {
   list-style: none;
 }
 .needs-you li button {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
   width: 100%;
   text-align: left;
-  padding: 0.1rem 0.3rem;
+  padding: 0.15rem 0.35rem;
   border: none;
+  border-inline-start: 2px solid var(--needs-you-base);
   border-radius: 2px;
   color: inherit;
   background: var(--control-base);
@@ -990,8 +1444,47 @@ body {
 .needs-you li button:hover {
   background: var(--control-hover);
 }
+.needs-you li button:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* **The count of chats waiting for the operator, drawn as the most important thing in the
+   window.** It is what charter-app is for: at fifty sessions nothing else on screen is worth
+   looking up for, and it was a 0.85rem line in the same grey as the todos under it.
+
+   The number carries the emphasis and the sentence carries the meaning — "3 need you" is still
+   one phrase to a screen reader, because the emphasis is markup inside it rather than a badge
+   beside it. */
 .needs-you-count {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
   font-weight: 600;
+  color: var(--text-primary);
+}
+/* The mark may be `needs-you.base`; the WORDS may not. `#b85050` on `surface.base` measures
+   3.64:1 in charter-dark, which is under AA for text and over the 3:1 an icon is held to —
+   the same distinction that split `needs-you` from `danger` in the first place. The number
+   below is loud by being filled, on the one pair the contrast test already measures. */
+.needs-you-count .node-icon {
+  color: var(--needs-you-base);
+}
+.needs-you-number {
+  min-width: 1.6rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--needs-you-base);
+  color: var(--needs-you-text);
+  font-size: 1.15rem;
+  line-height: 1.25;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.needs-you-empty .node-icon {
+  color: var(--state-success);
+  margin-inline-end: 0.35rem;
 }
 /* The fade is on the reassuring words alone. The note beside them is the half of the answer
    the app cannot vouch for, and it must not fade with them (#27). */
@@ -1041,10 +1534,15 @@ body {
 /* The right region: what is asking for you (charter ADR 0038) — the needs-you queue, the
    alerts sentence, the workspace's todos and the plane's personas. */
 .panels {
+  height: 100%;
+  overflow: auto;
   padding: 0.5rem;
   font-size: 0.85rem;
 }
 .panels h2 {
+  display: flex;
+  gap: 0.35rem;
+  align-items: center;
   font-size: 0.8rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1057,11 +1555,45 @@ body {
   padding: 0;
 }
 .panels li {
+  display: flex;
+  gap: 0.35rem;
+  align-items: baseline;
   padding: 0.1rem 0;
   overflow-wrap: anywhere;
 }
+.panels .node-icon {
+  color: var(--text-muted);
+}
 .panels .repo {
   font-weight: 600;
+}
+
+/* **The personas, which the operator named as the last plain-text list in the window.** A row
+   is a person charter can run a chat as, so it carries the mark for one, and the plane's
+   default is marked twice — the words it always had, and a star. The words are what a screen
+   reader gets and what the scenario spec asks for; the star is on top of them. */
+.panels .personas .is-default {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.panels .personas .default {
+  color: var(--text-muted);
+  font-weight: normal;
+}
+.panels .personas .is-default > .node-icon,
+.panels .personas .default .node-icon {
+  color: var(--accent-base);
+}
+/* The star follows the word it decorates; flush against it, it read as one glyph. */
+.panels .personas .default .node-icon {
+  margin-inline-start: 0.25rem;
+}
+
+/* A todo's mark is a ring and not a tick: nothing in this panel is done, by definition — it
+   lists what is open — and a tick beside an open todo would be the panel contradicting
+   itself. */
+.panels .todos .node-icon {
+  align-self: center;
 }
 .panels .none,
 .panels .pending,

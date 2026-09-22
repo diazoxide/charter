@@ -1,3 +1,16 @@
+import type { ReactNode } from "react";
+import {
+  CircleCheck,
+  CircleDashed,
+  CircleSlash,
+  CircleX,
+  FolderGit2,
+  GitBranch,
+  Hand,
+  LoaderCircle,
+  SkipForward,
+  TriangleAlert,
+} from "lucide-react";
 import type { Piece, RepoState } from "./bindings";
 import type { WorkspaceState } from "./workspaceState";
 
@@ -20,6 +33,32 @@ import type { WorkspaceState } from "./workspaceState";
  * are in two regions — ADR 0038 names that as the visible crack in its own rule — and the
  * least dishonest way to have them in both is to make each answer its own question: on the
  * left a piece is a thing you pick, here it is a branch that exists and may be unwired.
+ *
+ * ## It is a table, and that is the answer to "add tabs columns"
+ *
+ * Every repo used to be one run-on sentence — `svc main · 3 changed, 1 untracked · origin/main
+ * · 2 ahead · 2 worktrees · failed #41 · 2m ago` — and with four repos there was no way to read
+ * *down* it. "Which of these is dirty" is a column question, and a column question asked of
+ * prose is answered by reading every word of every row.
+ *
+ * So it is a real `<table>` with a real `<thead>`: the columns line up because a table lays
+ * them out, and a screen reader says "Changes: 3 changed" rather than reading the row as one
+ * sentence. A grid of `<li>`s would need `display: contents` to align across rows, which drops
+ * the list semantics in WebKit — and this window runs in WebKit on both platforms.
+ *
+ * **It stays unpressable.** A `<table>` has no interactive element in it, `<thead>` is not a
+ * tablist, and the column headings are `<th scope="col">`. Tabs in the sense of *controls* are
+ * exactly what ADR 0038 forbids down here, and the spec that presses on everything in this
+ * region would have said so.
+ *
+ * ## The worktrees are a tree here too
+ *
+ * Under each repo's row, spanning its full width, is that clone's pieces drawn with the same
+ * guides the explorer uses — the operator asked for the tree in both places. It is not the
+ * explorer's rows brought back: nothing in it is pickable, it carries the branch and the two
+ * states that change what starting a chat there would mean, and the row above it keeps the
+ * counts. It is the "list of branches" this component's own docstring has always promised,
+ * finally drawn as the thing it is.
  */
 export function BottomBar({
   workspace,
@@ -42,25 +81,26 @@ export function BottomBar({
 
   return (
     <footer className="state-bar" aria-label="Repository state" data-testid="bottom-bar">
-      {trouble && (
-        <p className="trouble" role="alert">
-          {trouble}
-        </p>
-      )}
-      {repos?.cache_refused && (
-        <p className="trouble" role="alert">
-          {repos.cache_refused}
-        </p>
-      )}
+      {trouble && <Trouble>{trouble}</Trouble>}
+      {repos?.cache_refused && <Trouble>{repos.cache_refused}</Trouble>}
 
       {panels === undefined ? (
-        <p className="pending">Reading the plane…</p>
+        <Pending>Reading the plane…</Pending>
       ) : names.length === 0 && panels.absent.length === 0 ? (
         <p className="none">No repos in this workspace</p>
       ) : (
-        <ul className="repo-states">
+        <table className="repo-states">
+          <thead>
+            <tr>
+              <th scope="col">Repo</th>
+              <th scope="col">Branch</th>
+              <th scope="col">Changes</th>
+              <th scope="col">Worktrees</th>
+              <th scope="col">Pipeline</th>
+            </tr>
+          </thead>
           {names.map((name) => (
-            <RepoRow
+            <RepoRows
               key={name}
               name={name}
               state={byName.get(name)}
@@ -70,22 +110,29 @@ export function BottomBar({
             />
           ))}
           {panels.absent.map((name) => (
-            <li key={`absent-${name}`} className="repo-row absent" data-testid={`repo-${name}`}>
-              <span className="repo">{name}</span>
-              {/* Membership without a clone. Said, because a repo the workspace means to
-                  hold and nobody has cloned is not the same as one that is not listed. */}
-              <span className="branch none">not cloned here</span>
-            </li>
+            <tbody key={`absent-${name}`}>
+              <tr className="repo-row absent" data-testid={`repo-${name}`}>
+                <th scope="row" className="repo">
+                  <FolderGit2 className="node-icon" />
+                  <span>{name}</span>
+                </th>
+                {/* Membership without a clone. Said, because a repo the workspace means to
+                    hold and nobody has cloned is not the same as one that is not listed. */}
+                <td className="branch none" colSpan={4}>
+                  not cloned here
+                </td>
+              </tr>
+            </tbody>
           ))}
-        </ul>
+        </table>
       )}
 
       {/* A refusal is drawn, never swallowed: a row that is simply missing looks like a
           workspace with fewer repos than it has. */}
       {panels?.refused.map(([name, why]) => (
-        <p className="trouble" role="alert" key={`refused-${name}`}>
+        <Trouble key={`refused-${name}`}>
           charter will not read <code>{name}</code>: {why}
-        </p>
+        </Trouble>
       ))}
 
       <p className="note">
@@ -95,9 +142,33 @@ export function BottomBar({
   );
 }
 
-/** One repo, in one row: where HEAD is, what is uncommitted, how many worktrees are cut off
- *  it, and what the forge cache last recorded. */
-function RepoRow({
+/** A refusal, with the mark that says it is one. Lucide hides a nameless icon from a screen
+ *  reader itself, so the alert reads exactly as it did before. */
+function Trouble({ children }: { children: ReactNode }) {
+  return (
+    <p className="trouble" role="alert">
+      <TriangleAlert className="node-icon" />
+      <span>{children}</span>
+    </p>
+  );
+}
+
+/** Something charter is still reading, which is a state no colour tells from a stopped one. */
+function Pending({ children }: { children: ReactNode }) {
+  return (
+    <p className="pending">
+      <LoaderCircle className="node-icon spinning" />
+      <span>{children}</span>
+    </p>
+  );
+}
+
+/** One repo: its row of columns, and — when git has listed any — its worktrees as a tree
+ *  under it.
+ *
+ *  Its own `<tbody>`, so the two rows are one thing to the browser and to a screen reader,
+ *  and so the tree is unmistakably *this* clone's rather than a row that happens to follow. */
+function RepoRows({
   name,
   state,
   pieces,
@@ -110,31 +181,76 @@ function RepoRow({
   piecesRefused: string | undefined;
   reading: boolean;
 }) {
+  const tree = pieces !== undefined && pieces.length > 0;
   return (
-    <li className="repo-row" data-testid={`repo-${name}`}>
-      <span className="repo">{name}</span>{" "}
-      {state === undefined ? (
-        <span className="branch pending">{reading ? "reading…" : "not read"}</span>
-      ) : state.unreadable ? (
-        // Never "clean". A tree charter could not read is the one thing a panel must not
-        // round down, because the round-down says everything is fine.
-        <span className="branch unreadable" role="alert">
-          {state.unreadable}
-        </span>
-      ) : (
-        <>
-          <span className="branch">{headOf(state)}</span>
-          <span className="dirt"> · {dirtOf(state)}</span>
-          {state.upstream && <span className="upstream"> · {state.upstream}</span>}
-          {gapOf(state) && <span className="gap"> · {gapOf(state)}</span>}
-        </>
+    <tbody>
+      <tr className="repo-row" data-testid={`repo-${name}`}>
+        <th scope="row" className="repo">
+          <FolderGit2 className="node-icon" />
+          <span>{name}</span>
+        </th>
+        {state === undefined ? (
+          <td className="branch pending" colSpan={2}>
+            {reading ? "reading…" : "not read"}
+          </td>
+        ) : state.unreadable ? (
+          // Never "clean". A tree charter could not read is the one thing a panel must not
+          // round down, because the round-down says everything is fine. It takes both columns
+          // rather than leaving an empty "Changes" cell beside it — an empty cell in a table
+          // reads as "nothing", which is the round-down in another shape.
+          <td colSpan={2}>
+            <span className="branch unreadable" role="alert">
+              <TriangleAlert className="node-icon" />
+              {state.unreadable}
+            </span>
+          </td>
+        ) : (
+          <>
+            <td className="branch">
+              <GitBranch className="node-icon" />
+              <span>{headOf(state)}</span>
+              {state.upstream && <span className="upstream">{state.upstream}</span>}
+              {gapOf(state) && <span className="gap">{gapOf(state)}</span>}
+            </td>
+            <td className="dirt">{dirtOf(state)}</td>
+          </>
+        )}
+        <td className="worktrees" data-testid={`worktrees-${name}`}>
+          <Worktrees pieces={pieces} refused={piecesRefused} />
+        </td>
+        <CiCell name={name} state={state} reading={reading} />
+      </tr>
+      {tree && (
+        <tr className="worktree-tree-row">
+          {/* The whole width, because a tree indented inside one column of five would be
+              three characters wide at the window sizes this region is given. */}
+          <td colSpan={5}>
+            <ul className="worktree-tree" data-testid={`worktree-tree-${name}`}>
+              {pieces.map((piece) => (
+                <li key={piece.piece}>
+                  <GitBranch className="node-icon" />
+                  <span className="piece">{piece.piece}</span>
+                  {/* The branch only when it says something the name does not. charter cuts a
+                      piece on a branch of its own name by default, and `perf perf` down a
+                      whole column is the same word twice on every row. */}
+                  {piece.branch && piece.branch !== piece.piece && (
+                    <code className="branch">{piece.branch}</code>
+                  )}
+                  {/* The same two states the count above totals, said here of the one tree
+                      they are true of. A total answers "is anything wrong in this clone";
+                      a row answers "which one". */}
+                  {piece.stale ? (
+                    <span className="label stale">stale</span>
+                  ) : (
+                    !piece.wired && <span className="label unwired">unwired</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </td>
+        </tr>
       )}
-      <span className="worktrees" data-testid={`worktrees-${name}`}>
-        {" · "}
-        <Worktrees pieces={pieces} refused={piecesRefused} />
-      </span>{" "}
-      <CiCell name={name} state={state} reading={reading} />
-    </li>
+    </tbody>
   );
 }
 
@@ -143,7 +259,13 @@ function Worktrees({ pieces, refused }: { pieces: Piece[] | undefined; refused?:
   // Never "no worktrees". A listing charter could not run says so, for the same reason an
   // unreadable tree is never drawn as clean.
   if (refused !== undefined) return <span className="none">worktrees unreadable</span>;
-  if (pieces === undefined) return <span className="pending">worktrees: asking git…</span>;
+  if (pieces === undefined)
+    return (
+      <span className="pending">
+        <LoaderCircle className="node-icon spinning" />
+        worktrees: asking git…
+      </span>
+    );
   if (pieces.length === 0) return <span className="none">no worktrees</span>;
   const stale = pieces.filter((piece) => piece.stale).length;
   const unwired = pieces.filter((piece) => !piece.wired && !piece.stale).length;
@@ -171,20 +293,47 @@ function CiCell({
   reading: boolean;
 }) {
   return (
-    <span className="ci" data-testid={`ci-${name}`}>
+    <td className="ci" data-testid={`ci-${name}`}>
       {state === undefined ? (
         <span className="pending">{reading ? "reading…" : "not read"}</span>
       ) : (
         <CiWords state={state} />
       )}
-    </span>
+    </td>
   );
 }
 
+/**
+ * The mark for each of the seven words a pipeline may be in.
+ *
+ * `CI_STATES` in `crates/charter-core/src/cistate.rs` is the closed list — both forges map
+ * their own vocabulary onto it — so this is exhaustive rather than a guess, and anything the
+ * cache holds that is not one of the seven gets the dashed circle, which is what charter
+ * already draws for "there is a fetch here and it names nothing".
+ *
+ * **`running` and `pending` are the ones that move.** That is the whole of the operator's
+ * "show pipelines with animation": those two are the states where nothing else on the row
+ * distinguishes *this is happening now* from *this stopped and nobody said so* — amber and
+ * the word "running" are equally true of a job that died an hour ago. Every other mark is a
+ * settled answer and sits still, because motion beside a settled answer is only something to
+ * look at. The spin stops under `prefers-reduced-motion`; the word and the shape do not.
+ */
+const CI_MARK: Record<string, { Mark: typeof CircleCheck; moving?: boolean }> = {
+  success: { Mark: CircleCheck },
+  failed: { Mark: CircleX },
+  running: { Mark: LoaderCircle, moving: true },
+  pending: { Mark: LoaderCircle, moving: true },
+  manual: { Mark: Hand },
+  canceled: { Mark: CircleSlash },
+  skipped: { Mark: SkipForward },
+};
+
 function CiWords({ state }: { state: RepoState }) {
   if (state.ci) {
+    const { Mark, moving } = CI_MARK[state.ci] ?? { Mark: CircleDashed };
     return (
       <span className={`ci-state ci-${state.ci}`}>
+        <Mark className={moving ? "node-icon spinning" : "node-icon"} />
         {state.ci}
         {state.change !== null && (
           <span className="change">
@@ -200,7 +349,12 @@ function CiWords({ state }: { state: RepoState }) {
   if (state.not_fetched) return <span className="none">not fetched — {state.not_fetched}</span>;
   // An entry inside the window that names no pipeline. The cache cannot tell "there is none"
   // from "the call failed", so neither can this — but it is still a fetch, with an age.
-  return <span className="none">no pipeline recorded · {ago(state.fetched_seconds_ago)}</span>;
+  return (
+    <span className="none">
+      <CircleDashed className="node-icon" />
+      no pipeline recorded · {ago(state.fetched_seconds_ago)}
+    </span>
+  );
 }
 
 /** Where HEAD is, in words. */

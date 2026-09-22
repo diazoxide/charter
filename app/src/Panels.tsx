@@ -1,3 +1,4 @@
+import { BellRing, CircleDashed, ListTodo, LoaderCircle, Star, UserRound } from "lucide-react";
 import { NeedsYou } from "./NeedsYou";
 import type { WorkspaceState } from "./workspaceState";
 
@@ -54,20 +55,27 @@ export function Panels({
           )}
 
           <section data-testid="panel-todos">
-            <h2>Todos</h2>
+            <h2>
+              <ListTodo className="node-icon" />
+              Todos
+            </h2>
             {panels?.todos_refused && (
               <p className="trouble" role="alert">
                 {panels.todos_refused}
               </p>
             )}
             {panels === undefined ? (
-              <p className="pending">Reading the plane…</p>
+              <p className="pending">
+                <LoaderCircle className="node-icon spinning" />
+                Reading the plane…
+              </p>
             ) : panels.todos.length === 0 ? (
               <p className="none">Nothing to do</p>
             ) : (
               <ul className="todos">
                 {panels.todos.map((todo) => (
                   <li key={todo.slug}>
+                    <CircleDashed className="node-icon" />
                     <span className="todo-title">{todo.title}</span>
                     {todo.stamp && <span className="stamp"> · {todo.stamp}</span>}
                   </li>
@@ -76,18 +84,39 @@ export function Panels({
             )}
           </section>
 
+          {/* **The personas, which were a plain list of words** — the operator's own last
+              example of what was wrong with this window. Each is a person charter can run a
+              chat as, so each carries the mark for one, and the plane's default carries a star
+              beside the word it already said.
+
+              The words are untouched. `· default` stays text rather than becoming a chip,
+              because a chip is a picture of a word and this one is read out: the region's
+              scenario spec asks the panel whether it says `default`, and a screen reader gets
+              the same sentence a sighted reader does. The star is decoration on top. */}
           <section data-testid="panel-personas">
-            <h2>Personas</h2>
+            <h2>
+              <UserRound className="node-icon" />
+              Personas
+            </h2>
             {panels === undefined ? (
-              <p className="pending">Reading the plane…</p>
+              <p className="pending">
+                <LoaderCircle className="node-icon spinning" />
+                Reading the plane…
+              </p>
             ) : panels.personas.length === 0 ? (
               <p className="none">No personas on this plane</p>
             ) : (
               <ul className="personas">
                 {panels.personas.map((persona) => (
-                  <li key={persona}>
+                  <li key={persona} className={persona === panels.persona ? "is-default" : ""}>
+                    <UserRound className="node-icon" />
                     {persona}
-                    {persona === panels.persona && <span className="default"> · default</span>}
+                    {persona === panels.persona && (
+                      <span className="default">
+                        {" · default"}
+                        <Star className="node-icon" />
+                      </span>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -117,7 +146,10 @@ export function Panels({
 function Alerts() {
   return (
     <section data-testid="panel-alerts">
-      <h2>Alerts</h2>
+      <h2>
+        <BellRing className="node-icon" />
+        Alerts
+      </h2>
       <p className="none">
         Not drawn by this build. charter&apos;s alert row is not ported, so charter cannot tell you
         whether anything is alerting — an empty list here would be a claim it has no way to make.
