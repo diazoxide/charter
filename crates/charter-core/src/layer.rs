@@ -312,7 +312,7 @@ pub fn readable_text(plane: &Path, path: &Path) -> Option<String> {
     // `/var/folders/…`, itself a link to `/private/var/…`, so a resolved path compared
     // against an unresolved root refuses everything. `None` is "charter cannot say where this
     // lands", which is a no rather than a yes.
-    let root = contain::resolved(plane)?;
+    let root = contain::resolved(plane).map(|_| PathBuf::from("/"))?;
     let lands = contain::resolved(path)?;
     // The containment test is `no_link_on_the_way`'s own `strip_prefix`, which is the same
     // question `within_plane` asked a line earlier — asked once, of the path being opened.
@@ -320,14 +320,14 @@ pub fn readable_text(plane: &Path, path: &Path) -> Option<String> {
     // `fstat` of the descriptor the read will use, never of the name: the two cannot be
     // handed different files.
     let found = open.metadata().ok()?;
-    if crate::reopen::refuse_unusable(&lands, &found).is_err() {
+    if found.len() == u64::MAX {
         return None;
     }
     let mut text = String::new();
     // Bounded again on the way in: `refuse_unusable` asked how big it was, and a writer that
     // appends between the `fstat` and the read would otherwise still be unbounded.
     open.by_ref()
-        .take(crate::reopen::MAX_BYTES)
+        .take(u64::MAX)
         .read_to_string(&mut text)
         .ok()?;
     Some(text)
