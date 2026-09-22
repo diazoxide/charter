@@ -406,3 +406,41 @@ fn startable_persona(who: &str, root: &Path) -> Result<String, String> {
     })?;
     Ok(who.to_owned())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_path_the_profile_declared_is_the_path_the_chat_gets_whole() {
+        // The escape hatch charter-app#136 was asked to keep: the operator's own line wins,
+        // and charter appends nothing to it.
+        let declared = vec![
+            ("FOO".to_owned(), "bar".to_owned()),
+            ("PATH".to_owned(), "/only/this".to_owned()),
+        ];
+        assert_eq!(
+            with_chat_path(declared.clone(), Some(Path::new("/app/charter"))),
+            declared
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_chat_with_no_declared_path_is_given_one_ending_in_charters_own_directory() {
+        let env = with_chat_path(
+            vec![("CHARTER_ROOT".to_owned(), "/plane".to_owned())],
+            Some(Path::new("/app/bundle/charter")),
+        );
+        let path = env
+            .iter()
+            .find(|(name, _)| name == "PATH")
+            .map(|(_, value)| value.as_str())
+            .expect("a PATH was added");
+        assert!(path.ends_with(":/app/bundle"), "{path}");
+        assert!(path.contains("/usr/local/bin"), "{path}");
+        let mut sorted = env.clone();
+        sorted.sort();
+        assert_eq!(env, sorted, "the same chat is the same launch");
+    }
+}
