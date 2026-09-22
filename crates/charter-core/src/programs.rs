@@ -240,6 +240,21 @@ pub fn search_dirs() -> Vec<PathBuf> {
 /// every chat of an operator who has both. Last, it answers only where nothing else would —
 /// a machine where the app is the only charter there is.
 ///
+/// **M3.1 narrowed that sentence and did not change this conclusion** (charter-app#168 asked to
+/// be told either way). The Bash guard is now ported, so the binary answers `pretooluse`
+/// instead of blocking it. It still blocks the other EIGHT tool-hook words the plugin wires —
+/// `pretooluse-read` above all, which Claude Code fires on every `Read` and `Grep` — so an
+/// operator with both charters and this binary first would still have those refused. The
+/// hazard went from nine words to eight; it did not go away.
+///
+/// And a second reason now stands on its own, which is the one that would survive porting all
+/// nine: for `pretooluse` this binary decides strictly LESS than the Python. There is no
+/// persona tool-gate, so a persona's declared tools stop skipping their prompt; no guard
+/// sighting, so `doctor` and the status line report the guard as never seen; no turn bump, no
+/// piece touch, no routing-mark clear and no trace row. Shadowing an installed Python charter
+/// with a binary that answers less is a regression whichever way the blocking question lands,
+/// and LAST is what keeps the app's binary out of that chat's way entirely.
+///
 /// **What is dropped.** A relative or empty entry: it resolves against the chat's working
 /// directory, which is a repository a chat can write, and "the program is whatever `./git`
 /// is in this checkout" is not a lookup charter hands a chat. A directory named twice keeps

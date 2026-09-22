@@ -403,6 +403,8 @@ export const commands = {
 	 */
 	cold: number | null,
 } | null, string>(__TAURI_INVOKE("chat_usage", { plane, session })),
+	/**  The pin report for this plane. */
+	planePin: (plane: PlaneId) => typedError<PinReport, string>(__TAURI_INVOKE("plane_pin", { plane })),
 };
 
 /* Types */
@@ -718,6 +720,24 @@ export type Moved = {
 	moved_at: number,
 };
 
+/**  One news entry, as the pin's dialog lists it. */
+export type NewsItem = {
+	version: string,
+	headline: string,
+};
+
+/**  What a check found, for the window and for the notification. */
+export type Offer = {
+	/**  The version on offer. */
+	version: string,
+	/**  The version running now. */
+	current: string,
+	/**  The channel it came from, so a surface never has to guess which manifest was read. */
+	channel: string,
+	/**  The release notes, as the manifest carries them. */
+	notes: string,
+};
+
 /**  One chat the app has open, as the UI draws it and as the quit warning lists it. */
 export type OpenChat = {
 	session: number,
@@ -821,6 +841,22 @@ export type Piece = {
 	wired: boolean,
 	/**  Set when git still has a registration whose directory is gone. */
 	stale: boolean,
+};
+
+/**  What the plane's pin says against this charter. */
+export type PinReport = {
+	/**  `charter version`'s verdict: its exit status was 1. The only thing the line keys on. */
+	drift: boolean,
+	/**  The release this charter brought (`news::shipped_version`). */
+	brought: string,
+	/**  `[charter] version` as written, or none. */
+	pinned: string | null,
+	/**  What `charter version` said, line by line, in its own words. */
+	said: string[],
+	/**  What came between the pin and what this charter brought — only when it drifts. */
+	news: NewsItem[],
+	/**  How many more entries there were than `news` carries. */
+	more_news: number,
 };
 
 /**

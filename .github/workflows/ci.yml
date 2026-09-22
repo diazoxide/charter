@@ -135,12 +135,19 @@ jobs:
       # costs is printed here on every run, for both implementations, on the same plane.
       - run: tests/differential/run.py --time-preflight 20
 
-  # M3.1 stages 1 to 4: `shellseg`, `shellwrap`, `heredoc`, `leakguard`, `pypath`, `livesub`,
-  # `credguard`, `floorguard` and `proseguard` are what every Bash refusal reads a command
-  # line with — and now most of what it refuses ON — and they are wired to nothing yet. So
-  # they have no CLI surface for `run.py` to drive, and they are compared FUNCTION BY FUNCTION
-  # instead — 200,000 generated command lines through both implementations, EVERY `pub` answer
-  # apiece, in batches so the run's memory is bounded. The example is dev-only; nothing ships it.
+  # M3.1 stages 1 to 4 and 6: `shellseg`, `shellwrap`, `heredoc`, `leakguard`, `pypath`,
+  # `livesub`, `credguard`, `floorguard`, `proseguard` and `handoffguard` are what every Bash
+  # refusal reads a command line with, and what it refuses ON. They are compared FUNCTION BY
+  # FUNCTION — 200,000 generated command lines through both implementations, EVERY `pub` answer
+  # apiece, in batches so the run's memory is bounded.
+  #
+  # **Still function by function now that the guard IS wired.** `charter hook pretooluse`
+  # answers one verdict per command line; asking it 200,000 times would compare one answer
+  # where this compares seventy, and a port that got a reader wrong and the verdict right by
+  # luck would pass. The hook's own differential is `run.py`'s `pretooluse-*` scenarios, in the
+  # plane-writes job above, and that is where the ORDER of the eight arms is measured.
+  #
+  # The example is dev-only; nothing ships it.
   differential-shellseg:
     name: differential (shell reader ${{ matrix.shard }} of 4)
     runs-on: ubuntu-24.04
