@@ -61,6 +61,21 @@ export const PASS_THROUGH_ID = "pane.sendkey";
 export const PASS_THROUGH_BYTES = "\u001bOQ";
 
 /**
+ * The mark a pane puts on itself to say the chat has the keyboard in here.
+ *
+ * **It is what makes "whose key is this?" answerable at all.** The window claims its keys on
+ * the window, capture-phase, which is before the focus has had any say — so the only thing a
+ * listener up there can ask about the chat is where the keystroke was DELIVERED. xterm reads
+ * from its own textarea, and that textarea is a descendant of the pane holding it, so a
+ * keydown inside a marked element is a keydown the operator aimed at a shell
+ * (`Palette.theChatKeepsIt`, charter-app#106).
+ *
+ * An attribute rather than the pane's class, because the class is how the pane is DRAWN and
+ * this is what it MEANS: a rule that reads `.pane` is one restyling away from being wrong.
+ */
+export const CHAT_KEYBOARD = "data-chat-keyboard";
+
+/**
  * The strip a chat working outside every workspace appears on.
  *
  * The sidebar has always shown those chats rather than dropping them, and a strip that shows
@@ -94,12 +109,30 @@ export type Does =
   | { verb: "pinWorkspace"; workspace: string; pinned: boolean }
   | { verb: "pinProject"; plane: string; pinned: boolean }
   | { verb: "focusWorkspace"; workspace: string }
+  /** Asks for a new workspace. It creates nothing by itself: the name, and the validation the
+   *  CLI applies to it, are the dialog's and the core's (`workspace_create`). */
+  | { verb: "createWorkspace" }
+  /** Asks to delete one workspace and everything in it.
+   *
+   *  **It deletes nothing by itself, and it carries no `force`.** The core's guard
+   *  (`wscmd::work_at_risk`) is what decides, in `workspace_remove`; the dialog shows what is
+   *  at risk, the first press is refused when work would be discarded, and forcing is a
+   *  second press on a sentence the operator has read. A `force` here would be a row that
+   *  discards work with nobody warned — the same objection `worktree.discard` records. */
+  | { verb: "removeWorkspace"; workspace: string }
   | { verb: "showChat"; session: number }
   | { verb: "removeWorktree"; force: boolean }
   | { verb: "mergeWorktree" }
   /** Shows the opener, so another project can be opened into this window beside the ones it
    *  already holds. It opens nothing by itself — the trust gate is the opener's (ADR 0035). */
   | { verb: "openProject" }
+  /** Shows the dialog that makes a NEW project — a plane charter scaffolds.
+   *
+   *  It scaffolds nothing by itself, for `openProject`'s reason one step further on: what is
+   *  written is `scaffold::init`'s and the open that follows is `Planes::open_if_approved`'s.
+   *  **A plane charter has just created is still opened through the gate** (ADR 0035), so the
+   *  first open of it raises the same trust dialog any other project's would. */
+  | { verb: "createProject" }
   /** Shows what has contributed what to this window: charter's own themes, and every
    *  extension this machine has, with what each is contributing right now (charter ADR 0041).
    *  It puts nothing in force by itself — an extension contributes only once it is approved,
@@ -214,11 +247,20 @@ export type Doing = {
   pinWorkspace: (workspace: string, pinned: boolean) => Promise<Ran>;
   pinProject: (plane: string, pinned: boolean) => Promise<Ran>;
   focusWorkspace: (workspace: string) => void;
+  /** Opens the new-workspace dialog. Nothing is created until it is answered. */
+  createWorkspace: () => void;
+  /** Opens the delete dialog for one workspace. Nothing is deleted until it is answered, and
+   *  what deletes is `workspace_remove` — never a lower-level call that would be past the
+   *  core's guard. */
+  removeWorkspace: (workspace: string) => void;
   showChat: (session: number) => void;
   removeWorktree: (force: boolean) => Promise<Ran>;
   mergeWorktree: () => Promise<Ran>;
   sendKey: (key: string) => Promise<Ran>;
   openProject: () => void;
+  /** Opens the new-project dialog. Nothing is scaffolded and nothing is opened until it is
+   *  answered, and the open it ends in is the gated one. */
+  createProject: () => void;
   showExtensions: () => void;
   selectProject: (plane: string) => void;
   closeProject: (plane: string) => Promise<Ran>;
@@ -249,11 +291,18 @@ export function projectRows(
   front: string | undefined,
   /** The projects this operator has pinned, by root. */
   pinned: readonly string[] = [],
-): { open: Offer; switchTo: Offer[]; pin: Offer[]; close: Offer[] } {
+): { open: Offer; create: Offer; switchTo: Offer[]; pin: Offer[]; close: Offer[] } {
   return {
     // Always available, and available with no project open too: it is how a window with
     // nothing in it gets its first one, and how a window with eight gets a ninth.
     open: can("project.open", "Open a project…", { verb: "openProject" }),
+    // **The seam the project strip's `+` is drawn from**, and the id anything else that wants
+    // to start a project asks for. Always available, and available with nothing open, for
+    // `project.open`'s reason: a window holding no project is exactly where one is made.
+    create: {
+      ...can("project.create", "New project…", { verb: "createProject" }),
+      note: "Makes a plane in a directory of its own. It never writes into a repo you point at.",
+    },
     switchTo: projects.map((project) => {
       const title = `Switch to project ${project.name}`;
       // The project in front has a row that says so and cannot run — the same rule the tab
@@ -305,6 +354,18 @@ export function projectRows(
  * operator tidying up was ending fifty live harnesses on that reading.
  */
 export const ENDS_IT = "Ends the program it runs. There is no undo.";
+
+/**
+ * What deleting a workspace costs, said on the row that asks for it.
+ *
+ * Named in full rather than as "deletes the workspace", which is a word that sounds like a
+ * tab closing. What goes is a directory of clones: every repo cloned into it, every worktree
+ * cut in it, its memory and its todos. What charter will refuse over — uncommitted and
+ * unpushed work — is the core's guard and is said by the core, on the dialog, about the
+ * workspace actually in front of the operator. This is what is true of every workspace.
+ */
+export const DELETES_A_WORKSPACE =
+  "Deletes its clones, worktrees, memory and todos. There is no undo.";
 
 /**
  * What a pin does, said on the row that does it.
@@ -466,12 +527,28 @@ export function catalogue(now: Now): Offer[] {
     });
   }
 
+  // **A workspace can be made from here, and this is the only row that offers it.** The name
+  // it takes is checked by the core and by nothing written here: `workspace_create` goes
+  // through `wscmd::create`, which is `charter workspace create`, so the app and a terminal
+  // refuse the same names with the same sentence. A second alphabet in the window would be a
+  // second answer to what a workspace may be called.
+  const newWorkspace = "New workspace…";
+  offers.push(
+    now.plane === undefined
+      ? cannot(
+          "workspace.create",
+          newWorkspace,
+          "charter found no plane, so there is nowhere to make a workspace.",
+        )
+      : can("workspace.create", newWorkspace, { verb: "createWorkspace" }),
+  );
+
   // The projects this window holds. Switching between them is navigation and not a state
   // change — the project left behind keeps every chat it had running — so these sit up here
   // with the tabs and the workspaces. Letting go of one is below the line, with the tab
   // closes it is the bigger version of.
   const projects = projectRows(now.projects ?? [], now.plane, pinned.projects);
-  offers.push(projects.open, ...projects.switchTo, ...projects.pin);
+  offers.push(projects.open, projects.create, ...projects.switchTo, ...projects.pin);
 
   // The worktree of the chat in front. Merging is not destructive — it is fast-forward only
   // and never pushes — so it sits above the line; removing is below it.
@@ -532,6 +609,31 @@ export function catalogue(now: Now): Offer[] {
     );
   }
 
+  // **The most destructive row charter has**, and therefore the last one before the two that
+  // lose nothing on disk. Deleting a workspace deletes its clones, its worktrees, its memory
+  // and its todos, and there is no undo anywhere.
+  //
+  // **It carries no `force`, and that is the whole design.** `wscmd::work_at_risk` decides
+  // whether anything would be discarded, inside `workspace_remove`; this row asks, the core
+  // refuses, and forcing is the operator's answer to a sentence they have read — which is
+  // `worktree.discard`'s rule one scope up. A row that offered to force would be charter
+  // putting "delete this and everything unpushed in it" one keystroke from a palette.
+  //
+  // Not for the strip of chats outside every workspace: it is not a workspace on the plane,
+  // and there is nothing on disk for a delete to name.
+  for (const workspace of now.workspaces) {
+    if (workspace === OUTSIDE) continue;
+    offers.push({
+      ...can(
+        `workspace.remove:${workspace}`,
+        `Delete workspace ${workspace}`,
+        { verb: "removeWorkspace", workspace },
+        workspace,
+      ),
+      note: DELETES_A_WORKSPACE,
+    });
+  }
+
   // Destructive, and therefore here: letting go of a project ends every chat in it. Nothing
   // of the project on disk goes — what is open is written into it first, and it opens again
   // with everything still in it (ADR 0033).
@@ -587,6 +689,12 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
     case "focusWorkspace":
       doing.focusWorkspace(does.workspace);
       return DID;
+    case "createWorkspace":
+      doing.createWorkspace();
+      return DID;
+    case "removeWorkspace":
+      doing.removeWorkspace(does.workspace);
+      return DID;
     case "showChat":
       doing.showChat(does.session);
       return DID;
@@ -598,6 +706,9 @@ export function perform(offer: Offer, doing: Doing): Ran | Promise<Ran> {
       return doing.sendKey(does.key);
     case "openProject":
       doing.openProject();
+      return DID;
+    case "createProject":
+      doing.createProject();
       return DID;
     case "showExtensions":
       doing.showExtensions();
@@ -723,4 +834,98 @@ export function narrow(query: string, offers: readonly Offer[]): Offer[] {
  */
 export function aim(rows: readonly Offer[]): number {
   return rows.findIndex((row) => row.available);
+}
+
+// ----------------------------------------------------------------------------------------
+// the context menus
+// ----------------------------------------------------------------------------------------
+
+/**
+ * The thing a context menu was opened ON.
+ *
+ * A menu is about one item, and this is the item. It never carries what the rows would DO —
+ * only enough to name them — because what they do is the catalogue's answer and a menu that
+ * carried its own copy would be the second answer this module exists to not have.
+ */
+export type MenuOn =
+  /** One chat, by the tab that holds it. Its rows are the same rows the tab strip draws. */
+  | { on: "chat"; tab: number }
+  | { on: "workspace"; workspace: string }
+  | { on: "project"; plane: string }
+  /** The panes — the centre of the window, where a chat is. Not about any one pane: a split
+   *  acts on the pane that has the keyboard, which is what the bar's buttons act on too. */
+  | { on: "pane" };
+
+/**
+ * Which rows a context menu on that item lists, **by catalogue id and in order**.
+ *
+ * This is the whole of a menu's content, and it is a list of NAMES. Nothing here knows what a
+ * row says, whether it can run or what it does; [`menuRows`] looks each one up in the
+ * catalogue the palette and the bar are already reading. That is the rule this module opens
+ * with, applied to a third surface: an action is written down once, and a menu, a palette row
+ * and a button cannot disagree about it because there is nothing for them to disagree with.
+ *
+ * **Destructive rows are `below`, and they are drawn under a separator.** The catalogue's own
+ * rule is that they go last so that Enter in the palette is never one keystroke from ending a
+ * chat; a menu pops up under the pointer, so the same rule matters more here, not less.
+ *
+ * **An id this catalogue does not have is simply not in the menu** — see [`menuRows`]. It is
+ * how `Outside every workspace` gets a menu with no pin and no delete in it without anything
+ * here knowing that strip exists, and how a row that is deleted from the catalogue takes its
+ * menu entry with it.
+ */
+export function menuOn(what: MenuOn): { above: string[]; below: string[] } {
+  switch (what.on) {
+    case "chat":
+      return {
+        above: [`tab.select:${what.tab}`, `tab.pin:${what.tab}`],
+        below: [`tab.close:${what.tab}`],
+      };
+    case "workspace":
+      return {
+        above: [
+          `workspace.focus:${what.workspace}`,
+          `workspace.pin:${what.workspace}`,
+          "workspace.create",
+        ],
+        below: [`workspace.remove:${what.workspace}`],
+      };
+    case "project":
+      return {
+        above: [
+          `project.select:${what.plane}`,
+          `project.pin:${what.plane}`,
+          "project.create",
+          "project.open",
+        ],
+        below: [`project.close:${what.plane}`],
+      };
+    case "pane":
+      return {
+        above: ["chat.new", "pane.split.right", "pane.split.down", PASS_THROUGH_ID],
+        below: ["pane.close"],
+      };
+  }
+}
+
+/**
+ * The rows a context menu on that item draws: the catalogue's own offers, in menu order.
+ *
+ * **A row the catalogue does not have is dropped rather than invented**, which is `Doer`'s
+ * rule for the bar's buttons and is the property that makes one catalogue enough. A menu on
+ * the strip of chats outside every workspace has no pin row because the catalogue has no
+ * `workspace.pin:outside/every/workspace`; nothing here had to be told about that case.
+ *
+ * **A row that cannot run is kept, with its reason**, exactly as the palette keeps it: an
+ * operator cannot ask about an option they cannot see, and "It is already in front." on a
+ * greyed row is an answer where a missing row is a mystery.
+ */
+export function menuRows(
+  what: MenuOn,
+  offers: readonly Offer[],
+): { above: Offer[]; below: Offer[] } {
+  const byId = (id: string) => offers.find((offer) => offer.id === id);
+  const found = (ids: readonly string[]) => ids.map(byId).filter((row) => row !== undefined);
+  const { above, below } = menuOn(what);
+  return { above: found(above), below: found(below) };
 }
