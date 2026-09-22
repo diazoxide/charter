@@ -255,7 +255,7 @@ pub fn render(plane: &Path, payload: &Value, ambient: &Ambient) -> String {
         identity_row(plane, &active, &look, ambient),
         format!("{DIM}{NOT_DRAWN_YET}{R}"),
     ];
-    rows.extend(alerts.alerts.iter().take(0).map(|alert| alert.line(&look)));
+    rows.extend(alerts.alerts.iter().map(|alert| alert.line(&look)));
     let body = Node::stack(rows).render(width);
     let body = zone_rules(&body);
     format!("{}\n", boxed(&body, frame_w))
