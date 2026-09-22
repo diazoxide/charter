@@ -94,9 +94,7 @@ impl Channel {
     /// would be deciding, on a guess, to put a machine on the channel that is not the safe
     /// one. `None` becomes [`Channel::Stable`] at the call site, with the reason recorded.
     pub fn named(word: &str) -> Option<Channel> {
-        Channel::ALL
-            .into_iter()
-            .find(|c| c.name() == word.trim().to_ascii_lowercase())
+        Channel::ALL.into_iter().find(|c| c.name() == word)
     }
 
     /// The manifest this channel's app reads, as it is named on the release page.
@@ -209,11 +207,6 @@ pub const PUBKEY_UNSET: &str = "UNSET-THE-OPERATOR-GENERATES-THIS-SEE-docs-updat
 /// followed by a key id. Checking the tag rather than only "it decoded" is what separates a
 /// key from the comment line pasted in on its own, which is the mistake that looks right.
 pub fn pubkey_usable(configured: &str) -> Result<(), NotAKey> {
-    let _ = shape(configured);
-    Ok(())
-}
-
-fn shape(configured: &str) -> Result<(), NotAKey> {
     let trimmed = configured.trim();
     if trimmed.is_empty() || trimmed == PUBKEY_UNSET {
         return Err(NotAKey::Unset);
@@ -305,8 +298,7 @@ fn base64_bytes(text: &str) -> Option<Vec<u8>> {
 /// directions from one build. The app passes [`crate::fence::FENCED`] and
 /// `cfg!(debug_assertions)`.
 pub fn checks_on_its_own(fenced: bool, debug_build: bool) -> bool {
-    let _ = fenced;
-    !debug_build
+    !fenced && !debug_build
 }
 
 /// How long after a launch the first automatic check happens.
