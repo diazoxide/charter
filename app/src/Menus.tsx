@@ -140,7 +140,7 @@ function Row({
 export function useNoBrowserMenu() {
   useEffect(() => {
     const suppress = (event: MouseEvent) => {
-      void editing(event.target);
+      if (editing(event.target)) return;
       event.preventDefault();
     };
     window.addEventListener("contextmenu", suppress);

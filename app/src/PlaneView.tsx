@@ -1555,7 +1555,7 @@ export function PlaneView({
           unreadable={removing.unreadable}
           refusal={removing.refusal}
           deleting={removing.busy}
-          onDelete={() => void deleteWorkspace(removing.workspace, true)}
+          onDelete={(force) => void deleteWorkspace(removing.workspace, force)}
           onCancel={() => setRemoving(undefined)}
         />
       )}
