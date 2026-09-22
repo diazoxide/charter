@@ -254,7 +254,9 @@ describe("making a workspace and deleting one", function () {
     await (await $('[role="dialog"]')).waitForDisplayed({ timeout: 20_000 });
     await (await $('[role="dialog"] input')).setValue("doomed");
     await $("button=Create workspace").click();
-    await stripBecomes(["beta", "gamma", "doomed"]);
+    // The strip is the PLANE's own order, which is `read_dir_sorted`'s — so a workspace
+    // made now lands where its name puts it and not at the end.
+    await stripBecomes(["beta", "doomed", "gamma"]);
     aRepoWithWorkInIt(join(mine, "workspaces", "doomed", "svc"));
 
     await runRow("Delete workspace doomed", "Delete workspace doomed");

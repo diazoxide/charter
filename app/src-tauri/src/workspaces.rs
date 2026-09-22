@@ -294,11 +294,27 @@ mod tests {
                 .to_owned()
         };
         assert_eq!(vision("alpha"), "ship the thing");
-        // **An empty box is no vision, not a vision that is empty.** Recorded, it would fill
-        // `## Vision` with whitespace and charter would read it back as one somebody wrote —
-        // and stop nagging for the one thing a fork inherits.
         assert_eq!(vision("beta"), "");
         assert_eq!(vision("gamma"), "");
+
+        // **And `vision()` is not enough to catch this, which is why the file is read too.**
+        // `set_vision("")` empties the section, and `vision()` answers "" for an empty section
+        // exactly as it answers "" for charter's placeholder — so a window that recorded an
+        // empty box would look identical through that door. What actually goes is the PROMPT:
+        // the line in `workspace.md` that asks for the one thing a fork inherits. A workspace
+        // made with an empty box has to be the workspace made with no vision at all.
+        let charter_of = |name: &str| {
+            std::fs::read_to_string(root.join("workspaces").join(name).join("workspace.md"))
+                .expect("its charter")
+        };
+        let placeholder = charter_core::workspaces::VISION_PLACEHOLDER;
+        assert!(
+            charter_of("beta").contains(placeholder),
+            "{}",
+            charter_of("beta")
+        );
+        assert!(charter_of("gamma").contains(placeholder));
+        assert!(!charter_of("alpha").contains(placeholder));
     }
 
     #[test]
