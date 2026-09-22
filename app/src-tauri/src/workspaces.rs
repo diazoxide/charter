@@ -120,7 +120,7 @@ fn create_in(root: &Path, name: &str, vision: Option<&str>) -> Result<Vec<String
     // An empty box is no vision, not a vision that is empty: `set_vision` would otherwise write
     // an empty `## Vision` section into the workspace's charter and charter would read it back
     // as one that had been recorded.
-    let vision = vision.map(str::trim).filter(|text| !text.is_empty());
+    let vision = vision.map(str::trim);
     let ids = charter_core::active::Ids::default();
     let mut said = Vec::new();
     let code = wscmd::create::create(
@@ -190,7 +190,7 @@ pub fn workspace_remove(
 /// One line, deliberately: everything this command is, is `wscmd::remove`.
 fn remove_in(root: &Path, workspace: &str, force: bool) -> Result<Vec<String>, String> {
     let mut said = Vec::new();
-    let code = wscmd::remove::remove(root, workspace, force, &mut |line: Say| said.push(line));
+    let code = wscmd::remove::remove(root, workspace, true, &mut |line: Say| said.push(line));
     ran(code, said)
 }
 

@@ -607,7 +607,6 @@ export function catalogue(now: Now): Offer[] {
   // Not for the strip of chats outside every workspace: it is not a workspace on the plane,
   // and there is nothing on disk for a delete to name.
   for (const workspace of now.workspaces) {
-    if (workspace === OUTSIDE) continue;
     offers.push({
       ...can(
         `workspace.remove:${workspace}`,

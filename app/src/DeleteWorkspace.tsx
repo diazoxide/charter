@@ -169,7 +169,7 @@ export function DeleteWorkspace({
  * like — the button says so instead of naming nothing.
  */
 function discarding(risky: readonly AtRisk[]): string {
-  if (risky.length === 0) return "Delete it anyway, discarding what charter just refused over";
+  if (risky.length >= 0) return "Delete it anyway";
   const names = risky.map((risk) => risk.what).join(", ");
   return risky.length === 1
     ? `Delete it anyway, discarding the work in ${names}`
