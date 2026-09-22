@@ -45,6 +45,7 @@ import { BottomBar } from "./BottomBar";
 import { useWorkspaceState } from "./workspaceState";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame, RegionToggle } from "./RegionFrame";
+import { StatusLine } from "./StatusLine";
 import {
   byLastActivity,
   closeFocusedPane,
@@ -1230,9 +1231,8 @@ export function PlaneView({
             />
           ))}
         </div>
-        <span className="plane">
-          <code>{plane}</code>
-        </span>
+        {/* The project's path is NOT here any more. It is on the status line at the very
+            bottom of the window (`StatusLine.tsx`), where the operator asked for it. */}
       </header>
 
       {trouble && (
@@ -1346,6 +1346,24 @@ export function PlaneView({
             )}
           </div>
         }
+      />
+
+      {/* **charter's status line**, under everything including the bottom region. It is not
+          in the arrangement and `StatusLine.tsx` argues why at length: a slot is sized as a
+          percentage of its group and this is one line of text, a region can be put away and
+          this must not be, and the window is chrome · four regions · chrome — the project
+          strip above is not a region either.
+
+          It reads what is already known. `workspaceState` is the one ask the three regions
+          share, and the sidebar has already been read for the strip, so the line costs no
+          command of its own — which matters here more than anywhere, because it is the one
+          surface that is drawn whatever else the window is doing. */}
+      <StatusLine
+        plane={plane}
+        read={sidebar !== undefined}
+        where={focused === OUTSIDE ? OUTSIDE_TITLE : focused}
+        workspaces={sidebar?.workspaces.length}
+        state={workspaceState}
       />
 
       {picking && (
