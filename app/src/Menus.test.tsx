@@ -214,3 +214,77 @@ describe("the browser's own menu", () => {
     expect(event.defaultPrevented).toBe(true);
   });
 });
+
+/**
+ * **The discriminator**, and the reason it is written out at length rather than folded into
+ * the tests above.
+ *
+ * The scenario run cannot open a context menu: a WebDriver right-click opens nothing on
+ * webkit 605.1.15 (macOS) or on WebKitGTK 605.1.15 (Linux) — `e2e/specs/workspace-lifecycle`
+ * records the runs. Two engines behaving identically under one driver points at the driver,
+ * but "points at" is not a measurement, and the alternative — that charter's own wiring
+ * swallows the event — would be a bug the operator meets a minute after installing.
+ *
+ * So the question is asked where there is **no WebDriver anywhere in the picture**: one
+ * `MouseEvent`, constructed and dispatched on a real workspace tab of the real `App`, with
+ * `useNoBrowserMenu` mounted — which is the only thing charter has that could prevent it.
+ *
+ * What this stands guard over is the ordering `Menus.tsx` documents. React 19 attaches its
+ * delegated listeners to the root container, BELOW `window`, so Radix's composed
+ * `onContextMenu` runs before the window-level suppressor and opens the menu. A capturing
+ * suppressor would reverse that: `composeEventHandlers` skips Radix's own handler once the
+ * event is `defaultPrevented`, so every context menu in the app would stop opening —
+ * silently, because nothing throws and the browser menu would still be gone.
+ */
+describe("a real contextmenu event, with the suppressor live", () => {
+  const PLANE = "/home/dev/plane";
+
+  function aPlane() {
+    mockIPC((cmd) => {
+      if (cmd === "plane_at_launch") return { plane: PLANE, from: PLANE, why: null };
+      if (cmd === "plane_sidebar")
+        return {
+          root: PLANE,
+          personas: [],
+          persona: null,
+          unfiled: [],
+          workspaces: [
+            { name: "alpha", path: `${PLANE}/workspaces/alpha`, vision: "", todos: [], chats: [] },
+          ],
+        };
+      if (
+        cmd === "opened_chats" ||
+        cmd === "chats_that_would_not_start" ||
+        cmd === "running_sessions" ||
+        cmd === "chat_states"
+      )
+        return [];
+      return null;
+    });
+  }
+
+  it("opens charter's own menu, and still takes the browser's away", async () => {
+    aPlane();
+    render(<App />);
+    const tab = await screen.findByRole("tab", { name: /alpha/ });
+
+    // Not `fireEvent`, deliberately: what a WebView sends is a `MouseEvent`, so that is what
+    // is sent, and the event object is kept so the second claim can be made about it.
+    const event = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+    tab.dispatchEvent(event);
+
+    const menu = await screen.findByRole("menu");
+    expect(
+      within(menu)
+        .getAllByRole("menuitem")
+        .map((row) => row.getAttribute("aria-label")),
+    ).toEqual([
+      "Focus workspace alpha",
+      "Pin workspace alpha",
+      "New workspace…",
+      "Delete workspace alpha",
+    ]);
+    // Both halves of one event: charter answered it, and the WebView's own menu is still gone.
+    expect(event.defaultPrevented).toBe(true);
+  });
+});

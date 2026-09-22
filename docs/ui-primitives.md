@@ -166,6 +166,22 @@ is `Strip.test.tsx`'s "moves between its rows with the arrow keys", which was wr
 passed first time. The rule the next primitive inherits is therefore **check, per primitive**:
 the question is where Radix listens, and only a primitive that listens on `document` has this.
 
+**A scenario run cannot right-click, on either engine — so a context menu is driven by the
+event and not by the pointer.** `element.click({ button: "right" })` is a W3C pointer sequence;
+`contextmenu` is a platform default action the engine raises from a native right-click, below
+where a synthesised sequence lands. Measured in charter's own window with a listener on the
+element: **0 `contextmenu` events after a WebDriver right-click, 1 after a dispatched
+`MouseEvent`** (webkit 605.1.15 on macOS, 2026-09-22), and run 35771806598 was red the same way
+on WebKitGTK 605.1.15. `e2e/specs/workspace-lifecycle.e2e.ts` therefore dispatches the event,
+and says so where the dispatch is.
+
+**That is a driver limit and not a product one, and the discriminator is a jsdom test.**
+`src/Menus.test.tsx`, _"a real contextmenu event, with the suppressor live"_, dispatches one
+`MouseEvent` at a real workspace tab of the real `App` with `useNoBrowserMenu` mounted and no
+WebDriver anywhere, and charter's menu opens. Making that suppressor capture-phase — the one way
+charter could swallow the event — turns that test and only that test red. Put the question where
+the driver is not, before changing a spec that cannot answer it.
+
 **A modal dialog really is modal, and the tests notice.** Radix marks everything outside the
 open dialog `aria-hidden`, so a `getByRole` for anything behind it finds nothing, and a scenario
 spec cannot click a tab while a picker is up. That is the app behaving correctly. When a test

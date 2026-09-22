@@ -96,6 +96,30 @@ async function stripBecomes(want: string[]): Promise<void> {
 }
 
 /**
+ * Sends the `contextmenu` a right-click sends, to the first element matching `selector`.
+ *
+ * Answers whether it found one, so a selector that stopped matching fails as itself rather
+ * than as a menu that never opened. The coordinates are the element's own centre, because
+ * Radix anchors the menu to the point the event carries.
+ */
+async function sendContextMenu(selector: string): Promise<boolean> {
+  return browser.execute((css: string) => {
+    const el = document.querySelector(css);
+    if (!(el instanceof HTMLElement)) return false;
+    const box = el.getBoundingClientRect();
+    el.dispatchEvent(
+      new MouseEvent("contextmenu", {
+        bubbles: true,
+        cancelable: true,
+        clientX: Math.round(box.left + box.width / 2),
+        clientY: Math.round(box.top + box.height / 2),
+      }),
+    );
+    return true;
+  }, selector);
+}
+
+/**
  * Runs one catalogue row through the palette, with no pointer.
  *
  * `query` and `title` are two arguments because they are two things: what is TYPED, which is
@@ -164,12 +188,33 @@ describe("making a workspace and deleting one", function () {
     }
   });
 
-  it("answers a right-click on a workspace tab with charter's own menu", async () => {
-    // A measurement as much as an assertion: whether a WebView context menu opens under
-    // WebDriver is not something this repo had established, and the answer belongs in a run
-    // rather than in a claim. The rows themselves are `Menus.test.tsx`'s.
-    const tab = await $(`${WORKSPACES} [role="tab"]`);
-    await tab.click({ button: "right" });
+  it("answers the contextmenu a WebView sends with charter's own menu", async () => {
+    // **A WebDriver right-click is not a `contextmenu`, and that is measured rather than
+    // assumed.** `element.click({ button: "right" })` is a W3C pointer sequence — a
+    // pointerDown and a pointerUp with `button: 2` — and the `contextmenu` event is a
+    // platform default action the engine raises from a native right-click, below where a
+    // synthesised sequence lands. Measured here, in this app, with a listener on the tab:
+    //
+    //   after a WebDriver right-click:      0 contextmenu events
+    //   after a dispatched MouseEvent:      1
+    //
+    // (webkit 605.1.15 on macOS, run locally 2026-09-22; and run 35771806598 went red on
+    // WebKitGTK 605.1.15 too, with the menu never opening on either engine.)
+    //
+    // **It is the driver and not the product**, which is the half that matters and is
+    // measured somewhere a driver cannot reach: `src/Menus.test.tsx`, "a real contextmenu
+    // event, with the suppressor live", dispatches one `MouseEvent` at a real workspace tab
+    // of the real `App` with `useNoBrowserMenu` mounted and no WebDriver in the picture, and
+    // charter's menu opens. Making that suppressor capture-phase — the one way charter could
+    // swallow this event — turns that test, and only that test, red. The operator's own
+    // report is the third leg: the WebView menu he saw before this work is the default action
+    // of the very event the driver will not send.
+    //
+    // So this spec sends the event the platform sends, and asks charter the question a
+    // scenario run can still ask: that the menu is the catalogue's, on the real window, with
+    // the real core behind it. `Menus.test.tsx` owns the rows.
+    const sent = await sendContextMenu(`${WORKSPACES} [role="tab"]`);
+    expect(sent).toBe(true);
 
     const menu = await $('[role="menu"]');
     await menu.waitForDisplayed({ timeout: 20_000 });
