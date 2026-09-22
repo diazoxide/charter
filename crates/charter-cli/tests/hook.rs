@@ -662,3 +662,190 @@ fn a_hook_reading_a_payload_that_never_ends_still_gets_out_of_the_way() {
     );
     assert_eq!(code, Some(0));
 }
+
+// --- the forge cache's trigger on a plane with no app open (charter-app#89) --------------- //
+
+/// A plane with one workspace holding one clone, and nothing fetched for it yet.
+///
+/// **A bare `git init` and no commit**, deliberately: `glrefresh::trees` asks for directories
+/// with a `.git`, and this machine cannot sign a commit (1Password), so a fixture that needed
+/// one would be red here for a reason that is not the code's. **And no `origin`**, so the
+/// refresh this starts is real but reaches no forge: `glrefresh` has no URL to infer a host
+/// from and writes an empty entry. A test that phoned a forge would be a test nobody could run.
+fn a_plane_with_a_clone() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().expect("a directory");
+    std::fs::write(dir.path().join("charter.toml"), "schema = 1\n").expect("the marker");
+    let clone = dir.path().join("workspaces/alpha/svc");
+    std::fs::create_dir_all(&clone).expect("the clone's directory");
+    let done = Command::new("git")
+        .args(["init", "-q", "-b", "main", "."])
+        .current_dir(&clone)
+        .status()
+        .expect("git runs");
+    assert!(done.success(), "the fixture clone was not made");
+    dir
+}
+
+/// `charter hook <word>` standing in that plane's clone, with the environment cleared.
+///
+/// The directory matters twice: it is the rung the workspace ladder reads — a chat runs inside
+/// the checkout it is working on — and `$CHARTER_ROOT` is set positively beside it so no walk
+/// up can reach the operator's own plane, which is the fence this suite is under
+/// (charter-app#132).
+fn hook_in(plane: &std::path::Path, word: &str, env: &[(&str, &str)]) -> i32 {
+    let clone = plane.join("workspaces/alpha/svc");
+    let out = Command::new(CHARTER)
+        .args(["hook", word])
+        .current_dir(&clone)
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("CHARTER_ROOT", plane)
+        .envs(env.iter().copied())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .expect("charter runs");
+    out.status.code().unwrap_or(-1)
+}
+
+/// Whether anything decided to refresh: the lock `glstate::maybe_spawn` writes with the pid of
+/// the process it started. The hook writes it before it exits, so its absence the moment the
+/// hook returns is an answer and not a race.
+fn a_refresh_was_started(plane: &std::path::Path) -> bool {
+    plane.join(charter_core::glrefresh::LOCK).exists()
+}
+
+/// Waits for the refresh the hook started to land its cache, or gives up.
+fn the_cache_it_wrote(plane: &std::path::Path) -> Option<String> {
+    let cache = plane.join(charter_core::glrefresh::CACHE);
+    for _ in 0..200 {
+        if let Ok(text) = std::fs::read_to_string(&cache) {
+            return Some(text);
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    None
+}
+
+#[test]
+fn a_session_starting_where_no_app_is_open_refreshes_the_forge_cache() {
+    // **charter-app#89, the whole of it.** #69 landed the policy with one trigger — focusing a
+    // workspace in the app — which covers a plane with the app open and nothing else. On a
+    // plane nobody has an app open on, the operator's own `claude` in a terminal runs these
+    // hooks and nothing else of charter's runs at all, so this is the only place a refresh can
+    // be decided. Before this, such a plane's CI column said "nothing has fetched this
+    // checkout" for ever.
+    let plane = a_plane_with_a_clone();
+
+    let code = hook_in(plane.path(), "sessionstart", &[]);
+
+    assert_eq!(code, 0, "a hook must never cost a harness its turn");
+    assert!(
+        a_refresh_was_started(plane.path()),
+        "nothing decided to refresh the cache"
+    );
+    // The lock alone would only say a process was started. The cache is what the panel reads,
+    // and a refresh that wrote one is a refresh that ran — keyed to this plane, because
+    // `maybe_spawn` hands the child `$CHARTER_ROOT` rather than letting it walk up from its
+    // own directory (charter#527).
+    let cache = the_cache_it_wrote(plane.path()).expect("the refresh it started wrote no cache");
+    assert!(
+        cache.contains("workspaces/alpha/svc"),
+        "the refresh was not about this plane's clone: {cache}"
+    );
+}
+
+#[test]
+fn no_other_hook_event_refreshes_it_because_once_a_session_is_not_once_a_turn() {
+    // The brakes make a repeat trigger cheap — past the cooldown it is two file reads — but
+    // `userpromptsubmit` and `stop` fire on every single turn, and "cheap" per turn is the
+    // shape #69's brakes exist to prevent on a path with a budget. With `REFRESH_TTL` at 300 s
+    // a per-turn trigger buys no freshness a per-session one does not.
+    for word in [
+        "userpromptsubmit",
+        "stop",
+        "notification",
+        "sessionend",
+        "subagentstop",
+    ] {
+        let plane = a_plane_with_a_clone();
+
+        let code = hook_in(plane.path(), word, &[]);
+
+        assert_eq!(code, 0);
+        assert!(
+            !a_refresh_was_started(plane.path()),
+            "`charter hook {word}` spawned a refresh, which is one per TURN"
+        );
+    }
+}
+
+#[test]
+fn a_session_the_app_started_leaves_the_refresh_to_the_app() {
+    // `$CHARTER_HOOK_SOCKET` in the environment means the app started this chat, and the app
+    // already decides when a refresh runs (`panels::repo_states`, focusing a workspace). Two
+    // deciders on one plane is not unsafe — the lock is what makes it safe — but it is two
+    // policies, and #89 is about the plane that has none. The socket leads nowhere on purpose:
+    // what is read here is that the variable is SET, not that anything answered.
+    let plane = a_plane_with_a_clone();
+    let gone = plane.path().join("gone.sock");
+
+    let code = hook_in(
+        plane.path(),
+        "sessionstart",
+        &[(SOCKET_ENV, gone.to_str().expect("a path"))],
+    );
+
+    assert_eq!(code, 0);
+    assert!(
+        !a_refresh_was_started(plane.path()),
+        "the hook refreshed on a plane the app is holding"
+    );
+}
+
+#[test]
+fn the_operators_brake_is_honoured_on_this_path_too() {
+    // `$CHARTER_NO_BACKGROUND_CHECKS` is a request not to phone home, and a refresh runs `gh`
+    // or `glab`. `glstate::decide` reads it before the lock or the cache is touched; this is
+    // the check that the new trigger goes THROUGH that decision rather than around it.
+    let plane = a_plane_with_a_clone();
+
+    let code = hook_in(
+        plane.path(),
+        "sessionstart",
+        &[(charter_core::glstate::NO_BACKGROUND_CHECKS, "1")],
+    );
+
+    assert_eq!(code, 0);
+    assert!(
+        !a_refresh_was_started(plane.path()),
+        "charter phoned a forge for somebody who asked it not to"
+    );
+}
+
+#[test]
+fn a_session_starting_outside_every_plane_refreshes_nothing() {
+    // Python's `if not config.HAS_CONTROL_PLANE: return`. Outside a plane `STATE_DIR` is
+    // `<cwd>/.charter`, so a spawn here scatters charter's caches into whatever directory the
+    // session happened to start in — and the child, handed no plane, goes looking for one of
+    // its own. That is charter#527, which is how a render for a throwaway root came to refresh
+    // the operator's live plane.
+    let outside = tempfile::tempdir().expect("a directory with no charter.toml in it");
+
+    let out = Command::new(CHARTER)
+        .args(["hook", "sessionstart"])
+        .current_dir(outside.path())
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .stdin(Stdio::null())
+        .output()
+        .expect("charter runs");
+
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty(), "it wrote to the transcript");
+    assert!(
+        !outside.path().join(".charter").exists(),
+        "charter left a cache directory in a plain directory"
+    );
+}
