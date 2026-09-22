@@ -11,14 +11,16 @@
 //! 1,445 lines of Python on top of stage 1, `_split_env_chdir` ([`crate::shellwrap`]) included,
 //! because `_line_pipelines` names each command's program through `_split_env`.
 //!
-//! # Nothing calls this yet, on purpose
+//! # Where this is called from
 //!
-//! `charter hook pretooluse` is ONE switch: `main.rs`'s `is_a_tool_hook` answers every word in
-//! the `pretooluse`/`posttooluse` namespace with exit 2 — *block* — and `charter-cli`'s `hook.rs`
-//! pins that. The first partial implementation of the guard flips that switch from fail-closed to
-//! allow-everything-except-the-arm-that-is-ported. **This is stage 2 of six and is wired to
-//! nothing.**
+//! [`crate::toolgate`] — `charter/hooks.py:pretooluse`'s eight refusals, in its order — and
+//! through it `charter hook pretooluse` (M3.1 stage 6).
 //!
+//! Until that stage the switch was closed: `main.rs`'s `is_a_tool_hook` answered every word in
+//! the `pretooluse`/`posttooluse` namespace with exit 2 — *block* — because a PARTIAL guard on
+//! the switch turns fail-closed into allow-everything-except-the-arm-that-is-ported. It moved
+//! once all eight arms were standing, and never earlier. The other eight words in that
+//! namespace still block, for the same reason they always did.
 //! # Why a body has to be judged at all
 //!
 //! `_segment_argv` shlex-splits the whole command string, so `cat > file <<'DOC' … DOC` hands the

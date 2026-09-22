@@ -45,11 +45,31 @@ share — `_live_substitution`, `_ansi_c_end`, `_double_quoted_substitution`,
 `_forge_prose_command`, `_forge_substitution_hit`, `_charter_words`, `_charter_prose_command`,
 `_charter_substitution_hit`.
 
-Their TABLES are compared as data too (`tbl`), rotated by the case's length so a run sweeps every
-row without any one case carrying the whole of it. A table is otherwise only covered once the
-fuzz has reached every row, which `--coverage` cannot promise per row.
+Stage 6 adds the last arm and the readers only it has — A7, the handoff guard:
+`_handoff_refusal`, `_handoff_line`, `_handoff_segment`, `_shell_string_handoff`,
+`_shell_string`, `_as_the_shell_reads`, `_disguised_handoff`, `_disguised_as`, `_is_handoff`
+and `_runs_handoff`. A7 is the one arm whose subject is the SOURCE, not the words: `'charter'
+handoff`, `\\charter handoff` and `charter  handoff` lex to the same two texts as the exact
+form, so `_lex`'s per-token character offsets — compared since stage 1 under `sp`, by nothing
+that read them — are load-bearing here for the first time.
 
-**Every `pub` item of the nine Rust modules is in `KEYS`**, or in `COVERED_ELSEWHERE` with the
+It is also the first arm with a PAYLOAD. `hr` asks the same command under six callers
+(`PROBE_CALLERS`), which is what makes the order of A7's first three refusals visible at all:
+one command, six payloads, six answers. `$CHARTER_HARNESS` is moved for the length of each
+call, because the Python reads it where the Rust takes a parameter.
+
+**What stage 6 does NOT compare here** is `toolgate::verdict`, the eight arms assembled. The
+order of eight arms is only observable through the whole hook, with a real plane and a real git
+behind A3/A3b, so its evidence is `run.py`'s `pretooluse-*` scenarios: both implementations run
+`charter hook pretooluse` as a PROCESS against the same fixture plane, and stdout is compared
+byte for byte. `COVERED_ELSEWHERE` names the scenario per item, the way stage 5's `pypath` rows
+name `planeroot.py`.
+
+Their TABLES are compared as data too (`tbl`, `a7tbl`), rotated by the case's length so a run
+sweeps every row without any one case carrying the whole of it. A table is otherwise only
+covered once the fuzz has reached every row, which `--coverage` cannot promise per row.
+
+**Every `pub` item of the eleven Rust modules is in `KEYS`**, or in `COVERED_ELSEWHERE` with the
 key that compares it. Stage 1's one real harness defect was a field nobody diffed —
 `_split_punctuation`'s per-piece offsets — and it was found by mutation rather than by reading,
 so the rule is written down: a `pub` item in neither list is a rule with no evidence.
@@ -247,6 +267,9 @@ os.environ["CHARTER_HOME"] = str(STATE)
 
 from charter import config as charter_config  # noqa: E402
 from charter import hooks  # noqa: E402  (after $CHARTER_HOME, deliberately)
+# A7 asks these two for their NAMES and nothing else: they are the harnesses where an
+# `agent_id` on the payload was measured to mean a sub-agent.
+from charter.harness import claude_code, codex  # noqa: E402
 
 # **The plane this run is about, pinned.** `config.ROOT` is derived at import by walking up from
 # the process's directory, which on this machine is a checkout INSIDE the operator's real plane
@@ -971,6 +994,68 @@ CURATED: list[str] = [
     "ssh -T git@UP.EXAMPLE",
     "ssh -T GIT@up.example",
     "git push git@UP.EXAMPLE:o/r.git",
+    # ---- stage 6: A7. Every spelling `docs/handoff.md` records as having run with NO PROMPT on
+    # Claude Code 2.1.268, and — first — the one shape that must still go through. That row is
+    # here rather than only in the fuzz because it is the guard's whole failure mode in the
+    # other direction: a generated run reaches it about 29 times in 20,000, and a curated row
+    # reaches it on `--cases 20`.
+    "charter handoff beta <<'BRIEF'\nship it\nBRIEF",
+    "charter handoff beta --persona devops <<'BRIEF'\nship it\nBRIEF",
+    "charter handoff beta --create --vision x <<'BRIEF'\nship it\nBRIEF",
+    "charter handoff beta <<-'BRIEF'\n\tship it\n\tBRIEF",
+    "charter handoff beta <<\\BRIEF\nship it\nBRIEF",
+    # The four measured spellings the host's `Bash(charter handoff *)` rule does not match.
+    "python3 -m charter handoff beta <<'BRIEF'\nx\nBRIEF",
+    "/usr/local/bin/charter handoff beta <<'BRIEF'\nx\nBRIEF",
+    "charter 'handoff' beta <<'BRIEF'\nx\nBRIEF",
+    "charter $'handoff' beta <<'BRIEF'\nx\nBRIEF",
+    # ...and the ones that are the same defect wearing other hats: the source spelling, not the
+    # words a shell makes of it.
+    "'charter' handoff beta <<'BRIEF'\nx\nBRIEF",
+    "\\charter handoff beta <<'BRIEF'\nx\nBRIEF",
+    "charter  handoff beta <<'BRIEF'\nx\nBRIEF",
+    "charter handoff beta <<'BRIEF'\nx\nBRIEF",
+    "charter\\\nhandoff beta <<'BRIEF'\nx\nBRIEF",
+    # A backslash-newline after `handoff` is NOT the one space, and the tokens do not say so —
+    # the lexer folds the pair into the word that follows and leaves a gap that reads as one.
+    "charter handoff \\\nbeta <<'BRIEF'\nx\nBRIEF",
+    "CHARTER_ROOT=/x charter handoff beta <<'BRIEF'\nx\nBRIEF",
+    "env charter handoff beta <<'BRIEF'\nx\nBRIEF",
+    # A string a shell runs, one level in — `eval` and every `-c` cluster.
+    "eval 'charter handoff beta'",
+    "eval \"charter handoff beta <<'BRIEF'\"",
+    "bash -c 'charter handoff beta'",
+    "sh -lc 'charter handoff beta'",
+    "zsh -xc 'charter handoff beta'",
+    "bash -c 'true' && charter handoff beta <<'BRIEF'\nx\nBRIEF",
+    # ...and a heredoc body a shell RUNS, which is where A7's old default was the opposite of
+    # the leak guard's and a canonical handoff went through unprompted.
+    "bash <<'EOF'\ncharter handoff beta <<'BRIEF'\nx\nBRIEF\nEOF",
+    "bash <<EOF\ncharter handoff beta\nEOF",
+    "cat script.sh | bash <<'EOF'\ncharter handoff beta\nEOF",
+    # ...against a body a READER swallows, which is data and is not searched. Both halves, so
+    # the shared plan cannot drift in either direction.
+    "git commit -F - <<'MSG'\ncharter handoff beta\nMSG",
+    "cat <<'DOC'\ncharter handoff beta\nDOC",
+    "charter handoff beta <<'BRIEF'\ncharter handoff gamma\nBRIEF",
+    # Every shape of stdin the prompt would not show, each with its own sentence.
+    "charter handoff beta <<<'ship it'",
+    "charter handoff beta < brief.md",
+    "charter handoff beta <> brief.md",
+    "cat brief.md | charter handoff beta",
+    "charter handoff beta",
+    "charter handoff beta <<'A' <<'B'\nx\nA\ny\nB",
+    "charter handoff beta <<BRIEF\nx\nBRIEF",
+    "charter handoff \"$(cat name)\" <<'BRIEF'\nx\nBRIEF",
+    "charter handoff beta <<'BRIEF'\nx\nBRIEF\n; echo `date`",
+    # A quote left open on the handoff's own line: which heredoc feeds it cannot be read off it,
+    # so it is refused rather than guessed.
+    "charter handoff beta 'unclosed",
+    # The first two words of a SEGMENT and only those, so charter's own repository searching for
+    # the phrase all day is a search.
+    "grep -rn 'charter handoff' docs",
+    "echo charter handoff",
+    "# charter handoff beta",
 ]
 
 #: What a case is built out of. Single characters where the shell gives one meaning, and the
@@ -1283,10 +1368,71 @@ def a_prose_case(rng: random.Random) -> str:
             f"{rng.choice(PROSE_TAILS)}")
 
 
+#: The handoff grammar — A7. Its subject is a SPELLING, and a spelling is not something a random
+#: join produces. Measured over 20,000 GENERATED cases with the curated rows excluded, so this
+#: is about the generators:
+#:
+#:     branch                   stages 1-5 generators    + a_handoff_case
+#:     a7-shell-string                              0                 348
+#:     a7-disguised                                 0                 587
+#:     a7-allowed                                   9                  28
+#:     handoff-spelling                           155                 762
+#:     handoff-brief-source                        85                 123
+#:
+#: Two of A7's branches were reached ZERO times — `eval`/`bash -c` one level in, and a word
+#: disguised behind quoting or a glob — which are two of the four defects the guard exists for.
+#:
+#: The three tables are the three things A7 judges apart: how `charter` is spelled, how `handoff`
+#: is, and what feeds the brief. They are crossed rather than joined, because the interesting
+#: cases are the ones where exactly one of the three is wrong.
+#:
+#: **`charter` and `handoff` are repeated, and the repetition is load-bearing.** `a7-allowed` —
+#: a canonical handoff going THROUGH — is the only branch standing between this guard and one
+#: that refuses every handoff there is, and `handoff-brief-source` sits behind it, since a bad
+#: brief is only reached once the spelling is right. Weighting the exact word is the same device
+#: `a_credential_case`'s `quiet_env` is, for the same reason: an arm measured only through the
+#: arm above it is not measured. It is still only 28 in 20,000, which is why the canonical
+#: spelling is ALSO a curated row — those run on `--cases 20`.
+HANDOFF_CHARTERS = ["charter", "charter", "charter", "charter", "charter", "charter",
+                    "'charter'", '"charter"', "\\charter", "$'charter'",
+                    "${CH:-charter}", "chart*", "char?er", "[c]harter", "CHARTER", "edm",
+                    "python3 -m charter", "python3 -B -m charter", "python3 -mcharter",
+                    "/usr/local/bin/charter", "./charter", "env charter", "sudo -u me charter",
+                    "FOO=1 charter", "charter ", "charter\t", "charter\\\n", "charter "]
+HANDOFF_VERBS = ["handoff", "handoff", "handoff", "handoff", "handoff",
+                 "'handoff'", '"handoff"', "$'handoff'", "ha$''ndoff",
+                 "${x:-handoff}", "{handoff,}", "hando?f", "handof[f]", "\\handoff",
+                 "HANDOFF", "handoffx", "hand off", "$'\\x68andoff'"]
+HANDOFF_BRIEFS = [" beta <<'BRIEF'\nship it\nBRIEF", " beta <<BRIEF\nship it\nBRIEF",
+                  " beta <<\"BRIEF\"\nship it\nBRIEF", " beta <<\\BRIEF\nship it\nBRIEF",
+                  " beta <<-'BRIEF'\nship it\n\tBRIEF", " beta <<''\nship it\n",
+                  " beta <<'A' <<'B'\nx\nA\ny\nB", " beta <<<'ship it'", " beta < brief.md",
+                  " beta <> brief.md", " beta", " beta 0<&-", " beta 'unclosed",
+                  " \"$(cat name)\" <<'BRIEF'\nx\nBRIEF", " beta <<'BRIEF'\n`env`\nBRIEF",
+                  " --create --vision x beta <<'BRIEF'\nx\nBRIEF", "  beta <<'BRIEF'\nx\nBRIEF",
+                  " beta\\\n <<'BRIEF'\nx\nBRIEF", ""]
+#: What can stand in FRONT of the handoff — a pipe, a prior command, a shell that runs a string,
+#: and a reader whose heredoc body the shared plan must call data.
+HANDOFF_HEADS = ["", "", "", "cat brief.md | ", "true && ", "true; ", "x=1 ",
+                 "eval '", "bash -c '", "sh -lc \"", "bash <<'EOF'\n",
+                 "git commit -F - <<'MSG'\n", "cat <<'DOC'\n", "echo '"]
+HANDOFF_FOOTS = {"eval '": "'", "bash -c '": "'", "sh -lc \"": '"', "echo '": "'",
+                 "bash <<'EOF'\n": "\nEOF", "git commit -F - <<'MSG'\n": "\nMSG",
+                 "cat <<'DOC'\n": "\nDOC"}
+
+
+def a_handoff_case(rng: random.Random) -> str:
+    """One generated command that really puts a handoff spelling to A7."""
+    head = rng.choice(HANDOFF_HEADS)
+    body = (f"{rng.choice(HANDOFF_CHARTERS)} {rng.choice(HANDOFF_VERBS)}"
+            f"{rng.choice(HANDOFF_BRIEFS)}")
+    return f"{head}{body}{HANDOFF_FOOTS.get(head, '')}"
+
+
 def a_case(rng: random.Random) -> str:
     """One generated command line.
 
-    SIX generators: a random join of FRAGMENTS — which is where the LEXER's answers live, and
+    SEVEN generators: a random join of FRAGMENTS — which is where the LEXER's answers live, and
     which stage 1 measured on — a well-formed heredoc, which is where the LAYOUT's answers live,
     stage 3's two, which are where the LEAK GUARD's are, and stage 4's two, which are where the
     golden rule's and the prose guards' are. None reaches another's interesting cases on its own,
@@ -1294,16 +1440,18 @@ def a_case(rng: random.Random) -> str:
     in the PR body and which the run itself fails on a branch nothing reached.
     """
     r = rng.random()
-    if r < 0.19:
+    if r < 0.17:
         return a_walk_case(rng)
-    if r < 0.38:
+    if r < 0.34:
         return a_reader_case(rng)
-    if r < 0.54:
+    if r < 0.48:
         return a_heredoc_case(rng)
-    if r < 0.72:
+    if r < 0.64:
         return a_credential_case(rng)
-    if r < 0.90:
+    if r < 0.80:
         return a_prose_case(rng)
+    if r < 0.93:
+        return a_handoff_case(rng)
     return "".join(rng.choice(FRAGMENTS) for _ in range(rng.randint(1, 14)))
 
 
@@ -1540,6 +1688,8 @@ def oracle(cmd: str) -> dict:
         **stage3(cmd),
         # ---- stage 4: the golden rule, the release floor and the two prose guards
         **stage4(cmd),
+        # ---- stage 6: the handoff guard
+        **stage6(cmd),
     }
 
 
@@ -1709,6 +1859,139 @@ def stage4(cmd: str) -> dict:
     }
 
 
+# --------------------------------------------------------------------------- #
+# Stage 6's probes: A7, the handoff guard                                       #
+# --------------------------------------------------------------------------- #
+
+#: The SOURCE spellings `_disguised_as` is asked about, for both of the words it is asked about.
+#: It is a pure function of two strings and is entered from the middle of `_disguised_handoff`,
+#: so asking it only what a generated case happens to ask leaves it compared only where the walk
+#: above it already agreed — the harness defect stage 1 found, in this arm.
+#:
+#: Every row is a shape the two halves of the rule answer differently: a mark with the word
+#: still in what is LEFT, a mark that makes the word match as a GLOB, a mark that does neither,
+#: and no mark at all. The bracket rows are `fnmatch._translate`'s own grammar, which
+#: `pypath::fnmatch` reimplements, asked here as a PATTERN for the first time — `fnm` asks it
+#: with the case's patterns and this asks it with a command's own words.
+PROBE_DISGUISES = [
+    "charter", "handoff", "$'handoff'", "ha$''ndoff", "${x:-handoff}", "{handoff,}",
+    "hando?f", "handof[f]", "$h", "'charter'", '"charter"', "\\charter", "chart*",
+    "[c]harter", "ch[a-z]rter", "handoff*", "*handoff*", "HANDOFF", "handoffx", "xhandoff",
+    "$'\\x68andoff'", "{hand,}off", '"handoff"', "h?ndoff", "[!x]andoff", "$charter",
+    "c'h'arter", "", "*", "?", "[", "[]", "[!]", "\\", "$", "{}", "{", "}", "handoff\n",
+    "hand\\off", "hand$off", "ha*ff", "?", "**", "[a-", "charter*handoff", "İandoff",
+]
+
+#: How many of them each case is asked about, rotated by the case's length.
+PROBE_DISGUISE_N = 4
+
+#: The payloads `_handoff_refusal` is put to: `(agent_id, $CHARTER_HARNESS, permission_mode)`.
+#:
+#: The first is an attended chat in the main conversation, which is the one that reaches the
+#: spelling and brief-source arms at all — the other three each short-circuit above them, and
+#: they are here because the ORDER is the thing this stage assembles. The two harness rows are
+#: the measured/unmeasured split: `agent_id` means a sub-agent only where somebody measured that
+#: it does, and a harness nobody measured must NOT read it as one.
+PROBE_CALLERS = [
+    (None, "claude-code", "default"),
+    (None, "claude-code", "bypassPermissions"),
+    ("sub-1", "claude-code", "default"),
+    ("sub-1", "opencode", "default"),
+    ("sub-1", None, "bypassPermissions"),
+    ("", "claude-code", "default"),
+]
+
+
+def _with_harness(harness):
+    """`$CHARTER_HARNESS` for the length of one call, put back whatever happens.
+
+    `_handoff_refusal` reads the environment where the Rust takes a parameter — the core holds
+    no globals — so the harness moves the variable rather than the port inventing one.
+    """
+    was = os.environ.get("CHARTER_HARNESS")
+    if harness is None:
+        os.environ.pop("CHARTER_HARNESS", None)
+    else:
+        os.environ["CHARTER_HARNESS"] = harness
+    return was
+
+
+def _restore_harness(was) -> None:
+    if was is None:
+        os.environ.pop("CHARTER_HARNESS", None)
+    else:
+        os.environ["CHARTER_HARNESS"] = was
+
+
+def _refusal(cmd: str, caller) -> list | None:
+    """`_handoff_refusal(cmd, payload)` for one caller, as `[reason, denial]` or `None`."""
+    agent_id, harness, mode = caller
+    data = {"permission_mode": mode}
+    if agent_id is not None:
+        data["agent_id"] = agent_id
+    was = _with_harness(harness)
+    try:
+        return _pair(hooks._handoff_refusal(cmd, data))
+    finally:
+        _restore_harness(was)
+
+
+def stage6(cmd: str) -> dict:
+    """What the frozen Python's handoff guard says — `_handoff_refusal` and its neighbourhood.
+
+    Asked of the RAW command, like stage 4's arms: `_handoff_line` does its own stripping
+    through `_lines_a_command_could_run`, and `_shell_string_handoff` does its own through
+    `_strip_reader_heredocs`. Handing either a pre-stripped string would measure a call the
+    guard never makes.
+    """
+    try:
+        toks = hooks._split_punctuation(hooks._lex(cmd))
+    except ValueError:
+        a7seg = None
+        hs7 = None
+    else:
+        a7seg = []
+        for seg, _before in hooks._segments_of(toks):
+            prog, _env, argv = hooks._split_env([t.text for t in seg])
+            a7seg.append([hooks._runs_handoff(prog, argv), hooks._shell_string(seg)])
+        seg, piped = hooks._handoff_segment(toks)
+        hs7 = [None if seg is None else shown(seg), piped]
+    raws = rotation(cmd, PROBE_DISGUISES, PROBE_DISGUISE_N)
+    texts = [hooks._HANDOFF_SUBAGENT, hooks._HANDOFF_UNATTENDED, hooks._HANDOFF_SPELLING,
+             hooks._HANDOFF_SHELL_STRING, hooks._HANDOFF_SOURCE]
+    line = hooks._handoff_line(cmd)
+    return {
+        # ---- A7's tables, as DATA, rotated like `tbl`: the five refusal SENTENCES are ~600
+        # characters each and emitting all five on every case would be most of the corpus, so
+        # one pair per case sweeps them. A paraphrase in either implementation is a denial two
+        # charters word differently, which is what `handoff.rs`'s own docstring says the
+        # differential caught once already.
+        "a7tbl": [
+            len(texts), rotation(cmd, texts, 2),
+            "".join(sorted(hooks._SPELLING_MARKS)),
+            sorted(hooks._STRING_SHELLS),
+            sorted(hooks._REDIRECT_READS),
+            sorted([claude_code.NAME, codex.NAME]),
+        ],
+        "ih": hooks._is_handoff(cmd),
+        "dh": hooks._disguised_handoff(cmd),
+        "atsr": hooks._as_the_shell_reads(cmd),
+        "ssh7": hooks._shell_string_handoff(cmd),
+        "hl7": None if line is None else list(line),
+        "da": [[r, w, hooks._disguised_as(r, w)] for r in raws for w in ("charter", "handoff")],
+        # The per-segment pair, in one list per segment for `gseg`'s and `s4seg`'s reason: both
+        # are asked of the same `_split_env`, and a divergence in one is about that segment.
+        "a7seg": a7seg,
+        "hs7": hs7,
+        # The VERDICT, per caller. Only the attended one carries its denial — the other three
+        # can only ever answer with a constant that `a7tbl` pins, and five full sentences per
+        # case would be the corpus. What every caller carries is the REASON, which is the field
+        # the order decides.
+        "hr": [None if r is None else r[0] for r in (_refusal(cmd, c) for c in PROBE_CALLERS)],
+        "hrd": _refusal(cmd, PROBE_CALLERS[0]),
+    }
+
+
 def _pair(t):
     """A tuple answer as JSON, or `None` — `json.dumps` writes a tuple as a list anyway, and
     spelling it makes the two sides' shapes identical to read in a failure."""
@@ -1791,6 +2074,11 @@ KEYS = (
     # in one of them is a divergence about that segment.
     "tbl", "kf", "sph", "sch", "scr", "s4seg", "ee", "rfr", "rfa", "unat",
     "ls", "ace", "dqs", "hsub", "hb", "fpc", "fsh", "cpc", "csh",
+    # ---- stage 6. `a7seg` carries A7's two per-segment answers in one list per segment, for
+    # `gseg`'s and `s4seg`'s reason. `hr` is the VERDICT per caller and is last, because a
+    # divergence there is nearly always a divergence in one of the readers above it — a failure
+    # report reads down to the arm rather than up from it.
+    "a7tbl", "atsr", "da", "dh", "ih", "ssh7", "a7seg", "hs7", "hl7", "hr", "hrd",
 )
 
 #: The `pub` items of those modules that the example does NOT name, and the key that covers each.
@@ -1846,11 +2134,44 @@ COVERED_ELSEWHERE = {
     # evidence is the OTHER harness: `planeroot.py`'s `pp` compares both on every case.
     "pypath::pure_path": "planeroot.py pp, gt, cwt — `str(Path(x))`",
     "pypath::path_div": "planeroot.py pp, gt, cwt — `str(Path(a) / b)`",
+    # ---- stage 6: A7's refusal texts and its five trace reasons. Each is returned VERBATIM by
+    # the arm that owns it, so the verdict IS the comparison — and `hr` asks for the reason under
+    # six different callers, which is what makes the ORDER of the first three arms visible.
+    "handoffguard::handoff_source": "hrd — every brief-source denial is this function's answer, "
+                                    "and `a7tbl` pins the template it fills",
+    "handoffguard::REASON_SUBAGENT": "hr — the trace key IS the answer, once per caller",
+    "handoffguard::REASON_UNATTENDED": "hr",
+    "handoffguard::REASON_SHELL_STRING": "hr",
+    "handoffguard::REASON_SPELLING": "hr",
+    "handoffguard::REASON_BRIEF_SOURCE": "hr",
+    "handoffguard::from_a_subagent": "hr — PROBE_CALLERS carries the measured/unmeasured split "
+                                     "and the empty `agent_id`, and nothing else reads them",
+    # ---- stage 6's assembly. Its evidence is the OTHER harness, for the reason `planeroot.py`
+    # exists: the order of eight arms is only observable through the WHOLE hook, with a real
+    # plane and a real git behind A3/A3b, and `run.py`'s `pretooluse-*` scenarios run
+    # `charter hook pretooluse` as a process on both sides and compare stdout byte for byte.
+    "toolgate::verdict": "run.py pretooluse-* — the eight arms in order, both sides, as a process",
+    "toolgate::Call": "run.py pretooluse-* — every field of it comes off the payload",
+    "toolgate::Plane": "run.py pretooluse-* — the plane gate, as the scenarios' two planes",
+    "toolgate::Verdict": "run.py pretooluse-* — its three fields are the denial the hook prints",
+    "toolgate::emitted": "run.py pretooluse-* — the stdout both sides are compared on",
+    "toolgate::said": "run.py pretooluse-* — under `emitted`",
+    "toolgate::EVENT": "run.py pretooluse-* — `hookEventName` in that stdout",
+    "toolgate::OVERRIDE_NOTE": "run.py pretooluse-* — the tail of every denial in that stdout",
+    "toolgate::LEAK_REASON_CHARS": "run.py pretooluse-leak — the trace key is a PREFIX of the "
+                                   "prose, and the scenario pins the arm that produces it",
+    "toolgate::REASON_SINGLE_CREDENTIAL": "run.py pretooluse-golden-rule",
+    "toolgate::REASON_PLANE_ROOT_BRANCH": "run.py pretooluse-plane-root-branch",
+    "toolgate::REASON_PLANE_ROOT_RESET": "run.py pretooluse-plane-root-reset",
+    "toolgate::REASON_RELEASE_FLOOR": "run.py pretooluse-release-floor",
+    "toolgate::REASON_FORGE_SUBSTITUTION": "run.py pretooluse-forge-substitution",
+    "toolgate::REASON_CHARTER_SUBSTITUTION": "run.py pretooluse-charter-substitution",
 }
 
 #: The Rust modules this harness is the evidence for.
 GUARD_MODULES = ("shellseg", "shellwrap", "heredoc", "leakguard", "pypath",
-                 "livesub", "credguard", "floorguard", "proseguard")
+                 "livesub", "credguard", "floorguard", "proseguard", "handoffguard",
+                 "toolgate")
 
 _PUB_RE = re.compile(
     r"^\s*pub\s+(?:fn|const|static|struct|enum|type)\s+([A-Za-z_][A-Za-z0-9_]*)", re.M)
@@ -2014,6 +2335,45 @@ def reached4(cmd: str) -> set[str]:
     # weakest: an EXPANDING body is the `--body-file -` spelling of the same defect.
     if hooks._heredoc_substitution(cmd):
         hit.add("a5-body-live")
+    hit |= reached6(cmd)
+    return hit
+
+
+def reached6(cmd: str) -> set[str]:
+    """The branches of A7 a case REACHES.
+
+    Two of them — `a7-shell-string` and `a7-disguised` — were reached 0 times over 20,000 cases
+    of the five generators that came before `a_handoff_case`; the table in that generator's
+    docstring has the rest. The one that matters most is `a7-allowed`: the CANONICAL spelling
+    going THROUGH is the only branch standing between this guard and a rule that refuses every
+    handoff there is, and it is the only branch here with no denial behind it.
+
+    `$CHARTER_HARNESS` is moved for the length of this function, because `_handoff_refusal`
+    reads it and a measurement must not depend on the shell the run was started from.
+    """
+    hit: set[str] = set()
+    was = _with_harness("claude-code")
+    try:
+        line = hooks._handoff_line(cmd)
+        if line is not None:
+            hit.add("a7-found")
+            if line[1]:
+                hit.add("a7-in-a-shells-body")
+        if hooks._shell_string_handoff(cmd):
+            hit.add("a7-shell-string")
+        if hooks._disguised_handoff(cmd):
+            hit.add("a7-disguised")
+        for caller in PROBE_CALLERS:
+            got = _refusal(cmd, caller)
+            if got is None:
+                if line is not None or hooks._shell_string_handoff(cmd):
+                    # The one branch with no denial behind it, and the whole point of the
+                    # guard: a handoff spelled the way the host's rule matches goes through.
+                    hit.add("a7-allowed")
+                continue
+            hit.add(got[0])
+    finally:
+        _restore_harness(was)
     return hit
 
 
@@ -2025,7 +2385,12 @@ COVERAGE_BRANCHES = ("heredoc-stripped", "unparseable", "raw-reveal", "raw-read"
                      "a2-inherited-env", "a2-git", "a2-ssh-env", "a2-key-env", "a2-c-config",
                      "a2-config-env", "a2-config-write", "a2-ssh-prog", "a2-ssh-url",
                      "a2-signing", "a2-denied", "a4-denied", "live-sub", "a5-body-live",
-                     "a5-pair", "a5-denied", "a6-charter-words", "a6-pair", "a6-denied")
+                     "a5-pair", "a5-denied", "a6-charter-words", "a6-pair", "a6-denied",
+                     # ---- stage 6: A7. The five denials are named by their own trace reasons,
+                     # so a branch here is a row a tally really carries.
+                     "a7-found", "a7-in-a-shells-body", "a7-shell-string", "a7-disguised",
+                     "a7-allowed", "handoff-subagent", "handoff-unattended",
+                     "handoff-shell-string", "handoff-spelling", "handoff-brief-source")
 
 
 def attribute(want: dict, got: dict) -> list[str]:
@@ -2059,7 +2424,7 @@ def main() -> int:
                          "count come from it; a case list that no longer matches is refused "
                          "rather than silently compared against the wrong answers.")
     ap.add_argument("--surface", action="store_true",
-                    help="check only that every `pub` item of the nine modules is reached by "
+                    help="check only that every `pub` item of the eleven modules is reached by "
                          "this harness or accounted for in COVERED_ELSEWHERE — no Python oracle "
                          "and no binary needed")
     ap.add_argument("--coverage", action="store_true",
@@ -2091,7 +2456,7 @@ def main() -> int:
 
     # **What is compared, before anything is compared.** Every mode runs this, because a run that
     # answers 200,000 cases about the part of the surface it happens to reach is the failure
-    # three stages have each found one instance of by mutation. It is cheap — nine file reads —
+    # three stages have each found one instance of by mutation. It is cheap — eleven file reads —
     # and it is the only check here that can go red without any Python at all.
     wrong = surface()
     if wrong:
