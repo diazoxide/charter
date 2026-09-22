@@ -190,6 +190,18 @@ describe("the command palette", () => {
 
     await browser.keys(["Enter"]);
 
+    // **Ending a chat asks first now, and this spec's point is that the keyboard alone can
+    // do it.** Radix's `AlertDialog` puts the focus on Cancel — the non-destructive answer,
+    // deliberately — so the yes is Tab and then Enter, and a Return pressed by reflex
+    // cancels. That is the behaviour worth pinning here rather than in a unit test: it is
+    // the primitive's, not charter's, and `docs/ui-primitives.md` says to check per
+    // primitive rather than assume.
+    const asking = await $('[role="alertdialog"]');
+    await asking.waitForDisplayed({ timeout: 20_000 });
+    await browser.keys(["Tab"]);
+    await browser.keys(["Enter"]);
+    await expect(asking).not.toBeDisplayed();
+
     await browser.waitUntil(async () => (await tabNames()).length === before.length - 1, {
       timeout: 15_000,
       timeoutMsg: `the chat the palette was asked to close is still open: ${before.join(", ")}`,

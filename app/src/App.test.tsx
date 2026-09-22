@@ -419,6 +419,23 @@ describe("App", () => {
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
+  it("answers the question with Escape, and Escape means no", async () => {
+    // `docs/ui-primitives.md`'s rule for every modal in this window: Escape answers, with the
+    // NON-destructive answer. It matters most on this one, because this is the only modal
+    // that appears without being asked for — a keyboard user's reflex must not end a chat.
+    const { asked } = core();
+    render(<App />);
+    await openAChat();
+
+    await userEvent.click(screen.getByRole("button", { name: "End chat 1 steward" }));
+    await screen.findByRole("alertdialog");
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(panes()).toEqual(["session 1"]);
+    expect(asked.filter(({ cmd }) => cmd === "close_session")).toEqual([]);
+  });
+
   it("ends a session it opened for a split whose tab closed while it was starting", async () => {
     // Starting a session is a real round trip: the tab can be gone by the time it answers,
     // and then nothing would ever show that session.
