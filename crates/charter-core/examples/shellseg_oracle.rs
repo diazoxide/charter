@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use charter_core::credguard;
 use charter_core::floorguard;
 use charter_core::forge;
+use charter_core::handoffguard;
 use charter_core::heredoc::{self, Header, Line};
 use charter_core::leakguard;
 use charter_core::livesub;
@@ -234,6 +235,73 @@ const PROBE_MODES: [Option<&str>; 5] = [
     Some("default"),
     Some("acceptEdits"),
     Some("BYPASSPERMISSIONS"),
+];
+
+/// `PROBE_DISGUISES` in the harness: the SOURCE spellings `disguised_as` is put, for both of
+/// the words it is asked about.
+const PROBE_DISGUISES: [&str; 47] = [
+    "charter",
+    "handoff",
+    "$'handoff'",
+    "ha$''ndoff",
+    "${x:-handoff}",
+    "{handoff,}",
+    "hando?f",
+    "handof[f]",
+    "$h",
+    "'charter'",
+    "\"charter\"",
+    "\\charter",
+    "chart*",
+    "[c]harter",
+    "ch[a-z]rter",
+    "handoff*",
+    "*handoff*",
+    "HANDOFF",
+    "handoffx",
+    "xhandoff",
+    "$'\\x68andoff'",
+    "{hand,}off",
+    "\"handoff\"",
+    "h?ndoff",
+    "[!x]andoff",
+    "$charter",
+    "c'h'arter",
+    "",
+    "*",
+    "?",
+    "[",
+    "[]",
+    "[!]",
+    "\\",
+    "$",
+    "{}",
+    "{",
+    "}",
+    "handoff\n",
+    "hand\\off",
+    "hand$off",
+    "ha*ff",
+    "?",
+    "**",
+    "[a-",
+    "charter*handoff",
+    // The dotted capital I, whose `str.lower`/`to_lowercase` mappings differ: `disguised_as`
+    // case-folds nothing, so this row is the one that says so.
+    "İandoff",
+];
+
+/// `PROBE_DISGUISE_N` in the harness.
+const PROBE_DISGUISE_N: usize = 4;
+
+/// `PROBE_CALLERS` in the harness: `(agent_id, $CHARTER_HARNESS, permission_mode)`.
+const PROBE_CALLERS: [(Option<&str>, Option<&str>, Option<&str>); 6] = [
+    (None, Some("claude-code"), Some("default")),
+    (None, Some("claude-code"), Some("bypassPermissions")),
+    (Some("sub-1"), Some("claude-code"), Some("default")),
+    (Some("sub-1"), Some("opencode"), Some("default")),
+    (Some("sub-1"), None, Some("bypassPermissions")),
+    (Some(""), Some("claude-code"), Some("default")),
 ];
 
 /// `probe_positions` in the harness: 0, then just past the first three characters one of the
@@ -467,6 +535,9 @@ fn read_it(cmd: &str, fx: &Fixture) -> Value {
         obj.insert(key.to_string(), value);
     }
     for (key, value) in stage4(cmd, fx, &chars, &segments) {
+        obj.insert(key.to_string(), value);
+    }
+    for (key, value) in stage6(cmd) {
         obj.insert(key.to_string(), value);
     }
     answer
@@ -792,6 +863,120 @@ fn stage3(
         (
             "wigs0",
             fx.rel(leakguard::walk_into_guarded_state(cwd, ops, pats, &fx.state).as_deref()),
+        ),
+    ]
+}
+
+/// A7's answers — `stage6` in `tests/differential/shellseg.py`.
+///
+/// Asked of the RAW command, like stage 4's arms: `handoff_line` does its own stripping through
+/// `lines_a_command_could_run` and `shell_string_handoff` does its own through
+/// `strip_reader_heredocs`, so a pre-stripped string would measure a call the guard never makes.
+fn stage6(cmd: &str) -> Vec<(&'static str, Value)> {
+    let (a7seg, hs7) = match shellseg::lex(cmd) {
+        Err(_) => (Value::Null, Value::Null),
+        Ok(toks) => {
+            let split = shellseg::split_punctuation(toks);
+            let per: Vec<Value> = heredoc::segments_of(&split)
+                .into_iter()
+                .map(|(seg, _before)| {
+                    let texts: Vec<String> = seg.iter().map(|t| t.text.clone()).collect();
+                    let (prog, _env, argv) = shellwrap::split_env(&texts);
+                    json!([
+                        handoffguard::runs_handoff(&prog, &argv),
+                        handoffguard::shell_string(&seg),
+                    ])
+                })
+                .collect();
+            let (seg, piped) = handoffguard::handoff_segment(&split);
+            let shown_seg = match seg {
+                None => Value::Null,
+                Some(seg) => json!(shown(&seg)),
+            };
+            (Value::Array(per), json!([shown_seg, piped]))
+        }
+    };
+    let raws = rotation(cmd, &PROBE_DISGUISES, PROBE_DISGUISE_N);
+    let texts = [
+        handoffguard::HANDOFF_SUBAGENT,
+        handoffguard::HANDOFF_UNATTENDED,
+        handoffguard::HANDOFF_SPELLING,
+        handoffguard::HANDOFF_SHELL_STRING,
+        handoffguard::HANDOFF_SOURCE,
+    ];
+    let mut marks: Vec<char> = handoffguard::SPELLING_MARKS.chars().collect();
+    marks.sort_unstable();
+    let mut shells: Vec<&str> = handoffguard::STRING_SHELLS.to_vec();
+    shells.sort_unstable();
+    let mut reads: Vec<&str> = handoffguard::REDIRECT_READS.to_vec();
+    reads.sort_unstable();
+    let mut measured: Vec<&str> = handoffguard::MEASURED_SUBAGENT_HARNESSES.to_vec();
+    measured.sort_unstable();
+    let refusal =
+        |(agent_id, harness, permission_mode): (Option<&str>, Option<&str>, Option<&str>)| {
+            handoffguard::handoff_refusal(
+                cmd,
+                handoffguard::Caller {
+                    agent_id,
+                    harness,
+                    permission_mode,
+                },
+            )
+        };
+    vec![
+        (
+            "a7tbl",
+            json!([
+                texts.len(),
+                rotation(cmd, &texts, 2),
+                marks.iter().collect::<String>(),
+                shells,
+                reads,
+                measured,
+            ]),
+        ),
+        ("atsr", json!(handoffguard::as_the_shell_reads(cmd))),
+        (
+            "da",
+            json!(
+                raws.iter()
+                    .flat_map(
+                        |raw| ["charter", "handoff"].into_iter().map(move |w| json!([
+                            raw,
+                            w,
+                            handoffguard::disguised_as(raw, w)
+                        ]))
+                    )
+                    .collect::<Vec<_>>()
+            ),
+        ),
+        ("dh", json!(handoffguard::disguised_handoff(cmd))),
+        ("ih", json!(handoffguard::is_handoff(cmd))),
+        ("ssh7", json!(handoffguard::shell_string_handoff(cmd))),
+        ("a7seg", a7seg),
+        ("hs7", hs7),
+        (
+            "hl7",
+            match handoffguard::handoff_line(cmd) {
+                None => Value::Null,
+                Some((line, in_body)) => json!([line, in_body]),
+            },
+        ),
+        (
+            "hr",
+            json!(
+                PROBE_CALLERS
+                    .iter()
+                    .map(|c| refusal(*c).map(|(reason, _)| reason))
+                    .collect::<Vec<_>>()
+            ),
+        ),
+        (
+            "hrd",
+            match refusal(PROBE_CALLERS[0]) {
+                None => Value::Null,
+                Some((reason, denial)) => json!([reason, denial]),
+            },
         ),
     ]
 }
