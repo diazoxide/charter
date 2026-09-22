@@ -952,21 +952,55 @@ function byItsWords(query: string, offer: Offer): boolean {
 }
 
 /**
+ * Whether this row is about the window AS IT STANDS, rather than about a thing it names.
+ *
+ * **It is the colon, and that is the same structural fact `matches` and `byItsWords` already
+ * read.** An id with no colon is a verb with no object — `worktree.remove`, `pane.close`,
+ * `chat.new`, `charter.quit` — and every one of those acts on what is in front of the
+ * operator right now. An id with one names something else in the plane: a tab, a workspace, a
+ * piece. This is not a tie-break invented for the ranking; it is the third use of the
+ * distinction `Offer.id` is documented as carrying.
+ *
+ * **charter-app#174 is why it is used here.** Giving every piece of the focused workspace a
+ * merge row put fifty rows of charter's own vocabulary between `re` and `Remove this chat's
+ * worktree` — 4th of 62 to 54th of 164, measured. Every one of those fifty is a real row and
+ * none of them is about the chat the operator is looking at. The rows in the way were not
+ * somebody's chat names this time, which made it a different defect from #48 with the same
+ * shape on screen; the operator does not get to care about the difference.
+ */
+function aboutWhatIsInFront(offer: Offer): boolean {
+  return !offer.id.includes(":");
+}
+
+/**
  * The rows left after what has been typed, in the order they are shown.
  *
- * **The name you typed in FULL is the row Enter runs**, and after that **a row your words
- * found comes before a row that merely has those letters in somebody's name.** Within each
- * of those two groups everything keeps the place the catalogue gave it — still no score and
- * still no cap. That matters at the scale ADR 0026 writes the limits for: with fifty chats
- * open the catalogue is 117 rows, and `re` used to list `Switch to tab release.3` and forty
- * other names above `Remove this chat's worktree` (measured, charter-app#48). Two stable
- * groups is not a score — nothing is weighted, nothing moves relative to anything else
- * inside its group, and the same query always gives the same order.
+ * **Three stable groups, in this order, and inside each one the catalogue's own order:**
+ *
+ * 1. **The name you typed in FULL**, which is the row Enter runs.
+ * 2. **A row your words found**, and inside that, **a row about what is in front before a row
+ *    about something it names** (`aboutWhatIsInFront`).
+ * 3. **A row that merely has those letters in somebody's name.**
+ *
+ * Still no score and still no cap: nothing is weighted, nothing moves relative to anything
+ * else inside its group, and the same query always gives the same order. That matters at the
+ * scale ADR 0026 writes the limits for, and both of the inner rules were bought with a
+ * measurement:
+ *
+ * - **Group 2 before group 3 is charter-app#48.** At fifty chats `re` listed `Switch to tab
+ *   release.3` and forty other names above `Remove this chat's worktree`.
+ * - **The split inside group 2 is charter-app#174.** Giving every piece of the focused
+ *   workspace its own merge row put fifty rows of charter's own vocabulary in front of the
+ *   same target — 4th of 62 to 54th of 164, measured on the shape `actions.test.ts` builds.
+ *   Those fifty are real rows about real worktrees and none of them is the one the operator
+ *   is looking at. A regression with a respectable cause is still a regression, and #48's
+ *   rule alone could not see this one: every row involved passes `byItsWords`.
  *
  * **It is ranking rather than filtering, and the measurement is why.** The tmux frame's
  * answer was to keep workspaces out of the browsable list; at fifty chats the rows burying
  * the verb are the TABS, which the frame kept, so dropping the workspaces would not have
- * moved the number it was meant to fix.
+ * moved the number it was meant to fix. The same holds one layer down: dropping the piece
+ * rows would take a surface away to fix an ordering.
  */
 export function narrow(query: string, offers: readonly Offer[]): Offer[] {
   const want = query.trim();
@@ -975,9 +1009,13 @@ export function narrow(query: string, offers: readonly Offer[]): Offer[] {
   const whole = want.toLowerCase();
   const exact = kept.filter((offer) => offer.title.toLowerCase() === whole);
   const rest = kept.filter((offer) => !exact.includes(offer));
+  const found = rest.filter((offer) => byItsWords(want, offer));
   return [
     ...exact,
-    ...rest.filter((offer) => byItsWords(want, offer)),
+    ...found.filter(aboutWhatIsInFront),
+    ...found.filter((offer) => !aboutWhatIsInFront(offer)),
+    // Not split again: group 3 is by definition the rows the query found only inside a NAME,
+    // so every row in it has one — and a row with a name has a colon.
     ...rest.filter((offer) => !byItsWords(want, offer)),
   ];
 }

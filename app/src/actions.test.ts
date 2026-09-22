@@ -627,25 +627,31 @@ describe("the catalogue as the tabs change", () => {
  * close-tab rows almost to the last one, and no version of this list has ever left the tabs
  * out. That is why this is ranking and not filtering.
  *
- * ## What charter-app#174 cost this, measured
+ * ## What charter-app#174 cost this, measured — and what was done about it
  *
  * The explorer's rows needed a row per piece to have a menu at all, so the shape below grew
  * ten clones with five pieces each and the plane's personas — the limits ADR 0026 writes for.
- * That is 183 rows to **291**, and it moves where `Remove this chat's worktree` lands:
+ * That is 183 rows to **291**, and the first cut of it moved `Remove this chat's worktree`
+ * down the list:
  *
- * | typed | before #174 | after #174       |
- * |-------|-------------|------------------|
- * | `re`  | 4th of 62   | **54th of 164**  |
- * | `r`   | 19th of 125 | **77th of 233**  |
- * | `rem` | 1st of 7    | 1st of 57        |
+ * | typed | before #174 | #174, first cut | #174 as merged |
+ * |-------|-------------|-----------------|----------------|
+ * | `re`  | 4th of 62   | 54th of 164     | **4th of 164** |
+ * | `r`   | 19th of 125 | 77th of 233     | **7th of 233** |
+ * | `rem` | 1st of 7    | 1st of 57       | 1st of 57      |
  *
- * **And the fifty rows now ahead of it are all worktree rows.** This is not #48's defect
- * coming back: that was forty CHAT NAMES that merely contained `re` burying the only verb
- * about a worktree there was. Every row ahead of it now is a merge of a named worktree, which
- * is what an operator typing `re` in a window full of worktrees is plausibly after — and one
- * more keystroke, `rem`, puts the front chat's own row first again, because the catalogue
- * writes the front row before the pieces and `narrow` keeps the catalogue's order inside a
- * group. Asserted below rather than described, so the next row added has to look at it.
+ * **The fifty rows that got in the way were all worktree rows, and that made it a different
+ * defect from #48 with the same shape on screen.** #48 was forty CHAT NAMES containing `re`;
+ * these are fifty merges of named worktrees, every one of them charter's own vocabulary, so
+ * #48's rule could not see them — they pass `byItsWords` exactly as the target does. From the
+ * operator's seat that distinction buys nothing: the row he wanted was 54th either way.
+ *
+ * So `narrow` gained a second rule inside that group — `aboutWhatIsInFront`, the colon in the
+ * id — and the row is back where it was. The `r` column improves on the BEFORE number too
+ * (19th to 7th), because the same rule lifts it above `Delete workspace <name>` and `Switch
+ * to project <name>`, which are rows about things the operator is not looking at either.
+ * Asserted below as a property — the same rank with the pieces and without — so the next row
+ * added about something else has to look at it.
  */
 describe("the palette at fifty chats", () => {
   const WORKSPACES = ["ide", "charter", "release", "statusline", "forge", "reddit"];
@@ -697,12 +703,14 @@ describe("the palette at fifty chats", () => {
     expect(verbs).toEqual([
       "New workspace…",
       "New project…",
-      // The chat in front's merge, then the fifty pieces' — the catalogue's own order, which
-      // is what `narrow` keeps inside the group it found by charter's words.
+      // **Both of the chat in front's rows, then the pieces'.** `aboutWhatIsInFront` is the
+      // second rule inside this group (charter-app#174): a row with no name in its id acts on
+      // what the operator is looking at, and fifty rows about other worktrees do not get to
+      // stand in front of it. Inside each half the catalogue's own order stands.
       "Merge this chat's worktree into its clone",
+      "Remove this chat's worktree",
       "Merge worktree piece-0 into repo-0",
       "Merge worktree piece-1 into repo-0",
-      "Merge worktree piece-2 into repo-0",
     ]);
     // Not a cap and not a filter: every name that matched is still listed, below.
     expect(rows.some((row) => row.title === "Switch to tab release.3")).toBe(true);
@@ -720,18 +728,67 @@ describe("the palette at fifty chats", () => {
     expect(rows[aim(rows)].title).toBe("New workspace…");
   });
 
-  it("costs the chat in front's removal fifty places under `re`, and nothing under `rem`", () => {
-    // **The price charter-app#174 paid, as a number.** Fifty pieces mean fifty merge rows,
-    // every one of them charter's own words, and they sit between the front chat's merge and
-    // its remove because the catalogue puts destructive rows last: 4th of 62 to 54th of 164.
-    // What is NOT lost is the property #48 bought — the rows now ahead of it are worktree
-    // rows and not chat names, and one more keystroke is the whole of the repair.
-    const at = (typed: string) =>
-      narrow(typed, loaded()).findIndex((row) => row.title === "Remove this chat's worktree") + 1;
+  /**
+   * A hundred rows about other worktrees do not move the row about this one.
+   *
+   * **This is the guard charter-app#174 needed and #48's rule could not give.** #48 split
+   * charter's own words from somebody's name; every row in this fight passes that test, so
+   * the fifty per-piece merges sat in front of `Remove this chat's worktree` on charter's own
+   * vocabulary — 4th of 62 to 54th of 164, measured before it was fixed. `aboutWhatIsInFront`
+   * is the second rule inside that group, and what it buys is asserted as a property rather
+   * than as a rank: **the same place, with the pieces and without them.** A row added about
+   * something the operator is not looking at fails here rather than being found in the
+   * palette at fifty chats.
+   */
+  describe("where the chat in front's own rows land", () => {
+    /** The same window with the pieces and the personas taken out — the catalogue as it was
+     *  before #174, so the two can be compared rather than described. */
+    const before = () =>
+      catalogue(
+        now({
+          tabs: fiftyChats(),
+          workspaces: WORKSPACES,
+          focused: "ide",
+          plane: "/plane",
+          worktree: PIECE,
+          needsYou: [103, 107],
+          nameOf: (session) => `chat ${session}`,
+        }),
+      );
 
-    expect(at("re")).toBe(54);
-    expect(at("r")).toBe(77);
-    expect(at("rem")).toBe(1);
+    const at = (typed: string, offers: Offer[]) =>
+      narrow(typed, offers).findIndex((row) => row.title === "Remove this chat's worktree") + 1;
+
+    it("is exactly where it was before a hundred rows were added around it", () => {
+      for (const typed of ["re", "r", "rem", "worktree", "remove"]) {
+        expect({ typed, rank: at(typed, loaded()) }).toEqual({
+          typed,
+          rank: at(typed, before()),
+        });
+      }
+    });
+
+    it("is near the top of what was typed, and not fifty rows down it", () => {
+      // The numbers themselves, so "unchanged" cannot be satisfied by both being bad.
+      expect(at("re", loaded())).toBe(4);
+      expect(at("r", loaded())).toBe(7);
+      expect(at("rem", loaded())).toBe(1);
+    });
+
+    it("leaves every row that was added still findable, because this is ranking", () => {
+      const rows = narrow("re", loaded());
+
+      expect(rows.filter((row) => row.id.startsWith("worktree.merge:"))).toHaveLength(50);
+      expect(rows.filter((row) => row.id.startsWith("worktree.remove:"))).toHaveLength(50);
+    });
+
+    it("puts a piece the operator named in full first, ahead of the row about this chat", () => {
+      // The rule above is about CHARTER'S words. A name typed in full is the operator saying
+      // which piece they mean, and #48's first group has always won over everything.
+      const rows = narrow("Remove worktree piece-3 in repo-7", loaded());
+
+      expect(rows[0].id).toBe("worktree.remove:repo-7/piece-3");
+    });
   });
 
   it("does not reorder anything when every row matched charter's own word", () => {
