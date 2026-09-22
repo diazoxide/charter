@@ -17,7 +17,9 @@
 //! └──────────────────────────────────────────────────────────┘
 //! ```
 //!
-//! **This build draws zone 1 and the frame, and says in the body that it draws no more.** The
+//! **This build draws zone 1, the alert rows and the frame, and says in the body what it does
+//! not draw.** The alert rows are [`crate::alerts`], compared row for row by the
+//! `statusline-alerts-*` differential scenarios. The
 //! seam is the zone rule, which is charter's own divider and not one invented for the port:
 //! everything above it — the top border, the identity row and the rule itself — is byte for
 //! byte what charter prints, and the differential compares exactly that
@@ -25,7 +27,7 @@
 //! rule).
 //!
 //! Why a seam at all: zone 2 is a `git status` per clone, linked worktrees drawn as rows,
-//! persona chips with vault health and memory counts, the alert list and the row planner that
+//! persona chips with vault health and memory counts, and the row planner that
 //! decides what a narrow pane gives up — and zone 3 is the usage history and the update cache.
 //! They are ports of their own. What this milestone refuses to do is draw *some* of zone 2: a
 //! footer that silently omitted the alert row would be worse than a sentence, because an
@@ -90,7 +92,7 @@ pub const RULE_LINE: &str = "\u{0}charter-rule\u{0}";
 /// the same lie as a `doctor` printing green for a check that did not run: the reader cannot
 /// tell "charter looked and there is nothing" from "charter did not look". So the line says
 /// which surfaces are missing, in the order they will arrive.
-pub const NOT_DRAWN_YET: &str = "not drawn by this build: repos · personas · alerts · session";
+pub const NOT_DRAWN_YET: &str = "not drawn by this build: repos · personas · session";
 
 /// The eight ANSI colour names, in ECMA-48's own order — `instance.FRAME_PANE_COLOURS`.
 ///
@@ -241,11 +243,20 @@ pub fn render(plane: &Path, payload: &Value, ambient: &Ambient) -> String {
     // chrome (`│ ` each side). `boxed` re-widens to `frame_w` at the end.
     let width = frame_w.saturating_sub(4).max(24);
 
-    let body = Node::stack([
+    // Below zone 2 in charter, and full width: actionable problems with the plane, each with
+    // the command that fixes it. Here they follow the line that stands where zone 2 will go,
+    // so the order is charter's order with the part not yet drawn named in its place.
+    let alerts = crate::alerts::read(&crate::alerts::Asking {
+        root: plane,
+        active: Some(&active.name),
+        standing: ambient.cwd,
+    });
+    let mut rows = vec![
         identity_row(plane, &active, &look, ambient),
         format!("{DIM}{NOT_DRAWN_YET}{R}"),
-    ])
-    .render(width);
+    ];
+    rows.extend(alerts.alerts.iter().map(|alert| alert.line(&look)));
+    let body = Node::stack(rows).render(width);
     let body = zone_rules(&body);
     format!("{}\n", boxed(&body, frame_w))
 }
@@ -391,7 +402,7 @@ const LEGACY_STRUCTURE_MARKER: &str = ".edm-structure";
 ///    directory inside the plane's own data; here any symlink on the way is in the way. The
 ///    two answers differ only for a workspace that carries such a link AND is missing the file
 ///    under it — a plane where the footer would be flagging a repair that charter would not.
-fn needs_reinit(plane: &Path, ws: &str) -> bool {
+pub(crate) fn needs_reinit(plane: &Path, ws: &str) -> bool {
     let dir = plane.join("workspaces").join(ws);
     if !dir.exists() {
         // Nothing to reinit: a workspace that is not there is not a stale one. `render` still

@@ -13,7 +13,7 @@ const LAUNCHABLE: [&str; 3] = ["claude", "opencode", "codex"];
 const BASELINE_DIRS: [&str; 3] = ["personas", "inventory", "workspaces"];
 
 /// Python's truthiness of a TOML value — the `x or default` every reader of the file uses.
-pub(super) fn truthy(v: &toml::Value) -> bool {
+pub(crate) fn truthy(v: &toml::Value) -> bool {
     match v {
         toml::Value::String(s) => !s.is_empty(),
         toml::Value::Integer(i) => *i != 0,
