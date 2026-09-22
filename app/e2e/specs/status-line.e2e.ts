@@ -1,3 +1,5 @@
+import { readFileSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { browser, expect, $, $$ } from "@wdio/globals";
 
 /**
@@ -51,6 +53,48 @@ async function focus(workspace: string): Promise<void> {
     }
   }
   throw new Error(`no ${workspace} on the workspace strip`);
+}
+
+/** The plane the app says it is acting on — the copy this run was given, never the repo's. */
+async function planeRoot(): Promise<string> {
+  const said = await $("span.plane code");
+  await said.waitForDisplayed({ timeout: 30_000 });
+  return (await said.getText()).trim();
+}
+
+/** Waits for the alerts button's name, and says what it was when it never gets there. */
+async function untilTheButtonSays(want: string): Promise<void> {
+  await $('[data-testid="status-alerts"]').waitForExist({ timeout: 20_000 });
+  let last: string | null = "";
+  try {
+    await browser.waitUntil(
+      async () => {
+        last = await $('[data-testid="status-alerts"]').getAttribute("aria-label");
+        return last === want;
+      },
+      { timeout: 30_000, interval: 250 },
+    );
+  } catch {
+    throw new Error(`the alerts button never said ${want}; it said ${JSON.stringify(last)}`);
+  }
+}
+
+/** Presses the status line's Alerts button and waits for the drawer, asked for afresh — an
+ *  element looked up before the drawer existed is not the drawer. */
+async function openTheDrawer(): Promise<WebdriverIO.Element> {
+  await $('[data-testid="status-alerts"]').click();
+  const drawer = await $('[data-testid="alerts-drawer"]');
+  await drawer.waitForDisplayed({ timeout: 20_000 });
+  return drawer.getElement();
+}
+
+/** Closes the drawer with Escape if it is up, and waits until it is gone. */
+async function closeTheDrawer(): Promise<void> {
+  if (await $('[data-testid="alerts-drawer"]').isExisting()) await browser.keys("Escape");
+  await browser.waitUntil(async () => !(await $('[data-testid="alerts-drawer"]').isExisting()), {
+    timeout: 20_000,
+    timeoutMsg: "the alerts drawer did not close",
+  });
 }
 
 /** Waits for the status line to say something, and says what it did say when it never does. */
@@ -172,16 +216,59 @@ describe("the status line", () => {
     await untilItSays("alpha");
   });
 
-  it("says charter cannot count alerts, on a button nothing is behind yet", async () => {
-    // charter's alert row is not ported (`charter/statusline.py:_alerts`), so the button says
-    // so instead of showing a zero — the same claim `Panels`'s alerts area refuses to make.
-    // M6.5's drawer is what makes it pressable.
+  it("opens the alerts drawer over the whole window, naming every open project", async () => {
+    // The fixture plane is healthy, so charter has read every project to the end and found
+    // nothing — which is a claim it can make, and the button makes it as `none`, with no badge.
     await untilTheStripIsRead();
+    await untilTheButtonSays("Alerts: none");
+    const name = basename(await planeRoot());
 
-    const button = await $('[data-testid="status-alerts"]');
-    await button.waitForExist({ timeout: 20_000 });
-    expect(await button.getAttribute("aria-label")).toBe("Alerts — not drawn by this build");
-    expect(await button.isEnabled()).toBe(false);
+    const drawer = await openTheDrawer();
+    expect(await drawer.getAttribute("role")).toBe("dialog");
+
+    // Over the window, not inside a region: the right edge to the right edge, top to bottom.
+    const [width, height] = await browser.execute(() => [
+      document.documentElement.clientWidth,
+      document.documentElement.clientHeight,
+    ]);
+    const x = (await drawer.getLocation("x")) as number;
+    const y = (await drawer.getLocation("y")) as number;
+    expect(Math.abs(x + ((await drawer.getSize("width")) as number) - width)).toBeLessThanOrEqual(
+      1,
+    );
+    expect(y).toBeLessThanOrEqual(1);
+    expect(Math.abs(((await drawer.getSize("height")) as number) - height)).toBeLessThanOrEqual(1);
+
+    const project = await drawer.$(`[aria-label="Alerts in ${name}"]`);
+    await expect(project).toHaveText(expect.stringContaining("Nothing needs you here."));
+
+    await closeTheDrawer();
+  });
+
+  it("lists an alert the plane has, counts it, and stops counting it once it is fixed", async () => {
+    // A workspace behind the current layout: charter's `reinit` alert, with its command. The
+    // drawer asks the core again as it opens, so what it lists is the plane as it is now.
+    await untilTheStripIsRead();
+    const plane = await planeRoot();
+    const marker = join(plane, "workspaces", "beta", ".charter-structure");
+    const was = readFileSync(marker, "utf8");
+    try {
+      writeFileSync(marker, "4\n");
+      const drawer = await openTheDrawer();
+      const project = await drawer.$(`[aria-label="Alerts in ${basename(plane)}"]`);
+      await expect(project).toHaveText(expect.stringContaining("charter ws reinit --all"));
+      await expect(project).toHaveText(expect.stringContaining("beta"));
+      await closeTheDrawer();
+      await untilTheButtonSays("Alerts: 1");
+    } finally {
+      // Put back what this spec changed, and never leave the drawer over the window: one app
+      // process serves the whole run, and a scrim left up blocks every spec after this one.
+      writeFileSync(marker, was);
+      await closeTheDrawer();
+    }
+    await openTheDrawer();
+    await closeTheDrawer();
+    await untilTheButtonSays("Alerts: none");
   });
 
   it("stays at the bottom when every region is put away", async () => {

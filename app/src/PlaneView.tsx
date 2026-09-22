@@ -45,7 +45,7 @@ import { BottomBar } from "./BottomBar";
 import { useWorkspaceState } from "./workspaceState";
 import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame, RegionToggle } from "./RegionFrame";
-import { StatusLine } from "./StatusLine";
+import { StatusLine, type Alerts } from "./StatusLine";
 import {
   byLastActivity,
   closeFocusedPane,
@@ -109,6 +109,7 @@ export function PlaneView({
   pinnedProjects,
   window: windowDoes,
   onReport,
+  alerts,
 }: {
   plane: PlaneId;
   /** Whether this is the project the operator is looking at. */
@@ -124,6 +125,9 @@ export function PlaneView({
   /** What this project has open and whether it has found out yet, for the window's quit
    *  warning and for this project's own tab. */
   onReport: (plane: PlaneId, report: PlaneReport) => void;
+  /** The window's alerts drawer, for the status line's button. The window's and not this
+   *  project's: alerts cross projects, so the count is every open project's. */
+  alerts?: Alerts;
 }) {
   const [tabs, setTabs] = useState<Tabs>(noTabs);
   /** What every chat is doing, in THIS project. Pushed from the core; nothing here polls.
@@ -1364,6 +1368,7 @@ export function PlaneView({
         where={focused === OUTSIDE ? OUTSIDE_TITLE : focused}
         workspaces={sidebar?.workspaces.length}
         state={workspaceState}
+        alerts={alerts}
       />
 
       {picking && (

@@ -163,12 +163,13 @@ describe("the right-hand region", () => {
     expect(await onTheBar.isExisting()).toBe(false);
   });
 
-  it("says the alert row is not ported rather than showing an empty alert area", async () => {
-    // charter ADR 0038 assigns alerts here and this build has no source for one. An empty
-    // area under the heading would claim charter had looked.
+  it("holds no alerts section, because alerts are the window's drawer now", async () => {
+    // An alert is about a plane and this region is one project's, so alerts moved to the
+    // drawer the status line opens (`status-line.e2e.ts` drives it).
     await untilTheStripIsRead();
+    await $('[data-testid="panels"]').waitForExist({ timeout: 20_000 });
 
-    await untilSays("panel-alerts", "Not drawn by this build");
+    expect(await $('[data-testid="panel-alerts"]').isExisting()).toBe(false);
   });
 
   it("no longer holds the repos or the CI, which went to the bottom bar", async () => {
