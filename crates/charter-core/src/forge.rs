@@ -571,7 +571,7 @@ fn cli_env(cli_dir: Option<&Path>) -> Vec<(String, String)> {
     }
     dirs.extend(git::GIT_DIRS.iter().map(|d| (*d).to_string()));
     let mut env = vec![
-        ("PATH".to_string(), dirs.join(":")),
+        ("PATH".to_string(), git::path_value(&dirs)),
         ("LC_ALL".to_string(), "C".to_string()),
         ("NO_COLOR".to_string(), "1".to_string()),
         // Nothing here has a terminal to answer a prompt on, and a prompt nobody can see is
@@ -1229,6 +1229,24 @@ pub fn py_str(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// charter-app#100's `PATH` joined with `:`, as it bit on unix: a forge CLI found under a
+    /// `$HOME` with a colon in it — one of `programs::USER_BIN` — used to hand its child a
+    /// `PATH` whose second half was a relative directory.
+    #[cfg(unix)]
+    #[test]
+    fn a_forge_clis_child_is_never_handed_a_relative_path_entry() {
+        let env = cli_env(Some(Path::new("/home/a:b/.local/bin")));
+        let path = &env.iter().find(|(k, _)| k == "PATH").expect("a PATH").1;
+        for dir in std::env::split_paths(path) {
+            assert!(dir.is_absolute(), "{} in {path}", dir.display());
+        }
+        assert_eq!(
+            std::env::split_paths(path).collect::<Vec<_>>(),
+            git::GIT_DIRS.iter().map(PathBuf::from).collect::<Vec<_>>(),
+            "the fixed directories, and nothing of the directory that could not be written"
+        );
+    }
 
     #[test]
     fn a_host_is_a_hostname_and_nothing_that_merely_fits_in_the_slot() {
