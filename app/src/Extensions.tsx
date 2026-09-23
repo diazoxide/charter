@@ -3,6 +3,7 @@ import * as Dialog from "@radix-ui/react-dialog";
 import { ApproveExtension } from "./ApproveExtension";
 import { commands, type ExtensionAsk, type InstalledExtensions } from "./bindings";
 import { drawIn, inForce, load } from "./theme/theme";
+import { atCreation } from "./windowprefs";
 
 /**
  * What has contributed what to this window, and the question charter asks before anything new
@@ -202,12 +203,17 @@ function standingReads(standing: string): string {
  * extension declares, so it lands afterwards. The visible cost is one repaint for an operator
  * who installed one, and the alternative is a slower launch for everybody who did not.
  *
+ * **The operator's own `theme.json` wins.** It is the one theme they wrote for this machine
+ * themselves, and it was drawn before the first frame (`windowprefs.ts`); an extension's
+ * contribution does not repaint over it. Delete the file to have the extension's theme.
+ *
  * The text is handed to `theme.load`, which is the parse-and-re-emit rule: a token's text is
  * read into a typed value and a fresh string is written out from it, so the theme's own bytes
  * never reach a stylesheet (ADR 0041 property 4). Nothing here throws; a theme that is not JSON
  * at all is dropped and the window keeps the theme it has.
  */
 export async function drawWhatIsInForce(): Promise<void> {
+  if (atCreation().theme.document !== null) return;
   const answered = await commands.extensionThemes();
   if (answered.status === "error" || answered.data.length === 0) return;
   // The first in force. Choosing among several is a preference this machine does not yet keep,

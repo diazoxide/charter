@@ -863,6 +863,17 @@ button.show-more:focus-visible {
   padding: 2px 4px;
 }
 
+/* **The strip under the last row is the terminal's colour, not xterm's black** (charter-app#193,
+   M6.8). `FitAddon` fits whole rows into a box that is not a multiple of one, so every pane has
+   up to a row of slack at its bottom, and `xterm.css` paints the viewport behind it `#000`.
+   This used to be an inline style set once per pane, because xterm's stylesheet was unlayered
+   and nothing in this layer could beat it; it is in the `vendor` layer now (`styles.css`), below
+   this one, so the fix is a token — and a theme switched while the window is up repaints the
+   strip with everything else. `pane-fill.e2e.ts` holds the pixel. */
+.xterm .xterm-viewport {
+  background-color: var(--terminal-background);
+}
+
 /* The window below the bar, when there is no project in it: the opener, full width. The
    four regions have their own layout below. */
 .body {

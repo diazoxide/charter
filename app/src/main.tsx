@@ -3,13 +3,16 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { attach } from "./bench";
 import { drawWhatIsInForce } from "./Extensions";
+import { settleLayout } from "./regions";
 import { DEFAULT_THEME, drawIn } from "./theme/theme";
+import { theirTheme } from "./windowprefs";
 
-// The window's colours, before anything is rendered and therefore before anything is painted.
-// A built-in theme is compiled into the bundle, so this is an object already in memory and
-// `TOKENS.length` calls to `setProperty` — nothing is read from disk on the way to the first
-// frame, which is the only arrangement ADR 0026's 2 s cold start can afford.
-drawIn(DEFAULT_THEME);
+// The window's colours, before anything is rendered and therefore before anything is painted:
+// the operator's own `theme.json` when there is one, else the built-in compiled into the bundle.
+// Neither is a read from disk on the way to the first frame — the file was read by the Rust side
+// before the window existed and handed to it with the window (`windowprefs.ts`) — which is the
+// only arrangement ADR 0026's 2 s cold start can afford.
+drawIn(theirTheme() ?? DEFAULT_THEME);
 
 // In a scenario-test build only, WebdriverIO's window-side plugin, which its Tauri service
 // looks for. `vite build --mode e2e` is the only build that sets this.
@@ -30,3 +33,8 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
 // and the first frame. An operator who installed a theme pays one repaint; everybody else pays
 // nothing. A machine with no extensions answers with an empty list and nothing is drawn again.
 void drawWhatIsInForce();
+
+// What the layout file cost, said in the alerts drawer, and the one-time move of the arrangement
+// web storage used to hold into the file. After the render for the same reason: the first frame
+// was already drawn from what the window was handed.
+void settleLayout();

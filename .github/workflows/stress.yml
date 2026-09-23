@@ -40,15 +40,17 @@ on:
       - .github/workflows/stress.yml
       # The spec, the helpers it drives the window with, and every other scenario spec:
       # STRESS=1 adds it to the WHOLE scenario run, in the same app process, after whatever
-      # the others left open. The benchmark, the state run and the Finder run are other
-      # configurations this job never starts.
+      # the others left open. The benchmark, the state run, the Finder run and the layout run
+      # are other configurations this job never starts.
       - app/e2e/**
       - '!app/e2e/bench/**'
       - '!app/e2e/wdio.bench.conf.ts'
       - '!app/e2e/wdio.state.conf.ts'
       - '!app/e2e/wdio.finder.conf.ts'
+      - '!app/e2e/wdio.layout.conf.ts'
       - '!app/e2e/specs/*.state.e2e.ts'
       - '!app/e2e/specs/*.finder.e2e.ts'
+      - '!app/e2e/specs/*.layout.e2e.ts'
       # The process it measures, all of it: a thread started anywhere in the app counts.
       - app/src-tauri/**
       - '!app/src-tauri/icons/**'
