@@ -2027,13 +2027,9 @@ const ENDS_A_CHAT = new Set(["closeTab", "closePane"]);
  * collides in review rather than at runtime. The controls keep their hover rule; the gauge,
  * always drawn, is outside it.
  *
- * **The frame knows whether there is a gauge, and says so with a class** (`gauged`). At
- * top-left the gauge would sit on the start of the terminal's first line at every pane size —
- * a terminal's text begins at column 0 — so the pane gives it a row (`App.css`, which also
- * records the margin-collapse that cost a first attempt). A class the component writes rather
- * than a `:has(.chat-gauge)` selector, because the frame already knows: it reads the usage to
- * draw the gauge, and a fact the component holds is plainer as a class than re-derived from
- * the DOM by the stylesheet.
+ * **Both corners float over the terminal and neither takes a row.** #207 gave the gauge a row
+ * of its own, and a pane with a gauge was then a row shorter than one without — the operator:
+ * *"its changing harness container sizes"*. A pane's size is the layout's business alone.
  */
 function PaneFrame({
   plane,
@@ -2052,7 +2048,7 @@ function PaneFrame({
 }) {
   const usage = useChatUsage(plane, session, moved, running);
   return (
-    <div className={clsx("pane-frame", usage !== undefined && "gauged")}>
+    <div className="pane-frame">
       {children}
       <div className="pane-corner at-start">
         <ChatGauge usage={usage} />
