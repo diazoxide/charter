@@ -489,6 +489,12 @@ export const commands = {
 	 */
 	extensionViews: () => typedError<ExtensionView[], string>(__TAURI_INVOKE("extension_views")),
 	/**
+	 *  Whether this platform runs extension programs at all
+	 *  ([`charter_core::executor::RUNS_PROGRAMS`]). On one that does not, [`extension_views`]
+	 *  offers nothing and the window should not draw a place for a view to go.
+	 */
+	extensionProgramsRun: () => __TAURI_INVOKE<boolean>("extension_programs_run"),
+	/**
 	 *  What one view shows for this plane, now.
 	 * 
 	 *  `from` is `None` for a view charter draws itself and an extension's id for one it offers;

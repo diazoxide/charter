@@ -130,9 +130,25 @@ pub(crate) async fn extension_views() -> Result<Vec<ExtensionView>, String> {
         .map_err(|err| format!("reading this machine's views did not finish: {err}"))
 }
 
+/// Whether this platform runs extension programs at all
+/// ([`charter_core::executor::RUNS_PROGRAMS`]). On one that does not, [`extension_views`]
+/// offers nothing and the window should not draw a place for a view to go.
+#[tauri::command]
+#[specta::specta]
+pub(crate) fn extension_programs_run() -> bool {
+    charter_core::executor::RUNS_PROGRAMS
+}
+
 /// [`extension_views`] with the survey already taken, so the shaping is testable without a
 /// Tauri runtime.
+///
+/// **Nothing on a platform that runs no programs**: a view's button there could only ever
+/// answer [`charter_core::executor::REFUSED_HERE`], and a button that always refuses is a
+/// button the operator should not have been shown.
 fn offered(seen: &extension::Survey) -> Vec<ExtensionView> {
+    if !charter_core::executor::RUNS_PROGRAMS {
+        return Vec::new();
+    }
     seen.installed
         .iter()
         .flat_map(|row| {
@@ -351,8 +367,16 @@ mod tests {
     #[test]
     fn an_approved_extension_s_view_is_offered_with_what_it_is_about() {
         let (_dir, config) = made(true);
+        let offered = offered(&extension::survey(&config));
+        if !charter_core::executor::RUNS_PROGRAMS {
+            assert!(
+                offered.is_empty(),
+                "a view was offered where it could only refuse"
+            );
+            return;
+        }
         assert_eq!(
-            offered(&extension::survey(&config)),
+            offered,
             vec![ExtensionView {
                 extension: "stats".into(),
                 id: "statistics".into(),

@@ -1133,6 +1133,7 @@ fn commands() -> Builder<tauri::Wry> {
             extensions::extension_themes,
             extensions::extension_panels,
             views::extension_views,
+            views::extension_programs_run,
             views::open_view,
             views::reopened_views,
             views::window_views,
