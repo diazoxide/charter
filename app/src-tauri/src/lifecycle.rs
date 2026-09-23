@@ -10,6 +10,7 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use std::sync::PoisonError;
+use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
@@ -110,21 +111,65 @@ pub fn hide_rather_than_close<R: Runtime>(window: &tauri::Window<R>) {
     let _ = window.hide();
 }
 
+/// The menu-bar glyph: charter's mark redrawn as a macOS template image, and NOT the app
+/// icon.
+///
+/// A template is drawn from its alpha channel alone — macOS throws the colours away and
+/// paints the shape black on a light menu bar, white on a dark one, white again when the
+/// menu is open. The app icon is full-bleed by design (#159, so the small sizes are not
+/// shrunk by a margin only macOS wants), which means its alpha is the whole rectangle, so
+/// handing it to a template is how the tray became a solid black square (#202).
+///
+/// `icons/tray-template.png` is the mark's winged quill in opaque black on transparent,
+/// 42x36, redrawn from `icons/source-1024.png` for the size it is drawn at rather than
+/// resized to it. tray-icon gives the tray's image a height of 18pt whatever its pixels are
+/// (tray-icon 0.24.2, `platform_impl/macos`), so 36px is the Retina pixel size and the
+/// glyph inside it lands at 15pt, the air Apple's own menu-bar icons leave.
+///
+/// The brackets around the quill are dropped, which is the one thing here that is a taste
+/// call. Keeping them costs the bird a fifth of its height and takes the wing's feather
+/// slots — 18px of a 1024 source — to 1.3px on a Retina menu bar and 0.7px off one, which
+/// is a grey smudge inside a box. A menu bar wants a glyph, not a logo.
+///
+/// It is compiled in rather than read from disk: `include_image!` decodes it at build time,
+/// so there is no file for an installer to lose and no runtime failure to handle.
+const MENU_BAR_GLYPH: Image<'static> = tauri::include_image!("icons/tray-template.png");
+
+/// What the tray is drawn from, and whether macOS is to treat it as a template.
+struct TrayIcon {
+    image: Image<'static>,
+    as_template: bool,
+}
+
+/// Which image the tray gets. `macos` is passed in rather than read from `cfg!` inside, so
+/// both answers can be tested from whichever platform the suite happens to run on.
+///
+/// macOS gets the template glyph and nothing else: a menu bar recolours what it draws, and
+/// a coloured icon there is either invisible or a rectangle. Every other platform gets the
+/// app's own icon in its own colours, which is what their trays have always shown and what
+/// `icon_as_template` means nothing to. `None` is a tray without an icon, not a panic: the
+/// app icon is bundled, but a build that lost it still has sessions to give back.
+fn tray_icon(macos: bool, app_icon: Option<Image<'static>>) -> Option<TrayIcon> {
+    if macos {
+        return Some(TrayIcon {
+            image: MENU_BAR_GLYPH,
+            as_template: true,
+        });
+    }
+    app_icon.map(|image| TrayIcon {
+        image,
+        as_template: false,
+    })
+}
+
 /// The tray icon: what the app is while its window is hidden, and what brings it back.
 pub fn tray(app: &AppHandle) -> tauri::Result<()> {
     let show_item = MenuItem::with_id(app, SHOW, "Show charter", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, QUIT, "Quit charter", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
 
-    TrayIconBuilder::with_id("charter")
+    let mut tray = TrayIconBuilder::with_id("charter")
         .tooltip("charter")
-        .icon(
-            app.default_window_icon()
-                .expect("the app is bundled with its icon")
-                .clone(),
-        )
-        // On macOS the icon is drawn as a template, so it follows a light or a dark menu bar.
-        .icon_as_template(true)
         .menu(&menu)
         // The menu is for the right button. A left click is "give me the window back", which
         // is what the icon is mostly there for.
@@ -138,8 +183,19 @@ pub fn tray(app: &AppHandle) -> tauri::Result<()> {
             {
                 show(tray.app_handle());
             }
-        })
-        .build(app)?;
+        });
+    // Owned, because the tray outlives this call while the bundled icon is borrowed from
+    // the app handle.
+    let app_icon = app
+        .default_window_icon()
+        .map(|icon| icon.clone().to_owned());
+    match tray_icon(cfg!(target_os = "macos"), app_icon) {
+        Some(icon) => tray = tray.icon(icon.image).icon_as_template(icon.as_template),
+        // Said out loud, because a tray with no icon is a tray that is hard to find, and
+        // reaching the window from the dock is easier than hunting for an empty slot.
+        None => eprintln!("charter: the tray has no icon; its menu is still on the click"),
+    }
+    tray.build(app)?;
     Ok(())
 }
 
@@ -191,6 +247,87 @@ pub fn clicked<R: Runtime>(app: &AppHandle<R>, id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A full-bleed app icon, the shape of the one #159 generated: opaque corner to corner.
+    fn full_bleed_icon() -> Image<'static> {
+        Image::new_owned(vec![255; 4 * 8 * 8], 8, 8)
+    }
+
+    fn alpha(image: &Image<'_>) -> Vec<u8> {
+        image.rgba().iter().skip(3).step_by(4).copied().collect()
+    }
+
+    /// The property that failed in #202, and the only one macOS reads: a template image is
+    /// its alpha channel, so it has to have both a background that is not there and a shape
+    /// that is. The app icon passes the second half and fails the first.
+    fn reads_as_a_template(image: &Image<'_>) -> bool {
+        let alpha = alpha(image);
+        let clear = alpha.iter().filter(|&&a| a == 0).count();
+        let opaque = alpha.iter().filter(|&&a| a == u8::MAX).count();
+        clear * 2 > alpha.len() && opaque * 10 > alpha.len()
+    }
+
+    #[test]
+    fn the_menu_bar_glyph_is_a_shape_in_alpha_and_not_a_filled_rectangle() {
+        // #202: the tray was the app icon drawn as a template, and a template is painted
+        // from its alpha alone, so an opaque image is a black rectangle in the menu bar.
+        // Nothing noticed, because the PNG looks right in any viewer.
+        let glyph = MENU_BAR_GLYPH;
+
+        let alpha = alpha(&glyph);
+        assert_eq!(
+            alpha.len(),
+            (glyph.width() * glyph.height()) as usize,
+            "the glyph is RGBA, so there is one alpha byte per pixel"
+        );
+        assert!(
+            reads_as_a_template(&glyph),
+            "the glyph must be transparent around an opaque shape, not opaque throughout"
+        );
+        let corners = [
+            0,
+            (glyph.width() - 1) as usize,
+            (glyph.width() * (glyph.height() - 1)) as usize,
+            (glyph.width() * glyph.height() - 1) as usize,
+        ];
+        for corner in corners {
+            assert_eq!(alpha[corner], 0, "a menu bar shows through every corner");
+        }
+    }
+
+    #[test]
+    fn macos_gets_the_template_glyph_however_opaque_the_app_icon_is() {
+        let icon = tray_icon(true, Some(full_bleed_icon())).expect("macOS carries its glyph");
+
+        assert!(icon.as_template, "a menu bar recolours what it draws");
+        assert!(
+            reads_as_a_template(&icon.image),
+            "only an image with a real alpha channel may be drawn as a template (#202)"
+        );
+    }
+
+    #[test]
+    fn every_other_platform_gets_the_app_icon_in_its_own_colours() {
+        // `icon_as_template` is a macOS concept. Linux and Windows draw the image as it is,
+        // and theirs was never the thing that broke.
+        let app_icon = full_bleed_icon();
+
+        let icon = tray_icon(false, Some(app_icon.clone())).expect("the app icon is bundled");
+
+        assert!(!icon.as_template);
+        assert_eq!(icon.image.rgba(), app_icon.rgba());
+    }
+
+    #[test]
+    fn a_build_that_lost_its_app_icon_still_gets_a_tray() {
+        // The tray was built with `.expect("the app is bundled with its icon")` while the
+        // code around it says a tray is never worth the app: "the sessions are the work".
+        assert!(tray_icon(false, None).is_none(), "and no panic");
+        assert!(
+            tray_icon(true, None).is_some(),
+            "macOS never asks the bundle for it — the glyph is compiled in"
+        );
+    }
 
     #[test]
     fn the_first_ask_to_quit_goes_to_the_window() {

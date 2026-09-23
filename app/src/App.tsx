@@ -41,6 +41,8 @@ import {
   type WindowDoing,
 } from "./PlaneView";
 import type { Alerts } from "./StatusLine";
+import { TitleBar, runningIn, useTitleBarRoom, type Crumbs } from "./TitleBar";
+import { useUpdates } from "./Updates";
 import { noTabs } from "./tabs";
 
 /**
@@ -714,8 +716,50 @@ function App() {
     [run],
   );
 
+  /**
+   * The updater, **once for the whole window** (`Updates.tsx`, `TitleBar.tsx`).
+   *
+   * It used to be called inside every `PlaneView`, which made a window holding eight projects
+   * hold eight updater clients for one app-wide fact — eight `update_channel` calls at open
+   * and eight listeners for each `update://checked`. An offer is about the app, so it is asked
+   * once, here, where the things that belong to the WINDOW live.
+   */
+  const updates = useUpdates();
+  const titleBarRoom = useTitleBarRoom();
+
+  /**
+   * Where the window is, for the title bar's left-hand side.
+   *
+   * **Every part of it is already known, and nothing here asks the core a second time.** The
+   * project is the tab's own name; the workspace is the same `focused` the status line draws,
+   * carried up in the project's report; the count is a filter over the `ending` list the quit
+   * warning is already given, whose per-chat state is what the hooks pushed. `runningIn`
+   * holds the rule that a chat has to be *running* and not merely open.
+   */
+  const crumbs = useMemo<Crumbs>(
+    () => ({
+      // **The same `undefined` the opener keys on**, so the bar and the window below it are
+      // never in two different states: `inFront` is already guarded against a project the
+      // window has stopped holding.
+      project: inFront === undefined ? undefined : calledOn(inFront),
+      // And the same pair of conditions the opener waits for, for the reason `openerUp` gives:
+      // both are about to decide whether this window has a project, and "No project open" on
+      // the bar half a second before eight projects arrive is the same lie in a smaller font.
+      decided: launch !== undefined && !restoring,
+      read: saying?.read ?? false,
+      workspace: saying?.where,
+      running: runningIn(saying),
+    }),
+    [inFront, launch, restoring, saying],
+  );
+
   return (
     <main className="window">
+      {/* The window's own title bar. Above the project strip, because on
+          macOS it IS the title bar — the system's traffic lights float over it — and on every
+          other platform it is the window's first row under the system's own bar.
+          `TitleBar.tsx` argues the shape, the drag region and what moved here. */}
+      <TitleBar crumbs={crumbs} updates={updates} room={titleBarRoom} />
       {/* The projects this window holds, as top-level tabs (ADR 0033). Drawn whenever it
           holds any — including one, because `+` is how it gets a second and `×` is the way
           back to the opener. Named, because the chat tabs and the workspaces are tablists

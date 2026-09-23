@@ -59,7 +59,7 @@ import { inSlots, SIDES, useArrangement } from "./regions";
 import { RegionFrame, RegionToggle } from "./RegionFrame";
 import { useDoctor } from "./Doctor";
 import { PaneGauge } from "./ChatGauge";
-import { usePin, useUpdates } from "./Updates";
+import { usePin } from "./Updates";
 import { StatusLine, type Alerts } from "./StatusLine";
 import {
   byLastActivity,
@@ -525,8 +525,19 @@ export function PlaneView({
   /** What `charter doctor` says about this project, run inside the app: the preflight when
    *  the project opens, the full doctor when the operator opens it (`Doctor.tsx`). */
   const doctor = useDoctor(plane);
-  /** The updater's offer (the whole app's) and this plane's pin (`Updates.tsx`). */
-  const updates = useUpdates();
+  /**
+   * This plane's pin (`Updates.tsx`).
+   *
+   * **The updater used to be here beside it and is not any more.** An offer is a fact about
+   * the app, and this component is one project of as many as the window holds — so
+   * `useUpdates` here was one updater client, three event listeners and an `update_channel`
+   * call PER OPEN PROJECT, all reporting the same thing. It is called once in `App` now and
+   * drawn once, on the title bar, which is the window's own chrome.
+   *
+   * The pin stays, because it is the opposite kind of fact: `charter version`'s verdict about
+   * THIS plane's `[charter] version` (charter ADR 0030). It belongs beside the project it is
+   * about, and two open projects can honestly disagree about it.
+   */
   const pin = usePin(plane);
 
   /**
@@ -1449,8 +1460,21 @@ export function PlaneView({
   // second capturing listener for the same key. What it lists has to be the project in
   // front's, and this is how it gets there.
   const mine = useMemo<PlaneReport>(
-    () => ({ ending, needsYou: states.needsYou.length, settled, offers, run, said: report }),
-    [ending, offers, report, run, settled, states.needsYou.length],
+    () => ({
+      ending,
+      needsYou: states.needsYou.length,
+      settled,
+      offers,
+      run,
+      said: report,
+      // Where this project is, for the window's title bar. **Read exactly as the status line
+      // reads it** — the same `focused`, through the same `OUTSIDE_TITLE`, out of the same
+      // `sidebar` — because the two rows would otherwise be two answers to one question at
+      // opposite ends of the window.
+      read: sidebar !== undefined,
+      where: focused === OUTSIDE ? OUTSIDE_TITLE : focused,
+    }),
+    [ending, focused, offers, report, run, settled, sidebar, states.needsYou.length],
   );
   // **Before the paint, not after it.** A quit — Cmd-Q, the tray, the menu — arrives whenever
   // it arrives, and the window decides on what every project has told it: a report that
@@ -1827,7 +1851,6 @@ export function PlaneView({
         workspaces={sidebar?.workspaces.length}
         state={workspaceState}
         doctor={doctor}
-        updates={updates}
         pin={pin}
         alerts={alerts}
       />
@@ -1907,6 +1930,12 @@ export type PlaneReport = {
   /** Whether the core has answered what it already had open. Until it has, "no tabs" is
    *  "not yet", and a quit that read it as "nothing is running" would end the lot. */
   settled: boolean;
+  /** Whether its plane has been read at all, for the title bar's breadcrumb. "Not yet" and
+   *  "nowhere" are different claims and {@link where} cannot carry both. */
+  read: boolean;
+  /** The workspace it is on, already read as it should be said — `undefined` when it is on
+   *  none. The title bar's second segment (`TitleBar.tsx`). */
+  where: string | undefined;
 };
 
 /** What a project asks the WINDOW to do, because the window is what holds projects. */

@@ -1,7 +1,7 @@
 import { Bell } from "lucide-react";
 import type { WorkspaceState } from "./workspaceState";
 import { Health, type DoctorState } from "./Doctor";
-import { PinItem, UpdateItem, type Updates } from "./Updates";
+import { PinItem } from "./Updates";
 import type { PinReport } from "./bindings";
 
 /**
@@ -68,10 +68,19 @@ import type { PinReport } from "./bindings";
  * **What is left off, and why.** The `ctx`/`cache` gauges and the usage trend are per-chat and
  * have no renderer ported — ADR 0038 names both as open, and a window-wide gauge would be one
  * conversation's number under fifty. `doctor` is one button here (`Doctor.tsx` argues why the
- * frame and not a region); the update offer and the plane's pin are two more (`Updates.tsx`).
- * Repos and
+ * frame and not a region) and the plane's pin is another (`Updates.tsx`). Repos and
  * CI are the bottom region's, and a status line that drew them would be a second bottom bar
  * one line below the first.
+ *
+ * **And the update offer is NOT here any more.** It was, beside the pin, and the two read as
+ * one pair of "version facts" — but only one of them is about a project. The pin is
+ * `charter version`'s verdict on THIS plane's `[charter] version` (charter ADR 0030), so two
+ * open projects can honestly disagree about it and it belongs on the line that names the
+ * project. An update offer is about the app: the same offer whichever project is in front, and
+ * the line is drawn once per project, so eight projects meant eight `useUpdates` clients
+ * listening for one event. It is on the title bar now — the window's own chrome, drawn once
+ * (`TitleBar.tsx`). Moved rather than copied: two surfaces stating one fact is the shape
+ * charter refuses, and the duplication this line already carries is named above and argued for.
  */
 export function StatusLine({
   plane,
@@ -81,7 +90,6 @@ export function StatusLine({
   state,
   alerts,
   doctor,
-  updates,
   pin,
 }: {
   /** The project's root directory — the path that used to sit in the top-right corner. */
@@ -120,8 +128,6 @@ export function StatusLine({
   /** What the doctor last said about this project, run inside the app (`Doctor.tsx`). Absent
    *  draws no button — a caller that has no doctor to offer offers none. */
   doctor?: DoctorState;
-  /** The updater, as the window knows it (`Updates.tsx`). Absent draws no button. */
-  updates?: Updates;
   /** What `charter version` says about this plane's pin, and a way to ask again. The item
    *  is drawn only when it drifts. */
   pin?: { pin?: PinReport; again: () => void };
@@ -168,8 +174,6 @@ export function StatusLine({
       <AlertsButton alerts={alerts} />
 
       {doctor && <Health doctor={doctor} />}
-
-      {updates && <UpdateItem updates={updates} />}
 
       {pin && <PinItem pin={pin.pin} again={pin.again} />}
 
