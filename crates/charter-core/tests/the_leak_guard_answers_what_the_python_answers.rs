@@ -25,6 +25,8 @@
 //! and the entries the glob probe is put to — and both are built from the root this test just
 //! made.
 
+mod oracle_corpus;
+
 use std::path::{Path, PathBuf};
 
 use charter_core::{heredoc, leakguard, pypath, shellseg, shellwrap};
@@ -129,17 +131,6 @@ fn rel(root: &Path, p: Option<&Path>) -> Value {
     }
 }
 
-fn corpus() -> Vec<Value> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/corpora/shellseg-oracle.jsonl");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|err| panic!("cannot read {}: {err}", path.display()));
-    text.lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| serde_json::from_str(l).expect("each line is one JSON object"))
-        .collect()
-}
-
 fn strings(v: &Value) -> Vec<String> {
     v.as_array()
         .expect("a recorded probe list")
@@ -150,7 +141,10 @@ fn strings(v: &Value) -> Vec<String> {
 
 #[test]
 fn the_recorded_python_answer_is_the_answer_this_guard_gives() {
-    let rows = corpus();
+    let (ats, rows): (Vec<String>, Vec<Value>) = oracle_corpus::shellseg()
+        .into_iter()
+        .map(|r| (r.at, r.row))
+        .unzip();
     assert!(
         rows.len() >= 300,
         "the corpus is the evidence; {} rows is not it",
@@ -170,12 +164,12 @@ fn the_recorded_python_answer_is_the_answer_this_guard_gives() {
     std::env::set_current_dir(&root).expect("the fixture root is enterable");
 
     let mut wrong: Vec<String> = Vec::new();
-    for row in &rows {
+    for (at, row) in ats.iter().zip(&rows) {
         let cmd = row["cmd"].as_str().expect("every row names its command");
         let mut check = |what: &str, want: &Value, got: Value| {
             if want != &got {
                 wrong.push(format!(
-                    "{cmd:?}\n    {what} python={want}\n    {what}   rust={got}"
+                    "{at} {cmd:?}\n    {what} python={want}\n    {what}   rust={got}"
                 ));
             }
         };

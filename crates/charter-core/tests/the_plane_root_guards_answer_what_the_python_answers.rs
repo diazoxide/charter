@@ -19,9 +19,8 @@
 //! binary for the one test, with the environment the harness gave both sides, and asserts on the
 //! child's verdict.
 
-#[allow(dead_code)]
-#[path = "../examples/planeroot_oracle.rs"]
-mod oracle;
+mod oracle_corpus;
+mod planeroot_answer;
 
 use std::path::{Path, PathBuf};
 
@@ -128,18 +127,20 @@ fn request(v: &Value, base: &str) -> Value {
 }
 
 fn replay(base: &str) -> Vec<String> {
-    let text = std::fs::read_to_string(repo_file("fixtures/corpora/planeroot-oracle.jsonl"))
-        .expect("the corpus is checked in");
-    let rows: Vec<Value> = text
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| serde_json::from_str(l).expect("one JSON object per line"))
-        .collect();
+    // The curated rows, then the frozen subset of the seeded fuzz: one replay, one comparison.
+    let mut rows = oracle_corpus::jsonl("planeroot-oracle.jsonl");
     assert!(
         rows.len() > 150,
         "the corpus has {} rows — it was cut, not answered",
         rows.len()
     );
+    let generated = oracle_corpus::jsonl_gz("planeroot-generated.jsonl.gz");
+    assert!(
+        generated.len() > 1500,
+        "the frozen fuzz subset has {} rows — it was cut, not answered",
+        generated.len()
+    );
+    rows.extend(generated);
     // Every sentence the two guards can refuse with is only evidence while the corpus really holds
     // a refusal that says it — asserted by name, so an edit to the corpus cannot quietly take one
     // away and leave this replaying nothing but allows.
@@ -171,7 +172,11 @@ fn replay(base: &str) -> Vec<String> {
     ] {
         let n = rows
             .iter()
-            .filter(|r| r["answer"][key].as_str().is_some_and(|s| s.contains(said)))
+            .filter(|r| {
+                r.row["answer"][key]
+                    .as_str()
+                    .is_some_and(|s| s.contains(said))
+            })
             .count();
         assert!(n > 0, "no recorded `{key}` refusal says {said:?}");
     }
@@ -201,16 +206,17 @@ fn replay(base: &str) -> Vec<String> {
     })
 }
 
-fn check(row: &Value, base: &str, scratch: &Path, wrong: &mut Vec<String>) {
+fn check(recorded: &oracle_corpus::Row, base: &str, scratch: &Path, wrong: &mut Vec<String>) {
+    let (at, row) = (&recorded.at, &recorded.row);
     let got = normalise(
-        &oracle::answer(&request(&row["request"], base), scratch),
+        &planeroot_answer::answer(&request(&row["request"], base), scratch),
         base,
     );
     let want = &row["answer"];
     for (key, value) in want.as_object().expect("an answer object") {
         if got.get(key) != Some(value) {
             wrong.push(format!(
-                "{:?} [{key}]\n    python: {value}\n    rust:   {}",
+                "{at} {:?} [{key}]\n    python: {value}\n    rust:   {}",
                 row["case"]["cmd"],
                 got.get(key).unwrap_or(&Value::Null)
             ));
@@ -219,7 +225,7 @@ fn check(row: &Value, base: &str, scratch: &Path, wrong: &mut Vec<String>) {
     for key in got.as_object().expect("an answer object").keys() {
         if want.get(key).is_none() {
             wrong.push(format!(
-                "{:?}: the Rust answered `{key}` and the recording has no such key",
+                "{at} {:?}: the Rust answered `{key}` and the recording has no such key",
                 row["case"]["cmd"]
             ));
         }

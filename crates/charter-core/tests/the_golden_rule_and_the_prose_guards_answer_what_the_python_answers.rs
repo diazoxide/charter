@@ -24,7 +24,9 @@
 //! side by side. The TABLES are not copied here at all — they are compared as data through the
 //! recording's `tbl` key.
 
-use std::path::{Path, PathBuf};
+mod oracle_corpus;
+
+use std::path::Path;
 
 use charter_core::{credguard, floorguard, forge, livesub, proseguard, shellseg, shellwrap};
 use serde_json::{Value, json};
@@ -92,14 +94,12 @@ fn rotation<T: Clone>(cmd: &str, table: &[T], count: usize) -> Vec<T> {
         .collect()
 }
 
+/// The curated rows alone — the command lines a docstring names. The wide replay below reads
+/// the frozen fuzz subset as well (`oracle_corpus::shellseg`).
 fn corpus() -> Vec<Value> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/corpora/shellseg-oracle.jsonl");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|err| panic!("cannot read {}: {err}", path.display()));
-    text.lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| serde_json::from_str(l).expect("each line is one JSON object"))
+    oracle_corpus::jsonl("shellseg-oracle.jsonl")
+        .into_iter()
+        .map(|r| r.row)
         .collect()
 }
 
@@ -162,7 +162,10 @@ fn tables(cmd: &str) -> Value {
 
 #[test]
 fn the_recorded_python_answer_is_the_answer_these_guards_give() {
-    let rows = corpus();
+    let (ats, rows): (Vec<String>, Vec<Value>) = oracle_corpus::shellseg()
+        .into_iter()
+        .map(|r| (r.at, r.row))
+        .unzip();
     assert!(
         rows.len() >= 440,
         "the corpus is the evidence; {} rows is not it",
@@ -174,12 +177,12 @@ fn the_recorded_python_answer_is_the_answer_these_guards_give() {
     let forges = forge::known_ordered(root);
 
     let mut wrong: Vec<String> = Vec::new();
-    for row in &rows {
+    for (at, row) in ats.iter().zip(&rows) {
         let cmd = row["cmd"].as_str().expect("every row names its command");
         let mut check = |what: &str, want: &Value, got: Value| {
             if want != &got {
                 wrong.push(format!(
-                    "{cmd:?}\n    {what} python={want}\n    {what}   rust={got}"
+                    "{at} {cmd:?}\n    {what} python={want}\n    {what}   rust={got}"
                 ));
             }
         };

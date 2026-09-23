@@ -24,8 +24,9 @@
 //! **Every `pub` item of the three modules is in that list**, deliberately: stage 1's one real
 //! harness defect was a field nobody diffed, and it was found by mutation rather than by reading.
 
+mod oracle_corpus;
+
 use std::collections::HashSet;
-use std::path::PathBuf;
 
 use charter_core::heredoc::{self, Header, Line};
 use charter_core::shellseg::{self, LexError, Tok};
@@ -62,14 +63,12 @@ fn sorted(set: HashSet<usize>) -> Value {
     serde_json::json!(v)
 }
 
+/// The curated rows alone — the command lines a docstring names. The wide replay below reads
+/// the frozen fuzz subset as well (`oracle_corpus::shellseg`).
 fn corpus() -> Vec<Value> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/corpora/shellseg-oracle.jsonl");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|err| panic!("cannot read {}: {err}", path.display()));
-    text.lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| serde_json::from_str(l).expect("each line is one JSON object"))
+    oracle_corpus::jsonl("shellseg-oracle.jsonl")
+        .into_iter()
+        .map(|r| r.row)
         .collect()
 }
 
@@ -90,19 +89,22 @@ fn said(err: LexError) -> &'static str {
 
 #[test]
 fn the_recorded_python_answer_is_the_answer_this_module_gives() {
-    let rows = corpus();
+    let (ats, rows): (Vec<String>, Vec<Value>) = oracle_corpus::shellseg()
+        .into_iter()
+        .map(|r| (r.at, r.row))
+        .unzip();
     assert!(
         rows.len() >= 300,
         "the corpus is the evidence; {} rows is not it",
         rows.len()
     );
     let mut wrong: Vec<String> = Vec::new();
-    for row in &rows {
+    for (at, row) in ats.iter().zip(&rows) {
         let cmd = row["cmd"].as_str().expect("every row names its command");
         let mut check = |what: &str, want: &Value, got: Value| {
             if want != &got {
                 wrong.push(format!(
-                    "{cmd:?}\n    {what} python={want}\n    {what}   rust={got}"
+                    "{at} {cmd:?}\n    {what} python={want}\n    {what}   rust={got}"
                 ));
             }
         };

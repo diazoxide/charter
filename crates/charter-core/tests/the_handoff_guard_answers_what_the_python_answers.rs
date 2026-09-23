@@ -15,7 +15,7 @@
 //! judges a SOURCE SPELLING and two fields of a payload. That is the same fact the module
 //! header states as its reason for existing, and it is why this file can be a plain replay.
 
-use std::path::PathBuf;
+mod oracle_corpus;
 
 use charter_core::handoffguard::{self, Caller};
 use charter_core::{heredoc, shellseg, shellwrap};
@@ -93,14 +93,12 @@ fn rotation<T: Clone>(cmd: &str, table: &[T], count: usize) -> Vec<T> {
         .collect()
 }
 
+/// The curated rows alone — the command lines a docstring names. The wide replay below reads
+/// the frozen fuzz subset as well (`oracle_corpus::shellseg`).
 fn corpus() -> Vec<Value> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/corpora/shellseg-oracle.jsonl");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|err| panic!("cannot read {}: {err}", path.display()));
-    text.lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| serde_json::from_str(l).expect("each line is one JSON object"))
+    oracle_corpus::jsonl("shellseg-oracle.jsonl")
+        .into_iter()
+        .map(|r| r.row)
         .collect()
 }
 
@@ -148,19 +146,22 @@ fn tables(cmd: &str) -> Value {
 
 #[test]
 fn the_recorded_python_answer_is_the_answer_this_guard_gives() {
-    let rows = corpus();
+    let (ats, rows): (Vec<String>, Vec<Value>) = oracle_corpus::shellseg()
+        .into_iter()
+        .map(|r| (r.at, r.row))
+        .unzip();
     assert!(
         rows.len() >= 500,
         "the corpus is the evidence; {} rows is not it",
         rows.len()
     );
     let mut wrong: Vec<String> = Vec::new();
-    for row in &rows {
+    for (at, row) in ats.iter().zip(&rows) {
         let cmd = row["cmd"].as_str().expect("every row names its command");
         let mut check = |what: &str, want: &Value, got: Value| {
             if want != &got {
                 wrong.push(format!(
-                    "{cmd:?}\n    {what} python={want}\n    {what}   rust={got}"
+                    "{at} {cmd:?}\n    {what} python={want}\n    {what}   rust={got}"
                 ));
             }
         };
