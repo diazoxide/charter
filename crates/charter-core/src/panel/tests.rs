@@ -16,7 +16,7 @@ fn declaring(json: &str) -> Result<Vec<Panel>, String> {
 fn rows(panel: &Panel) -> &[Row] {
     match &panel.blocks[0] {
         Block::List { rows, .. } => rows,
-        Block::Note { .. } => panic!("the panel's first block is not a list"),
+        Block::Note { .. } | Block::Chart(_) => panic!("the panel's first block is not a list"),
     }
 }
 
@@ -54,7 +54,7 @@ fn a_panel_is_a_title_an_ordering_and_a_body() {
 }
 
 #[test]
-fn a_contributed_panel_may_not_run_a_charter_verb_because_there_is_no_executor() {
+fn a_contributed_panel_may_not_run_a_charter_verb() {
     // **The most important refusal in this file.** A row that ran a catalogue offer on a click
     // would be the first thing in charter that executes on an extension's say-so, through a
     // path with no hook, no prompt and no grant — charter ADR 0041's second door, opened by a
@@ -67,8 +67,8 @@ fn a_contributed_panel_may_not_run_a_charter_verb_because_there_is_no_executor()
     )
     .expect_err("a declared row may not carry a verb");
 
-    assert!(why.contains("may not run one"), "{why}");
-    assert!(why.contains("no extension runtime"), "{why}");
+    assert!(why.contains("may not put one on a row"), "{why}");
+    assert!(why.contains("data charter draws"), "{why}");
 }
 
 #[test]
@@ -81,7 +81,7 @@ fn an_empty_states_button_is_refused_for_the_same_reason() {
     )
     .expect_err("a declared empty state may not carry a verb");
 
-    assert!(why.contains("may not run one"), "{why}");
+    assert!(why.contains("may not put one on a row"), "{why}");
 }
 
 #[test]
@@ -175,6 +175,7 @@ fn two_extensions_cannot_collide_and_neither_can_one_that_calls_itself_charter()
         mark: Mark::Todo,
         blocks: Vec::new(),
         from: By::Charter,
+        about: None,
     };
     let theirs = Panel {
         from: By::Extension("charter".into()),
@@ -198,6 +199,7 @@ fn charters_own_panels_sort_before_a_strangers_at_the_same_order() {
         mark: Mark::Dot,
         blocks: Vec::new(),
         from,
+        about: None,
     };
     let mut panels = vec![
         at(10, By::Extension("zeta".into()), "z"),
@@ -262,4 +264,136 @@ fn two_panels_with_one_id_are_refused_and_so_are_two_rows_with_one_key() {
     )
     .expect_err("two rows, one key");
     assert!(why.contains("two rows called"), "{why}");
+}
+
+// -------------------------------------------------------------------------------------
+// What a program answers (ADR 0041 stage 2): the same vocabulary, plus a chart
+// -------------------------------------------------------------------------------------
+
+fn answering(json: &str) -> Result<Vec<Block>, String> {
+    let value: serde_json::Value = serde_json::from_str(json).expect("the test's own JSON");
+    answered(&value)
+}
+
+#[test]
+fn an_answer_is_a_list_a_note_and_a_chart() {
+    let blocks = answering(
+        r#"[{"kind":"note","text":"42 memories"},
+            {"kind":"chart","title":"Per persona","shape":"columns","unit":"memories",
+             "points":[{"label":"steward","value":30,"note":"71%"},{"label":"release","value":12}]},
+            {"kind":"list","rows":[{"key":"steward","text":"steward","note":"today"}]}]"#,
+    )
+    .expect("an answer");
+
+    assert_eq!(blocks.len(), 3);
+    assert_eq!(
+        blocks[1],
+        Block::Chart(Chart {
+            title: "Per persona".into(),
+            shape: Shape::Columns,
+            unit: Some("memories".into()),
+            points: vec![
+                Point {
+                    label: "steward".into(),
+                    value: 30,
+                    note: Some("71%".into())
+                },
+                Point {
+                    label: "release".into(),
+                    value: 12,
+                    note: None
+                },
+            ],
+        })
+    );
+}
+
+#[test]
+fn a_chart_cannot_be_declared_in_a_manifest() {
+    // ADR 0043's reason, which still holds for a manifest: a declared chart is numbers written
+    // down at install time. `declared` has no way to carry one, and a panel that tried is
+    // refused by name rather than having the key dropped.
+    let refused = declaring(r#"[{"id":"p","title":"P","chart":{"title":"x","points":[]}}]"#)
+        .expect_err("a frozen chart was declared");
+    assert!(refused.contains("\"chart\""), "{refused}");
+}
+
+#[test]
+fn an_answered_row_may_not_carry_a_verb_either() {
+    let refused =
+        answering(r#"[{"kind":"list","rows":[{"key":"a","text":"a","runs":"chat.new"}]}]"#)
+            .expect_err("a verb in an answer");
+    assert!(refused.contains(NO_VERB), "{refused}");
+}
+
+#[test]
+fn an_answered_empty_state_may_not_offer_a_verb() {
+    let refused =
+        answering(r#"[{"kind":"list","rows":[],"empty":{"headline":"x","offer":"chat.new"}}]"#)
+            .expect_err("a verb in an empty state");
+    assert!(refused.contains(NO_VERB), "{refused}");
+}
+
+#[test]
+fn a_chart_that_names_a_colour_is_refused_rather_than_painted() {
+    let refused = answering(r#"[{"kind":"chart","title":"x","colour":"red","points":[]}]"#)
+        .expect_err("a colour reached a chart");
+    assert!(refused.contains("\"colour\""), "{refused}");
+}
+
+#[test]
+fn a_point_that_is_not_a_whole_count_is_refused_rather_than_rounded() {
+    for value in ["-1", "1.5", "\"7\"", "4294967296", "null"] {
+        let refused = answering(&format!(
+            r#"[{{"kind":"chart","title":"x","points":[{{"label":"a","value":{value}}}]}}]"#
+        ))
+        .expect_err(value);
+        assert!(refused.contains("value"), "{value}: {refused}");
+    }
+}
+
+#[test]
+fn a_chart_shape_charter_does_not_draw_is_refused_with_the_ones_it_does() {
+    let refused = answering(r#"[{"kind":"chart","title":"x","shape":"pie","points":[]}]"#)
+        .expect_err("a pie");
+    assert!(refused.contains("bars, columns"), "{refused}");
+}
+
+#[test]
+fn a_block_kind_charter_does_not_draw_is_refused() {
+    let refused =
+        answering(r#"[{"kind":"html","html":"<b>"}]"#).expect_err("markup reached the window");
+    assert!(refused.contains("\"html\""), "{refused}");
+}
+
+#[test]
+fn an_answer_is_bounded_in_blocks_and_in_points() {
+    let many_blocks = format!(
+        "[{}]",
+        vec![r#"{"kind":"note","text":"x"}"#; MOST_BLOCKS + 1].join(",")
+    );
+    assert!(
+        answering(&many_blocks).is_err(),
+        "too many blocks were drawn"
+    );
+
+    let points: Vec<String> = (0..=MOST_POINTS)
+        .map(|n| format!(r#"{{"label":"p{n}","value":{n}}}"#))
+        .collect();
+    let many_points = format!(
+        r#"[{{"kind":"chart","title":"x","points":[{}]}}]"#,
+        points.join(",")
+    );
+    assert!(
+        answering(&many_points).is_err(),
+        "too many points were drawn"
+    );
+}
+
+#[test]
+fn a_control_character_in_a_label_is_refused() {
+    let refused =
+        answering(r#"[{"kind":"chart","title":"x","points":[{"label":"a\u0007b","value":1}]}]"#)
+            .expect_err("a bell in a label");
+    assert!(refused.contains("control character"), "{refused}");
 }

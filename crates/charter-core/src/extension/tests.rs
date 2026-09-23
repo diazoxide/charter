@@ -1448,7 +1448,7 @@ fn a_panel_charter_will_not_read_refuses_the_whole_extension_rather_than_going_q
 
     let why = read_at(&made.at()).expect_err("a row that runs a charter verb is refused");
 
-    assert!(why.contains("may not run one"), "{why}");
+    assert!(why.contains(crate::panel::NO_VERB), "{why}");
 }
 
 #[test]
@@ -1585,17 +1585,159 @@ fn the_prompt_names_every_contribution_and_carries_back_what_was_shown() {
 }
 
 #[test]
-fn a_declared_program_is_named_as_one_this_charter_does_not_start() {
-    // An operator who approved an extension under a charter with no executor must not be left
-    // believing they approved it running — nor believing they refused it, when the next
-    // charter will run it on the same approval.
+fn a_declared_program_with_no_view_is_named_as_one_nothing_starts() {
+    // A program declared with no view has nothing that would ever ask charter to start it,
+    // and the operator is owed that sentence rather than the executor's.
     let made = Made::new();
     made.manifest(r#"{"version":1,"id":"x","contributes":{"runs":"bin/x"}}"#);
     made.file("bin/x", "#!/bin/sh\n");
     let found = read_at(&made.at()).expect("an extension");
 
     let said = prompt(&found, Standing::New).declares.join("\n");
-    assert!(said.contains("does not start it"), "{said}");
+    assert!(
+        said.contains("nothing ever asks charter to start it"),
+        "{said}"
+    );
+}
+
+/// An extension with a program and one view about personas.
+fn with_a_view(made: &Made) -> Extension {
+    made.manifest(
+        r#"{"version":1,"id":"x","contributes":{"runs":"bin/x",
+            "views":[{"id":"stats","title":"Statistics","about":"personas"}]}}"#,
+    );
+    made.file("bin/x", "#!/bin/sh\n");
+    read_at(&made.at()).expect("an extension")
+}
+
+#[test]
+fn a_program_that_answers_a_view_is_named_with_when_charter_starts_it() {
+    // ADR 0041's amendment: the prompt says what charter will do with the program, from the
+    // core, and that what it does is conduct and not a cage.
+    let made = Made::new();
+    let asked = prompt(&with_a_view(&made), Standing::New);
+    let said = asked.declares.join("\n");
+
+    assert!(said.contains(crate::executor::HOW_IT_RUNS), "{said}");
+    assert!(
+        said.contains(crate::handed::what(crate::panel::Subject::Personas)),
+        "the view does not say what it is handed: {said}"
+    );
+    assert_eq!(asked.runs_as_you, RUNS_AS_YOU);
+}
+
+#[test]
+fn a_view_is_read_with_its_title_and_what_it_is_about() {
+    let made = Made::new();
+    let found = with_a_view(&made);
+    assert_eq!(
+        found.manifest.views,
+        vec![View {
+            id: "stats".into(),
+            title: "Statistics".into(),
+            about: crate::panel::Subject::Personas
+        }]
+    );
+}
+
+#[test]
+fn a_view_with_no_program_to_answer_it_is_refused() {
+    let made = Made::new();
+    made.manifest(
+        r#"{"version":1,"id":"x","contributes":{
+            "views":[{"id":"stats","title":"Statistics","about":"personas"}]}}"#,
+    );
+    let refused = read_at(&made.at()).expect_err("a button that can never do anything");
+    assert!(refused.contains("no program"), "{refused}");
+}
+
+#[test]
+fn a_view_about_something_charter_hands_nothing_for_is_refused() {
+    let made = Made::new();
+    made.manifest(
+        r#"{"version":1,"id":"x","contributes":{"runs":"bin/x",
+            "views":[{"id":"stats","title":"Statistics","about":"vaults"}]}}"#,
+    );
+    made.file("bin/x", "#!/bin/sh\n");
+    let refused = read_at(&made.at()).expect_err("a view about vaults");
+    assert!(refused.contains("\"vaults\""), "{refused}");
+}
+
+#[test]
+fn a_view_that_says_where_it_goes_is_refused() {
+    // ADR 0043 property 3, for the one contribution that runs: charter decides where a view is
+    // offered, and a key that tried to decide it is refused by name rather than ignored.
+    let made = Made::new();
+    made.manifest(
+        r#"{"version":1,"id":"x","contributes":{"runs":"bin/x",
+            "views":[{"id":"stats","title":"Statistics","about":"personas","region":"left"}]}}"#,
+    );
+    made.file("bin/x", "#!/bin/sh\n");
+    let refused = read_at(&made.at()).expect_err("a view that chose its place");
+    assert!(refused.contains("\"region\""), "{refused}");
+}
+
+#[test]
+fn two_views_with_one_id_are_refused() {
+    let made = Made::new();
+    made.manifest(
+        r#"{"version":1,"id":"x","contributes":{"runs":"bin/x","views":[
+            {"id":"stats","title":"A","about":"personas"},
+            {"id":"stats","title":"B","about":"personas"}]}}"#,
+    );
+    made.file("bin/x", "#!/bin/sh\n");
+    let refused = read_at(&made.at()).expect_err("two views, one name");
+    assert!(refused.contains("two views"), "{refused}");
+}
+
+#[test]
+fn a_yes_to_a_program_given_before_charter_started_programs_does_not_cover_running_it() {
+    // Until the executor, the prompt said of a program "this charter has no extension runtime
+    // and does not start it". A yes to THAT is not a yes to running it, so a program-declaring
+    // extension carries the executor's protocol in its fingerprint: the digest over the same
+    // bytes with no program declared is a different one, which is what makes every such yes
+    // given before this read as changed.
+    let made = Made::new();
+    let found = with_a_view(&made);
+    let bytes = std::fs::read(made.at().join(MANIFEST)).expect("the manifest");
+    let mut without = found.manifest.clone();
+    without.program = None;
+    without.views = Vec::new();
+
+    let (with_it, _) =
+        tree(&made.at(), &bytes, &found.manifest, MOST_TREE_ENTRIES).expect("hashed");
+    let (without_it, _) = tree(&made.at(), &bytes, &without, MOST_TREE_ENTRIES).expect("hashed");
+    assert_ne!(
+        with_it, without_it,
+        "declaring a program that charter will start did not change what the yes covers"
+    );
+}
+
+#[test]
+fn only_an_approved_extension_offers_its_views() {
+    let made = Made::new();
+    with_a_view(&made);
+    let found = install(&made.config(), &made.at()).expect("installed");
+    assert!(
+        survey(&made.config()).installed[0]
+            .views_in_force()
+            .is_empty(),
+        "an unapproved extension offered a view"
+    );
+
+    approve(&made.config(), found.id(), &found.path, &found.fingerprint).expect("approved");
+    assert_eq!(
+        survey(&made.config()).installed[0].views_in_force().len(),
+        1
+    );
+
+    made.file("bin/x", "#!/bin/sh\necho changed\n");
+    assert!(
+        survey(&made.config()).installed[0]
+            .views_in_force()
+            .is_empty(),
+        "a changed extension still offered its view"
+    );
 }
 
 #[test]
@@ -1611,16 +1753,36 @@ fn a_re_ask_says_it_is_one() {
 }
 
 #[test]
-fn charter_runs_nothing() {
-    // ADR 0041's stage 1 is "the registry with NO executor". This is the whole of the claim,
-    // and it is pinned as source rather than as behaviour because behaviour cannot prove an
-    // absence: a test that watched for a spawned process would pass against a runtime that
-    // simply had not been reached.
+fn the_registry_runs_nothing() {
+    // ADR 0041's stage 1 was "the registry with NO executor", and stage 2 kept it that way on
+    // purpose: the executor is `crate::executor`, which ASKS this module, and the module that
+    // decides what a yes covers has no way to run anything — so a defect here can only ever
+    // be a refusal, never an execution. Pinned as source rather than as behaviour because
+    // behaviour cannot prove an absence.
     let source = include_str!("../extension.rs");
     for spawning in ["Command::new", "std::process::Command", "spawn(", "exec("] {
         assert!(
             !source.contains(spawning),
-            "{spawning} is in the registry, which is ADR 0041 stage 1 and has no executor"
+            "{spawning} is in the registry; the executor is crate::executor, and only it starts \
+             anything"
         );
     }
+}
+
+#[test]
+fn the_executor_is_the_only_thing_in_the_core_that_starts_an_extension_s_program() {
+    // The other half of the claim above: an extension's program has one way to start, and it
+    // is the one with the gate in it. Any other module that learned where an extension's
+    // program is would be a second door.
+    for (name, source) in [
+        ("panel.rs", include_str!("../panel.rs")),
+        ("handed.rs", include_str!("../handed.rs")),
+        ("machine.rs", include_str!("../machine.rs")),
+    ] {
+        assert!(
+            !source.contains("manifest.program"),
+            "{name} reads an extension's program; only executor.rs may"
+        );
+    }
+    assert!(include_str!("../executor.rs").contains("fn cleared("));
 }
