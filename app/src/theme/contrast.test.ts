@@ -76,6 +76,13 @@ const PAIRS: [Token, Token, number][] = [
   ["state.waiting", "control.base", 3],
   ["accent.base", "surface.base", 3],
   ["focus.ring", "surface.base", 3],
+  // The three strips are three shades now (charter-app#193), and a tab that is not the one
+  // you are on is muted text on whichever its strip is. The one you are on is primary text on
+  // the lighter `layer.selected` — the pair #176 would have caught had it been sub-AA.
+  ["text.muted", "layer.project", 4.5],
+  ["text.muted", "layer.workspace", 4.5],
+  ["text.muted", "layer.chat", 4.5],
+  ["text.primary", "layer.selected", 4.5],
   ["border.subtle", "surface.base", 1.2],
   ["border.strong", "surface.base", 1.5],
 ];

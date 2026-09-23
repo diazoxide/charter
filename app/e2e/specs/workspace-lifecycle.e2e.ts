@@ -229,6 +229,34 @@ describe("making a workspace and deleting one", function () {
     await browser.keys(["Escape"]);
   });
 
+  /**
+   * **The strip's own `+`, in the shipped window** (charter-app#193).
+   *
+   * The operator: *"also no new workspace button in workspaces tab — it should be like
+   * projects tabs buttons."* `WorkspaceLifecycle.test.tsx` owns what pressing it does, where
+   * jsdom can watch the command go out; what only a scenario can say is that the control
+   * survives the Vite build and is really on the element in the running app — the same half
+   * `picker.e2e.ts` keeps for `tabindex` (`docs/ui-primitives.md`).
+   *
+   * **Found by its `aria-label` and not by its text**, because it has no text: that is the
+   * whole shape the operator asked for, and the label is what a screen reader reads. The match
+   * is a prefix so the selector stays ASCII, for `runRow`'s reason one function up — the
+   * catalogue's title ends in an ellipsis, and nothing here should turn on one surviving a
+   * round trip through a driver.
+   */
+  it("carries a `+` on the workspace strip, named by the catalogue and drawn as an icon", async () => {
+    const plus = await $(`${WORKSPACES} ~ .strip-doing button[aria-label^="New workspace"]`);
+    await plus.waitForDisplayed({ timeout: 20_000 });
+
+    // No words in it, and a mark inside it. An icon-only button with no icon is an empty box.
+    expect((await plus.getText()).trim()).toBe("");
+    expect(await plus.$("svg").isExisting()).toBe(true);
+
+    // And it is not a tab: it sits beside the tablist, so nothing the strip collapses can
+    // take it away (charter-app#130/#131).
+    expect(await plus.getAttribute("role")).toBe(null);
+  });
+
   it("makes a workspace with the baseline charter gives it, and puts it on the strip", async () => {
     await runRow("New workspace", "New workspace…");
 

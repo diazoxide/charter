@@ -34,10 +34,23 @@
  * theme of the same appearance and the substitution is *reported*, rather than the theme being
  * refused whole or — worse — half-applied into something nobody can read. `load` always
  * answers with a complete theme.
+ *
+ * **A theme also says how the window moves** (M7.2). Durations and easings are a second, smaller
+ * vocabulary under a theme file's `motion`, held to the same rules — semantic names, a closed
+ * grammar, a fallback per token, nothing written outside this directory — and `motion.ts` is
+ * where it and its reasons live, including why reduced motion is decided there and only there.
  */
 
 import dark from "./charter-dark.json";
 import light from "./charter-light.json";
+import {
+  builtInMotion,
+  loadMotion,
+  motionReduced,
+  motionVariables,
+  REDUCE,
+  type Motion,
+} from "./motion";
 
 /**
  * Every token, in the order a theme file is easiest to read in.
@@ -77,6 +90,22 @@ export const TOKENS = [
   "accent.surface",
   "focus.ring",
   "tab.active",
+
+  // **The three strips of the axis, one quiet shade each, and the tab you are on** (charter
+  // ADR 0036, charter-app#193). A project holds workspaces and a workspace holds chats; #171
+  // drew that by indenting each row under the one above, the operator read the indent as stray
+  // padding, and then turned down coloured rules in its place — *"this is not looks
+  // professional, it should be minimalistic, and i prefer to change little bit backgrounds of
+  // tabs and little lighter for selected tab"*. So the depth is a background, one small step
+  // per row, outermost deepest, and `selected` is a step lighter than any of them.
+  //
+  // Neutral greys, no hue: the distinction is meant to be felt rather than noticed. Their own
+  // group rather than `surface.*`, because what they mean is "which row of the axis" and a
+  // theme author should be able to move them without moving every other surface in the window.
+  "layer.project",
+  "layer.workspace",
+  "layer.chat",
+  "layer.selected",
 
   // The one signal this whole app exists for: a chat that has stopped and is waiting.
   "needs-you.base",
@@ -141,6 +170,9 @@ export type Theme = {
    *  native scrollbars and form controls are drawn the right way round. */
   appearance: Appearance;
   values: Record<Token, string>;
+  /** How the window moves: the durations and easings in `motion.ts`, which a theme sets under
+   *  `motion` exactly as it sets colours under `tokens`. */
+  motion: Motion;
 };
 
 /**
@@ -181,14 +213,24 @@ function fallbackFor(appearance: Appearance): Theme {
  * would otherwise only show up as an unreadable window.
  */
 function asTheme(raw: unknown): Theme {
-  const from = raw as { name: string; appearance: Appearance; tokens: Record<string, string> };
+  const from = raw as {
+    name: string;
+    appearance: Appearance;
+    tokens: Record<string, string>;
+    motion: unknown;
+  };
   const values = {} as Record<Token, string>;
   for (const token of TOKENS) {
     const value = from.tokens[token];
     if (!isColour(value)) throw new Error(`the built-in theme ${from.name} has no ${token}`);
     values[token] = value;
   }
-  return { name: from.name, appearance: from.appearance, values };
+  return {
+    name: from.name,
+    appearance: from.appearance,
+    values,
+    motion: builtInMotion(from.name, from.motion),
+  };
 }
 
 /** What `load` had to put right. Every entry is a value the file did not supply usably. */
@@ -254,7 +296,12 @@ export function load(raw: unknown): Loaded {
     }
   }
 
-  return { theme: { name, appearance, values }, complaints };
+  // A theme that says nothing about motion moves the way the built-in of its appearance does,
+  // exactly as a token it does not name is coloured by that built-in.
+  const moved = loadMotion(from.motion, base.motion);
+  for (const said of moved.said) complaints.push({ said });
+
+  return { theme: { name, appearance, values, motion: moved.motion }, complaints };
 }
 
 /**
@@ -312,6 +359,10 @@ export function xtermTheme(theme: Theme): Record<string, string> {
 /**
  * Puts a theme on the document, and says what the window is now drawn on.
  *
+ * `reduced` is whether the operator has asked for less motion, and it is read here rather than
+ * by any component: the motion layer collapses every duration in one place (`motion.ts`), so a
+ * component can neither forget to honour the setting nor honour it differently.
+ *
  * Called from `main.tsx` **before React renders**, so no frame is ever painted in one theme
  * and repainted in another. It is `TOKENS.length` calls to `setProperty` on one element —
  * see `theme.bench.ts` for what that costs against ADR 0026's 2 s.
@@ -319,8 +370,10 @@ export function xtermTheme(theme: Theme): Record<string, string> {
  * `color-scheme` goes on too: it is what makes the platform's own scrollbars, text selection
  * and form controls match, and no custom property can do it.
  */
-export function apply(theme: Theme, to: HTMLElement): void {
+export function apply(theme: Theme, to: HTMLElement, reduced = motionReduced()): void {
   for (const [name, value] of Object.entries(cssVariables(theme)))
+    to.style.setProperty(name, value);
+  for (const [name, value] of Object.entries(motionVariables(theme.motion, reduced)))
     to.style.setProperty(name, value);
   to.style.colorScheme = theme.appearance;
   to.dataset.theme = theme.name;
@@ -340,5 +393,27 @@ export function inForce(): Theme {
  *  reads any call to one as a hook call — which it then refuses inside a `try`. */
 export function drawIn(theme: Theme, to: HTMLElement = document.documentElement): void {
   current = theme;
+  drawnOn = to;
   apply(theme, to);
+  followReducedMotion();
+}
+
+/** Where the theme in force was last drawn, so a change of the reduced-motion setting can be
+ *  drawn onto the same element. */
+let drawnOn: HTMLElement | null = null;
+
+/** Whether the setting is already being followed. One listener for the life of the window. */
+let following = false;
+
+/**
+ * Redraws the theme in force when the operator changes the reduced-motion setting while the
+ * window is up. The platform answers the query live, and a window that only read it at launch
+ * would go on animating for somebody who has just asked it to stop.
+ */
+function followReducedMotion(): void {
+  if (following || typeof matchMedia !== "function") return;
+  following = true;
+  matchMedia(REDUCE).addEventListener("change", (event) => {
+    if (drawnOn !== null) apply(current, drawnOn, event.matches);
+  });
 }

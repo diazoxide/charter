@@ -58,6 +58,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -3329,9 +3330,99 @@ FRESH_SESSION = "fresh-session-2"
 #: different frames to report on — charter has a tmux frame and this binary has none at all,
 #: so it says so and prints the same command to run in a new terminal.
 HANDOFF_HAS_NO_FRAME = (
-    "charter opens the chat in a background window of its own tmux; this binary has no frame "
-    "and no channel into the app that opens one, so it always reaches the frame refusal. Both "
-    "print the command to run in a new terminal, and neither writes anything."
+    "charter opens the chat in a background window of its own tmux; this binary's frame is the "
+    "desktop app, and a chat the app did not start, or whose app is not listening, reaches the "
+    "frame refusal. Both print the command to run in a new terminal, and neither writes "
+    "anything."
+)
+
+#: The app's socket, as a chat the app started finds it in its environment — RELATIVE, so the
+#: one scenario value names each side's own plane copy (both commands run at the plane root).
+#: `.charter/app/` is where the app binds it (`app/src-tauri/src/hooks.rs:socket_for`).
+AN_APPS_SOCKET = ".charter/app/hooks.sock"
+
+#: A stand-in for the app's half of charter-app#204: it binds the socket, answers a ticket ask
+#: with a ticket and an open with "opened as chat 9", and is gone. It checks nothing, because
+#: what is under test is the COMMAND's side; the app's half is `app/src-tauri/src/handoff.rs`
+#: and its own tests. It gives up after thirty seconds, so the Python side, which never
+#: connects, does not leave it running.
+_AN_APP_THAT_OPENS = r'''
+import json, os, socket, sys
+path = sys.argv[1]
+listening = socket.socket(socket.AF_UNIX)
+listening.bind(path)
+listening.listen(1)
+listening.settimeout(30)
+try:
+    connection, _ = listening.accept()
+    connection.settimeout(10)
+    stream = connection.makefile("rwb")
+    for line in stream:
+        ask = json.loads(line)
+        if "ticket" in ask:
+            answer = {"ticket": {"ticket": "0" * 64}}
+        else:
+            answer = {"opened": {"chat": 9}}
+        stream.write((json.dumps(answer) + "\n").encode())
+        stream.flush()
+except OSError:
+    pass
+finally:
+    os.unlink(path)
+'''
+
+
+def _an_app_that_opens(root: Path) -> None:
+    """A stand-in app listening at :data:`AN_APPS_SOCKET` in this plane copy."""
+    socket_path = root / AN_APPS_SOCKET
+    socket_path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.Popen([sys.executable, "-c", _AN_APP_THAT_OPENS, str(socket_path)],
+                     start_new_session=True, stdin=subprocess.DEVNULL,
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Listening before the command runs, or the Rust side would find nothing there and take
+    # the terminal path, which is the OTHER scenario.
+    for _ in range(100):
+        if socket_path.exists():
+            return
+        time.sleep(0.05)
+    raise SystemExit(f"the stand-in app never bound {socket_path}")
+
+
+#: The writes `charter/commands_handoff.py` makes after its open, which this charter does not
+#: make at all: the todo in the target workspace (`todos.add`), the dispatch tally
+#: (`dispatch.record_handoff`) and the arrival mark on the strip (`workspace.record_arrival`).
+#: charter-app has no todo store, writes no dispatch log (`charter_core::dispatch` reads
+#: only), and draws its strip in the app — so a handoff the app opened leaves the plane exactly
+#: as it found it.
+#:
+#: **It is declared here, and it cannot be a `Divergence` of its own, which is worth saying
+#: rather than leaving to look forgotten.** A `Divergence` must name paths the ORACLE writes
+#: and pin them present on its side, and the oracle reaches those writes only after opening a
+#: chat in a live tmux frame of its own (`commands_frame.open_in_background`) — which no
+#: differential run has, on any runner. What CAN be checked is the Rust half, and the scenario
+#: below does: its plane is compared byte for byte and the Rust side writes nothing, so the
+#: day it starts writing a todo that scenario goes red and this has to be decided again.
+HANDOFF_WRITES_NOTHING_AFTER_THE_OPEN = (
+    "charter records a todo, a dispatch tally and an arrival mark after its open; charter-app "
+    "has no todo store and no dispatch writer, and its strip is drawn in the app, so a handoff "
+    "it opens writes nothing to the plane."
+)
+
+#: The first declared hole for charter-app#204. Read `Divergence` before changing anything.
+A_HANDOFF_OPENS_IN_THE_APP = Divergence(
+    why=(
+        "charter-app#204: a chat the desktop app started carries the app's hook socket, and "
+        "`charter handoff` from it asks the app to open the chat in a tab rather than printing "
+        "a command to run in a terminal — the app is this charter's frame, as tmux is charter's "
+        "(ADR 0025 made the app the frame; ADR 0035: 'the app has a window and a person "
+        "looking at it'). The Python charter is frozen (spec decision 17) and has no such "
+        "socket, so it answers as it does in any shell that is not a tmux chat. "
+        + HANDOFF_WRITES_NOTHING_AFTER_THE_OPEN
+    ),
+    python_exit=1,
+    rust_exit=0,
+    rust_stderr="",
+    python_stderr_has="Run this in a new terminal instead:",
 )
 
 #: Why `remove`'s unreadable-clone refusal differs. Both refuse, both exit 2 and both name the
@@ -3843,6 +3934,42 @@ M28_SCENARIOS = [
         stdin=A_BRIEF,
         refusal="Run this in a new terminal instead:",
         stderr_differs=HANDOFF_HAS_NO_FRAME,
+    ),
+    # ---- charter handoff from a chat the app started (charter-app#204) -------------------
+    Scenario(
+        # The app quit while the chat kept running: the socket is named and nothing is behind
+        # it. The Rust side must take the terminal path it takes with no socket at all —
+        # `crates/charter-cli/tests/handoff_from_inside_the_app.rs` pins those bytes to the
+        # ones it printed before #204.
+        name="handoff-inside-an-app-that-is-not-listening-prints-the-command-and-writes-nothing",
+        plane="daily",
+        python=["handoff", "alpha"],
+        pins_the_clock=False,
+        stdin=A_BRIEF,
+        env={"CHARTER_HOOK_SOCKET": AN_APPS_SOCKET, "CHARTER_CHAT": "1",
+             "CHARTER_SESSION_ID": "1"},
+        refusal="Run this in a new terminal instead:",
+        stderr_differs=HANDOFF_HAS_NO_FRAME,
+    ),
+    Scenario(
+        name="handoff-inside-the-app-opens-the-chat-there-and-writes-nothing",
+        plane="daily",
+        python=["handoff", "alpha"],
+        pins_the_clock=False,
+        stdin=A_BRIEF,
+        env={"CHARTER_HOOK_SOCKET": AN_APPS_SOCKET, "CHARTER_CHAT": "1",
+             "CHARTER_SESSION_ID": "1"},
+        setup=_an_app_that_opens,
+        ignore={AN_APPS_SOCKET: (
+            "the stand-in app's own socket, which neither implementation writes: it goes when "
+            "the stand-in has answered, and on the Python side nothing ever connects to it"
+        )},
+        stdout_differs=(
+            "charter printed nothing on stdout because it opened nothing; charter-app prints "
+            "`commands_handoff.OPENED` for the chat the app opened. The bytes are pinned by "
+            "`crates/charter-cli/tests/handoff_from_inside_the_app.rs`."
+        ),
+        diverges=A_HANDOFF_OPENS_IN_THE_APP,
     ),
     # ---- charter workspace live ---------------------------------------------------------
     Scenario(
@@ -4669,6 +4796,49 @@ init --plane-is-this-repo`. That default is charter-app's and is the opposite of
 charter's, which scaffolds the plane into the repo — ADR 0035, and charter-app spec
 decision 27.
 
+""",
+            ),
+        ),
+    ),
+    "handoff": PageDiverges(
+        why=(
+            "charter-app#204: a chat the desktop app started asks the app to open a handoff "
+            "instead of printing a command, because the app is this charter's frame (ADR 0025) "
+            "and 'the app has a window and a person looking at it' (ADR 0035). "
+            "`A_HANDOFF_OPENS_IN_THE_APP` holds the BEHAVIOUR apart and this is its "
+            "documentation; the Python charter is frozen (spec decision 17) and has no app. "
+            "The page says in its own text which implementation the added paragraphs describe."
+        ),
+        rewrites=(
+            (
+                """\
+starting the wrong tool with your brief already in its argv.
+
+## Isolation and continuation
+""",
+                """\
+starting the wrong tool with your brief already in its argv.
+
+**Inside charter-app, the app is the frame.** A chat the desktop app started carries the app's
+hook socket, and `charter handoff` from it asks the app to open the chat instead of printing a
+command. The chat opens as a new tab on the target workspace's strip, started on the stamped
+brief. It opens behind the tab you are reading and does not raise the window; it takes the front
+only in a window with no tab at all. Your yes to the prompt in front of `charter handoff` is the
+only one asked for, and the new chat runs the same harness profile as the chat that asked. If the
+app is not listening or does not answer, you get the command above, word for word. If it
+refuses, you get the command and one more line saying why. A handoff the app opened records no
+todo in the target workspace: the brief is the new chat's first message, and the tab is how you
+see it.
+
+The app opens one chat per `charter handoff`. The command asks the app for a single-use ticket
+and spends it on the same connection, so no single line on the socket opens a chat and no line
+can be replayed. The ticket cannot tell the command you approved from another process running
+inside the same chat, which could run `charter handoff` itself, just as it can already start a
+harness in the background with `claude -p`. That is why a handed-off chat always lands as a tab
+you can see, stamped with the chat it came from. This describes charter-app; the Python charter
+has no app, and opens the chat in a background tmux window.
+
+## Isolation and continuation
 """,
             ),
         ),

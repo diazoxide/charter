@@ -164,7 +164,11 @@ describe("the four regions", () => {
     core();
     render(<App />);
 
-    expect(await screen.findByLabelText("Explorer")).toBeInTheDocument();
+    // **By role and not by label alone** (charter-app#193): the explorer's own `nav` and the
+    // status line's toggle for it are now two elements named `Explorer`, which is correct —
+    // one is the region, the other is the way to put it away, and a person looking for either
+    // is looking for that word. The region is the landmark, so that is what this asks for.
+    expect(await screen.findByRole("navigation", { name: "Explorer" })).toBeInTheDocument();
     expect(await screen.findByTestId("panels")).toBeInTheDocument();
     expect(await screen.findByLabelText("Repository state")).toBeInTheDocument();
     expect(screen.getByRole("tablist", { name: "Tabs" })).toBeInTheDocument();
@@ -268,7 +272,7 @@ describe("the four regions", () => {
   it("puts a region away and brings it back", async () => {
     core();
     render(<App />);
-    await screen.findByLabelText("Explorer");
+    await screen.findByRole("navigation", { name: "Explorer" });
 
     await userEvent.click(screen.getByRole("button", { name: "Explorer", pressed: true }));
     expect(screen.queryByTestId("explorer")).not.toBeInTheDocument();
@@ -291,18 +295,28 @@ describe("the four regions", () => {
     expect(screen.queryByTestId("panels")).not.toBeInTheDocument();
   });
 
-  it("gives every region in the arrangement its own way back", async () => {
+  it("gives every region in the arrangement its own way back, on the status line", async () => {
     // The buttons are drawn from the arrangement, so a region added to the catalogue cannot
     // arrive with nowhere to bring it back from — which a list written out by hand allowed.
+    //
+    // **And they are on the status line, not on the bar** (charter-app#193, asked for twice).
+    // The `within` is over the line itself rather than over `.regions-doing` for that reason:
+    // the class would pass wherever the row was moved to, and where it is IS the claim.
+    //
+    // **Read by `aria-label` and not by text**, because there is no text — *"just small icons
+    // without texts, texts only with tooltips"*. That the name survived losing the words is
+    // the whole risk in that instruction, and it is what this line asserts.
     core();
     render(<App />);
-    await screen.findByLabelText("Explorer");
+    await screen.findByRole("navigation", { name: "Explorer" });
 
     expect(
-      within(document.querySelector(".regions-doing") as HTMLElement)
+      within(screen.getByTestId("status-line"))
         .getAllByRole("button")
-        .map((one) => one.textContent),
+        .filter((one) => one.getAttribute("aria-pressed") !== null)
+        .map((one) => one.getAttribute("aria-label")),
     ).toEqual(["Explorer", "Attention", "State"]);
+    expect(document.querySelector("header.bar .regions-doing")).toBeNull();
   });
 
   it("keeps a chat in another workspace running while the explorer is used", async () => {
@@ -383,7 +397,7 @@ describe("the window the stored arrangement asks for", () => {
   it("writes what the operator did back where the next launch will read it", async () => {
     core();
     render(<App />);
-    await screen.findByLabelText("Explorer");
+    await screen.findByRole("navigation", { name: "Explorer" });
 
     await userEvent.click(screen.getByRole("button", { name: "Explorer", pressed: true }));
 

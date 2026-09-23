@@ -1,0 +1,194 @@
+name: stress
+
+# `fifty tabs` has a workflow of its own so that a pull request pays for it only when it can
+# change what it measures (charter-app#147). A `paths:` filter is a WORKFLOW's, so inside
+# `ci.yml` it would have skipped the nine required checks along with this one; out here it
+# is GitHub's own filter on the one job it is meant for, with no action and no job of ours
+# deciding it.
+#
+# **Every push to `main` runs it, unfiltered.** That is the record for each merge, and it is
+# the backstop for everything below: a list that turns out too narrow costs a regression
+# found one merge later, never one that is not found.
+#
+# Measured on `main` on 2026-09-23, three runs: 8–9.6 minutes on macOS and 6–7 on Ubuntu,
+# about sixteen runner-minutes a run and two of the twenty concurrent jobs this account
+# shares with `diazoxide/charter`. It is NOT what a CI run waits for — the shell reader's
+# shards finish last — so skipping it buys back slots, not wall clock: the run for #203
+# started seven of its jobs three to five minutes late and took 13 minutes to its
+# neighbours' 11.
+#
+# Not a required check, before or after this file existed — checked against branch
+# protection on 2026-09-23, not assumed. A workflow that does not trigger posts no check at
+# all, which is only harmless for a check nothing requires. If `fifty tabs` is ever made
+# required, the filter below has to go first.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    # **What the run EXECUTES, not what the spec is about.** Its assertions are on the whole
+    # app process — its thread count, its memory, one round's budget — so any module that
+    # runs a thread, and any render that grows with fifty chats, is inside the dependency set
+    # whether or not it has "tab" in its name. `PlaneView.tsx`, `actions.ts` and `fits.ts`
+    # each carry a measurement at fifty tabs for that reason.
+    #
+    # Every doubt goes IN. A new file under a watched directory is watched by default; what
+    # is left out is named one path at a time, and each says why the run cannot reach it.
+    #
+    # Order matters: a `!` line excludes what the lines above it matched.
+    paths:
+      # The job itself.
+      - .github/workflows/stress.yml
+      # The spec, the helpers it drives the window with, and every other scenario spec:
+      # STRESS=1 adds it to the WHOLE scenario run, in the same app process, after whatever
+      # the others left open. The benchmark, the state run and the Finder run are other
+      # configurations this job never starts.
+      - app/e2e/**
+      - '!app/e2e/bench/**'
+      - '!app/e2e/wdio.bench.conf.ts'
+      - '!app/e2e/wdio.state.conf.ts'
+      - '!app/e2e/wdio.finder.conf.ts'
+      - '!app/e2e/specs/*.state.e2e.ts'
+      - '!app/e2e/specs/*.finder.e2e.ts'
+      # The process it measures, all of it: a thread started anywhere in the app counts.
+      - app/src-tauri/**
+      - '!app/src-tauri/icons/**'
+      - '!app/src-tauri/tauri.release.conf.json'
+      # The window it drives: both strips, the picker, the ending question, the panes, and
+      # what fifty chats cost to draw.
+      - app/src/**
+      - '!app/src/**/*.test.ts'
+      - '!app/src/**/*.test.tsx'
+      - '!app/src/test-setup.ts'
+      - app/index.html
+      - app/vite.config.ts
+      - app/tsconfig.json
+      - app/tsconfig.node.json
+      - app/package.json
+      - app/package-lock.json
+      # The harness in every pane.
+      - crates/fake-harness/**
+      # The session lifecycle — starting, probing, the pty, reaping, the record — and the
+      # rest of the core the app links.
+      - crates/charter-core/**
+      - '!crates/charter-core/tests/**'
+      - '!crates/charter-core/examples/**'
+      - '!crates/charter-core/docs/**'
+      - '!crates/charter-core/proptest-regressions/**'
+      - '!crates/charter-core/src/**/tests.rs'
+      # The sixteen core modules the app crate cannot reach, by a walk of every
+      # `charter_core::` and `crate::` path from `app/src-tauri/src` on 2026-09-23: the Bash
+      # guard and the readers it refuses with, which only `charter hook pretooluse` calls
+      # (they have the differential), and three CLI-only verbs. A PR that makes one of them
+      # reachable touches a watched file to do it.
+      - '!crates/charter-core/src/credguard.rs'
+      - '!crates/charter-core/src/curate.rs'
+      - '!crates/charter-core/src/docsrc.rs'
+      - '!crates/charter-core/src/floorguard.rs'
+      - '!crates/charter-core/src/gitconfig.rs'
+      - '!crates/charter-core/src/handoffguard.rs'
+      - '!crates/charter-core/src/heredoc.rs'
+      - '!crates/charter-core/src/leakguard.rs'
+      - '!crates/charter-core/src/livesub.rs'
+      - '!crates/charter-core/src/personacmd.rs'
+      - '!crates/charter-core/src/planeroot.rs'
+      - '!crates/charter-core/src/planeroot/**'
+      - '!crates/charter-core/src/proseguard.rs'
+      - '!crates/charter-core/src/pypath.rs'
+      - '!crates/charter-core/src/shellseg.rs'
+      - '!crates/charter-core/src/shellwrap.rs'
+      - '!crates/charter-core/src/toolgate.rs'
+      # Every dependency's version and the toolchain: a tokio, portable-pty or Tauri bump
+      # moves the thread count directly.
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - .nvmrc
+      # NOT `crates/charter-cli`. The job builds it, because other specs in the same run
+      # start it, but no pane in this spec does: `writeShell` starts the fake harness with
+      # no `--hook`, and the fake harness runs no `statusLine`. A charter-cli that does not
+      # compile is the required `rust` job's red, not this one's.
+
+concurrency:
+  group: stress-${{ github.ref }}
+  # `ci.yml`'s reason: a PR's newest push supersedes the last, and a merge's run on `main` is
+  # the only record that commit gets.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  stress:
+    # Evidence for charter-app#16, not a gate: fifty tabs on a shared runner is timing-bound,
+    # and a flaky REQUIRED check blocks every merge — including the fix for the bug it watches.
+    # It reports, and it is allowed to fail. charter-app#147 says what a red run means now.
+    #
+    # It was red on five of its last six runs on `main` (2026-09-20) and that was NOT the
+    # timing this comment allows for: the spec asked for a 900 s budget in the first line of
+    # its body, where WebdriverIO has already read the old one, so it silently ran under
+    # `mochaOpts.timeout` — 180 s — against a macOS runner that needs 170–218 s. The budget
+    # decided the result and the app never did. `stress.e2e.ts` carries the measurement and
+    # `e2e/budget.test.ts` keeps the budget where WebdriverIO reads it.
+    #
+    # A job red five times in six is not evidence of anything; it teaches the repo to ignore
+    # a red X. If this one goes red again, read `logs/stress.jsonl` in the artifact below
+    # before assuming the runner: it now records the app's memory, threads and session count
+    # every ten tabs, so a run that stops says which tab it stopped on.
+    name: fifty tabs (${{ matrix.os }}, evidence only)
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tauri's Linux build dependencies, and a display to run in
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev xvfb dbus-x11
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+      - run: npm ci
+        working-directory: app
+      - name: The harness the scenario tests run in every pane, and the binary its hooks run
+        run: cargo build -p fake-harness -p charter-cli
+      # The `e2e` feature puts WebdriverIO's embedded WebDriver server inside the app, which is
+      # what drives it on macOS as well as Linux. It is in no build anyone is given.
+      - name: Build the app for the scenario tests
+        run: npx tauri build --debug --no-bundle --features e2e --config src-tauri/tauri.e2e.conf.json
+        working-directory: app
+      - run: npm run e2e
+        if: runner.os == 'macOS'
+        working-directory: app
+        env:
+          STRESS: "1"
+          # The app says how far its launch got (#23). A stress run that loses the app has to
+          # be able to tell a launch that never finished from one that did and then died.
+          CHARTER_LAUNCH_LOG: "1"
+      - run: xvfb-run -a npm run e2e
+        if: runner.os == 'Linux'
+        working-directory: app
+        env:
+          CHARTER_LAUNCH_LOG: "1"
+          STRESS: "1"
+      # `always()`, not `failure()`: this job's whole output is the numbers, and the run that
+      # SUCCEEDED is the one that says what healthy costs. The comment at the top of this job
+      # claimed the logs were kept either way and nothing kept them — the console scrollback
+      # was all there was, and it does not survive a log rotation.
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: stress-logs-${{ matrix.os }}
+          path: app/logs
+          if-no-files-found: warn

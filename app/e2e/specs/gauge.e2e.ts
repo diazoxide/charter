@@ -186,6 +186,36 @@ describe("a chat's context gauge", () => {
     });
     expect((await gauges()).join(" ")).toContain("cache 90%");
 
+    // 4. **Where it is drawn** (charter-app#193): the pane's top-LEFT, and NOT over the
+    // terminal's first row. At top-left that row's text starts under it at every pane size, so
+    // the pane gives the gauge a row of its own; what is measured is that the gauge's box ends
+    // above the terminal's, and that its left edge is the pane frame's, not its right.
+    // No named helpers inside `execute`: the spec's bundler wraps them in a `__name` the page
+    // does not have.
+    const placed = await browser.execute(() => {
+      const gauge = document.querySelector('[data-testid="chat-gauge"]');
+      const frame = gauge?.closest(".pane-frame");
+      const term = frame?.querySelector(".xterm-screen");
+      if (!gauge || !frame || !term) return null;
+      const g = gauge.getBoundingClientRect();
+      const f = frame.getBoundingClientRect();
+      const t = term.getBoundingClientRect();
+      return {
+        gaugeBottom: g.bottom,
+        termTop: t.top,
+        fromLeft: g.left - f.left,
+        fromRight: f.right - g.right,
+      };
+    });
+    // Measured when this was written (768 px window): gauge 83–98, terminal from 101. Before the
+    // pane gave up its row the gauge ran 101–116, over the terminal's first line.
+    expect(placed).not.toBeNull();
+    if (placed) {
+      // The gauge's box ends above the terminal's first row rather than on it.
+      expect(placed.gaugeBottom).toBeLessThanOrEqual(placed.termTop);
+      expect(placed.fromLeft).toBeLessThan(placed.fromRight);
+    }
+
     // **No `stop` here, deliberately.** A `stop` puts the chat in the needs-you queue, and
     // `palette.e2e.ts` asserts that queue is empty in this run ("Nothing reports a hook in
     // this run") — it went red on CI when this spec ended the turn. The chat is ended by

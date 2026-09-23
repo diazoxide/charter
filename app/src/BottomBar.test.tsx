@@ -456,13 +456,13 @@ describe("the bottom bar", () => {
   });
 
   it.each([
-    ["success", "lucide-circle-check", false],
-    ["failed", "lucide-circle-x", false],
-    ["running", "lucide-loader-circle", true],
-    ["pending", "lucide-loader-circle", true],
-    ["manual", "lucide-hand", false],
-    ["canceled", "lucide-circle-slash", false],
-    ["skipped", "lucide-skip-forward", false],
+    ["success", "lucide-circle-check", null],
+    ["failed", "lucide-circle-x", null],
+    ["running", "lucide-loader-circle", "spinning"],
+    ["pending", "lucide-clock", "breathing"],
+    ["manual", "lucide-hand", null],
+    ["canceled", "lucide-circle-slash", null],
+    ["skipped", "lucide-skip-forward", null],
   ])(
     "marks a %s pipeline with its own shape, moving only if it is still going",
     (ci, mark, moves) => {
@@ -483,9 +483,55 @@ describe("the bottom bar", () => {
       expect(cell).toHaveTextContent(ci);
       const svg = cell.querySelector(`svg.${mark}`);
       expect(svg).not.toBeNull();
-      expect(svg?.classList.contains("spinning")).toBe(moves);
+      // Running and queued are different claims, so they move differently (M7.2): a queued
+      // run that spun would be drawn as one that is working. And nothing else moves at all —
+      // including a settle, because this row was drawn already finished rather than seen to.
+      for (const motion of ["spinning", "breathing", "settling"]) {
+        expect(svg?.classList.contains(motion), motion).toBe(motion === moves);
+      }
     },
   );
+
+  it("settles a pipeline's mark when the run finishes on screen, and only then", () => {
+    const bar = (ci: string) => (
+      <BottomBar
+        workspace="alpha"
+        state={state({
+          repos: {
+            workspace: "alpha",
+            cache_refused: null,
+            repos: [repo("svc", { ci, fetched_seconds_ago: 60, not_fetched: null })],
+          },
+        })}
+      />
+    );
+    const { rerender } = render(bar("running"));
+    expect(screen.getByTestId("ci-svc").querySelector(".settling")).toBeNull();
+
+    // The run finishes while the row is up: the new mark is drawn settling into place.
+    rerender(bar("success"));
+    const settled = screen.getByTestId("ci-svc").querySelector("svg.lucide-circle-check");
+    expect(settled?.classList.contains("settling")).toBe(true);
+    expect(settled?.classList.contains("spinning")).toBe(false);
+  });
+
+  it("does not settle a mark the row was first drawn with", () => {
+    // A bar opened on a workspace whose pipelines all finished an hour ago is a row of
+    // settled answers, and a row of them all growing into place at once is decoration.
+    render(
+      <BottomBar
+        workspace="alpha"
+        state={state({
+          repos: {
+            workspace: "alpha",
+            cache_refused: null,
+            repos: [repo("svc", { ci: "success", fetched_seconds_ago: 60, not_fetched: null })],
+          },
+        })}
+      />,
+    );
+    expect(screen.getByTestId("ci-svc").querySelector(".settling")).toBeNull();
+  });
 
   it("draws an answer it does not recognise as a fetch that names nothing, and keeps still", () => {
     render(

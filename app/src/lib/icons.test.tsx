@@ -4,6 +4,8 @@ import { join } from "node:path";
 import { render, screen } from "@testing-library/react";
 import { CircleAlert, Plus } from "lucide-react";
 import { describe, expect, it } from "vitest";
+import { motionVariables } from "../theme/motion";
+import { DEFAULT_THEME } from "../theme/theme";
 
 /**
  * Lucide is charter's icon set, and this is the one thing about it the theme layer has to be
@@ -83,24 +85,27 @@ describe("an icon beside a button's words is not part of its name", () => {
 });
 
 /**
- * **The spin is the window's one animation, and it stops for anyone who asked for less motion.**
+ * **The spin is how a mark says it is still happening, and it stops for anyone who asked for
+ * less motion.**
  *
  * `.spinning` means "this is still happening" (`App.css` has the argument). Motion is the
  * decoration on that meaning, never the meaning itself, and `prefers-reduced-motion` is the
- * operating system's way of saying so on the operator's behalf. jsdom evaluates no media
- * query and no animation, so this reads the rule rather than a computed style.
+ * operating system's way of saying so on the operator's behalf. Since M7.2 the spin does not
+ * stop itself: it reads its turn from `--motion-duration-spin`, and the motion layer writes that
+ * as `0ms` for an operator who asked — a looping animation over no time does not run. So this
+ * holds both halves: the rule reads the token, and the layer collapses the token.
  */
-describe("the one animation respects reduced motion", () => {
+describe("the spin respects reduced motion", () => {
   const css = readFileSync(join(process.cwd(), "src/App.css"), "utf8");
-  const reduced = [
-    ...css.matchAll(/@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{([\s\S]*?)\n\}/g),
-  ].map((hit) => hit[1]);
 
-  it("spins what is still happening", () => {
-    expect(css).toMatch(/\.spinning\s*\{[^}]*animation:\s*charter-spin\b/);
+  it("spins what is still happening, for as long as the theme says a turn takes", () => {
+    expect(css).toMatch(
+      /\.spinning\s*\{[^}]*animation:\s*charter-spin\s+var\(--motion-duration-spin\)/,
+    );
   });
 
   it("stops the spin when the operating system asks for reduced motion", () => {
-    expect(reduced.some((block) => /\.spinning\s*\{[^}]*animation:\s*none/.test(block))).toBe(true);
+    const written = motionVariables(DEFAULT_THEME.motion, true);
+    expect(Number.parseFloat(written["--motion-duration-spin"])).toBe(0);
   });
 });

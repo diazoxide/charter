@@ -150,21 +150,6 @@ export function ChatGauge({ usage }: { usage: ChatUsage | undefined }) {
   );
 }
 
-/** The gauge for the chat in one pane, reading its own record. */
-export function PaneGauge({
-  plane,
-  session,
-  moved,
-  running,
-}: {
-  plane: PlaneId;
-  session: number;
-  moved: number;
-  running: boolean;
-}) {
-  return <ChatGauge usage={useChatUsage(plane, session, moved, running)} />;
-}
-
 /** What one turn's bar says on its title. */
 function turnSaid(turn: UsageTurn, index: number): string {
   return [

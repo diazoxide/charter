@@ -4,6 +4,7 @@ import {
   CircleDashed,
   CircleSlash,
   CircleX,
+  Clock,
   FolderGit2,
   GitBranch,
   Hand,
@@ -13,6 +14,7 @@ import {
 } from "lucide-react";
 import type { Piece, RepoState } from "./bindings";
 import type { WorkspaceState } from "./workspaceState";
+import { useArrived } from "./lib/arrived";
 
 /**
  * The bottom region: what the focused workspace's repos are doing (charter ADR 0038).
@@ -346,24 +348,37 @@ function CiCell({
  * distinguishes *this is happening now* from *this stopped and nobody said so* — amber and
  * the word "running" are equally true of a job that died an hour ago. Every other mark is a
  * settled answer and sits still, because motion beside a settled answer is only something to
- * look at. The spin stops under `prefers-reduced-motion`; the word and the shape do not.
+ * look at.
+ *
+ * **And the two move differently, because they are different claims** (M7.2). `running` spins:
+ * work is being done. `pending` is a clock that breathes: the run is alive and queued, and
+ * nothing is being done yet. Both used to spin, which drew a queued pipeline as a working one —
+ * the same lie the paragraph above is about, told the other way round.
+ *
+ * **A mark that arrives at an answer settles into it, once.** A pipeline that finishes while
+ * the operator is looking has its new mark drawn in over `duration.settle`; one that was already
+ * finished when the row was drawn is simply there (`useArrived`). Every one of these motions is
+ * a theme token, and every one of them stops under `prefers-reduced-motion` in the one place
+ * the motion layer handles it (`src/theme/motion.ts`); the word and the shape do not.
  */
-const CI_MARK: Record<string, { Mark: typeof CircleCheck; moving?: boolean }> = {
+const CI_MARK: Record<string, { Mark: typeof CircleCheck; moving?: "spinning" | "breathing" }> = {
   success: { Mark: CircleCheck },
   failed: { Mark: CircleX },
-  running: { Mark: LoaderCircle, moving: true },
-  pending: { Mark: LoaderCircle, moving: true },
+  running: { Mark: LoaderCircle, moving: "spinning" },
+  pending: { Mark: Clock, moving: "breathing" },
   manual: { Mark: Hand },
   canceled: { Mark: CircleSlash },
   skipped: { Mark: SkipForward },
 };
 
 function CiWords({ state }: { state: RepoState }) {
+  const arrived = useArrived(state.ci);
   if (state.ci) {
     const { Mark, moving } = CI_MARK[state.ci] ?? { Mark: CircleDashed };
+    const motion = moving ?? (arrived ? "settling" : undefined);
     return (
       <span className={`ci-state ci-${state.ci}`}>
-        <Mark className={moving ? "node-icon spinning" : "node-icon"} />
+        <Mark className={motion ? `node-icon ${motion}` : "node-icon"} />
         {state.ci}
         {state.change !== null && (
           <span className="change">

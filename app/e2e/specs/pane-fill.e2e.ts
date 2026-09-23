@@ -134,7 +134,7 @@ async function tabNames(): Promise<string[]> {
 
 /** Brings the State region back if a failed assertion left it put away. */
 async function stateRegionBack(): Promise<void> {
-  const away = await $('button[aria-pressed="false"]=State');
+  const away = await $('button[aria-pressed="false"][aria-label="State"]');
   if (await away.isExisting()) {
     await away.click();
     await $('[data-testid="bottom-bar"]').waitForExist({ timeout: 20_000 });
@@ -186,12 +186,93 @@ describe("the terminal in the centre region", () => {
     expect(Math.abs(bottomRegion - filled.centre.bottom)).toBeLessThanOrEqual(2);
   });
 
+  /**
+   * **The slack under the last row is the terminal's own colour, not a band of black**
+   * (charter-app#193).
+   *
+   * The test above holds that the terminal is fitted to the room it has. It cannot hold that
+   * the room it *cannot* use looks like the terminal, and that is the gap the operator fell
+   * into: *"harness bottom seems overflowed - you can see black space."*
+   *
+   * It was not an overflow and it was not the bottom region. A terminal is a whole number of
+   * rows and its box is not a multiple of one, so every pane has up to a row of slack at the
+   * bottom — 14 px, measured here — and `xterm.css` line 93 paints it `#000`. That stylesheet
+   * was imported from `SessionPane.tsx`, which lands it **unlayered**, and unlayered CSS beats
+   * every layer at every specificity, so nothing in `App.css` could have overruled it.
+   * `SessionPane.tsx` now puts the theme's `terminal.background` on the viewport itself, and
+   * says why that and not the larger `vendor`-layer move. Seen to fail without it:
+   * `rgb(0, 0, 0) (painted by DIV.xterm-viewport)` against `rgb(24, 24, 24)`.
+   *
+   * **Read as what is PAINTED, not as a rule.** `elementFromPoint` inside the strip and then up
+   * the ancestors to the first opaque background is the only question that has the right
+   * answer whoever paints it — xterm, charter, or the next vendor. Before the fix it answered
+   * `rgb(0, 0, 0)` from `DIV.xterm-viewport`.
+   */
+  it("paints the slack under the last row in the terminal's colour, not black", async () => {
+    await $('[data-testid="bottom-bar"]').waitForExist({ timeout: 20_000 });
+    await pressAndStart("New tab");
+    // The grid, not the harness's words: what is asked is the colour of the room the rows
+    // do not use, which exists as soon as the terminal is fitted.
+    await untilTheyFill(1);
+
+    const seen = await browser.execute(() => {
+      const wanted = getComputedStyle(document.documentElement)
+        .getPropertyValue("--terminal-background")
+        .trim();
+      const blank = { slack: 0, painted: "", from: "", inside: "", wanted, trouble: "" };
+      const term = document.querySelector(".xterm");
+      const screen = document.querySelector(".xterm-screen");
+      if (!term || !screen) return { ...blank, trouble: "no terminal on screen" };
+      const t = term.getBoundingClientRect();
+      const s = screen.getBoundingClientRect();
+      const slack = t.bottom - s.bottom;
+      // Nothing to read when the rows happen to land exactly on the box's edge.
+      if (slack < 3) return { ...blank, slack: Math.round(slack) };
+      // What is painted at each point: the first opaque background from there up. Written as a
+      // loop over two points rather than a named helper, because the spec's bundler wraps a
+      // named function in `__name(…)` and the page this runs in has no `__name`.
+      const x = Math.round(t.left + t.width / 2);
+      const found: { colour: string; from: string }[] = [];
+      for (const y of [Math.round((s.bottom + t.bottom) / 2), Math.round(s.top + s.height / 2)]) {
+        let el = document.elementFromPoint(x, y);
+        let hit = { colour: "none", from: "none" };
+        while (el) {
+          const bg = getComputedStyle(el).backgroundColor;
+          if (bg && bg !== "rgba(0, 0, 0, 0)" && bg !== "transparent") {
+            hit = { colour: bg, from: `${el.tagName}.${String(el.className).split(" ")[0]}` };
+            break;
+          }
+          el = el.parentElement;
+        }
+        found.push(hit);
+      }
+      return {
+        ...blank,
+        slack: Math.round(slack),
+        painted: found[0].colour,
+        from: found[0].from,
+        inside: found[1].colour,
+      };
+    });
+
+    expect(seen.trouble).toBe("");
+    expect(seen.wanted).toMatch(/^#/);
+    if (seen.painted === "") return; // the rows landed on the edge; nothing to be miscoloured
+    // **The same colour as the rows above it**, which is the claim an operator would make.
+    // Read off the window rather than against a literal, because a literal here would be the
+    // very thing `docs/design-system.md` forbids. The `from` is carried into the message so a
+    // failure says which element painted it, which is what took the measuring to find.
+    expect(`${seen.painted} (painted by ${seen.from})`).toBe(
+      `${seen.inside} (painted by ${seen.from})`,
+    );
+  });
+
   it("fits again when the centre grows, and again when it shrinks back", async () => {
     // A terminal that fills on its first paint and not after a resize is the same bug: the
     // fit has to follow the box, not be taken once at mount.
     const before = await untilTheyFill(1);
 
-    await (await $('button[aria-pressed="true"]=State')).click();
+    await (await $('button[aria-pressed="true"][aria-label="State"]')).click();
     await browser.waitUntil(async () => !(await $('[data-testid="bottom-bar"]').isExisting()), {
       timeout: 20_000,
       timeoutMsg: "the bottom region did not go away when it was put away",
@@ -200,7 +281,7 @@ describe("the terminal in the centre region", () => {
     expect(grown.centre.bottom).toBeGreaterThan(before.centre.bottom);
     expect(grown.panes[0].rows).toBeGreaterThan(before.panes[0].rows);
 
-    await (await $('button[aria-pressed="false"]=State')).click();
+    await (await $('button[aria-pressed="false"][aria-label="State"]')).click();
     await $('[data-testid="bottom-bar"]').waitForExist({ timeout: 20_000 });
     const back = await untilTheyFill(1);
     expect(back.panes[0].rows).toBeLessThan(grown.panes[0].rows);
