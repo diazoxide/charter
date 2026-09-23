@@ -117,15 +117,32 @@ moves.
 
 ## Cutting a stable release
 
+What a release brought is written in `CHANGELOG.md` (Keep a Changelog), under `## [Unreleased]`,
+as it merges. Cutting the release is one PR and one tag:
+
 ```sh
-# 1. set [workspace.package] version in Cargo.toml AND "version" in app/src-tauri/tauri.conf.json to X.Y.Z; merge it
+# 1. one PR, merged:
+#    - CHANGELOG.md: rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, put an empty
+#      `## [Unreleased]` above it, and point the link references at the bottom at the new
+#      tag (`[Unreleased]: …/compare/vX.Y.Z...HEAD`, `[X.Y.Z]: …/releases/tag/vX.Y.Z`)
+#    - [workspace.package] version in Cargo.toml AND "version" in app/src-tauri/tauri.conf.json
+#      set to X.Y.Z
 git switch main && git pull
 git tag vX.Y.Z && git push origin vX.Y.Z      # this, and only this, publishes a stable release
-# 2. afterwards, bump both to the NEXT version and merge, so dev builds are X.Y.(Z+1)-dev.N
+# 2. afterwards, bump both version fields to the NEXT version and merge, so dev builds are
+#    X.Y.(Z+1)-dev.N
 ```
 
-The workflow refuses a tag that disagrees with `Cargo.toml`, and a test holds `tauri.conf.json`
-to `Cargo.toml`.
+The `## [X.Y.Z]` section is the release: it becomes the GitHub release's body and the notes in
+`latest.json`, and About Charter in that build shows the same section out of the copy compiled
+into it. So the workflow refuses a tag whose version has no section in `CHANGELOG.md`, or an
+empty one, before it builds anything, beside refusing a tag that disagrees with `Cargo.toml`. To
+see what a tag would publish, run `cargo run -p changelog -- X.Y.Z` on the merged `main`.
+
+Between releases a test (`about.rs`) holds the crate version to the changelog: it has its own
+section, or it is newer than every released version and `## [Unreleased]` is there. A test also
+holds `tauri.conf.json` to `Cargo.toml`. A dev build shows `[Unreleased]` in About, as a dev build
+of the next version; its release note stays the one-line "dev build of <sha>".
 
 ## What a first-time installer sees on macOS
 
