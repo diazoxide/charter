@@ -44,10 +44,13 @@ pub fn vault_status(root: &Path, state: &Path, vault: Option<&str>) -> String {
     let Some(vault) = vault.filter(|v| !v.is_empty() && *v != "—") else {
         return "no vault".into();
     };
-    if !super::registered_vaults(root, state).contains_key(vault) {
-        return "not set up (local)".into();
+    match super::registered_vaults(root, state) {
+        // Python's sentence carries `json`'s own reason after the path; this one stops at
+        // the path, which is the part the reader acts on.
+        Err(why) => why,
+        Ok(vaults) if !vaults.contains_key(vault) => "not set up (local)".into(),
+        Ok(_) => REGISTERED_UNCHECKED.into(),
     }
-    REGISTERED_UNCHECKED.into()
 }
 
 /// `charter persona list`, and its exit code.

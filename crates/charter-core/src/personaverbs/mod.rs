@@ -82,9 +82,36 @@ pub fn own_meta(root: &Path, name: &str) -> Option<BTreeMap<String, String>> {
     Some(pairs.into_iter().collect())
 }
 
-/// Every persona this plane defines — `persona.list_personas`.
+/// Every persona this plane defines — `persona.list_personas`, by ITS rules: every
+/// `personas/*.md` but a README, by stem, and every directory not starting `_` that holds a
+/// `persona.md`, by its FULL name.
+///
+/// Not [`crate::personagrant::list_personas`], which takes a directory's `file_stem` and so
+/// listed `personas/ops.v2/` as `ops`: `sync-agents` then generated nothing for it and pruned
+/// its existing agent as stale. The names here decide what gets written and what gets
+/// deleted, so they are Python's exactly.
 pub fn names(root: &Path) -> Vec<String> {
-    crate::personagrant::list_personas(root)
+    let Ok(reader) = std::fs::read_dir(root.join("personas")) else {
+        return Vec::new();
+    };
+    let mut out: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for entry in reader.filter_map(Result::ok) {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".md") {
+            let stem = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if stem.to_lowercase() != "readme" {
+                out.insert(stem);
+            }
+        }
+        if path.is_dir() && !name.starts_with('_') && path.join("persona.md").exists() {
+            out.insert(name);
+        }
+    }
+    out.into_iter().collect()
 }
 
 /// `persona.is_draft`: the RESOLVED `draft:` is one of `true`, `yes`, `1`, `on`, so a child
@@ -121,21 +148,34 @@ pub fn declared_skills(root: &Path, name: &str) -> Vec<String> {
 /// no provider is built and no vault file is opened. The secrets port owns the rest (see the
 /// module header). A half that is missing, unreadable or not JSON contributes nothing, and an
 /// entry that is not an object is dropped as `usable_vaults` drops it.
-pub fn registered_vaults(root: &Path, state: &Path) -> BTreeMap<String, serde_json::Value> {
-    fn half(path: &Path) -> serde_json::Map<String, serde_json::Value> {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-            .and_then(|doc| doc.get("vaults").and_then(|v| v.as_object()).cloned())
-            .unwrap_or_default()
+pub fn registered_vaults(
+    root: &Path,
+    state: &Path,
+) -> Result<BTreeMap<String, serde_json::Value>, String> {
+    // A half that is absent is empty; one that is there and is not a JSON object is the
+    // whole registry failing, as `registry.load_registry` raises for it.
+    fn half(path: &Path) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return Ok(Default::default());
+        };
+        let corrupt = || format!("vault registry {} is corrupt", path.display());
+        let doc: serde_json::Value = serde_json::from_str(&text).map_err(|_| corrupt())?;
+        let doc = doc.as_object().ok_or_else(corrupt)?;
+        Ok(doc
+            .get("vaults")
+            .and_then(|v| v.as_object())
+            .cloned()
+            .unwrap_or_default())
     }
+    let shared = half(&root.join("vaults.json"))?;
+    let local = half(&state.join("vaults.json"))?;
     let mut merged: BTreeMap<String, serde_json::Value> = BTreeMap::new();
-    for (name, entry) in half(&root.join("vaults.json")) {
+    for (name, entry) in shared {
         if entry.is_object() {
             merged.insert(name, entry);
         }
     }
-    for (name, entry) in half(&state.join("vaults.json")) {
+    for (name, entry) in local {
         let Some(local) = entry.as_object() else {
             continue;
         };
@@ -161,7 +201,7 @@ pub fn registered_vaults(root: &Path, state: &Path) -> BTreeMap<String, serde_js
             }
         }
     }
-    merged
+    Ok(merged)
 }
 
 /// `persona.vault_of`: the resolved `vault:` (`None` for [`NO_VAULT`]), else the first vault
@@ -173,7 +213,9 @@ pub fn vault_of(root: &Path, state: &Path, name: &str) -> Option<String> {
         let v = crate::memstore::py_strip(v);
         return (v != NO_VAULT && !v.is_empty()).then(|| v.to_string());
     }
+    // A registry that cannot be read names no vault: `vault_of` catches the error.
     registered_vaults(root, state)
+        .ok()?
         .into_iter()
         .find(|(_, entry)| entry.get("persona").and_then(|p| p.as_str()) == Some(name))
         .map(|(vault, _)| vault)
@@ -247,6 +289,29 @@ mod tests {
             "# Base\n\nFirst.\n\n---\n\n### ⤷ `kid` extends `mid` — its own charter\n\nKid's own."
         );
         assert_eq!(r.get("role"), Some("Kid"));
+    }
+
+    #[test]
+    fn a_persona_directory_is_named_in_full_and_a_flat_file_by_its_stem() {
+        let dir = plane(&[("ops.v2", "---\nrole: x\n---\n"), ("_shared", "")]);
+        std::fs::write(dir.path().join("personas/legacy.md"), "---\n---\n").unwrap();
+        std::fs::write(dir.path().join("personas/README.md"), "").unwrap();
+        assert_eq!(names(dir.path()), vec!["legacy", "ops.v2"]);
+    }
+
+    #[test]
+    fn a_registry_that_does_not_read_names_no_vault() {
+        let dir = plane(&[("solo", "---\nname: solo\n---\n")]);
+        let state = dir.path().join(".charter");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(dir.path().join("vaults.json"), "{bad").unwrap();
+        std::fs::write(
+            state.join("vaults.json"),
+            r#"{"vaults": {"a": {"persona": "solo"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(vault_of(dir.path(), &state, "solo"), None);
+        assert!(registered_vaults(dir.path(), &state).is_err());
     }
 
     #[test]

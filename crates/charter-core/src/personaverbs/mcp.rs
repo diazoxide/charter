@@ -399,10 +399,9 @@ pub fn render_entry(vault: Option<&str>, entry: &Value, approved: &BTreeSet<Stri
         Some(fp) if approved.contains(&fp) => {}
         _ => return Value::Object(out),
     }
-    let text = |v: &Value| match v {
-        Value::String(s) => s.clone(),
-        other => crate::pyjson::dumps(other, None, ", ", ": "),
-    };
+    // f"{env}={key}" is Python's `str()` of whatever the file holds: `None`, `True`, a list
+    // as `[1, 'x']`.
+    let text = crate::pyrepr::str_json;
     let mut args: Vec<Value> = vec!["secret".into(), "exec".into(), vault.clone().into()];
     for (env, key) in secrets.into_iter().flatten() {
         args.push("--env".into());
@@ -427,8 +426,13 @@ pub fn render_entry(vault: Option<&str>, entry: &Value, approved: &BTreeSet<Stri
     {
         args.push(command.clone());
     }
-    if let Some(Value::Array(original)) = out.get("args") {
-        args.extend(original.iter().cloned());
+    // `list(out.get("args") or [])`: a list as it is, a string as its characters and an
+    // object as its keys — what Python's `list()` makes of each.
+    match out.get("args") {
+        Some(Value::Array(original)) => args.extend(original.iter().cloned()),
+        Some(Value::String(s)) => args.extend(s.chars().map(|c| Value::String(c.to_string()))),
+        Some(Value::Object(m)) => args.extend(m.keys().map(|k| Value::String(k.clone()))),
+        _ => {}
     }
     out.insert("command".into(), "charter".into());
     out.insert("args".into(), Value::Array(args));

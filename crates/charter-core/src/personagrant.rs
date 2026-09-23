@@ -160,7 +160,10 @@ pub(crate) fn misspelled_key(key: &str) -> Option<&'static str> {
     if KNOWN_KEYS.contains(&key) {
         return None;
     }
-    let folded = key.to_lowercase();
+    // `str.casefold`, for the one case where it differs from lowering on the way to a key
+    // charter knows: U+017F LONG S folds to `s`, so `ſkills:`/`borrowſ:` is a misspelling of
+    // a known key and is reported (and a `borrows` fails closed) as Python reports it.
+    let folded = key.to_lowercase().replace('\u{17f}', "s");
     KNOWN_KEYS.iter().copied().find(|k| *k == folded)
 }
 

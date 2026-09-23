@@ -538,7 +538,12 @@ fn sync_in(
             .unwrap_or_default();
         files.sort();
         for file in files {
-            if file.extension().is_none_or(|e| e != "md") {
+            // `glob("*.md")`: by name, so `.md` itself (whose stem is `.md`) is one too.
+            if !file
+                .file_name()
+                .is_some_and(|n| n.to_string_lossy().ends_with(".md"))
+                || !file.is_file()
+            {
                 continue;
             }
             let Some(stem) = file.file_stem().map(|s| s.to_string_lossy().into_owned()) else {

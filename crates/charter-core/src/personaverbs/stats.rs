@@ -86,42 +86,111 @@ pub fn row(root: &Path, name: &str, recent_days: i64, today: NaiveDate) -> Row {
     }
 }
 
-/// `dispatch._ts`: a row's `ts`, naive read as UTC.
-fn ts(row: &serde_json::Value) -> Option<NaiveDateTime> {
-    let raw = row.get("ts")?.as_str()?;
-    if let Ok(at) = chrono::DateTime::parse_from_rfc3339(raw) {
-        return Some(at.naive_utc());
+/// `dispatch._ts`: a row's `ts` as `datetime.fromisoformat` reads it — `(the instant, in UTC,
+/// for ordering; the date as the row wrote it, for printing)`. A stamp with no offset is UTC.
+///
+/// `fromisoformat` takes more than RFC 3339: a date alone, `T` or a space, an hour with or
+/// without minutes and seconds, a fraction, `Z` or an offset, and the basic forms without
+/// separators. Each is tried here, because a row whose stamp this rejected was one Python
+/// counted, and the advice line then printed an empty date.
+fn ts(row: &serde_json::Value) -> Option<(NaiveDateTime, NaiveDate)> {
+    let raw = row.get("ts")?.as_str()?.trim();
+    let (body, offset) = split_offset(raw);
+    let local = naive(body)?;
+    let utc = local - chrono::Duration::seconds(offset?);
+    Some((utc, local.date()))
+}
+
+/// `raw` without its trailing `Z`/`±HH[:MM[:SS]]`, and the offset in seconds — `Some(0)` for
+/// none. `None` for an offset that does not read.
+fn split_offset(raw: &str) -> (&str, Option<i64>) {
+    if let Some(body) = raw.strip_suffix('Z') {
+        return (body, Some(0));
     }
-    NaiveDateTime::parse_from_str(raw, "%Y-%m-%dT%H:%M:%S%.f")
-        .or_else(|_| NaiveDateTime::parse_from_str(raw, "%Y-%m-%d %H:%M:%S%.f"))
-        .ok()
-        .or_else(|| {
-            NaiveDate::parse_from_str(raw, "%Y-%m-%d")
-                .ok()
-                .and_then(|d| d.and_hms_opt(0, 0, 0))
-        })
+    // An offset can only follow the time, which follows the 8th character at the earliest.
+    let at = raw
+        .char_indices()
+        .skip(8)
+        .find(|(_, c)| *c == '+' || *c == '-')
+        .map(|(i, _)| i);
+    let Some(at) = at else {
+        return (raw, Some(0));
+    };
+    let (body, off) = raw.split_at(at);
+    let sign = if off.starts_with('-') { -1 } else { 1 };
+    let digits: String = off[1..].chars().filter(|c| *c != ':').collect();
+    let part = |r: std::ops::Range<usize>| digits.get(r).and_then(|d| d.parse::<i64>().ok());
+    let seconds = match digits.len() {
+        2 => part(0..2).map(|h| h * 3600),
+        4 => part(0..2).zip(part(2..4)).map(|(h, m)| h * 3600 + m * 60),
+        6 => part(0..2)
+            .zip(part(2..4))
+            .zip(part(4..6))
+            .map(|((h, m), s)| h * 3600 + m * 60 + s),
+        _ => None,
+    };
+    (body, seconds.map(|s| sign * s))
+}
+
+fn naive(body: &str) -> Option<NaiveDateTime> {
+    const DATES: [&str; 2] = ["%Y-%m-%d", "%Y%m%d"];
+    const TIMES: [&str; 8] = [
+        "%H:%M:%S%.f",
+        "%H:%M:%S",
+        "%H:%M",
+        "%H",
+        "%H%M%S%.f",
+        "%H%M%S",
+        "%H%M",
+        "",
+    ];
+    for date in DATES {
+        for sep in ["T", " "] {
+            for time in TIMES {
+                let fmt = if time.is_empty() {
+                    date.to_string()
+                } else {
+                    format!("{date}{sep}{time}")
+                };
+                if time.is_empty() {
+                    if let Ok(d) = NaiveDate::parse_from_str(body, &fmt) {
+                        return d.and_hms_opt(0, 0, 0);
+                    }
+                } else if let Ok(at) = NaiveDateTime::parse_from_str(body, &fmt) {
+                    return Some(at);
+                } else if time == "%H"
+                    && let Some((d, h)) = body.split_once(sep)
+                    && h.len() == 2
+                    && let (Ok(d), Ok(h)) = (NaiveDate::parse_from_str(d, date), h.parse::<u32>())
+                {
+                    return d.and_hms_opt(h, 0, 0);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn is_event(row: &serde_json::Value, event: &str) -> bool {
     row.get("event").and_then(|e| e.as_str()) == Some(event)
 }
 
-/// `(fired, first, followed)` — `dispatch.advice_tally`, `first_advice` and
-/// `routed_since_first_advice`.
-fn advice(rows: &[serde_json::Value]) -> (usize, Option<NaiveDateTime>, usize) {
+/// `(fired, first, followed)` — `dispatch.advice_tally`, `first_advice` (its date as the row
+/// wrote it) and `routed_since_first_advice`.
+fn advice(rows: &[serde_json::Value]) -> (usize, Option<NaiveDate>, usize) {
     let fired = rows.iter().filter(|r| is_event(r, ADVICE)).count();
     let first = rows
         .iter()
         .filter(|r| is_event(r, ADVICE))
         .filter_map(ts)
-        .min();
-    let followed = first.map_or(0, |since| {
+        .min_by_key(|(utc, _)| *utc);
+    let followed = first.map_or(0, |(since, _)| {
         rows.iter()
             .filter(|r| crate::dispatch::truthy(r.get("agent")))
-            .filter(|r| ts(r).is_some_and(|t| t >= since))
+            .filter(|r| ts(r).is_some_and(|(t, _)| t >= since))
             .count()
     });
-    (fired, first, followed)
+    (fired, first.map(|(_, day)| day), followed)
 }
 
 /// `dispatch.last_backfill`: the newest backfill file's modification time, local.
@@ -153,7 +222,9 @@ fn skills_used(root: &Path, name: &str) -> BTreeSet<String> {
         let Ok(text) = std::fs::read_to_string(&file) else {
             continue;
         };
-        for line in text.lines() {
+        // `str.splitlines`, whose line breaks include U+2028 and friends: a row holding one
+        // raw is two broken rows to Python, and counts for nothing.
+        for line in crate::mdsection::split_lines(&text) {
             let Ok(row) = serde_json::from_str::<serde_json::Value>(line) else {
                 continue;
             };
@@ -164,10 +235,7 @@ fn skills_used(root: &Path, name: &str) -> BTreeSet<String> {
             if persona != name {
                 continue;
             }
-            let skill = match &row["skill"] {
-                serde_json::Value::String(s) => s.clone(),
-                other => other.to_string(),
-            };
+            let skill = crate::pyrepr::str_json(&row["skill"]);
             let leaf = skill.split_once(':').map_or(skill.as_str(), |(_, l)| l);
             out.insert(leaf.to_string());
         }
@@ -372,7 +440,7 @@ pub fn stats(root: &Path, name: Option<&str>, recent_days: i64, today: NaiveDate
     let log = crate::dispatch::rows(root);
     let (fired, first, followed) = advice(&log);
     if fired > 0 {
-        let since = first.map_or_else(String::new, |t| t.format("%Y-%m-%d").to_string());
+        let since = first.map_or_else(String::new, |d| d.format("%Y-%m-%d").to_string());
         say(Say::Info(format!(
             "Routing advice: fired {fired} time(s) · work handed to a persona {followed} \
              time(s) since the first one ({since}). Advice that fires and is never followed is \
@@ -456,8 +524,35 @@ mod tests {
         .collect();
         let (fired, first, followed) = advice(&rows);
         assert_eq!(fired, 1);
-        assert_eq!(first.unwrap().to_string(), "2026-03-02 09:30:00");
+        assert_eq!(first.unwrap().to_string(), "2026-03-02");
         assert_eq!(followed, 2);
+    }
+
+    #[test]
+    fn a_stamp_is_read_as_fromisoformat_reads_it_and_dated_in_its_own_offset() {
+        let at = |raw: &str| ts(&serde_json::json!({ "ts": raw }));
+        let d = |s: &str| NaiveDate::parse_from_str(s, "%Y-%m-%d").unwrap();
+        assert_eq!(at("2026-03-02T09:33").unwrap().1, d("2026-03-02"));
+        assert_eq!(
+            at("2026-03-04T10").unwrap().0.to_string(),
+            "2026-03-04 10:00:00"
+        );
+        assert_eq!(
+            at("20260303T101010").unwrap().0.to_string(),
+            "2026-03-03 10:10:10"
+        );
+        assert_eq!(
+            at("2026-03-02").unwrap().0.to_string(),
+            "2026-03-02 00:00:00"
+        );
+        let late = at("2026-03-01T23:30:00-05:00").unwrap();
+        assert_eq!(late.0.to_string(), "2026-03-02 04:30:00");
+        assert_eq!(late.1, d("2026-03-01"));
+        assert_eq!(
+            at("2026-03-02T09:00:00Z").unwrap().0.to_string(),
+            "2026-03-02 09:00:00"
+        );
+        assert!(at("yesterday").is_none());
     }
 
     #[test]
