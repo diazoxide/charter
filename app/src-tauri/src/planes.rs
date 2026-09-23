@@ -1180,6 +1180,150 @@ mod tests {
         at.to_path_buf()
     }
 
+    /// A Rust file's CODE, with every comment taken out.
+    ///
+    /// **The audit below is about what the crate does, and a rule is worth writing down.**
+    /// The first spelling read the text whole and so failed on its own explanation — on the
+    /// comment over `worktree_of_chat` naming the walk it no longer makes, on the paragraph
+    /// in this very test — which would have taught the next person to document the rule less.
+    ///
+    /// It cuts at the first `//` on a line and does not care that a `//` inside a string
+    /// literal is one too: a needle hidden behind one is the only thing that escapes, and
+    /// spelling `plane::resolve` inside a string to get past an audit is not a mistake
+    /// anybody makes by accident. Being a Rust parser here would cost more than the check.
+    fn code_of(text: &str) -> String {
+        text.lines()
+            .map(|line| line.split_once("//").map_or(line, |(code, _)| code))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Every `.rs` file of this crate, as `(name, code with the comments taken out)`.
+    ///
+    /// Anchored to `CARGO_MANIFEST_DIR` and never to the working directory, for the reason
+    /// `BINDINGS` is: a test is run from wherever the runner stands.
+    fn the_app_crates_sources() -> Vec<(String, String)> {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut found: Vec<(String, String)> = std::fs::read_dir(&src)
+            .expect("the app crate's own sources are readable")
+            .filter_map(Result::ok)
+            .map(|item| item.path())
+            .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+            .map(|path| {
+                let name = path
+                    .file_name()
+                    .expect("a file has a name")
+                    .to_string_lossy()
+                    .into_owned();
+                let text = std::fs::read_to_string(&path).expect("it is readable");
+                (name, code_of(&text))
+            })
+            .collect();
+        found.sort();
+        assert!(
+            found.len() > 10,
+            "the audit below read {} files, which is not this crate",
+            found.len()
+        );
+        found
+    }
+
+    /// **The audit charter-app#127 asked to keep, run rather than remembered.**
+    ///
+    /// #111 made the registry the only route to a board so that *a command that forgets which
+    /// plane it means does not compile*, and the type carries that as far as a type can: a
+    /// [`PlaneId`] is minted by [`Planes::open`] alone and [`Planes::held`] refuses one this
+    /// process never opened. What the type cannot do is stop a command from **not asking** —
+    /// from taking a path of its own and walking up from it, which is what `worktree_list`,
+    /// `worktree_remove` and `worktree_merge` did with a `String`, what `worktree_of_chat` did
+    /// with a chat's `cwd`, and what `workspace_panels` and `workspace_repos` did with
+    /// `current_dir()` before #125.
+    ///
+    /// So the audit the issue names — "grep `current_dir` and any command taking a plane as
+    /// `String`" — is written down here as the thing it is: **the walk up from a path to a
+    /// plane belongs to this module, and the process's own directory belongs to `setup`.** A
+    /// fourth command that reached for either has to edit this list to land, and editing it is
+    /// a decision somebody makes on purpose rather than an argument they forgot to pass.
+    #[test]
+    fn nothing_but_this_module_turns_a_path_into_the_plane_a_command_acts_on() {
+        // Spelled in pieces because this file is read by the audit like any other, and a
+        // needle written whole here would be a use of the very thing being looked for.
+        let walking_up = ["plane", "::resolve"].concat();
+        let the_processs_own_directory = ["current", "_dir"].concat();
+        let mut wrong = Vec::new();
+        let (mut resolves_here, mut launched_in) = (0, 0);
+        for (name, code) in the_app_crates_sources() {
+            // `planes.rs` is where a path becomes a plane: `Planes::open` resolves the root
+            // the operator named and mints the id every command is then handed.
+            let walks = code.matches(&walking_up).count();
+            if name == "planes.rs" {
+                resolves_here += walks;
+            } else if walks > 0 {
+                wrong.push(format!("{name} walks up from a path to a plane"));
+            }
+            // `lib.rs`, once, in `setup`: the directory charter was launched in is one of the
+            // operator's two yeses (`Approved`), and it is read there and nowhere else.
+            let directories = code.matches(&the_processs_own_directory).count();
+            if name == "lib.rs" {
+                launched_in += directories;
+            } else if directories > 0 {
+                wrong.push(format!(
+                    "{name} reads the process's own directory {directories} time(s)"
+                ));
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "charter-app#127: a command is choosing its own plane rather than being handed \
+             one the registry vouched for — {wrong:?}"
+        );
+        // ...and the two the rule PERMITS are really there, so a `code_of` that started
+        // returning nothing would fail here rather than report the crate spotless.
+        assert!(
+            resolves_here > 0,
+            "the registry no longer resolves a plane at all, so the check above read nothing"
+        );
+        assert_eq!(
+            launched_in, 1,
+            "the process's own directory is read in `setup` and nowhere else (#125)"
+        );
+    }
+
+    /// The same audit at the window's edge: **every command that names a plane names it as a
+    /// [`PlaneId`]**, which is the half a reader of the TypeScript can check.
+    ///
+    /// The bindings are generated from the command list and CI holds them to being in sync
+    /// (`the_typescript_the_ui_imports_is_the_one_these_commands_generate`), so a claim about
+    /// that file is a claim about the commands. Cheap, and it is the shape the three commands
+    /// in #127's title were wrong in: `plane: string`.
+    #[test]
+    fn no_command_takes_its_plane_as_a_bare_string() {
+        let bindings = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/bindings.ts"),
+        )
+        .expect("the generated bindings are readable");
+        let raw: Vec<&str> = bindings
+            .lines()
+            .filter(|line| line.contains("__TAURI_INVOKE("))
+            .filter(|line| {
+                line.contains("plane: string")
+                    || line.contains("planeRoot: string")
+                    || line.contains("root: string")
+            })
+            .collect();
+        assert!(
+            raw.is_empty(),
+            "charter-app#127: a command takes a plane PATH, which is whatever the caller says, \
+             where a `PlaneId` is one the registry agreed to — {raw:?}"
+        );
+        // ...and the mirror, so this cannot go vacuous the day the bindings stop being
+        // generated at all: there ARE commands here, and they do name planes.
+        assert!(
+            bindings.matches("plane: PlaneId").count() > 10,
+            "the bindings name no planes at all, so the check above proved nothing"
+        );
+    }
+
     /// Where a held plane is listening, as a path a test can look for on disk.
     fn socket_of(planes: &Planes, plane: &PlaneId) -> Option<PathBuf> {
         planes

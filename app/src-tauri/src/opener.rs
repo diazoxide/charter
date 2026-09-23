@@ -436,6 +436,21 @@ pub fn window_holds_planes(
 /// above it. The walk is still asked, through `plane::find_root`, but only to REFUSE: a
 /// directory inside a plane is a place for a workspace's clone, not for a second plane.
 ///
+/// **And that is not a second walk** (charter-app#178). The operator's ruling was worded as
+/// *walk as the CLI does, and refuse rather than write when the walk lands somewhere other
+/// than the directory picked*, and a reviewer asked the fair question about the paragraph
+/// above: if this asks `find_root` where the CLI asks `place`, the two can drift, and the day
+/// they do, the refusal starts naming a plane `charter init` would not have chosen. They
+/// cannot. `find_root` and `place` are **one** walk in this core — `plane::walk`, which is a
+/// single function on purpose and says so at length, because two copies of it are two answers
+/// about one directory (M2.9, then M2.16). The two differ in what they do with a `None` and
+/// in reading `$CHARTER_ROOT`, and neither difference can reach the `Some` this refusal is
+/// made of. `$CHARTER_ROOT` is the one thing deliberately not honoured here, and that is the
+/// difference this command wants: a variable inherited from whatever shell opened the app is
+/// not an answer about a folder somebody just pointed at.
+/// `the_refusal_names_the_plane_the_cli_would_have_scaffolded_into` holds the identity, so a
+/// change that made the two walks disagree lands in this file.
+///
 /// **`adopt` is the third answer, and ADR 0035's default** (charter-app#175). Beside "refuse"
 /// and "scaffold the old shape" there is now "make the plane here and take that repository as
 /// its first clone", which is what the record actually decided — *"`charter init` on an
@@ -695,6 +710,49 @@ mod tests {
 
         assert!(refused.contains("is inside the project"), "{refused}");
         assert!(!inside.join(charter_core::plane::MANIFEST).exists());
+    }
+
+    /// **The refusal names exactly the directory `charter init` would have written into**, so
+    /// the window's mechanism and the ruling's wording cannot come apart (charter-app#178).
+    ///
+    /// See `create_project`'s last paragraph for why they cannot: `find_root` and `place` are
+    /// one walk. This is the assertion that keeps it true — it compares the sentence the
+    /// operator reads against `place`'s own answer for the same directory, so a change to
+    /// either resolver that made them disagree fails here rather than in a refusal naming a
+    /// plane nobody picked.
+    #[test]
+    fn the_refusal_names_the_plane_the_cli_would_have_scaffolded_into() {
+        // `place` reads `$CHARTER_ROOT` before it walks anything, and a test may not set or
+        // clear a variable every other test in the process shares. Inherited, it would make
+        // `place` answer about a plane that has nothing to do with this temp directory — so
+        // the identity is asserted where it is the walk that answers, which is every ordinary
+        // run, CI's included.
+        if std::env::var_os("CHARTER_ROOT").is_some_and(|it| !it.is_empty()) {
+            return;
+        }
+        let dir = tempfile::tempdir().expect("a directory");
+        let plane = a_plane(&dir.path().join("plane"));
+        let inside = plane.join("workspaces").join("alpha").join("thing");
+
+        let refused = scaffold_at(&inside, false, None).expect_err("a plane inside a plane");
+
+        let cli_would_write_into = charter_core::plane::place(&inside).root;
+        assert_ne!(
+            cli_would_write_into, inside,
+            "this directory has to be one the CLI's walk leads away from, or the test proves \
+             nothing"
+        );
+        // The whole sentence and not the path alone: the picked directory is UNDER the plane,
+        // so its own spelling contains the plane's as a prefix and a bare `contains` passes
+        // for a refusal that named the wrong one of the two. Measured — a hand mutation that
+        // printed the picked path in both slots went green against the weaker assertion.
+        assert!(
+            refused.contains(&format!(
+                "is inside the project {}.",
+                cli_would_write_into.display()
+            )),
+            "the refusal must name where `charter init` would have written: {refused}"
+        );
     }
 
     #[test]

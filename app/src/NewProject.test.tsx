@@ -105,6 +105,33 @@ describe("making a project", () => {
     ]);
   });
 
+  /**
+   * **The button, which is all charter-app#178 was still missing.** #172 built the dialog, the
+   * command and the catalogue row behind it and left the chrome; this is the chrome, and what
+   * it has to be is the same row the menu above already reaches. So the assertion is on the
+   * strip's pair: two controls, no words between them, each named by `actions.projectRows`.
+   */
+  it("is on the project strip too, beside the one that opens a project that exists", async () => {
+    core();
+    render(<App />);
+    await screen.findByRole("tab", { name: /plane/ });
+
+    const controls = within(screen.getByRole("tablist", { name: "Projects" }))
+      .getAllByRole("button")
+      .filter((button) => button.classList.contains("bare"));
+
+    // Icon-only, in the operator's own words for this strip — *"without label — just icon"* —
+    // so the accessible name is the whole name and the order is open, then create.
+    expect(controls.map((button) => button.getAttribute("aria-label"))).toEqual([
+      "Open a project…",
+      "New project…",
+    ]);
+    expect(controls.map((button) => button.textContent)).toEqual(["", ""]);
+
+    await userEvent.click(controls[1]);
+    expect(await screen.findByRole("dialog", { name: "New project" })).toBeInTheDocument();
+  });
+
   it("sends the folder that was typed, and does not make the repo the plane", async () => {
     const { calls } = core();
     render(<App />);

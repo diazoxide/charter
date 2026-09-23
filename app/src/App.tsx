@@ -755,10 +755,21 @@ function App() {
               down: the `+` at the end of a strip makes one more of what the strip lists. Its
               accessible name is still the catalogue's `Open a project…`.
 
+              **And beside it, the other half of the same sentence** — *"also we need to have
+              create new project button too"* (charter-app#178). Two controls and not one
+              menu: opening a project the operator already has and making one that does not
+              exist yet are different acts, and the second writes to disk. It is drawn exactly
+              as its neighbour is — one `Doer` over the catalogue's `project.create`, icon-only,
+              named `New project…` by the same row the palette and the tab's menu read — so
+              there is still one place those words are written down. It is second because
+              opening one is the commoner act; both are always available, including with no
+              project open, which is exactly the window that needs them.
+
               And the projects there was no room for, in the same component the chat strip
               uses, so an operator learns one control for all three strips. */}
           <span className="strip-doing" ref={projectControls}>
             <Doer offer={strip.open} onPress={press} iconOnly />
+            <Doer offer={strip.create} onPress={press} iconOnly />
             <ShowMore
               noun="project"
               hidden={projectsShown.hidden.map((project) => ({

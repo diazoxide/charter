@@ -25,6 +25,23 @@
 //! what charter is about to say; the delete asks again, in the core, at the moment it matters.
 //! A preview that decided would be a check made against a disk that can change between the two.
 //!
+//! # The words on the button, which are not the decision (charter-app#182)
+//!
+//! Those two reads happen at two moments, and a workspace can move between them — a clone goes
+//! dirty, a commit is made, a worktree appears. Nothing is then wrongly deleted, because the
+//! core's own read still governs. What went wrong is smaller and still bad: the button that
+//! offers to discard work drew its words from the **preview**, so it could name one clone while
+//! the verbatim refusal printed above it named another, at the moment somebody is deciding
+//! whether to throw work away.
+//!
+//! So [`workspace_remove`] refuses with a [`Refused`], which carries the core's sentence **and
+//! the list that sentence was made from** — `wscmd::remove::Removal::refused_over`, read inside
+//! the delete. The window draws the refusal's own list once there is one, and the preview only
+//! before the first press.
+//!
+//! **This changes nothing about what decides.** The list is an output of the read that already
+//! happened; it is not read here, not compared here, and no code in this module branches on it.
+//!
 //! **A refusal crosses unchanged**, for `worktrees.rs`' reason: the core's sentence names the
 //! repair, and an operator shown a reworded version of it can neither follow it nor search for
 //! it.
@@ -55,6 +72,23 @@ impl From<wscmd::AtRisk> for AtRisk {
             said: risk.said,
         }
     }
+}
+
+/// Why a delete made nothing — **and the reading it was refused on** (charter-app#182).
+///
+/// Two fields and they are one answer. `said` is the core's sentence, verbatim, because it
+/// names the repair. `at_risk` is `work_at_risk`'s list as the core read it *inside* the
+/// delete, so the surface offering to discard that work names the same things the sentence
+/// above it names. Empty for every refusal that is not the guard's — a name that is not a
+/// workspace, a `workspaces/<ws>` that links out of the plane, a `remove_dir_all` that failed
+/// — and that is the honest shape: `--force` does not get past any of those, so a window that
+/// drew a force button beside one would be offering a way through that does not exist.
+#[derive(Debug, Clone, serde::Serialize, specta::Type)]
+pub struct Refused {
+    /// The core's own words, unchanged and all of them.
+    pub said: String,
+    /// What the core refused on, in the order it said them.
+    pub at_risk: Vec<AtRisk>,
 }
 
 /// What a workspace command said, turned into what a window draws.
@@ -180,18 +214,32 @@ pub fn workspace_remove(
     plane: PlaneId,
     workspace: String,
     force: bool,
-) -> Result<Vec<String>, String> {
-    let root = planes.held(&plane)?.root().to_path_buf();
+) -> Result<Vec<String>, Refused> {
+    let root = planes
+        .held(&plane)
+        .map_err(|why| Refused {
+            said: why,
+            at_risk: Vec::new(),
+        })?
+        .root()
+        .to_path_buf();
     remove_in(&root, &workspace, force)
 }
 
 /// The removal itself, against a root the registry has already vouched for.
 ///
-/// One line, deliberately: everything this command is, is `wscmd::remove`.
-fn remove_in(root: &Path, workspace: &str, force: bool) -> Result<Vec<String>, String> {
+/// Still one call, deliberately: everything this command is, is `wscmd::remove`. What it
+/// answers with now carries `refused_over` — the list the core made its refusal from — and
+/// that list is copied across the wire and read by nothing on this side (charter-app#182).
+fn remove_in(root: &Path, workspace: &str, force: bool) -> Result<Vec<String>, Refused> {
     let mut said = Vec::new();
-    let code = wscmd::remove::remove(root, workspace, force, &mut |line: Say| said.push(line));
-    ran(code, said)
+    let done = wscmd::remove::remove(root, workspace, force, &mut |line: Say| said.push(line));
+    // `ran` is untouched and shared with `workspace_create`: which lines are a refusal, and
+    // whether there was one at all, is still decided in exactly one place.
+    ran(done.code, said).map_err(|said| Refused {
+        said,
+        at_risk: done.refused_over.into_iter().map(AtRisk::from).collect(),
+    })
 }
 
 #[cfg(test)]
@@ -231,6 +279,15 @@ mod tests {
         git(&at, &["init", "-q", "-b", "main", "."]);
         git(&at, &["config", "user.email", "t@e.invalid"]);
         git(&at, &["config", "user.name", "t"]);
+        // **A fixture repository may not inherit the developer's signing configuration.** With
+        // `commit.gpgsign = true` and an SSH signer in `~/.gitconfig` — an ordinary setup, and
+        // the operator's — the commit below either parks on a biometric prompt or fails with
+        // the agent's own error, and every test of this delete goes red for a reason that has
+        // nothing to do with it. **CI cannot see it**: a runner has no signing config. charter's
+        // Python suite hit exactly this and turned it off everywhere
+        // (`news/0.54.0-the-suite-stops-spending-your-forge-token-and-your-thumb.md`); this
+        // port carried the helper over without it.
+        git(&at, &["config", "commit.gpgsign", "false"]);
         std::fs::write(at.join("README.md"), "one\n").expect("a file");
         git(&at, &["add", "-A"]);
         git(&at, &["commit", "-q", "-m", "one"]);
@@ -338,8 +395,14 @@ mod tests {
 
         let refused = remove_in(&root, "alpha", false).expect_err("a dirty clone is refused");
 
-        assert!(refused.contains("this would discard work"), "{refused}");
-        assert!(refused.contains("svc: uncommitted changes"), "{refused}");
+        assert!(
+            refused.said.contains("this would discard work"),
+            "{refused:?}"
+        );
+        assert!(
+            refused.said.contains("svc: uncommitted changes"),
+            "{refused:?}"
+        );
         assert!(clone.exists(), "the guard fired, so nothing was deleted");
         assert!(clone.join("README.md").exists());
     }
@@ -370,8 +433,10 @@ mod tests {
         let refused = remove_in(&root, "alpha", false).expect_err("unique commits are refused");
 
         assert!(
-            refused.contains("svc/task: 1 commit(s) that exist nowhere else"),
-            "{refused}"
+            refused
+                .said
+                .contains("svc/task: 1 commit(s) that exist nowhere else"),
+            "{refused:?}"
         );
         assert!(piece.exists());
     }
@@ -387,7 +452,7 @@ mod tests {
 
         let refused = remove_in(&root, "alpha", false).expect_err("an unreadable clone refuses");
 
-        assert!(refused.contains("could not be read"), "{refused}");
+        assert!(refused.said.contains("could not be read"), "{refused:?}");
         assert!(clone.exists());
     }
 
@@ -417,7 +482,45 @@ mod tests {
         assert_eq!(shown.len(), 1, "{shown:?}");
         assert_eq!(shown[0].what, "svc");
         assert_eq!(shown[0].said, "svc: uncommitted changes");
-        assert!(refused.contains(&shown[0].said), "{refused}");
+        assert!(refused.said.contains(&shown[0].said), "{refused:?}");
+    }
+
+    /// **The refusal carries the list it was refused on, and the preview is not it**
+    /// (charter-app#182).
+    ///
+    /// The workspace is made to move between the two reads, which is the whole failure: the
+    /// preview sees one clone at risk, a second goes dirty while the dialog is up, and the
+    /// core refuses over both. Before this, the only list the window had to name what it was
+    /// about to discard was the first one — so the force button named `svc` under a sentence
+    /// naming `svc` and `lib`, and the operator was reading two descriptions of one act that
+    /// did not agree.
+    #[test]
+    fn a_refusal_names_what_the_core_read_and_not_what_the_preview_read() {
+        let (_dir, root) = plane();
+        let svc = clone_in(&root, "alpha", "svc");
+        let lib = clone_in(&root, "alpha", "lib");
+        std::fs::write(svc.join("README.md"), "changed\n").expect("a change");
+
+        let preview = at_risk_in(&root, "alpha");
+
+        // The workspace moves while the dialog is up.
+        std::fs::write(lib.join("README.md"), "changed too\n").expect("a second change");
+
+        let refused = remove_in(&root, "alpha", false).expect_err("both clones are at risk now");
+
+        assert_eq!(
+            preview.iter().map(|r| &r.what).collect::<Vec<_>>(),
+            vec!["svc"],
+            "the preview is the older reading, and it stays older"
+        );
+        assert_eq!(
+            refused.at_risk.iter().map(|r| &r.what).collect::<Vec<_>>(),
+            vec!["lib", "svc"]
+        );
+        // The claim: every name the button would draw is a name the sentence above it uses.
+        for risk in &refused.at_risk {
+            assert!(refused.said.contains(&risk.said), "{refused:?}");
+        }
     }
 
     #[test]
@@ -435,9 +538,14 @@ mod tests {
         let refused = remove_in(&root, "alpha", true).expect_err("a link out of the plane");
 
         assert!(
-            refused.contains("does not resolve to a directory inside this plane"),
-            "{refused}"
+            refused
+                .said
+                .contains("does not resolve to a directory inside this plane"),
+            "{refused:?}"
         );
+        // Not the guard's refusal, so there is nothing to offer forcing past — and a window
+        // that drew a force button here would be offering a way through that does not exist.
+        assert!(refused.at_risk.is_empty(), "{refused:?}");
         assert!(
             outside.path().join("treasure/keep.txt").exists(),
             "--force is not a way out of the plane"
