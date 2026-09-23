@@ -143,7 +143,7 @@ fn git_binary() -> (PathBuf, String) {
     for dir in GIT_DIRS {
         let candidate = Path::new(dir).join("git");
         if candidate.is_file() {
-            return (candidate, dirs.join(":"));
+            return (candidate, path_value(&dirs));
         }
     }
     // Searched in the PARENT, where `PATH` is still readable, and resolved to an absolute
@@ -155,11 +155,31 @@ fn git_binary() -> (PathBuf, String) {
             let candidate = dir.join("git");
             if candidate.is_file() {
                 dirs.insert(0, dir.display().to_string());
-                return (candidate, dirs.join(":"));
+                return (candidate, path_value(&dirs));
             }
         }
     }
-    (PathBuf::from("git"), dirs.join(":"))
+    (PathBuf::from("git"), path_value(&dirs))
+}
+
+/// `dirs` as a child's `PATH`, joined the way this platform splits one — `:` here, `;` on
+/// Windows (charter-app#100: a `PATH` joined with `:` arrives there as one nonsense entry).
+///
+/// **A directory that cannot be written into a `PATH` is left out, not split.** On unix that
+/// is a directory with a `:` in it, which the joined string would hand the child as TWO
+/// entries — the second one relative, resolved against whatever directory the child runs
+/// in. A `$HOME` with a colon puts every user directory [`crate::programs`] searches in that
+/// position. The program itself is still run by the absolute path found for it; what the
+/// child loses is one directory to look for ITS programs in, which is the smaller failure and
+/// the same trade `programs::chat_path_from` makes.
+pub(crate) fn path_value(dirs: &[String]) -> String {
+    let joinable = dirs
+        .iter()
+        .filter(|dir| std::env::join_paths([dir.as_str()]).is_ok());
+    std::env::join_paths(joinable)
+        .ok()
+        .and_then(|joined| joined.into_string().ok())
+        .unwrap_or_default()
 }
 
 /// Config keys that name a program git will run, turned off where no config can re-enable
@@ -753,6 +773,29 @@ mod tests {
                 "{name} is repository-local and must not be given to the child"
             );
         }
+    }
+
+    #[test]
+    fn a_childs_path_splits_back_into_exactly_the_directories_it_was_built_from() {
+        let dirs: Vec<String> = GIT_DIRS.iter().map(|d| (*d).to_string()).collect();
+        let back: Vec<String> = std::env::split_paths(&path_value(&dirs))
+            .map(|d| d.display().to_string())
+            .collect();
+        assert_eq!(
+            back, dirs,
+            "joined with this platform's separator, not a literal `:`"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_with_the_separator_in_it_is_left_out_rather_than_split_in_two() {
+        let dirs = vec!["/home/a:b/.local/bin".to_string(), "/usr/bin".to_string()];
+        assert_eq!(
+            path_value(&dirs),
+            "/usr/bin",
+            "joined, it would reach the child as `/home/a` and a RELATIVE `b/.local/bin`"
+        );
     }
 
     #[test]
