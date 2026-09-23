@@ -109,10 +109,62 @@ pub struct Chat {
     pub number: Option<u32>,
 }
 
+/// The most view tabs one record puts back. A window opens one per persona and per extension
+/// view at most, and a plane with more personas than this is not one anybody reads tab by tab;
+/// the bound exists so a hand-written record cannot make a launch draw ten thousand tabs.
+pub const MOST_VIEWS: usize = 64;
+
+/// The most a view tab's recorded title may be, in characters. A tab draws a word or two.
+pub const MOST_TITLE: usize = 120;
+
+/// One tab that held a **view** rather than a chat, as it was when the app last wrote this.
+///
+/// **A tab is a layout of panes, and a pane holds a session or a view** (charter ADR 0043, as
+/// amended for view tabs). A chat comes back because its program is started again; a view has
+/// no program of charter's to start, so what comes back is only the fact that the tab was
+/// there — which view, on which strip, where among the tabs, and whether it was in front.
+///
+/// **Identified by data, and the same data for charter's own views and a stranger's.** `from`
+/// is `None` for a view charter draws itself (the persona view) and an extension's id for one
+/// an approved extension offers (persona statistics), `view` is which of theirs, and `key` is
+/// what it is about inside that — a persona's name, or empty for the whole plane. Nothing here
+/// knows what a persona view is.
+///
+/// **Putting one back runs nothing.** A view an extension offers is asked when the operator
+/// opens it, and a tab that came back from this file waits for a press before its program is
+/// asked anything (`app/src/Views.tsx`): this file is writable by whoever can write the plane's
+/// state directory, and a line in it must not become a program run at every launch. That is
+/// also why views are not part of `machine::Contribution` — they start nothing, so there is
+/// nothing for the trust fingerprint to cover.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct View {
+    /// Whose view: `None` for charter's own, else the extension's id.
+    pub from: Option<String>,
+    /// Which view of theirs.
+    pub view: String,
+    /// What it is about inside that: a persona's name, or empty for the whole plane.
+    pub key: String,
+    /// What its tab said, so a tab whose source has gone still comes back under its name.
+    pub title: String,
+    /// The workspace whose strip it was on, or `None` for the strip of chats outside every
+    /// workspace. A tab with no chat cannot be filed by where its chat works, so it says.
+    pub workspace: Option<String>,
+    /// Where it was on the strip, counted over chats and views together from the left. A
+    /// place and not a promise: a chat that did not come back moves it by one.
+    pub at: u32,
+    /// Whether it was the tab in front.
+    pub active: bool,
+    /// Whether the operator pinned it (charter ADR 0039), for [`Chat::pinned`]'s reasons.
+    pub pinned: bool,
+}
+
 /// Every chat that was open, and the numbers this plane has already spent.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Record {
     pub chats: Vec<Chat>,
+    /// The view tabs that were open — see [`View`]. Empty in every record written before a tab
+    /// could hold one, which is what was true of those.
+    pub views: Vec<View>,
     /// The highest chat number this plane has ever dealt, open or closed — charter-app#90.
     ///
     /// **A number is never dealt twice, and this is what remembers that across a quit.**
@@ -399,6 +451,12 @@ pub fn read_or_refusal(plane_root: &Path) -> Result<Record, std::io::Error> {
     }
     let record = Record {
         chats: on_disk.chats.into_iter().map(Chat::from).collect(),
+        views: on_disk
+            .views
+            .into_iter()
+            .filter_map(ViewOnDisk::held)
+            .take(MOST_VIEWS)
+            .collect(),
         dealt: on_disk.dealt,
     };
     // Held to the same invariant on the way in as on the way out: a file whose counter sits
@@ -429,6 +487,102 @@ struct OnDisk {
     /// this file does not already name", which is what was true of those.
     #[serde(default)]
     dealt: u32,
+    /// The view tabs — see [`View`]. **Absent in every record written before tabs could hold
+    /// one, and absent whenever none is open**, so a plane that never opened a view writes the
+    /// record it always wrote. It is not a version bump for the reason [`Chat::pinned`] gives:
+    /// a bump drops every operator's open chats at the first launch after it, and a missing
+    /// list reads honestly as no view tabs. An older charter reading a newer record ignores
+    /// the key, because nothing here refuses one it does not know.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    views: Vec<ViewOnDisk>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ViewOnDisk {
+    /// The extension's id, or empty for charter's own.
+    #[serde(default)]
+    from: String,
+    #[serde(default)]
+    view: String,
+    #[serde(default)]
+    key: String,
+    #[serde(default)]
+    title: String,
+    /// The workspace's name, or empty for the strip outside every workspace.
+    #[serde(default)]
+    workspace: String,
+    #[serde(default)]
+    at: u32,
+    #[serde(default)]
+    active: bool,
+    #[serde(default)]
+    pinned: bool,
+}
+
+impl ViewOnDisk {
+    /// The view this line names, or nothing when it is not one charter would have written.
+    ///
+    /// **Every field is held to a shape**, for `ChatOnDisk`'s reason: this file is writable by
+    /// whoever can write the plane's state directory, and these words reach a tab, a command the
+    /// window sends back to the core, and — for an extension's view — the id the executor is
+    /// asked about. A line that fails is dropped whole rather than repaired: a view with a
+    /// mangled id is not a view the operator had open.
+    fn held(self) -> Option<View> {
+        let id_ok =
+            |word: &str| word.chars().count() <= 64 && crate::contain::workspace_name_ok(word);
+        if !id_ok(&self.view) {
+            return None;
+        }
+        let from = if self.from.is_empty() {
+            None
+        } else if id_ok(&self.from) {
+            Some(self.from)
+        } else {
+            return None;
+        };
+        // A key is empty — the whole plane — or one word of the alphabet charter mints names
+        // in. A persona's name passes; a path does not.
+        if !self.key.is_empty() && !id_ok(&self.key) {
+            return None;
+        }
+        // The title is only ever drawn, as a text node — but it is drawn on a tab, so it is
+        // one line of a bounded length, and a title that is not one is the view's own id.
+        let title = if self.title.trim().is_empty()
+            || self.title.chars().count() > MOST_TITLE
+            || self.title.chars().any(char::is_control)
+        {
+            self.view.clone()
+        } else {
+            self.title
+        };
+        Some(View {
+            from,
+            view: self.view,
+            key: self.key,
+            title,
+            // A name that is not a workspace name files the tab outside every workspace,
+            // which is where the window puts a tab whose workspace has gone anyway.
+            workspace: Some(self.workspace).filter(|name| crate::contain::workspace_name_ok(name)),
+            at: self.at,
+            active: self.active,
+            pinned: self.pinned,
+        })
+    }
+}
+
+impl From<&View> for ViewOnDisk {
+    fn from(view: &View) -> Self {
+        Self {
+            from: view.from.clone().unwrap_or_default(),
+            view: view.view.clone(),
+            key: view.key.clone(),
+            title: view.title.clone(),
+            workspace: view.workspace.clone().unwrap_or_default(),
+            at: view.at,
+            active: view.active,
+            pinned: view.pinned,
+        }
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -512,6 +666,7 @@ impl From<&Record> for OnDisk {
                 })
                 .collect(),
             dealt: highest_dealt(record),
+            views: record.views.iter().map(ViewOnDisk::from).collect(),
         }
     }
 }
@@ -887,6 +1042,7 @@ mod tests {
 
     fn one_chat() -> Record {
         Record {
+            views: Vec::new(),
             dealt: 0,
             chats: vec![Chat {
                 program: "/bin/sh".into(),
@@ -1077,6 +1233,7 @@ mod tests {
     fn a_pinned_chat_comes_back_pinned() {
         let plane = tempfile::tempdir().unwrap();
         let record = Record {
+            views: Vec::new(),
             dealt: 0,
             chats: vec![
                 Chat {
@@ -1138,6 +1295,7 @@ mod tests {
         // `.charter/sessions/<n>.workspace` and `<n>.lock` are written at.
         let plane = tempfile::tempdir().unwrap();
         let record = Record {
+            views: Vec::new(),
             chats: vec![
                 Chat {
                     number: Some(2),
@@ -1201,6 +1359,7 @@ mod tests {
         write(
             plane.path(),
             &Record {
+                views: Vec::new(),
                 chats: vec![Chat {
                     number: Some(6),
                     ..claude("ide.7", None)
@@ -1227,5 +1386,157 @@ mod tests {
         .unwrap();
 
         assert_eq!(read(plane.path()).dealt, 4);
+    }
+
+    // ----- view tabs (charter ADR 0043, as amended: a pane holds a session or a view) -----
+
+    fn persona_view(name: &str) -> View {
+        View {
+            from: None,
+            view: "persona".into(),
+            key: name.into(),
+            title: name.into(),
+            workspace: Some("ide".into()),
+            at: 1,
+            active: true,
+            pinned: false,
+        }
+    }
+
+    #[test]
+    fn a_view_tab_comes_back_as_it_was_recorded() {
+        let plane = tempfile::tempdir().unwrap();
+        let record = Record {
+            chats: vec![claude("ide.7", Some(ID))],
+            views: vec![
+                persona_view("steward"),
+                View {
+                    from: Some("persona-statistics".into()),
+                    view: "statistics".into(),
+                    key: String::new(),
+                    title: "Statistics".into(),
+                    workspace: None,
+                    at: 2,
+                    active: false,
+                    pinned: true,
+                },
+            ],
+            dealt: 0,
+        };
+
+        write(plane.path(), &record).expect("the record is written");
+
+        assert_eq!(read(plane.path()), record);
+    }
+
+    #[test]
+    fn a_record_written_before_tabs_held_views_reads_as_no_view_tabs() {
+        // Every operator's record at the first launch after this change. The chats in it must
+        // still come back: a version bump here would have dropped them all.
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(plane.path().join(".charter/app")).unwrap();
+        std::fs::write(
+            path(plane.path()),
+            br#"{"version":1,"at":0,"chats":[{"program":"claude","name":"ide.7"}]}"#,
+        )
+        .unwrap();
+
+        let back = read(plane.path());
+
+        assert_eq!(back.chats.len(), 1);
+        assert!(back.views.is_empty());
+    }
+
+    #[test]
+    fn a_plane_with_no_view_tabs_writes_no_views_key() {
+        // So the record of a plane that never opened a view is byte for byte the record an
+        // older charter wrote and reads.
+        let plane = tempfile::tempdir().unwrap();
+        write(
+            plane.path(),
+            &Record {
+                chats: vec![claude("ide.7", None)],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let text = fs::read_to_string(path(plane.path())).unwrap();
+
+        assert!(!text.contains("\"views\""), "{text}");
+    }
+
+    #[test]
+    fn a_view_line_that_is_not_one_charter_would_write_is_dropped_and_the_rest_kept() {
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(plane.path().join(".charter/app")).unwrap();
+        std::fs::write(
+            path(plane.path()),
+            br#"{"version":1,"at":0,"chats":[],"views":[
+                {"view":"persona","key":"../../etc"},
+                {"from":"a/b","view":"statistics"},
+                {"view":""},
+                {"view":"persona","key":"steward","workspace":"no/such"}
+            ]}"#,
+        )
+        .unwrap();
+
+        let back = read(plane.path());
+
+        assert_eq!(back.views.len(), 1, "{:?}", back.views);
+        assert_eq!(back.views[0].key, "steward");
+        assert_eq!(
+            back.views[0].workspace, None,
+            "a name that is not a workspace files the tab outside every workspace"
+        );
+    }
+
+    #[test]
+    fn a_view_title_that_is_not_one_line_of_words_is_the_view_s_own_id() {
+        let plane = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(plane.path().join(".charter/app")).unwrap();
+        let long = "x".repeat(MOST_TITLE + 1);
+        std::fs::write(
+            path(plane.path()),
+            format!(
+                r#"{{"version":1,"at":0,"chats":[],"views":[
+                    {{"view":"one","title":"two\nlines"}},
+                    {{"view":"two","title":"{long}"}},
+                    {{"view":"three","title":"  "}},
+                    {{"view":"four","title":"Statistics"}}
+                ]}}"#
+            ),
+        )
+        .unwrap();
+
+        let titles: Vec<String> = read(plane.path())
+            .views
+            .into_iter()
+            .map(|view| view.title)
+            .collect();
+
+        assert_eq!(titles, vec!["one", "two", "three", "Statistics"]);
+    }
+
+    #[test]
+    fn a_record_puts_back_no_more_view_tabs_than_the_bound() {
+        let plane = tempfile::tempdir().unwrap();
+        let many: Vec<View> = (0..MOST_VIEWS + 5)
+            .map(|at| View {
+                key: format!("p{at}"),
+                active: false,
+                ..persona_view("x")
+            })
+            .collect();
+        write(
+            plane.path(),
+            &Record {
+                views: many,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(read(plane.path()).views.len(), MOST_VIEWS);
     }
 }

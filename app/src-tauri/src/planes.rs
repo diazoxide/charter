@@ -1457,6 +1457,7 @@ mod tests {
     /// A record of one chat running `program` and nothing else.
     fn one_chat_on(program: &str) -> reopen::Record {
         reopen::Record {
+            views: Vec::new(),
             chats: vec![charter_core::reopen::Chat {
                 program: program.to_owned(),
                 args: Vec::new(),
