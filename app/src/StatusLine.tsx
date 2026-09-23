@@ -157,7 +157,33 @@ export function StatusLine({
   const pieces = pieceCount(state);
   return (
     <footer className="status-line" aria-label="Status" data-testid="status-line">
-      {/* Where I am. First, because it is what the line is for, and because the row's order
+      {/* **Which regions are drawn** (charter ADR 0038), FIRST on the line, at the window's
+          bottom-left corner — the operator's *"show hide buttons can be movet to bottom status
+          bar — again like ZED"*, with a screenshot of Zed that has them at the far left. #207
+          put them at the right-hand end and called that Zed's place; it is not, and the
+          operator had to ask a fourth time.
+
+          **One button per region in the arrangement, in the order the window draws them.** A
+          region added to the catalogue gets its own way back without anybody remembering to
+          add one, which is what a list written out by hand kept getting wrong.
+
+          **First is also where they cannot move.** The row's order is its truncation order,
+          and nothing to their left changes width, so they sit at the same x whatever the
+          workspace is called or however long the path is. */}
+      {regions && (
+        <span className="regions-doing">
+          {regions.placed.map((placed) => (
+            <RegionToggle
+              key={placed.id}
+              id={placed.id}
+              shown={!placed.collapsed}
+              onToggle={regions.onToggle}
+            />
+          ))}
+        </span>
+      )}
+
+      {/* Where I am. Right after the region toggles, because it is what the line is for, and because the row's order
           is its truncation order: what goes off the end is the least important thing. */}
       <span className="status-where">
         <span className="status-glyph" aria-hidden="true">
@@ -204,33 +230,6 @@ export function StatusLine({
       <span className="plane" title={plane}>
         <span className="status-label">project</span> <code>{plane}</code>
       </span>
-
-      {/* **Which regions are drawn** (charter ADR 0038), at the right-hand end of the line —
-          the operator's *"show hide buttons can be movet to bottom status bar — again like
-          ZED"*, which is exactly where Zed keeps them. They were labelled buttons on
-          `header.bar`, in a row with the tab strip, the `+` and the show-more, competing for
-          the width that the strip needs most when it is fullest.
-
-          **One button per region in the arrangement, in the order the window draws them.**
-          That rule came with them unchanged and is the half worth protecting: a region added
-          to the catalogue gets its own way back without anybody remembering to add one, which
-          is what a list written out by hand kept getting wrong.
-
-          **Last on the line, after the path.** The row's order is its truncation order, and
-          the path is the one item allowed to shrink — so these sit at the window's own
-          right-hand corner, where they do not move when the path does. */}
-      {regions && (
-        <span className="regions-doing">
-          {regions.placed.map((placed) => (
-            <RegionToggle
-              key={placed.id}
-              id={placed.id}
-              shown={!placed.collapsed}
-              onToggle={regions.onToggle}
-            />
-          ))}
-        </span>
-      )}
     </footer>
   );
 }

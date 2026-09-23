@@ -243,11 +243,11 @@ describe("the gauge's corner", () => {
     expect(hidden).not.toContain("gauge");
   });
 
-  it("takes its row from the pane's box, and only when there is a gauge", () => {
-    // The pane's box and not `.xterm`'s padding: `SessionPane` refits on a change to the pane's
-    // size, and the gauge arrives after the first fit. And PADDING on the frame, never a margin
-    // on the pane — measured: the margin collapsed through the frame and took the gauge with it.
-    expect(rule("\\.pane-frame\\.gauged")).toMatch(/padding-top:\s*var\(--gauge-room\)/);
-    expect(css).not.toMatch(/\.pane-frame[^{]*>\s*\.pane\s*\{[^}]*margin-top/);
+  it("floats over the terminal and never changes the pane's size", () => {
+    // The operator: "context usage component position is not absolute and its changing harness
+    // container sizes". A pane with a gauge must be exactly as tall as one without.
+    expect(css).not.toMatch(/\.pane-frame\.gauged/);
+    expect(css).not.toMatch(/--gauge-room/);
+    expect(rule("\\.pane-corner")).toMatch(/position:\s*absolute/);
   });
 });
