@@ -554,9 +554,14 @@ jobs:
             test -f "$plugin/.claude-plugin/plugin.json"
             test -f "$plugin/hooks/hooks.json"
           else
-            dpkg -c dist/*.deb | grep -E 'plugin/' || true
-            dpkg -c dist/*.deb | grep -q 'plugin/.claude-plugin/plugin.json'
-            dpkg -c dist/*.deb | grep -q 'plugin/hooks/hooks.json'
+            # Listed ONCE into a variable, then searched. `dpkg -c … | grep -q` failed the first
+            # dev publish after #221 with the plugin present: `grep -q` exits at its first
+            # match, dpkg-deb's tar gets SIGPIPE writing the rest, and `pipefail` turns that
+            # into "tar subprocess returned error exit status 2".
+            listing=$(dpkg -c dist/*.deb)
+            grep -E 'plugin/' <<<"$listing" || true
+            grep -q 'plugin/.claude-plugin/plugin.json' <<<"$listing"
+            grep -q 'plugin/hooks/hooks.json' <<<"$listing"
           fi
 
       - name: Upload
