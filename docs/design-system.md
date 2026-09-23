@@ -1,7 +1,7 @@
 # The window's design system
 
-**A theme is a data file. Every colour in charter comes from one, and nothing else may write
-one down.** `docs/ui-primitives.md` says what the window is built *out of*; this file says what
+**A theme is a data file. Every colour in charter comes from one, and so does every motion —
+and nothing else may write either down.** `docs/ui-primitives.md` says what the window is built *out of*; this file says what
 it is *drawn in*.
 
 The rule, in one line each:
@@ -12,6 +12,8 @@ The rule, in one line each:
   reason: a theme cannot reach inside a bracket.
 - **Semantic names only.** A token is `surface.raised`, never `gray-800`.
 - **Both built-in themes get every new token**, or the window will not start.
+- **No time and no easing outside `app/src/theme/`** — no `150ms`, no `ease-out`, no
+  `duration-150`, and no `prefers-reduced-motion` block. Same test; see [Motion](#motion-is-data-too).
 
 ## Why a theme is data and not CSS
 
@@ -151,6 +153,134 @@ field. If a layout ever has to be shared, hand-edited or contributed by a plugin
 rather than fetched from it, for the reason above. The seam is `load(raw: unknown)`, the same
 shape this page describes for the theme.
 
+## Motion is data too
+
+**How long a change in the window takes, and how it moves, is a theme token — named for what the
+motion is for, read by name, and collapsed in one place for an operator who asked for less.**
+This is M7.2, and it is the colour layer's argument applied to time.
+
+Before it, the window had two motions — `900ms linear` on the spinner and `120ms ease` on the
+explorer's twisty — each spelled out where it was used and each with its own
+`@media (prefers-reduced-motion)` block beside it. That is where colour was before this file
+existed: every value a local decision, every guard something the next component had to remember.
+The operator has asked for animation twice (*"no icons, visual components, animations"*, *"show
+pipelines with animation"*), and adding it on top of that shape would have multiplied both.
+
+### The vocabulary
+
+`DURATIONS` and `EASINGS` in `app/src/theme/motion.ts`. Nine names, written to the document as
+`--motion-duration-*` and `--motion-easing-*` beside the colours:
+
+| token | built-in | what it is for |
+| --- | --- | --- |
+| `duration.quick` | 120 ms | the window answering a press: a tab lit, a chevron turning |
+| `duration.enter` | 160 ms | a surface arriving: a menu, a popover, a dialog, a region brought back |
+| `duration.settle` | 280 ms | a mark arriving at an answer: a pipeline finished, a chat changed state |
+| `duration.spin` | 900 ms | one turn of *still running* |
+| `duration.breathe` | 1600 ms | one breath of *queued, not yet running* |
+| `easing.standard` | `[0.2, 0, 0, 1]` | a state changing in place |
+| `easing.enter` | `[0, 0, 0.2, 1]` | decelerating into place, which is what reads as *arrived* |
+| `easing.steady` | `[0, 0, 1, 1]` | a turn; an eased one stutters once a second |
+| `easing.breathe` | `[0.4, 0, 0.6, 1]` | a loop with no visible seam |
+
+**Semantic, not a scale**, for the reason `needs-you.base` and `danger.base` are two tokens: a
+theme that wants arrivals quicker changes `duration.enter` and does not also speed up whatever
+happened to share a rung of `duration-200` with it.
+
+A theme file carries them under `motion`, beside `tokens`:
+
+```json
+{
+  "name": "brisk",
+  "appearance": "dark",
+  "motion": {
+    "duration.enter": 90,
+    "easing.enter": [0, 0, 0.1, 1]
+  }
+}
+```
+
+- **A duration is a whole number of milliseconds, 0 to 10,000; an easing is the four numbers of
+  a cubic Bézier**, each `x` in 0..1 and each `y` in -1..2. Numbers and never text, which is the
+  same security boundary as hex-only colour: `motionVariables` writes the CSS from the numbers,
+  so `"150ms; } body { display: none"` has nowhere to go (ADR 0041's parse-and-re-emit). The
+  `x` range is CSS's own rule — a curve that breaks it drops its whole declaration, so the motion
+  would silently vanish — and the `y` range leaves room for an overshoot and none for a curve
+  that flings a menu off the window.
+- **A partial `motion` is normal, and so is none.** What a theme does not name moves the way the
+  built-in of its appearance does; a bad value falls back and is reported, exactly as a colour is.
+- **`0` turns a motion off.** A theme that sets every duration to zero is a still window.
+- **An extension restyles motion the same way it restyles colour** — through the theme it
+  contributes (charter ADR 0041; the panel contract of ADR 0043 is the same registry). Nothing
+  about the extension path changed: the theme text goes to `load`, and `load` now reads `motion`.
+
+### Reduced motion is the layer's job, once
+
+Under `prefers-reduced-motion: reduce`, `drawIn` writes **every duration as `0ms`**, and follows
+the setting live if the operator changes it while the window is up. A transition over no time is
+no transition, and a looping animation with a zero duration has a zero active duration (Web
+Animations), so a spinner does not spin and a pulse does not pulse. **A component written
+tomorrow gets this for free, because it reads a token** — and `literals.test.ts` refuses a
+`prefers-reduced-motion` query anywhere outside `src/theme/`, so there is no second place that
+could mean something different by it.
+
+It follows that **every looping mark is designed to read standing still.** A spinner at rest is
+the loader glyph; a breathing mark at rest is the mark at full weight. Motion is decoration on a
+meaning that the shape and the word already carry, never the meaning itself.
+
+Collapsing to zero rather than swapping movement for a cross-fade is a decision, and the cheaper
+of the two: WCAG 2.3.3 asks that motion *can be disabled*, and a cross-fade layer would need a
+second set of keyframes per motion. The seam for it, if it is ever wanted, is `motionVariables`.
+
+### What moves, and what is deliberately still
+
+The rule is **motion explains a change of state; it never decorates one.** Every motion is in
+one labelled section at the end of `App.css`.
+
+| moves | how | why |
+| --- | --- | --- |
+| a tab being selected, on all three strips | its surface and lit edge cross-fade, `quick` | the change the operator just made, answered; hangs off `[role="tablist"]`, so a restyled strip keeps it |
+| a strip starting to collapse into `N more` | the button fades in, `enter` | says the tabs went somewhere; not replayed as the count changes on resize |
+| a popover or menu opening | fades in a quarter-rem out of its anchored side, `enter` | says what opened it; hangs off Radix's popper wrapper, so the next popover gets it |
+| a dialog, its scrim, the alerts drawer | fade, no movement, `enter` | a question should appear where the eye already is |
+| a region brought back | fades in, `enter` | only its opacity; see below |
+| a running pipeline | spins, `spin` | *still happening*, which amber alone cannot say |
+| a queued pipeline | a clock that breathes, `breathe` | alive and not working; a spinner would claim work being done |
+| a pipeline that finishes on screen | its new mark grows into place once, `settle` | the answer arriving |
+| a chat's state mark | colour, shape and ring morph, `settle` | the state changing, rather than blinking |
+| a chat that starts waiting on you | its ring knocks twice, `settle` | the one signal this app exists for, arriving |
+
+**Nothing animates because it mounted.** A mark that animates on a change has to tell a change
+from a first draw, and CSS cannot: an animation plays when its element appears. Without that, a
+"settle" would play on every finished pipeline at launch, and every waiting chat would knock each
+time the workspace strip brought its tabs back into view. `useArrived` (`app/src/lib/arrived.ts`)
+is how a component says *this value changed while I was on screen*, and the stylesheet only
+animates what it is told arrived.
+
+Left still, on purpose:
+
+- **The terminal, always.** It is the product and it is what the operator is reading.
+- **A region's size.** A slot that grew over time would refit xterm on every frame of it, which
+  is terminal output moving; a region arrives at its full size and only fades.
+- **A tab's width or position.** A tab that slides under the pointer breaks aiming (`tabs.ts`);
+  the collapse into `N more` is instant, and only the button that appears is drawn arriving.
+- **Closing anything.** Radix unmounts a closing surface at once unless an animation is running
+  on it, and a close that lingers leaves a dismissed question over the window the operator has
+  gone back to.
+- **Counts and words** — the needs-you badge, the gauge, the status line. They are read, and a
+  number that animates is a number that is briefly wrong.
+- **Hover on rows.** Only a tab eases its hover, because a tab's hover and its selection are the
+  same properties; a list of fifty rows fading under a moving pointer is decoration.
+
+**Nothing delays input.** A dialog is focusable and answerable from its first frame; the fade is
+only what it looks like. The longest one-shot motion is 280 ms and nothing waits on one.
+
+### What it costs
+
+Measured against `origin/main` with `vite build`: CSS **+2.80 kB (+0.62 kB gz)**, JS **+3.09 kB
+(+1.06 kB gz)**. Cold start gains nine `setProperty` calls in `drawIn`, beside the fifty-four the
+colours already make.
+
 ## Tailwind, shadcn and Lucide
 
 **Tailwind v4**, wired in `app/src/styles.css`. Three decisions there, each with a test in
@@ -169,6 +299,11 @@ shape this page describes for the theme.
   the one leak**: they carry their own `rgb(0 0 0 / 0.1)` rather than reading `overlay.shadow`,
   so a shadow utility is a colour a theme cannot reach. Use the token in CSS until somebody
   maps `--shadow-*` in `@theme` as well.
+- **Motion is bridged the same way.** `ease-*` and `animate-*` are cleared like the palette, so
+  `ease-in-out` and `animate-spin` are not classes; `ease-enter` and `duration-enter` are the
+  motion tokens; and a bare `transition` takes `duration.quick` and `easing.standard` instead of
+  Tailwind's 150 ms. Tailwind still makes `duration-150` from any integer and no `@theme` entry
+  can stop it, so `literals.test.ts` refuses one in the source.
 - **Preflight is not imported, and `App.css` is imported into a layer.** A reset would restyle
   1,330 lines in one commit, and `scenario tests` read the real DOM. The layer order —
   `theme, base, charter, components, utilities` — is what the reset would have been for:
@@ -266,9 +401,10 @@ The rules an icon has to meet here:
   the state (a pipeline's tick, cross or spinner). Not on every row because rows can have one.
 - **Chosen by what a thing IS, not where it is.** The layout is data (`regions.ts`), so a region
   toggle drawn as "left panel" would point at the wrong edge the first time the region moved.
-- **Motion means "still happening" and nothing else.** `.spinning` is the one animation in the
-  window: a running pipeline and a listing charter is still waiting for. Nothing settled moves,
-  and `prefers-reduced-motion` stops the spin while leaving the mark.
+- **An icon that moves says *still happening*, and nothing else loops.** `.spinning` is a running
+  pipeline and a listing charter is still waiting for; `.breathing` is a queued pipeline. A
+  settled answer is still, apart from the one `settle` it gets if it arrived while on screen.
+  Reduced motion stops both loops and leaves the mark ([Motion](#motion-is-data-too)).
 - **A contrast floor applies to an icon's colour as it does to text** — 3:1 for a graphic. A
   state colour that is too weak for words (`needs-you.base` measures 3.64:1 on `surface.base` in
   charter-dark) may colour the mark beside the words and never the words.

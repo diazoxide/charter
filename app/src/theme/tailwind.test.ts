@@ -73,6 +73,28 @@ describe("Tailwind is wired to the tokens and to nothing else", () => {
     expect(css).not.toMatch(/\bblockquote\b/);
   });
 
+  it("gives a motion utility the motion token, and nothing of Tailwind's own", async () => {
+    // M7.2: the same bridge for timing. `ease-enter` and `duration-enter` are the theme's; a
+    // bare `transition` takes `duration.quick` rather than Tailwind's 150ms; and Tailwind's own
+    // easings and animations are gone the way its palette is.
+    const css = await stylesheet("ease-enter", "duration-enter", "transition");
+    expect(css).toMatch(/--ease-enter:\s*var\(--motion-easing-enter\)/);
+    expect(css).toMatch(
+      /\.duration-enter\s*\{[^}]*transition-duration:\s*var\(--transition-duration-enter\)/,
+    );
+    expect(css).toMatch(/--transition-duration-enter:\s*var\(--motion-duration-enter\)/);
+    expect(css).toMatch(/--default-transition-duration:\s*var\(--motion-duration-quick\)/);
+    expect(css).toMatch(/--default-transition-timing-function:\s*var\(--motion-easing-standard\)/);
+  });
+
+  it("has no easing or animation of Tailwind's own", async () => {
+    const css = await stylesheet("ease-in-out", "ease-out", "animate-spin", "animate-pulse");
+    expect(css).not.toContain(".ease-in-out");
+    expect(css).not.toContain(".ease-out");
+    expect(css).not.toContain(".animate-spin");
+    expect(css).not.toContain(".animate-pulse");
+  });
+
   it("puts the window's own stylesheet under the utilities", async () => {
     // Unlayered CSS beats layered CSS, so `App.css` had to be imported INTO a layer or no
     // utility could ever override a rule in it without `!important`.

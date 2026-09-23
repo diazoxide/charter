@@ -90,6 +90,7 @@ import { EmptyState } from "./EmptyState";
 import type { PanelView } from "./bindings";
 import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
 import { fitting, LEAST, useRoom } from "./fits";
+import { useArrived } from "./lib/arrived";
 import type { Ending } from "./QuitWarning";
 
 /**
@@ -2210,6 +2211,10 @@ export function ShowMore({
    * own handler once the event is prevented — and the click is what toggles it.
    */
   const [open, setOpen] = useState(false);
+  // The strip has just started hiding tabs, as opposed to having been hiding them when this
+  // strip was drawn: only the first is a change worth drawing (`useArrived`, and the motion
+  // section of `App.css`).
+  const arrived = useArrived(hidden.length > 0);
   // Nothing is hidden, so there is nothing to say there is more OF.
   if (hidden.length === 0) return null;
   const many = hidden.length === 1 ? `1 ${noun}` : `${hidden.length} ${noun}s`;
@@ -2222,7 +2227,7 @@ export function ShowMore({
     <Menu.Root modal={false} open={open} onOpenChange={setOpen}>
       <Menu.Trigger asChild>
         <button
-          className="show-more"
+          className={arrived ? "show-more arrived" : "show-more"}
           aria-label={`Show ${many} the strip is not showing`}
           onPointerDown={(event) => event.preventDefault()}
           onClick={() => setOpen((up) => !up)}

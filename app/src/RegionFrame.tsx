@@ -14,6 +14,7 @@ import {
   type RegionId,
   type Side,
 } from "./regions";
+import { useArrived } from "./lib/arrived";
 
 /**
  * **The window, drawn from the arrangement** (charter ADR 0038, and `regions.ts` for why the
@@ -138,6 +139,9 @@ function Slot({
   const shown = shownIn(placed);
   const open = shown.length > 0;
   const panel = usePanelRef();
+  // Brought back while the window is up, as opposed to open since launch: only the first is
+  // drawn arriving, so a window does not fade its own regions in every time it starts.
+  const arrived = useArrived(open) && open;
 
   /** How big it should be when it is brought back. */
   const wanted = slotSize(side, placed);
@@ -173,7 +177,7 @@ function Slot({
   return (
     <Panel
       id={panelOf(side)}
-      className={`region-slot slot-${side}`}
+      className={`region-slot slot-${side}${arrived ? " arrived" : ""}`}
       panelRef={panel}
       // **Every one of these is constant for the life of the group, and that is the point.**
       // See this component's docstring: changing a panel's constraints re-registers it, and a

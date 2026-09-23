@@ -70,5 +70,17 @@
     "terminal.ansi.bright-magenta": "#a475f9",
     "terminal.ansi.bright-cyan": "#3192aa",
     "terminal.ansi.bright-white": "#8c959f"
+  },
+  "motion": {
+    "duration.quick": 120,
+    "duration.enter": 160,
+    "duration.settle": 280,
+    "duration.spin": 900,
+    "duration.breathe": 1600,
+
+    "easing.standard": [0.2, 0, 0, 1],
+    "easing.enter": [0, 0, 0.2, 1],
+    "easing.steady": [0, 0, 1, 1],
+    "easing.breathe": [0.4, 0, 0.6, 1]
   }
 }

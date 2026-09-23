@@ -223,7 +223,7 @@ export function Health({ doctor }: { doctor: DoctorState }) {
           title={label}
         >
           {running ? (
-            // It is running: this is the one state the window's only animation is for.
+            // It is running: this is the state the spin is for, *still happening*.
             <LoaderCircle aria-hidden="true" className="spinning" />
           ) : (
             <Stethoscope aria-hidden="true" />
