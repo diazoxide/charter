@@ -283,12 +283,12 @@ pub fn file(config_root: &Path) -> PathBuf {
 /// See the module docstring: on Windows the `0600`/`0700` this store depends on has no
 /// expression, and ADR 0031 says such a guard refuses.
 #[cfg(unix)]
-fn supported() -> io::Result<()> {
+pub(crate) fn supported() -> io::Result<()> {
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn supported() -> io::Result<()> {
+pub(crate) fn supported() -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,
         "charter keeps no machine-level store on this platform: the 0600 on the file and the \
@@ -1086,8 +1086,26 @@ fn parse(text: &str) -> Result<serde_json::Value, String> {
 
 /// The file's bytes, `None` for no file at all, an error for a file charter will not read.
 fn read_text(config_root: &Path) -> io::Result<Option<String>> {
+    read_beside(config_root, FILE, MAX_BYTES, "charter's machine store")
+}
+
+/// The bytes of `name` in charter's own directory, gated exactly as the store's own read is.
+///
+/// **One implementation for every file in that directory** (`crate::beside` reads the
+/// window's layout and the operator's theme through it). The module docstring's reason for
+/// keeping a fifth thing in this file rather than beside it was that a second file would have
+/// to get containment right a second time; this is how a file that has to be beside it — one
+/// an operator edits by hand — gets it right the first time instead.
+///
+/// `what` names the file in a refusal, as the operator would: "charter's machine store".
+pub(crate) fn read_beside(
+    config_root: &Path,
+    name: &str,
+    max_bytes: u64,
+    what: &str,
+) -> io::Result<Option<String>> {
     supported()?;
-    let target = file(config_root);
+    let target = dir(config_root).join(name);
     let mut open = match crate::contain::open_no_link(config_root, &target) {
         Ok(open) => open,
         Err(gone) if gone.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -1100,16 +1118,16 @@ fn read_text(config_root: &Path) -> io::Result<Option<String>> {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "{} is not a plain file, and charter reads its machine store from nothing else",
+                "{} is not a plain file, and {what} is read from nothing else",
                 target.display()
             ),
         ));
     }
-    if found.len() > MAX_BYTES {
+    if found.len() > max_bytes {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!(
-                "{} is {} bytes, and charter's machine store is never larger than {MAX_BYTES}",
+                "{} is {} bytes, and {what} is never larger than {max_bytes}",
                 target.display(),
                 found.len()
             ),
@@ -1255,7 +1273,12 @@ pub fn write(config_root: &Path, store: &Store) -> io::Result<()> {
 /// test that plants one at the store's own path passes against code that writes through an
 /// unguarded temp file, which is precisely the defect the gate here exists to stop, so a test
 /// that cannot name the temp file proves nothing about it.
-fn write_through(config_root: &Path, target: &Path, temp: &Path, bytes: &[u8]) -> io::Result<()> {
+pub(crate) fn write_through(
+    config_root: &Path,
+    target: &Path,
+    temp: &Path,
+    bytes: &[u8],
+) -> io::Result<()> {
     // The walk, against the config home: this is what refuses a `charter/` that is a link
     // out of it, at the moment the create happens rather than at some earlier check.
     crate::contain::no_link_on_the_way(config_root, temp)?;
@@ -1305,7 +1328,7 @@ fn write_through(config_root: &Path, target: &Path, temp: &Path, bytes: &[u8]) -
 /// permissions (exFAT, many network mounts) cannot hold a mode, and refusing to keep state to
 /// protect a mode the filesystem was never going to keep helps nobody. The mode that the
 /// guard rests on is the one set at **creation**, which is not best-effort.
-fn private_dir(config_root: &Path) -> io::Result<PathBuf> {
+pub(crate) fn private_dir(config_root: &Path) -> io::Result<PathBuf> {
     // The config home itself is made without a mode: `~/.config` belongs to the operator
     // and to every application on the machine, and charter creating it at 0700 would quietly
     // re-mode a directory that is not its own. `0700` starts at charter's own level.

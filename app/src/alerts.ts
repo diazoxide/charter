@@ -26,12 +26,18 @@ export type AlertsReading =
  * with nothing on it saying so. Zero IS a number here, once every project has been read to the
  * end — "nothing needs you" is then a claim charter can make.
  */
-export function countOf(reading: AlertsReading, planes: readonly PlaneId[]): number | undefined {
+export function countOf(
+  reading: AlertsReading,
+  planes: readonly PlaneId[],
+  /** What the window itself is saying about this machine (`windowprefs.ts`), which is counted
+   *  with the projects' alerts because it is drawn in the same drawer. */
+  aboutThisMachine = 0,
+): number | undefined {
   if (reading.at !== "read") return undefined;
   const answered = new Set(reading.planes.map((one) => one.plane));
   if (planes.some((plane) => !answered.has(plane))) return undefined;
   if (reading.planes.some((one) => one.stopped !== null)) return undefined;
-  return reading.planes.reduce((total, one) => total + one.alerts.length, 0);
+  return reading.planes.reduce((total, one) => total + one.alerts.length, aboutThisMachine);
 }
 
 /** How often the reading is refreshed while nothing else asks for it. Alerts move when a

@@ -4,6 +4,8 @@ import { cleanup, render as renderBare, screen, waitFor, within } from "@testing
 import { userEvent } from "@testing-library/user-event";
 import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import App from "./App";
+import { forgetThisLaunch } from "./regions";
+import { GLOBAL } from "./windowprefs";
 
 /**
  * **The window is four regions** (charter ADR 0038), against the whole app, because three of
@@ -133,6 +135,8 @@ let alerts: unknown = [];
 
 beforeEach(() => {
   globalThis.localStorage.clear();
+  // Every test is a launch: what an earlier one toggled is not this one's arrangement.
+  forgetThisLaunch();
   alerts = [{ plane: PLANE, alerts: [], stopped: null }];
 });
 afterEach(() => {
@@ -343,9 +347,22 @@ describe("the four regions", () => {
  * in one module is not configurable.
  */
 describe("the window the stored arrangement asks for", () => {
-  /** What the window reads before it renders. */
-  const arrange = (regions: unknown) =>
-    globalThis.localStorage.setItem("charter.layout", JSON.stringify({ regions }));
+  /** What the window reads before it renders: the layout file, handed to the page as it is
+   *  created (`windowprefs.ts`). */
+  const arrange = (regions: unknown) => {
+    (globalThis as Record<string, unknown>)[GLOBAL] = {
+      layout: {
+        path: "layout.json",
+        found: true,
+        document: { version: 1, regions },
+        trouble: null,
+      },
+      theme: { path: "theme.json", found: false, document: null, trouble: null },
+    };
+  };
+  afterEach(() => {
+    Reflect.deleteProperty(globalThis, GLOBAL);
+  });
 
   const inSlot = (side: string) => within(screen.getByTestId(`region-${side}`));
 
@@ -395,13 +412,16 @@ describe("the window the stored arrangement asks for", () => {
   });
 
   it("writes what the operator did back where the next launch will read it", async () => {
-    core();
+    const { asked } = core();
     render(<App />);
     await screen.findByRole("navigation", { name: "Explorer" });
 
     await userEvent.click(screen.getByRole("button", { name: "Explorer", pressed: true }));
 
-    expect(JSON.parse(globalThis.localStorage.getItem("charter.layout") ?? "null")).toEqual({
+    await vi.waitFor(() => expect(asked.some((one) => one.cmd === "write_layout")).toBe(true));
+    const written = asked.filter((one) => one.cmd === "write_layout").at(-1);
+    expect(JSON.parse(String(written?.args.text))).toEqual({
+      version: 1,
       regions: [
         { id: "explorer", side: "left", order: 0, collapsed: true },
         { id: "aside", side: "right", order: 0, collapsed: false },

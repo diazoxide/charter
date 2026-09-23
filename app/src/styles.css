@@ -5,7 +5,7 @@
  * `src/theme/theme.ts` from a theme file. Tailwind's `@theme` is CSS-variable-native, which is
  * the whole reason v4 was picked: it can sit on top of a token layer instead of being one.
  *
- * Three decisions are made in this file and `docs/design-system.md` holds the reasons.
+ * Five decisions are made in this file and `docs/design-system.md` holds the reasons.
  *
  * **Tailwind's own palette is deleted.** `--color-*: initial` clears the namespace, so
  * `bg-red-500`, `text-slate-300` and the other 250-odd palette utilities do not exist in this
@@ -27,14 +27,27 @@
  * `duration-150` — it accepts any integer as milliseconds and no namespace can switch that off —
  * so `literals.test.ts` refuses one in the source instead.
  *
+ * **A dependency's stylesheet goes in `vendor`, below charter, and is imported here** (M6.8).
+ * CSS outside every layer outranks every layer, at any specificity, so a stylesheet imported
+ * from a component — xterm's was, from `SessionPane.tsx` — silently beats `App.css` and every
+ * utility. It already had: xterm's `#000` viewport put a black band under every terminal
+ * (charter-app#193). In `vendor` it is the library's default and nothing more, and
+ * `literals.test.ts` refuses a stylesheet imported anywhere but here, or here without a layer.
+ *
+ * **A shadow is a token's colour too** (M6.8). Tailwind's `shadow-md` and its siblings carry
+ * their own `rgb(0 0 0 / 0.1)`, so a shadow utility was a colour no theme could reach. Every
+ * shadow namespace is cleared below like the palette, and the sizes are put back with
+ * `overlay.shadow` as their colour; `tailwind.test.ts` compiles every one to prove it.
+ *
  * **The Tailwind colour name IS the token name**, stutter and all — `text-text-primary`,
  * `border-border-subtle`. A prettier alias would be a second vocabulary, and a second
  * vocabulary is the defect this whole layer exists to remove.
  */
 
-@layer theme, base, charter, components, utilities;
+@layer theme, base, vendor, charter, components, utilities;
 
 @import "tailwindcss/theme.css" layer(theme);
+@import "@xterm/xterm/css/xterm.css" layer(vendor);
 @import "tailwindcss/utilities.css" layer(utilities);
 @import "./App.css" layer(charter);
 
@@ -80,6 +93,38 @@
   --color-state-unreadable: var(--state-unreadable);
   --color-overlay-scrim: var(--overlay-scrim);
   --color-overlay-shadow: var(--overlay-shadow);
+
+  --shadow-*: initial;
+  --shadow-2xs: 0 1px var(--overlay-shadow);
+  --shadow-xs: 0 1px 2px 0 var(--overlay-shadow);
+  --shadow-sm: 0 1px 3px 0 var(--overlay-shadow), 0 1px 2px -1px var(--overlay-shadow);
+  --shadow-md: 0 4px 6px -1px var(--overlay-shadow), 0 2px 4px -2px var(--overlay-shadow);
+  --shadow-lg: 0 10px 15px -3px var(--overlay-shadow), 0 4px 6px -4px var(--overlay-shadow);
+  --shadow-xl: 0 20px 25px -5px var(--overlay-shadow), 0 8px 10px -6px var(--overlay-shadow);
+  --shadow-2xl: 0 25px 50px -12px var(--overlay-shadow);
+  --inset-shadow-*: initial;
+  --inset-shadow-2xs: inset 0 1px var(--overlay-shadow);
+  --inset-shadow-xs: inset 0 1px 1px var(--overlay-shadow);
+  --inset-shadow-sm: inset 0 2px 4px var(--overlay-shadow);
+  --drop-shadow-*: initial;
+  --drop-shadow-xs: 0 1px 1px var(--overlay-shadow);
+  --drop-shadow-sm: 0 1px 2px var(--overlay-shadow);
+  --drop-shadow-md: 0 3px 3px var(--overlay-shadow);
+  --drop-shadow-lg: 0 4px 4px var(--overlay-shadow);
+  --drop-shadow-xl: 0 9px 7px var(--overlay-shadow);
+  --drop-shadow-2xl: 0 25px 25px var(--overlay-shadow);
+  --text-shadow-*: initial;
+  --text-shadow-2xs: 0px 1px 0px var(--overlay-shadow);
+  --text-shadow-xs: 0px 1px 1px var(--overlay-shadow);
+  --text-shadow-sm:
+    0px 1px 0px var(--overlay-shadow), 0px 1px 1px var(--overlay-shadow),
+    0px 2px 2px var(--overlay-shadow);
+  --text-shadow-md:
+    0px 1px 1px var(--overlay-shadow), 0px 1px 2px var(--overlay-shadow),
+    0px 2px 4px var(--overlay-shadow);
+  --text-shadow-lg:
+    0px 1px 2px var(--overlay-shadow), 0px 3px 2px var(--overlay-shadow),
+    0px 4px 8px var(--overlay-shadow);
 
   --transition-duration-*: initial;
   --transition-duration-quick: var(--motion-duration-quick);

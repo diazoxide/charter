@@ -267,6 +267,17 @@ jobs:
         run: xvfb-run -a npm run e2e:finder
         if: runner.os == 'Linux'
         working-directory: app
+      # A layout file written before the app starts, and the window's first frame drawn from
+      # it (M6.9). Its own run, because the file has to be on disk before the one app process
+      # a run keeps is started.
+      - name: The window's first frame, from a layout file
+        run: npm run e2e:layout
+        if: runner.os == 'macOS'
+        working-directory: app
+      - name: The window's first frame, from a layout file
+        run: xvfb-run -a npm run e2e:layout
+        if: runner.os == 'Linux'
+        working-directory: app
       # The app ended and started again, which no scenario spec can do: WebdriverIO's service
       # keeps one app process for a whole run, so a spec that quits takes the run with it.
       - name: Reopening what was open, across a real relaunch

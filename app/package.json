@@ -17,7 +17,8 @@
     "e2e:relaunch": "node ../tools/relaunch.mjs",
     "build:e2e": "tsc && vite build --mode e2e",
     "e2e:state": "wdio run e2e/wdio.state.conf.ts",
-    "e2e:finder": "wdio run e2e/wdio.finder.conf.ts"
+    "e2e:finder": "wdio run e2e/wdio.finder.conf.ts",
+    "e2e:layout": "wdio run e2e/wdio.layout.conf.ts"
   },
   "dependencies": {
     "@radix-ui/react-alert-dialog": "^1.1.23",

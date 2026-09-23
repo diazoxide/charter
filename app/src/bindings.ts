@@ -558,6 +558,18 @@ export const commands = {
 	 *  and the window holds no project for the first moments of every launch.
 	 */
 	aboutCharter: () => __TAURI_INVOKE<About>("about_charter"),
+	/**
+	 *  Keeps the window's layout, replacing what the file held.
+	 * 
+	 *  `text` is the document as JSON text; the core parses it and writes it back out itself, so
+	 *  what lands on disk is always a document charter wrote.
+	 */
+	writeLayout: (text: string) => typedError<null, string>(__TAURI_INVOKE("write_layout", { text })),
+	/**
+	 *  Moves the arrangement web storage held into the layout file — **only when there is no file
+	 *  yet**. Answers whether it did, so the window knows the old key can go.
+	 */
+	adoptLayout: (text: string) => typedError<boolean, string>(__TAURI_INVOKE("adopt_layout", { text })),
 };
 
 /* Types */

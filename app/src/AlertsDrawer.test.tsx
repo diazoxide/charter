@@ -40,6 +40,40 @@ function draw(reading: AlertsReading, planes: string[] = [A, B]) {
 
 const project = (name: string) => screen.getByRole("region", { name: `Alerts in ${name}` });
 
+describe("what the window says about this machine", () => {
+  it("is listed above the projects, with what fixes it", () => {
+    render(
+      <AlertsDrawer
+        open
+        onOpenChange={() => {}}
+        reading={{ at: "read", planes: [plane(A, [])] }}
+        aboutThisMachine={[
+          row({
+            subject: "layout",
+            detail: 'layout.json: "minimap" is not a region this charter has',
+            remedy: "fix layout.json",
+          }),
+        ]}
+        planes={[A]}
+        nameOf={nameOf}
+      />,
+    );
+
+    const machine = screen.getByRole("region", { name: "Alerts about this machine" });
+    expect(machine).toHaveTextContent("This machine");
+    expect(machine).toHaveTextContent('"minimap" is not a region this charter has');
+    expect(within(machine).getByText("fix layout.json").tagName).toBe("CODE");
+    const regions = screen.getAllByRole("region");
+    expect(regions.indexOf(machine)).toBeLessThan(regions.indexOf(project("alpha-plane")));
+  });
+
+  it("is not drawn at all when there is nothing to say", () => {
+    draw({ at: "read", planes: [plane(A, [])] }, [A]);
+
+    expect(screen.queryByRole("region", { name: "Alerts about this machine" })).toBeNull();
+  });
+});
+
 describe("the alerts drawer", () => {
   it("lists every project the window holds, each with its own alerts and what fixes them", () => {
     draw({
