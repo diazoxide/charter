@@ -207,6 +207,57 @@ describe("the three strips share one tab shape", () => {
 });
 
 /**
+ * **`N more` is one button, not one per strip** (charter-app#193).
+ *
+ * The operator: *"lets make 'N more' button looks like that buttons, to have all buttons in
+ * same style."* It was drawn three ways — a bordered box on the chat strip from `.bar button`,
+ * a borderless one on the project strip from `.projects button`, and a rule of its own on the
+ * workspace strip with a third padding — and none of those differences was about the control.
+ * Each was whichever ancestor's rule happened to reach it, which is a look that changes when
+ * somebody moves the markup.
+ *
+ * jsdom computes no cascade, so the property is held over the stylesheet's text: nothing
+ * dresses this per strip, and what does dress it is the family the `+` beside it is in.
+ */
+describe("the show-more button", () => {
+  const css = readFileSync(join(process.cwd(), "src/App.css"), "utf8").replace(
+    /\/\*[\s\S]*?\*\//g,
+    "",
+  );
+
+  /** Every selector in the stylesheet that opens a rule and mentions `.show-more`. */
+  const selectors = [...css.matchAll(/([^{}]*)\{/g)]
+    .flatMap((hit) => hit[1].split(","))
+    .map((one) => one.trim())
+    .filter((one) => one.includes(".show-more"));
+
+  it("is dressed by nothing that names a strip", () => {
+    expect(selectors.length).toBeGreaterThan(0);
+    const perStrip = selectors.filter((one) =>
+      [".projects", ".workspaces", ".bar", ".tabs"].some((strip) => one.includes(strip)),
+    );
+    expect(perStrip, "one control, one rule — a strip may not redress it").toEqual([]);
+  });
+
+  it("wears the same family as the `+` beside it: no border, no fill, muted until hovered", () => {
+    const rule = (selector: string) =>
+      new RegExp(`(^|[},])\\s*${selector}\\s*\\{([^}]*)\\}`).exec(css)?.[2] ?? "";
+    const drawn = rule("button\\.show-more");
+    // Read against `button.bare`, which is what the strip's `+` wears, so the claim is that
+    // the two match rather than that this one happens to say some words.
+    const bare = rule("button\\.bare");
+    expect(bare).not.toBe("");
+    for (const declaration of ["border: 0", "background: none", "color: var(--text-muted)"]) {
+      expect(bare, `button.bare no longer says ${declaration}`).toContain(declaration);
+      expect(drawn, `button.show-more does not say ${declaration}`).toContain(declaration);
+    }
+    expect(rule("button\\.show-more:hover:not\\(:disabled\\)")).toContain(
+      "background: var(--surface-hover)",
+    );
+  });
+});
+
+/**
  * **What says which of the three strips you are looking at** (charter-app#193).
  *
  * charter-app#171 drew the nesting with three signals — height, inset and surface — and the
