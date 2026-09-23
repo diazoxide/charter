@@ -912,6 +912,22 @@ pub fn leak_reason(cmd: &str, cwd: &str, state_dir: &Path) -> Option<String> {
         {
             return Some(REVEAL_REASON.to_string());
         }
+        // `script` runs its command on a pseudo-terminal, and a pty is a terminal to
+        // `--reveal`: the value is printed to it and the agent reads what `script` relays.
+        // Recognised cheaply — any word of its arguments naming charter, beside the flag.
+        if base == "script"
+            && it.argv.iter().skip(1).any(|a| {
+                a.split_whitespace()
+                    .any(|w| CHARTER_PROGS.contains(&base_lower(w).as_str()))
+            })
+            && it
+                .argv
+                .iter()
+                .skip(1)
+                .any(|a| a == "--reveal" || a.starts_with("--reveal=") || reveal_re().is_match(a))
+        {
+            return Some(REVEAL_REASON.to_string());
+        }
         if READERS.contains(&base.as_str())
             && let Some(hit) = opens(
                 &spliced_operands(&file_operands(&it.prog, &it.argv)),

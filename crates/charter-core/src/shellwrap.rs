@@ -560,6 +560,11 @@ pub fn split_env_chdir(toks: &[String]) -> Invocation {
             match toks.iter().skip(verb).position(|t| t == "--") {
                 Some(at) => {
                     toks.drain(..verb + at + 1);
+                    // `secret exec` drops one more leading `--` from the command it runs, so
+                    // `… -- -- cat <vault>` runs `cat`; the guard has to see the same program.
+                    if toks.front().is_some_and(|t| t == "--") {
+                        toks.pop_front();
+                    }
                     continue;
                 }
                 None => {
