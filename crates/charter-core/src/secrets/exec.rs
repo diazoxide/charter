@@ -475,7 +475,7 @@ impl Termination {
             SIGVTALRM, SIGPROF,
         ];
         #[cfg(any(target_os = "linux", target_os = "android"))]
-        out.extend([SIGIO, SIGPWR, SIGSTKFLT]);
+        out.extend([SIGIO, libc::SIGPWR, libc::SIGSTKFLT]);
         out
     }
 
