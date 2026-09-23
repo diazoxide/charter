@@ -18,8 +18,150 @@
 use std::path::Path;
 
 use charter_core::cistate::{self, Reading};
+use charter_core::panel;
 use charter_core::repos::{self, Head};
 use charter_core::workspaces::Plane;
+
+// ---------------------------------------------------------------------------------------
+// The contribution contract, on the wire
+// ---------------------------------------------------------------------------------------
+
+/// What opens when a row is opened, as the window receives it.
+///
+/// A mirror of [`panel::Detail`] rather than the thing itself, for the reason
+/// [`crate::extensions::ExtensionAsk`] is one: `charter-core` never depends on the app, and the
+/// app's wire types are what generate `app/src/bindings.ts`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub(crate) enum PanelDetail {
+    /// The row's own words, in full. The only kind a contributed panel may use.
+    Text { text: String },
+    /// What this plane says this persona is. **A name and not an answer**: the window asks
+    /// `persona_details` when the card opens, because a definition is a file an operator edits
+    /// while charter is running, and because folding it in here would read every persona's
+    /// definition on every workspace focus for something nobody has asked to see.
+    Persona { persona: String },
+}
+
+/// One row of a panel's list.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct PanelRow {
+    pub key: String,
+    pub text: String,
+    /// A short trailing note — a date, a word like `default`.
+    pub note: Option<String>,
+    /// A word out of [`panel::Mark`]'s closed set. The window maps it to a glyph it already
+    /// ships; a word it does not know draws the plain one rather than nothing, because a
+    /// missing icon is cosmetic and a missing row is not.
+    pub mark: String,
+    /// A word out of [`panel::Tone`]'s closed set.
+    pub tone: String,
+    pub detail: Option<PanelDetail>,
+    /// The catalogue row this runs when pressed (`app/src/actions.ts`), or nothing.
+    ///
+    /// **Never set from a manifest** — `charter_core::panel`'s header has the whole of why, and
+    /// `panel::NO_VERB` is the sentence an extension that tried gets. What is here comes from
+    /// charter's own contributions, below, and the window looks the id up in the catalogue: a
+    /// row cannot invent a verb even here.
+    pub runs: Option<String>,
+}
+
+/// What a list says when it has no rows.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct PanelEmpty {
+    pub headline: String,
+    pub body: Option<String>,
+    /// The catalogue row the empty state offers as a way out. charter's own, for `runs`'s
+    /// reason.
+    pub offer: Option<String>,
+}
+
+/// One part of a panel's body.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub(crate) enum PanelBlock {
+    List {
+        rows: Vec<PanelRow>,
+        empty: PanelEmpty,
+    },
+    Note {
+        text: String,
+        tone: String,
+    },
+}
+
+/// A panel, as the window receives it: a key, a title, an ordering and a body.
+///
+/// **This is the whole of what a panel is**, and the window's renderer takes nothing else. That
+/// is the test of the contract: charter's own todos and personas arrive in this shape, an
+/// approved extension's declared panel arrives in this shape, and `app/src/Panels.tsx` cannot
+/// tell them apart except by [`Self::from`] — which it draws, because ADR 0041 item 5 says what
+/// is in force is shown after approval and not only at it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub(crate) struct PanelView {
+    /// `charter/<id>` or `ext/<extension>/<id>` — see `panel::Panel::key`.
+    pub key: String,
+    pub title: String,
+    pub order: i32,
+    pub mark: String,
+    pub blocks: Vec<PanelBlock>,
+    /// The extension that contributed it, or `null` for charter's own.
+    pub from: Option<String>,
+}
+
+impl From<&panel::Panel> for PanelView {
+    fn from(it: &panel::Panel) -> Self {
+        Self {
+            key: it.key(),
+            title: it.title.clone(),
+            order: it.order,
+            mark: it.mark.as_str().to_owned(),
+            blocks: it.blocks.iter().map(PanelBlock::from).collect(),
+            from: match &it.from {
+                panel::By::Charter => None,
+                panel::By::Extension(id) => Some(id.clone()),
+            },
+        }
+    }
+}
+
+impl From<&panel::Block> for PanelBlock {
+    fn from(it: &panel::Block) -> Self {
+        match it {
+            panel::Block::List { rows, empty } => Self::List {
+                rows: rows.iter().map(PanelRow::from).collect(),
+                empty: PanelEmpty {
+                    headline: empty.headline.clone(),
+                    body: empty.body.clone(),
+                    offer: empty.offer.clone(),
+                },
+            },
+            panel::Block::Note { text, tone } => Self::Note {
+                text: text.clone(),
+                tone: tone.as_str().to_owned(),
+            },
+        }
+    }
+}
+
+impl From<&panel::Row> for PanelRow {
+    fn from(it: &panel::Row) -> Self {
+        Self {
+            key: it.key.clone(),
+            text: it.text.clone(),
+            note: it.note.clone(),
+            mark: it.mark.as_str().to_owned(),
+            tone: it.tone.as_str().to_owned(),
+            detail: it.detail.as_ref().map(|detail| match detail {
+                panel::Detail::Text(text) => PanelDetail::Text { text: text.clone() },
+                panel::Detail::Persona(name) => PanelDetail::Persona {
+                    persona: name.clone(),
+                },
+            }),
+            runs: it.runs.clone(),
+        }
+    }
+}
 
 /// One open todo. There is no state field: a closed todo is a deleted file (ADR 0004).
 #[derive(Debug, Clone, serde::Serialize, specta::Type)]
@@ -51,6 +193,34 @@ pub(crate) struct Panels {
     /// The plane's personas, and the one a chat started here would adopt.
     personas: Vec<String>,
     persona: Option<String>,
+    /// **The same facts again, as contributions** — charter's own two panels, in the shape a
+    /// stranger's extension contributes one in (`charter_core::panel`).
+    ///
+    /// # Why the fields above survived, which is a decision and not an oversight
+    ///
+    /// `todos`, `personas` and `persona` are not panel bodies. They are facts about the
+    /// workspace that three other surfaces read: the status line counts the todos, the
+    /// catalogue builds a `persona.show:<name>` row per persona, and a test pins the default.
+    /// Deleting them would have moved those three onto a shape designed for drawing, which is
+    /// the opposite of the separation this change is for. **What moved is the drawing**:
+    /// `Panels.tsx` reads `contributed` and nothing else, so the panels on screen do come
+    /// through the seam.
+    ///
+    /// # And why they are in THIS call, when the brief said a contributed panel cannot be
+    ///
+    /// The thing a contributed panel cannot be is a *field*. `Panels` names `todos` and
+    /// `personas`; there is no field for a panel nobody has written yet, and there is no
+    /// honest way to add one. A *list* has room for every contributor. The round trip was never
+    /// the problem, and splitting it would cost something real: focusing a workspace has 100 ms
+    /// and this command is the one that has to answer inside it.
+    ///
+    /// **A contributed panel needs no round trip of its own, and that is a fact about stage 1.**
+    /// With no executor there is nothing to ask: an extension's panel is declared, so its rows
+    /// came off the disk at survey time, and charter's own are produced from the plane read
+    /// this command already does. The day an executor lands, a panel that wants live rows asks
+    /// its extension — and that is a second call, made when the panel is drawn, and it is stage
+    /// 2's to design.
+    contributed: Vec<PanelView>,
 }
 
 /// What one persona says about itself, for the row a reader clicked.
@@ -162,19 +332,29 @@ pub(crate) fn of(root: &Path, workspace: &str) -> Result<Panels, String> {
         .filter(|name| !here.contains(name))
         .collect();
     let ws = plane.workspace(workspace).map_err(|why| why.to_string())?;
-    let (todos, todos_refused): (Vec<PanelTodo>, Option<String>) = match ws.todos() {
+    let read = ws.todos();
+    let (todos, todos_refused): (Vec<PanelTodo>, Option<String>) = match &read {
         Ok(open) => (
-            open.into_iter()
+            open.iter()
                 .map(|todo| PanelTodo {
-                    slug: todo.slug,
-                    title: todo.title,
-                    stamp: todo.stamp,
+                    slug: todo.slug.clone(),
+                    title: todo.title.clone(),
+                    stamp: todo.stamp.clone(),
                 })
                 .collect(),
             None,
         ),
         Err(why) => (Vec::new(), Some(why.to_string())),
     };
+    let personas = plane.personas().map_err(|why| why.to_string())?;
+    let persona = plane.default_persona();
+    let contributed = charters_own(
+        root,
+        read.as_deref().unwrap_or(&[]),
+        todos_refused.as_deref(),
+        &personas,
+        persona.as_deref(),
+    );
     Ok(Panels {
         workspace: workspace.to_string(),
         repos: here,
@@ -182,9 +362,203 @@ pub(crate) fn of(root: &Path, workspace: &str) -> Result<Panels, String> {
         refused: found.refused,
         todos,
         todos_refused,
-        personas: plane.personas().map_err(|why| why.to_string())?,
-        persona: plane.default_persona(),
+        personas,
+        persona,
+        contributed,
     })
+}
+
+/// charter's own two panels, built through the seam a stranger's extension contributes through.
+///
+/// **This is the proof, and it is the whole reason the contract is worth having.** These two
+/// were hardcoded React fed by named fields; they are now `panel::Panel` values that go down the
+/// same wire, into the same renderer, drawn by the same list primitive as a declared panel.
+/// Everything the window knows about a todo row it learned from the vocabulary.
+///
+/// **Where they differ from a stranger's, said out loud rather than smoothed over.** Two things,
+/// and both are the same thing: charter is code that is already in the process.
+///
+/// 1. **Their rows carry `runs`** — a persona row runs `persona.show:<name>`, which is a
+///    catalogue row the palette and a context menu already run (charter-app#174). A declared row
+///    may not (`panel::NO_VERB`): there is no executor, and a row that ran a charter verb on an
+///    extension's say-so would be one with nothing behind it.
+/// 2. **Their cards may name a consumer that reads the plane** — `Detail::Persona` costs a
+///    `persona_details` call. A declared card is `Detail::Text`, which reads nothing.
+///
+/// Neither is a privilege of being charter, and neither is permanent. The grant that lifts the
+/// first is *this extension may offer this catalogue row*, consented per extension per row, and
+/// it is stage 2.
+fn charters_own(
+    root: &Path,
+    todos: &[charter_core::workspaces::Entry],
+    todos_refused: Option<&str>,
+    personas: &[String],
+    default: Option<&str>,
+) -> Vec<PanelView> {
+    let mut panels = Vec::new();
+
+    // **The todos, at 10.** `order` is a hint charter sorts by and these two are deliberately
+    // ten apart, so a contributed panel has somewhere to land between them without either of
+    // charter's moving.
+    let mut blocks = Vec::new();
+    if let Some(why) = todos_refused {
+        // Drawn and never swallowed: a store charter would not read is not a workspace with
+        // nothing to do, and "Nothing to do" is what an empty list would say about it.
+        blocks.push(panel::Block::Note {
+            text: why.to_owned(),
+            tone: panel::Tone::Trouble,
+        });
+    }
+    blocks.push(panel::Block::List {
+        rows: todos
+            .iter()
+            .map(|todo| panel::Row {
+                key: todo.slug.clone(),
+                text: todo.title.clone(),
+                note: (!todo.stamp.is_empty()).then(|| todo.stamp.clone()),
+                mark: panel::Mark::Todo,
+                tone: panel::Tone::Plain,
+                // **The operator's own request** — *"same as persona description"*: a row is one
+                // line and the card carries the whole of it. The body when the todo has one,
+                // and the untruncated title when it does not, because the complaint the card
+                // answers is a title that broke across three lines.
+                detail: Some(panel::Detail::Text(if todo.body.trim().is_empty() {
+                    todo.title.clone()
+                } else {
+                    todo.body.clone()
+                })),
+                runs: None,
+            })
+            .collect(),
+        empty: panel::Empty {
+            headline: "Nothing to do".into(),
+            body: Some("Todos are files in this workspace's store (charter ADR 0004).".into()),
+            offer: None,
+        },
+    });
+    panels.push(panel::Panel {
+        id: "todos".into(),
+        title: "Todos".into(),
+        order: 10,
+        mark: panel::Mark::Todo,
+        blocks,
+        from: panel::By::Charter,
+    });
+
+    panels.push(panel::Panel {
+        blocks: vec![panel::Block::List {
+            rows: personas
+                .iter()
+                .map(|name| panel::Row {
+                    key: name.clone(),
+                    text: name.clone(),
+                    // **The word stays a word, and now it carries a count.** The region's
+                    // scenario spec asks the panel whether it says `default`, and a screen
+                    // reader gets the sentence a sighted reader does; the star the tone draws
+                    // is decoration on top of it.
+                    //
+                    // The count is `personas::memory_count`, which is a `read_dir` and no file
+                    // opens — once per persona on the path that has 100 ms to draw. Reading
+                    // them is `persona_memories`, when a reader asks.
+                    note: Some(note_for(root, name, Some(name.as_str()) == default)),
+                    mark: panel::Mark::Persona,
+                    tone: if Some(name.as_str()) == default {
+                        panel::Tone::Default
+                    } else {
+                        panel::Tone::Plain
+                    },
+                    detail: Some(panel::Detail::Persona(name.clone())),
+                    runs: Some(format!("persona.show:{name}")),
+                })
+                .collect(),
+            empty: panel::Empty {
+                headline: "No personas on this plane".into(),
+                body: Some("`charter persona create` is how one arrives.".into()),
+                offer: None,
+            },
+        }],
+        id: "personas".into(),
+        title: "Personas".into(),
+        order: 20,
+        mark: panel::Mark::Persona,
+        from: panel::By::Charter,
+    });
+
+    panel::Panel::sort(&mut panels);
+    panels.iter().map(PanelView::from).collect()
+}
+
+/// What a persona row's note says: whether the plane defaults to it, and how much it remembers.
+///
+/// **Both in one string, because `note` is one string and a second field would be a second
+/// vocabulary word invented for one row.** `panel::Row::note` is *a short trailing note*; a
+/// contributed panel that wants a count puts it here too, so nothing charter's own row does is
+/// out of reach of a declared one.
+///
+/// `0 memories` is said rather than left off: a persona with none reads as one nobody has
+/// taught anything, and a row that silently omits the count reads as one charter did not look
+/// at. They are different facts.
+fn note_for(root: &Path, persona: &str, is_default: bool) -> String {
+    let held = charter_core::personas::memory_count(root, persona);
+    let memories = format!("{held} {}", if held == 1 { "memory" } else { "memories" });
+    if is_default {
+        format!("default · {memories}")
+    } else {
+        memories
+    }
+}
+
+/// One persona's memories, as rows of the same vocabulary a panel is drawn from.
+///
+/// **It answers in `PanelRow`s, and that is the point rather than a convenience.** The window's
+/// list primitive shortens a row, opens its card, bounds the count, offers more and grows a
+/// search once there is more than a page of them — and it does all of that for these without
+/// knowing what a memory is, because they arrive as rows. A panel body and a row's detail
+/// surface are the same vocabulary drawn by the same code, which is the test of whether the
+/// contract was worth defining.
+///
+/// **Its own command, asked when a persona's card is opened.** `workspace_panels` carries the
+/// *count*, which is a `read_dir`; this reads every memory file, and folding it in would read
+/// every persona's whole store on every workspace focus for something nobody has asked to see —
+/// `persona_details`' reason, at a larger size.
+#[tauri::command]
+#[specta::specta]
+pub(crate) async fn persona_memories(
+    planes: tauri::State<'_, crate::planes::Planes>,
+    plane: crate::planes::PlaneId,
+    persona: String,
+) -> Result<Vec<PanelRow>, String> {
+    let root = planes.held(&plane)?.root().to_path_buf();
+    // On a blocking thread: a store is one file read per memory, and a plane's oldest persona
+    // can hold hundreds. The card draws "reading…" while it comes.
+    tauri::async_runtime::spawn_blocking(move || memories_of(&root, &persona))
+        .await
+        .map_err(|err| format!("reading that persona's memories did not finish: {err}"))?
+}
+
+/// [`persona_memories`] against a path, so it is a test's to drive.
+fn memories_of(root: &Path, persona: &str) -> Result<Vec<PanelRow>, String> {
+    Ok(charter_core::personas::memories(root, persona)?
+        .iter()
+        .map(|memory| {
+            PanelRow::from(&panel::Row {
+                key: memory.slug.clone(),
+                text: memory.title.clone(),
+                note: (!memory.stamp.is_empty()).then(|| memory.stamp.clone()),
+                mark: panel::Mark::Note,
+                tone: panel::Tone::Plain,
+                // The whole of it, which is what the operator asked for: *"user will be able to
+                // read all memories from ui"*. A memory's body is the durable fact; the title
+                // is the sentence it is filed under.
+                detail: Some(panel::Detail::Text(if memory.body.trim().is_empty() {
+                    memory.title.clone()
+                } else {
+                    memory.body.clone()
+                })),
+                runs: None,
+            })
+        })
+        .collect())
 }
 
 /// The panel that needs git. Call it off the thread that draws, for one project's workspace.
@@ -377,6 +751,179 @@ mod tests {
             );
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
+    }
+
+    /// A plane with one workspace holding one todo, and two personas — one of them the
+    /// plane's default, one of them with a memory.
+    fn plane_with_a_todo_and_two_personas() -> (tempfile::TempDir, PathBuf) {
+        let (dir, root) = plane_with_a_clone();
+        std::fs::write(
+            root.join("charter.toml"),
+            "[persona]\ndefault = \"steward\"\n",
+        )
+        .expect("a manifest naming a default");
+        std::fs::create_dir_all(root.join("workspaces/alpha/todos")).expect("a todo store");
+        std::fs::write(
+            root.join("workspaces/alpha/todos/20260302-091400-review.md"),
+            "# Review the rollout plan\n\n_2026-03-02 09:14 · todo_\n\nEvery step of it.\n",
+        )
+        .expect("a todo");
+        for who in ["devops", "steward"] {
+            std::fs::create_dir_all(root.join("personas").join(who).join("memory"))
+                .expect("a persona");
+            std::fs::write(
+                root.join("personas").join(who).join("persona.md"),
+                format!("---\nrole: {who}\n---\n\n# {who}\n"),
+            )
+            .expect("a definition");
+        }
+        std::fs::write(
+            root.join("personas/steward/memory/charter-defects-go-upstream.md"),
+            "# Charter defects go upstream\n\n_2026-09-20 10:00 · durable_\n\nFile the issue.\n",
+        )
+        .expect("a memory");
+        (dir, root)
+    }
+
+    #[test]
+    fn charters_own_panels_come_through_the_same_seam_an_extension_would_use() {
+        // **The claim the whole change rests on.** Todos and personas used to be named fields
+        // that hardcoded React read. They are `charter_core::panel` values now, produced here
+        // and drawn by the loop in `Panels.tsx` that draws a stranger's declared panel — so
+        // what the window knows about a todo it learned from the vocabulary.
+        let (_plane, root) = plane_with_a_todo_and_two_personas();
+
+        let drawn = of(&root, "alpha").expect("the panels draw");
+
+        let keys: Vec<&str> = drawn
+            .contributed
+            .iter()
+            .map(|panel| panel.key.as_str())
+            .collect();
+        assert_eq!(keys, ["charter/todos", "charter/personas"]);
+        assert!(
+            drawn.contributed.iter().all(|panel| panel.from.is_none()),
+            "charter's own panels named an extension as their contributor"
+        );
+    }
+
+    #[test]
+    fn a_todo_row_carries_its_whole_body_for_the_card_the_row_opens() {
+        // The operator's own request — *"on clicking we should show full body"* — and the
+        // reason the row itself is only the title: a row is one line and the card is the rest.
+        let (_plane, root) = plane_with_a_todo_and_two_personas();
+
+        let drawn = of(&root, "alpha").expect("the panels draw");
+
+        let rows = list_of(&drawn.contributed[0]);
+        assert_eq!(rows[0].text, "Review the rollout plan");
+        // The stamp as the file records it, which is the store's own reading and not this
+        // panel's — a row that reformatted a date would be a second answer to what a todo says.
+        assert_eq!(rows[0].note.as_deref(), Some("2026-03-02 09:14"));
+        assert_eq!(
+            rows[0].detail,
+            Some(PanelDetail::Text {
+                text: "Every step of it.".into()
+            })
+        );
+    }
+
+    #[test]
+    fn a_persona_row_says_how_much_it_remembers_without_reading_a_memory() {
+        // The count is a `read_dir` on the path that has 100 ms to draw; the memories
+        // themselves are `persona_memories`, when a reader asks. `0 memories` is said rather
+        // than left off — a row that omits the count reads as one charter did not look at,
+        // which is a different fact from a persona with none.
+        let (_plane, root) = plane_with_a_todo_and_two_personas();
+
+        let drawn = of(&root, "alpha").expect("the panels draw");
+
+        let rows = list_of(&drawn.contributed[1]);
+        let notes: Vec<Option<&str>> = rows.iter().map(|row| row.note.as_deref()).collect();
+        assert_eq!(notes, [Some("0 memories"), Some("default · 1 memory")]);
+        assert_eq!(rows[1].tone, "default");
+        assert_eq!(rows[1].runs.as_deref(), Some("persona.show:steward"));
+    }
+
+    #[test]
+    fn a_contributed_row_could_never_carry_the_verb_a_persona_row_does() {
+        // The asymmetry, pinned where it is created rather than only where it is refused.
+        // `charter_core::panel::declared` refuses `runs` from a manifest; this is the other
+        // half — charter's own producer is the only thing that sets it, and it sets it to a
+        // catalogue id the window looks up rather than to anything it made up.
+        let (_plane, root) = plane_with_a_todo_and_two_personas();
+
+        let drawn = of(&root, "alpha").expect("the panels draw");
+
+        for row in list_of(&drawn.contributed[0]) {
+            assert_eq!(row.runs, None, "a todo row grew a verb nobody asked for");
+        }
+        for row in list_of(&drawn.contributed[1]) {
+            assert!(
+                row.runs
+                    .as_deref()
+                    .is_some_and(|id| id.starts_with("persona.show:")),
+                "a persona row's verb is not the catalogue row that opens its card"
+            );
+        }
+    }
+
+    #[test]
+    fn a_memory_arrives_as_a_row_of_the_same_vocabulary_a_panel_is_drawn_from() {
+        // **The second consumer of the list primitive**, and what makes it a primitive rather
+        // than a panel with a general-sounding name: the window's search, bound and card work
+        // on these without anything in it knowing what a memory is.
+        let (_plane, root) = plane_with_a_todo_and_two_personas();
+
+        let rows = memories_of(&root, "steward").expect("the memories read");
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].text, "Charter defects go upstream");
+        assert_eq!(rows[0].mark, "note");
+        assert_eq!(rows[0].runs, None);
+        assert_eq!(
+            rows[0].detail,
+            Some(PanelDetail::Text {
+                text: "File the issue.".into()
+            })
+        );
+    }
+
+    #[test]
+    fn a_todo_store_charter_will_not_read_is_a_sentence_and_never_an_empty_list() {
+        // "Nothing to do" is what an empty list would claim about a store charter refused, and
+        // that claim is false in the direction that matters.
+        let (_plane, root) = plane_with_a_clone();
+        std::fs::create_dir_all(root.join("workspaces/alpha")).expect("the workspace");
+        let outside = root.parent().expect("a parent").join("elsewhere");
+        std::fs::create_dir_all(&outside).expect("somewhere outside");
+        std::os::unix::fs::symlink(&outside, root.join("workspaces/alpha/todos"))
+            .expect("a link out of the plane");
+
+        let drawn = of(&root, "alpha").expect("the panels draw");
+
+        let told = drawn.contributed[0]
+            .blocks
+            .iter()
+            .find_map(|block| match block {
+                PanelBlock::Note { text, tone } => Some((text.clone(), tone.clone())),
+                PanelBlock::List { .. } => None,
+            })
+            .expect("the refusal is drawn");
+        assert_eq!(told.1, "trouble");
+        assert!(!told.0.is_empty());
+    }
+
+    /// The rows of a panel's one list block.
+    fn list_of(panel: &PanelView) -> &[PanelRow] {
+        panel
+            .blocks
+            .iter()
+            .find_map(|block| match block {
+                PanelBlock::List { rows, .. } => Some(rows.as_slice()),
+                PanelBlock::Note { .. } => None,
+            })
+            .expect("a list block")
     }
 
     #[test]

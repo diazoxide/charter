@@ -277,7 +277,7 @@ describe("App", () => {
     render(<App />);
 
     expect(await screen.findByText("/home/dev/plane")).toBeInTheDocument();
-    expect(await screen.findByText(/No sessions/)).toBeInTheDocument();
+    expect(await screen.findByTestId("empty-window")).toBeInTheDocument();
   });
 
   // What the window does with sessions the core is already holding is in

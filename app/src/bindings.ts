@@ -285,6 +285,22 @@ export const commands = {
 	 */
 	workspacePanels: (plane: PlaneId, workspace: string) => typedError<Panels, string>(__TAURI_INVOKE("workspace_panels", { plane, workspace })),
 	/**
+	 *  One persona's memories, as rows of the same vocabulary a panel is drawn from.
+	 * 
+	 *  **It answers in `PanelRow`s, and that is the point rather than a convenience.** The window's
+	 *  list primitive shortens a row, opens its card, bounds the count, offers more and grows a
+	 *  search once there is more than a page of them — and it does all of that for these without
+	 *  knowing what a memory is, because they arrive as rows. A panel body and a row's detail
+	 *  surface are the same vocabulary drawn by the same code, which is the test of whether the
+	 *  contract was worth defining.
+	 * 
+	 *  **Its own command, asked when a persona's card is opened.** `workspace_panels` carries the
+	 *  *count*, which is a `read_dir`; this reads every memory file, and folding it in would read
+	 *  every persona's whole store on every workspace focus for something nobody has asked to see —
+	 *  `persona_details`' reason, at a larger size.
+	 */
+	personaMemories: (plane: PlaneId, persona: string) => typedError<PanelRow[], string>(__TAURI_INVOKE("persona_memories", { plane, persona })),
+	/**
 	 *  Make a workspace: `charter workspace create <name>`, with the vision when one was typed.
 	 * 
 	 *  **The name is checked by the core and by nothing in the window.** `wscmd::create` runs
@@ -484,6 +500,19 @@ export const commands = {
 	 *  this command only shapes it.
 	 */
 	extensionThemes: () => typedError<ExtensionTheme[], string>(__TAURI_INVOKE("extension_themes")),
+	/**
+	 *  Every panel an approved extension contributes to this window's side region.
+	 * 
+	 *  **Its own command, asked once per window and never per workspace focus.** A survey reads
+	 *  every installed extension's whole directory to re-take the fingerprint — ADR 0041's named
+	 *  cost of fingerprinting code — and folding that into `workspace_panels` would put it on the
+	 *  path that has 100 ms to draw, once per click on the workspace strip.
+	 * 
+	 *  It is the same shape as [`extension_themes`] one row down, and for the same reason: an
+	 *  extension that is new, changed or unreadable contributes nothing here. That is the registry
+	 *  doing its one job, and a contributed panel rests on it entirely.
+	 */
+	extensionPanels: () => typedError<PanelView[], string>(__TAURI_INVOKE("extension_panels")),
 	/**
 	 *  Every row `charter doctor` would print for this plane, run inside the app.
 	 * 
@@ -942,6 +971,64 @@ export type Opened = {
 	ask: Ask | null,
 };
 
+/**  One part of a panel's body. */
+export type PanelBlock = { kind: "list"; rows: PanelRow[]; empty: PanelEmpty } | { kind: "note"; text: string; tone: string };
+
+/**
+ *  What opens when a row is opened, as the window receives it.
+ * 
+ *  A mirror of [`panel::Detail`] rather than the thing itself, for the reason
+ *  [`crate::extensions::ExtensionAsk`] is one: `charter-core` never depends on the app, and the
+ *  app's wire types are what generate `app/src/bindings.ts`.
+ */
+export type PanelDetail = 
+/**  The row's own words, in full. The only kind a contributed panel may use. */
+{ kind: "text"; text: string } | 
+/**
+ *  What this plane says this persona is. **A name and not an answer**: the window asks
+ *  `persona_details` when the card opens, because a definition is a file an operator edits
+ *  while charter is running, and because folding it in here would read every persona's
+ *  definition on every workspace focus for something nobody has asked to see.
+ */
+{ kind: "persona"; persona: string };
+
+/**  What a list says when it has no rows. */
+export type PanelEmpty = {
+	headline: string,
+	body: string | null,
+	/**
+	 *  The catalogue row the empty state offers as a way out. charter's own, for `runs`'s
+	 *  reason.
+	 */
+	offer: string | null,
+};
+
+/**  One row of a panel's list. */
+export type PanelRow = {
+	key: string,
+	text: string,
+	/**  A short trailing note — a date, a word like `default`. */
+	note: string | null,
+	/**
+	 *  A word out of [`panel::Mark`]'s closed set. The window maps it to a glyph it already
+	 *  ships; a word it does not know draws the plain one rather than nothing, because a
+	 *  missing icon is cosmetic and a missing row is not.
+	 */
+	mark: string,
+	/**  A word out of [`panel::Tone`]'s closed set. */
+	tone: string,
+	detail: PanelDetail | null,
+	/**
+	 *  The catalogue row this runs when pressed (`app/src/actions.ts`), or nothing.
+	 * 
+	 *  **Never set from a manifest** — `charter_core::panel`'s header has the whole of why, and
+	 *  `panel::NO_VERB` is the sentence an extension that tried gets. What is here comes from
+	 *  charter's own contributions, below, and the window looks the id up in the catalogue: a
+	 *  row cannot invent a verb even here.
+	 */
+	runs: string | null,
+};
+
 /**  One open todo. There is no state field: a closed todo is a deleted file (ADR 0004). */
 export type PanelTodo = {
 	/**  The file stem, which is what a todo is closed by. */
@@ -949,6 +1036,26 @@ export type PanelTodo = {
 	title: string,
 	/**  The date the todo was written, as the file records it. */
 	stamp: string,
+};
+
+/**
+ *  A panel, as the window receives it: a key, a title, an ordering and a body.
+ * 
+ *  **This is the whole of what a panel is**, and the window's renderer takes nothing else. That
+ *  is the test of the contract: charter's own todos and personas arrive in this shape, an
+ *  approved extension's declared panel arrives in this shape, and `app/src/Panels.tsx` cannot
+ *  tell them apart except by [`Self::from`] — which it draws, because ADR 0041 item 5 says what
+ *  is in force is shown after approval and not only at it.
+ */
+export type PanelView = {
+	/**  `charter/<id>` or `ext/<extension>/<id>` — see `panel::Panel::key`. */
+	key: string,
+	title: string,
+	order: number,
+	mark: string,
+	blocks: PanelBlock[],
+	/**  The extension that contributed it, or `null` for charter's own. */
+	from: string | null,
 };
 
 /**  Everything the panels can draw without running git. */
@@ -976,6 +1083,36 @@ export type Panels = {
 	/**  The plane's personas, and the one a chat started here would adopt. */
 	personas: string[],
 	persona: string | null,
+	/**
+	 *  **The same facts again, as contributions** — charter's own two panels, in the shape a
+	 *  stranger's extension contributes one in (`charter_core::panel`).
+	 * 
+	 *  # Why the fields above survived, which is a decision and not an oversight
+	 * 
+	 *  `todos`, `personas` and `persona` are not panel bodies. They are facts about the
+	 *  workspace that three other surfaces read: the status line counts the todos, the
+	 *  catalogue builds a `persona.show:<name>` row per persona, and a test pins the default.
+	 *  Deleting them would have moved those three onto a shape designed for drawing, which is
+	 *  the opposite of the separation this change is for. **What moved is the drawing**:
+	 *  `Panels.tsx` reads `contributed` and nothing else, so the panels on screen do come
+	 *  through the seam.
+	 * 
+	 *  # And why they are in THIS call, when the brief said a contributed panel cannot be
+	 * 
+	 *  The thing a contributed panel cannot be is a *field*. `Panels` names `todos` and
+	 *  `personas`; there is no field for a panel nobody has written yet, and there is no
+	 *  honest way to add one. A *list* has room for every contributor. The round trip was never
+	 *  the problem, and splitting it would cost something real: focusing a workspace has 100 ms
+	 *  and this command is the one that has to answer inside it.
+	 * 
+	 *  **A contributed panel needs no round trip of its own, and that is a fact about stage 1.**
+	 *  With no executor there is nothing to ask: an extension's panel is declared, so its rows
+	 *  came off the disk at survey time, and charter's own are produced from the plane read
+	 *  this command already does. The day an executor lands, a panel that wants live rows asks
+	 *  its extension — and that is a second call, made when the panel is drawn, and it is stage
+	 *  2's to design.
+	 */
+	contributed: PanelView[],
 };
 
 /**  One percentage on the gauge, and the tone its threshold gives it. */
