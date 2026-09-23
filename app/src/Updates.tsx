@@ -4,6 +4,7 @@ import * as RadioGroup from "@radix-ui/react-radio-group";
 import { listen } from "@tauri-apps/api/event";
 import { ArrowUpCircle, LoaderCircle, Pin } from "lucide-react";
 import { commands, type Offer, type PinReport, type PlaneId } from "./bindings";
+import { ReleaseNotes } from "./ReleaseNotes";
 
 /**
  * **"An update is available", and the pin that drifts** — the two version facts charter ADR
@@ -228,7 +229,12 @@ export function UpdateItem({ updates }: { updates: Updates }) {
                   charter <strong>{state.offer.version}</strong> is available on the{" "}
                   {state.offer.channel} channel. This is {state.offer.current}.
                 </p>
-                {state.offer.notes && <pre className="update-notes">{state.offer.notes}</pre>}
+                {/* A stable release's notes are its CHANGELOG.md section, in Markdown. */}
+                {state.offer.notes && (
+                  <div className="update-notes">
+                    <ReleaseNotes markdown={state.offer.notes} />
+                  </div>
+                )}
                 <p className="honest mid-turn" role="alert" data-testid="update-ends-sessions">
                   {INSTALL_ENDS_SESSIONS}
                 </p>

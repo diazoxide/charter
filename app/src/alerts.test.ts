@@ -41,6 +41,13 @@ describe("the count", () => {
     expect(countOf({ at: "read", planes: [plane(A, []), plane(B, [])] }, [A, B])).toBe(0);
   });
 
+  it("counts what the window says about this machine with the projects' alerts", () => {
+    // They are drawn in the same drawer, so a button reading 0 over a drawer with a layout
+    // alert in it would be a count of something other than what opening it shows.
+    expect(countOf({ at: "read", planes: [plane(A, []), plane(B, [])] }, [A, B], 2)).toBe(2);
+    expect(countOf({ at: "reading" }, [A], 2)).toBeUndefined();
+  });
+
   it("is dropped before anything has answered", () => {
     expect(countOf({ at: "reading" }, [A])).toBeUndefined();
   });

@@ -385,7 +385,8 @@ export function apply(theme: Theme, to: HTMLElement, reduced = motionReduced()):
   to.dataset.theme = theme.name;
 }
 
-/** What the running window is drawn in. Read by a pane that is opening a terminal. */
+/** What the running window is drawn in. Read by a pane that is opening a terminal, which then
+ *  follows it through {@link onDrawn}. */
 let current: Theme = DEFAULT_THEME;
 
 /** The theme in force. */
@@ -398,11 +399,33 @@ export function inForce(): Theme {
  *  Not called `use`: `use` is a React hook's name in React 19, and `react-hooks/rules-of-hooks`
  *  reads any call to one as a hook call — which it then refuses inside a `try`. */
 export function drawIn(theme: Theme, to: HTMLElement = document.documentElement): void {
+  const changed = theme !== current;
   current = theme;
   drawnOn = to;
   apply(theme, to);
   followReducedMotion();
+  if (changed) for (const follow of followers) follow(theme);
 }
+
+/**
+ * **The second consumer's half of a live switch** (M6.7). The stylesheet follows a theme drawn
+ * while the window is up by itself — {@link apply} rewrites the custom properties it reads —
+ * but xterm was handed an *object* when a pane was built, and nothing about a custom property
+ * changing reaches it. So a pane subscribes here and hands its terminal the new object; without
+ * this, "one source, two consumers" held at boot and only one consumer was live.
+ *
+ * Told only when the theme in force actually changes. Answers the way to stop being told, which
+ * a pane calls when it goes.
+ */
+export function onDrawn(follow: (theme: Theme) => void): () => void {
+  followers.add(follow);
+  return () => {
+    followers.delete(follow);
+  };
+}
+
+/** Everything following the theme in force: one per terminal on screen. */
+const followers = new Set<(theme: Theme) => void>();
 
 /** Where the theme in force was last drawn, so a change of the reduced-motion setting can be
  *  drawn onto the same element. */

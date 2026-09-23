@@ -99,7 +99,74 @@ describe("Tailwind is wired to the tokens and to nothing else", () => {
     // Unlayered CSS beats layered CSS, so `App.css` had to be imported INTO a layer or no
     // utility could ever override a rule in it without `!important`.
     const css = await stylesheet();
-    expect(css).toContain("@layer theme, base, charter, components, utilities;");
+    expect(css).toContain("@layer theme, base, vendor, charter, components, utilities;");
     expect(css).toMatch(/@layer charter\s*\{/);
+  });
+
+  it("puts xterm's stylesheet in a layer below charter's, so a token can beat its black", async () => {
+    // M6.8. Imported from `SessionPane.tsx` it landed outside every layer and outranked the
+    // whole stack; its `.xterm-viewport { background-color: #000 }` was the black band under
+    // every terminal (charter-app#193). Inside `vendor` it is the library's default, and the
+    // rule in `App.css` that paints the strip `--terminal-background` wins by layer order.
+    const css = await stylesheet();
+    const vendor = /@layer vendor\s*\{([\s\S]*?)\n\}/.exec(css)?.[1] ?? "";
+    expect(vendor).toContain(".xterm .xterm-viewport");
+    const charter = /@layer charter\s*\{([\s\S]*)/.exec(css)?.[1] ?? "";
+    expect(charter).toMatch(
+      /\.xterm \.xterm-viewport\s*\{\s*background-color:\s*var\(--terminal-background\)/,
+    );
+    expect(css.indexOf("@layer vendor")).toBeLessThan(css.indexOf("@layer charter {"));
+  });
+});
+
+/**
+ * **Every shadow Tailwind can make is drawn in `overlay.shadow`** (M6.8).
+ *
+ * Tailwind's own `shadow-md` carries `rgb(0 0 0 / 0.1)`, which made a shadow utility a colour no
+ * theme could reach — the one leak in the "Tailwind owns no colour" rule. `styles.css` clears
+ * each shadow namespace and puts the sizes back on the token. This compiles every shadow
+ * utility Tailwind ships, by the name Tailwind ships it under, so a namespace that stops being
+ * cleared — or a size added back with a colour of its own — fails here rather than on screen.
+ */
+describe("a shadow is a token's colour", () => {
+  const SIZES = ["2xs", "xs", "sm", "md", "lg", "xl", "2xl"];
+  const SHADOWS = [
+    "shadow",
+    "shadow-inner",
+    ...SIZES.map((size) => `shadow-${size}`),
+    ...["2xs", "xs", "sm"].map((size) => `inset-shadow-${size}`),
+    "drop-shadow",
+    ...SIZES.slice(1).map((size) => `drop-shadow-${size}`),
+    ...["2xs", "xs", "sm", "md", "lg"].map((size) => `text-shadow-${size}`),
+  ];
+  /** The `utilities` layer of a compiled stylesheet, which is where Tailwind writes what it
+   *  makes and nothing else is. */
+  const utilities = (css: string) => css.slice(css.indexOf("@layer utilities {"));
+  /** A colour written out: what a theme cannot reach. */
+  const LITERAL = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color)\s*\(/;
+
+  it.each(SHADOWS)("%s reads overlay.shadow and carries no colour of its own", async (name) => {
+    // Only the utilities layer: xterm's own stylesheet has a `.shadow` of its own.
+    const css = utilities(await stylesheet(name));
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const rule = new RegExp(`\\.${escaped}\\s*\\{([^}]*)\\}`).exec(css)?.[1];
+    // A utility the namespace no longer makes is not a leak. One it makes is held to the token.
+    if (rule === undefined) return;
+    expect(rule, `${name} wrote a colour of its own`).not.toMatch(LITERAL);
+    expect(rule).toContain("var(--overlay-shadow)");
+  });
+
+  it("still makes the everyday sizes", async () => {
+    // Clearing a namespace and forgetting to put it back would pass the test above by making
+    // nothing at all.
+    for (const name of [
+      "shadow-sm",
+      "shadow-md",
+      "shadow-lg",
+      "drop-shadow-md",
+      "text-shadow-sm",
+    ]) {
+      expect(utilities(await stylesheet(name)), name).toMatch(new RegExp(`\\.${name}\\s*\\{`));
+    }
   });
 });

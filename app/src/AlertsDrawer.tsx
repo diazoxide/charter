@@ -1,7 +1,7 @@
 import { useRef } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
-import { FolderOpen, LoaderCircle, OctagonAlert, TriangleAlert, X } from "lucide-react";
-import type { PlaneAlerts, PlaneId } from "./bindings";
+import { FolderOpen, LoaderCircle, Monitor, OctagonAlert, TriangleAlert, X } from "lucide-react";
+import type { AlertRow, PlaneAlerts, PlaneId } from "./bindings";
 import type { AlertsReading } from "./alerts";
 
 /**
@@ -33,12 +33,17 @@ export function AlertsDrawer({
   open,
   onOpenChange,
   reading,
+  aboutThisMachine = [],
   planes,
   nameOf,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   reading: AlertsReading;
+  /** What the window says about this machine rather than a project: a layout or theme file in
+   *  charter's config directory that it could not use as written (`windowprefs.ts`). Listed
+   *  above the projects, and only when there is something to say. */
+  aboutThisMachine?: AlertRow[];
   /** The projects this window holds, in the strip's order, which is the order they are listed
    *  in. A project the core holds that this window does not is listed after them. */
   planes: readonly PlaneId[];
@@ -78,6 +83,15 @@ export function AlertsDrawer({
           <Dialog.Description className="drawer-about">
             Every open project, not only the one in front. Each alert carries what fixes it.
           </Dialog.Description>
+          {aboutThisMachine.length > 0 && (
+            <section className="drawer-project" aria-label="Alerts about this machine">
+              <h3>
+                <Monitor className="node-icon" />
+                This machine
+              </h3>
+              <Rows alerts={aboutThisMachine} />
+            </section>
+          )}
           <Body reading={reading} planes={planes} nameOf={nameOf} />
         </Dialog.Content>
       </Dialog.Portal>
@@ -159,25 +173,32 @@ function Project({
           {read.alerts.length === 0 ? (
             read.stopped === null && <p className="none">Nothing needs you here.</p>
           ) : (
-            <ul className="drawer-alerts">
-              {read.alerts.map((alert) => (
-                <li key={`${alert.subject}\n${alert.detail}`} data-severity={alert.severity}>
-                  {alert.severity === "bad" ? (
-                    <OctagonAlert className="node-icon" />
-                  ) : (
-                    <TriangleAlert className="node-icon" />
-                  )}
-                  <span className="alert-words">
-                    <span className="alert-subject">{alert.subject}</span>{" "}
-                    <span className="alert-detail">{alert.detail}</span>
-                  </span>
-                  <code className="alert-remedy">{alert.remedy}</code>
-                </li>
-              ))}
-            </ul>
+            <Rows alerts={read.alerts} />
           )}
         </>
       )}
     </section>
+  );
+}
+
+/** One list of alerts, each with what fixes it. */
+function Rows({ alerts }: { alerts: AlertRow[] }) {
+  return (
+    <ul className="drawer-alerts">
+      {alerts.map((alert) => (
+        <li key={`${alert.subject}\n${alert.detail}`} data-severity={alert.severity}>
+          {alert.severity === "bad" ? (
+            <OctagonAlert className="node-icon" />
+          ) : (
+            <TriangleAlert className="node-icon" />
+          )}
+          <span className="alert-words">
+            <span className="alert-subject">{alert.subject}</span>{" "}
+            <span className="alert-detail">{alert.detail}</span>
+          </span>
+          <code className="alert-remedy">{alert.remedy}</code>
+        </li>
+      ))}
+    </ul>
   );
 }

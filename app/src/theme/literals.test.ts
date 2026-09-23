@@ -204,6 +204,50 @@ describe("no motion is written outside a theme file", () => {
   );
 });
 
+/**
+ * **No stylesheet lands outside the layer stack** (M6.8).
+ *
+ * CSS outside every `@layer` outranks every layer at any specificity, so a stylesheet imported
+ * from a component beats `App.css` and every utility, silently. xterm's was, from
+ * `SessionPane.tsx`, and its `#000` viewport put a black band under every terminal that no rule
+ * in `App.css` could reach (charter-app#193) — and the colours a dependency ships are invisible
+ * to the literal guard above, which reads only charter's own sources. So the rule is structural:
+ * the window has ONE stylesheet entry, `styles.css`, imported once from `App.tsx`, and every
+ * `@import` in it names a layer. A library's stylesheet goes there, in `vendor`.
+ */
+describe("every stylesheet is in a layer", () => {
+  /** A stylesheet pulled in from script: `import "x.css"`, `import a from "x.css?inline"`, or
+   *  `import("x.css")`. */
+  const IMPORTED =
+    /\bimport\s*(?:\(\s*|[\w{}*\s,]+\s+from\s+)?["'`]([^"'`]+\.css(?:\?[^"'`]*)?)["'`]/g;
+
+  it.each(sources(".ts", ".tsx"))("%s imports no stylesheet but the window's own", (path, raw) => {
+    const text = withoutComments(raw, "ts");
+    const complaints = [...text.matchAll(IMPORTED)]
+      .filter((hit) => !(path === "src/App.tsx" && hit[1] === "./styles.css"))
+      .map((hit) => `${at(path, text, hit.index)} imports ${hit[1]}`);
+    expect(
+      complaints,
+      'import it from styles.css instead, as `@import "..." layer(vendor);`',
+    ).toEqual([]);
+  });
+
+  it("imports the window's stylesheet exactly once", () => {
+    const imports = sources(".ts", ".tsx").flatMap(([path, raw]) =>
+      [...withoutComments(raw, "ts").matchAll(IMPORTED)].map((hit) => `${path}: ${hit[1]}`),
+    );
+    expect(imports).toEqual(["src/App.tsx: ./styles.css"]);
+  });
+
+  it.each(sources(".css"))("%s gives every @import a layer", (path, raw) => {
+    const text = withoutComments(raw, "css");
+    const complaints = [...text.matchAll(/@import\s+[^;]+;/g)]
+      .filter((hit) => !/\blayer\(\s*[\w-]+\s*\)/.test(hit[0]))
+      .map((hit) => `${at(path, text, hit.index)}: ${hit[0]}`);
+    expect(complaints, "add layer(vendor) — or the layer the stylesheet belongs in").toEqual([]);
+  });
+});
+
 describe("a Tailwind class cannot reach past the tokens", () => {
   /** Tailwind v4's escape hatch: `text-[13px]`, `bg-[#fff]`, `w-[calc(100%-2rem)]`. Every one
    *  of them is a value a theme cannot change, which is the same defect as a hex literal with

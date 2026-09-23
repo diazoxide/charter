@@ -72,6 +72,7 @@ pub mod tui;
 pub mod updates;
 pub mod usage;
 pub mod version;
+pub mod windowprefs;
 pub mod wiring;
 pub mod workspaces;
 pub mod worktree;
