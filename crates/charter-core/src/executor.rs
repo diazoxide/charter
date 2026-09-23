@@ -1065,6 +1065,17 @@ fn listen(ours: &std::os::unix::net::UnixStream, until: Instant) -> Heard {
         }
         match ours.read(&mut chunk) {
             Ok(0) => return Heard::Nothing(!heard.is_empty()),
+            // **A reset is the program ending, not the connection breaking.** On Linux a stream
+            // socket whose peer exits with bytes still unread in its receive queue — a program
+            // that crashed before reading the whole question — reads as `ECONNRESET` here
+            // rather than as end-of-file. To charter that is the same event as EOF: the
+            // program is gone, and its exit status and last words are what to report. Read
+            // as `Broken`, a crash was drawn as "charter lost its connection", and whether a
+            // run saw EOF or a reset depended on how much of the question the program had
+            // read before it died — main went red on exactly that.
+            Err(why) if why.kind() == std::io::ErrorKind::ConnectionReset => {
+                return Heard::Nothing(!heard.is_empty());
+            }
             Ok(got) => {
                 let before = heard.len();
                 heard.extend_from_slice(&chunk[..got]);
