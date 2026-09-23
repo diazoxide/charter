@@ -21,10 +21,12 @@ import type { About } from "./bindings";
  * would end in an IPC call rather than an observable drag. What is measured instead — here and
  * again in the shipped app — is the two facts that handler reads out of the DOM
  * (`tauri/src/window/scripts/drag.js`): the bar carries `data-tauri-drag-region="deep"`, and
- * every control inside it carries a `tabindex` other than `-1`, which is what makes the
- * handler stop at it and treat the press as a click. The third fact, the
- * `core:window:allow-start-dragging` permission, is in `capabilities/default.json` and is a
- * build-time refusal rather than anything a test can read.
+ * every control inside it is something the walk stops at. `BUTTON` is in its `CLICKABLE_TAGS`,
+ * so the tag is what does that and no attribute of ours is load-bearing for it — About's
+ * `tabIndex={0}` is WebKit's rule (charter-app#186) and the update item's trigger has none,
+ * which is charter-app#189's. The third fact, the `core:window:allow-start-dragging`
+ * permission, is in `capabilities/default.json` and is a runtime refusal rather than anything
+ * a test here can read.
  */
 
 afterEach(() => {
@@ -169,18 +171,30 @@ describe("what `N chats running` counts", () => {
 
 describe("the bar itself", () => {
   it("is a drag region its own controls are not", () => {
-    // Tauri's handler walks the composed path up from what was pressed and stops at the first
-    // element that is clickable — a `<button>`, or anything carrying a `tabindex` other than
-    // `-1`. `deep` rather than the bare attribute, because a bare one drags only on a DIRECT
-    // press of the element carrying it: on a bar made of text spans that is everywhere except
-    // on its own words.
+    // Tauri's handler walks the composed path up from what was pressed and returns false at
+    // the first clickable element — where `BUTTON` is in its `CLICKABLE_TAGS`, so the tag is
+    // what stops it. `deep` rather than the bare attribute, because a bare one drags only on a
+    // DIRECT press of the element carrying it: on a bar made of text spans that is everywhere
+    // except on its own words.
     render(<TitleBar crumbs={crumbs()} />);
 
     expect(screen.getByTestId("title-bar")).toHaveAttribute("data-tauri-drag-region", "deep");
     const about = screen.getByTestId("title-about");
     expect(about.tagName).toBe("BUTTON");
-    expect(about).toHaveAttribute("tabindex", "0");
+    // And it is not itself a drag region, which would make the button drag the window.
     expect(about).not.toHaveAttribute("data-tauri-drag-region");
+  });
+
+  it("gives the button it adds the tabindex WebKit's tab sequence needs", () => {
+    // Separate from the drag rule above, and deliberately: the two are different rules that
+    // happen to read the same attribute. This one is charter-app#186's — WebKit leaves a
+    // `<button>` out of the tab sequence unless its `tabindex` is written down — and it
+    // applies to every button this change added. The update item's trigger beside it has
+    // none, which is charter-app#189's open question about the whole window outside its
+    // dialogs, and is not something this bar should answer on one button.
+    render(<TitleBar crumbs={crumbs()} />);
+
+    expect(screen.getByTestId("title-about")).toHaveAttribute("tabindex", "0");
   });
 
   it("reserves nothing until the core says how much the system has already spent", () => {

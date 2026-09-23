@@ -37,19 +37,25 @@ import { UpdateItem, type Updates } from "./Updates";
  * (`tauri/src/window/scripts/drag.js`) walks the composed path up from what was pressed: the
  * bare attribute drags only on a **direct** press of the element carrying it, which on a bar
  * made of text spans means the bar drags everywhere except on its own words. `deep` drags
- * anywhere in the subtree — and the same walk stops dead at the first *clickable* element it
- * meets, where clickable is a `<button>`, a link, or **anything carrying a `tabindex` other
- * than `-1`**. Every control in here is both, so About and the update item press rather than
- * drag without a single line of ours saying so.
+ * anywhere in the subtree — and the same walk returns false at the first *clickable* element
+ * it meets, where clickable is a `<button>`, a link, an `<input>`, an interactive `role`, or
+ * anything carrying a `tabindex` other than `-1`.
+ *
+ * **Both controls here are `<button>`s, and the TAG is what carries it.** `BUTTON` is in
+ * Tauri's `CLICKABLE_TAGS`, so no attribute of ours is load-bearing for this: About's
+ * `tabIndex={0}` is there for WebKit's tab sequence (charter-app#186), and the update item's
+ * trigger has none at all — which is charter-app#189's, not this bar's. A scenario written
+ * asserting a `tabindex` on every control was refuted by the real app, which is how that came
+ * to be written down here rather than assumed.
  *
  * **What no test here proves is that the window then moves.** WebDriver dispatches a
  * synthetic event and performs no default action (`docs/ui-primitives.md`), and a synthetic
  * `mousedown` that did reach Tauri's listener would end in an IPC call rather than an
  * observable drag. What IS proved, in jsdom and again in the shipped app, is the two facts
- * that handler reads: the attribute is on the bar, and every control inside it carries a
- * `tabindex` the handler stops at. `core:window:allow-start-dragging` — which `core:default`
- * does NOT include — is named in `capabilities/default.json` for the same reason: without it
- * the IPC call is refused and the bar is one the operator cannot grab.
+ * that handler reads: the attribute is on the bar, and every control inside it is an element
+ * the handler stops at. `core:window:allow-start-dragging` — which `core:default` does NOT
+ * include — is named in `capabilities/default.json` for the same reason: without it the IPC
+ * call is refused and the bar is one the operator cannot grab.
  */
 export function TitleBar({
   crumbs,

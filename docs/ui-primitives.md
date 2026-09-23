@@ -475,9 +475,12 @@ sequence above, so it is written down here for the same reason.
 - **A control inside a drag region needs nothing to stay a control.** That same walk returns
   `false` at the first _clickable_ element it meets, and clickable there means a `<button>`, an
   `<a>`, an `<input>`, a `contenteditable`, an interactive `role` — **or anything carrying a
-  `tabindex` other than `-1`**. Every button in this window already carries `tabIndex={0}` for
-  the WebKit rule above, so it satisfies this one twice over. Nothing in charter's own code
-  says "do not drag here".
+  `tabindex` other than `-1`**. **`BUTTON` is in that tag list, so the tag alone does it** and no
+  attribute of charter's is load-bearing for dragging. Worth writing down because it is easy to
+  get backwards: the title bar's scenario was first written asserting `tabindex="0"` on every
+  control and the real app refuted it — the update item's trigger carries none, for
+  charter-app#189's reason, and it presses perfectly well. Nothing in charter's own code says
+  "do not drag here".
 - **`core:window:allow-start-dragging` is NOT in `core:default`.** The handler ends in
   `invoke('plugin:window|start_dragging')`, and without that permission named in
   `capabilities/default.json` the call is refused at runtime — a title bar that looks right and
@@ -486,9 +489,10 @@ sequence above, so it is written down here for the same reason.
 - **No test proves the window moves.** The rig performs no default action (above), and a
   synthetic `mousedown` that reached Tauri's listener would end in an IPC call rather than an
   observable drag. What is measured is the DOM the handler reads — the attribute on the bar, and
-  a `tabindex` on every control in it — in jsdom (`TitleBar.test.tsx`) and again in the shipped
-  bundle (`e2e/specs/title-bar.e2e.ts`), which is `picker.e2e.ts`'s split applied to a second
-  attribute. The permission is checked by nothing and is the sharpest thing to attack.
+  every control in it being an element the walk stops at — in jsdom (`TitleBar.test.tsx`) and
+  again in the shipped bundle (`e2e/specs/title-bar.e2e.ts`), which is `picker.e2e.ts`'s split
+  applied to a second attribute. The permission is checked by nothing and is the sharpest thing
+  to attack.
 
 ## Which keys belong to the chat, and which to the window
 

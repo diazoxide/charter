@@ -160,9 +160,18 @@ describe("the title bar", () => {
     // `deep` and not the bare attribute: Tauri's handler
     // (`tauri/src/window/scripts/drag.js`) walks the composed path up from what was pressed,
     // and a bare attribute drags only on a DIRECT press of the element carrying it — which on
-    // a bar made of text spans is everywhere except on its own words. The same walk stops at
-    // the first clickable element, where clickable is a `<button>` or anything with a
-    // `tabindex` other than `-1`, which is what keeps the controls pressable.
+    // a bar made of text spans is everywhere except on its own words. The same walk returns
+    // false at the first CLICKABLE element, and `BUTTON` is in its `CLICKABLE_TAGS` — so the
+    // tag alone is what keeps a control pressable and **no attribute of ours is load-bearing
+    // here**.
+    //
+    // **This test was written asserting `tabindex="0"` on every control and the real app
+    // refuted it**, which is the reason it is worded the way it is now: the update item's
+    // trigger carries none. That is charter-app#189's — every button outside a dialog is in
+    // the same position, and #189 argues at length that the answer there is a tab order and
+    // not `tabIndex={0}` sprinkled on one more button. About carries one because it is a
+    // button this change ADDED and the standing rule applies to it; the two disagreeing is
+    // that open issue showing through, not a defect in this bar.
     await untilTheStripIsRead();
 
     const shape = await browser.execute(() => {
@@ -170,20 +179,21 @@ describe("the title bar", () => {
       if (!bar) return { bar: "(the title bar was not on screen)", controls: [] as string[] };
       return {
         bar: bar.getAttribute("data-tauri-drag-region") ?? "(none)",
-        controls: [...bar.querySelectorAll("button")].map(
+        controls: [...bar.querySelectorAll('button, a, [role="button"]')].map(
           (el) =>
             `${(el.getAttribute("data-testid") || el.textContent || "?").trim()}` +
-            `=${el.getAttribute("tabindex")}` +
+            `=<${el.tagName.toLowerCase()}>` +
             `/${el.hasAttribute("data-tauri-drag-region") ? "drags" : "presses"}`,
         ),
       };
     });
 
     expect(shape.bar).toBe("deep");
-    // At least About; the update item is there too unless a build drew none.
-    expect(shape.controls.length).toBeGreaterThan(0);
-    // Every one of them, and the failure names which lost it rather than saying "false".
-    expect(shape.controls.filter((said) => !said.endsWith("=0/presses"))).toEqual([]);
+    // About and the update item. A bar that drew neither would pass a filter over an empty
+    // list, which is the failure this guards against first.
+    expect(shape.controls.length).toBeGreaterThanOrEqual(2);
+    // Every one of them, and the failure names which one lost it rather than saying "false".
+    expect(shape.controls.filter((said) => !said.endsWith("=<button>/presses"))).toEqual([]);
   });
 
   it("carries the updater, which is on this bar now and no longer on the status line", async () => {
