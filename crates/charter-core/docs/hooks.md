@@ -16,10 +16,19 @@ the Bash guard as `-c hooks.<Event>=…` flags. Both are for that session alone;
 
 ## What this version answers
 
+`charter hook --list` prints every word the binary answers, with the event and tool matcher
+each is wired to.
+
 | Hook | What it does |
 | --- | --- |
-| `sessionstart`, `userpromptsubmit`, `notification`, `subagentstop`, `stop`, `sessionend` | reports what the session just did to the app that started it, which is how the window knows which chat needs you. Outside the app it has nobody to tell and does nothing, except that `sessionstart` starts a background forge refresh |
-| `pretooluse` on `Bash` | the guards below |
+| `sessionstart`, `userpromptsubmit`, `notification`, `subagentstop`, `stop`, `sessionend` | reports what the session just did to the app that started it, which is how the window knows which chat needs you. Outside the app it has nobody to tell, except that `sessionstart` starts a background forge refresh |
+| `sessionstart`, in a plane | also briefs the session, as `additionalContext`: the workspace gate (confirm a workspace before repo work, unless the session is locked to one or `$CHARTER_WORKSPACE` pins it), the persona it was started as and a digest of that persona's memory, memory not yet shared, the workspace's oldest open todos, the plane's other workspaces, and the piece the session stands in. It also freezes each persona's `tools:` for the persona tool gate below |
+| `pretooluse` on `Bash` | the guards below, then the persona tool gate |
+| `pretooluse-read` on `Read`/`Grep` | the vault guard on those tools (*Vault read*, below) |
+| `pretooluse-edit` on `Write`/`Edit`/`MultiEdit` | the state-directory guard (*A hand-written state file*, below) |
+| `pretooluse-dispatch` on `Task`/`Agent` | asks before a persona that writes code is dispatched beside an agent already running (*A dispatch beside a running agent*, below) |
+| `posttooluse` on `Write`/`Edit`/`MultiEdit`, in a plane | warns when a memory or ref just written looks like it holds a secret; says what the workspace flow expects on the first edit in a LIVE workspace's clone; and every twelfth change without a memory, reminds the session to record one |
+| `posttooluse-skill`, `posttooluse-dispatch`, `posttooluse-message`, in a plane | log which skill the active persona used, which persona was dispatched, and a message that resumes one |
 | any other `pretooluse…` or `posttooluse…` word | **blocks** the tool call, with the reason on stderr |
 | any other word | exits 1 with the reason on stderr, and blocks nothing |
 
@@ -27,16 +36,16 @@ the Bash guard as `-c hooks.<Event>=…` flags. Both are for that session alone;
 would make the session carry on instead of ending, so every failure on a reporting hook is a
 silent exit 0 and the window keeps the last state it was told.
 
-**A tool hook this version cannot answer blocks, and that is deliberate.** Refusing a tool
-call is the only safe thing a program that checked nothing can do; answering `allow` for a
-guard it has not got would be a hole that looks like a guard. That covers the guard on the
-`Read` and `Grep` tools, the guard on writes into charter's own state, and the `PostToolUse`
-handlers, none of which this version has yet.
+**A tool hook word this binary does not know blocks, and that is deliberate.** Refusing a
+tool call is the only safe thing a program that checked nothing can do; answering `allow`
+for a guard it has not got would be a hole that looks like a guard. Every word the plugin
+wires is answered, so this only ever meets a word nobody has invented yet.
 
 ## The guards
 
-These are what `charter hook pretooluse` answers on a `Bash` call. Every one of them
-**denies**. None of them asks: charter holds no nudge on the Bash tool.
+These are what `charter hook pretooluse` answers on a `Bash` call, and the two guards on the
+file tools beside it. Every one of them **denies**. None of them asks: charter holds no nudge
+on the Bash tool.
 
 The guards about the shell itself (the secret leak and the two substitution guards) run in
 any directory. The ones whose subject is a control plane (one credential, the two plane-root
@@ -70,8 +79,7 @@ rule while one who reads a bare refusal files an issue.
   lines is denied wherever the reader on the line stands — it is the command that opens the
   `<<`, and its pipeline, that decide, not the first word. A shell inside a **loop or
   conditional** the body is piped into (`cat <<'EOF' | while read l; do eval "$l"; done`) counts,
-  and an executor is still seen when it stands behind ANSI-C `$'…'` quoting
-  ([#1086](https://github.com/diazoxide/charter/issues/1086)). **The pipeline is followed across
+  and an executor is still seen when it stands behind ANSI-C `$'…'` quoting. **The pipeline is followed across
   lines**: a trailing `|` continues onto the command after the heredoc body (`cat <<'EOF' |`
   … `EOF` … `bash`), and a backslash-newline splices before it, so the downstream shell is
   seen either way. **Newlines, quotes and comments are read as bash reads them across lines**:
@@ -79,18 +87,17 @@ rule while one who reads a bare refusal files an issue.
   spliced into the next line, and — when the command cannot be tokenised at all — it is still cut
   into lines on the newlines bash makes a boundary (not one inside an unclosed quote, not one a
   live backslash spliced away) rather than collapsed on whitespace, so a read on the line after a
-  `cd` is still seen ([#1082](https://github.com/diazoxide/charter/issues/1082),
-  [#1086](https://github.com/diazoxide/charter/issues/1086)). A **quoted** heredoc fed only to a
+  `cd` is still seen. A **quoted** heredoc fed only to a
   reader (`cat <<'EOF'`) is stdin data: its body is dropped, so a document naming these paths
-  is not refused as a read of them ([#258](https://github.com/diazoxide/charter/issues/258)).
+  is not refused as a read of them.
   That body ends where bash ends it: `<<'EO'F`, `<<"EO"F` and `<<E\OF` are all heredocs whose
   delimiter is `EOF`, because quotes are removed per character and the pieces join. A body whose
   terminator never arrives is not dropped at all, since that is what a misread delimiter looks
-  like ([#975](https://github.com/diazoxide/charter/issues/975)).
+  like.
   A **commit message on stdin** is the same data on the same terms: the quoted body of
   `git commit -F -`, `-F-`, `--file=-` or `--file -`, git's global options before `commit`
   included, is dropped when no executor is in its pipeline, so a message describing charter's
-  own layout is not refused ([#997](https://github.com/diazoxide/charter/issues/997)). Any
+  own layout is not refused. Any
   spelling of `--edit` keeps it visible, because git hands the message to the editor and
   `core.editor=sh` runs it; so does a redirection target spelled like the flag (`> -F-`), which
   leaves the heredoc to the editor's stdin. The recogniser is narrow on purpose, and each
@@ -101,7 +108,7 @@ rule while one who reads a bare refusal files an issue.
   A **PR or issue body on stdin** is data on the same terms: the quoted body of
   `gh pr create`, `gh pr comment`, `gh issue create` or `gh issue comment` given
   `--body-file -`, `--body-file=-`, `-F -` or `-F-` is dropped when no executor is in its
-  pipeline ([#1070](https://github.com/diazoxide/charter/issues/1070)). Before that, one
+  pipeline. Before that, one
   apostrophe in a body left the call unparseable, the body's words became operands of a
   `| tail -1` after it, and two neighbours such as "`~`." and "Charter" joined into `.Charter`
   and were refused as a vault read. `-e`, `--editor` and a short cluster holding `e` keep the
@@ -116,8 +123,7 @@ rule while one who reads a bare refusal files an issue.
   and `gh api --input <path>` / `--field key=@<path>`) READS that file and uploads it to the
   forge — worse than printing it, because the value lands on the forge. `gh` is not a printer
   and so is not in the reader allowlist, but these flags name a file it opens, so their operand
-  goes through the same vault check a reader's does
-  ([#1086](https://github.com/diazoxide/charter/issues/1086)). An ordinary body file
+  goes through the same vault check a reader's does. An ordinary body file
   (`-F notes.md`) and `gh api -f/--raw-field key=@path` (a literal string, not a file) stay
   allowed. A release ASSET named positionally (`gh release create v1 <path>`) is uploaded too
   and is not covered here — a separate finding, not this flag check.
@@ -131,16 +137,19 @@ rule while one who reads a bare refusal files an issue.
   `.`/`..` segments and letter case — so `.charter//vaults/db.json`,
   `.charter/./vaults/db.json` and `.CHARTER/vaults/db.json` all answer the same as the
   plain form. Two things it still cannot know. A *different* path holding the same bytes: a
-  vault registered outside `.charter/`, a file `charter secret cp` wrote to a path you
-  named, or a symlink. And anything a **shell** does to the operand after the hook has
+  vault registered outside `.charter/`, a copy of a vault at a path you named, or a symlink. And anything a **shell** does to the operand after the hook has
   answered — a glob (`cat .charter/vault?/db.json`), a variable (`V=…; cat $V`), a quoted
   substitution, brace or tilde expansion. The hook runs on the command line, never on what
   `sh` turns it into, so each of those is `cat` on the same inode and allowed. **What it
-  does not catch is written down** — see *Where the secret-leak guard stops*, below, and
-  [SECURITY.md](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/SECURITY.md) for why that is the honest scope rather than a defect.
+  does not catch is written down** — see *Where the secret-leak guard stops*, below, for
+  why that is the honest scope rather than a defect.
 - **Vault read.** The same invariant on the `Read` and `Grep` tools, which never reach the
-  Bash matcher. This version does not answer that hook yet, so it blocks those calls rather
-  than judging them (see *What this version answers*).
+  Bash matcher (`charter hook pretooluse-read`). A `Read` or `Grep` naming a vault path is
+  refused, and so is a `Grep` that would walk into the plane's state directory — one with no
+  path searches the directory it stands in, which is the commonest spelling of that walk —
+  unless its `glob` selects nothing in there. Like the leak guard it runs in any directory,
+  because `$CHARTER_HOME` can put a real vault within reach of one that holds no
+  `charter.toml`.
 - **Plane-root branch move.** The plane is not a work tree (ADR 0008); a branch switch there
   is almost always meant for a clone. `--detach` counts — with an operand, without one, and
   with the plane's own default branch as the operand, which is the one spelling that used to
@@ -169,8 +178,7 @@ rule while one who reads a bare refusal files an issue.
   is the fix for `git -C ../../.. checkout <branch>` reaching the root from a clone — and
   the three options that name a repository without naming a directory to stand in:
   `--git-dir`, `--work-tree` and their `GIT_DIR` / `GIT_WORK_TREE` environment spellings,
-  attached or separated, composing with `-C`
-  ([#477](https://github.com/diazoxide/charter/issues/477)). The cwd is a subject of every
+  attached or separated, composing with `-C`. The cwd is a subject of every
   git command, including one that names a `--work-tree` elsewhere: with no `--git-dir`, git
   discovers the repository from the cwd, so the refs that move are the cwd's. And *which
   repository a `--git-dir` belongs to* is asked of the filesystem rather than of the string,
@@ -185,17 +193,14 @@ rule while one who reads a bare refusal files an issue.
   invocation-derived subject that costs a disk read, at 13–65 µs, stated in
   charter's git-config reader along with the routes it declines: `git -c core.worktree=…` on the
   command line (git ignores it, so it reaches nothing), `include`/`includeIf`, and the
-  global and system configs
-  ([#504](https://github.com/diazoxide/charter/issues/504)). A `-C`
+  global and system configs. A `-C`
   counts as git's
   change-directory global only **before the subcommand**, which is the only position git
   reads one in — so `git switch -C <branch>`, where `-C` is `switch`'s own `--force-create`,
-  is the branch creation it is rather than a directory called `<branch>`
-  ([#483](https://github.com/diazoxide/charter/issues/483)). Every one of those is a row in
+  is the branch creation it is rather than a directory called `<branch>`. Every one of those is a row in
   the guard's corpus, crossed with the commands rather than listed beside them. The walk also carries the **environment a command
   line establishes for its later segments**, so `export GIT_DIR=<plane>/.git && git checkout
-  <branch>` reaches the same denial the attached `GIT_DIR=… git …` does
-  ([#496](https://github.com/diazoxide/charter/issues/496)) — as do `declare -x`/`typeset
+  <branch>` reaches the same denial the attached `GIT_DIR=… git …` does — as do `declare -x`/`typeset
   -x`, `GIT_DIR=…; export GIT_DIR`, and a bare assignment under `set -a`. A bare
   `GIT_DIR=…;` segment on its own is *not* one of them, because a shell exports nothing
   there. That environment only ever grows: `unset` and `export -n` are not modelled, since
@@ -210,8 +215,7 @@ rule while one who reads a bare refusal files an issue.
   commits that are already pushed all run untouched. It clears itself — `charter save` lands
   the commits and the same command is allowed. It follows **aliases** exactly as the branch
   guard does — `wipe = reset --hard` makes `git wipe origin/main` the same command, and so
-  does `git -c alias.z='reset --hard origin/main' z`
-  ([#467](https://github.com/diazoxide/charter/issues/467)) — and shares every route above,
+  does `git -c alias.z='reset --hard origin/main' z` — and shares every route above,
   so `git --git-dir=<plane>/.git reset --hard <ref>` from a clone is refused too.
 - **One credential.** SSH to a forge, `GIT_SSH_COMMAND`, `-S`/`--gpg-sign`, and the
   `core.sshCommand` family that reaches the same transport by another road (`-c`,
@@ -219,18 +223,11 @@ rule while one who reads a bare refusal files an issue.
   expressible as a pattern and stays in the hook anyway, so it can explain itself — see
   [git-policy.md](git-policy.md) and ADR 0014.
 - **Release floor.** A run the harness reports as `bypassPermissions` may not create a tag,
-  push tags, `gh release create` / `gh pr merge`, or **`charter change land`**.
+  push tags, or `gh release create` / `gh pr merge` (and glab's equivalents).
   `bypassPermissions` means *stop asking me*, not *stop knowing things*, and a published
-  version number can never be reused.
-
-  `charter change land` is here because it merges one member of a cross-repo change into a
-  repository, which is the same act `gh pr merge` is — and the project's line already runs
-  between *opening* a request and *merging* one (`gh pr create` is deliberately not on this
-  list). The split is attended versus unattended: attended, an agent may land one member,
-  because that is the merge the standing rule already permits for a single repo. Every other
-  `charter change` verb — `show`, `list`, `create`, `add`, `drop`, `push`, `revert` — is
-  untouched in every mode. See [changes.md](changes.md) and
-  [ADR 0020](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0020-there-is-no-cross-repo-merge-loop.md).
+  version number can never be reused. The line runs between *opening* a request and
+  *merging* one: `gh pr create` is deliberately not on this list. The floor also refuses the
+  spelling `charter change land`, a cross-repo landing command this version does not have yet.
 
 - **Forge body substitution.** A `gh`/`glab` command that publishes prose — `issue
   create|comment|edit`, `pr create|comment|edit|review`, `release create|edit`, `gist
@@ -245,8 +242,7 @@ rule while one who reads a bare refusal files an issue.
   Inside double quotes a backtick is command substitution, and a body is the one argument
   where that collides with markdown: writing a code span and writing a shell command are
   the same character. An agent filing an issue hit this and published sixty-four
-  environment variables — vault tokens included — into a public body
-  ([#703](https://github.com/diazoxide/charter/issues/703)). Nineteen other issues filed
+  environment variables — vault tokens included — into a public body. Nineteen other issues filed
   the same night used the same shape and were harmless, because the backticked text was not
   a runnable command; the pattern was wrong in all twenty.
 
@@ -261,8 +257,7 @@ rule while one who reads a bare refusal files an issue.
   that a credential stays off a forge. Three limits follow from that
   and are stated rather than left to be found: a **`--body-file` whose file already holds
   the text** is not covered (nothing expands on that path, so there is no shape to see);
-  **`git commit -m "… `x` …"`** is out of scope
-  ([#711](https://github.com/diazoxide/charter/issues/711)); and the check is scoped to the
+  **`git commit -m "… `x` …"`** is out of scope; and the check is scoped to the
   **whole Bash call**, not to the
   body argument, so `cd "$(git rev-parse --show-toplevel)" && gh pr create --body-file b.md`
   is refused as well. Narrowing that means deciding which argument a substitution lands in,
@@ -271,13 +266,13 @@ rule while one who reads a bare refusal files an issue.
 
   The commit-message limit is worth its own paragraphs, because the obvious reason for it is
   wrong and the real one took a measurement. It is **not** that a commit matters less. On
-  the axis #703 turns on — *can this be undone* — a commit message is **worse** than an
+  the axis the forge case turns on — *can this be undone* — a commit message is **worse** than an
   issue body: a body is replaced in one call, while a pushed commit needs a history rewrite,
   and a rewrite reaches neither forks nor existing clones nor the forge's caches. Visibility
   is not reversibility.
 
   **The commit surface has since been enumerated**, against real `git … --help` output
-  rather than recalled, so the gap #711 opened with is closed. These write a message: `commit`
+  rather than recalled, so the gap this limit opened with is closed. These write a message: `commit`
   (`-m`, which repeats and concatenates; `-F`; `-t`; `-C`/`--reuse-message`;
   `-c`/`--reedit-message`; `--squash`; `--fixup`), `tag` (`-m`, `-F`), `merge` (`-m`, `-F`),
   `notes add|append|edit` (`-m`, `-F`, `-C`, `-c`) and `stash push|store` (`-m`). `revert`
@@ -298,10 +293,9 @@ rule while one who reads a bare refusal files an issue.
   clone-commit nudge outright rather than narrowing it (see *What charter stopped asking*).
   Exempting `$(cat <<'QUOTED')` by name
   would mean the guard deciding which substitutions are *safe* rather than which are *live*,
-  and a parser that gets that wrong fails open. `charter save`, `charter workspace save -m`
-  and `charter workspace rename -m` write commit messages too, so they are out for the same
-  reason rather than by oversight. `git commit` is therefore a **stated limit, not an open
-  question** ([#711](https://github.com/diazoxide/charter/issues/711)).
+  and a parser that gets that wrong fails open. `charter save <message>` writes a commit
+  message too, so it is out for the same reason rather than by oversight. `git commit` is therefore a **stated limit, not an open
+  question**.
 
   **What it does not reach, checked rather than assumed.** The guard matches a
   `(tool, noun, verb)` triple, so every route that publishes without spelling one is
@@ -326,8 +320,7 @@ rule while one who reads a bare refusal files an issue.
   and its remedy is plain `gh`/`glab` usage — the same reason the secret-leak guard is
   ungated.
 
-- **charter's own text substitution.** The same rule on charter's own text-taking commands
-  ([#778](https://github.com/diazoxide/charter/issues/778)). The guard above covers somebody
+- **charter's own text substitution.** The same rule on charter's own text-taking commands. The guard above covers somebody
   else's tools; these persist prose that this plane commits and pushes, so the same defect
   reaches a public repository by an indirect route:
 
@@ -336,30 +329,26 @@ rule while one who reads a bare refusal files an issue.
   charter persona remember "the marker is appended to \`pending\` each pass"  # allowed
   ```
 
-  That is not a constructed example. It happened while #710's own findings were being
+  That is not a constructed example. It happened while a guard review's findings were being
   written up: zsh ran the word, printed `command not found`, spliced its empty output, and
   the saved memory read *"appending to  each pass"* with the word silently gone — into
   `personas/_shared/memory/`, which is committed and pushed.
 
-  **The rows, verified against `charter`'s own parser rather than its rendered help:**
-  `persona remember|log`, `workspace remember|note|todo|vision` (and the `ws` alias),
-  `worktree abandon` (`wt`), `change create|drop` — whose `--why` is written into every
-  request body by `charter change push` — and `report bug|gap`, whose text
-  `charter report send` publishes as a **public** issue on charter's own tracker. The line
-  for inclusion is the one that keeps `gh pr merge --body` out above: the free text has to be
-  required or the primary operand, and what holds it has to be read back as prose. So
-  `workspace create --vision`, `workspace snapshot --description` and
-  `persona create --role` are outside it, where the prose is a secondary attribute of
-  creating a thing.
+  **The rows:** `persona remember`, `workspace remember|note|todo|vision` (and the `ws`
+  alias). The list also holds the spellings of text-taking commands this version does not
+  have yet — `persona log`, `worktree abandon` (`wt`), `change create|drop` and
+  `report bug|gap` — so the rule is already in place when those commands arrive.
+  The line for inclusion is the one that keeps `gh pr merge --body` out above: the free text
+  has to be required or the primary operand, and what holds it has to be read back as prose.
+  So `workspace create --vision` and `workspace snapshot --description` are outside it, where
+  the prose is a secondary attribute of creating a thing.
 
   **The remedy is not the forge guard's, and that took measuring.** Of the 284 committed
   memory bodies on `main`, **221 contain an apostrophe** — and *all nine* of the
   backtick-carrying ones do — so "single-quote it", the obvious answer, fails on exactly the
   text this refuses. **Backslash-escape each backtick** instead: inside double quotes
-  `` \` `` is a literal backtick and the apostrophes keep working. `report bug|gap`
-  additionally takes `--from-file` and `--stdin`, which is `--body-file` by another name;
-  the memory commands have no file input, so the denial names a flag only where one exists.
-  And if you *meant* to interpolate a computed value, compute it in a **separate** Bash call
+  `` \` `` is a literal backtick and the apostrophes keep working. The memory commands have
+  no file input, so the denial names no flag. And if you *meant* to interpolate a computed value, compute it in a **separate** Bash call
   and pass `"$VAR"` — a parameter expansion is not a substitution, and a shell does not
   re-expand a parameter's value.
 
@@ -374,8 +363,7 @@ rule while one who reads a bare refusal files an issue.
   single-line double-quoted operand is a command that was going to corrupt its own text.
 
   **What it does not reach**, on the same terms as the guard above: `python3 -m charter …`
-  is covered, because that is how `CONTRIBUTING.md` says to run a checkout, but a shell
-  wrapper (`sh -c 'charter …'`), an alias, and a program name arriving in a variable are
+  is covered, but a shell wrapper (`sh -c 'charter …'`), an alias, and a program name arriving in a variable are
   not — nor is `python3 -mcharter`, a fail-open hole named in the guard rather than closed
   with a short-option parser inside it. It reads the first two words after `charter`, which
   is exact only because charter's root parser has no option that takes a value — a test
@@ -394,8 +382,15 @@ rule while one who reads a bare refusal files an issue.
   | a call from a **sub-agent**: the payload carries `agent_id` | You are talking to the parent chat, and what the sub-agent found goes back there anyway. Measured on Claude Code 2.1.268 and codex-cli 0.147.0: a sub-agent's Bash call carries `agent_id` and a main-conversation call does not. A harness nobody has measured is not read this way. |
   | an **unattended run**: `permission_mode: bypassPermissions` | Nobody is there to answer the prompt. The refusal names `charter ws todo` as the way to keep the work. |
   | a **spelling** of `charter handoff …` it can recognise as other than the exact one: a wrapper, a prefix, a path or `python3 -m charter`; a word quoted or escaped; a word that still reads `charter` or `handoff` once its quoting, expansion and glob characters are removed (`$'handoff'`, `${x:-handoff}`, `{handoff,}`), or that `handoff` matches as a glob (`hando?f`); a gap other than one ASCII space before or after `handoff`, a line continuation included | On Claude Code 2.1.268, `python3 -m charter handoff`, a path to charter, `charter 'handoff'`, `charter $'handoff'`, `charter {handoff,}` and `charter hando?f` ran with no prompt. A `FOO=1` prefix, an `env` wrapper, a quoted `charter`, two spaces and a tab were matched there and are refused anyway, so a model has one spelling to follow. The first two words are judged as written, never as a shell would rewrite them — which is also why a brace split inside a word (`{hand,}off`), an ANSI-C escape (`$'\x68andoff'`) and a parameter default split across one (`hand${x:-}off`) are not recognised; the first two of those ran with no prompt too. |
-  | a handoff **inside a string or a heredoc a shell runs**, one level deep: `eval`, or `sh`, `bash`, `zsh`, `dash`, `ksh` with `-c` (alone or in a cluster such as `-lc`) or reading a heredoc body (`bash <<'EOF'`) | The rule reads the outer command: on Claude Code 2.1.268, a handoff inside `eval '…'`, `bash -c '…'` or a `bash <<'EOF'` body ran with no prompt. The refusal says to run it directly. Which heredoc bodies a shell runs is [#974](https://github.com/diazoxide/charter/pull/974)'s answer, the same one the leak guard uses, so a brief is never one of them. |
+  | a handoff **inside a string or a heredoc a shell runs**, one level deep: `eval`, or `sh`, `bash`, `zsh`, `dash`, `ksh` with `-c` (alone or in a cluster such as `-lc`) or reading a heredoc body (`bash <<'EOF'`) | The rule reads the outer command: on Claude Code 2.1.268, a handoff inside `eval '…'`, `bash -c '…'` or a `bash <<'EOF'` body ran with no prompt. The refusal says to run it directly. Which heredoc bodies a shell runs is the same answer the leak guard uses, so a brief is never one of them. |
   | a **stdin** other than one quoted heredoc on the handoff's own segment: an unquoted `<<BRIEF`, a pipe, `< file`, `<<<`, no heredoc, two heredocs, or a live `$(…)` anywhere in the call | The prompt has to show the exact text the new chat is sent. An unquoted heredoc expands before charter reads it, a file shows as a path, and with two heredocs bash hands the command only the last body (GNU bash 3.2.57). |
+
+  **Text that only mentions a handoff is not one.** A heredoc body a reader takes (`cat > f
+  <<'EOF'`), a quoted argument (`grep 'charter handoff' docs`), an `echo`'s words, and the
+  later lines of a quoted string that spans lines (a `git commit -m '…'` message, a
+  `python3 -c "…"` script) are data, and are not searched for a handoff. What a shell runs is:
+  a `-c` string, `eval`'s words, and a heredoc fed to a shell. Where a multi-line quote closes
+  partway along a line, the rest of that line is a command again and is judged as one.
 
   **Which heredoc bodies A7 searches.** A body is searched when its OWN opener is a shell or an
   interpreter (`bash`, `sh`, `python3`, `perl`, one of those behind `env`/`nohup`, or `ssh`,
@@ -419,13 +414,11 @@ rule while one who reads a bare refusal files an issue.
 
   That scan does **not honour `#` comments**: a `'` or `"` inside one still opens a quote, so
   `echo #' && bash <<'ZZ'` reads the rest of the line as quoted, the real opener is never seen,
-  and the handoff in that body runs with no prompt — measured identical on this branch and on
-  2b59d8a.
+  and the handoff in that body runs with no prompt.
 
   An **ANSI-C word** (`$'don\'t'`) is read correctly by that scan, but the shared lexer cannot
   parse one, so a call carrying it keeps every heredoc body visible to the secret-leak guard and
-  prose in a brief on such a line can be refused as a read — measured identical on this branch,
-  on 2b59d8a and on main. For the leak guard that errs toward refusing; it is not a claim about
+  prose in a brief on such a line can be refused as a read. For the leak guard that errs toward refusing; it is not a claim about
   A7, whose own mis-reading of `$'` inside `"…"` erased real openers until it was fixed.
 
   **The brief is data to the secret-leak guard.** The body of a heredoc on the handoff's own
@@ -433,15 +426,14 @@ rule while one who reads a bare refusal files an issue.
   reader's is. A brief that names `.charter/vaults/…` in prose, holds one apostrophe, or
   opens a line with a reader (`cat .charter/vaults/dev.json would print it, so never run
   that.`) is not refused as a read. Only that body: in `charter handoff beta && bash <<'EOF'` the body belongs
-  to `bash` and is read as commands. A refused handoff leaves `routing: require`'s pending mark
-  in place, and its trace row carries the refusal's name and no part of the command.
+  to `bash` and is read as commands.
 
   Gated on a control plane, unlike the two substitution guards above: this is a policy about a
-  plane's chats, not a fact about the shell. **What it does not reach:** opencode's plugin
-  builds a payload with neither `agent_id` nor `permission_mode`, so there the `ask` rule is
-  the whole gate. Codex has no command-pattern permissions, so an attended Codex chat's handoff
-  runs without a prompt, and `codex exec --approve-for-me` reports `permission_mode: default`,
-  so it is not refused as unattended. `charter doctor`'s `handoff gate` row names both gaps.
+  plane's chats, not a fact about the shell. **What it does not reach:** Codex has no
+  command-pattern permissions, so an attended Codex chat's handoff runs without a prompt, and
+  `codex exec --approve-for-me` reports `permission_mode: default`, so it is not refused as
+  unattended. `charter doctor` does not check the handoff gate yet, so nothing names that gap
+  on a plane but this page.
 
   **What it does not see, on any harness.** It refuses the spellings of a handoff it can
   recognise, so a chat working in good faith keeps the prompt in front of its handoff; it reads a
@@ -472,17 +464,31 @@ rule while one who reads a bare refusal files an issue.
   a Bash rule "isn't a security boundary around the program"
   ([What a Bash rule doesn't match](https://code.claude.com/docs/en/permissions#bash-rule-limits)).
 
-- **A hand-written state file.** A `Write` or `Edit` into charter's state directory
-  (`.charter/`, or `$CHARTER_HOME`). This version does not answer that hook yet, so it
-  blocks those calls rather than judging them.
+- **A hand-written state file.** A `Write`, `Edit` or `MultiEdit` into charter's state
+  directory (`.charter/`, or `$CHARTER_HOME`), which holds the persona tool gate's frozen
+  ceiling and the persona pointers (`charter hook pretooluse-edit`). The target is resolved
+  through links before it is compared. Gated on a control plane.
 
-This version has no allowance path: a persona's declared `tools:` do not skip the harness's
-permission prompt. Every denial above applies, and nothing is smoothed.
+## Two answers that are not denials
+
+- **The persona tool gate.** When nothing above refused a `Bash` call, charter asks whether
+  the active persona's `tools:` declares the program, and if it does answers `allow`, so the
+  harness does not prompt. It never denies; the worst it can do is leave the prompt. It
+  declines a command the shell would still rewrite (`$`, `~`, `*`, `;`, `|`, `>` and the
+  like), an interpreter or wrapper (`bash`, `python`, `env`, `sudo`, `xargs`, `find`,
+  `make`), an argument that names another program, a destructive subcommand, and anything
+  that touches charter's control surface. The ceiling is frozen at `SessionStart`: a session
+  that edits its own persona's `tools:` can narrow the grant mid-session, never widen it.
+  Gated on a control plane.
+- **A dispatch beside a running agent.** A `Task`/`Agent` call that sends out a persona
+  declaring `dispatch-isolation: worktree` while another dispatched agent is still running is
+  **asked** about, because the two share one working tree and their edits interleave. In an
+  unattended run there is nobody to ask, so the note is given and the call goes ahead. Gated
+  on a control plane.
 
 ## Where the secret-leak guard stops
 
-SECURITY.md gives charter's position and this section is the local, specific version of it:
-**guard rails, not guarantees — a guard against mistakes, not an attacker with shell access
+charter's position is **guard rails, not guarantees — a guard against mistakes, not an attacker with shell access
 as your user.** The secret-leak guard is worth having because an agent reaching for a vault
 file by name is a real and frequent event, and the guard catches those spellings reliably.
 It is not a sandbox, and the list above is not a claim of completeness.
@@ -500,8 +506,8 @@ was defeated by the next spelling — `$( … )`, `env -C`, a quoted `)`, a bare
 fd digit. That pattern is the finding. Deciding what a shell will execute, without executing
 it, is not winnable in a tokeniser, so the honest move is to say what is open:
 
-- **a quoted command substitution** — the example above, and `` "`cat <vault>`" ``,
-  `"$(<vault>)"`, `"$(charter secret get v k --reveal)"`. Two command families are the
+- **a quoted command substitution** — the example above, and `` "`cat <vault>`" `` and
+  `"$(<vault>)"`. Two command families are the
   exception, and they are an exception for a different reason rather than a fix for this
   one: a `gh`/`glab` command that publishes prose, and a charter command that persists it,
   are refused whenever a live substitution stands on the line — so
@@ -521,15 +527,17 @@ it, is not winnable in a tokeniser, so the honest move is to say what is open:
   runtime, a copy followed by a read of the copy.
 
 There is no second line of defence behind it: nothing scans Bash *output*. What actually
-makes a vault not worth reading is the provider — `1password` and `reference` keep the value
-in a system built for custody and resolve it on demand, so there is no plaintext on disk for
-any of the above to print. That is the control; the hook is the guard rail.
+makes a vault not worth reading is keeping the value in a system built for custody and
+resolving it on demand, so there is no plaintext on disk for any of the above to print. That
+is the control; the hook is the guard rail. The `charter vault` and `charter secret` commands
+that manage vaults are not in this version yet ([secrets.md](secrets.md)).
 
 ## A line that looks like a secret, in memory or a brief
 
-A second guard reads text rather than commands. In this version two places ask it the same
-question: `charter save` before it commits a file, and `charter handoff` before it sends a
-brief. Each answer is a **kind**, never the text it matched: an AgentMail key, a
+A second guard reads text rather than commands. Three places ask it the same question:
+`charter save` before it commits a memory or ref file, `charter handoff` before it sends a
+brief, and the `PostToolUse` hook after a memory or ref is written, which warns rather than
+refuses. Each answer is a **kind**, never the text it matched: an AgentMail key, a
 JWT, a PEM private key, an AWS access key, or a **credential assignment**, which is a
 `password`, `passwd`, `api_key`, `apikey`, `secret` or `token` followed by `:` or `=` and six
 non-blank characters.
@@ -537,11 +545,13 @@ non-blank characters.
 **Naming where a credential lives is not a credential assignment.** The brief refusal tells
 you to do exactly that, and the rule used to refuse the answer whenever it was one word:
 `api_key = vault:forge/api-token` and ``token: `charter secret get forge token` `` were both
-refused as credentials ([#985](https://github.com/diazoxide/charter/issues/985)). A value in
+refused as credentials. A value in
 one of the four spellings charter uses is now let through, with at most a quote or backtick
 on each side: `vault:<vault>/<key>`, `charter secret get <vault> <key>`, and the two URIs a
-`reference` vault stores, `op://<vault>/<item>/<field>` and `vault://<path>#<field>`.
-Because that happens in the one classifier, both places give the same answer. **The
+`reference` vault stores, `op://<vault>/<item>/<field>` and `vault://<path>#<field>`. (The
+`charter secret` command is not in this version yet; its spelling is recognised all the same,
+because a plane's text already uses it.) Because that happens in the one classifier, every
+place gives the same answer. **The
 whole value, to the end of its line, has to be the reference, and its names have to look
 like names**. No name may start with a prefix a credential issuer puts on its tokens (`ghp_`,
 `github_pat_`, `glpat-`, `sk_live_`, `sk-`, `xoxb-`, `AIza`, `pypi-`, `npm_`, `hf_`, `AKIA`
@@ -600,8 +610,7 @@ Some guards name a narrower move first, and it is usually the one you want:
   heredoc. This one is rarely wrong about the shape and often wrong about the intent: the
   body you meant is exactly the body you get, and it is the shorter line to type anyway.
 - **charter's own text substitution** — backslash-escape each backtick, which is one
-  character and leaves the apostrophes in your prose working. Where the command takes a
-  file (`report bug|gap`), `--from-file` or `--stdin` keeps the text out of argv entirely.
+  character and leaves the apostrophes in your prose working.
 - **Release floor** — re-run the step **attended**. This is a mode, and it is yours to set.
 - **One credential** — `charter git-policy --apply` configures every clone for the token
   transport, which is what most denials of it are actually asking for.
@@ -621,15 +630,16 @@ commits, say. Switching the guard off locally hides that; the fix belongs in the
 
 **The thing that is not an override**, named here so nobody finds it by accident and
 believes they found the switch: removing charter's hooks from `.claude/settings.json`, or
-disabling the plugin. That takes out every guard, both injections and every tally together,
+disabling the plugin. That takes out every guard, the briefing and every log together,
 because one of them was wrong once. It is an uninstall.
 
 ## What is not injected, and not counted
 
-This version's `SessionStart` injects no context: no persona role, no memory digest, no
-brief. `UserPromptSubmit` carries no commitment gate and no roster. And no hook keeps a
-tally of dispatches, routing advice, handoffs or skill invocations. Each of those is a
-feature this version does not have yet, not one that ran and found nothing.
+`SessionStart` briefs the session (see *What this version answers*), but not with the brief
+of a handed-off chat that reopened empty. `UserPromptSubmit` injects nothing: no commitment
+gate, no roster and no placement advice. The dispatch and skill logs are kept; no hook keeps
+a tally of routing advice or handoffs, and no trace of verdicts is written. Each of those is
+a feature this version does not have yet, not one that ran and found nothing.
 
 ## When a hook fails
 

@@ -152,29 +152,29 @@ pub const CHARTER_PROSE_ROWS: [(&str, &str, &str, Option<&str>); 11] = [
     (
         "change",
         "create",
-        "the change record's `why`, which `charter change push` writes into every request body \
-         on the forge",
+        "the change record's `why`, which would be written into every request body on the \
+         forge (`charter change` is not in this version yet)",
         None,
     ),
     (
         "change",
         "drop",
-        "the exclusion's `why`, which `charter change push` writes into every request body on \
-         the forge",
+        "the exclusion's `why`, which would be written into every request body on the forge \
+         (`charter change` is not in this version yet)",
         None,
     ),
     (
         "report",
         "bug",
-        "a report draft that `charter report send` publishes as a PUBLIC issue on charter's own \
-         tracker",
+        "a report draft, which would be published as a PUBLIC issue on charter's own tracker \
+         (`charter report` is not in this version yet)",
         Some("--from-file"),
     ),
     (
         "report",
         "gap",
-        "a report draft that `charter report send` publishes as a PUBLIC issue on charter's own \
-         tracker",
+        "a report draft, which would be published as a PUBLIC issue on charter's own tracker \
+         (`charter report` is not in this version yet)",
         Some("--from-file"),
     ),
 ];

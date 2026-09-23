@@ -75,10 +75,10 @@ The plugin is called `charter-app`. It carries every hook charter answers — th
 report a chat's state and the Bash guard, described in [hooks.md](hooks.md) — and the
 `handoff`, `working-in-a-clone` and `update` skills, which reach the model as
 `charter-app:<skill>`. It lives in `Contents/Resources/plugin` on macOS and
-`/usr/lib/charter/plugin` on Linux. A chat the app starts also turns the Python charter's
-`charter@charter` plugin off for itself, so a plane whose settings enable that plugin for your
-own terminal sessions does not give an app chat two sets of hooks; a `claude` you run in a
-terminal is untouched. A Codex chat gets charter's state hooks and Bash guard as `-c` flags on
+`/usr/lib/charter/plugin` on Linux. A chat the app starts also turns a plugin named
+`charter@charter` off for itself, so a plane whose settings enable an older charter plugin for
+your own terminal sessions does not give an app chat two sets of hooks; a `claude` you run in
+a terminal is untouched. A Codex chat gets charter's state hooks and Bash guard as `-c` flags on
 its command line, and Codex asks once to trust them. How each harness is armed is in
 [harnesses.md](harnesses.md#per-profile--armed-at-launch).
 
@@ -134,5 +134,6 @@ init --plane-is-this-repo`. That default is ADR 0035's, and charter-app spec dec
 GitLab, which nothing above installs and which must be authenticated.
 
 A chat runs a harness program, and charter does not install those either: `claude` for
-Claude Code, `codex` and `opencode` for theirs. `charter harness list` shows the profiles
-this plane offers; [harnesses.md](harnesses.md) is the rest.
+Claude Code and `codex` for Codex. Starting opencode chats is not in this version yet.
+`charter harness list` shows the profiles this plane offers; [harnesses.md](harnesses.md) is
+the rest.

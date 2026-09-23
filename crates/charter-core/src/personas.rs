@@ -337,17 +337,17 @@ pub fn name_refusal(root: &Path, name: &str) -> Option<String> {
         let file = def_path(root, name);
         if file.exists() {
             return Some(format!(
-                "persona '{name}' does not load from {} (see why: charter persona lint {name})",
+                "persona '{name}' does not load from {} (its frontmatter does not parse)",
                 relative(file)
             ));
         }
         return Some(format!(
-            "no persona '{name}' (create it: charter persona create {name})"
+            "no persona '{name}' (add it: write personas/{name}/persona.md)"
         ));
     }
     let parent = ancestor_that_does_not_load(root, name)?;
     Some(format!(
-        "persona '{name}' inherits from '{parent}', which does not load from {} (see why: charter persona lint {parent})",
+        "persona '{name}' inherits from '{parent}', which does not load from {} (its frontmatter does not parse)",
         relative(def_path(root, &parent))
     ))
 }
@@ -597,15 +597,15 @@ mod name_tests {
         );
         assert_eq!(
             name_refusal(dir.path(), "nope").unwrap(),
-            "no persona 'nope' (create it: charter persona create nope)"
+            "no persona 'nope' (add it: write personas/nope/persona.md)"
         );
         assert_eq!(
             name_refusal(dir.path(), "broken").unwrap(),
-            "persona 'broken' does not load from personas/broken/persona.md (see why: charter persona lint broken)"
+            "persona 'broken' does not load from personas/broken/persona.md (its frontmatter does not parse)"
         );
         assert_eq!(
             name_refusal(dir.path(), "child").unwrap(),
-            "persona 'child' inherits from 'broken', which does not load from personas/broken/persona.md (see why: charter persona lint broken)"
+            "persona 'child' inherits from 'broken', which does not load from personas/broken/persona.md (its frontmatter does not parse)"
         );
     }
 
@@ -892,7 +892,7 @@ mod detail_tests {
 
         assert_eq!(
             details(dir.path(), "nope").unwrap_err(),
-            "no persona 'nope' (create it: charter persona create nope)"
+            "no persona 'nope' (add it: write personas/nope/persona.md)"
         );
         assert_eq!(
             details(dir.path(), "Bad").unwrap_err(),

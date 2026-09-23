@@ -60,8 +60,7 @@ use crate::shellwrap::{self, base_lower};
 /// same no matter what matched, and that is how the tally came to hold 335 denials nobody could
 /// attribute (#289). The shape is the attribution; this is the prose.
 pub const SINGLE_CREDENTIAL_FIX: &str = "The control plane is **token-only**: git auth is each forge's own CLI token over HTTPS \
-     (`charter git-policy --apply` configures every clone; `charter save` / `charter workspace \
-     save` already use it). ";
+     (`charter git-policy --apply` configures every clone; `charter save` already uses it). ";
 
 /// `_GIT_SSH_ENV_RE`: `^GIT_SSH(?:_COMMAND)?=`, case-SENSITIVE as the Python's is — an
 /// environment variable name is, to every shell charter runs under.

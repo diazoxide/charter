@@ -8,7 +8,7 @@
 # NEVER commit this — it holds credentials.
 /.charter/
 
-# This machine's own harness permissions (`charter guard ask|allow --local`). Its committed
+# This machine's own harness permissions. Its committed
 # sibling `.claude/settings.json` is deliberately NOT ignored — that one is the team's.
 /.claude/settings.local.json
 

@@ -249,10 +249,10 @@ pub(super) fn charter_toml(d: &Doctor) -> Row {
             NAME,
             format!("[harness] default = \"{refused}\" is not a harness charter can launch"),
             format!(
-                "Bare `charter`'s profile selector marks no row for it and opens on the first \
-                 one that can run — which is also what a plane that declares no default gets, \
-                 so the key currently reads as absent. Name one of: {}, or any profile \
-                 charter.local.toml declares. `charter <profile>` is unaffected.",
+                "The app's new-chat picker marks no row for it and opens on the first one that \
+                 can run — which is also what a plane that declares no default gets, so the \
+                 key currently reads as absent. Name one of: {}, or any profile \
+                 charter.local.toml declares.",
                 LAUNCHABLE.join(", ")
             ),
         );
@@ -268,8 +268,8 @@ pub(super) fn charter_toml(d: &Doctor) -> Row {
     if arranges {
         return deferred::row(
             NAME,
-            "whether charter can draw this plane's [[frame.component]] arrangement is the \
-             tmux frame's question, which this charter does not check",
+            "this plane declares a [[frame.component]] arrangement, which arranges a tmux \
+             frame this charter does not have, so nothing reads it",
         );
     }
     if !d.has_plane {

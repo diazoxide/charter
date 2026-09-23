@@ -145,7 +145,11 @@ fn not_probed(root: &Path, p: &Profile, ignored: &IgnoreCheck) -> Option<(String
                  been shown",
                 state.as_str()
             ),
-            format!("charter {}", shown::readable(&p.name, usize::MAX)),
+            format!(
+                "start a chat on '{}' from the app's new-chat picker, which shows its command \
+                 and asks once",
+                shown::readable(&p.name, usize::MAX)
+            ),
         )
     })
 }

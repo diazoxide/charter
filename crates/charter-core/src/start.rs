@@ -82,6 +82,16 @@ pub const FOOTER_SHOW: &str = "show";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ready {
     pub program: String,
+    /// The rest of the profile's own `command`, after [`Self::program`] — the words the
+    /// operator wrote, which stand before anything charter adds.
+    ///
+    /// **Its own field because a profile's command is commonly a wrapper** (ADR 0022): for
+    /// `["ccs", "work"]` it is `["work"]`, the wrapper's own subcommand, and a flag put in
+    /// front of it is a flag handed to the wrapper rather than to the harness (M8.3).
+    pub command: Vec<String>,
+    /// Charter's own words — the new-session id or the resume — which follow the profile's
+    /// command and whatever the app arms the harness with ([`Self::command_line`]). A caller
+    /// may append after them (a handoff's positional first message is the last word).
     pub args: Vec<String>,
     /// The profile's environment, charter's own variables, and the persona — sorted, so two
     /// starts of one profile are the same launch.
@@ -92,6 +102,35 @@ pub struct Ready {
     /// The conversation this chat is now under — resumed, or the one charter just chose.
     pub session: Option<SessionId>,
     pub how: Reopened,
+}
+
+impl Ready {
+    /// Every argument after [`Self::program`], with `armed` — the arguments that arm the
+    /// harness for this session alone ([`crate::harness::StateHooks`]) — in their place.
+    ///
+    /// **The profile's whole command, then `armed`, then charter's own words.** The whole
+    /// command first because it is one command the operator wrote, and a wrapper reads its
+    /// own words before it hands the rest to the harness: `["ccs", "work"]` starts as
+    /// `ccs work --plugin-dir … --settings … --session-id …`, never
+    /// `ccs --plugin-dir … work`. Charter's words last, after the armed flags where they have
+    /// always stood: Codex resumes through a subcommand (`resume <id>`), and a handoff's
+    /// first message is positional.
+    ///
+    /// For a plain `["claude"]` or `["codex"]` the command is empty and this is the line it
+    /// always was: `armed`, then charter's words.
+    pub fn command_line(&self, armed: Vec<String>) -> Vec<String> {
+        Self::line(self.command.clone(), armed, self.args.clone())
+    }
+
+    /// [`Self::command_line`] from its three parts, for a caller that holds them apart — the
+    /// app's one place a session is opened, which also opens chats on no profile (an empty
+    /// `command`).
+    pub fn line(command: Vec<String>, armed: Vec<String>, charters: Vec<String>) -> Vec<String> {
+        let mut line = command;
+        line.extend(armed);
+        line.extend(charters);
+        line
+    }
 }
 
 /// Everything a chat needs to start, or the one sentence saying why it may not.
@@ -157,15 +196,12 @@ pub fn ready(start: &Start, root: &Path) -> Result<Ready, String> {
     let mut argv = crate::programs::resolve_argv(&profiles::expanded_command(profile, &home))
         .map_err(|gone| format!("{} Nothing was started.", gone.said()))?;
     let program = argv.remove(0);
-    // Charter's words first and the profile's own arguments after them, which is the order
-    // the Python launcher uses. It is not cosmetic: Codex resumes through a SUBCOMMAND, and
-    // a subcommand after a positional prompt is not the same command line at all.
-    let mut args = added;
-    args.extend(argv);
-
+    // The profile's own words stay together and in front; charter's go after them and after
+    // whatever arms the harness. [`Ready::command_line`] is where the order is decided.
     Ok(Ready {
         program,
-        args,
+        command: argv,
+        args: added,
         env: environment(profile, root, persona.as_deref(), start.show_footer),
         cwd: start.cwd.clone(),
         harness,

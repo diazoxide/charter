@@ -331,8 +331,11 @@ fn a_branch_name_that_resolves_to_another_branch_is_used_under_the_name_git_prin
             // CHARTER's refusal, which it can only produce by having resolved the name
             // itself and looked it up. Git's own error for the same input mentions `other`
             // too, so asserting on the name alone does not tell the two apart.
-            assert!(said.contains("Reuse it"), "charter looked it up: {said}");
-            assert!(said.contains("--branch other"), "{said}");
+            assert!(
+                said.contains("Pick another piece name"),
+                "charter looked it up: {said}"
+            );
+            assert!(said.contains("branch 'other' already exists"), "{said}");
         }
         Ok(added) => {
             assert_eq!(

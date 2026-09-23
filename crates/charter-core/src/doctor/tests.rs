@@ -828,7 +828,11 @@ fn a_declared_profile_nobody_approved_is_not_probed_and_says_so() {
         r.detail,
         "new, and not approved yet — charter asks before it runs a command it has not been shown"
     );
-    assert_eq!(r.hint, "charter claude-work");
+    assert_eq!(
+        r.hint,
+        "start a chat on 'claude-work' from the app's new-chat picker, which shows its command \
+         and asks once"
+    );
 }
 
 // ---- inventory ------------------------------------------------------------------------------

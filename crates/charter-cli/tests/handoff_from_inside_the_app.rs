@@ -114,14 +114,11 @@ fn minute_masked(text: &str) -> String {
     format!("{}{}<when>{}", &text[..start], " · ", &text[end..])
 }
 
-/// What `charter handoff alpha` printed from a chat with no app behind it BEFORE #204, and
-/// must go on printing. Written out rather than derived, so that a change to any word of it
-/// has to be made here too, on purpose.
-const WHAT_A_TERMINAL_IS_TOLD: &str = "✗ charter handoff: this `charter` is the desktop app's \
-binary, which has no frame to open a chat in the background of and no way to ask the app to \
-open one — nothing was opened.\n  Run this in a new terminal instead:\n  charter claude \
---workspace alpha '⟨handoff from chat 3 · workspace default · <when>⟩\\x0a\\x0a# Retry the \
-failed webhook deliveries\\x0a\\x0aThe queue is in workspaces/alpha/svc.\\x0a'\n";
+/// What `charter handoff alpha` prints from a chat with no app behind it. Written out rather
+/// than derived, so that a change to any word of it has to be made here too, on purpose.
+const WHAT_A_TERMINAL_IS_TOLD: &str = "✗ charter handoff: no charter app answered this call, so \
+nothing was opened. Open charter, then run this handoff again from a chat the app started — or \
+start a chat in workspace 'alpha' from the window and give it the brief.\n";
 
 #[test]
 fn a_chat_with_no_app_behind_it_is_told_exactly_what_it_was_told_before() {
@@ -253,11 +250,8 @@ fn an_app_that_refuses_gets_the_printed_command_and_its_reason() {
     assert_eq!(text(&out.stdout), "");
     assert_eq!(
         minute_masked(&text(&out.stderr)),
-        format!(
-            "{}  The app that started this chat was asked, and would not open one: chat 3 is \
-             not on a harness profile\n",
-            WHAT_A_TERMINAL_IS_TOLD
-        )
+        "✗ charter handoff: the charter app that started this chat was asked, and would not \
+         open one: chat 3 is not on a harness profile — nothing was opened.\n"
     );
 }
 
