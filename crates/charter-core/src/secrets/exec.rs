@@ -65,8 +65,12 @@ impl Drop for Cleanup {
 
 /// `_child_env`: this process's environment, minus every OTHER vault's declared identity
 /// variables. The vault being read keeps its own names.
-fn child_env(ctx: &Ctx, vault: &str) -> Vec<(OsString, OsString)> {
-    let doc = registry::load_registry(ctx).unwrap_or_default();
+///
+/// No fallback when the registry cannot be read: a fallback to the whole environment would
+/// quietly restore every other vault's credential to the child. (The registry was read a moment
+/// earlier to find this vault, so in practice this does not fail.)
+fn child_env(ctx: &Ctx, vault: &str) -> Result<Vec<(OsString, OsString)>, super::VaultError> {
+    let doc = registry::load_registry(ctx)?;
     let declared = registry::identity_vars(&doc);
     let own: Vec<String> = declared
         .iter()
@@ -78,12 +82,13 @@ fn child_env(ctx: &Ctx, vault: &str) -> Vec<(OsString, OsString)> {
         .flat_map(|(_, names)| names.iter())
         .filter(|n| !own.contains(n))
         .collect();
-    ctx.env
+    Ok(ctx
+        .env
         .vars()
         .iter()
         .filter(|(k, _)| !strip.iter().any(|s| k.as_os_str() == s.as_str()))
         .cloned()
-        .collect()
+        .collect())
 }
 
 fn set_var(env: &mut Vec<(OsString, OsString)>, name: &str, value: impl Into<OsString>) {
@@ -159,7 +164,13 @@ pub fn exec(ctx: &Ctx, req: &Request, io: &mut dyn Io) -> i32 {
         return 2;
     }
 
-    let mut env = child_env(ctx, &req.vault);
+    let mut env = match child_env(ctx, &req.vault) {
+        Ok(env) => env,
+        Err(e) => {
+            io.say(Say::Err(e.message));
+            return 1;
+        }
+    };
     let mut secret_values: Vec<String> = Vec::new();
     let mut key_names: Vec<String> = Vec::new();
     let mut env_names: Vec<String> = Vec::new();
