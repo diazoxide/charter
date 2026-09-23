@@ -1403,7 +1403,10 @@ mod tests {
     /// The guard hook's label, in the list `init`/`reinit` put it in.
     fn guard_label(root: &Path) -> (&'static str, bool) {
         if plugin_guards(root) {
-            (".claude/settings.json (plane-root guard already wired)", false)
+            (
+                ".claude/settings.json (plane-root guard already wired)",
+                false,
+            )
         } else {
             (".claude/settings.json (plane-root guard)", true)
         }
@@ -1620,10 +1623,13 @@ mod tests {
 
         let outcome = init(&at(&root, false), &plain());
 
-        assert_eq!(errs(&outcome), vec![match escape(".gitignore", &lands, "init") {
-            Say::Err(e) => e,
-            _ => unreachable!(),
-        }]);
+        assert_eq!(
+            errs(&outcome),
+            vec![match escape(".gitignore", &lands, "init") {
+                Say::Err(e) => e,
+                _ => unreachable!(),
+            }]
+        );
         assert_eq!(outcome.code, 1);
         assert_eq!(
             std::fs::read_to_string(outside.join("bashrc")).expect("the file"),
@@ -1753,7 +1759,10 @@ mod tests {
             outcome.said
         );
         assert_eq!(outcome.code, 1);
-        assert_eq!(std::fs::read_dir(&outside).expect("the directory").count(), 0);
+        assert_eq!(
+            std::fs::read_dir(&outside).expect("the directory").count(),
+            0
+        );
     }
 
     /// `cmd_init`'s malformed branch: `util.warn(f"{_settings_left_untouched(p)}\n
@@ -1794,8 +1803,7 @@ mod tests {
     impl ReadOnly {
         fn make(path: &Path) -> Option<Self> {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o555))
-                .expect("chmod");
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o555)).expect("chmod");
             let guard = ReadOnly(path.to_path_buf());
             let probe = path.join(".probe");
             if std::fs::write(&probe, "").is_ok() {
@@ -1973,7 +1981,9 @@ mod tests {
         if guard_created {
             added.push_str(&format!(", {guard}"));
         }
-        said.push(Say::Ok(format!("Reinitialized control plane → added {added}.")));
+        said.push(Say::Ok(format!(
+            "Reinitialized control plane → added {added}."
+        )));
         if !guard_created {
             said.push(Say::Info(format!("  already present: {guard}")));
         }
@@ -1994,8 +2004,7 @@ mod tests {
         let outcome = reinit(&at(&root, true));
 
         let mut created =
-            "workspaces/, .gitignore (/charter.local.toml), .claude/settings.json (env)"
-                .to_owned();
+            "workspaces/, .gitignore (/charter.local.toml), .claude/settings.json (env)".to_owned();
         let mut present = "personas/".to_owned();
         if guard_created {
             created.push_str(&format!(", {guard}"));
@@ -2032,7 +2041,10 @@ mod tests {
             Some(&escape(".gitignore", &lands, "reinit"))
         );
         assert_eq!(outcome.code, 1);
-        assert_eq!(std::fs::read_to_string(&outside).expect("the file"), "keep\n");
+        assert_eq!(
+            std::fs::read_to_string(&outside).expect("the file"),
+            "keep\n"
+        );
     }
 
     /// A settings directory the OS will not let charter write into: each settings write that
@@ -2085,8 +2097,11 @@ mod tests {
     fn a_gitignore_missing_the_local_files_gets_only_those_appended() {
         let dir = tempfile::tempdir().expect("a directory");
         let path = dir.path().join(".gitignore");
-        std::fs::write(&path, "node_modules/\n!/workspaces/.gitkeep\n/.charter/\n\n\n")
-            .expect("a .gitignore");
+        std::fs::write(
+            &path,
+            "node_modules/\n!/workspaces/.gitkeep\n/.charter/\n\n\n",
+        )
+        .expect("a .gitignore");
 
         assert_eq!(ensure_gitignore(&path), Ok(true));
         assert_eq!(
