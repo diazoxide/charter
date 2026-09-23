@@ -66,12 +66,13 @@ pub enum Refusal {
     #[error("'{0}' is not a git repository. Clone it into this workspace first: charter clone {0}")]
     NotARepo(String),
     #[error(
-        "branch '{branch}' already exists in {repo}. Reuse it: charter wt add {repo} <piece> \
-         --branch {branch}   (or pick another piece name)"
+        "branch '{branch}' already exists in {repo}. Pick another piece name, or remove the \
+         branch if nothing on it is needed"
     )]
     BranchTaken { repo: String, branch: String },
     #[error(
-        "no worktree '{piece}' for {repo} in workspace '{ws}'. See what exists: charter wt list {repo}"
+        "no worktree '{piece}' for {repo} in workspace '{ws}'. See what exists: git -C \
+         <clone> worktree list"
     )]
     NoSuchPiece {
         ws: String,
@@ -96,7 +97,7 @@ pub enum Refusal {
     Unreadable { what: String, why: String },
     #[error(
         "'{branch}' was cut, but charter could not record the branch it came from ({why}), so \
-         `charter wt merge` would not know where to land it. The worktree is there; record it \
+         a merge would not know where to land it. The worktree is there; record it \
          by hand: git -C <clone> config --replace-all branch.{branch}.charterBase <base>"
     )]
     BaseNotRecorded { branch: String, why: String },

@@ -83,14 +83,9 @@ harness in the background with `claude -p`. That is why a handed-off chat always
 tab you can see, stamped with the chat it came from.
 
 **Outside a chat the app started**, or when the app is not listening or does not answer,
-nothing is opened. The command prints the equivalent terminal command — `charter <harness>
---workspace <ws> …`, with `charter workspace create … &&` in front of it when you asked for
-one, `CHARTER_PERSONA=` when you named a persona, and every word quoted, the brief included —
-and exits 1. If the app refuses, you get that command and one more line saying why. The
-`charter <harness>` terminal launch that line names is not in this version yet, so outside
-the app a handoff does not open a chat. If nothing says which harness this is — no
-`$CHARTER_HARNESS`, no `[harness] default` — charter prints `<harness>` where the word goes
-rather than naming the wrong tool with your brief already in its argv.
+nothing is opened and nothing is created. The command says so, tells you to open charter and
+either run the handoff again from a chat the app started or start a chat in that workspace
+from the window, and exits 1. If the app refuses, you get one more line saying why.
 
 ## The stamp
 
@@ -123,7 +118,7 @@ nothing is created and no chat is opened.
 | stdin closed altogether (`0<&-`) | that there is nothing to read, and the heredoc form |
 | a brief shaped like a credential | the KIND, never the value |
 | a first message with a NUL byte, or past the byte bound | the bound, and how big the brief was |
-| no app to open the chat in | the command to run in a new terminal (above) |
+| no app to open the chat in | to open charter (above) |
 
 The app asks again what only it can answer: that the asking chat is one it has open, that the
 chat is on a harness profile, that the first message is stamped from that chat, and that the

@@ -55,8 +55,6 @@
 //! Python writes after its open have no counterpart here, and the recorded scenario declares
 //! that (`handoff-inside-the-app-opens-the-chat-there-and-writes-nothing`, ADR 0046).
 
-use std::fmt::Write as _;
-
 /// The first line of every handoff's first message. Facts charter can observe and no
 /// instruction: where it came from, which workspace that was, and when.
 ///
@@ -68,12 +66,6 @@ pub const STAMP: &str = "⟨handoff from chat {chat} · workspace {workspace} ·
 /// outside any frame, which is refused, but whose printed command still carries the stamp so
 /// the chat it opens is marked the same way.
 pub const NO_CHAT: &str = "none";
-
-/// Stands where the harness's own word goes when nothing says which harness this is: no
-/// `$CHARTER_HARNESS`, no profile, and no `[harness] default` on the plane. Printed
-/// literally, because a guess here starts the wrong tool with the operator's brief already
-/// in its argv.
-pub const UNKNOWN_HARNESS: &str = "<harness>";
 
 /// The most a first message may be, in bytes — `commands_frame.FIRST_MESSAGE_MAX_BYTES`.
 ///
@@ -294,9 +286,8 @@ impl BadMessage {
                 .to_string(),
             Self::TooLong(n) => format!(
                 "cannot open a chat with a {n}-byte first message — charter refuses one past \
-                 {FIRST_MESSAGE_MAX_BYTES} bytes, its own bound, set under tmux's \
-                 16,364-byte command limit so the chat's names, directory and identity still \
-                 fit beside it. Nothing was opened; shorten it, and name long material by \
+                 {FIRST_MESSAGE_MAX_BYTES} bytes, its own bound, so the chat's names, directory \
+                 and identity still fit beside it on the harness's command line. Nothing was opened; shorten it, and name long material by \
                  its path instead of pasting it."
             ),
         }
@@ -362,54 +353,6 @@ pub fn first_message_argv(kind: &str, text: &str) -> Option<Vec<String>> {
     }
 }
 
-/// The command to run in a new terminal, when there is no frame to open a chat in.
-///
-/// A handoff needs a frame with a launcher that can go away once the chat exists. Outside one
-/// there is nothing to open a chat in the background OF, so charter prints the equivalent
-/// command instead of refusing and stopping: everything the handoff would have done, minus
-/// the background.
-///
-/// Every word goes through [`quote`], including the message — it carries the brief, which is
-/// arbitrary approved prose with quotes and newlines in it.
-///
-/// `persona` rides as a `CHARTER_PERSONA=` prefix rather than a flag, because that variable is
-/// the pin `charter <harness>` already reads, and `create_vision` rides as a
-/// `charter workspace create … &&` in front, because the workspace has to exist before the
-/// launcher resolves it.
-///
-/// **One parameter for "create it, and this is its vision", not two.** `--create` without
-/// `--vision` is refused before this is reached, so a `create` flag beside an optional vision
-/// is a pair that can only be wrong together. `None` means the workspace is there already.
-pub fn terminal_command(
-    cli_name: &str,
-    workspace: &str,
-    extra: &[String],
-    create_vision: Option<&str>,
-    persona: Option<&str>,
-) -> String {
-    let mut head = String::new();
-    if let Some(vision) = create_vision {
-        let _ = write!(
-            head,
-            "charter workspace create {} --vision {} && ",
-            quote(workspace),
-            quote(vision)
-        );
-    }
-    if let Some(persona) = persona.filter(|p| !p.is_empty()) {
-        let _ = write!(head, "CHARTER_PERSONA={} ", quote(persona));
-    }
-    // `cli_name` unquoted: it is a registered harness's own word, or the literal `<harness>`
-    // placeholder, and quoting the placeholder would hide that it is one.
-    let mut words = vec![
-        format!("charter {cli_name}"),
-        "--workspace".to_string(),
-        quote(workspace),
-    ];
-    words.extend(extra.iter().map(|a| quote(a)));
-    brief_shown(&(head + &words.join(" ")))
-}
-
 /// A word as a POSIX shell will read it back unchanged — `shlex.quote`.
 ///
 /// Single quotes and the `'\''` dance, because a single-quoted string is the one shell
@@ -425,32 +368,6 @@ pub fn quote(word: &str) -> String {
         return word.to_string();
     }
     format!("'{}'", word.replace('\'', "'\"'\"'"))
-}
-
-/// A command, safe to PRINT on the terminal charter is printing to.
-///
-/// **`shlex.quote` escapes nothing.** It wraps a word in single quotes, which is what the
-/// SHELL needs and says nothing about what a terminal does with the bytes inside them —
-/// measured: ESC, `\r`, backspace and a bidirectional override all pass through it untouched.
-/// And the word this line carries is the whole brief, which is arbitrary text the operator
-/// approved for a model to read, not for a terminal to execute.
-///
-/// That matters most here of anywhere, because this is the one refusal that tells the
-/// operator to **paste the line into a new terminal**: a brief opening
-/// `\r✓ opened chat beta.9` repaints charter's own refusal as a success, on the line the
-/// operator is about to trust.
-///
-/// **The cost, stated:** a brief carrying a control character is pasted as its escape rather
-/// than as the character, so the chat that command opens is sent `\x1b` as four characters.
-/// That is the right way round — a brief has nothing to say in ESC — and the operator can see
-/// on screen exactly what the command would send.
-///
-/// The escape is asked for without the report clip ([`crate::shown::NO_CLIP`]), because a
-/// command cut off after 160 characters is not a command. That constant and the escape rule
-/// are both [`crate::shown`]'s: `charter/handoff.py:_shown` is `contain.one_line` at
-/// `contain.NO_CLIP`, and this is the same two names on this side.
-fn brief_shown(command: &str) -> String {
-    crate::shown::one_line(command, crate::shown::NO_CLIP)
 }
 
 #[cfg(test)]
@@ -637,60 +554,6 @@ mod tests {
             "opencode's positional is [project], not a prompt"
         );
         assert_eq!(first_message_argv("aider", "hi"), None, "never a guess");
-    }
-
-    #[test]
-    fn the_printed_command_quotes_every_word_and_carries_the_persona_as_the_variable() {
-        let extra = vec!["a brief\nwith a newline".to_string()];
-        let line = terminal_command("claude", "beta", &extra, None, Some("devops"));
-        assert_eq!(
-            line,
-            "CHARTER_PERSONA=devops charter claude --workspace beta \
-             'a brief\\x0awith a newline'"
-        );
-    }
-
-    #[test]
-    fn creating_the_workspace_comes_first_in_the_printed_command() {
-        let line = terminal_command(
-            "claude",
-            "beta",
-            &["hi there".to_string()],
-            Some("ship the thing"),
-            None,
-        );
-        assert!(line.starts_with(
-            "charter workspace create beta --vision 'ship the thing' && charter claude "
-        ));
-    }
-
-    #[test]
-    fn a_control_character_in_the_brief_cannot_repaint_the_line_it_is_printed_on() {
-        // The refusal this line appears in tells the operator to PASTE it. A brief opening
-        // with a carriage return would otherwise overwrite charter's own refusal.
-        let extra = vec!["\r\x1b[2K✓ opened chat beta.9".to_string()];
-        let line = terminal_command("claude", "beta", &extra, None, None);
-        assert!(!line.contains('\r'), "{line}");
-        assert!(!line.contains('\x1b'), "{line}");
-        assert!(line.contains("\\x0d\\x1b[2K"), "{line}");
-    }
-
-    #[test]
-    fn the_printed_command_is_never_clipped() {
-        let brief = "word ".repeat(400);
-        let line = terminal_command("claude", "beta", std::slice::from_ref(&brief), None, None);
-        assert!(line.len() > 160);
-        assert!(!line.contains('…'), "a command cut off is not a command");
-        assert!(line.ends_with(&format!("{brief}'")));
-    }
-
-    #[test]
-    fn an_unmeasured_harness_is_named_by_the_placeholder_rather_than_guessed_at() {
-        let line = terminal_command(UNKNOWN_HARNESS, "beta", &["hi there".into()], None, None);
-        assert!(
-            line.starts_with("charter <harness> --workspace beta "),
-            "{line}"
-        );
     }
 
     #[test]

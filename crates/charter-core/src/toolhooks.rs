@@ -310,8 +310,9 @@ pub fn pretooluse_read(hook: &Hook) -> Answer {
 
 /// `_state_write_reason`'s sentence.
 pub const STATE_WRITE_REASON: &str = "writes charter's own state directly (that directory \
-     decides which commands run without a prompt). Use the charter command that owns it — \
-     `charter persona use`, `charter vault add`, `charter secret set`";
+     decides which commands run without a prompt). Only charter writes there; the commands \
+     that manage a vault or pin a persona from a chat are not in this version yet, and the \
+     app's new-chat picker is where a persona is chosen.";
 
 /// `pretooluse_edit`: refuse a `Write`/`Edit` into charter's own state directory, which holds
 /// the tool-gate ceiling, the persona pointers and the vault registry.
@@ -644,8 +645,8 @@ fn secret_scan(hook: &Hook, input: &Value, fp: &str) -> Answer {
             format!(
                 "⚠ SECURITY: the memory/ref you just wrote ({name}) appears to contain a secret \
                  ({kind}). Persona AND workspace memory/refs are committed and shared — secrets \
-                 must NEVER go there. Remove it now and store the value in the vault instead \
-                 (`charter persona secret set <key>` / `charter vault`)."
+                 must NEVER go there. Remove it now; keep the value where it came from, never \
+                 in a memory or ref file."
             ),
         )],
     )

@@ -144,9 +144,7 @@ pub fn snapshot(request: &Request, say: Sink) -> u8 {
         )));
     }
     say(Say::Info(
-        "Share it with the team: charter workspace save   (commits + pushes manifest + \
-         memory)."
-            .to_string(),
+        "Share it with the team: charter save   (commits + pushes manifest + memory).".to_string(),
     ));
     0
 }

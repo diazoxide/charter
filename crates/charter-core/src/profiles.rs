@@ -420,9 +420,9 @@ pub fn derive(root: &Path) -> ProfileSet {
                         "[harness.{parent}] holds a table {child}, which charter reads \
                          neither way — {child} is not a key a profile has (kind, command \
                          and env), and if a profile named '{dotted}' was meant, a profile's \
-                         name is letters, digits, '_' and '-', with no dot, because a dot \
-                         breaks tmux targets. Rename the key, or give that profile a name \
-                         of its own."
+                         name is letters, digits, '_' and '-', with no dot — the plane \
+                         format fixes that alphabet. Rename the key, or give that profile a \
+                         name of its own."
                     ),
                     name: dotted,
                     source: LOCAL_FILE.to_owned(),
@@ -615,8 +615,8 @@ fn refusal(name: &str, table: &toml::Value) -> Option<String> {
     if !name_ok(name) {
         return Some(format!(
             "profile '{shown_name}' is not a name charter accepts — letters, digits, '_' \
-             and '-', starting with a letter or digit, and no dot, because a dot breaks tmux \
-             targets. Rename the table."
+             and '-', starting with a letter or digit, and no dot — the plane format fixes \
+             that alphabet. Rename the table."
         ));
     }
     if name == DEFAULT {

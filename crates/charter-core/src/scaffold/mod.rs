@@ -143,7 +143,7 @@ pub const GITIGNORE_BASELINE: &str = "\
 # NEVER commit this — it holds credentials.
 /.charter/
 
-# This machine's own harness permissions (`charter guard ask|allow --local`). Its committed
+# This machine's own harness permissions. Its committed
 # sibling `.claude/settings.json` is deliberately NOT ignored — that one is the team's.
 /.claude/settings.local.json
 
@@ -728,8 +728,7 @@ fn handoff_gate(run: &mut Run, root: &Path, settings_ok: bool) {
     if !bad.is_empty() {
         let line = format!(
             "the ask rule for `charter handoff` was not written anywhere — {} is not valid, and \
-             `charter guard` writes every harness or none. Fix it, then: charter guard ask \
-             'charter handoff *'",
+             charter writes every harness or none. Fix it, then run charter init again",
             bad.join(", ")
         );
         run.warn(line);
@@ -788,8 +787,8 @@ fn profile_approvals(run: &mut Run, root: &Path) {
         if let Some(state) = crate::profiletrust::approval_needed(root, p) {
             let name = crate::shown::short(&p.name);
             run.warn(format!(
-                "  profile '{name}' is {} and not approved yet — run charter {name} once to \
-                 approve its command",
+                "  profile '{name}' is {} and not approved yet — start a chat on it from the \
+                 app's new-chat picker to approve its command",
                 state.as_str()
             ));
         }
@@ -829,15 +828,17 @@ This plane has no other personas yet, so there is nothing to route to. That is t
 thing worth fixing, not a reason to do everything here:
 
 ```
-charter persona create <name> --role "<Role>" \
-  --delegate-when "<the work that should come to it>"
+personas/<name>/persona.md
+---
+role: <Role>
+delegate-when: <the work that should come to it>
+---
 ```
 
 `delegate-when` is what makes a persona findable — it becomes the description whoever is
 routing reads. Create one the moment a second kind of work appears in this plane.
 
-Once others exist, `routing: advise` above puts them in front of you on work-shaped
-prompts: who exists, what each claims, when each was last dispatched. charter never says
+Once others exist, route to them by what each one's `delegate-when` claims. charter never says
 which one owns the request — that call is yours. Route on the *work*, not on the file a
 change happens to touch.
 
@@ -1766,8 +1767,8 @@ mod tests {
 
         let warned = Say::Warn(format!(
             "the ask rule for `charter handoff` was not written anywhere — {} (`permission` is \
-             not an object) is not valid, and `charter guard` writes every harness or none. Fix \
-             it, then: charter guard ask 'charter handoff *'",
+             not an object) is not valid, and charter writes every harness or none. Fix it, \
+             then run charter init again",
             opencode.display()
         ));
         assert!(outcome.said.contains(&warned), "{:?}", outcome.said);
@@ -2191,7 +2192,7 @@ mod tests {
     }
 
     /// What still stops a chat is a command nobody approved, and that IS said — as a warning,
-    /// with the command that approves it.
+    /// with where it is approved.
     #[test]
     fn a_profile_nobody_approved_is_named_with_the_way_to_approve_it() {
         let (_dir, root, _profile) = plane_with_a_profile("claude", false);
@@ -2201,8 +2202,8 @@ mod tests {
         assert_eq!(
             line_about_work(&outcome),
             vec![&Say::Warn(
-                "  profile 'work' is new and not approved yet — run charter work once to \
-                 approve its command"
+                "  profile 'work' is new and not approved yet — start a chat on it from the \
+                 app's new-chat picker to approve its command"
                     .to_owned()
             )]
         );
