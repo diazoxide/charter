@@ -217,22 +217,23 @@ const GH_BODY_FILE_SHORT: [&str; 2] = ["-F", "-T"];
 /// What to do about a walk that reaches the vault directory — `_WALK_FIX`, in both spellings,
 /// so the refusal is one edit away from running.
 pub const WALK_FIX: &str = "Exclude it — `grep -rn --exclude-dir=.charter …`, `rg --glob \
-     '!.charter' …` — or search the path you actually mean.";
+     '!.charter' …` — or search the path you actually mean. `charter … secret exec --env \
+     NAME=<key> -- <cmd>` is how a command gets a value without anyone reading one.";
 
 /// `_REVEAL_REASON`. Deliberately does NOT offer `secret cp` as a way to SEE a value: `cp`
 /// materialises it into a file, and the agent's next move after reading a denial is whatever
 /// the denial names — so that text was the documented route around itself (#423).
 pub const REVEAL_REASON: &str = "would reveal a secret value into the conversation (--reveal). \
-     A secret goes to a command, never to this conversation; charter's commands that hand one \
-     to a program are not in this version yet. A copy of it in a file you chose is the same \
-     leak by another road, and no guard covers a path you chose.";
+     Use `charter … secret exec --env NAME=<key> -- <cmd>` — hand it to a command, never to \
+     this conversation. (`secret cp` writes a 0600 FILE for a tool that needs a path; reading \
+     that file back is the same leak by another road, and no guard covers a path you chose.)";
 
 /// `_READ_REASON`. Returned from three places — argv, the raw scan on the unparseable path, and
 /// the Read/Grep guard — because a guard whose wording drifts per path is a guard whose reader
 /// cannot tell which rule fired.
-pub const READ_REASON: &str = "reads a vault/secret file directly (would print plaintext). A \
-     secret goes to a command, never to this conversation; charter's commands that hand one to \
-     a program are not in this version yet. Do not read a copy back either: no guard covers a \
+pub const READ_REASON: &str = "reads a vault/secret file directly (would print plaintext). Use \
+     `charter … secret exec --env NAME=<key> -- <cmd>`, or `--file ENVVAR=<key>` for a tool \
+     that needs a path — and do not read a materialised copy back either: no guard covers a \
      path you chose.";
 
 /// `i` as CPython's `(?i)` reads it: the letter, and the two Turkic spellings the `regex`

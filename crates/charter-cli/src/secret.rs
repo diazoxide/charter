@@ -379,8 +379,11 @@ pub fn persona_secret(
         return 1;
     }
     let Some(name) = here.active_persona(flag.as_deref()) else {
+        // Python names `charter persona use` here, which this charter does not have (yet); a
+        // chat's persona is chosen in the app's new-chat picker.
         voice::err(
-            "no active persona. Select one: charter persona use <name>  (or pass --persona).",
+            "no active persona. Pass --persona, or start the chat as a persona from the app's \
+             new-chat picker.",
         );
         return 1;
     };
