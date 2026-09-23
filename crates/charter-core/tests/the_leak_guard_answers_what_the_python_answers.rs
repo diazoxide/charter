@@ -1,12 +1,17 @@
 //! Every command line the leak guard's docstrings name as a bypass that SHIPPED, answered here
 //! the way the frozen Python answers it — with no Python present.
 //!
-//! The answers are not written by hand. `tests/differential/shellseg.py --record` ran each of
-//! these through the Python charter pinned at the commit the fixture planes come from;
-//! `--check` fails if the file stops being what the oracle says. This replays the stage-3 half
-//! of that recording, so the ordinary `cargo test` job holds the line and the differential job
-//! — which fuzzes 200,000 generated cases against the live oracle — is the wider net rather
-//! than the only one.
+//! The answers are not written by hand, and they no longer change on their own. The retired
+//! `shellseg.py` differential harness ran each command line through the Python charter pinned at
+//! 50d31dc and recorded what it said, once, on 2026-09-23: the curated rows
+//! (`fixtures/corpora/shellseg-oracle.jsonl`) and a coverage-selected subset of its 200,000 seeded
+//! cases (`shellseg-generated.jsonl.gz`). Since then the recording IS this app's contract, and
+//! no Python is needed or consulted. To change an answer deliberately, edit the row and say why
+//! in the pull request (`fixtures/corpora/README.md`). Where this file says "the harness" it
+//! means that script; the names it cites are the script's, kept so a row can be traced to what
+//! produced it.
+//!
+//! This replays the stage-3 half of that recording: the leak guard.
 //!
 //! # Why this is a test binary of its own
 //!

@@ -2,13 +2,16 @@
 //! filed from their port — answered here the way the frozen Python answers it, with no Python
 //! present.
 //!
-//! The answers are not written by hand. `tests/differential/planeroot.py --record` ran each case
-//! through the Python charter pinned at the fixture planes' commit, against a git-repository
-//! fixture it built from `fixtures/corpora/planeroot-fixture.json`; `--check` fails if either file
-//! stops being what the oracle says. This builds the SAME fixture from the same steps and replays
-//! the recording through the same code the differential's Rust side runs
-//! (`examples/planeroot_oracle.rs`, included below), so the ordinary `cargo test` job holds the
-//! line and the differential job, which fuzzes against the live oracle, is the wider net.
+//! The answers are not written by hand, and they no longer change on their own. The retired
+//! `planeroot.py` differential harness ran each case through the Python charter pinned at
+//! 50d31dc, against a git-repository fixture it built from
+//! `fixtures/corpora/planeroot-fixture.json`, and recorded what it said, once, on 2026-09-23: the
+//! curated rows (`planeroot-oracle.jsonl`) and a coverage-selected subset of its 50,000 seeded
+//! cases (`planeroot-generated.jsonl.gz`). Since then the recording IS this app's contract, and
+//! no Python is needed or consulted. To change an answer deliberately, edit the row and say why
+//! in the pull request (`fixtures/corpora/README.md`). This builds the SAME fixture from the same steps and replays
+//! both recordings through the code the harness's Rust side ran (`planeroot_answer`, which was
+//! its `planeroot_oracle` example). Where this file says "the harness" it means that script.
 //!
 //! # Why the replay runs in a child process
 //!
