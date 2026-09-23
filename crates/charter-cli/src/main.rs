@@ -9,7 +9,7 @@
 //! left to be discovered:
 //!
 //! - **Not every command prints its confirmation.** charter says `✓ Vision set for 'alpha' →
-//!   …` on stderr, and `vision` and `todo` here are still silent. The memory commands
+//!   …` on stderr, and `vision` here is still silent (`todo` speaks since M8.5). The memory commands
 //!   (`memory.rs`) are ported whole, their output included, and so is the one line of stdout
 //!   `workspace current` and `persona current` print — the sentence explaining which rung
 //!   decided is not.
@@ -1960,58 +1960,166 @@ fn run(command: Command) -> Result<u8, String> {
         Command::Workspace(WorkspaceCommand::Todo { words, common }) => {
             let ws = here.workspace(common.workspace.as_deref())?;
             let stamp = common.stamp()?;
-            match words.as_slice() {
-                [] => {
-                    for todo in ws.todos().map_err(|e| e.to_string())? {
-                        println!("{}  {}", todo.slug, todo.title);
-                    }
-                }
-                [verb, slug] if verb == "done" => {
-                    ws.close_todo(slug, stamp).map_err(|e| e.to_string())?;
-                }
-                // `forget` abandons a todo silently — no journal entry, unlike `done`.
-                [verb, slug] if verb == "forget" => {
-                    charter_core::memstore::forget(
-                        here.plane.root(),
-                        &ws.dir().join("todos"),
-                        slug,
-                    )
-                    .map_err(|e| e.to_string())?;
-                }
-                // A lone verb is NOT todo text. charter refuses it, and the reason is that
-                // `todo done` with a forgotten slug would otherwise record a todo called
-                // "done" and leave the one it meant to close open.
-                [verb] if verb == "done" || verb == "forget" => {
-                    return Err(format!(
-                        "`todo {verb}` needs the slug of the todo to close."
-                    ));
-                }
-                [text] => {
-                    // Duplicate INTENT is worse than duplicate memory: closing one of a
-                    // near-identical pair leaves its twin looking outstanding, so the list
-                    // starts lying about what is left. Warn and skip rather than merge.
-                    if let Some(dup) = charter_core::memstore::duplicate_of(
-                        here.plane.root(),
-                        &ws.dir().join("todos"),
-                        text,
-                    ) {
-                        // CONTAINED, as `commands_workspace.py` contains it: `dup` is the
-                        // `# ` heading of a file on disk, and since `charter handoff` a
-                        // stored title can be a model's prose. It was the one heading this
-                        // binary echoed raw, so a todo headed `# \r<ESC>[2K✓ saved` could
-                        // repaint charter's own refusal on the way past.
-                        return Err(format!(
-                            "already on the list: {}",
-                            charter_core::personas::one_line(&dup)
-                        ));
-                    }
-                    ws.add_todo(text, stamp).map_err(|e| e.to_string())?;
-                }
-                _ => return Err("usage: charter ws todo [-w WS] [\"<text>\" | done <slug>]".into()),
-            }
+            return Ok(todo(&here.plane, &ws, &words, stamp));
         }
     }
     Ok(0)
+}
+
+/// `charter ws todo` — record one todo, list them, or close one with `done`/`forget <slug>`,
+/// saying what it did as `commands_workspace.cmd_workspace_todo` says it (M8.5: the port
+/// did the writes and said nothing, so an agent recording a todo had no confirmation and
+/// one closing a mistyped slug could not tell it had closed nothing).
+fn todo(
+    plane: &Plane,
+    ws: &charter_core::workspaces::Workspace,
+    words: &[String],
+    stamp: chrono::NaiveDateTime,
+) -> u8 {
+    let root = plane.root();
+    let name = ws.name();
+    let dir = ws.dir().join("todos");
+    let see = format!("charter ws todo --workspace {name}");
+    match words {
+        [] => {
+            let (open, unread) = charter_core::memstore::read_entries(root, &dir);
+            voice::unread(root, &unread);
+            if open.is_empty() {
+                voice::info(&format!(
+                    "No open todos in '{name}'. Record one: charter ws todo \"<what>\""
+                ));
+                return 0;
+            }
+            // Oldest first, with its age: what surfaces is what is being avoided.
+            let today = stamp.date();
+            for todo in open {
+                let file = todo.path.file_name().unwrap_or_default().to_string_lossy();
+                let stem = todo.path.file_stem().unwrap_or_default().to_string_lossy();
+                let age = charter_core::memstore::memory_date(&todo.text, &file)
+                    .map_or(0, |d| (today - d).num_days());
+                println!(
+                    "  {stem}  {age}d  {}",
+                    charter_core::personas::one_line(&todo.title)
+                );
+            }
+            0
+        }
+        [verb, slug] if verb == "done" || verb == "forget" => {
+            let slug = charter_core::memstore::py_strip(slug);
+            if !charter_core::contain::segment_ok(slug) {
+                voice::err(&charter_core::repocmd::clone::not_a_segment(slug));
+                voice::info(&format!("  List the real ones: {see}"));
+                return 1;
+            }
+            let Some(path) = charter_core::memstore::resolve(root, &dir, slug) else {
+                voice::err(&format!("no todo '{slug}' in workspace '{name}'."));
+                voice::info(&format!("  List the real ones: {see}"));
+                return 1;
+            };
+            let stem = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            let title = ws
+                .todos()
+                .ok()
+                .and_then(|open| open.into_iter().find(|t| t.slug == stem))
+                .map_or_else(|| stem.clone(), |t| t.title);
+            if verb == "done" {
+                // The journal entry first, while the todo is still there to name: it is the
+                // only evidence that survives the close.
+                let code = match memory::workspace_remember(
+                    plane,
+                    name,
+                    Some(&format!("Closed todo: {title}")),
+                    None,
+                    false,
+                    Some(&stamp.format("%Y-%m-%dT%H:%M:%S").to_string()),
+                ) {
+                    Ok(code) => code,
+                    Err(e) => {
+                        voice::err(&e);
+                        1
+                    }
+                };
+                if code != 0 {
+                    return code;
+                }
+            }
+            if let Err(e) = charter_core::memstore::forget(root, &dir, slug) {
+                voice::err(&e.to_string());
+                return 1;
+            }
+            if verb == "done" {
+                voice::ok(&format!(
+                    "Closed '{title}' in '{name}' — the journal has the trace."
+                ));
+            } else {
+                voice::ok(&format!(
+                    "Dropped '{title}' from '{name}' — abandoned, so nothing was journalled."
+                ));
+            }
+            0
+        }
+        // A lone verb is NOT todo text. charter refuses it, and the reason is that
+        // `todo done` with a forgotten slug would otherwise record a todo called "done" and
+        // leave the one it meant to close open.
+        [verb] if verb == "done" || verb == "forget" => {
+            voice::err(&format!(
+                "`todo {verb}` needs the slug of the todo to close."
+            ));
+            voice::info(&format!("  The slug is the first column: {see}"));
+            let capital: String = verb
+                .chars()
+                .take(1)
+                .flat_map(char::to_uppercase)
+                .chain(verb.chars().skip(1))
+                .collect();
+            voice::info(&format!(
+                "  To record a todo actually called \"{verb}\", capitalise it or add a word: \
+                 charter ws todo \"{capital} …\""
+            ));
+            1
+        }
+        [text] => {
+            // Duplicate INTENT is worse than duplicate memory: closing one of a near-identical
+            // pair leaves its twin looking outstanding, so the list starts lying about what is
+            // left. Warn and skip rather than merge. CONTAINED, as `commands_workspace.py`
+            // contains it: `dup` is the `# ` heading of a file on disk, and since `charter
+            // handoff` a stored title can be a model's prose.
+            if let Some(dup) = charter_core::memstore::duplicate_of(root, &dir, text) {
+                voice::err(&format!(
+                    "already on the list: {}",
+                    charter_core::personas::one_line(&dup)
+                ));
+                voice::info(&format!("  See it: {see}"));
+                return 1;
+            }
+            match ws.add_todo(text, stamp) {
+                Ok(path) => {
+                    voice::ok(&format!(
+                        "Todo recorded in '{name}' → workspaces/{name}/todos/{}",
+                        path.file_name().unwrap_or_default().to_string_lossy()
+                    ));
+                    if !plane.is_live(name) {
+                        voice::info(&format!(
+                            "  '{name}' is LOCAL (private) — todos stay on disk, not committed."
+                        ));
+                    }
+                    0
+                }
+                Err(e) => {
+                    voice::err(&e.to_string());
+                    1
+                }
+            }
+        }
+        _ => {
+            voice::err("usage: charter ws todo [-w WS] [\"<text>\" | done <slug>]");
+            1
+        }
+    }
 }
 
 fn main() -> ExitCode {
