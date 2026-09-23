@@ -117,13 +117,19 @@ export function QuitWarning({
           {running.length === 0 && unknown.length === 0 && (
             <p className="honest">No session is mid-turn.</p>
           )}
+          {/* `tabIndex={0}` on both, per `docs/ui-primitives.md` (charter-app#186): WebKit
+              leaves a `<button>` out of the tab sequence unless its `tabindex` is written
+              down. These two were reachable anyway, because they are the two edges Radix's
+              focus scope handles — but "reachable because there are only two of them" is a
+              property that goes away the moment a third control arrives, and the attribute is
+              what makes it not depend on the count. */}
           <div className="answer">
             {/* Cancel first, and focused: the destructive answer is never the one a stray
               Return key finds. */}
-            <button ref={cancel} onClick={onCancel}>
+            <button ref={cancel} tabIndex={0} onClick={onCancel}>
               Cancel
             </button>
-            <button className="ends-it" onClick={onQuit}>
+            <button className="ends-it" tabIndex={0} onClick={onQuit}>
               Quit charter
             </button>
           </div>

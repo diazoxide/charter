@@ -795,6 +795,17 @@ def _without_inventory(root: Path) -> None:
     shutil.rmtree(root / "inventory")
 
 
+def _holding_a_workspace_named_after_a_device(root: Path) -> None:
+    """A plane that ALREADY has `workspaces/nul` — minted by some earlier charter.
+
+    charter-app#96's gate is on minting and on nothing else, and this is what says so: the
+    same command that refuses to create this name has to go on selecting, scaffolding and
+    repairing the one that is already there, or the fix has locked an operator out of their
+    own plane instead of protecting them.
+    """
+    (root / "workspaces" / "nul").mkdir(parents=True)
+
+
 def _without_the_profiles_ignore_line(root: Path) -> None:
     ignore = root / ".gitignore"
     ignore.write_text(ignore.read_text().replace("/charter.local.toml\n", ""))
@@ -946,6 +957,67 @@ INIT_IN_A_REPO_DIVERGES = Divergence(
     rust_stderr=NOT_COLONISED,
     python_stderr_has="✓ Initialized control plane (schema 1) — 8 item(s) written.",
     python_writes=COLONISED,
+)
+
+
+#: The SECOND declared hole in spec decision 15's byte-for-byte guarantee (charter-app#96).
+#: Read `Divergence` before changing anything here.
+A_MINTED_NAME_MUST_TRAVEL = Divergence(
+    why=(
+        "charter-app#96: `contain::segment_ok` and the name alphabets above it accept names "
+        "that resolve to something else on Windows — `nul` is the null device whatever is "
+        "appended to it, `alpha.` is `alpha`, and `alpha:evil` is a stream inside `alpha`. "
+        "This was MEASURED on macOS against these functions, so it is not a Windows-only "
+        "concern: `contain.rs`'s own SEPARATORS doctrine is that a plane is committed and "
+        "travels, so the defect is written down here and detonates wherever the plane lands. "
+        "ADR 0031 (Windows gets charter's guards or it gets no charter) is the record that "
+        "decided a guard which cannot be expressed on a platform refuses rather than "
+        "degrades, and spec decision 14 requires this stricter-than-Python rule to be "
+        "declared rather than left to fail. The Python charter is frozen (decision 17) and "
+        "mints the name. The gate is on MINTING alone — `charter workspace reinit nul` on a "
+        "plane that already holds one still works on both sides, which is the scenario beside "
+        "this one."
+    ),
+    python_exit=0,
+    rust_exit=1,
+    rust_stderr=(
+        "✗ charter will not create a workspace called 'nul': its stem is a DOS device name — "
+        "'con', 'prn', 'aux', 'nul', 'com0'-'com9' or 'lpt0'-'lpt9', in any case and whatever "
+        "follows the first '.'. On Windows 'nul.md' opens the null device, so the write "
+        "succeeds and the bytes are gone. Put a letter or a digit beside it: 'nul-notes' "
+        "rather than 'nul'. A plane is committed and travels, so a name that means one "
+        "directory here and another where the plane lands is a defect wherever it was written "
+        "down\n"
+    ),
+    python_stderr_has="✓ Workspace 'nul' ready (LOCAL",
+    python_writes=("workspaces/nul",),
+)
+
+#: The THIRD, and the other half of charter-app#96: the same rule asked of a name charter
+#: DERIVES rather than one it is handed. Read `Divergence` before changing anything here.
+A_DERIVED_FILENAME_MUST_TRAVEL = Divergence(
+    why=(
+        "charter-app#96, the derived half. `memstore.slug` turns a note's title into a "
+        "filename over `[a-z0-9-]`, and a persona memory carries no `YYYYMMDD-HHMMSS-` "
+        "prefix, so a note titled 'NUL' is written to `nul.md` — the null device on Windows, "
+        "where the write succeeds and the note is gone. Of everything `contain::mintable` "
+        "refuses, a DOS device stem is the only thing that alphabet can produce, so this is "
+        "the whole of the difference. ADR 0031 (Windows gets charter's guards or it gets no "
+        "charter) is the record, and spec decision 14 requires a rule made stricter than the "
+        "frozen Python's to be declared here rather than left to fail. It is a rename and not "
+        "a refusal because this name is charter's own: #96's rule is that charter must not "
+        "silently rename an OPERATOR's workspace, and nobody typed this filename — the "
+        "alternative was losing the note the operator had just written."
+    ),
+    python_exit=0,
+    rust_exit=0,
+    rust_stderr=(
+        "\u2713 Remembered (persistent) \u2192 personas/devops/memory/nul-note.md\n"
+        "\u2022   (--no-sync) recorded locally; share later with: charter persona memory-sync.\n"
+    ),
+    python_stderr_has="\u2713 Remembered (persistent) \u2192 personas/devops/memory/nul.md",
+    python_writes=("personas/devops/memory/nul.md",),
+    rust_writes=("personas/devops/memory/nul-note.md",),
 )
 
 
@@ -3940,6 +4012,33 @@ M28_SCENARIOS = [
         refusal="invalid workspace name",
         same_stderr=True,
     ),
+    # charter-app#96, and the SECOND declared hole in spec decision 15's byte-for-byte
+    # guarantee. Read `Divergence` before touching it.
+    Scenario(
+        name="workspace-create-refuses-a-name-the-next-machine-reads-as-a-device",
+        plane="daily",
+        python=["workspace", "create", "nul"],
+        diverges=A_MINTED_NAME_MUST_TRAVEL,
+    ),
+    # The other half of that declaration, and the pair is the whole claim: the first says the
+    # MINT diverges and exactly how, this one says that a plane already holding the name is
+    # still selected, scaffolded and repaired byte for byte by both. `workspace use` runs
+    # `workspace.ensure` on a name that is already there as well as on one it creates, so it
+    # is the command that would go red first if the gate had been put on reading.
+    Scenario(
+        name="workspace-use-on-a-device-name-the-plane-already-holds-is-unchanged",
+        plane="daily",
+        setup=_holding_a_workspace_named_after_a_device,
+        python=["workspace", "use", "nul"],
+        env={"CHARTER_SESSION_ID": FRESH_SESSION},
+        ignore={
+            f".charter/persona-state/trace/{FRESH_SESSION}.jsonl": (
+                "charter records every selection in its trace store; this binary writes no "
+                "trace at all, which is a whole store and not this command's to port"
+            )
+        },
+        same_stderr=True,
+    ),
     Scenario(
         name="workspace-create-use-in-a-locked-session-creates-it-and-refuses-the-selection",
         plane="daily",
@@ -5946,6 +6045,20 @@ SCENARIOS = [
         name="persona-remember-under-a-title-of-spaces",
         plane="daily",
         python=["persona", "remember", "devops", "Body text", "--title", "   ", "--no-sync"],
+    ),
+    Scenario(
+        name="persona-remember-under-a-title-whose-filename-would-be-a-device",
+        plane="daily",
+        python=["persona", "remember", "devops", "NUL", "--no-sync"],
+        diverges=A_DERIVED_FILENAME_MUST_TRAVEL,
+        ignore={
+            "personas/devops/memory/MEMORY.md": (
+                "the index carries the filename, so it differs exactly where "
+                "A_DERIVED_FILENAME_MUST_TRAVEL says the filename does and nowhere else — the "
+                "two one-sided paths it declares are what pin that, and the scenario beside "
+                "this one holds the index byte for byte for every other title"
+            )
+        },
     ),
     Scenario(
         name="persona-remember-a-title-already-taken-is-numbered",

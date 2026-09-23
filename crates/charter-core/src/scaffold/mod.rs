@@ -954,6 +954,18 @@ fn front_door(run: &mut Run, root: &Path, name: &str) {
         ));
         return;
     }
+    // The only place this binary MINTS a persona directory, and `persona.valid_name`'s
+    // alphabet above admits `nul`, `con` and `com1` — measured, charter-app#96. A persona is
+    // committed, so the name travels; the refusal is here and not in
+    // `contain::persona_name_ok`, which every reader of an existing plane asks.
+    if let Err(why) = crate::contain::mintable(name) {
+        run.warn(format!(
+            "--front-door {} would not name the same directory on every machine this plane \
+             reaches — {why} — skipped.",
+            text::py_repr(name)
+        ));
+        return;
+    }
     let rel = format!("personas/{name}");
     let files = [
         format!("{rel}/persona.md"),

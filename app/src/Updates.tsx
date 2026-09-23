@@ -238,24 +238,31 @@ export function UpdateItem({ updates }: { updates: Updates }) {
               </div>
             ))}
           </RadioGroup.Root>
+          {/* `tabIndex={0}` on every one, per `docs/ui-primitives.md` (charter-app#186). The
+              channel radios above are the scope's first edge and `Close` is its last, which
+              left `Install`, `Quit charter…` and `Check now` in the middle — where Radix's
+              focus scope does nothing and WebKit will not tab to a `<button>` whose `tabindex`
+              is not written down. Installing an update was a mouse-only act. */}
           <div className="answer">
             {state.kind === "offered" && (
-              <button type="button" onClick={install}>
+              <button type="button" tabIndex={0} onClick={install}>
                 Install {state.offer.version}
               </button>
             )}
             {state.kind === "installed" && (
-              <button type="button" onClick={() => void commands.askToQuit()}>
+              <button type="button" tabIndex={0} onClick={() => void commands.askToQuit()}>
                 Quit charter…
               </button>
             )}
             {state.kind !== "installing" && state.kind !== "installed" && (
-              <button type="button" onClick={check}>
+              <button type="button" tabIndex={0} onClick={check}>
                 Check now
               </button>
             )}
             <Dialog.Close asChild>
-              <button type="button">Close</button>
+              <button type="button" tabIndex={0}>
+                Close
+              </button>
             </Dialog.Close>
           </div>
         </Dialog.Content>
@@ -323,9 +330,14 @@ export function PinItem({ pin, again }: { pin?: PinReport; again: () => void }) 
               )}
             </section>
           )}
+          {/* `tabIndex={0}`, per `docs/ui-primitives.md` (charter-app#186): the one control
+              this dialog has, and WebKit leaves a `<button>` out of the tab sequence unless
+              its `tabindex` is written down. */}
           <div className="answer">
             <Dialog.Close asChild>
-              <button type="button">Close</button>
+              <button type="button" tabIndex={0}>
+                Close
+              </button>
             </Dialog.Close>
           </div>
         </Dialog.Content>

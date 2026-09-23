@@ -68,7 +68,10 @@ export function AlertsDrawer({
         >
           <header className="drawer-head">
             <Dialog.Title>Alerts</Dialog.Title>
-            <Dialog.Close className="drawer-close">
+            {/* `tabIndex={0}`, per `docs/ui-primitives.md` (charter-app#186): WebKit leaves a
+                `<button>` out of the tab sequence unless its `tabindex` is written down, and
+                this is the drawer's only control. */}
+            <Dialog.Close className="drawer-close" tabIndex={0}>
               <X aria-hidden="true" /> Close
             </Dialog.Close>
           </header>

@@ -70,6 +70,34 @@ fn a_name_the_gate_refuses_never_reaches_the_filesystem_at_all() {
 // ---------------------------------------------------------------------------------------
 
 #[test]
+fn a_piece_name_the_next_machine_reads_as_something_else_is_never_cut() {
+    // charter-app#96. `piece_name_ok` is `contain::segment_ok` plus charter's alphabet, and
+    // measured on macOS that pair says `true` to `nul` and to `alpha.` — a directory under
+    // `.worktrees/<repo>/` and a branch name recorded in the clone's git config, both of
+    // which reach every machine the branch does.
+    let f = support::plane_with_clone("thing");
+
+    for bad in ["nul", "NUL", "con", "aux", "lpt9", "com1.txt", "alpha."] {
+        let refusal = worktree::add(&f.plane, &f.ws, &f.repo, bad, None)
+            .expect_err("a piece name that means another directory elsewhere is refused");
+        assert!(
+            format!("{refusal}").contains("charter will not cut a worktree called"),
+            "{bad:?}: {refusal}"
+        );
+        assert!(
+            !f.workspace()
+                .join(".worktrees")
+                .join(&f.repo)
+                .join(bad)
+                .exists(),
+            "{bad:?} was refused and must have left nothing behind"
+        );
+    }
+    // The gate is the name's shape and not a ban on the letters: this one is ordinary.
+    worktree::add(&f.plane, &f.ws, &f.repo, "nul-notes", None).expect("an ordinary piece name");
+}
+
+#[test]
 fn a_branch_name_that_git_would_read_as_an_option_never_reaches_its_argv() {
     // `git check-ref-format --branch --upload-pack=…` is the injection, so delegating this
     // rule to git cannot prevent it. It is charter's.
