@@ -47,12 +47,13 @@
 //!
 //! # The evidence
 //!
-//! `tests/differential/shellseg.py` runs the frozen Python here and puts the same question to
-//! this module, six answers at a time, over 200,000 generated command lines; it also records
-//! `fixtures/corpora/shellseg-oracle.jsonl`, which
-//! `tests/the_shell_is_read_the_way_python_reads_it.rs` replays with no Python present so the
-//! ordinary `cargo test` job holds the line too. Nothing in either is written by hand: a rule
-//! this module gets wrong changes an answer the Python already gave.
+//! The differential harness ran the frozen Python and put the same question to this module, six
+//! answers at a time, over 200,000 generated command lines. Its answers are recorded
+//! (`fixtures/corpora/shellseg-oracle.jsonl`, and `shellseg-generated.jsonl.gz`, a subset of the
+//! generated cases chosen to reach every branch the full run reached — ADR 0046), and
+//! `tests/the_shell_is_read_the_way_python_reads_it.rs` replays them with no Python present.
+//! Nothing in either is written by hand: a rule this module gets wrong changes an answer the
+//! Python already gave.
 //!
 //! # What stage 2 added here
 //!

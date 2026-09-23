@@ -1,6 +1,6 @@
 # Harnesses
 
-> **In this version** the CLI has `charter harness list` only, and chats are started from the app's window; `charter harness install` and the `charter <profile>` terminal launch are not in it yet. Where it describes the tmux frame, read [frame.md](frame.md): this app has no frame, and its window takes the frame's place.
+> **In this version** the CLI has `charter harness list` only, and chats are started from the app's window; the `charter <profile>` terminal launch is not in it yet. There is no `charter harness install` and there will not be one: the app installs nothing into a harness, and arms each chat it starts for that session alone (*Per profile — armed at launch*, below). Where it describes the tmux frame, read [frame.md](frame.md): this app has no frame, and its window takes the frame's place.
 
 You use Claude Code. A teammate uses opencode. CI runs Codex.
 
@@ -11,7 +11,6 @@ persona's declared tools.
 
 ```bash
 charter harness list          # every profile, every harness, what it can't carry, and which one you're in
-charter harness install codex # Codex only — see below
 ```
 
 ```
@@ -88,12 +87,12 @@ Claude Code harness: the pane carries `$CHARTER_HARNESS`, the workspace layer an
 three. The program charter looks for before it starts anything is the wrapper — a missing
 `ccs` is refused and named, and a `claude` your `PATH` cannot see is the wrapper's to find.
 
-**The wrapper has to pass its arguments on**, and not only yours: charter asks the harness
-whether its plugin is wired by running the profile's own command with the harness's probe
-after it — `plugin list --json` for Claude Code, `debug config` for opencode (see *Per
-profile — wired automatically, or it refuses*, below) — so `ccs work plugin list --json` has
-to reach `claude`. A wrapper that swallows arguments reads as a profile charter could not
-ask, and it refuses to start.
+**The wrapper has to pass its arguments on**, and not only yours: the app arms a chat with
+words it puts directly after the profile's program and before the profile's own —
+`--plugin-dir <bundled plugin> --settings <json>` for Claude Code, `-c hooks.<Event>=…` for
+Codex (see *Per profile — armed at launch*, below) — so a `ccs work` profile starts as
+`ccs --plugin-dir … --settings … work`, and those words have to reach `claude`. A wrapper
+that swallows them starts a chat with none of charter's hooks and none of its guard.
 
 **There is no `charter harness add`.** A profile is added by editing `charter.local.toml`. A
 chat can run a command as easily as it can edit a file, so a command could never stand for
@@ -109,25 +108,24 @@ See [*A new or changed command asks once*](control-plane.md#a-new-or-changed-com
 **What differs is not what charter enforces — it is what each harness lets charter
 offer**, and `charter doctor` prints the gap rather than leaving you to find it:
 
-| | how it is installed | how it updates | what it cannot carry | what to do about it |
+| | how charter reaches a chat | how it updates | what it cannot carry | what to do about it |
 | --- | --- | --- | --- | --- |
-| Claude Code | `charter init` — the plugin, at `project` scope, for the plane it creates (`charter doctor --fix` for a plane that already exists) | `claude plugin update charter@charter` | — | — |
+| Claude Code | the app's own plugin, `charter-app`, loaded into each chat it starts with `--plugin-dir` — nothing installed | with the app | — | — |
+| Codex | charter's hooks, armed on each chat's command line as `-c hooks.<Event>=…` — nothing installed; Codex asks once to trust them | with the app | no status bar; no command-pattern permissions; no project-level config *file*, so no per-workspace config (a project `.codex/skills/` **is** read — a skills surface, not config); no prompt in front of `charter handoff`; no word when it stops mid-turn for your approval | `charter statusline --watch`; `guard ask` rules stay in charter's own hook; that hook still refuses a handoff from a sub-agent or from a run reporting `permission_mode: bypassPermissions`, and an attended chat's handoff runs without asking |
+| opencode | not started by this app — v1 starts Claude Code and Codex, and opencode follows | — | no status bar; no per-turn prompt hook; no ask at tool time; no per-workspace config | — until the app starts it |
 
 Claude Code's row is empty because nothing charter offers is out of reach there, not
-because charter fills every surface it has: since 0.57.0 charter writes no `statusLine`
-key, so its footer is the operator's to wire or leave empty. That is a choice, not a
-ceiling, which is why it is written here and not in the table.
-| opencode | `charter init` — one plugin under opencode's config dir, read by every project | charter moves it — its own file, compared byte for byte (`read_bytes`) with the one charter generates; anything else in that plugin directory is named too, and nothing charter did not write is ever overwritten | no status bar; no per-turn prompt hook; no ask at tool time; no per-workspace config; **no isolation from other plugins**; no refusal of a `charter handoff` from a sub-agent or an unattended run | `charter statusline --watch`; mid-session notes ride tool output already; charter's own tool-time asks allow and are not shown — denials are unaffected; a second plugin in that directory shares charter's globals and can disable its guards, so `doctor` names it — charter reports the realm, it cannot contain it; the plugin's tool payload carries neither `agent_id` nor `permission_mode`, so the `ask` rule in `opencode.json` is a handoff's whole gate |
-| Codex | the same plugin (`codex plugin`), plus `charter harness install codex` to name the harness | `codex plugin marketplace upgrade charter && codex plugin add charter@charter` | no status bar; no command-pattern permissions; no project-level config *file*, so no per-workspace config (a project `.codex/skills/` **is** read — a skills surface, not config); no prompt in front of `charter handoff` | `charter statusline --watch`; `guard ask` rules stay in charter's own hook; that hook still refuses a handoff from a sub-agent or from a run reporting `permission_mode: bypassPermissions`, and an attended chat's handoff runs without asking |
+because charter fills every surface it has: the app sets Claude Code's `statusLine` for a
+chat only where the settings in force fill it with nothing, so a footer the operator wired
+stays theirs. That is a choice, not a ceiling, which is why it is written here and not in
+the table.
 
-You never have to remember that third column — `charter update` asks the harness you are in
-and names its command (or, for opencode, just moves it). It is written down because a
-column charter fills in from one place is a column that cannot quietly go stale in three.
-`charter doctor` asks the same question for its `version lock` hint and moves nothing, not
-even opencode's plugin: it gets the answer `charter update` would, from the same code with the
-write skipped. Before #1039 a `doctor` under opencode regenerated that global plugin.
+The third column says the same thing twice because there is one thing to move. The plugin, the hooks it
+declares and the `charter` they call ship inside the app's bundle, and the app's updater
+moves all of them together ([updating.md](https://github.com/diazoxide/charter-app/blob/main/docs/updating.md)).
+Nothing is installed into Claude Code or Codex, so there is nothing there to keep in step.
 
-One artifact per harness, installed once — nothing is written into the repos you work in.
+Nothing per harness is installed, and nothing is written into the repos you work in.
 `charter doctor` and `charter harness list` print that last column against whichever
 harness you are in, each ceiling carrying its own answer. Where it is empty it stays empty:
 charter cannot conjure opencode a per-turn prompt hook, and a workaround that does not
@@ -175,29 +173,22 @@ missing resume row is the only sign.
 
 ## Wiring, and when it happens
 
-`charter init` writes each harness's wiring into the plane, and installs the one artifact
-charter can install for you: Claude Code's charter plugin, at `project` scope, for the plane
-it is creating. Codex is the exception (below) — its wiring is machine-global, so it waits
-to be asked by name.
-
-**`init`, `charter doctor --fix`, `charter harness install` — and the launch of the very
-harness the install is for.** Installation never happens as a side effect of an *unrelated*
-command: `charter workspace list` does not install software, and `charter reinit` — which
-re-runs the *wiring* — does not either. The first three doors are commands somebody typed,
-which is the same shape `charter harness install codex` has and the same reason charter
-refuses to write `~/.claude/settings.json` unasked. The fourth is `charter claude-alt` finding
-that `~/.claude-alt` has no charter plugin: the plugin is what makes that chat a guarded one,
-so the launch installs it, says so, and only then starts (*Per profile — wired automatically,
-or it refuses*, below).
+**`charter init` installs no software.** It writes the plane's own files — its settings, the
+`ask` rule in front of `charter handoff` — and nothing into a harness's config folder or
+anywhere outside the plane. `charter reinit` does the same. Charter's hooks and guard reach a
+chat because the app started it: every chat is armed at launch, for that session alone
+(*Per profile — armed at launch*, below), so there is no install to run, repair or keep up
+to date.
 
 **Plus one generated file per workspace, and only for Claude Code.** Claude Code reads
 project settings from the session's working directory and does not walk up, so a chat
 launched in `workspaces/<ws>/` — which is where the `+` and every workspace tab put it —
-would otherwise get no plugin and no `$CHARTER_HARNESS`. Charter mirrors the plane's
-`enabledPlugins` and `env` into `workspaces/<ws>/.claude/settings.json` at launch, records
-what it wrote in a `.charter-generated` sidecar, and never touches a file whose hash it
-cannot vouch for. (`statusLine` was the third key mirrored until 0.57.0; charter no longer
-writes one anywhere, so a plane that still carries one keeps it to itself.)
+would otherwise get none of the plane's plugins and none of its `env`. Charter mirrors the
+plane's `enabledPlugins` and `env` into `workspaces/<ws>/.claude/settings.json` at launch,
+records what it wrote in a `.charter-generated` sidecar, and never touches a file whose hash
+it cannot vouch for. Charter's own plugin does not depend on this file: it arrives on the
+command line. (`statusLine` was the third key mirrored until 0.57.0; charter writes none into
+any settings file now, so a plane that still carries one keeps it to itself.)
 `charter doctor`'s `workspace layer` row reports staleness; `charter workspace reinit` is
 the repair.
 
@@ -269,179 +260,54 @@ is **capability** — agents, skills, commands — and three things are delibera
 - **`CLAUDE.md` or any equivalent**, because a guest hides its own files and does not
   narrate the host's.
 
-### Per profile — wired automatically, or it refuses
+### Per profile — armed at launch
 
-A profile points a harness at another config folder, and **every kind loses charter's wiring
-when its folder moves**. Measured in throwaway folders against claude 2.1.269, codex-cli
-0.147.0 and opencode 1.18.23: under an empty `$CLAUDE_CONFIG_DIR` charter's plugin is not
-merely disabled, it is unknown to that folder, because the marketplace is known only to the
-folder it was added in. Under an empty `$CODEX_HOME` there is no plugin, no hook trust and
-no `shell_environment_policy`. Under a throwaway `$XDG_CONFIG_HOME` opencode has no shim.
+A profile points a harness at another config folder, and **charter's guard does not live in
+that folder**, so moving it moves nothing of charter's. The app arms every chat it starts on
+the command line, for that session alone, and writes nothing into any config folder:
 
-So a chat started on such a profile would look guarded and not be. **Where charter can wire
-the folder by itself, the launch does it** rather than refusing: a Claude Code profile gets
-charter's plugin installed into its config folder — the same `claude plugin marketplace add`
-and `claude plugin install charter@charter --scope project` that `charter harness install
-<name>` runs — and an opencode profile gets the shim written into its config home. One line
-says so, where you are looking — the pane, before the harness takes it; the terminal, for
-`--no-frame`; the tool output, for a handoff; `charter reopen`'s own report:
+- **Claude Code** gets `--plugin-dir <the bundled plugin>`: the app's own plugin,
+  `charter-app`, with every hook charter answers — the state hooks and the Bash guard — and
+  the `handoff`, `working-in-a-clone` and `update` skills, which reach the model as
+  `charter-app:<skill>`. Beside it, `--settings` carries `enabledPlugins` with
+  `charter-app@inline` pinned on — a project file a chat can write could otherwise turn it
+  off — and the Python charter's `charter@charter` turned off, so a plane whose settings
+  enable that plugin for your terminal sessions does not give an app chat two sets of hooks
+  and two `handoff` skills. `--settings` merges with the settings in force and wins where it
+  names a key (measured on claude 2.1.276 and 2.1.280), and it is for that session only: the
+  project file still enables `charter@charter` for every `claude` you run yourself.
+- **Codex** gets `-c hooks.<Event>=[…]` for the four state events Codex fires
+  (`SessionStart`, `UserPromptSubmit`, `Stop`, `SessionEnd`) and the Bash guard on
+  `PreToolUse`, each pointing at the app's `charter` by its absolute path. Codex lists them as
+  "Session flags" and runs them beside any hooks of your own in `$CODEX_HOME/config.toml`
+  (measured on codex-cli 0.147.0). They are inert until trusted: the Codex TUI asks at
+  startup, and records the answer in its own `[hooks.state]`, so one binary path is asked
+  about once, not once a chat. The app turns nothing of Codex's off, so a charter plugin the
+  Python charter installed into that `$CODEX_HOME` still runs as well.
+- **opencode** is not started by this app. A profile of that kind is read and listed, and a
+  start is refused: *charter-app v1 starts Claude Code and Codex, and opencode follows.*
 
-```
-✓ charter: wired 'claude-alt' — installed charter@charter into /Users/you/.claude-alt
-```
+Every chat also carries `$CHARTER_HARNESS` (the registry's name for its kind, whatever the
+profile is called), `$CHARTER_HARNESS_PROFILE` and `$CHARTER_ROOT` in its environment, and a
+`PATH` with the app's own `charter` first unless the profile sets its own.
 
-Then charter asks the harness again, and only a folder that now answers *wired* starts a
-chat. It is the launch of that very harness that installs, which is what keeps the standing
-rule — nothing installs software as a side effect of an unrelated command — intact: the
-command is `charter claude-alt`, and the plugin is what makes `claude-alt` a guarded chat.
-There is no question in between; the one that stands for your approval of the profile's
-command (`run this? [y/N]`) has already been answered, or the launch never got this far.
+**What still stops a chat on a profile**, each said before anything opens:
 
-**What it costs.** Measured 2026-09-15 with claude 2.1.272 against an empty folder, twice:
-`marketplace add` 7 s and 18 s — it clones charter's repository from GitHub, so it needs the
-network and is paced by it, and no login (the folder held no credentials and no account,
-and the environment carried no API key) — and `plugin install` 0.8 s and 1.3 s; a second
-launch pays nothing, because its probe (150 ms) finds the folder wired. The opencode shim is
-four files written in 35 ms with nothing spawned; opencode's own first `debug config` in a
-fresh config home took 8 s (it installs its dependencies there), then 450 ms. Two launches
-of one unwired profile at once are serialised with a lock under `.charter/`: the second
-waits, then finds the first one's work in place and says that instead of *installed*.
+- **A kind this app does not start** — opencode, above.
+- **A profile charter may not run a command for** — not approved yet, or declared in a
+  `charter.local.toml` git would commit. Nothing is run and nothing is written.
 
-**What still refuses**, each with the fix in the same sentence:
+**`charter doctor` shows a row per profile and runs nothing to fill it.** A profile it may
+ask about reads OK — *the app arms each chat with its own plugin, charter-app*, or for Codex
+*the app arms each Codex chat with charter's hooks; Codex asks once to trust them* — with the
+program it found. What can still be wrong is whether the harness can be found at all, and
+that is a warning naming the directories searched and the fix: an absolute command in
+`charter.local.toml`. `charter doctor --preflight`, which the SessionStart hook runs, shows no
+profile row.
 
-- **Codex — by construction.** Charter writes its half, the `shell_environment_policy` line,
-  into `$CODEX_HOME/config.toml`; the plugin install and the hook approval are Codex's own
-  commands and a prompt only a person inside a Codex session can answer, so the launch stops
-  and prints them with `CODEX_HOME=` in front, exactly as `charter harness install codex`
-  ends. The selector's row for such a profile stays refused with those steps.
-- **A folder charter could not ask** — a probe that timed out, exited non-zero or answered
-  something unparseable. An unknown is not a pass, and it is not installed over either:
-  installing over an unknown state is how a second copy appears.
-- **A profile charter may not run a command for** — not approved yet, or in a
-  `charter.local.toml` git would commit. Nothing is probed and nothing is written.
-- **An install that failed** — no network, a `claude` that refused a step. The refusal names
-  what the install said, and `charter harness install <name>` prints the whole of it:
-
-  ```
-  charter: profile 'claude-alt' is not wired, and charter could not wire it — failed: `claude
-  plugin install charter@charter --scope project -y` failed: <what claude said>. Nothing was
-  started. Wire it by hand: charter harness install claude-alt
-  ```
-
-- **A fix that is not the install** — the plugin is installed and disabled, or another file
-  shares opencode's plugin realm. The install would find its work present and change nothing,
-  so the launch refuses with the fix that does: the `claude plugin enable` below, or moving
-  the file.
-
-**This includes the built-ins.** `charter codex` on a plane where nobody wired Codex refuses
-with Codex's steps; `charter opencode` where `init` never wrote the shim writes it and starts.
-A chat that looks guarded and is not is the same failure whichever profile started it, and no
-flag launches one unguarded.
-
-**Wiring is detected by asking the harness under the profile's own environment**, never
-inferred from the profile's variable names — one account can be reached through variables
-that do or do not move the plugin. `$XDG_DATA_HOME` moves opencode's login and leaves its
-plugins where they are; `$CLAUDE_CONFIG_DIR` and `$CODEX_HOME` move both.
-
-| kind | what charter asks | what "wired" means |
-|---|---|---|
-| Claude Code | `<command> plugin list --json`, run in the chat's own directory with the profile's `env` | an install record of `charter@charter` covering that directory or the plane, whose `enabled` is true |
-| Codex | reads `$CODEX_HOME/config.toml` — no subprocess | all three: `plugins."charter@charter".enabled`, `shell_environment_policy.set.CHARTER_HARNESS = "codex"`, and a trusted entry for charter's **guard** hook — `charter hook pretooluse`, at the position the installed plugin's `hooks.json` gives it |
-| opencode | `<command> debug config` with the profile's `env` | all three: a `plugin` entry naming charter's shim, the shim byte-identical to what charter writes, and no other file in `plugin/` |
-
-Measured costs, five runs each: `claude plugin list --json` 137 ms against an empty folder
-and 178 ms against a full one; `opencode debug config` 631 ms and 718 ms; Codex parses one
-file. A launch pays it twice — once before tmux and once in the pane — and always freshly.
-The `+`, a workspace tab, `charter reopen` and a handoff ask before they open anything, so
-their refusal has somewhere to be said, and the pane asks again; nothing in between does.
-The install happens at whichever of the two first finds the folder unwired — the opener's —
-and the pane's then finds it wired, so a start still pays two probes and one install.
-
-**Nothing is asked of a profile charter may not run.** A probe runs the profile's own
-command, so it waits for the same two things a launch does: git would not commit
-`charter.local.toml`, and you have approved that command (`run this? [y/N]`). Until then
-`charter doctor` says which of the two it is waiting for, and probes nothing.
-
-Three details that decide answers, all measured on 2026-09-12:
-
-- **`enabled` is the effective setting at the directory charter asks from**, merged local >
-  project > user, and every listed entry of the plugin carries the same value. A disable
-  written only to `<dir>/.claude/settings.local.json` — or only to that directory's
-  `.claude/settings.json` — flips it, so charter reads no settings file of its own.
-- **An install covering the plane covers a chat in its workspace.** `charter init` installs
-  at `project` scope for the plane root, while a chat stands in `workspaces/<ws>/`; charter
-  mirrors the plane's `enabledPlugins` into that directory, so the record that covers the
-  plane is the one that answers there.
-- **Codex records hook trust lazily**, one entry per hook as each first fires — a machine
-  that has been running charter under Codex for weeks held 12 of the plugin's 18 keys — and
-  a `trusted_hash` cannot be recomputed from the plugin's `hooks/hooks.json`. So charter
-  asks whether charter's **guard** hook — `charter hook pretooluse`, the one on `Bash` that
-  refuses a command — was approved in that home at all. Neither an approved SessionStart
-  hook nor the approved `Task|Agent` dispatch hook is enough: Codex asks about each hook on
-  its own, and neither of those refuses a command. Codex numbers its trust entries by
-  position in the installed plugin's own `hooks/hooks.json`
-  (`$CODEX_HOME/plugins/cache/charter/charter/<version>/`), and those positions move between
-  releases, so charter reads the guard's position there; when two cached versions disagree,
-  it is not wired. An old entry survives a change to a hook's command.
-- **A disabled plugin's fix is `claude plugin enable charter@charter --scope local`, run in
-  the chat's own directory**, and charter prints it with that `cd` in front. Measured on
-  claude 2.1.270 (2026-09-13): it undid a disable in that directory's `settings.local.json`,
-  in its `settings.json`, and in a git plane root's `settings.local.json`, which reaches a
-  session below it. `--scope project` and `--scope user` each exited 1 over a local disable
-  and changed nothing.
-
-**Charter cannot tell** — a probe that times out, exits non-zero or answers something
-unparseable — is also a refusal, with the probe to run by hand printed beside it. An unknown
-is not a pass.
-
-**What each surface does per profile:**
-
-- The **profile selector** lists a Claude Code or opencode profile whose folder lacks the
-  plugin as a row that starts, reading `not wired yet — Enter installs charter@charter into
-  /Users/you/.claude-alt`; Enter runs the launch, and the launch installs. A row charter
-  cannot wire alone — Codex without trust, a disabled plugin, a folder it could not ask —
-  stays refused with the sentence above.
-- The **launch** — `charter <profile>`, the pane, `--no-frame`, `charter reopen`, a handoff —
-  installs at its first probe and says the one line where that path's operator is looking.
-  For `charter <profile>` typed at a terminal that line lands just before the frame covers the
-  screen, and is there when the frame exits.
-
-- `charter init` installs for every approved Claude Code and opencode profile, the same two
-  doors an install may come through. A Codex profile is reported as opt-in.
-- `charter reinit` installs nothing. It writes the opencode shim into each opencode
-  profile's own config home, and for a Claude Code profile it reports the gap and names
-  `charter harness install <name>`.
-- `charter harness install <name>` resolves a profile first and a registry name second, so
-  `charter harness install codex` still means what it always did. A profile you have not
-  approved is shown and asked about first, as a launch would ask, and refused where there is
-  no terminal to ask on. It wires that profile's own folder and then asks the harness
-  whether that worked — and exits non-zero when it did
-  not, which is the ordinary outcome for Codex, whose plugin install and hook approval are
-  Codex's own commands. Charter prints them with `CODEX_HOME=` in front.
-- `charter doctor` shows a row per profile and probes them concurrently; it never installs.
-  Its hint on an unwired Claude Code or opencode profile names `charter harness install
-  <name>` and adds that the next launch installs it itself.
-  `charter doctor --preflight`, which the SessionStart hook runs, probes nothing and shows
-  no profile row: a probe costs a subprocess and writes into somebody's account folder, and
-  a hook's whole budget is 20 seconds.
-
-**Limits, stated rather than designed around:**
-
-- `claude plugin list --json` **writes** `.claude.json` and a `backups/` directory into the
-  folder it asks about. Charter's probe is otherwise a read.
-- **Codex's home is the one charter can see.** One a wrapper script exports on its way to
-  `codex` is invisible here, and charter will report on the wrong file without knowing it.
-- `charter dispatch`'s transcript lookup and charter's persona skill lookup answer for the
-  **default** config folder, not for a profile's. Neither is about one chat.
-- The launch record and the wiring cache under `.charter/` are **as writable by a chat as
-  `charter.local.toml` is** — no path guard covers that directory. That is why a launch
-  never trusts the cache and always probes: the cache exists to draw the selector's rows.
-  An entry is stamped with the config folder's two files and every `.claude/settings.json`
-  and `settings.local.json` from the chat's directory up to the plane root, and an entry
-  that is a day old or dated ahead is not used.
-- A config file a chat left in a shape the harness never writes — a `plugins."charter@charter"
-  = true`, a trust entry that is a string, a NUL byte in a profile's path — is **charter
-  could not tell**, and refuses like any other unknown.
+**The one place a chat can still be unarmed:** a build of the app that carries no plugin — a
+development build without one — starts a Claude Code chat with nothing added, and the chat
+reads `unknown` rather than being half-armed from somewhere else.
 
 ## `charter statusline --watch`
 
@@ -456,14 +322,12 @@ whether the status line was used for anything but that footer. It is: this loop,
 are built out of the same renderers. So charter stopped WIRING a status line and kept the
 command that draws one.
 
-## The one exception: Codex
+## Codex needs nothing extra now
 
-Codex needs the extra command for one reason: its hooks arrive with the plugin, but nothing
-in a plugin can tell a shell which harness it is, so `charter harness install codex` writes
-that single line.
+The Python charter needed `charter harness install codex` for one line: its Codex hooks
+arrived with a plugin, and nothing in a plugin could tell a shell which harness it was. The
+app sets `$CHARTER_HARNESS` in the environment of every chat it starts and arms Codex's hooks
+on the command line, so there is no line to write and no command to write it.
 
-If it finds hooks declared in `~/.codex/config.toml` it refuses and says so — those would
-run alongside the plugin's, and charter would fire twice a turn.
-
-Why the boundary sits where it does:
+Why the boundary sat where it did, for the Python charter:
 [ADR 0015](https://github.com/diazoxide/charter/blob/0ae0961d8a6a8e59b48ba43b10d28de8fd87afb7/docs/adr/0015-the-boundary-moves-with-the-harness.md).

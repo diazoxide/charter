@@ -5,7 +5,7 @@
 //! which the workspace forbids — and would leak into every other test in the binary.
 //!
 //! The ladders themselves are unit-tested rung by rung in `charter_core::active`, and proved
-//! against the Python charter scenario by scenario in `tests/differential/run.py`. What is
+//! against the Python charter's recorded answers scenario by scenario (ADR 0046). What is
 //! here is the part neither of those can see: that the COMMANDS reach the ladder at all.
 
 use std::path::{Path, PathBuf};

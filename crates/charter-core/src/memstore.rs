@@ -44,8 +44,8 @@ pub const INDEX: &str = "MEMORY.md";
 /// device on Windows, where the write succeeds and the note is gone. The fix is here rather
 /// than a refusal because this name is charter's own derivation and not one the operator
 /// typed: the brief for #96 is that charter must not silently rename a WORKSPACE, and it has
-/// always chosen this filename itself. Declared against the frozen Python, which writes
-/// `nul.md`, in `tests/differential/run.py`.
+/// always chosen this filename itself. A declared difference from the frozen Python, which
+/// writes `nul.md`.
 pub fn slug(title: &str) -> String {
     let lowered = title.to_lowercase();
     let mut out = String::with_capacity(lowered.len());
@@ -1056,8 +1056,8 @@ mod tests {
     fn a_title_whose_filename_would_be_a_device_gets_one_that_travels() {
         // charter-app#96. A persona memory carries no timestamp prefix, so `nul.md` is the
         // whole filename — and on Windows that is the null device: the write succeeds, and
-        // the note the operator just wrote is gone. Declared against the frozen Python,
-        // which writes `nul.md`, in `tests/differential/run.py`.
+        // the note the operator just wrote is gone. A declared difference from the frozen
+        // Python, which writes `nul.md`.
         assert_eq!(slug("NUL"), "nul-note");
         assert_eq!(slug("con"), "con-note");
         assert_eq!(slug("COM1"), "com1-note");

@@ -660,10 +660,14 @@ dependencies = [
 name = "charter-cli"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "charter-core",
  "chrono",
  "clap",
+ "flate2",
+ "regex",
  "serde_json",
+ "sha2",
  "stand-in",
  "tempfile",
 ]
@@ -676,6 +680,7 @@ dependencies = [
  "charter-core",
  "chrono",
  "dirs",
+ "flate2",
  "libc",
  "memchr",
  "portable-pty",

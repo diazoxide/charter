@@ -102,11 +102,17 @@ release notes are `CHANGELOG.md`. Nothing is added to the corpus.
 - The pin dialog's news list is the corpus between the pin and the app's version, and only on
   drift. The corpus names no version of this app, so the list is empty. The field stays for the
   day the app's own notes feed it.
-- The corpus is still compared byte for byte with the Python charter's copy in the differential
-  run. That comparison is what keeps it an honest record of what that charter shipped, and
-  `news/SOURCE` stays for as long as it runs.
+- The corpus was compared byte for byte with the Python charter's copy in the differential run,
+  and `news/SOURCE` pinned it to the oracle's commit for that comparison. Both went when the
+  oracle was retired ([ADR 0046](0046-the-python-oracle-is-frozen-into-recorded-fixtures.md)):
+  the corpus is frozen, so nothing is left for it to drift from, and `news/SOURCE` now only says
+  where the entries came from.
 
 ## What the differential says about it
+
+Written while the Python charter still ran beside the app in CI. Its answers are recorded
+fixtures now ([ADR 0046](0046-the-python-oracle-is-frozen-into-recorded-fixtures.md)), and the
+four `version-*` scenarios below are replayed from them, the divergence included.
 
 The words differ, as they already did under ADR 0030. The exit status is compared in four
 states. Three agree:

@@ -627,50 +627,24 @@ runs `charter doctor --preflight`, which skips it. `charter doctor`'s `harness p
 warns for each refusal above, with each state's own fix, and for a `default` that names no
 profile this machine has.
 
-### The profile is wired
+### The profile is armed at launch
 
-Charter's guard lives in the harness's own config folder, and a profile names another one.
-**A profile whose folder does not carry charter's wiring is wired by the launch where
-charter can do that alone, and refuses to start where it cannot.** Asking runs the
-profile's own command, so it is asked only once you have approved that command — a new
-`claude-alt` shows `run this? [y/N]` first. A yes is followed by one line and then the chat:
+Moving a profile to another config folder moves nothing of charter's: **its guard does not
+live in that folder.** The app arms every chat it starts on the command line, for that session
+alone, and installs nothing into any folder — a Claude Code chat gets the app's own plugin,
+`charter-app`, with `--plugin-dir`, and `--settings` turning the Python charter's
+`charter@charter` plugin off for that chat only; a Codex chat gets charter's hooks as
+`-c hooks.<Event>=…` flags, which Codex asks once to trust. So a new `claude-alt` needs no
+wiring step: once you have approved its command, it starts armed.
 
-```
-✓ charter: wired 'claude-alt' — installed charter@charter into /Users/you/.claude-alt
-```
+What still stops a chat on a profile is said before anything opens, and nothing is written:
+a profile you have not approved, a `charter.local.toml` git would commit, or a kind this app
+does not start — opencode, for now. `charter doctor`'s row per profile runs nothing; it says
+how the app arms that kind and warns only when the harness's program cannot be found, naming
+where it looked.
 
-That is the same install `charter harness install claude-alt` runs, into the folder the
-profile names and no other, and charter asks the harness again before it starts anything:
-only a folder that now answers *wired* gets a chat. An opencode profile gets its shim the
-same way. **Codex does not** — its hooks are trusted only inside a Codex session — so
-charter writes its half of the wiring and the launch stops with Codex's own steps:
-
-```
-charter: profile 'codex-alt' is not wired — /Users/you/.codex-alt/config.toml: charter@charter
-is not an enabled plugin; no copy of charter@charter under … places charter's guard hook, so
-there is no guard to trust, so a chat on it would run without charter's guard. Nothing was
-started. Wire it: CODEX_HOME=/Users/you/.codex-alt codex plugin marketplace add …
-```
-
-**No flag launches one unguarded**, and the rule covers the built-ins: `charter codex` on a
-plane where nobody wired Codex refuses this way, and `charter opencode` where `init` never
-wrote the shim writes it and starts. A chat that looks guarded and is not is the same
-failure whichever profile started it.
-
-A probe that cannot answer — it timed out, exited non-zero, or said something charter could
-not read — refuses, prints the probe to run by hand, and installs nothing over the doubt. An
-unknown is not a pass. An install that fails refuses too, naming what the install said, and
-so does a folder whose fix is not the install (a plugin installed and disabled).
-
-Every launch asks freshly, before tmux and again in the pane — a `+`, a tab, `charter
-reopen` and a handoff ask before they open anything, and the pane asks again. The install
-happens at the first of those that finds the folder unwired, and the second finds it wired.
-A launch never reads the remembered answer under `.charter/`: that file is as writable by a
-chat as `charter.local.toml` is, and it exists to draw rows, not to start chats.
-
-What "wired" means per kind, what the launch, `init`, `reinit`, `charter harness install`
-and the selector each do about it, and the measured cost of each probe and of the install
-are in [harnesses.md](harnesses.md#per-profile--wired-automatically-or-it-refuses).
+What each kind is armed with, and what a chat on each can and cannot report, are in
+[harnesses.md](harnesses.md#per-profile--armed-at-launch).
 
 ### `default` — bare `charter`
 

@@ -2,8 +2,8 @@
 //! purpose — each a place the differential harness cannot compare, because the two are
 //! meant to disagree.
 //!
-//! Everything else these commands do is compared byte for byte against Python by
-//! `tests/differential/run.py`; what is here is what that harness would report as a
+//! Everything else these commands do is compared byte for byte against Python's recorded
+//! answers (ADR 0046); what is here is what that replay would report as a
 //! difference: a name that is a path, and a link read by name.
 //!
 //! **"the rungs of which workspace, which persona that this binary does not climb" used to

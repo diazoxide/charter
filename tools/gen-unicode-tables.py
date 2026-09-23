@@ -28,9 +28,12 @@ than taken from a crate with its own opinion (`unicode-width` deviates deliberat
 emoji presentation sequences and zeroes default-ignorables, neither of which
 `east_asian_width` says).
 
-Run it with the same CPython the differential oracle runs on, and paste the output into
-`crates/charter-core/src/tui/tables.rs`. The header line records which Unicode version the
-tables are of, so a future reader can tell whether a disagreement is a bug or a version.
+Run it with a CPython whose Unicode version is the one the header of `tables.rs` names (the
+recorded answers in `tests/fixtures/recorded/` were taken under it, ADR 0046), and paste the
+output into `crates/charter-core/src/tui/tables.rs`. The header line records which Unicode
+version the tables are of, so a future reader can tell whether a disagreement is a bug or a
+version. It is a generator for a checked-in file, run by hand: nothing in CI or in a build runs
+it.
 
     python3 tools/gen-unicode-tables.py > crates/charter-core/src/tui/tables.rs
     rustfmt --edition 2024 crates/charter-core/src/tui/tables.rs

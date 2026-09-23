@@ -19,9 +19,17 @@ in `diazoxide/charter` as history (ADR 0044). A new decision is the next number 
 - **Nothing parses harness output to decide anything.** A session's state comes from hooks only.
 - **The plane on disk has the format `docs/plane-format.md` records.** Never change it here
   without that document changing first.
-- **Nothing shipped depends on the Python charter.** No message, doc page or code path in the
-  app or the `charter` binary tells anyone to install or run it. It is allowed only as the
-  differential oracle in CI (ADR 0044, ADR 0045).
+- **Nothing depends on the Python charter, shipped or not.** No message, doc page or code path in
+  the app or the `charter` binary tells anyone to install or run it, and nothing in CI or the
+  tests installs it or contacts `diazoxide/charter`: its answers are frozen into recorded
+  fixtures (ADR 0044, ADR 0045, ADR 0046). No Python in the shipped path.
+- **A recorded answer changes only on purpose.** `tests/fixtures/recorded/behaviour.jsonl` is
+  what the Python charter answered for 404 scenarios, replayed against every build by
+  `cargo test -p charter-cli --test recorded_behaviour` (add scenario names after `--` for
+  fewer). When a change is meant to move one, re-record it with
+  `CHARTER_RECORDED_BLESS=1 cargo test -p charter-cli --test recorded_behaviour -- <name>`, read
+  the fixture's diff, and say in the PR which contract moved and why. Never re-record to make a
+  red run green without that sentence (ADR 0046).
 - **No `unsafe`, with one audited exception** (`unsafe_code = "deny"` workspace-wide). The
   exception is `charter_core::executor::inherit_nothing_else`: the `pre_exec` hook that closes
   every descriptor above 2 in an extension's program, because nothing but code run between

@@ -70,23 +70,24 @@ CI also runs clippy on the app crate (`--workspace`), after creating an empty `a
 compiles without a frontend build.
 
 CI runs a `windows` job too, and it is **evidence, not a gate**: `continue-on-error`, not one
-of the nine required checks, and it reports the whole `cargo check` error list rather than
+of the eight required checks, and it reports the whole `cargo check` error list rather than
 stopping at the first line. Nothing has been ported to Windows, so it is expected to be red —
 what it is for is making "what is true on Windows" a measurement instead of a guess. What it
 has found so far is [ADR 0031](docs/adr/0031-windows-gets-charters-guards-or-it-gets-no-charter.md),
 and #95 to #103.
 
-Every plane write is also checked against the Python charter itself: the same command is run by
-both implementations against copies of one fixture plane, and the trees they leave are compared
-byte for byte (spec decision 14). Python is a dev dependency of that run and of nothing else —
-never of the app, the binary or an installer (decision 15). `uv` fetches it, pinned to the
-commit that generated the fixtures:
+Every plane write is also checked against what the Python charter answered for the same
+command on the same fixture plane: its output, its exit status and the tree it left, byte for
+byte. Those answers were recorded once, on 2026-09-23, and are replayed against every build with
+no Python anywhere (ADR 0046):
 
 ```bash
-cargo build -p charter-cli
-tests/differential/run.py                    # every scenario
-tests/differential/run.py --scenario vision  # one, with a diff when it differs
+cargo test -p charter-cli --test recorded_behaviour                  # every scenario
+cargo test -p charter-cli --test recorded_behaviour -- save- doctor-  # only those
 ```
+
+A change that is meant to move a recorded answer re-records it
+(`CHARTER_RECORDED_BLESS=1`, same command) and says why in the PR.
 
 To measure the app against the spec's limits, with tmux beside it as a reference (macOS; it
 takes about twenty minutes, opens windows on screen and brings each to the front, and needs the

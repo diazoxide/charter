@@ -154,9 +154,8 @@ mod tests {
     /// ADR 0035 and spec decision 27 reversed the default at the top of a git repository, and
     /// these two pages went on printing the old one — `charter init --clone-this-repo`, an
     /// option this binary does not have — because the corpus check held them byte for byte
-    /// against a frozen Python charter that still has it. `tests/differential/run.py`'s
-    /// `DOCS_DIVERGE` is what lets them be right; this is the cheap half of the same claim,
-    /// in the suite a person runs before pushing rather than in the job that takes minutes.
+    /// against a frozen Python charter that still has it. The pages are this app's own now
+    /// (ADR 0044), and this is what holds the option out of them.
     ///
     /// It asks about the OPTIONS rather than about a sentence, because the sentence is the
     /// part that is allowed to be rewritten and the option is the part that must be right:
@@ -176,7 +175,7 @@ mod tests {
             assert!(
                 !page.contains("--clone-this-repo"),
                 "docs/{topic}.md offers `charter init --clone-this-repo`, whose flow ADR 0035 \
-                 reversed — see DOCS_DIVERGE in tests/differential/run.py"
+                 reversed (ADR 0035)"
             );
         }
         for topic in ["control-plane", "install"] {

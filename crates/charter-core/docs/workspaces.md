@@ -29,9 +29,10 @@ The name is `[workspace] default` if your `charter.toml` sets one.
 
 Claude Code reads project settings from the session's working directory and **does not walk
 up** for them. A chat launched in `workspaces/<name>/` — which is where the `+` and every
-workspace tab put it — would therefore get no plugin and no `$CHARTER_HARNESS`, while its
-agents and skills arrived anyway, because those *do* walk up and this directory is not a
-git boundary.
+workspace tab put it — would therefore get none of the plane's plugins and none of its
+`env`, while its agents and skills arrived anyway, because those *do* walk up and this
+directory is not a git boundary. (Charter's own plugin and `$CHARTER_HARNESS` do not ride on
+this file: the app puts them on the chat's command line and in its environment.)
 
 So charter generates `.claude/settings.json` here, at launch: the plane's own
 `enabledPlugins` and `env`, plus the **restrictive half** of its `permissions`. Skills come

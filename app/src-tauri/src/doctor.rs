@@ -11,7 +11,7 @@
 //! So this runs [`charter_core::doctor::Doctor`] **in the app's own process**, on the plane the
 //! window names, and hands the rows over unchanged. Thin by design, as `worktrees.rs` is: every
 //! row, every sentence and every verdict is the core's, the same ones `charter doctor --json`
-//! prints (and `tests/differential/run.py` compares byte for byte with Python's). Nothing here
+//! prints (and the recorded `doctor-*` scenarios hold byte for byte to Python's, ADR 0046). Nothing here
 //! rewords a row.
 //!
 //! # Two depths, and who asks for which

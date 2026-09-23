@@ -348,7 +348,7 @@ which grew a `VISION` column for exactly this. On an unattended run the block sa
 that `charter handoff` is refused there, and names `charter ws todo --workspace` — the
 refusal and the fix in the same breath.
 
-**`charter:handoff`** is the procedure, shipped as a skill with the plugin: apply the two
+**`charter-app:handoff`** is the procedure, shipped as a skill with the app's plugin: apply the two
 tests, find the workspace, write the brief from a template (goal, what is known with paths,
 done when, constraints, and the claim-a-piece line), quiz with the brief shown **in full**,
 and run the command only on a yes. `charter doctor` reports a plane that keeps its own copy

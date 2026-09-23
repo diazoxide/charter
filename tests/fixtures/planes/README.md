@@ -1,7 +1,6 @@
 # Fixture planes
 
-Two control planes, written by the Python charter itself, for tests on both sides of the
-rebuild to read. The format they are in is specified in
+Two control planes, written by the Python charter itself, for the tests to read. The format they are in is specified in
 [`docs/plane-format.md`](../../../docs/plane-format.md); this directory is the "fixture planes" that spec calls for (ADR 0025,
 spec decision 13).
 
@@ -10,29 +9,23 @@ spec decision 13).
 | `minimal/` | What `charter init` leaves behind, and nothing else |
 | `daily/` | A plane in use: a LIVE workspace with a clone, memory, todos and a snapshot; a second workspace left local; a second persona with its own and shared memory; a vault registry; and the session state a harness run leaves in `.charter/` |
 
-`--check` compares the working tree, not the index, so it only means anything on a clean
-checkout: a file left behind by an earlier run makes it pass locally and fail in CI. Run
-`git status --ignored tests/fixtures/planes` if a local pass looks too easy.
-
-**Nothing here is hand-written.** Every byte is what charter wrote, so the fixtures cannot
-drift from the implementation they describe by someone editing them to match a hope. Edit
-`generate.py` and regenerate instead.
+**Nothing here is hand-written, and nothing regenerates it any more.** Every byte is what the
+Python charter (pinned at `50d31dc`) wrote when `generate.py` ran it; on 2026-09-23 the Python
+oracle was retired (ADR 0046) and the generator with it, so these planes are DATA now — the
+starting point every recorded scenario in `tests/fixtures/recorded/` is replayed from, and what
+`crates/charter-core/tests/fixture_planes.rs` reads. Change one only on purpose, in a PR that
+says why, and re-record the scenarios that start from it
+(`CHARTER_RECORDED_BLESS=1 cargo test -p charter-cli --test recorded_behaviour`): every
+recorded answer assumes these exact bytes.
 
 ```bash
-./generate.py                       # regenerate both planes
-./generate.py --check               # regenerate elsewhere and diff (what CI runs)
-./generate.py daily                 # one plane
 git add -f tests/fixtures/planes    # a plane's .gitignore hides its own files
 ```
 
-`generate.py` is a [PEP 723](https://peps.python.org/pep-0723/) script: `uv` reads its
-header and installs what it needs. The Python charter is pinned there to a commit, so a
-regeneration is reproducible; moving that pin is how the fixtures follow a charter release.
-
-## What is pinned, and why
+## What was pinned, and why
 
 charter records who did a thing and when, and both would otherwise change on every run and
-on every machine. The generator pins:
+on every machine. The generator pinned:
 
 | Thing | Pinned to | How |
 | --- | --- | --- |
@@ -47,13 +40,13 @@ on every machine. The generator pins:
 
 - **File modes.** charter writes `.charter/` as `0700` and the files in it as `0600`, and
   git carries only the executable bit — so on any fresh clone or CI checkout they come back
-  `0755`/`0644`, and `--check` does not compare modes. A test about modes has to create the
-  files and let charter write them; reading a mode off a checked-out fixture measures git,
-  not charter.
+  `0755`/`0644`, and the generator's `--check` did not compare modes. A test about modes has
+  to create the files and let charter write them; reading a mode off a checked-out fixture
+  measures git, not charter.
 - **Empty directories.** A fresh plane has `inventory/` and `workspaces/` with nothing in
   them, and git cannot carry an empty directory. They are part of the format, so each plane
-  records its own in `<plane>.empty-dirs` beside it, and `--check` compares that listing. A
-  test that needs the directories themselves creates them from that file.
+  records its own in `<plane>.empty-dirs` beside it. A test that needs the directories
+  themselves creates them from that file, as the recorded-behaviour replay does.
 - **Every `.git` directory**, the plane's own and each clone's. Git will not track a path
   inside a `.git` directory, so a fixture that kept one could not be committed. This also
   drops `<clone>/.git/info/exclude`, which charter writes and the format specifies: a test
@@ -68,7 +61,7 @@ on every machine. The generator pins:
   `docs/plane-format.md` documents each of those files; a test that needs one writes it
   through the same writer charter uses.
 
-## A rule for editing `generate.py`
+## A rule for editing a fixture
 
 Keep fixture titles ASCII. Memory and todo filenames are slugs of the title, and a title
 with an accented character is stored NFD on macOS and NFC on Linux — the fixture would then

@@ -55,10 +55,11 @@
 //!
 //! # Three defects this port found in the frozen Python, and REPRODUCES
 //!
-//! The Python is the differential's oracle, so a port that is right where the oracle is wrong is
-//! a port that fails its own test. Each is filed upstream and each has a row in
-//! `fixtures/corpora/shellseg-oracle.jsonl` pinning today's answer, so the fix landing there
-//! shows up here as a divergence rather than silently:
+//! The Python was the differential's oracle, so a port that was right where the oracle was wrong
+//! was a port that failed its own test. Each was filed upstream and each has a row in
+//! `fixtures/corpora/shellseg-oracle.jsonl` pinning the answer. The oracle is frozen now (ADR
+//! 0046), so a fix upstream no longer shows up here by itself: fixing one in this port is a
+//! decision to change that row, made on purpose:
 //!
 //! * **charter#1164** — `_file_operands` skips the value of `-f`/`--file`, and for `sed`, `awk`,
 //!   `grep`, `rg` and `ag` that value is a file the program OPENS. `awk` quotes the offending

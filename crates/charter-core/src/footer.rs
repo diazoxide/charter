@@ -22,9 +22,8 @@
 //! `statusline-alerts-*` differential scenarios. The
 //! seam is the zone rule, which is charter's own divider and not one invented for the port:
 //! everything above it — the top border, the identity row and the rule itself — is byte for
-//! byte what charter prints, and the differential compares exactly that
-//! (`statusline-*-identity-row` in `tests/differential/run.py`, which cuts both stdouts at the
-//! rule).
+//! byte what charter prints, and the recorded scenarios compare exactly that
+//! (`statusline-*identity-row*`, cut at the rule, ADR 0046).
 //!
 //! Why a seam at all: zone 2 is a `git status` per clone, linked worktrees drawn as rows,
 //! persona chips with vault health and memory counts, and the row planner that

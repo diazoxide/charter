@@ -3,7 +3,7 @@
 //! A port of `charter/doctor.py` and `commands.cmd_doctor`. Each check is one [`Row`] — a
 //! name, a status, a sentence and a repair — and `--json` prints them in exactly the shape
 //! Python's `json.dumps(indent=2)` does, because other tools read that output and it is a
-//! contract (`tests/differential/run.py` compares it byte for byte).
+//! contract (the recorded `doctor-*` scenarios hold it byte for byte, ADR 0046).
 //!
 //! # An absent answer is not health
 //!

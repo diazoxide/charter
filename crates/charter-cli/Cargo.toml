@@ -25,6 +25,20 @@ serde_json.workspace = true
 charter-core = { workspace = true, features = ["fenced"] }
 stand-in.workspace = true
 tempfile.workspace = true
+# The recorded-behaviour replay (ADR 0046): the scenarios' masks, and the file contents they
+# carry compressed and by hash.
+base64 = "0.22"
+flate2 = "1"
+regex = "1"
+sha2 = "0.10"
+
+# Every scenario the Python differential ran, replayed against this build's `charter` and
+# compared with what was recorded (ADR 0046). Its own runner rather than libtest's, so one
+# failure names its scenario and the run can be narrowed to one by name.
+[[test]]
+name = "recorded_behaviour"
+path = "tests/recorded_behaviour/main.rs"
+harness = false
 
 [lints]
 workspace = true

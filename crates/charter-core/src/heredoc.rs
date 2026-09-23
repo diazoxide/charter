@@ -53,11 +53,12 @@
 //!
 //! # The evidence
 //!
-//! `tests/differential/shellseg.py` — stage 1's harness, extended rather than replaced — puts the
-//! same question to this module and to the frozen Python over hundreds of thousands of generated
-//! command lines, comparing each answer SEPARATELY so a divergence is attributed rather than
-//! merely seen, and records `fixtures/corpora/shellseg-oracle.jsonl` for
-//! `tests/the_shell_is_read_the_way_python_reads_it.rs` to replay with no Python present.
+//! Stage 1's differential harness, extended rather than replaced, put the same question to this
+//! module and to the frozen Python over hundreds of thousands of generated command lines,
+//! comparing each answer SEPARATELY so a divergence was attributed rather than merely seen. Its
+//! answers are recorded — `fixtures/corpora/shellseg-oracle.jsonl` and a coverage-chosen subset of
+//! the generated cases, `shellseg-generated.jsonl.gz` (ADR 0046) — and
+//! `tests/the_shell_is_read_the_way_python_reads_it.rs` replays them with no Python present.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;

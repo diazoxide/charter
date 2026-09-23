@@ -5,7 +5,7 @@ mutants.out*/
 # Agent worktrees, created by the harness for isolated sub-agents.
 .claude/worktrees/
 
-# Python bytecode, which the differential run leaves behind when it is imported.
+# Python bytecode, which the CI tools under `tools/` can leave behind.
 __pycache__/
 
 # The charter binary the release workflow stages as a Tauri sidecar before bundling.

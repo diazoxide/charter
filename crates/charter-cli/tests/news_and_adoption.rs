@@ -1,8 +1,8 @@
 //! `charter news` and the adoption half of `charter update`, through the binary.
 //!
-//! The rendering of an entry is compared against the Python charter by
-//! `tests/differential/run.py`, one scenario per version, and this file does not repeat that.
-//! What it covers is the two things that harness cannot:
+//! The rendering of an entry was compared against the Python charter one scenario per version
+//! until the corpus was frozen and that comparison retired (ADR 0045, ADR 0046). What this file
+//! covers is the two things that comparison never could:
 //!
 //! * **`--pending`**, whose Python answer is a function of the MACHINE — the five probes the
 //!   corpus ships run `persona lint` and `frame-probe`, and whether those exit 0 depends on the

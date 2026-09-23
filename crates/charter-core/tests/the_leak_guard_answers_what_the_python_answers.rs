@@ -1,12 +1,17 @@
 //! Every command line the leak guard's docstrings name as a bypass that SHIPPED, answered here
 //! the way the frozen Python answers it — with no Python present.
 //!
-//! The answers are not written by hand. `tests/differential/shellseg.py --record` ran each of
-//! these through the Python charter pinned at the commit the fixture planes come from;
-//! `--check` fails if the file stops being what the oracle says. This replays the stage-3 half
-//! of that recording, so the ordinary `cargo test` job holds the line and the differential job
-//! — which fuzzes 200,000 generated cases against the live oracle — is the wider net rather
-//! than the only one.
+//! The answers are not written by hand, and they no longer change on their own. The retired
+//! `shellseg.py` differential harness ran each command line through the Python charter pinned at
+//! 50d31dc and recorded what it said, once, on 2026-09-23: the curated rows
+//! (`fixtures/corpora/shellseg-oracle.jsonl`) and a coverage-selected subset of its 200,000 seeded
+//! cases (`shellseg-generated.jsonl.gz`). Since then the recording IS this app's contract, and
+//! no Python is needed or consulted. To change an answer deliberately, edit the row and say why
+//! in the pull request (`fixtures/corpora/README.md`). Where this file says "the harness" it
+//! means that script; the names it cites are the script's, kept so a row can be traced to what
+//! produced it.
+//!
+//! This replays the stage-3 half of that recording: the leak guard.
 //!
 //! # Why this is a test binary of its own
 //!
@@ -24,6 +29,8 @@
 //! only tables here are the two the fixture itself defines — the directories a case may run in
 //! and the entries the glob probe is put to — and both are built from the root this test just
 //! made.
+
+mod oracle_corpus;
 
 use std::path::{Path, PathBuf};
 
@@ -129,17 +136,6 @@ fn rel(root: &Path, p: Option<&Path>) -> Value {
     }
 }
 
-fn corpus() -> Vec<Value> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/corpora/shellseg-oracle.jsonl");
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|err| panic!("cannot read {}: {err}", path.display()));
-    text.lines()
-        .filter(|l| !l.is_empty())
-        .map(|l| serde_json::from_str(l).expect("each line is one JSON object"))
-        .collect()
-}
-
 fn strings(v: &Value) -> Vec<String> {
     v.as_array()
         .expect("a recorded probe list")
@@ -150,7 +146,10 @@ fn strings(v: &Value) -> Vec<String> {
 
 #[test]
 fn the_recorded_python_answer_is_the_answer_this_guard_gives() {
-    let rows = corpus();
+    let (ats, rows): (Vec<String>, Vec<Value>) = oracle_corpus::shellseg()
+        .into_iter()
+        .map(|r| (r.at, r.row))
+        .unzip();
     assert!(
         rows.len() >= 300,
         "the corpus is the evidence; {} rows is not it",
@@ -170,12 +169,12 @@ fn the_recorded_python_answer_is_the_answer_this_guard_gives() {
     std::env::set_current_dir(&root).expect("the fixture root is enterable");
 
     let mut wrong: Vec<String> = Vec::new();
-    for row in &rows {
+    for (at, row) in ats.iter().zip(&rows) {
         let cmd = row["cmd"].as_str().expect("every row names its command");
         let mut check = |what: &str, want: &Value, got: Value| {
             if want != &got {
                 wrong.push(format!(
-                    "{cmd:?}\n    {what} python={want}\n    {what}   rust={got}"
+                    "{at} {cmd:?}\n    {what} python={want}\n    {what}   rust={got}"
                 ));
             }
         };

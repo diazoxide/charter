@@ -10,8 +10,8 @@
 //! - a link that stays inside the plane is followed, as the Python charter follows it;
 //! - running it twice leaves the tree the first run left.
 //!
-//! The differential (`tests/differential/run.py`) compares the ordinary cases against the
-//! Python charter. These are the containment half, which is this binary's own contract.
+//! The recorded scenarios (`init-*`, ADR 0046) compare the ordinary cases against the Python
+//! charter's answers. These are the containment half, which is this binary's own contract.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -522,8 +522,8 @@ fn reinit_heals_a_missing_directory_and_then_has_nothing_to_do() {
 // ------------------------------------------------------------------------------------------
 //
 // The DECLARED divergence from the Python charter, which still scaffolds into the repository
-// and prints the first-clone offer afterwards. `tests/differential/run.py` asserts that
-// difference by name against the oracle; what is pinned here is the Rust side's own contract:
+// and prints the first-clone offer afterwards. The recorded scenario holds that difference by
+// name (a `divergence` note, ADR 0046); what is pinned here is the Rust side's own contract:
 // exactly which runs refuse, and that a refusing run writes nothing at all.
 
 #[test]
