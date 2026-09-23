@@ -593,7 +593,7 @@ describe("what a keyboard reaches in the window's modal surfaces", () => {
     // written rather than after somebody noticed, which is the whole argument this file makes:
     // the hole is not a mistake anybody made, it is what a modal in a WebView does by default.
     // Its command is not mocked and it does not need to be — a dialog that could not read the
-    // corpus draws the refusal, and either way it has the one control this walk is about.
+    // changelog draws the refusal, and either way it has the one control this walk is about.
     render(<AboutCharter />);
     await userEvent.click(screen.getByTestId("title-about"));
     await screen.findByRole("dialog");

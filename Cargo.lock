@@ -624,9 +624,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd16c4719339c4530435d38e511904438d07cce7950afa3718a84ac36c10e89e"
 
 [[package]]
+name = "changelog"
+version = "0.1.0"
+dependencies = [
+ "parse-changelog",
+]
+
+[[package]]
 name = "charter-app"
 version = "0.1.0"
 dependencies = [
+ "changelog",
  "charter-core",
  "chrono",
  "serde",
@@ -3151,6 +3159,17 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link 0.2.1",
+]
+
+[[package]]
+name = "parse-changelog"
+version = "0.6.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0878368d958d9eac74fcbbe62d3fa9fc0e6f1c2ea7c16f9cdbd7232722d58d9"
+dependencies = [
+ "indexmap 2.14.2",
+ "memchr",
+ "regex",
 ]
 
 [[package]]

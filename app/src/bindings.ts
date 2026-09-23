@@ -553,9 +553,9 @@ export const commands = {
 	/**
 	 *  The About dialog's content.
 	 * 
-	 *  A plain function of the compiled-in corpus: no plane, no disk, no state. That is why it
-	 *  takes nothing — a dialog that needed a project open could not be on the window's chrome,
-	 *  and the window holds no project for the first moments of every launch.
+	 *  No plane, no disk, no state: the version is the bundle's and the changelog is compiled in.
+	 *  A dialog that needed a project open could not be on the window's chrome, and the window
+	 *  holds no project for the first moments of every launch.
 	 */
 	aboutCharter: () => __TAURI_INVOKE<About>("about_charter"),
 };
@@ -563,14 +563,15 @@ export const commands = {
 /* Types */
 /**  What charter says about itself. */
 export type About = {
-	/**  The release this charter brought (`news::shipped_version`). */
+	/**  The version this build announces, dev suffix and all. */
 	version: string,
+	/**  Whether that version is released, a dev build, or not in the changelog. */
+	build: Build,
 	/**
-	 *  What that version brought, in the corpus's own order — which is
-	 *  [`charter_core::news::all`]'s, so a `lead:` entry is first here exactly as it is in the
-	 *  Release body and in `charter news`. Never empty; see this module's docstring.
+	 *  The section shown: the version's own for a release, `[Unreleased]` otherwise. `None`
+	 *  only when there is no such section to show.
 	 */
-	notes: Note[],
+	notes: Notes | null,
 };
 
 /**  One alert, as the drawer draws it. */
@@ -634,6 +635,15 @@ export type AtRisk = {
 	/**  charter's own sentence about it, name included: `svc: 2 unpushed commit(s)`. */
 	said: string,
 };
+
+/**  What kind of build this is, which decides which section is shown. */
+export type Build = 
+/**  The changelog has a section for this version. */
+{ kind: "release" } | 
+/**  A prerelease of `of`, the next version: `0.2.0-dev.42` is a dev build of `0.2.0`. */
+{ kind: "dev"; of: string } | 
+/**  A version with no section and no prerelease suffix. A local build of `main` is one. */
+{ kind: "unlisted" };
 
 /**  Everything the chat's gauge draws. Every part is absent when charter does not know it. */
 export type ChatUsage = {
@@ -904,19 +914,17 @@ export type NewsItem = {
 	headline: string,
 };
 
-/**
- *  One entry of the version's news, as the About dialog reads it.
- * 
- *  Headline and body, and nothing else. `check:`/`adopt:` are about whether a PLANE has taken
- *  an entry up — `charter news` answers that, with a plane to ask it of — and this dialog has
- *  no plane in its hand. Reporting *unchecked* against every line would be the window adding a
- *  column of the same word three times.
- */
-export type Note = {
-	/**  The entry's one-line headline, as its author wrote it. */
-	headline: string,
-	/**  The prose under the frontmatter. Empty for an entry that is only a headline. */
-	body: string,
+/**  One section of the changelog, as the dialog draws it. */
+export type Notes = {
+	/**  The heading's version: `0.1.0`, or `Unreleased`. */
+	version: string,
+	/**  The date the heading gives, for a released version. */
+	date: string | null,
+	/**
+	 *  The section as Markdown: `### Added`, `### Changed`, `### Fixed` and their bullets.
+	 *  Empty for an `[Unreleased]` that has nothing in it yet.
+	 */
+	markdown: string,
 };
 
 /**  What a check found, for the window and for the notification. */

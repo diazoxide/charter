@@ -2411,7 +2411,6 @@ button.show-more:focus-visible {
 .update-notes {
   max-height: 12rem;
   overflow: auto;
-  white-space: pre-wrap;
   font-size: 0.8rem;
   padding: 0.5rem;
   background: var(--surface-sunken);
@@ -3035,23 +3034,30 @@ button.show-more:focus-visible {
   outline-offset: -2px;
 }
 
-/* What the version brought, one entry per row. The headline is the line to read; the body is
-   the paragraph its author wrote under it, and it is scrollable rather than allowed to grow
-   the dialog past the window — a release has shipped 47 entries in a day. */
-.about-news {
-  max-height: 22rem;
-  margin: 0.4rem 0 0.75rem;
-  padding-left: 1.1rem;
+/* What the version brought. The body scrolls, bounded, and the title and Close around it stay
+   where they are however long a release is. */
+.about-body {
+  max-height: 24rem;
   overflow-y: auto;
 }
 
-.about-news li {
-  margin: 0 0 0.6rem;
+/* One version's notes, as the changelog's Markdown draws them (`ReleaseNotes.tsx`): a heading
+   per kind of change and a bullet per change. Here and in the update dialog. */
+.release-notes ul {
+  margin: 0.2rem 0 0.5rem;
+  padding-left: 1.1rem;
 }
 
-.about-news p {
-  margin: 0.2rem 0 0;
-  color: var(--text-secondary);
+.release-notes li {
+  margin: 0 0 0.35rem;
+}
+
+.release-notes p {
+  margin: 0.2rem 0;
+}
+
+.release-notes a {
+  color: var(--accent-base);
 }
 
 /* =====================================================================================

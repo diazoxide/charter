@@ -10,10 +10,10 @@ import type { About } from "./bindings";
  *
  * The questions this file can answer are the ones a props-in/markup-out test really settles:
  * what each degraded reading of the breadcrumb SAYS, that *running* means running, that the
- * controls are on the bar and are buttons, and that About reads the core's corpus rather than
- * a list of its own. `app/e2e/specs/title-bar.e2e.ts` asks the two things jsdom cannot —
+ * controls are on the bar and are buttons, and that About draws what the core answered out of
+ * the changelog rather than a list of its own. `app/e2e/specs/title-bar.e2e.ts` asks the two things jsdom cannot —
  * whether the bar is really the first thing in the window, and whether About names the version
- * the real core shipped.
+ * the real build announces.
  *
  * **What nothing here proves is that the window moves when the bar is dragged.** That is not a
  * gap in this file: WebDriver dispatches a synthetic event and performs no default action
@@ -222,13 +222,15 @@ describe("the bar itself", () => {
   });
 });
 
-describe("About charter", () => {
+describe("About Charter", () => {
   const ABOUT: About = {
-    version: "0.62.1",
-    notes: [
-      { headline: "A dead tmux server no longer doubles live chats", body: "The long story." },
-      { headline: "Recall and changes name what they could not read", body: "" },
-    ],
+    version: "0.1.0",
+    build: { kind: "release" },
+    notes: {
+      version: "0.1.0",
+      date: "2026-09-23",
+      markdown: "### Added\n\n- **Tabs** hold views.\n- The long story.",
+    },
   };
 
   /** What the core was asked, so a test can prove the dialog reads it rather than a list of
@@ -255,25 +257,85 @@ describe("About charter", () => {
     expect(asked).not.toContain("about_charter");
   });
 
-  it("names the version the core shipped and lists what it brought", async () => {
+  it("names the version this build is and draws what it brought as Markdown", async () => {
     core();
     render(<TitleBar crumbs={crumbs()} />);
 
     await userEvent.click(screen.getByTestId("title-about"));
     const dialog = await screen.findByRole("dialog");
 
-    expect(await within(dialog).findByTestId("about-version")).toHaveTextContent("0.62.1");
-    expect(within(dialog).getByRole("heading", { name: "What 0.62.1 brought" })).toBeVisible();
-    for (const note of ABOUT.notes)
-      expect(within(dialog).getByText(note.headline)).toBeInTheDocument();
-    expect(within(dialog).getByText("The long story.")).toBeInTheDocument();
+    expect(within(dialog).getByRole("heading", { name: "About Charter" })).toBeVisible();
+    expect(await within(dialog).findByTestId("about-version")).toHaveTextContent("0.1.0");
+    expect(dialog).toHaveTextContent("This is Charter 0.1.0, released 2026-09-23.");
+    expect(within(dialog).getByRole("heading", { name: "What 0.1.0 brought" })).toBeVisible();
+    expect(within(dialog).getByRole("heading", { name: "Added" })).toBeVisible();
+    expect(within(dialog).getByText("Tabs").tagName).toBe("STRONG");
+    expect(within(dialog).getAllByRole("listitem")).toHaveLength(2);
+  });
+
+  it("says a dev build is one, of the next version, and shows what is unreleased", async () => {
+    core({
+      version: "0.2.0-dev.42",
+      build: { kind: "dev", of: "0.2.0" },
+      notes: { version: "Unreleased", date: null, markdown: "- Coming next." },
+    });
+    render(<TitleBar crumbs={crumbs()} />);
+
+    await userEvent.click(screen.getByTestId("title-about"));
+    const dialog = await screen.findByRole("dialog");
+
+    expect(await within(dialog).findByTestId("about-version")).toHaveTextContent("0.2.0-dev.42");
+    expect(dialog).toHaveTextContent("a dev build of 0.2.0");
+    expect(within(dialog).getByRole("heading", { name: "Not released yet" })).toBeVisible();
+    expect(within(dialog).getByRole("listitem")).toHaveTextContent("Coming next.");
+  });
+
+  it("says plainly when the changelog has no section for this version", async () => {
+    core({ version: "0.3.0", build: { kind: "unlisted" }, notes: null });
+    render(<TitleBar crumbs={crumbs()} />);
+
+    await userEvent.click(screen.getByTestId("title-about"));
+    const dialog = await screen.findByRole("dialog");
+
+    expect(await within(dialog).findByTestId("about-version")).toHaveTextContent("0.3.0");
+    expect(dialog).toHaveTextContent("The changelog this build carries has no section for it.");
+    expect(within(dialog).queryByRole("listitem")).toBeNull();
+  });
+
+  it("says an unreleased section with nothing in it has nothing, rather than drawing a blank", async () => {
+    core({
+      version: "0.2.0-dev.1",
+      build: { kind: "dev", of: "0.2.0" },
+      notes: { version: "Unreleased", date: null, markdown: "" },
+    });
+    render(<TitleBar crumbs={crumbs()} />);
+
+    await userEvent.click(screen.getByTestId("title-about"));
+    const dialog = await screen.findByRole("dialog");
+
+    expect(await within(dialog).findByText("Nothing is recorded for it yet.")).toBeVisible();
+  });
+
+  it("points at the releases page, and never at Python charter's news", async () => {
+    core();
+    render(<TitleBar crumbs={crumbs()} />);
+
+    await userEvent.click(screen.getByTestId("title-about"));
+    const dialog = await screen.findByRole("dialog");
+
+    await within(dialog).findByTestId("about-version");
+    expect(within(dialog).getByRole("link", { name: "releases page" })).toHaveAttribute(
+      "href",
+      "https://github.com/diazoxide/charter-app/releases",
+    );
+    expect(dialog).not.toHaveTextContent("charter news");
   });
 
   it("says what went wrong rather than drawing an empty list, when the core refuses", async () => {
-    // The corpus is compiled in so it cannot be missing, but a command can always fail — and
-    // an About dialog that answered a failure with a blank panel would read as a version that
-    // brought nothing.
-    core(new Error("no corpus"));
+    // The changelog is compiled in so it cannot be missing, but a command can always fail —
+    // and an About dialog that answered a failure with a blank panel would read as a version
+    // that brought nothing.
+    core(new Error("no changelog"));
     render(<TitleBar crumbs={crumbs()} />);
 
     await userEvent.click(screen.getByTestId("title-about"));
@@ -284,7 +346,7 @@ describe("About charter", () => {
     );
   });
 
-  it("asks once, because the corpus ships in the binary and cannot change while it runs", async () => {
+  it("asks once, because the changelog ships in the binary and cannot change while it runs", async () => {
     const asked = core();
     render(<TitleBar crumbs={crumbs()} />);
 
