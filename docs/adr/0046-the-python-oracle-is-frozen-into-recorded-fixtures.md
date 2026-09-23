@@ -18,9 +18,10 @@ more.
 
 ## What was recorded, and how
 
-**Once, on one head where both implementations agreed.** It ran on Linux, the CI platform
-(Ubuntu 24.04, git 2.43), where the unchanged differential passed all 431 scenarios on that
-head. The replay was then checked on Linux and on macOS. The recorder ran each
+**Once, on one head where both implementations agreed.** It ran on Linux (an Ubuntu 24.04
+container, git 2.43), where the unchanged differential passed all 431 scenarios on that head.
+The replay was then checked there, on macOS (git 2.50), and on CI's own runner (git 2.55). The
+recorder ran each
 differential scenario through the differential's own `check`, both implementations and every
 comparison, and wrote a row only for a scenario that passed. A scenario that failed stopped the
 recording. So wherever the differential compared the two, the recorded text is Python's answer.
@@ -85,7 +86,7 @@ The whole set runs in about ten seconds, so it is not sharded.
   macOS writes `core.ignorecase` and `core.precomposeunicode` into a repository's config, so the
   replay reads a repository's config without those two keys.
 - **The fuzzers' breadth.** The shell reader's 200,000 generated cases and the plane-root
-  guards' 50,000 are now 2,400 and 1,710 recorded cases. They were chosen to reach every branch
+  guards' 50,000 are now 2,399 and 1,710 recorded cases. They were chosen to reach every branch
   and reader feature the full runs reached. What that subset can and cannot prove is in
   `fixtures/corpora/README.md`.
 - **Two masks used look-around**, which Rust's `regex` does not support. Each became a capture

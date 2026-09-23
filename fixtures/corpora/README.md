@@ -7,7 +7,7 @@ Real harness output, recorded off a pseudo-terminal, for benchmarks (spec §Limi
 | --- | --- |
 | `claude-code-session.raw` | Claude Code 2.1.274 answering "Print the numbers 1 to 2000, one per line", on a 150×42 terminal, macOS 26.2, 2026-09-17. 132 KB, ending mid-session where the recorder hung up. |
 | `shellseg-oracle.jsonl` | Command lines the Python charter's `hooks.py` docstrings name as bypasses that SHIPPED (529 rows), each with what the frozen Python answers for every function of the shell reader, the heredoc layout, the wrapper split, the leak guard, A2, A4, A5/A6 and A7. Every filesystem answer in it is a path **relative to the fixture plane the replay builds**, never an absolute one, so the file is the same on every machine; the probe INPUTS ride along in the `pr` key, so the replay tests hold no copy of the recorder's tables. |
-| `shellseg-generated.jsonl.gz` | The same answers for 2,400 command lines out of the retired fuzz's 200,000 seeded cases, chosen as described below. Same row shape. 17.7 MB as JSON Lines, 1.84 MB gzipped. |
+| `shellseg-generated.jsonl.gz` | The same answers for 2,399 command lines out of the retired fuzz's 200,000 seeded cases, chosen as described below. Same row shape. 17.7 MB as JSON Lines, 1.84 MB gzipped. |
 | `planeroot-oracle.jsonl` | Every command line A3's and A3b's docstrings name as a bypass that shipped, and every defect filed from their port (202 rows): `{case, request, answer}`, where `request` carries every probe the recorder derived and every path is written against `@B@`, the fixture's base directory. |
 | `planeroot-generated.jsonl.gz` | The same for 1,710 of the retired fuzz's 50,000 seeded cases, each recorded WITH the git layer on. 3.5 MB as JSON Lines, 0.32 MB gzipped. |
 | `planeroot-fixture.json` | The git-repository fixture both plane-root corpora were answered against, as steps; the replay builds it again from these. |
@@ -39,6 +39,14 @@ reader-vocabulary feature) — and added a fixed seeded random sample on top (se
 shell cases, 1,500 plane-root cases), dropping duplicates. Every branch and feature the full run
 reached, the subset reaches. The files are gzip with a zero timestamp, so re-recording wrote them
 byte for byte the same.
+
+**One chosen case was taken out again**, because its answer belongs to the machine and not to
+the guard: `sudo --chdir=/tmp grep --recursive TOKEN --exclude-dir='[b-a]' .` walks `/tmp`, and
+whether that walk contains the fixture plane's `vaults` depends on where the machine keeps its
+temporary directories. On macOS that is `/var/folders/…`, so the recording answered "allowed".
+On Linux it is `/tmp`, so the replay refused. The live differential ran both sides on one machine
+and never saw it. Replaying the corpora on Linux and on macOS shows every other row answering
+the same on both.
 
 The vocabulary features exist because the branch cover alone was measured to be too coarse: a
 `pipeline_continues` that forgot `|&` survived a subset chosen on guard branches, while the full
