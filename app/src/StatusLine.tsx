@@ -1,6 +1,8 @@
 import { Bell } from "lucide-react";
 import type { WorkspaceState } from "./workspaceState";
 import { Health, type DoctorState } from "./Doctor";
+import { RegionToggle } from "./RegionFrame";
+import type { Placement, RegionId } from "./regions";
 import { PinItem, UpdateItem, type Updates } from "./Updates";
 import type { PinReport } from "./bindings";
 
@@ -25,11 +27,14 @@ import type { PinReport } from "./bindings";
  *   `react-resizable-panels` takes. A status line is one line of text: its height is a font
  *   and two paddings, and the percentage that happens to equal that at 1080 px is the wrong
  *   one at 4K. There is no honest number to put in the catalogue.
- * - **A region resizes and can be put away; this does neither.** The toggles on the bar are
- *   drawn from the arrangement (`SIDES.flatMap`), so a region arrives with a button that hides
- *   it — which is the right rule for a region and the wrong one for the line that says where
- *   you are and which project you are in. A status line an operator can lose is one they will
- *   lose and then report as a bug.
+ * - **A region resizes and can be put away; this does neither.** The toggles are drawn from the
+ *   arrangement (`SIDES.flatMap`), so a region arrives with a button that hides it — which is
+ *   the right rule for a region and the wrong one for the line that says where you are and
+ *   which project you are in. A status line an operator can lose is one they will lose and then
+ *   report as a bug. That those toggles are now drawn *on* this line does not weaken the
+ *   argument, it sharpens it: the line carries every region's way back and has none of its own,
+ *   which is what makes it the frame rather than a tenant. `FourRegions.test.tsx`'s *"cannot be
+ *   put away, because it is not a region"* is the guard.
  * - **It is the frame, not a tenant of it.** `nav.projects` sits above the regions and is not
  *   in the arrangement either. The window is chrome, four regions, chrome; this is the bottom
  *   half of the chrome, and `RegionFrame` is untouched by it — which is also why this change
@@ -83,6 +88,7 @@ export function StatusLine({
   doctor,
   updates,
   pin,
+  regions,
 }: {
   /** The project's root directory — the path that used to sit in the top-right corner. */
   plane: string;
@@ -125,6 +131,21 @@ export function StatusLine({
   /** What `charter version` says about this plane's pin, and a way to ask again. The item
    *  is drawn only when it drifts. */
   pin?: { pin?: PinReport; again: () => void };
+  /**
+   * Which regions the window is drawing, and the way to change that (charter ADR 0038).
+   *
+   * **The arrangement, already in the order the window draws it** — `PlaneView` flattens
+   * `inSlots` and hands the result over. Nothing here sorts, filters or names a region: a
+   * status line that decided which regions exist would be the second place that decides, and
+   * the reason there is a catalogue at all is that there is one.
+   *
+   * Absent draws no toggles, which is a status line rendered on its own.
+   */
+  regions?: {
+    /** One region each, in the order the window draws them. */
+    placed: readonly Placement[];
+    onToggle: (id: RegionId) => void;
+  };
 }) {
   const todos = todoCount(state);
   const pieces = pieceCount(state);
@@ -179,6 +200,33 @@ export function StatusLine({
       <span className="plane" title={plane}>
         <span className="status-label">project</span> <code>{plane}</code>
       </span>
+
+      {/* **Which regions are drawn** (charter ADR 0038), at the right-hand end of the line —
+          the operator's *"show hide buttons can be movet to bottom status bar — again like
+          ZED"*, which is exactly where Zed keeps them. They were labelled buttons on
+          `header.bar`, in a row with the tab strip, the `+` and the show-more, competing for
+          the width that the strip needs most when it is fullest.
+
+          **One button per region in the arrangement, in the order the window draws them.**
+          That rule came with them unchanged and is the half worth protecting: a region added
+          to the catalogue gets its own way back without anybody remembering to add one, which
+          is what a list written out by hand kept getting wrong.
+
+          **Last on the line, after the path.** The row's order is its truncation order, and
+          the path is the one item allowed to shrink — so these sit at the window's own
+          right-hand corner, where they do not move when the path does. */}
+      {regions && (
+        <span className="regions-doing">
+          {regions.placed.map((placed) => (
+            <RegionToggle
+              key={placed.id}
+              id={placed.id}
+              shown={!placed.collapsed}
+              onToggle={regions.onToggle}
+            />
+          ))}
+        </span>
+      )}
     </footer>
   );
 }

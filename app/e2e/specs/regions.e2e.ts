@@ -388,7 +388,7 @@ describe("putting a region away", () => {
     await untilTheStripIsRead();
     await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
 
-    await (await $('button[aria-pressed="true"]=Explorer')).click();
+    await (await $('button[aria-pressed="true"][aria-label="Explorer"]')).click();
     await browser.waitUntil(async () => !(await $('[data-testid="explorer"]').isExisting()), {
       timeout: 20_000,
       timeoutMsg: "the explorer did not go away when it was put away",
@@ -396,7 +396,7 @@ describe("putting a region away", () => {
     // The centre cannot be put away: the terminal panes are the product.
     await expect(await $('[role="tablist"][aria-label="Tabs"]')).toBeExisting();
 
-    await (await $('button[aria-pressed="false"]=Explorer')).click();
+    await (await $('button[aria-pressed="false"][aria-label="Explorer"]')).click();
     await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
   });
 
@@ -408,7 +408,7 @@ describe("putting a region away", () => {
     await untilTheStripIsRead();
     await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
 
-    await (await $('button[aria-pressed="true"]=Explorer')).click();
+    await (await $('button[aria-pressed="true"][aria-label="Explorer"]')).click();
     await browser.waitUntil(async () => !(await $('[data-testid="explorer"]').isExisting()), {
       timeout: 20_000,
       timeoutMsg: "the explorer did not go away when it was put away",
@@ -418,7 +418,7 @@ describe("putting a region away", () => {
     await expect(slot).toBeExisting();
     expect((await slot.getSize("width")) as number).toBe(0);
 
-    await (await $('button[aria-pressed="false"]=Explorer')).click();
+    await (await $('button[aria-pressed="false"][aria-label="Explorer"]')).click();
     await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
   });
 });
@@ -486,12 +486,12 @@ describe("the layout as data", () => {
     });
     const dragged = (await slot.getSize("width")) as number;
 
-    await (await $('button[aria-pressed="true"]=Explorer')).click();
+    await (await $('button[aria-pressed="true"][aria-label="Explorer"]')).click();
     await browser.waitUntil(async () => !(await $('[data-testid="explorer"]').isExisting()), {
       timeout: 20_000,
       timeoutMsg: "the explorer did not go away when it was put away",
     });
-    await (await $('button[aria-pressed="false"]=Explorer')).click();
+    await (await $('button[aria-pressed="false"][aria-label="Explorer"]')).click();
     await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
 
     await browser.waitUntil(

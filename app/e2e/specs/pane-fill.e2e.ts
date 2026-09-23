@@ -134,7 +134,7 @@ async function tabNames(): Promise<string[]> {
 
 /** Brings the State region back if a failed assertion left it put away. */
 async function stateRegionBack(): Promise<void> {
-  const away = await $('button[aria-pressed="false"]=State');
+  const away = await $('button[aria-pressed="false"][aria-label="State"]');
   if (await away.isExisting()) {
     await away.click();
     await $('[data-testid="bottom-bar"]').waitForExist({ timeout: 20_000 });
@@ -191,7 +191,7 @@ describe("the terminal in the centre region", () => {
     // fit has to follow the box, not be taken once at mount.
     const before = await untilTheyFill(1);
 
-    await (await $('button[aria-pressed="true"]=State')).click();
+    await (await $('button[aria-pressed="true"][aria-label="State"]')).click();
     await browser.waitUntil(async () => !(await $('[data-testid="bottom-bar"]').isExisting()), {
       timeout: 20_000,
       timeoutMsg: "the bottom region did not go away when it was put away",
@@ -200,7 +200,7 @@ describe("the terminal in the centre region", () => {
     expect(grown.centre.bottom).toBeGreaterThan(before.centre.bottom);
     expect(grown.panes[0].rows).toBeGreaterThan(before.panes[0].rows);
 
-    await (await $('button[aria-pressed="false"]=State')).click();
+    await (await $('button[aria-pressed="false"][aria-label="State"]')).click();
     await $('[data-testid="bottom-bar"]').waitForExist({ timeout: 20_000 });
     const back = await untilTheyFill(1);
     expect(back.panes[0].rows).toBeLessThan(grown.panes[0].rows);

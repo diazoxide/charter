@@ -495,7 +495,26 @@ component library gets added on.
   belongs to the three tablists that are the axis (ADR 0036); this is the current item of a
   list. Radix has no tree or listbox primitive, and native buttons are not hand-rolled markup.
 - **The region buttons are `aria-pressed` toggles**, which is what the platform has for a
-  control that is on or off.
+  control that is on or off. They are **on the status line and icon-only** since charter-app
+  #193, which the operator asked for twice — *"show hide buttons can be movet to bottom status
+  bar — again like ZED"*, and then *"let make them without labels, just small icons without
+  texts, texts only with tooltips"*. Three things about that are decisions:
+  - **The name did not go with the words.** `aria-label` carries it, which is the one condition
+    `docs/design-system.md` puts on an icon with no text beside it — and not a formality here:
+    `pressOnly("Explorer")` is how the palette and the specs reach a control, and a screen
+    reader reads the same string. An icon-only button whose accessible name is an icon is a
+    button nobody can find, by either route.
+  - **The `title` says what pressing does, not what the thing is.** *"Put the Explorer region
+    away"* is where prose belongs once there is no visible text; a tooltip repeating the label
+    is a tooltip nobody reads twice.
+  - **The status line hosts every region's way back and has none of its own**, which is not a
+    contradiction of `StatusLine.tsx`'s argument for not being a region but the sharpest form
+    of it: it is the frame. `FourRegions.test.tsx`'s *"cannot be put away, because it is not a
+    region"* is the guard, and it presses all three toggles to get there.
+  - **A scenario reaches them by `[aria-label="Explorer"]` and no longer by `=Explorer`.**
+    WebdriverIO's `=` is a whole-text match, and there is no text. `regions.e2e.ts`,
+    `pane-fill.e2e.ts` and `status-line.e2e.ts` all moved; `StripMarks.test.tsx` is what holds
+    the name they match against.
 
 ## Which keys belong to the chat, and which to the window
 

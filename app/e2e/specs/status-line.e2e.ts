@@ -288,6 +288,46 @@ describe("the status line", () => {
     expect(await $('[data-testid="status-pin"]').isExisting()).toBe(false);
   });
 
+  /**
+   * **The region toggles are on this line, and they are icons** (charter-app#193).
+   *
+   * The operator asked twice — *"show hide buttons can be movet to bottom status bar — again
+   * like ZED"*, and then *"you dont moved this 3 hide/show bottons to bottom status bar — and
+   * let make them without labels, just small icons without texts, texts only with tooltips"*.
+   * `FourRegions.test.tsx` owns which regions get one and in what order, where jsdom can read
+   * the arrangement; what only a scenario can say is where they ended up in the shipped window
+   * and that the accessible name survived the build with no text under it.
+   */
+  it("carries every region's way back, as icons named for the region", async () => {
+    await untilTheStripIsRead();
+    await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
+
+    const found = await browser.execute(() => {
+      const line = document.querySelector('[data-testid="status-line"]');
+      const toggles = [...(line?.querySelectorAll("button[aria-pressed]") ?? [])];
+      return {
+        named: toggles.map((one) => one.getAttribute("aria-label")),
+        // No words in any of them, a mark in every one, and a tooltip that says what pressing
+        // does rather than repeating the name.
+        worded: toggles.map((one) => (one.textContent ?? "").trim()).filter(Boolean),
+        marked: toggles.filter((one) => one.querySelector("svg")).length,
+        told: toggles.map((one) => one.getAttribute("title")),
+        // And gone from the bar they used to be on.
+        onTheBar: document.querySelectorAll("header.bar button[aria-pressed]").length,
+      };
+    });
+
+    expect(found.named).toEqual(["Explorer", "Attention", "State"]);
+    expect(found.worded).toEqual([]);
+    expect(found.marked).toBe(3);
+    expect(found.told).toEqual([
+      "Put the Explorer region away",
+      "Put the Attention region away",
+      "Put the State region away",
+    ]);
+    expect(found.onTheBar).toBe(0);
+  });
+
   it("stays at the bottom when every region is put away", async () => {
     // It is not in the arrangement, so nothing about it changes when the arrangement does —
     // and the window that is left is the panes and this line.
@@ -295,7 +335,8 @@ describe("the status line", () => {
     await $('[data-testid="explorer"]').waitForExist({ timeout: 20_000 });
 
     const names = ["Explorer", "Attention", "State"];
-    for (const name of names) await (await $(`button[aria-pressed="true"]=${name}`)).click();
+    for (const name of names)
+      await (await $(`button[aria-pressed="true"][aria-label="${name}"]`)).click();
     await browser.waitUntil(async () => !(await $('[data-testid="bottom-bar"]').isExisting()), {
       timeout: 20_000,
       timeoutMsg: "the bottom region did not go away when it was put away",
@@ -306,7 +347,8 @@ describe("the status line", () => {
       Math.abs((await bottomOf('[data-testid="status-line"]')) - (await viewport())),
     ).toBeLessThanOrEqual(1);
 
-    for (const name of names) await (await $(`button[aria-pressed="false"]=${name}`)).click();
+    for (const name of names)
+      await (await $(`button[aria-pressed="false"][aria-label="${name}"]`)).click();
     await $('[data-testid="bottom-bar"]').waitForExist({ timeout: 20_000 });
   });
 });

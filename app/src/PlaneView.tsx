@@ -55,7 +55,7 @@ import { Explorer, type Spot } from "./Explorer";
 import { BottomBar } from "./BottomBar";
 import { useWorkspaceState } from "./workspaceState";
 import { inSlots, SIDES, useArrangement } from "./regions";
-import { RegionFrame, RegionToggle } from "./RegionFrame";
+import { RegionFrame } from "./RegionFrame";
 import { useDoctor } from "./Doctor";
 import { PaneGauge } from "./ChatGauge";
 import { usePin, useUpdates } from "./Updates";
@@ -1636,25 +1636,13 @@ export function PlaneView({
             They are still catalogue rows and still in the palette, which is what a keyboard
             without a pointer uses: the palette acts on the focused pane, and a pane's own
             button focuses that pane before it runs the same row. */}
-        {/* Which regions are drawn (ADR 0038). Here rather than in each region, because a
-            region that is not drawn has nowhere to put its own way back.
+        {/* **The region toggles are NOT here any more.** They are on the status line at the
+            bottom of the window, icon-only (`StatusLine.tsx`, `RegionFrame`'s `RegionToggle`),
+            where the operator asked for them twice — *"show hide buttons can be movet to
+            bottom status bar — again like ZED"*. The rule is unchanged and travels with them:
+            one button per region in the arrangement, in the order the window draws them.
 
-            **One button per region in the arrangement**, in the order the window draws them —
-            so a region added to the catalogue gets its own way back without anybody
-            remembering to add one, which is the half of this that a list written out by hand
-            kept getting wrong. */}
-        <div className="regions-doing">
-          {SIDES.flatMap((side) => slots[side]).map((placed) => (
-            <RegionToggle
-              key={placed.id}
-              id={placed.id}
-              shown={!placed.collapsed}
-              onToggle={toggleRegion}
-            />
-          ))}
-        </div>
-        {/* The project's path is NOT here any more. It is on the status line at the very
-            bottom of the window (`StatusLine.tsx`), where the operator asked for it. */}
+            The project's path is not here either, for the same reason and since #172. */}
       </header>
 
       {trouble && (
@@ -1806,6 +1794,14 @@ export function PlaneView({
         updates={updates}
         pin={pin}
         alerts={alerts}
+        /* Which regions are drawn (ADR 0038), handed over as the arrangement already reads
+           them. **The slots are flattened here and not there**: the arrangement is this
+           project's, `inSlots` is the module that knows what order a side's regions come in,
+           and a status line that sorted regions would be a second place that decides. */
+        regions={{
+          placed: SIDES.flatMap((side) => slots[side]),
+          onToggle: toggleRegion,
+        }}
       />
 
       {/* Making a workspace, and deleting one. Mounted only while they are up, and drawn

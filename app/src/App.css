@@ -430,14 +430,14 @@ body {
 /* The tabs are the one thing on the bar that gives way: they take what is left after the
    controls and share it out between them, and what has no room collapses into the show-more
    button. A strip that could not shrink pushed the splits and the region buttons off the
-   window at about thirty chats. */
+   window at about thirty chats — the region buttons are on the status line since
+   charter-app#193, and the `+` and the show-more are what is left to be pushed off. */
 .tabs {
   flex: 1 1 auto;
 }
 
 .bar > .adding,
-.bar > .more,
-.bar > .regions-doing {
+.bar > .more {
   flex: none;
 }
 
@@ -920,21 +920,10 @@ button.show-more:focus-visible {
   background: var(--surface-deep);
 }
 
-/* The buttons that put a region away and bring it back. Quiet, because they are about the
-   window and not about the plane. */
-.regions-doing {
-  display: flex;
-  gap: 0.2rem;
-  align-items: center;
-}
-
-.region-toggle[aria-pressed="false"] {
-  opacity: 0.45;
-}
-
-.region-toggle[aria-pressed="true"] {
-  border-bottom: 1px solid var(--accent-base);
-}
+/* The buttons that put a region away and bring it back are NOT drawn here any more. They are
+   on the status line at the bottom of the window (charter-app#193), and `.status-line
+   .regions-doing` below is where they are dressed — beside the rest of that line, which is
+   what makes them look like part of it rather than like the bar's controls moved down. */
 
 /* The left region: the repo and worktree explorer, which is the selector WITHIN a workspace
    (charter ADR 0038). */
@@ -2438,6 +2427,56 @@ button.show-more:focus-visible {
   border-radius: 999px;
   background: var(--control-count);
   font-variant-numeric: tabular-nums;
+}
+
+/* **Which regions are drawn, at the right-hand corner of the line** (charter ADR 0038,
+   charter-app#193). They were labelled buttons on `header.bar`; the operator asked twice for
+   them down here — *"show hide buttons can be movet to bottom status bar — again like ZED"* —
+   and then *"let make them without labels, just small icons without texts, texts only with
+   tooltips"*. So each is its mark and nothing else, and its name is on `aria-label` where a
+   screen reader and `pressOnly("Explorer")` both still find it (`RegionFrame.tsx`).
+
+   Square and small, because a row of three icons with a text button's padding reads as three
+   words missing. `1.4rem` is the icon at `1em` plus its own breathing room, which is the
+   smallest this can be while staying a pointer target at the very corner of the window. */
+.regions-doing {
+  display: flex;
+  gap: 0.15rem;
+  align-items: center;
+}
+
+.region-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.4rem;
+  padding: 0.1rem;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.region-toggle:hover {
+  background: var(--surface-hover);
+}
+
+.region-toggle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+
+/* **Off is drawn by going quiet, on by the accent underneath.** Both were here before the move
+   and neither is decoration: with the words gone, `aria-pressed` is carried to a pointer by
+   these two rules alone, and a screen reader by the attribute itself. */
+.region-toggle[aria-pressed="false"] {
+  opacity: 0.45;
+}
+
+.region-toggle[aria-pressed="true"] {
+  border-bottom: 1px solid var(--accent-base);
 }
 /* **The doctor's button** (`app/src/Doctor.tsx`): the same chrome as the alerts button beside
    it, so the right-hand end of the line reads as "things you can open". Its tone is the

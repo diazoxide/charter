@@ -211,6 +211,30 @@ function Edge({ open }: { open: boolean }) {
  *
  * `aria-pressed` and not a label that flips between "Show" and "Hide": the name of the thing is
  * what a person looks for, and the state is what the attribute is for.
+ *
+ * # Its mark, and nothing else — on the status line (charter-app#193)
+ *
+ * The operator asked for this twice. First *"show hide buttons can be movet to bottom status
+ * bar — again like ZED"*, and then, when only half of it had been done: *"you dont moved this 3
+ * hide/show bottons to bottom status bar — and let make them without labels, just small icons
+ * without texts, texts only with tooltips, i already asked about this — seems you missed."*
+ * `StatusLine.tsx` is where they are drawn now; this is what one of them is.
+ *
+ * **The words do not go away — they move from the content to `aria-label`.** That is the one
+ * condition `docs/design-system.md` puts on an icon with no text beside it, and it is not a
+ * formality here: `pressOnly("Explorer")` is how the palette and the scenario specs reach a
+ * control, and a screen reader reads exactly the same string. An icon-only button whose
+ * accessible name is an icon is a button nobody can find, by either route.
+ *
+ * **The `title` says what pressing it does, which the name cannot.** `aria-label` has to be the
+ * name of the thing — `Explorer` — because that is what a person looks for; the tooltip is
+ * where *"Put the Explorer region away"* belongs, and it already said it. A tooltip that merely
+ * repeated the label would be a tooltip nobody reads twice.
+ *
+ * **The mark is what the region IS and never where it is**, which was already true and is now
+ * the whole of what is drawn — see {@link REGION_MARKS}. A panel-left glyph would be wrong the
+ * first time a region moved, and with the words gone it would be the only thing left to be
+ * wrong.
  */
 export function RegionToggle({
   id,
@@ -228,11 +252,11 @@ export function RegionToggle({
       type="button"
       className="region-toggle"
       aria-pressed={shown}
+      aria-label={name}
       title={shown ? `Put the ${name} region away` : `Bring the ${name} region back`}
       onClick={() => onToggle(id)}
     >
       <Mark />
-      {name}
     </button>
   );
 }
