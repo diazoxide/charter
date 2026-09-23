@@ -294,6 +294,16 @@ fn reveal_re() -> &'static Regex {
     })
 }
 
+/// `_VAULT_PATH_RE.search(text)` on `text` exactly as given — no `normpath`, no second spelling.
+///
+/// The persona tool gate (`toolgate._touches_control_surface`, [`crate::personagate`]) asks the
+/// pattern this way, on a spelling it has normalised by its own rule, and it must be the SAME
+/// pattern the leak guard refuses on: two copies of "what is a vault path" is how the Read route
+/// and the Bash route came to disagree about the vault directory (#462).
+pub fn vault_path_matches(text: &str) -> bool {
+    vault_path_re().is_match(text)
+}
+
 /// True when `operand` names a guarded path, in any spelling of the SAME path —
 /// `_names_a_vault_path`.
 ///
