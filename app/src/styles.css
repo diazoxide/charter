@@ -58,6 +58,7 @@
   --color-layer-project: var(--layer-project);
   --color-layer-workspace: var(--layer-workspace);
   --color-layer-chat: var(--layer-chat);
+  --color-layer-selected: var(--layer-selected);
   --color-needs-you-base: var(--needs-you-base);
   --color-needs-you-text: var(--needs-you-text);
   --color-danger-base: var(--danger-base);

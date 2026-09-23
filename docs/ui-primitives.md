@@ -407,13 +407,15 @@ different question (where should Tab go between four regions?), so #186 stopped 
 where a focus scope makes the boundary obvious and the surfaces are countable. charter-app#189
 carries the rest.
 
-## The three strips say their depth in colour, and that took no primitive either
+## The three strips say their depth in shade, and that took no primitive either
 
 charter ADR 0036 makes the window an axis — a project holds workspaces, a workspace holds chats —
 and charter-app#171 drew that with three signals so the nesting would be legible before a word
 was read: **height** (a project's row is the tallest), **inset** (each row began under its
-parent's first tab) and **surface** (deep, raised, then the bar). charter-app#193 keeps two of
-them and replaces the third, on the operator's reading of the running app.
+parent's first tab) and **surface** (deep, raised, then the bar). charter-app#193 keeps
+**height**, drops the **inset**, and turns **surface** into a quiet shade per strip in tokens of
+its own — and drops the accent edge under the selected tab too, on the operator's reading of
+the running app.
 
 **The inset went because it could not be told apart from padding.** His words, unprompted:
 *"workspaces tabs and sessions tabs have some padding from left, they should be like project
@@ -422,24 +424,22 @@ it was drawn for read it as slop. It was not free either: 1.1rem off the workspa
 2.2rem off the chat strip is a tab's worth of room at ADR 0026's widths, taken from the two
 strips that collapse first (`fits.ts`).
 
-**What replaces it is a colour, and it is a theme token rather than a look.** Each strip draws a
-2px rule along its own bottom in its own token — `layer.project`, `layer.workspace`, `layer.chat`
-— which is the other half of the same instruction: *"lets make some different styles/collor for
-each layer (project,workspace,sessions) — now style of 3 tabs layers are same."* Four properties
-of that answer are decisions rather than details:
+**What replaces it is a shade, and it is a theme token rather than a look.** The operator asked
+for the layers to differ — *"lets make some different styles/collor for each layer"* — and then
+turned down coloured rules under each strip, the first answer to that, as not minimal enough:
+*"i prefer to change little bit backgrounds of tabs and little lighter for selected tab, borders
+are not feeling well."* So each strip is one quiet step of neutral grey — `layer.project`,
+`layer.workspace`, `layer.chat`, outermost deepest — and nothing is drawn under or between the
+rows. Three properties of that answer are decisions rather than details:
 
-- **It is a token, so a theme owns it.** `docs/design-system.md` has the group, why the hue warms
-  as the window goes in, and why none of the three is a `state.*` colour — a rule under a row of
-  tabs must never be a thing an operator has to ask about while scanning for a chat that failed.
-- **It is on the strip, not on the selected tab.** The lit edge under the selected tab stays
-  `accent.base` on all three, which is #171's rule and is about *selection*; depth and selection
-  are two facts and a reader should not have to work out which a colour is carrying. Under the
-  selected tab the two sit one above the other, accent over the layer's rule, and that stacking
-  is the whole cost.
-- **It is legible across the row rather than at one end of it.** An indent says its piece only
-  where the row begins; a rule says it wherever the eye lands.
-- **No primitive, and no component.** This is three declarations in `App.css` and three values in
-  a theme file. A "strip" component parameterised by depth would be exactly the charter API in
+- **It is a token, so a theme owns it.** `docs/design-system.md` has the group and the contrast
+  floor each shade is held to in both built-in themes.
+- **The selected tab is a step lighter, and that is the whole selection signal.** #171 also lit
+  the selected tab's bottom edge in `accent.base`; it went with the coloured rules, on the same
+  instruction. `layer.selected` is one token for all three strips, so the tab you are on reads
+  the same way on every row.
+- **No primitive, and no component.** This is four declarations in `App.css` and four values per
+  theme file. A "strip" component parameterised by depth would be exactly the charter API in
   front of nothing that the rule at the top of this file refuses.
 
 **And a tab's label is centred in its cell** — *"also lets make tabs labels center aligned"* —
@@ -449,8 +449,8 @@ whole cell: the same rule, not an exception to it.
 
 `src/StripMarks.test.tsx` is the guard on both halves, and it is a stylesheet test on purpose —
 jsdom computes no layout and no cascade, so what can be held there is the rule as written: each
-strip names its own layer token, the three tokens are three different tokens, and there is no
-`--nested` left to indent anything with.
+strip names its own shade and draws no line, the three shades are three different tokens, no
+strip's tab carries an edge, and there is no `--nested` left to indent anything with.
 
 ## The four regions added no primitive, which is the rule working
 

@@ -101,17 +101,23 @@ body {
    somebody padded — and it cost the two inner strips a whole tab's worth of room at ADR 0026's
    widths for a fact it never managed to state. All three rows now begin at the same x.
 
-   **What carries the depth in its place is colour, which is what he asked for in the same
-   breath**: *"lets make some different styles/collor for each layer (project,workspace,
-   sessions) — now style of 3 tabs layers are same."* Each strip draws a 2px rule along its own
-   bottom in its own token — `--layer-project`, `--layer-workspace`, `--layer-chat` — and the
-   hue warms as the window goes in. A colour cannot be mistaken for padding, it is legible
-   across the whole width of the row rather than only at its left-hand end, and it costs no
-   room at all. `app/src/theme/theme.ts` holds why those three hues and not the `state.*` ones.
+   **What carries the depth in its place is a shade, and nothing else.** He asked for the
+   layers to differ in the same breath — *"lets make some different styles/collor for each
+   layer"* — and then turned down coloured rules under each strip on sight: *"this is not looks
+   professional, it should be minimalistic, and i prefer to change little bit backgrounds of
+   tabs and little lighter for selected tab, borders are not feeling well."* So each strip is
+   one small step of neutral grey from the next, outermost deepest — `--layer-project`,
+   `--layer-workspace`, `--layer-chat` — and nothing is drawn under or between the rows. The
+   step is meant to be felt rather than noticed; `app/src/theme/theme.ts` holds the group.
 
-   So the three still differ in three ways and no more, each one meaning depth rather than
-   identity: **height** (a project's row is the tallest), **surface** (deep, raised, then the
-   bar itself) and **layer colour**. The tab CELL is still one shape.
+   **The selected tab is a step lighter, and that is the whole selection signal.** #171 also lit
+   the selected tab's bottom edge in the accent colour; that went with the rules, on the same
+   instruction. `--layer-selected` is one token for all three strips, lighter than the lightest
+   of them, so the tab you are on reads the same way on every row.
+
+   So the three differ in two ways and no more, each one meaning depth rather than identity:
+   **height** (a project's row is the tallest) and **shade**. #171's *surface* signal is the
+   shade, now in tokens of its own. The tab CELL is still one shape.
 
    **And a tab's label is centred in its cell**, on all three — the operator's *"lets make tabs
    labels center aligned"*. It is a property of the cell and not of the strip, so it is written
@@ -136,19 +142,17 @@ body {
    widest, tallest row in the window, because it is the one that holds the other two. */
 .projects {
   min-height: 2.3rem;
-  background: var(--surface-deep);
-  border-bottom: 2px solid var(--layer-project);
+  background: var(--layer-project);
 }
 
 /* The workspaces of the project in front: the middle of the three strips (ADR 0036). It begins
    at the same x as the project row above it — the inset #171 put here is gone (charter-app
-   #193) and the rule below is what says which row this is. */
+   #193) — and its shade, one step up from the project row's, is what says which row this is. */
 .workspaces {
   display: flex;
   align-items: stretch;
   min-height: 2rem;
-  background: var(--surface-raised);
-  border-bottom: 2px solid var(--layer-workspace);
+  background: var(--layer-workspace);
 }
 
 .workspaces-strip {
@@ -190,35 +194,20 @@ body {
   max-width: 15rem;
 }
 
-/* The lit edge. Drawn on every tab and coloured only on the selected one, so a strip does not
-   shift by two pixels when the selection moves. */
-.projects .project::after,
-.workspaces-strip [role="tab"]::after,
-.tabs .tab::after {
-  content: "";
-  position: absolute;
-  inset-inline: 0;
-  inset-block-end: 0;
-  height: 2px;
-  background: transparent;
-  pointer-events: none;
-}
-
 /* `:has` is how a wrapper knows its own button is the selected one. Where it is not supported
    the button alone takes the surface — the same colour, one hairline narrower — which is a
-   floor rather than an undressed tab. */
+   floor rather than an undressed tab.
+
+   **A step lighter than its strip, and nothing more** (charter-app#193): *"little lighter for
+   selected tab"*. There was an accent-coloured edge under it as well, lit along the side facing
+   what it selects; it went with the coloured rules, because it was one of the borders that
+   were *"not feeling well"*, and a background is enough to say which tab you are on. */
 .projects .project:has([aria-selected="true"]),
 .tabs .tab:has([aria-selected="true"]),
 .projects [role="tab"][aria-selected="true"],
 .workspaces-strip [role="tab"][aria-selected="true"],
 .tabs [role="tab"][aria-selected="true"] {
-  background: var(--tab-active);
-}
-
-.projects .project:has([aria-selected="true"])::after,
-.tabs .tab:has([aria-selected="true"])::after,
-.workspaces-strip [role="tab"][aria-selected="true"]::after {
-  background: var(--accent-base);
+  background: var(--layer-selected);
 }
 
 /* The tab itself: flat, because the cell around it is the shape. Quiet until it is the one you
@@ -409,15 +398,15 @@ body {
 
 /* The innermost of the three rows: the chats of the workspace above. It begins at the same x
    as the two rows above it — the double inset #171 put here is gone (charter-app#193) — and
-   it is the shortest of the three and carries the innermost of the three layer colours. The
-   0.6rem that is left is the end of the row, where its own controls sit. */
+   it is the shortest of the three and the lightest of the three shades. The 0.6rem that is left
+   is the end of the row, where its own controls sit. */
 .bar {
   display: flex;
   gap: 0.5rem;
   align-items: stretch;
   min-height: 1.85rem;
   padding-inline: 0 0.6rem;
-  border-bottom: 2px solid var(--layer-chat);
+  background: var(--layer-chat);
 }
 
 .adding,

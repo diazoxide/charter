@@ -183,9 +183,9 @@ describe("a region toggle", () => {
 });
 
 /**
- * **A strip's tabs are cells, and the selected one is lit — by a rule, not by a border colour
- * on a pill.** jsdom lays nothing out, so what can be held here is the stylesheet's claim: all
- * three strips share the lit edge, and hovering never repaints the tab that is selected.
+ * **A strip's tabs are cells, and the selected one is a step lighter — nothing more.** jsdom
+ * lays nothing out, so what can be held here is the stylesheet's claim: all three strips draw
+ * the selected tab from one token, and hovering never repaints the tab that is selected.
  */
 describe("the three strips share one tab shape", () => {
   // Comments out first: a selector read with the prose above it splits on the prose's commas.
@@ -194,12 +194,25 @@ describe("the three strips share one tab shape", () => {
     "",
   );
 
-  it("lights the selected tab's edge on every strip", () => {
-    const lit = /([^{}]*)\{\s*background:\s*var\(--accent-base\);\s*\}/g;
+  it("draws the selected tab a step lighter, from one token, on every strip", () => {
+    // The operator: *"little lighter for selected tab"* (charter-app#193). One token for all
+    // three, so the tab you are on reads the same way on every row.
+    const lit = /([^{}]*)\{\s*background:\s*var\(--layer-selected\);\s*\}/g;
     const selectors = [...css.matchAll(lit)].map((hit) => hit[1]).join(",");
-    expect(selectors).toContain('.projects .project:has([aria-selected="true"])::after');
-    expect(selectors).toContain('.workspaces-strip [role="tab"][aria-selected="true"]::after');
-    expect(selectors).toContain('.tabs .tab:has([aria-selected="true"])::after');
+    expect(selectors).toContain('.projects .project:has([aria-selected="true"])');
+    expect(selectors).toContain('.workspaces-strip [role="tab"][aria-selected="true"]');
+    expect(selectors).toContain('.tabs .tab:has([aria-selected="true"])');
+  });
+
+  it("lights no edge under a tab, because a lighter background is the whole signal", () => {
+    // #171 lit the selected tab's bottom edge in the accent colour. The operator turned down
+    // the coloured lines — *"borders are not feeling well"* — and the edge was one of them. A
+    // pseudo-element on a strip's tab is how it was drawn, so none may come back quietly.
+    const edges = [...css.matchAll(/([^{}]*::after[^{}]*)\{/g)]
+      .flatMap((hit) => hit[1].split(","))
+      .map((one) => one.trim())
+      .filter((one) => /\.projects|\.workspaces-strip|\.tabs/.test(one));
+    expect(edges).toEqual([]);
   });
 
   it("never lets hover repaint the selected tab", () => {
@@ -283,13 +296,15 @@ describe("the show-more button", () => {
  * charter-app#171 drew the nesting with three signals — height, inset and surface — and the
  * operator read the inset back off the running app as stray padding: *"workspaces tabs and
  * sessions tabs have some padding from left, they should be like project tabs without
- * padding."* So the inset is gone and a colour carries the depth instead, one token per strip.
+ * padding."* The inset is gone, and so are the coloured rules that first replaced it — *"this is
+ * not looks professional, it should be minimalistic, and i prefer to change little bit
+ * backgrounds of tabs"*. A quiet shade per strip carries the depth, one token each.
  *
  * jsdom lays nothing out and computes no stylesheet, so what can be held here is the rule as it
- * is written — which is enough for both halves of the claim: that each strip names its own
- * layer token, and that nothing indents a strip any more.
+ * is written — which is enough for the claim: each strip names its own shade, no strip draws a
+ * line under itself, and nothing indents a strip any more.
  */
-describe("each strip says which layer it is, in colour rather than in indent", () => {
+describe("each strip says which layer it is, by shade rather than by indent or line", () => {
   const raw = readFileSync(join(process.cwd(), "src/App.css"), "utf8");
   const css = raw.replace(/\/\*[\s\S]*?\*\//g, "");
 
@@ -319,15 +334,17 @@ describe("each strip says which layer it is, in colour rather than in indent", (
     [".projects", "--layer-project"],
     [".workspaces", "--layer-workspace"],
     [".bar", "--layer-chat"],
-  ])("%s draws its own layer colour along its bottom", (selector, token) => {
-    expect(block(selector)).toContain(`border-bottom: 2px solid var(${token})`);
+  ])("%s is drawn on its own shade, with no line under it", (selector, token) => {
+    const rule = block(selector);
+    expect(rule).toContain(`background: var(${token})`);
+    expect(rule, `${selector} draws a border`).not.toMatch(/border/);
   });
 
   it("gives the three of them three different tokens", () => {
-    // One token used twice would pass every case above and draw two rows the same colour,
+    // One token used twice would pass every case above and draw two rows the same shade,
     // which is the whole of what the operator asked to be able to tell apart.
     const drawn = [".projects", ".workspaces", ".bar"].map(
-      (selector) => /border-bottom:\s*2px solid var\((--layer-\w+)\)/.exec(block(selector))?.[1],
+      (selector) => /background:\s*var\((--layer-\w+)\)/.exec(block(selector))?.[1],
     );
     expect(new Set(drawn).size).toBe(3);
   });
