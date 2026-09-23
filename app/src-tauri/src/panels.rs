@@ -757,8 +757,11 @@ mod tests {
     /// plane's default, one of them with a memory.
     fn plane_with_a_todo_and_two_personas() -> (tempfile::TempDir, PathBuf) {
         let (dir, root) = plane_with_a_clone();
-        std::fs::write(root.join("charter.toml"), "[persona]\ndefault = \"steward\"\n")
-            .expect("a manifest naming a default");
+        std::fs::write(
+            root.join("charter.toml"),
+            "[persona]\ndefault = \"steward\"\n",
+        )
+        .expect("a manifest naming a default");
         std::fs::create_dir_all(root.join("workspaces/alpha/todos")).expect("a todo store");
         std::fs::write(
             root.join("workspaces/alpha/todos/20260302-091400-review.md"),
