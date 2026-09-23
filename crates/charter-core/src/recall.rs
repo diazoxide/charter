@@ -526,6 +526,7 @@ mod tests {
         assert_eq!(from_isoformat("2026W537"), Some(day("2027-01-03")));
         for refused in [
             "20260W01",   // a `W` one place late is not `YYYY-Www`
+            "2026X01",    // nor is anything but a `W` `YYYYWww`
             "2026-X01",   // nor is a `-` with no `W` after it
             "2026-X01-1", // nor `YYYY-Www-D` with no `W`
             "2026-W0101", // nor `YYYY-Www-D` with no second `-`
