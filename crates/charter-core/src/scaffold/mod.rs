@@ -1801,6 +1801,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn an_opencode_file_that_cannot_take_the_handoff_rule_keeps_it_out_of_every_harness() {
+        // `commands._guard_apply`: every harness is asked first, and "only `malformed`
+        // blocks" — Claude Code is first in the registry, so without the dry run its file
+        // would already hold the rule when opencode refused. Nothing is written anywhere.
+        let (_dir, root) = empty_plane();
+        let opencode = root.join(settings::OPENCODE);
+        std::fs::write(&opencode, "{\"permission\": \"ask\"}\n").expect("opencode.json");
+
+        let outcome = init(&at(&root, false), &plain());
+
+        let warned = Say::Warn(format!(
+            "the ask rule for `charter handoff` was not written anywhere — {} (`permission` is \
+             not an object) is not valid, and `charter guard` writes every harness or none. Fix \
+             it, then: charter guard ask 'charter handoff *'",
+            opencode.display()
+        ));
+        assert!(outcome.said.contains(&warned), "{:?}", outcome.said);
+        let claude = std::fs::read_to_string(root.join(settings::SETTINGS)).unwrap_or_default();
+        assert!(
+            !claude.contains(settings::HANDOFF_RULE),
+            "Claude Code took the rule opencode could not: {claude}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&opencode).expect("opencode.json"),
+            "{\"permission\": \"ask\"}\n"
+        );
+    }
+
     /// Makes `path` unwritable for the test and back again after, so the tempdir can go.
     /// `None` when the process can write it anyway (root), where the scenario cannot exist.
     struct ReadOnly(PathBuf);
