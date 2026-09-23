@@ -169,6 +169,26 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "channel=$channel publish=$publish version=$version sha=$SHA updater-key=$HAS_UPDATER_KEY macos-signing=$macos_signing"
 
+      # A stable release says what it brought, and says it from CHANGELOG.md: the section is
+      # the GitHub release's body and `latest.json`'s notes, and About Charter in the build
+      # shows the same section out of the copy compiled into it. So a tag whose version has no
+      # `## [X.Y.Z]` section, or an empty one, is refused here, beside the check that the tag
+      # agrees with Cargo.toml and before anything is built. The `changelog` crate is the one
+      # the app reads the file with, so this refusal and the dialog cannot disagree.
+      - uses: dtolnay/rust-toolchain@stable
+        if: steps.plan.outputs.channel == 'stable'
+      - name: A stable tag has its section in CHANGELOG.md
+        if: steps.plan.outputs.channel == 'stable'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          if ! notes=$(cargo run --locked --quiet -p changelog -- "$VERSION" CHANGELOG.md 2>&1); then
+            echo "::error::$notes"
+            exit 1
+          fi
+          { echo "### What $VERSION brought"; echo; echo "$notes"; } >> "$GITHUB_STEP_SUMMARY"
+
       # Everything a publish needs that a human has to provide, checked BEFORE twenty minutes
       # of building, each failure naming the one thing to do. See docs/updating.md.
       - name: A publish has everything the operator must provide
@@ -704,7 +724,11 @@ jobs:
           ls -l dist
           if [ "$CHANNEL" = stable ]; then
             base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
-            notes="charter $VERSION. What it brought: https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
+            # The version's CHANGELOG.md section, which `plan` already refused the tag without.
+            # Written to a file the release step reads too, so the updater's notes and the
+            # release body are one extraction, not two.
+            cargo run --locked --quiet -p changelog -- "$VERSION" CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+            notes=$(cat "$RUNNER_TEMP/notes.md")
           else
             base="https://github.com/$GITHUB_REPOSITORY/releases/download/dev"
             notes="charter $VERSION, a dev build of $SHA."
@@ -731,14 +755,17 @@ jobs:
           assets=()
           for f in dist/*; do [[ $f == *.json ]] || assets+=("$f"); done
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber "${assets[@]}"
+            # A re-run over a release that exists: the same body, and the assets replaced by
+            # name (the script says why not `--clobber`).
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file "$RUNNER_TEMP/notes.md"
+            tools/replace-release-assets.sh "$TAG" "${assets[@]}"
           else
             # `--verify-tag`: refuse unless the tag already exists on the remote. This command
             # can never create a tag, which is the operator's rule enforced by the tool.
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
-              --title "charter $VERSION" --notes "charter $VERSION" "${assets[@]}"
+              --title "charter $VERSION" --notes-file "$RUNNER_TEMP/notes.md" "${assets[@]}"
           fi
-          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber latest.json
+          tools/replace-release-assets.sh "$TAG" latest.json
 
       - name: Dev — replace the assets of the one `dev` prerelease
         if: needs.plan.outputs.channel == 'dev'
@@ -746,10 +773,14 @@ jobs:
           set -euo pipefail
           assets=()
           for f in dist/*; do [[ $f == *.json ]] || assets+=("$f"); done
-          # `upload --clobber` and `edit --notes` only: neither touches the tag the release
-          # hangs on, so `dev` stays wherever the operator created it and only the assets move.
-          gh release upload dev --repo "$GITHUB_REPOSITORY" --clobber "${assets[@]}"
-          gh release upload dev --repo "$GITHUB_REPOSITORY" --clobber dev.json
+          # Assets replaced and `edit --notes` only: neither touches the tag the release hangs
+          # on, so `dev` stays wherever the operator created it and only the assets move.
+          # Replaced by name rather than with `gh release upload --clobber`, which died twice
+          # on 2026-09-23 on GitHub's asset list lagging the previous publish's replace;
+          # `tools/replace-release-assets.sh` says how. `dev.json` last, on its own, so no
+          # machine reads a manifest naming an asset that is not uploaded yet.
+          tools/replace-release-assets.sh dev "${assets[@]}"
+          tools/replace-release-assets.sh dev dev.json
           gh release edit dev --repo "$GITHUB_REPOSITORY" \
             --notes "The rolling dev channel. Now: charter $VERSION, built from $SHA. Not a release — see the stable releases for those."
           {

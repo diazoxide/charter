@@ -19,6 +19,7 @@ mod slowstart;
 mod updates;
 mod usage;
 mod views;
+mod windowprefs;
 mod workspaces;
 mod worktrees;
 
@@ -1141,6 +1142,8 @@ fn commands() -> Builder<tauri::Wry> {
             usage::chat_usage,
             pin::plane_pin,
             about::about_charter,
+            windowprefs::write_layout,
+            windowprefs::adopt_layout,
         ])
         // What `update://checked` carries. It crosses on an event rather than a command, so it
         // is named here or the window would have to write the shape out by hand.
@@ -1238,6 +1241,25 @@ pub fn run() {
         })
         .setup(|app| {
             reached("setup");
+            // **The window, built here rather than by Tauri from the config, so it can be
+            // handed the operator's layout and theme as it is created** (`windowprefs.rs`). Its
+            // entry in `tauri.conf.json` says `"create": false` and is still the one source of
+            // its size, title and title bar; this adds the initialization script and nothing
+            // else. First in `setup`, which is exactly where Tauri would have built it.
+            let main = app
+                .config()
+                .app
+                .windows
+                .iter()
+                .find(|window| window.label == lifecycle::WINDOW)
+                .cloned()
+                .ok_or("tauri.conf.json declares no main window")?;
+            tauri::WebviewWindowBuilder::from_config(app.handle(), &main)?
+                .initialization_script(windowprefs::creation_script(
+                    charter_core::machine::config_root().as_deref(),
+                ))
+                .build()?;
+            reached("the window is built");
             // Where a panic is kept, now that the app can be told where its logs belong. An app
             // with no log directory still has standard error, which is all it had before.
             if let Ok(logs) = app.path().app_log_dir() {

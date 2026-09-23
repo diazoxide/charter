@@ -219,11 +219,11 @@ describe("the title bar", () => {
     );
   });
 
-  it("opens About on the version this build really shipped, with that version's own news", async () => {
-    // The whole point of the dialog, and the half jsdom cannot reach: the corpus is compiled
-    // into the binary by `build.rs`, so this is the real `news::for_version(shipped_version())`
-    // rather than a list a mock handed it. `about.rs` holds the invariant that makes an empty
-    // list impossible — the version is DERIVED from the entries.
+  it("opens About on the version this build really is, with its changelog section", async () => {
+    // The half jsdom cannot reach: the version is the bundle's own (`app.package_info()`) and
+    // the notes are CHANGELOG.md as compiled into the binary, rather than an answer a mock
+    // handed it. Before this, About said charter's news corpus version (0.62.1) on a build
+    // whose release page said 0.1.0.
     await untilTheStripIsRead();
 
     await (await $('[data-testid="title-about"]')).click();
@@ -231,14 +231,20 @@ describe("the title bar", () => {
     await dialog.waitForDisplayed({ timeout: 20_000 });
 
     const version = await (await $('[data-testid="about-version"]')).getText();
-    // A release charter really named, rather than the crate's own `0.1.0` — `news.rs` argues
-    // at length why those are different numbers.
-    expect(version).toMatch(/^\d+\.\d+\.\d+/);
-    await expect(dialog).toHaveText(expect.stringContaining(`What ${version} brought`));
+    // The app's own version line, which starts at 0.1.0 — not Python charter's 0.62.
+    expect(version).toMatch(/^0\.\d+\.\d+/);
+    expect(version).not.toMatch(/^0\.6\d\./);
 
-    const headlines = await $$('[role="dialog"] .about-news li strong').getElements();
-    expect(headlines.length).toBeGreaterThan(0);
-    expect((await headlines[0].getText()).trim().length).toBeGreaterThan(0);
+    // A scenario build carries the crate's version with no dev suffix: its own section once
+    // that version is released, `[Unreleased]` before — and `about.rs` has the test that keeps
+    // one of the two in the file. Right after a release `[Unreleased]` is empty, and the dialog
+    // says so rather than drawing nothing.
+    const said = await dialog.getText();
+    if (!said.includes("Nothing is recorded for it yet.")) {
+      const items = await $$('[role="dialog"] .release-notes li').getElements();
+      expect(items.length).toBeGreaterThan(0);
+      expect((await items[0].getText()).trim().length).toBeGreaterThan(0);
+    }
 
     // Never left over the window: one app process serves the whole run, and a scrim left up
     // blocks every spec after this one.

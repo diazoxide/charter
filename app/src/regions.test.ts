@@ -1,27 +1,56 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, renderHook } from "@testing-library/react";
+import { clearMocks, mockIPC } from "@tauri-apps/api/mocks";
 import {
   CATALOGUE,
   DEFAULT_ARRANGEMENT,
+  forgetThisLaunch,
   inSlots,
+  LEGACY_KEY,
   REGION_IDS,
   remembered,
+  settleLayout,
   shownIn,
   SIDES,
   SLOTS,
   slotSize,
   useArrangement,
 } from "./regions";
+import { aboutThisMachine, GLOBAL, sayAboutThisMachine, type Reading } from "./windowprefs";
 
-const KEY = "charter.layout";
+const PATH = "/home/op/.config/charter/layout.json";
 
-const put = (document: unknown) => globalThis.localStorage.setItem(KEY, JSON.stringify(document));
+/** Hands the window a layout file, as the initialization script does before anything runs. */
+const handed = (layout: Partial<Reading>) => {
+  (globalThis as Record<string, unknown>)[GLOBAL] = {
+    layout: { path: PATH, found: false, document: null, trouble: null, ...layout },
+    theme: { path: "", found: false, document: null, trouble: null },
+  };
+};
+/** A layout file holding `document`. */
+const put = (document: unknown) => handed({ found: true, document });
 const placed = (arrangement: ReturnType<typeof remembered>, id: string) =>
   arrangement.find((one) => one.id === id);
 
-beforeEach(() => globalThis.localStorage.clear());
+/** Every command the window sent the core, in order, and what the core answers. */
+let sent: { cmd: string; args: unknown }[] = [];
+let answer: (cmd: string) => unknown = () => null;
+
+beforeEach(() => {
+  globalThis.localStorage.clear();
+  Reflect.deleteProperty(globalThis, GLOBAL);
+  forgetThisLaunch();
+  sayAboutThisMachine("layout", undefined);
+  sent = [];
+  answer = (cmd) => (cmd === "adopt_layout" ? true : null);
+  mockIPC((cmd, args) => {
+    sent.push({ cmd, args });
+    return answer(cmd);
+  });
+});
 afterEach(() => {
   cleanup();
+  clearMocks();
   vi.restoreAllMocks();
 });
 
@@ -226,8 +255,8 @@ describe("a stored arrangement that is not what this build writes", () => {
   });
 
   it("draws the default arrangement when the document is not one", () => {
-    for (const held of ["{{{", "null", "[]", '"a layout"', "7", '{"regions":"none"}']) {
-      globalThis.localStorage.setItem(KEY, held);
+    for (const held of [null, [], "a layout", 7, { regions: "none" }]) {
+      put(held);
 
       expect(remembered()).toEqual(DEFAULT_ARRANGEMENT);
     }
@@ -241,25 +270,150 @@ describe("a stored arrangement that is not what this build writes", () => {
   });
 });
 
-describe("the webview refusing storage", () => {
-  it("draws the default arrangement when it will not be read", () => {
-    vi.spyOn(globalThis.Storage.prototype, "getItem").mockImplementation(() => {
-      throw new Error("storage is blocked");
+describe("the layout file", () => {
+  it("is what the first frame is drawn from, with nothing fetched", () => {
+    put({
+      version: 1,
+      regions: [{ id: "explorer", side: "right", order: 1, collapsed: false, size: 22 }],
     });
 
-    expect(remembered()).toEqual(DEFAULT_ARRANGEMENT);
+    expect(placed(remembered(), "explorer")).toEqual({
+      id: "explorer",
+      side: "right",
+      order: 1,
+      collapsed: false,
+      size: 22,
+    });
+    expect(sent).toEqual([]);
   });
 
-  it("still puts a region away when it will not be stored", () => {
-    // The preference is lost at the next launch. The window must not fail to lay out over it.
-    vi.spyOn(globalThis.Storage.prototype, "setItem").mockImplementation(() => {
-      throw new Error("storage is blocked");
+  it("is where every change goes, in the order the window made them", async () => {
+    const { result } = renderHook(() => useArrangement());
+
+    act(() => result.current.toggle("explorer"));
+    act(() => result.current.move("bottom", "right", 1));
+
+    await vi.waitFor(() => expect(sent).toHaveLength(2));
+    expect(sent.map((one) => one.cmd)).toEqual(["write_layout", "write_layout"]);
+    const last = JSON.parse((sent[1].args as { text: string }).text);
+    expect(last).toEqual({
+      version: 1,
+      regions: [
+        { id: "explorer", side: "left", order: 0, collapsed: true },
+        { id: "aside", side: "right", order: 0, collapsed: false },
+        { id: "bottom", side: "right", order: 1, collapsed: false },
+      ],
     });
+  });
+
+  it("that could not be read is drawn as the default, and the drawer says why and where", async () => {
+    handed({ found: true, trouble: `${PATH} is not JSON: expected value at line 1` });
+
+    expect(remembered()).toEqual(DEFAULT_ARRANGEMENT);
+    await settleLayout();
+
+    const [said] = aboutThisMachine();
+    expect(said.subject).toBe("layout");
+    expect(said.detail).toContain("is not JSON");
+    expect(said.detail).toContain("default arrangement");
+    expect(said.remedy).toContain(PATH);
+  });
+
+  it("naming a region this build does not have is drawn without it, and says so", async () => {
+    put({ version: 1, regions: [{ id: "minimap", side: "left", order: 0 }] });
+
+    expect(remembered()).toEqual(DEFAULT_ARRANGEMENT);
+    await settleLayout();
+
+    expect(aboutThisMachine()).toHaveLength(1);
+    expect(aboutThisMachine()[0].detail).toContain('"minimap" is not a region this charter has');
+  });
+
+  it("says nothing when there is nothing wrong with it", async () => {
+    put({ version: 1, regions: DEFAULT_ARRANGEMENT });
+
+    await settleLayout();
+
+    expect(aboutThisMachine()).toEqual([]);
+  });
+
+  it("that the core would not write is said, and the window keeps what the operator did", async () => {
+    answer = (cmd) => {
+      if (cmd === "write_layout") throw "charter will not overwrite a layout it could not read";
+      return null;
+    };
     const { result } = renderHook(() => useArrangement());
 
     act(() => result.current.toggle("aside"));
 
     expect(placed(result.current.arrangement, "aside")?.collapsed).toBe(true);
+    await vi.waitFor(() => expect(aboutThisMachine()).toHaveLength(1));
+    expect(aboutThisMachine()[0].detail).toContain("will not overwrite");
+  });
+
+  it("takes back what the drawer said about it once a change has been kept", async () => {
+    handed({ found: true, trouble: `${PATH} is not JSON` });
+    await settleLayout();
+    expect(aboutThisMachine()).toHaveLength(1);
+    const { result } = renderHook(() => useArrangement());
+
+    act(() => result.current.toggle("aside"));
+
+    await vi.waitFor(() => expect(aboutThisMachine()).toEqual([]));
+  });
+});
+
+describe("the arrangement web storage held before the file", () => {
+  const legacy = [{ id: "explorer", side: "left", order: 0, collapsed: true }];
+
+  it("is drawn on the first launch that finds no file, and moved into it", async () => {
+    globalThis.localStorage.setItem(LEGACY_KEY, JSON.stringify({ regions: legacy }));
+    handed({ found: false });
+
+    expect(placed(remembered(), "explorer")?.collapsed).toBe(true);
+    await settleLayout();
+
+    expect(sent.map((one) => one.cmd)).toEqual(["adopt_layout"]);
+    expect(JSON.parse((sent[0].args as { text: string }).text)).toMatchObject({
+      version: 1,
+      regions: [{ id: "explorer", collapsed: true }, { id: "aside" }, { id: "bottom" }],
+    });
+    // Moved, so never read again.
+    expect(globalThis.localStorage.getItem(LEGACY_KEY)).toBeNull();
+    // And a project opened after the move still gets it, with the key gone.
+    expect(placed(remembered(), "explorer")?.collapsed).toBe(true);
+  });
+
+  it("is kept where it is when the move fails, so the next launch tries again", async () => {
+    globalThis.localStorage.setItem(LEGACY_KEY, JSON.stringify({ regions: legacy }));
+    answer = () => {
+      throw "the disk is full";
+    };
+
+    await settleLayout();
+
+    expect(globalThis.localStorage.getItem(LEGACY_KEY)).not.toBeNull();
+    expect(aboutThisMachine()[0].detail).toContain("the disk is full");
+  });
+
+  it("is not read at all once there is a file", async () => {
+    globalThis.localStorage.setItem(LEGACY_KEY, JSON.stringify({ regions: legacy }));
+    const read = vi.spyOn(globalThis.Storage.prototype, "getItem");
+    put({ version: 1, regions: [] });
+
+    expect(placed(remembered(), "explorer")?.collapsed).toBe(false);
+    await settleLayout();
+
+    expect(read).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+  });
+
+  it("draws the default when the webview will not read it", () => {
+    vi.spyOn(globalThis.Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("storage is blocked");
+    });
+
+    expect(remembered()).toEqual(DEFAULT_ARRANGEMENT);
   });
 });
 

@@ -22,6 +22,7 @@ import {
 } from "./actions";
 import { countOf, useAlerts } from "./alerts";
 import { AlertsDrawer } from "./AlertsDrawer";
+import { useAboutThisMachine } from "./windowprefs";
 import { ApprovePlane } from "./ApprovePlane";
 import { Extensions } from "./Extensions";
 import { Opener } from "./Opener";
@@ -136,7 +137,11 @@ function App() {
    */
   const { reading: alertsRead, reread: rereadAlerts } = useAlerts(planes);
   const [alertsOpen, setAlertsOpen] = useState(false);
-  const alertCount = countOf(alertsRead, planes);
+  /** What the window says about this machine rather than a project — a layout or theme file it
+   *  could not use as written (`windowprefs.ts`). Drawn in the same drawer, counted in the same
+   *  number. */
+  const aboutThisMachine = useAboutThisMachine();
+  const alertCount = countOf(alertsRead, planes, aboutThisMachine.length);
   const alerts = useMemo<Alerts>(
     () => ({
       count: alertCount,
@@ -906,6 +911,7 @@ function App() {
         open={alertsOpen}
         onOpenChange={setAlertsOpen}
         reading={alertsRead}
+        aboutThisMachine={aboutThisMachine}
         planes={planes}
         nameOf={calledOn}
       />

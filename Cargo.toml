@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/charter-core", "crates/charter-cli", "crates/fake-harness", "crates/persona-statistics", "crates/release-manifest", "crates/stand-in", "app/src-tauri"]
+members = ["crates/charter-core", "crates/charter-cli", "crates/fake-harness", "crates/persona-statistics", "crates/release-manifest", "crates/changelog", "crates/stand-in", "app/src-tauri"]
 # Plain `cargo test` and `cargo clippy` cover the crates that need no built frontend.
 # The app crate compiles `app/dist` into itself, so it is checked through `npm run tauri`.
-default-members = ["crates/charter-core", "crates/charter-cli", "crates/fake-harness", "crates/persona-statistics", "crates/release-manifest", "crates/stand-in"]
+default-members = ["crates/charter-core", "crates/charter-cli", "crates/fake-harness", "crates/persona-statistics", "crates/release-manifest", "crates/changelog", "crates/stand-in"]
 
 [workspace.package]
 version = "0.1.0"
@@ -14,6 +14,8 @@ repository = "https://github.com/diazoxide/charter-app"
 
 [workspace.dependencies]
 charter-core = { path = "crates/charter-core" }
+# What each release of the app brought: About Charter and the release body both read it.
+changelog = { path = "crates/changelog" }
 # Test-only: the one way a test writes a program it is about to run (charter-app#81).
 stand-in = { path = "crates/stand-in" }
 clap = { version = "4", features = ["derive"] }

@@ -377,6 +377,9 @@ export type Bench = {
   focus(session: number): void;
   /** The end of what a pane has been sent, for working out why a job is still waiting. */
   tail(session: number): { tail: string; waitingFor?: string; seen?: boolean };
+  /** Every slot each region's content has been put in since the page started, in order —
+   *  `{ explorer: ["region-right"] }` for a window that never drew it anywhere else. */
+  regionsSeen(): Record<string, string[]>;
 };
 
 const bench: Bench = {
@@ -449,7 +452,42 @@ const bench: Bench = {
     if (!found) throw new Error(`no pane is showing session ${session}`);
     (found as HTMLElement).click();
   },
+  regionsSeen: () => structuredClone(seen),
 };
+
+/** What each region is drawn as: the element its content puts in a slot. */
+const REGION_CONTENT =
+  '[data-testid="explorer"], [data-testid="panels"], [data-testid="bottom-bar"]';
+
+/** Every slot each region's content has been mounted in, in order. */
+const seen: Record<string, string[]> = {};
+
+/**
+ * **Where every region has ever been drawn** (M6.9's scenario, `layout.layout.e2e.ts`).
+ *
+ * A layout that arrived after the first paint would be drawn twice: the default arrangement
+ * first, then the operator's. The second drawing is the one any later assertion sees, so an
+ * assertion about where a region IS cannot tell the two apart. This can: it is attached before
+ * React renders anything, and it writes down every slot a region's content is inserted into,
+ * so a region that was ever in the wrong place has two entries.
+ */
+function watchRegions(): void {
+  new MutationObserver((records) => {
+    for (const record of records) {
+      for (const node of record.addedNodes) {
+        if (!(node instanceof Element)) continue;
+        const found = [...(node.matches(REGION_CONTENT) ? [node] : [])];
+        found.push(...node.querySelectorAll(REGION_CONTENT));
+        for (const one of found) {
+          const region = one.getAttribute("data-testid") ?? "";
+          const slot = one.closest('[data-panel][id^="region-"]')?.id ?? "nowhere";
+          const list = (seen[region] ??= []);
+          if (list.at(-1) !== slot) list.push(slot);
+        }
+      }
+    }
+  }).observe(document, { childList: true, subtree: true });
+}
 
 declare global {
   interface Window {
@@ -459,5 +497,7 @@ declare global {
 
 /** Puts the seam on `window`, in the `e2e` build and nowhere else. */
 export function attach(): void {
-  if (measuring) window.charterBench = bench;
+  if (!measuring) return;
+  window.charterBench = bench;
+  watchRegions();
 }

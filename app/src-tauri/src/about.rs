@@ -1,77 +1,118 @@
-//! What this charter is, and what the version it brought brought — the title bar's
-//! *About charter*.
+//! Which charter this is, and what its version brought: the title bar's *About Charter*.
 //!
 //! The operator asked for it in as many words: *"About Charter — that will open news of
 //! charter e.g. current version News"*.
 //!
-//! **It reads the corpus the rest of charter reads, and there is no second one.**
-//! [`charter_core::news`] is compiled into the binary by `build.rs`, so `charter news`, the
-//! Release body, the plane pin's dialog (`crate::pin`) and this are four views of one set of
-//! files. A dialog that carried its own "what's new" text would be a fifth copy of the
-//! release notes with nobody to keep it honest — which is the drift the news module's own
-//! docstring exists to prevent.
+//! **The version is the app's own.** It is the one this build announces, which is the one the
+//! updater compares against a manifest and the one on the GitHub release it came from:
+//! `0.1.0` for a stable build, `0.2.0-dev.42` for a dev build (the release workflow's `plan`
+//! step appends `-dev.<run>` to the workspace version and writes it into the bundle's config).
+//! It is read from `app.package_info()`, because that is where the dev suffix lands;
+//! `CARGO_PKG_VERSION` is the same number without it, and a test in `updates.rs` holds the two
+//! together.
 //!
-//! **The version is the one the corpus names, not the crate's.** `news::shipped_version` is
-//! the newest released entry's version, and [`charter_core::news`] argues at length why that
-//! is the honest answer for a binary whose `CARGO_PKG_VERSION` is the workspace's `0.1.0` —
-//! the corpus travels with the code that implements it, so the newest entry a build ships is
-//! the newest thing that build brought. The same number the status line's pin item already
-//! reports as `brought` (`crate::pin::PinReport`), from the same call.
+//! **The notes are the repository's `CHANGELOG.md`, compiled in, and there is no second copy.**
+//! The release workflow puts the same section on the GitHub release and in `latest.json`, both
+//! through the `changelog` crate's [`changelog::section`], so the dialog of a build and the
+//! release page it was published on say the same thing about the same version.
 //!
-//! **So the list is never empty.** `shipped_version` is *derived from* the entries, so the
-//! version it answers with has at least one, by construction. There is no "this version
-//! brought nothing" state to draw, and the window does not pretend there is one.
+//! What a build shows depends on what it is:
 //!
-//! **Nothing here is about a plane.** The pin is (`crate::pin`): it asks what THIS control
-//! plane pins against what this charter brought, and it lives on the status line next to the
-//! project it is about. This is a fact about the binary, so it lives on the window's chrome
-//! and is asked without a plane.
+//! * **a release**: the version has a `## [X.Y.Z]` section, and that section is shown. The
+//!   release workflow refuses a tag whose version has none, and a test below refuses a crate
+//!   version that has none and is not the next release;
+//! * **a dev build** (`X.Y.Z-dev.N`): a prerelease of the next version, so what it carries is
+//!   `## [Unreleased]`;
+//! * **a version the changelog does not list**, which is what a local build of `main` is: said
+//!   plainly, with `## [Unreleased]` beside it as what the build is ahead by.
+//!
+//! **Python charter's news is not read here.** `charter_core::news` is charter's own corpus,
+//! vendored for `charter news` and the differential, and its newest version (0.62.x) is a
+//! different product's number. The plane pin (`crate::pin`) still reads it, because a plane's
+//! `[charter] version` pin is written in that product's numbers.
+//!
+//! **Nothing here is about a plane.** This is a fact about the binary, so it lives on the
+//! window's chrome and is asked without one.
 
-use charter_core::news;
+/// The changelog this build carries: the one its release was published with.
+const CHANGELOG: &str = include_str!("../../../CHANGELOG.md");
 
-/// One entry of the version's news, as the About dialog reads it.
-///
-/// Headline and body, and nothing else. `check:`/`adopt:` are about whether a PLANE has taken
-/// an entry up — `charter news` answers that, with a plane to ask it of — and this dialog has
-/// no plane in its hand. Reporting *unchecked* against every line would be the window adding a
-/// column of the same word three times.
+/// What kind of build this is, which decides which section is shown.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
-pub struct Note {
-    /// The entry's one-line headline, as its author wrote it.
-    pub headline: String,
-    /// The prose under the frontmatter. Empty for an entry that is only a headline.
-    pub body: String,
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum Build {
+    /// The changelog has a section for this version.
+    Release,
+    /// A prerelease of `of`, the next version: `0.2.0-dev.42` is a dev build of `0.2.0`.
+    Dev { of: String },
+    /// A version with no section and no prerelease suffix. A local build of `main` is one.
+    Unlisted,
+}
+
+/// One section of the changelog, as the dialog draws it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
+pub struct Notes {
+    /// The heading's version: `0.1.0`, or `Unreleased`.
+    pub version: String,
+    /// The date the heading gives, for a released version.
+    pub date: Option<String>,
+    /// The section as Markdown: `### Added`, `### Changed`, `### Fixed` and their bullets.
+    /// Empty for an `[Unreleased]` that has nothing in it yet.
+    pub markdown: String,
 }
 
 /// What charter says about itself.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, specta::Type)]
 pub struct About {
-    /// The release this charter brought (`news::shipped_version`).
+    /// The version this build announces, dev suffix and all.
     pub version: String,
-    /// What that version brought, in the corpus's own order — which is
-    /// [`charter_core::news::all`]'s, so a `lead:` entry is first here exactly as it is in the
-    /// Release body and in `charter news`. Never empty; see this module's docstring.
-    pub notes: Vec<Note>,
+    /// Whether that version is released, a dev build, or not in the changelog.
+    pub build: Build,
+    /// The section shown: the version's own for a release, `[Unreleased]` otherwise. `None`
+    /// only when there is no such section to show.
+    pub notes: Option<Notes>,
 }
 
 /// The About dialog's content.
 ///
-/// A plain function of the compiled-in corpus: no plane, no disk, no state. That is why it
-/// takes nothing — a dialog that needed a project open could not be on the window's chrome,
-/// and the window holds no project for the first moments of every launch.
+/// No plane, no disk, no state: the version is the bundle's and the changelog is compiled in.
+/// A dialog that needed a project open could not be on the window's chrome, and the window
+/// holds no project for the first moments of every launch.
 #[tauri::command]
 #[specta::specta]
-pub fn about_charter() -> About {
-    let version = news::shipped_version();
-    About {
-        notes: news::for_version(&version)
-            .into_iter()
-            .map(|entry| Note {
-                headline: entry.headline,
-                body: entry.body,
+pub fn about_charter(app: tauri::AppHandle) -> About {
+    about(&app.package_info().version.to_string(), CHANGELOG)
+}
+
+/// What a build of `version` says about itself, out of `changelog`.
+fn about(version: &str, changelog: &str) -> About {
+    let notes = |heading: &str| {
+        changelog::section(changelog, heading)
+            .ok()
+            .map(|section| Notes {
+                version: section.version,
+                date: section.date,
+                markdown: section.notes,
             })
-            .collect(),
-        version,
+    };
+    if let Some((of, _)) = version.split_once('-') {
+        return About {
+            version: version.to_owned(),
+            build: Build::Dev { of: of.to_owned() },
+            notes: notes(changelog::UNRELEASED),
+        };
+    }
+    match notes(version) {
+        Some(own) => About {
+            version: version.to_owned(),
+            build: Build::Release,
+            notes: Some(own),
+        },
+        None => About {
+            version: version.to_owned(),
+            build: Build::Unlisted,
+            notes: notes(changelog::UNRELEASED),
+        },
     }
 }
 
@@ -79,55 +120,141 @@ pub fn about_charter() -> About {
 mod tests {
     use super::*;
 
-    #[test]
-    fn about_names_the_release_this_build_brought() {
-        let about = about_charter();
+    const LOG: &str = "\
+# Changelog
 
-        assert_eq!(about.version, news::shipped_version());
-        assert_ne!(about.version, "", "the corpus names a released version");
+## [Unreleased]
+
+### Added
+
+- Coming next.
+
+## [0.1.0] - 2026-09-23
+
+### Added
+
+- The first thing.
+
+[Unreleased]: https://example.com/compare/v0.1.0...HEAD
+[0.1.0]: https://example.com/releases/tag/v0.1.0
+";
+
+    #[test]
+    fn a_released_version_shows_its_own_section_and_date() {
+        let about = about("0.1.0", LOG);
+
+        assert_eq!(about.version, "0.1.0");
+        assert_eq!(about.build, Build::Release);
+        assert_eq!(
+            about.notes,
+            Some(Notes {
+                version: "0.1.0".into(),
+                date: Some("2026-09-23".into()),
+                markdown: "### Added\n\n- The first thing.".into(),
+            })
+        );
     }
 
     #[test]
-    fn the_version_it_names_always_has_news_because_it_is_derived_from_the_news() {
-        // The invariant the dialog leans on: `shipped_version` is the newest RELEASED entry's
-        // version, so asking the corpus for that version's entries cannot come back empty.
-        // If this ever fails, the About dialog has an empty state that nothing draws.
-        let about = about_charter();
+    fn a_dev_build_is_a_build_of_the_next_version_and_shows_unreleased() {
+        let about = about("0.2.0-dev.42", LOG);
 
-        assert!(!about.notes.is_empty(), "{about:?}");
+        assert_eq!(about.version, "0.2.0-dev.42");
+        assert_eq!(about.build, Build::Dev { of: "0.2.0".into() });
+        let notes = about.notes.unwrap();
+        assert_eq!(notes.version, "Unreleased");
+        assert_eq!(notes.date, None);
+        assert_eq!(notes.markdown, "### Added\n\n- Coming next.");
     }
 
     #[test]
-    fn every_note_carries_the_headline_its_entry_was_written_with() {
-        let about = about_charter();
-        let entries = news::for_version(&about.version);
+    fn a_dev_build_of_a_released_version_still_shows_unreleased() {
+        // A prerelease is never the release it precedes, whatever the changelog lists.
+        let about = about("0.1.0-dev.3", LOG);
 
-        assert_eq!(about.notes.len(), entries.len());
-        for (note, entry) in about.notes.iter().zip(entries.iter()) {
-            assert_eq!(note.headline, entry.headline);
-            assert_eq!(note.body, entry.body);
+        assert_eq!(about.build, Build::Dev { of: "0.1.0".into() });
+        assert_eq!(about.notes.unwrap().version, "Unreleased");
+    }
+
+    #[test]
+    fn a_version_the_changelog_does_not_list_says_so_and_shows_unreleased() {
+        let about = about("0.3.0", LOG);
+
+        assert_eq!(about.build, Build::Unlisted);
+        assert_eq!(about.notes.unwrap().version, "Unreleased");
+    }
+
+    #[test]
+    fn with_no_section_to_show_there_are_no_notes_rather_than_empty_ones() {
+        let released_only = "# Changelog\n\n## [0.1.0] - 2026-09-23\n\n- One.\n";
+
+        assert_eq!(about("0.2.0-dev.1", released_only).notes, None);
+        assert_eq!(about("0.2.0", released_only).notes, None);
+        assert_eq!(about("0.2.0", "not a changelog").notes, None);
+    }
+
+    /// `X.Y.Z` as numbers, so `0.10.0` sorts after `0.9.0`.
+    fn triple(version: &str) -> (u64, u64, u64) {
+        let mut parts = version.split('.').map(|part| {
+            part.parse::<u64>()
+                .unwrap_or_else(|_| panic!("{version:?} is not X.Y.Z"))
+        });
+        let mut next = || {
+            parts
+                .next()
+                .unwrap_or_else(|| panic!("{version:?} is not X.Y.Z"))
+        };
+        (next(), next(), next())
+    }
+
+    #[test]
+    fn the_version_this_crate_is_built_as_has_notes_to_show() {
+        // What keeps a build from shipping with a version the changelog says nothing about.
+        // Either the version is released and has its section, or it is the NEXT release —
+        // newer than every released one — and `[Unreleased]` is there to say what it has so
+        // far. `main` is the second between releases (docs/updating.md), and the release PR
+        // that renames `[Unreleased]` to this version makes it the first.
+        let version = env!("CARGO_PKG_VERSION");
+        if changelog::section(CHANGELOG, version).is_ok() {
+            return;
         }
-    }
-
-    #[test]
-    fn it_lists_no_entry_from_another_version() {
-        // The pin dialog lists a RANGE (`news::between`); this lists ONE version. A dialog
-        // titled "what 0.62.1 brought" that carried 0.62.0's fifty entries would be the pin
-        // item under another name.
-        let about = about_charter();
-        let mine: Vec<String> = news::for_version(&about.version)
-            .into_iter()
-            .map(|e| e.headline)
-            .collect();
-
-        for note in &about.notes {
-            assert!(mine.contains(&note.headline), "{note:?}");
+        let released = changelog::released(CHANGELOG).expect("CHANGELOG.md is readable");
+        for older in &released {
+            assert!(
+                triple(version) > triple(older),
+                "the crate is {version}, CHANGELOG.md has no section for it, and it is not newer \
+                 than the released {older}"
+            );
         }
         assert!(
-            news::released()
-                .iter()
-                .filter(|e| e.version != about.version)
-                .all(|e| !about.notes.iter().any(|n| n.headline == e.headline)),
+            changelog::section(CHANGELOG, changelog::UNRELEASED).is_ok(),
+            "the crate is {version}, which is unreleased, and CHANGELOG.md has no \
+             `## [Unreleased]` to say what it has"
         );
+    }
+
+    #[test]
+    fn every_released_version_in_the_shipped_changelog_says_what_it_brought() {
+        for version in changelog::released(CHANGELOG).expect("CHANGELOG.md is readable") {
+            assert!(
+                changelog::section(CHANGELOG, &version).is_ok(),
+                "{:?}",
+                changelog::section(CHANGELOG, &version)
+            );
+        }
+    }
+
+    #[test]
+    fn the_shipped_changelog_is_the_apps_and_not_python_charters_news() {
+        // The defect this module was rewritten for: About said 0.62.1, charter's corpus
+        // version, on a build the release page called 0.1.0.
+        let about = about(env!("CARGO_PKG_VERSION"), CHANGELOG);
+
+        assert_eq!(about.version, env!("CARGO_PKG_VERSION"));
+        let notes = about
+            .notes
+            .expect("the shipped changelog has notes for this build");
+        assert!(!notes.markdown.is_empty(), "{notes:?}");
+        assert!(!notes.version.starts_with("0.62"), "{notes:?}");
     }
 }

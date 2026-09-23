@@ -154,7 +154,7 @@ body {
   gap: 0;
   flex: 1 1 0;
   min-width: var(--least);
-  border-inline-end: 1px solid var(--border-subtle);
+  border-inline-end: 1px solid var(--layer-divider);
 }
 
 /* A cap, so a strip with two chats on it does not draw two tabs half a window wide. The
@@ -206,6 +206,15 @@ body {
   font: inherit;
   cursor: pointer;
   white-space: nowrap;
+}
+
+/* **Every tab is divided from the next by one very light hairline** — the operator's *"very very
+   light visible border - just for little bit highlight separation"*. A workspace tab IS its
+   `[role="tab"]` button, so the `border: 0` reset just above used to erase the divider the cell
+   rule gave it, and the workspace strip was the one strip with none. Re-stated here, after the
+   reset, for the one strip whose cell is the button. */
+.workspaces-strip [role="tab"] {
+  border-inline-end: 1px solid var(--layer-divider);
 }
 
 /* **`min-width: 0`, or the name never truncates.** A flex item's floor is its content, so
@@ -706,38 +715,17 @@ button.show-more:focus-visible {
   right: 8px;
 }
 
-/* **The gauge's own row, taken from the terminal only when there is a gauge.** At top-left the
-   gauge is over the first columns of the first row, and a terminal's text starts there at every
-   pane size — a prompt, Claude Code's header box — where the top-right it came from mostly
-   covered the blank end of a left-aligned line. A readout on top of the first line of a chat is
-   the thing the move must not ship, so the pane gives that row up instead.
-
-   **The pane's BOX shrinks, not the terminal's padding**, and that is load-bearing: the gauge
-   arrives after the terminal has been fitted, `SessionPane`'s `ResizeObserver` watches the pane,
-   and only a change to the pane's own size makes it fit again. A chat with no gauge — a shell,
-   a harness charter reads no usage for — keeps every row it had. The cost is the one the
-   gauge's first home refused: a Claude chat is a row shorter. It is paid only where the row
-   carries something.
-
-   **Padding on the frame, not a margin on the pane — measured, not chosen.** A `margin-top` on
-   `.pane` was the first version, and in the running window the gauge still sat 15 px into the
-   first row: the frame has no border or padding of its own, so the pane's margin collapsed
-   THROUGH it, the frame moved down with the pane, and the gauge — positioned against the frame
-   — moved with them. Padding cannot collapse. The pane's `height: 100%` resolves against the
-   frame's content box, so the pane is the row shorter, `SessionPane`'s `ResizeObserver` sees
-   it and refits. `.gauged` is written by `PaneFrame` (`PlaneView.tsx`), which reads the usage. */
-.pane-frame {
-  --gauge-room: 1.4rem;
-}
-
-.pane-frame.gauged {
-  padding-top: var(--gauge-room);
-}
+/* **The gauge floats; it takes no row.** For one build (#207) the pane gave the gauge a row of
+   its own, so as not to cover the start of the terminal's first line. The operator saw the
+   cost at once: *"context usage component position is not absolute and its changing harness
+   container sizes"* — a pane with a gauge was a row shorter than its neighbour without one, and
+   a pane changed height the moment its first usage arrived. The gauge is drawn over the
+   terminal now, exactly as the pane's controls are in the other corner, and the terminal keeps
+   every row whether or not charter has usage for it. */
 
 /* **A chat's `ctx`/`cache` gauge** (`app/src/ChatGauge.tsx`): small, in the pane's top-LEFT
-   corner since charter-app#193, on a row the pane gives up for it (`.pane-frame.gauged`
-   above says why the row, and what it costs). Raised and bordered so it reads as charter's and
-   not as the program's output.
+   corner since charter-app#193, drawn over the terminal and taking no row of its own. Raised and
+   bordered so it reads as charter's and not as the program's output.
 
    **It does not place itself**: `.pane-corner.at-start` holds it. Everything else about it is
    unchanged — in particular it is always drawn, and never takes the controls' hover rule. */
@@ -879,6 +867,17 @@ button.show-more:focus-visible {
 .xterm {
   height: 100%;
   padding: 2px 4px;
+}
+
+/* **The strip under the last row is the terminal's colour, not xterm's black** (charter-app#193,
+   M6.8). `FitAddon` fits whole rows into a box that is not a multiple of one, so every pane has
+   up to a row of slack at its bottom, and `xterm.css` paints the viewport behind it `#000`.
+   This used to be an inline style set once per pane, because xterm's stylesheet was unlayered
+   and nothing in this layer could beat it; it is in the `vendor` layer now (`styles.css`), below
+   this one, so the fix is a token — and a theme switched while the window is up repaints the
+   strip with everything else. `pane-fill.e2e.ts` holds the pixel. */
+.xterm .xterm-viewport {
+  background-color: var(--terminal-background);
 }
 
 /* The window below the bar, when there is no project in it: the opener, full width. The
@@ -2317,6 +2316,11 @@ button.show-more:focus-visible {
   display: flex;
   gap: 0.15rem;
   align-items: center;
+  /* First on the line, as Zed has them: a hairline after the group is what says these are the
+     window's controls and what follows is the line's text. */
+  padding-inline-end: 0.5rem;
+  margin-inline-end: 0.25rem;
+  border-inline-end: 1px solid var(--border-subtle);
 }
 
 .region-toggle {
@@ -2417,7 +2421,6 @@ button.show-more:focus-visible {
 .update-notes {
   max-height: 12rem;
   overflow: auto;
-  white-space: pre-wrap;
   font-size: 0.8rem;
   padding: 0.5rem;
   background: var(--surface-sunken);
@@ -3041,23 +3044,30 @@ button.show-more:focus-visible {
   outline-offset: -2px;
 }
 
-/* What the version brought, one entry per row. The headline is the line to read; the body is
-   the paragraph its author wrote under it, and it is scrollable rather than allowed to grow
-   the dialog past the window — a release has shipped 47 entries in a day. */
-.about-news {
-  max-height: 22rem;
-  margin: 0.4rem 0 0.75rem;
-  padding-left: 1.1rem;
+/* What the version brought. The body scrolls, bounded, and the title and Close around it stay
+   where they are however long a release is. */
+.about-body {
+  max-height: 24rem;
   overflow-y: auto;
 }
 
-.about-news li {
-  margin: 0 0 0.6rem;
+/* One version's notes, as the changelog's Markdown draws them (`ReleaseNotes.tsx`): a heading
+   per kind of change and a bullet per change. Here and in the update dialog. */
+.release-notes ul {
+  margin: 0.2rem 0 0.5rem;
+  padding-left: 1.1rem;
 }
 
-.about-news p {
-  margin: 0.2rem 0 0;
-  color: var(--text-secondary);
+.release-notes li {
+  margin: 0 0 0.35rem;
+}
+
+.release-notes p {
+  margin: 0.2rem 0;
+}
+
+.release-notes a {
+  color: var(--accent-base);
 }
 
 /* =====================================================================================

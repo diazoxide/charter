@@ -2,43 +2,43 @@ import { useCallback, useEffect, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Info } from "lucide-react";
 import { commands, type About } from "./bindings";
+import { ExternalLink, ReleaseNotes } from "./ReleaseNotes";
+
+/** Where every version's notes are, the same text this dialog shows for one of them. */
+const RELEASES = "https://github.com/diazoxide/charter-app/releases";
 
 /**
- * **About charter** — which charter this is, and what the version it brought brought.
+ * **About Charter**: which version of the app this is, and what that version brought.
  *
  * The operator asked for it on the title bar's right-hand side, and said what it should open:
  * *"About Charter — that will open news of charter e.g. current version News"*.
  *
- * # It reads charter's own news, and there is no second copy
+ * # The app's version and the app's changelog
  *
- * `app/src-tauri/src/about.rs` answers out of [`charter_core::news`], which `build.rs`
- * compiles into the binary. That is the same corpus behind `charter news`, behind a Release
- * body, and behind the plane pin's dialog one row down (`Updates.tsx`'s `PinItem`, which
- * lists `news::between(pin, brought)`). A dialog with release notes of its own would be a
- * fifth copy that nothing keeps honest — which is the drift the news module's own docstring
- * was written to prevent.
+ * `app/src-tauri/src/about.rs` answers with the version this build announces (the one the
+ * updater compares and the GitHub release is named for) and that version's section of the
+ * repository's `CHANGELOG.md`, which is compiled into the binary. The release workflow puts the
+ * same section on the GitHub release, so this dialog and the release page say the same thing.
+ * Python charter's news, which `charter news` still prints, is a different product's history
+ * with a different version line, and is not shown here.
  *
- * **The pin dialog and this are not the same statement**, which is why both exist:
+ * What is drawn follows what the build is (`Build` in the bindings):
  *
- * - The **pin** is about a PROJECT — what this control plane pins against what this charter
- *   brought — so it is drawn only when that plane drifts, and it lives on the status line
- *   beside the project it is about.
- * - **About** is about the BINARY. It needs no plane, it is always available, and it answers
- *   the question a desktop app is expected to answer from that menu on every platform: what
- *   am I running, and what came with it.
+ * - **a release**: the version, its date, and its section;
+ * - **a dev build** (`0.2.0-dev.42`): a dev build of the next version, and `[Unreleased]` as
+ *   what it has so far;
+ * - **a version the changelog does not list**, such as a local build of `main`: said plainly,
+ *   with `[Unreleased]` beside it.
+ *
+ * The notes are Markdown and are drawn as Markdown (`ReleaseNotes.tsx`). The body scrolls
+ * inside a bounded height, so the title and Close stay put however long a release is.
  *
  * # Asked when it is opened, and once
  *
- * The corpus is compiled in, so the answer cannot change while the process runs — there is
- * nothing to re-read and nothing to invalidate. And a launch does not pay for a dialog nobody
- * opened: this is the one surface in the window that most operators will open once a release.
- *
- * # The empty state that cannot happen, said rather than drawn
- *
- * `news::shipped_version` is *derived from* the entries — it is the newest released entry's
- * own version — so the version this names always has at least one note. There is no "this
- * version brought nothing" list to draw, and `about.rs` has the test that keeps it that way.
- * What IS drawn is the ask failing, because a command can always fail.
+ * The changelog is compiled in and the version is the bundle's, so the answer cannot change
+ * while the process runs. And a launch does not pay for a dialog nobody opened: this is the
+ * one surface in the window most operators open once a release. What IS drawn on failure is
+ * the ask failing, because a command can always fail.
  */
 export function AboutCharter() {
   const [open, setOpen] = useState(false);
@@ -46,7 +46,7 @@ export function AboutCharter() {
   const [trouble, setTrouble] = useState<string>();
 
   const ask = useCallback(() => {
-    // Once. The corpus ships in the binary, so a second ask reads the same bytes.
+    // Once. The changelog ships in the binary, so a second ask reads the same bytes.
     if (about !== undefined) return;
     void commands
       .aboutCharter()
@@ -77,8 +77,8 @@ export function AboutCharter() {
           tabIndex={0}
           className="title-about"
           data-testid="title-about"
-          aria-label="About charter — what this version brought"
-          title="About charter — what this version brought"
+          aria-label="About Charter — what this version brought"
+          title="About Charter — what this version brought"
         >
           <Info aria-hidden="true" /> <span>About</span>
         </button>
@@ -86,7 +86,7 @@ export function AboutCharter() {
       <Dialog.Portal>
         <Dialog.Overlay className="asking" />
         <Dialog.Content className="warning update about" aria-describedby="about-what">
-          <Dialog.Title>About charter</Dialog.Title>
+          <Dialog.Title>About Charter</Dialog.Title>
           <div id="about-what">
             {trouble !== undefined ? (
               <p className="honest doctor-trouble" role="alert">
@@ -95,27 +95,7 @@ export function AboutCharter() {
             ) : about === undefined ? (
               <p className="pending">reading what this version brought…</p>
             ) : (
-              <>
-                <p className="honest">
-                  This is charter <strong data-testid="about-version">{about.version}</strong>.
-                </p>
-                <h3 id="about-brought">What {about.version} brought</h3>
-                <ul className="about-news" aria-labelledby="about-brought">
-                  {about.notes.map((note) => (
-                    <li key={note.headline}>
-                      <strong>{note.headline}</strong>
-                      {note.body && <p>{note.body}</p>}
-                    </li>
-                  ))}
-                </ul>
-                {/* Where the rest of it is. The dialog is one version's, deliberately — the
-                    range between two versions is the PIN's question and the status line
-                    already answers it for the project in front. */}
-                <p className="honest">
-                  <code>charter news</code> lists every version&apos;s, and the status line says
-                  when this project pins an older charter.
-                </p>
-              </>
+              <Said about={about} />
             )}
           </div>
           {/* `tabIndex={0}` on the one control, per `docs/ui-primitives.md`. */}
@@ -129,5 +109,48 @@ export function AboutCharter() {
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>
+  );
+}
+
+/** What the core answered, as sentences and the section it named. */
+function Said({ about }: { about: About }) {
+  const version = <strong data-testid="about-version">{about.version}</strong>;
+  const { build, notes } = about;
+  return (
+    <div className="about-body">
+      {build.kind === "release" ? (
+        <p>
+          This is Charter {version}
+          {notes?.date ? `, released ${notes.date}` : ""}.
+        </p>
+      ) : build.kind === "dev" ? (
+        <p>
+          This is Charter {version}, a dev build of {build.of}.
+        </p>
+      ) : (
+        <p>This is Charter {version}. The changelog this build carries has no section for it.</p>
+      )}
+      {notes === null ? (
+        // An unlisted version has already been told so, one line up.
+        build.kind !== "unlisted" && (
+          <p className="honest">The changelog this build carries has nothing to show for it.</p>
+        )
+      ) : (
+        <section aria-labelledby="about-brought">
+          <h3 id="about-brought">
+            {build.kind === "release" ? `What ${notes.version} brought` : "Not released yet"}
+          </h3>
+          {notes.markdown === "" ? (
+            <p className="honest">Nothing is recorded for it yet.</p>
+          ) : (
+            <ReleaseNotes markdown={notes.markdown} />
+          )}
+        </section>
+      )}
+      <p className="honest">
+        Every version&apos;s notes are on the{" "}
+        <ExternalLink href={RELEASES}>releases page</ExternalLink>.
+      </p>
+    </div>
   );
 }

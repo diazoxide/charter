@@ -186,10 +186,12 @@ describe("a chat's context gauge", () => {
     });
     expect((await gauges()).join(" ")).toContain("cache 90%");
 
-    // 4. **Where it is drawn** (charter-app#193): the pane's top-LEFT, and NOT over the
-    // terminal's first row. At top-left that row's text starts under it at every pane size, so
-    // the pane gives the gauge a row of its own; what is measured is that the gauge's box ends
-    // above the terminal's, and that its left edge is the pane frame's, not its right.
+    // 4. **Where it is drawn** (charter-app#193): the pane's top-LEFT, floating over the
+    // terminal the way the pane's controls do in the other corner, and taking no row of its
+    // own. For one build the pane gave the gauge a row, and the operator saw what that cost:
+    // "its changing harness container sizes" — a pane with a gauge was a row shorter than its
+    // neighbour. So what is measured is that the terminal starts where the pane frame starts,
+    // gauge or no gauge, and that the gauge's left edge is the frame's, not its right.
     // No named helpers inside `execute`: the spec's bundler wraps them in a `__name` the page
     // does not have.
     const placed = await browser.execute(() => {
@@ -201,18 +203,15 @@ describe("a chat's context gauge", () => {
       const f = frame.getBoundingClientRect();
       const t = term.getBoundingClientRect();
       return {
-        gaugeBottom: g.bottom,
-        termTop: t.top,
+        termFromFrameTop: t.top - f.top,
         fromLeft: g.left - f.left,
         fromRight: f.right - g.right,
       };
     });
-    // Measured when this was written (768 px window): gauge 83–98, terminal from 101. Before the
-    // pane gave up its row the gauge ran 101–116, over the terminal's first line.
     expect(placed).not.toBeNull();
     if (placed) {
-      // The gauge's box ends above the terminal's first row rather than on it.
-      expect(placed.gaugeBottom).toBeLessThanOrEqual(placed.termTop);
+      // The terminal's own padding (`.xterm`, a few px) and nothing more: no row given up.
+      expect(placed.termFromFrameTop).toBeLessThan(8);
       expect(placed.fromLeft).toBeLessThan(placed.fromRight);
     }
 

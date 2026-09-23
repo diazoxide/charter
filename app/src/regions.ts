@@ -1,4 +1,6 @@
 import { useCallback, useState } from "react";
+import { commands } from "./bindings";
+import { atCreation, sayAboutThisMachine, type Reading } from "./windowprefs";
 
 /**
  * **The window's layout is data** (charter ADR 0038, charter-app#141 for the four regions
@@ -20,30 +22,33 @@ import { useCallback, useState } from "react";
  * is up — a region moves by moving its *content*, and a slot with nothing shown in it collapses
  * by exactly the mechanism a hidden region already used.
  *
- * **Where this is kept, and why it is not a file.** A pin is machine state (charter ADR 0040,
- * amending 0034) and a theme is a file beside `machine.json` (`docs/design-system.md`); a
- * layout is an arrangement like both, and it is in neither. Two reasons, and the first is the
- * one that decides it:
+ * **Where this is kept: a file, injected at creation** (M6.9). The arrangement is
+ * `charter/layout.json` in charter's config directory, beside `machine.json` and the operator's
+ * `theme.json` — `docs/design-system.md` documents the format, because a file is the one form an
+ * operator can hand-edit and `side` and `order` have no control in the window yet.
  *
- * - **The first frame.** Both of those live behind a Tauri command, which is asynchronous. A
- *   layout read after the window has painted means the window paints the *default* arrangement
- *   and then re-lays-out — which is the flash this module exists to remove, one level up.
- *   `main.tsx` makes the same argument for the theme in as many words: nothing is read from
- *   disk on the way to the first frame, because ADR 0026 holds cold start at 2 s. Web storage
- *   is the only store in a webview that answers synchronously.
- * - **It is not ADR 0034's kind of fact.** ADR 0040 amended 0034 for *"how the operator
- *   arranged what this file already names"* — the planes the store holds and the workspaces
- *   inside them. A region arrangement names nothing that file holds. Amending 0034 again for
- *   it would be appending to a limit whose whole value is that the fourth thing had to be
- *   argued for.
+ * **It is read before the window exists, not fetched from it.** A Tauri command is
+ * asynchronous; a layout that arrived after the first paint would mean painting the *default*
+ * arrangement and then re-laying-out, which is the flash this module exists to remove. So the
+ * Rust side reads the file and hands it to the page in the window's initialization script
+ * (`windowprefs.ts`), and {@link remembered} is a property access. What the window changes goes
+ * back to the file through a command, in the order it was changed.
  *
- * The seam is {@link load}, which takes whatever `JSON.parse` gave and is tested against
- * garbage — the same shape `theme.ts` left for its own file. If a layout ever has to be shared,
- * hand-edited or contributed by a plugin (charter ADR 0041), the source changes there and
- * nothing that renders changes at all; a file would then have to be injected into the window at
- * creation rather than fetched from it, for the reason above.
+ * **It is not a field of the machine store** — ADR 0040 amended 0034 for *"how the operator
+ * arranged what this file already names"*, and a region arrangement names nothing that file
+ * holds.
  *
- * **The old key is not read.** charter-app#141's `charter.regions.shown` held which regions were
+ * **Web storage held it before this, under `charter.layout`, and is read exactly once more**:
+ * on the first launch that finds no file, the old value is drawn and moved into the file
+ * ({@link settleLayout}), and the key is removed once the file has it. After that nothing reads
+ * it; a second store answering the same question is how the two come to disagree.
+ *
+ * **A file that is wrong never costs the window.** The Rust side refuses a file that is not a
+ * layout at all; {@link load} drops what this build does not know field by field. Either way
+ * the window draws what it can, and says what it put right in the alerts drawer rather than a
+ * console nobody reads.
+ *
+ * **The older key is not read either.** charter-app#141's `charter.regions.shown` held which regions were
  * drawn and nothing else. It is not migrated: carrying a second format forward is permanent, and
  * the whole cost of dropping it is that a region an operator had put away comes back — visible,
  * and one click to undo. Losing a *size* would be silent; losing a hidden region is not.
@@ -131,11 +136,18 @@ export const DEFAULT_ARRANGEMENT: Arrangement = [
   { id: "bottom", side: "bottom", order: 0, collapsed: false },
 ];
 
-/** Where the arrangement is kept between launches. */
-const KEY = "charter.layout";
+/** Where web storage held the arrangement before it was a file. Read once, to move it. */
+export const LEGACY_KEY = "charter.layout";
 
-/** The document's shape, once it has been read. */
-type Document = { regions: Arrangement };
+/** The one version of the file's format this build writes. `charter_core::windowprefs` refuses
+ *  any other before the window sees it. */
+export const VERSION = 1;
+
+/** The document, as it is written to the file. */
+type Document = { version: typeof VERSION; regions: Arrangement };
+
+/** A document read field by field, and what had to be put right to read it. */
+export type Loaded = { regions: Arrangement; said: string[] };
 
 /**
  * The arrangement, and the two things that change it while the window is up.
@@ -196,16 +208,114 @@ export function useArrangement(): {
   return { arrangement, toggle, move, resized };
 }
 
-/** The arrangement as it was left, or the default when nothing readable was stored. */
-export function remembered(): Arrangement {
+/**
+ * The arrangement this launch started from, and what it cost to get it.
+ *
+ * - **A file charter could use**: that file, loaded field by field.
+ * - **A file charter could not**: the default, and the reason.
+ * - **No file**: what web storage held before the file existed, if it held anything — the
+ *   window is drawn from it, and {@link settleLayout} moves it into the file.
+ *
+ * Pure but for the one read of web storage, and that read happens only while there is no file.
+ */
+export function startingLayout(
+  layout: Reading = atCreation().layout,
+): Loaded & { trouble?: string; legacy?: boolean } {
+  if (layout.found) {
+    if (layout.trouble !== null)
+      return { regions: DEFAULT_ARRANGEMENT, said: [], trouble: layout.trouble };
+    return load(layout.document);
+  }
+  let held: string | null = null;
   try {
-    return load(JSON.parse(globalThis.localStorage?.getItem(KEY) ?? "null")).regions;
+    held = globalThis.localStorage?.getItem(LEGACY_KEY) ?? null;
   } catch {
-    // A webview that refuses storage, or a stored value that is not JSON. Both are "nothing
-    // was remembered", and a window must not fail to lay out over a layout preference.
-    return DEFAULT_ARRANGEMENT;
+    // A webview that refuses storage has nothing to move.
+  }
+  if (held === null) return { regions: DEFAULT_ARRANGEMENT, said: [] };
+  try {
+    return { ...load(JSON.parse(held)), legacy: true };
+  } catch {
+    // Not JSON: there is nothing in it worth moving, and the next change writes the file.
+    return { regions: DEFAULT_ARRANGEMENT, said: [] };
   }
 }
+
+/**
+ * The arrangement as the window last left it: what it changed this launch, or what the launch
+ * started from. A project opened after the operator moved something gets what they moved.
+ */
+export function remembered(): Arrangement {
+  return changed ?? startingLayout().regions;
+}
+
+/** What the window has changed the arrangement to this launch, if anything. */
+let changed: Arrangement | undefined;
+
+/** Forgets what this launch changed, as a new launch would. For tests, which are many launches
+ *  in one module. */
+export function forgetThisLaunch(): void {
+  changed = undefined;
+  writing = Promise.resolve();
+}
+
+/**
+ * **After the first frame**: says what the layout file cost, and moves web storage's old value
+ * into the file.
+ *
+ * Called once by `main.tsx`. Nothing here is on the way to the first paint — that was drawn from
+ * {@link startingLayout} already — so the move is an ordinary asynchronous command, and the old
+ * key is removed only once the core says the file has it. A move that fails leaves the key where
+ * it is, so the next launch tries again rather than losing the arrangement.
+ */
+export async function settleLayout(layout: Reading = atCreation().layout): Promise<void> {
+  const started = startingLayout(layout);
+  sayWhatTheLayoutCost(layout.path, started);
+  if (!started.legacy) return;
+  const moved = await commands
+    .adoptLayout(JSON.stringify(asDocument(started.regions)))
+    .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+  if (moved.status === "error") {
+    sayAboutThisMachine("layout", {
+      severity: "warn",
+      detail: `charter could not move the arrangement it kept in the window into ${where(layout.path)}: ${moved.error}`,
+      remedy: "nothing to do: it is still drawn, and the next launch tries again",
+    });
+    return;
+  }
+  // The key is about to go, and a project opened later this launch must still get what it held
+  // — {@link remembered} would otherwise find neither a file in the reading nor a key.
+  changed ??= started.regions;
+  try {
+    globalThis.localStorage?.removeItem(LEGACY_KEY);
+  } catch {
+    // Nothing to remove from a webview that refuses storage.
+  }
+}
+
+function sayWhatTheLayoutCost(path: string, started: ReturnType<typeof startingLayout>): void {
+  if (started.trouble !== undefined) {
+    sayAboutThisMachine("layout", {
+      severity: "warn",
+      detail: `${started.trouble} — the window is drawn in the default arrangement`,
+      remedy: `fix ${where(path)} or delete it; the next change you make to the layout replaces it`,
+    });
+  } else if (started.said.length > 0 && !started.legacy) {
+    sayAboutThisMachine("layout", {
+      severity: "warn",
+      detail: `${where(path)}: ${started.said.join("; ")}`,
+      remedy: `fix ${where(path)}; the next change you make to the layout rewrites it without these`,
+    });
+  }
+}
+
+const where = (path: string) => path || "the layout file";
+
+const asDocument = (regions: Arrangement): Document => ({ version: VERSION, regions });
+
+/** Every write, in the order the window made it. Tauri runs commands on a thread pool, and two
+ *  writes that raced there could land the older one last. */
+let writing: Promise<void> = Promise.resolve();
 
 /**
  * A stored document, read field by field.
@@ -217,50 +327,93 @@ export function remembered(): Arrangement {
  * key this one replaces. So an unknown region is dropped, a missing one is placed from the
  * default, and a field that is not what it should be is the default's.
  */
-export function load(raw: unknown): Document {
+export function load(raw: unknown): Loaded {
   // A `Map`, and the result is built by walking the DEFAULT arrangement and asking it — never
   // by walking the document. That is what makes an id this build does not have cost nothing:
   // it is simply never asked for, so there is no unknown region to draw and no unknown key to
   // reach a prototype through.
-  const said = new Map<string, Record<string, unknown>>();
+  const said: string[] = [];
+  const held = new Map<string, Record<string, unknown>>();
   if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
     const regions = (raw as { regions?: unknown }).regions;
     if (Array.isArray(regions)) {
       for (const one of regions) {
-        if (one === null || typeof one !== "object" || Array.isArray(one)) continue;
-        const held = one as Record<string, unknown>;
-        if (typeof held.id === "string") said.set(held.id, held);
+        if (one === null || typeof one !== "object" || Array.isArray(one)) {
+          said.push(`${JSON.stringify(one)} is not a region's placement, so it was skipped`);
+          continue;
+        }
+        const placement = one as Record<string, unknown>;
+        if (typeof placement.id !== "string") {
+          said.push("a placement with no id was skipped");
+        } else if (!(REGION_IDS as string[]).includes(placement.id)) {
+          said.push(
+            `${JSON.stringify(placement.id)} is not a region this charter has (${REGION_IDS.join(", ")}), so it was left out`,
+          );
+        } else {
+          held.set(placement.id, placement);
+        }
       }
+    } else {
+      said.push('there is no "regions" list, so every region is where it starts');
     }
+  } else {
+    said.push("it is not a layout, so every region is where it starts");
   }
 
   return {
+    said,
     regions: DEFAULT_ARRANGEMENT.map((fallback) => {
-      const held = said.get(fallback.id);
-      if (held === undefined) return fallback;
+      const one = held.get(fallback.id);
+      if (one === undefined) return fallback;
+      if (one.side !== undefined && !isSide(one.side)) {
+        said.push(
+          `${fallback.id}'s side ${JSON.stringify(one.side)} is not left, right or bottom, so it is on the ${fallback.side}`,
+        );
+      }
+      if (one.order !== undefined && !Number.isFinite(one.order)) {
+        said.push(`${fallback.id}'s order ${JSON.stringify(one.order)} is not a number`);
+      }
+      if (one.size !== undefined && !usable(one.size)) {
+        said.push(`${fallback.id}'s size ${JSON.stringify(one.size)} is not a percentage above 0`);
+      }
       return {
         id: fallback.id,
-        side: isSide(held.side) ? held.side : fallback.side,
-        order: Number.isFinite(held.order) ? (held.order as number) : fallback.order,
+        side: isSide(one.side) ? one.side : fallback.side,
+        order: Number.isFinite(one.order) ? (one.order as number) : fallback.order,
         // Only `true` puts a region away. Anything else — missing, a string, a number — is a
         // region charter cannot read the answer for, and it is SHOWN.
-        collapsed: held.collapsed === true,
-        ...(usable(held.size) ? { size: held.size } : {}),
+        collapsed: one.collapsed === true,
+        ...(usable(one.size) ? { size: one.size } : {}),
       };
     }),
   };
 }
 
+/**
+ * Keeps the arrangement: for the rest of this launch at once, and in the file behind it.
+ *
+ * A write that fails is said in the alerts drawer and costs nothing else: the window keeps
+ * drawing what the operator did, and only the next launch would not know. A write that lands
+ * takes back whatever the drawer was saying about the file, because the file is now one this
+ * window wrote.
+ */
 function remember(arrangement: Arrangement): void {
-  try {
-    globalThis.localStorage?.setItem(
-      KEY,
-      JSON.stringify({ regions: arrangement } satisfies Document),
-    );
-  } catch {
-    // A webview that will not store it still draws it. The operator loses the arrangement at
-    // the next launch and nothing else.
-  }
+  changed = arrangement;
+  const text = JSON.stringify(asDocument(arrangement));
+  writing = writing.then(async () => {
+    const kept = await commands
+      .writeLayout(text)
+      .catch((err: unknown) => ({ status: "error" as const, error: String(err) }));
+    if (kept.status === "error") {
+      sayAboutThisMachine("layout", {
+        severity: "warn",
+        detail: `charter could not keep the layout: ${kept.error}`,
+        remedy: "the window keeps it until you quit; the next launch starts from the last one kept",
+      });
+    } else {
+      sayAboutThisMachine("layout", undefined);
+    }
+  });
 }
 
 /** A percentage a panel can actually be given. `0` is excluded on purpose: a slot is collapsed
