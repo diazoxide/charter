@@ -16,6 +16,7 @@ import {
   ChevronDown,
   FolderOpen,
   FolderPlus,
+  MessageSquarePlus,
   Pin as PinMark,
   Plus,
   SquareSplitHorizontal,
@@ -83,6 +84,8 @@ import {
 import { ChatState } from "./NeedsYou";
 import { EndingChat } from "./EndingChat";
 import { Panels } from "./Panels";
+import { EmptyState } from "./EmptyState";
+import type { PanelView } from "./bindings";
 import { movedAt, quietOnes, stateOf, useChatStates, type ChatStates } from "./chatState";
 import { fitting, LEAST, useRoom } from "./fits";
 import type { Ending } from "./QuitWarning";
@@ -125,6 +128,7 @@ export function PlaneView({
   window: windowDoes,
   onReport,
   alerts,
+  contributed = [],
 }: {
   plane: PlaneId;
   /** Whether this is the project the operator is looking at. */
@@ -143,6 +147,10 @@ export function PlaneView({
   /** The window's alerts drawer, for the status line's button. The window's and not this
    *  project's: alerts cross projects, so the count is every open project's. */
   alerts?: Alerts;
+  /** What approved extensions contribute to the side region. The window's, for the same reason
+   *  the alerts are: an extension is installed per machine and never travels in a plane
+   *  (charter ADR 0041), so one survey serves every project this window holds. */
+  contributed?: readonly PanelView[];
 }) {
   const [tabs, setTabs] = useState<Tabs>(noTabs);
   /** What every chat is doing, in THIS project. Pushed from the core; nothing here polls.
@@ -293,15 +301,22 @@ export function PlaneView({
    */
   const [pickedSpot, setPickedSpot] = useState<{ workspace: string; spot: Spot }>();
   /**
-   * The persona whose card is open on the right-hand panel, if any (#173).
+   * The panel row whose card is open on the right-hand region, if any, as
+   * `<panel key>/<row key>` — `charter/personas/steward`, `charter/todos/<slug>`,
+   * `ext/acme/reviews/<key>`.
    *
-   * **Held here rather than in the row that draws it**, because opening that card is a
-   * catalogue row now (`persona.show:<name>`, charter-app#174) and a catalogue row is carried
-   * out by `perform` against `Doing` — which is assembled here. One state, so the menu, the
-   * palette and the row's own click are three ways to do the same thing rather than three
-   * things that look the same.
+   * **Held here rather than in the row that draws it**, because opening a persona's card is a
+   * catalogue row (`persona.show:<name>`, charter-app#174) and a catalogue row is carried out
+   * by `perform` against `Doing` — which is assembled here. One state, so the menu, the palette
+   * and the row's own click are three ways to do the same thing rather than three things that
+   * look the same.
+   *
+   * **It was `shownPersona` and is a row key now**, because the panels are contributions and
+   * every contributed panel's rows open the same way. A second piece of window state per panel
+   * would be the special case the contract exists to remove — and it could not exist at all for
+   * a panel nobody has written yet.
    */
-  const [shownPersona, setShownPersona] = useState<string>();
+  const [shownRow, setShownRow] = useState<string>();
   /** How the window is laid out — which regions are drawn, on which side, in what order and
    *  how big (ADR 0038). Data rather than the shape of the JSX below; `regions.ts` says why. */
   const { arrangement, toggle: toggleRegion, resized } = useArrangement();
@@ -1169,7 +1184,11 @@ export function PlaneView({
       createWorkspace,
       removeWorkspace,
       showChat,
-      showPersona: setShownPersona,
+      // The verb still names a persona — that is what the catalogue row is about — and the
+      // window turns it into the row it opens. `charter/personas` is charter's own panel's
+      // key (`charter_core::panel::Panel::key`), and it is written here because the catalogue
+      // is not a reader of the panel list.
+      showPersona: (persona: string) => setShownRow(`charter/personas/${persona}`),
       removeWorktree,
       mergeWorktree,
       sendKey,
@@ -1754,8 +1773,9 @@ export function PlaneView({
               showChat={showChat}
               offers={found}
               onPress={press}
-              shownPersona={shownPersona}
-              onShowPersona={setShownPersona}
+              contributed={contributed}
+              shownRow={shownRow}
+              onShowRow={setShownRow}
             />
           ),
           bottom: <BottomBar workspace={ofWorkspace} state={workspaceState} />,
@@ -1781,11 +1801,33 @@ export function PlaneView({
                 // Chats are running — just not in the workspace being looked at. Saying
                 // "no sessions" here would be charter telling the operator that what it is
                 // still drawing on the strip above does not exist.
-                <p className="empty">
-                  No chats in this workspace. Open one with New tab, or pick a workspace above.
-                </p>
+                <EmptyState
+                  mark={MessageSquarePlus}
+                  headline="No chats in this workspace"
+                  body="Other workspaces have some — pick one on the strip above, or start one here."
+                  action={<Doer offer={by("chat.new")} onPress={press} words="Open a chat here" />}
+                  testid="empty-workspace"
+                />
               ) : (
-                <p className="empty">No sessions. Open one with New tab.</p>
+                /* **The empty window, centred, with a way out** — the operator's own
+                   instruction: *"when opening empty workspace lets make open new tab button on
+                   empty page center"*. It was one sentence in the top-left corner of a box the
+                   size of the screen, and the thing to do about it was a menu item away.
+
+                   The button is the catalogue's `chat.new` row drawn by `Doer`, so it carries
+                   the same words the bar's button and the palette's row carry, and it stops
+                   existing if the catalogue stops offering it. A second button with its own
+                   label would be the second answer to "how do I start a chat" that
+                   `actions.ts` exists to prevent. */
+                <EmptyState
+                  mark={MessageSquarePlus}
+                  headline="No chats yet"
+                  body="charter runs each chat in its own pane. Open the first one here."
+                  action={
+                    <Doer offer={by("chat.new")} onPress={press} words="Open the first chat" />
+                  }
+                  testid="empty-window"
+                />
               )}
             </div>
           </Menued>
@@ -1935,9 +1977,25 @@ export function Doer({
   offer,
   onPress,
   iconOnly,
+  words,
 }: {
   offer?: Offer;
   onPress: (offer: Offer) => void;
+  /**
+   * What this button SAYS, where the surface it is on asks a different question from the bar.
+   *
+   * **It overrides the words and nothing else.** What the row does, whether it can run and why
+   * not are still the catalogue's, and a row the catalogue has stopped offering still draws no
+   * button — which is the whole of what `actions.ts` being the one list buys. What it does not
+   * buy, and never claimed to, is that one verb has one phrasing on every surface.
+   *
+   * It exists for the empty state, and the argument is an accessibility one rather than a
+   * stylistic one: the strip's `+` is already named `New tab`, and a second button with the
+   * identical accessible name on the same screen is two controls a screen reader cannot tell
+   * apart. A toolbar button says *what this control is*; a call to action in the middle of an
+   * empty page says *what to do now*. Those are different sentences about one verb.
+   */
+  words?: string;
   /**
    * Drawn as its mark alone, with the row's words carried by `aria-label`.
    *
@@ -1960,12 +2018,12 @@ export function Doer({
     <button
       className={clsx(offer.id === "pane.close" && "ends-a-chat", bare && "bare")}
       disabled={!offer.available}
-      aria-label={bare ? offer.title : undefined}
+      aria-label={bare ? (words ?? offer.title) : undefined}
       title={offer.reason || offer.note || (bare ? offer.title : undefined)}
       onClick={() => onPress(offer)}
     >
       {Mark && <Mark />}
-      {!bare && offer.title}
+      {!bare && (words ?? offer.title)}
     </button>
   );
 }

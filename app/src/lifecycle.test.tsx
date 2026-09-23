@@ -525,7 +525,7 @@ describe("being asked to quit", () => {
     // of. What the next line fires at is a window that has committed both, as a fact rather
     // than as something a poll caught in time.
     await untilTheCoreHas(settled);
-    expect(screen.getByText(/No sessions/)).toBeInTheDocument();
+    expect(screen.getByTestId("empty-window")).toBeInTheDocument();
 
     const listen = of("plugin:event|listen", asked).find(
       (one) => (one.args as { event: string }).event === "quit-asked",

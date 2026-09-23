@@ -459,6 +459,40 @@ fn csv(value: &str) -> Vec<String> {
 ///
 /// The refusal is [`name_refusal`]'s, so a panel, the CLI and a hook all refuse a name in
 /// the same words — which is the whole point of that function existing (#1057, #1059).
+/// One persona's memory store, which is the same per-file store the workspaces use.
+///
+/// **A path and not an opened thing**, so the two readers below each apply their own
+/// containment check to what they are about to touch — [`memstore::read_files`] refuses a
+/// directory that resolves out of the plane and [`crate::workspaces::read_store`] refuses it
+/// again per entry. A committed symlink at `personas/<name>/memory` is the shape both are for.
+fn memory_dir(root: &Path, name: &str) -> PathBuf {
+    root.join("personas").join(name).join("memory")
+}
+
+/// How many memories this persona holds, counted **without reading one**.
+///
+/// It is the count a panel row carries, so it runs once per persona on the path that draws the
+/// window, and the whole point of it is that it is a `read_dir` and no file opens. Reading them
+/// is [`memories`], which happens when a reader asks to see them and not before.
+///
+/// A store charter cannot look at counts zero, because the count is decoration on a row and the
+/// row is about the persona. A reader who opens it gets the refusal in charter's own words.
+pub fn memory_count(root: &Path, name: &str) -> usize {
+    memstore::read_files(root, &memory_dir(root, name)).0.len()
+}
+
+/// This persona's memories, in the store's own order, or charter's own sentence for a name it
+/// will not answer about.
+///
+/// The same [`crate::workspaces::read_store`] the todo list comes out of — one store, one
+/// reader, and a memory that arrives with the title, the stamp and the body a todo does.
+pub fn memories(root: &Path, name: &str) -> Result<Vec<crate::workspaces::Entry>, String> {
+    if let Some(refused) = name_refusal(root, name) {
+        return Err(refused);
+    }
+    crate::workspaces::read_store(root, &memory_dir(root, name)).map_err(|why| why.to_string())
+}
+
 pub fn details(root: &Path, name: &str) -> Result<Details, String> {
     if let Some(refused) = name_refusal(root, name) {
         return Err(refused);

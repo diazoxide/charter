@@ -149,6 +149,39 @@ pub async fn extension_themes() -> Result<Vec<ExtensionTheme>, String> {
         .map_err(|err| format!("reading this machine's themes did not finish: {err}"))
 }
 
+/// Every panel an approved extension contributes to this window's side region.
+///
+/// **Its own command, asked once per window and never per workspace focus.** A survey reads
+/// every installed extension's whole directory to re-take the fingerprint — ADR 0041's named
+/// cost of fingerprinting code — and folding that into `workspace_panels` would put it on the
+/// path that has 100 ms to draw, once per click on the workspace strip.
+///
+/// It is the same shape as [`extension_themes`] one row down, and for the same reason: an
+/// extension that is new, changed or unreadable contributes nothing here. That is the registry
+/// doing its one job, and a contributed panel rests on it entirely.
+#[tauri::command]
+#[specta::specta]
+pub async fn extension_panels() -> Result<Vec<crate::panels::PanelView>, String> {
+    let root = config_root()?;
+    tauri::async_runtime::spawn_blocking(move || panels_in_force(&extension::survey(&root)))
+        .await
+        .map_err(|err| format!("reading this machine's panels did not finish: {err}"))
+}
+
+/// [`extension_panels`] with the survey already taken, so the shaping is testable without a
+/// Tauri runtime to run it on.
+fn panels_in_force(seen: &extension::Survey) -> Vec<crate::panels::PanelView> {
+    let mut found: Vec<charter_core::panel::Panel> = seen
+        .installed
+        .iter()
+        .flat_map(|row| row.panels_in_force().iter().cloned())
+        .collect();
+    // Sorted here rather than in the window, so that two extensions declaring the same `order`
+    // land in the same place at every launch instead of the order the record was read in.
+    charter_core::panel::Panel::sort(&mut found);
+    found.iter().map(crate::panels::PanelView::from).collect()
+}
+
 /// [`extension_themes`] with the survey already taken.
 fn in_force(seen: &extension::Survey) -> Vec<ExtensionTheme> {
     let mut themes = Vec::new();

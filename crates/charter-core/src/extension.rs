@@ -289,6 +289,12 @@ pub struct Manifest {
     pub name: String,
     /// The themes it contributes.
     pub themes: Vec<Theme>,
+    /// The panels it contributes to the window's side region (`crate::panel`).
+    ///
+    /// **Data, like a theme, and never a file.** A panel's whole body is in this manifest — so
+    /// it is inside the manifest's own bytes, which are hashed into the fingerprint with
+    /// everything else, and there is no second file for a later read to disagree with.
+    pub panels: Vec<crate::panel::Panel>,
     /// A program it declares, relative to its own directory.
     ///
     /// **Declared, hashed, named in the prompt, and never run.** There is no executor in this
@@ -636,7 +642,21 @@ fn parse(text: &str) -> Result<Manifest, String> {
         }
     };
 
-    if themes.is_empty() && program.is_none() {
+    // **The second word in the vocabulary, and the one this charter grew for**
+    // (`crate::panel`). A panel is declarative data against a closed vocabulary charter owns,
+    // exactly as a theme is — no file is named, nothing is evaluated, and a row that tried to
+    // carry a charter verb is refused by name, because there is still no executor.
+    //
+    // It is parsed here, from these bytes, so that what the fingerprint was taken over and what
+    // the operator is shown are one read (charter-app#123's shape). Note that a panel declares
+    // no FILE: it does not touch `MOST_DECLARED_FILES` below, and it is bounded by
+    // `panel::MOST_PANELS` and `panel::MOST_ROWS` instead.
+    let panels = match contributes.get("panels") {
+        None => Vec::new(),
+        Some(value) => crate::panel::declared(value, id)?,
+    };
+
+    if themes.is_empty() && panels.is_empty() && program.is_none() {
         return Err("declares no contributions, so there is nothing to consent to".into());
     }
     if themes.len() + usize::from(program.is_some()) > MOST_DECLARED_FILES {
@@ -696,6 +716,7 @@ fn parse(text: &str) -> Result<Manifest, String> {
         id: id.to_owned(),
         name,
         themes,
+        panels,
         program,
         state,
     })
@@ -1610,6 +1631,16 @@ impl Surveyed {
             _ => &[],
         }
     }
+
+    /// The panels it is contributing right now, on the same terms and for the same reason: an
+    /// extension that is new, changed or unreadable contributes nothing, and the registry doing
+    /// that one job is what a panel contribution rests on entirely.
+    pub fn panels_in_force(&self) -> &[crate::panel::Panel] {
+        match (&self.found, self.standing.may_contribute()) {
+            (Some(found), true) => &found.manifest.panels,
+            _ => &[],
+        }
+    }
 }
 
 /// What has contributed what to this window.
@@ -1726,6 +1757,7 @@ pub fn prompt(found: &Extension, standing: Standing) -> Prompt {
         .iter()
         .map(|theme| format!("a theme, “{}”", theme.name))
         .collect();
+    declares.extend(found.manifest.panels.iter().map(crate::panel::declares));
     if let Some(program) = &found.manifest.program {
         // Named, and named as not running. An extension that declares a program and is
         // approved by a charter with no executor must not leave the operator believing they
