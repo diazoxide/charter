@@ -135,7 +135,10 @@ git tag vX.Y.Z && git push origin vX.Y.Z      # this, and only this, publishes a
 
 The `## [X.Y.Z]` section is the release: it becomes the GitHub release's body and the notes in
 `latest.json`, and About Charter in that build shows the same section out of the copy compiled
-into it. So the workflow refuses a tag whose version has no section in `CHANGELOG.md`, or an
+into it. The release page puts **how to install** above it (`.github/release-install.md`, with the
+tag and version filled in), because the page is where a first install starts. Lead the section
+with a short paragraph saying what the release is, before `### Added`: that paragraph is the
+headline on the release page and in About alike. So the workflow refuses a tag whose version has no section in `CHANGELOG.md`, or an
 empty one, before it builds anything, beside refusing a tag that disagrees with `Cargo.toml`. To
 see what a tag would publish, run `cargo run -p changelog -- X.Y.Z` on the merged `main`.
 
