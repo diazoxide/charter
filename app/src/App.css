@@ -42,32 +42,6 @@ body {
   vertical-align: -0.14em;
 }
 
-/* **The one animation in the window, and what it is allowed to mean.**
- *
- * It says *this is still happening* — a pipeline that is running, a listing charter has asked
- * git for and not been answered. That state is otherwise indistinguishable from a stopped one:
- * the colour is the same amber whether the run is moving or was abandoned an hour ago, and
- * "running" is a word both of them can carry. Nothing that has already finished spins, because
- * motion beside a settled answer is only a thing to look at.
- *
- * `prefers-reduced-motion` stops it and leaves the mark, which still reads — the mark is a
- * shape and a word, never the motion alone. */
-@keyframes charter-spin {
-  to {
-    rotate: 1turn;
-  }
-}
-
-.spinning {
-  animation: charter-spin 900ms linear infinite;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .spinning {
-    animation: none;
-  }
-}
-
 /* The window is the bar and the panes, and the panes take whatever is left. */
 .window {
   display: flex;
@@ -1073,23 +1047,14 @@ button.bare:focus-visible {
   background: var(--surface-hover);
 }
 
-/* The twisty turns with the disclosure. This is motion that is the direct answer to a click —
-   it says which way the thing just went — and it is the only transition in the window that is
-   not about something still happening. It stops under `prefers-reduced-motion`; the state is
-   carried by the direction the chevron points, never by the turn. */
+/* The twisty points the way the disclosure went. Its turn is in the motion section at the end
+   of this file; the state is carried by the direction the chevron points, never by the turn. */
 .explorer .clone > summary .twisty {
   color: var(--text-muted);
-  transition: rotate 120ms ease;
 }
 
 .explorer .clone[open] > summary .twisty {
   rotate: 90deg;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .explorer .clone > summary .twisty {
-    transition: none;
-  }
 }
 
 .explorer .repo {
@@ -3085,4 +3050,177 @@ button.bare:focus-visible {
 .about-news p {
   margin: 0.2rem 0 0;
   color: var(--text-secondary);
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════════════════════
+   MOTION (M7.2). Every motion in the window is in this section, and every one reads its timing
+   from a token.
+
+   **The timing is not here.** Durations and easings are theme data (`src/theme/motion.ts`),
+   written onto the document as `--motion-*` beside the colours, so a theme — and through a
+   theme, an extension (ADR 0041, ADR 0043) — restyles motion the way it restyles colour.
+   `src/theme/literals.test.ts` refuses a time or an easing written anywhere else, exactly as
+   it refuses a hex colour.
+
+   **Reduced motion is not here either.** The layer writes every duration as `0ms` when the
+   operator has asked for less motion, so nothing in this section has a reduced-motion media
+   query and nothing may: the same test refuses one. A looping animation over no time does not
+   run at all, so every mark below is designed to read correctly standing still.
+
+   **What moves, and the rule that chose it.** Motion here explains a change of state; it never
+   decorates one. A tab being lit, a surface arriving, a mark settling on an answer, a chat
+   starting to ask for you. Nothing animates on mount alone (`src/lib/arrived.ts` is how a
+   component tells a change from a first draw), nothing delays input — a surface is focusable
+   and answerable from its first frame, the fade is only what it looks like — and nothing
+   moves that the operator is reading. **The terminal never animates**, and neither does a
+   region's size: a slot that grew over time would refit the terminal on every frame of it,
+   which is terminal output moving. `docs/design-system.md` says what was left still and why.
+   ═════════════════════════════════════════════════════════════════════════════════════════════ */
+
+/* **Still happening.** A pipeline that is running, a listing charter has asked git for and not
+   been answered. That state is otherwise indistinguishable from a stopped one: the colour is
+   the same amber whether the run is moving or was abandoned an hour ago. Nothing that has
+   finished spins, because motion beside a settled answer is only a thing to look at. `steady`,
+   because a turn that eases reads as a stutter once a second. */
+@keyframes charter-spin {
+  to {
+    rotate: 1turn;
+  }
+}
+
+.spinning {
+  animation: charter-spin var(--motion-duration-spin) var(--motion-easing-steady) infinite;
+}
+
+/* **Queued, not yet running** — a pipeline that is `pending`. Alive, and visibly not working:
+   a spinner here would claim work that is not being done. It breathes down from its resting
+   opacity and back, so standing still (reduced motion) it is simply the mark at full weight. */
+@keyframes charter-breathe {
+  to {
+    opacity: 0.35;
+  }
+}
+
+.breathing {
+  animation: charter-breathe var(--motion-duration-breathe) var(--motion-easing-breathe) infinite
+    alternate;
+}
+
+/* **Arrived at an answer.** A pipeline mark drawn in because the run just finished while the
+   row was on screen — never on the row's first draw. It grows into place once and is still. */
+@keyframes charter-settle {
+  from {
+    opacity: 0;
+    scale: 0.6;
+  }
+}
+
+.settling {
+  animation: charter-settle var(--motion-duration-settle) var(--motion-easing-standard);
+}
+
+/* The explorer's twisty turns with the disclosure: motion that is the direct answer to a click,
+   saying which way the thing just went. */
+.explorer .clone > summary .twisty {
+  transition: rotate var(--motion-duration-quick) var(--motion-easing-standard);
+}
+
+/* **A tab being selected.** The cell's surface and its lit edge cross-fade rather than cut, on
+   all three strips. `quick`, because this is the window answering a press and must never be
+   something the operator waits on; the selection itself is immediate, only its paint eases.
+   Written against the tablist's own structure rather than the strips' class names, so a strip
+   restyled tomorrow keeps it without being told. Colour only: a tab's width and position never
+   animate, because a tab that slides under the pointer breaks aiming (`tabs.ts`). */
+[role="tablist"] > *,
+[role="tablist"] > *::after,
+[role="tablist"] [role="tab"],
+[role="tablist"] [role="tab"]::after {
+  transition-property: background-color, color;
+  transition-duration: var(--motion-duration-quick);
+  transition-timing-function: var(--motion-easing-standard);
+}
+
+/* **Something arriving**: a fade from nothing. The shared keyframe for a surface or a control
+   that was not there a moment ago. */
+@keyframes charter-appear {
+  from {
+    opacity: 0;
+  }
+}
+
+/* A strip that has just run out of room: its `N more` appears rather than blinking in, which
+   is what says the tabs went somewhere. Only when the strip STARTED collapsing while on screen
+   (`ShowMore`'s `arrived`); a count that changes as the window is resized does not move. */
+.show-more.arrived {
+  animation: charter-appear var(--motion-duration-enter) var(--motion-easing-enter);
+}
+
+/* A region brought back while the window is up — never at launch — fades in where it lands.
+   Only its opacity: the slot is its full size from the first frame, so the terminal beside it
+   is refitted once and not on every frame of a slide. */
+.region-slot.arrived {
+  animation: charter-appear var(--motion-duration-enter) var(--motion-easing-enter);
+}
+
+/* **A modal surface opening** — every dialog, the scrim behind it, and the alerts drawer. A fade
+   and no movement: a question should be where the eye already is. Opening only, on purpose.
+   Radix unmounts a closing surface at once unless an animation is running on it, and a close
+   that lingers leaves a dismissed question over the window the operator has gone back to. */
+.asking[data-state="open"],
+[role="dialog"][data-state="open"],
+[role="alertdialog"][data-state="open"] {
+  animation: charter-appear var(--motion-duration-enter) var(--motion-easing-enter);
+}
+
+/* **A popover or a menu opening** — the show-more menus, the context menus, the persona card,
+   and whatever anchored surface is added next, because the rule hangs off Radix's own popper
+   wrapper rather than off a class. It comes a quarter of a rem out of the side it is anchored
+   to, which is what says what opened it. After the dialog rule on purpose: a popover is also
+   `role="dialog"`, and this is the one it gets. */
+@keyframes charter-arrive {
+  from {
+    opacity: 0;
+    translate: var(--arrive-from);
+  }
+}
+
+[data-radix-popper-content-wrapper] > [data-state="open"] {
+  --arrive-from: 0 -0.25rem;
+  animation: charter-arrive var(--motion-duration-enter) var(--motion-easing-enter);
+}
+
+[data-radix-popper-content-wrapper] > [data-side="top"] {
+  --arrive-from: 0 0.25rem;
+}
+
+[data-radix-popper-content-wrapper] > [data-side="left"] {
+  --arrive-from: 0.25rem 0;
+}
+
+[data-radix-popper-content-wrapper] > [data-side="right"] {
+  --arrive-from: -0.25rem 0;
+}
+
+/* **A chat's state mark changing.** Its colour, its shape and its ring morph into the new state
+   over `settle` rather than cutting — a transition, so it only ever runs on a change and never
+   on a tab being drawn. */
+.state {
+  transition-property: background-color, border-color, border-radius, box-shadow, opacity;
+  transition-duration: var(--motion-duration-settle);
+  transition-timing-function: var(--motion-easing-standard);
+}
+
+/* **And a chat that has just started waiting on you knocks twice.** The ring swells and settles
+   back: the one signal this app exists for, arriving, is the one mark allowed to ask for the
+   eye. Only on the change (`ChatState`'s `arrived`) — a strip of chats that were already
+   waiting when it was drawn does not pulse, and a waiting chat never pulses again until it has
+   run and stopped. */
+@keyframes charter-call {
+  50% {
+    box-shadow: 0 0 0 5px var(--state-waiting-glow);
+  }
+}
+
+.state-waiting.arrived {
+  animation: charter-call var(--motion-duration-settle) var(--motion-easing-standard) 2;
 }

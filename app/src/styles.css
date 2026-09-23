@@ -20,6 +20,13 @@
  * without `!important` and without specificity games. Preflight is a separate decision for
  * whoever converts a component, not a side effect of wiring the tokens up.
  *
+ * **Motion is bridged the same way (M7.2).** `duration-enter` and `ease-enter` are the motion
+ * tokens of `src/theme/motion.ts`; Tailwind's own easings and animations are deleted as its
+ * palette is, and a bare `transition` utility takes `duration.quick` and `easing.standard`
+ * rather than Tailwind's 150ms. The one thing Tailwind will still make from a number is
+ * `duration-150` — it accepts any integer as milliseconds and no namespace can switch that off —
+ * so `literals.test.ts` refuses one in the source instead.
+ *
  * **The Tailwind colour name IS the token name**, stutter and all — `text-text-primary`,
  * `border-border-subtle`. A prettier alias would be a second vocabulary, and a second
  * vocabulary is the defect this whole layer exists to remove.
@@ -69,4 +76,21 @@
   --color-state-unreadable: var(--state-unreadable);
   --color-overlay-scrim: var(--overlay-scrim);
   --color-overlay-shadow: var(--overlay-shadow);
+
+  --transition-duration-*: initial;
+  --transition-duration-quick: var(--motion-duration-quick);
+  --transition-duration-enter: var(--motion-duration-enter);
+  --transition-duration-settle: var(--motion-duration-settle);
+  --transition-duration-spin: var(--motion-duration-spin);
+  --transition-duration-breathe: var(--motion-duration-breathe);
+
+  --ease-*: initial;
+  --ease-standard: var(--motion-easing-standard);
+  --ease-enter: var(--motion-easing-enter);
+  --ease-steady: var(--motion-easing-steady);
+  --ease-breathe: var(--motion-easing-breathe);
+
+  --animate-*: initial;
+  --default-transition-duration: var(--motion-duration-quick);
+  --default-transition-timing-function: var(--motion-easing-standard);
 }

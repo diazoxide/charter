@@ -1,6 +1,7 @@
 /** What a chat is doing, as the tab and the queue draw it. */
 import { CircleCheck, Hand, SquareTerminal } from "lucide-react";
 import { type State } from "./chatState";
+import { useArrived } from "./lib/arrived";
 
 /** The word beside a chat's name. */
 const WORDS: Record<State, string> = {
@@ -12,9 +13,12 @@ const WORDS: Record<State, string> = {
 };
 
 export function ChatState({ state }: { state: State }) {
+  // A state this mark CHANGED to, rather than the one it was drawn in: only the first moves,
+  // so a workspace's tabs coming back into view do not all pulse at once (`useArrived`).
+  const arrived = useArrived(state);
   return (
     <span
-      className={`state state-${state}`}
+      className={`state state-${state}${arrived ? " arrived" : ""}`}
       data-state={state}
       // The word, never only a colour: a state told apart by colour alone is no state at all
       // to anyone who cannot see it, and `title` alone is no use on a touch screen or to a
