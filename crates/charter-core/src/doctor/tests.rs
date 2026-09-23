@@ -1,6 +1,6 @@
 //! What each row says, on planes built for the one thing a test is about.
 //!
-//! Byte-for-byte agreement with Python is `tests/differential/run.py`'s job; these pin each
+//! Byte-for-byte agreement with Python is the recorded `doctor-*` scenarios' job; these pin each
 //! branch of each row on its own, and above all the rule the whole module is built on — a
 //! row that could not look never says OK.
 

@@ -49,8 +49,8 @@
 //!   pinned charter, and this binary answers it with a refusal that points at `charter version`
 //!   (`adopt::version_move_refusal`).
 //!
-//! The differential declares the second (`PIN_ROW_REMEDY` in `tests/differential/run.py`) and
-//! still compares every other byte of the row; the first is `alerts/tests.rs`'s, because the
+//! The recorded `statusline-*` scenarios carry the second as the app's own row (it was
+//! `PIN_ROW_REMEDY` in the differential, ADR 0046) and compare every other byte of it; the first is `alerts/tests.rs`'s, because the
 //! Python side draws a row the harness would have to count differently.
 
 use std::path::{Path, PathBuf};

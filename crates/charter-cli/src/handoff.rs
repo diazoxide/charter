@@ -43,8 +43,8 @@
 //!
 //! **Python's writes after the open are not ported**: the todo in the target workspace, the
 //! dispatch tally, the arrival mark on the strip. This charter has no todo store and writes
-//! no dispatch log, and the differential declares the difference rather than hiding it
-//! (`tests/differential/run.py`, `HANDOFF_WRITES_NOTHING_AFTER_THE_OPEN`). With `--create`
+//! no dispatch log, and the recorded scenario declares the difference rather than hiding it
+//! (`handoff-inside-the-app-opens-the-chat-there-and-writes-nothing`, ADR 0046). With `--create`
 //! the app creates the workspace before it opens the chat, because a chat has to stand in a
 //! directory that exists.
 

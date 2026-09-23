@@ -7,7 +7,7 @@
 //! parameter instead, so one set of steps serves both shapes charter-app has:
 //!
 //! - **`--clone-this-repo`**, where the source IS the plane root. Byte for byte Python's, and
-//!   `tests/differential/run.py` holds it there.
+//!   the recorded `init-*` scenarios hold it there (ADR 0046).
 //! - **`--adopt <repo>`**, where the source is a repository somewhere else and the plane was
 //!   made beside it. That is ADR 0035's default — *"`charter init` on an existing repo adopts
 //!   that repo as the plane's first clone and makes the plane beside it"* — and it is the

@@ -1,8 +1,9 @@
 //! The `charter` command line, in Rust.
 //!
 //! Only the plane commands M1.1 covers are here, and only as far as the PLANE goes. The
-//! differential tests (`tests/differential/run.py`) prove that by running both
-//! implementations against copies of one fixture plane and comparing the trees they leave.
+//! recorded scenarios (`tests/fixtures/recorded/`, ADR 0046) prove that: each runs this binary
+//! against a copy of a fixture plane and compares the tree it leaves with what the Python
+//! charter left.
 //!
 //! One thing this binary deliberately does NOT do yet, recorded in the harness rather than
 //! left to be discovered:

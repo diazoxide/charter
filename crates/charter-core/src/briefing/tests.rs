@@ -1,5 +1,5 @@
-//! What a session is told. The exact wording is the differential's (`run.py`'s `sessionstart-*`
-//! scenarios); these pin the decisions: which blocks appear, in which order, and when.
+//! What a session is told. The exact wording is the recorded `sessionstart-*` scenarios'
+//! (ADR 0046); these pin the decisions: which blocks appear, in which order, and when.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

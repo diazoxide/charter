@@ -1,6 +1,7 @@
-//! Checks against the committed fixture planes, which the Python charter itself wrote
-//! (`tests/fixtures/planes/generate.py`). They are the oracle that needs no Python to read:
-//! whatever charter put in these files is what a Rust reader has to agree with.
+//! Checks against the committed fixture planes, which the Python charter itself wrote (its
+//! generator was retired with the Python oracle, ADR 0046, and the planes are data now). They
+//! are the oracle that needs no Python to read: whatever charter put in these files is what a
+//! Rust reader has to agree with.
 
 use std::path::{Path, PathBuf};
 

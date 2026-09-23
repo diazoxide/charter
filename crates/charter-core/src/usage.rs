@@ -985,7 +985,7 @@ mod tests {
     // Each expected value below is what the Python charter's own helpers answer for the same
     // rows (`_last_ctx_of`, `_hits`, `_pairs`, `_rebuilds`, `_fmt_tok`, `_cold_streak`),
     // run against the frozen oracle on 2026-09-22. `recorded_context_gauge` is internal to
-    // the frame's panel and has no CLI surface for `tests/differential/run.py` to drive, so
+    // the frame's panel and had no CLI surface for the differential to drive, so
     // the oracle was asked directly and its answers are pinned here.
 
     fn rows(lines: &[&str]) -> Vec<Sample> {

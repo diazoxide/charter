@@ -1,12 +1,8 @@
-These entries are charter's `docs/news/`, taken whole from
-
-    https://github.com/diazoxide/charter  @ 50d31dc66835592ccea625bab8f5a0da313f2444
-
-which is the same commit `tests/differential/run.py` pins its Python oracle to. That is not a
-coincidence and it is not documentation: it is the only thing tying the two copies together.
-`news --for <version>` is compared byte for byte against that oracle, one scenario per version,
-so an entry that drifts here — edited, dropped, added, re-ordered — turns a differential
-scenario red rather than shipping a release body charter would not have written.
+These entries are the Python charter's `docs/news/`, taken whole from
+https://github.com/diazoxide/charter at commit 50d31dc. That is where they came from and nothing
+more: no check ties this copy to that repository any more. The Python oracle that compared it
+byte for byte is gone (ADR 0046) and the corpus is frozen history (ADR 0045), so it changes only
+when somebody edits a file here on purpose.
 
 WHY THERE ARE TWO COPIES AT ALL
 
@@ -24,9 +20,6 @@ entries it had staged when it stopped. None of them is news about this app, whos
 are `CHANGELOG.md`, and nothing is added here. They stay compiled in, read-only, so `charter
 news` can still say what a plane pinned on the Python line skipped. `news::HISTORY_REPO` keeps
 linking each entry into `diazoxide/charter` by tag, because that is where each one was published.
-
-The pin above stays for as long as the corpus is compared byte for byte with the oracle, which
-is what keeps this copy honest about what the Python charter actually shipped.
 
 NO FILE IN HERE IS NOT AN ENTRY
 

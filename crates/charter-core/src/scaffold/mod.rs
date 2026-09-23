@@ -34,9 +34,8 @@
 //! charter-app spec decision 27 records it.
 //!
 //! It is the FIRST declared hole in spec decision 15's byte-for-byte guarantee, and Python is
-//! frozen (decision 17), so it does not follow. `tests/differential/run.py` carries it as a
-//! `Divergence` the run asserts by name — it fails if the two ever agree again, as well as if
-//! they disagree differently.
+//! frozen (decision 17), so it does not follow. The recorded scenario carries it with a
+//! `divergence` note, and the replay holds the app to its side of it (ADR 0046).
 //!
 //! # What `init` does not do here, on purpose
 //!
@@ -1861,7 +1860,7 @@ mod tests {
         std::fs::write(root.join("charter.toml"), "schema = 2\n").expect("charter.toml");
         let refusal = vec![Say::Err(format!(
             // The app's own wording (ADR 0045): Python's pointed at `uv tool install
-            // charter-cp`, which this charter never ships on. `run.py` declares the divergence.
+            // charter-cp`, which this charter never ships on. A declared divergence.
             "{} declares schema 2, but this charter understands 1. Upgrade charter: update the \
              app. Nothing was run. `charter doctor` reports it; `charter update` is the way out.",
             root.join("charter.toml").display()
@@ -2363,8 +2362,8 @@ mod tests {
     }
 
     /// ADR 0035 / spec decision 27, the declared divergence: `init` at the top of a repo
-    /// writes nothing and says how to ask. The lines are `NOT_COLONISED` in
-    /// `tests/differential/run.py`, which holds the CLI to them byte for byte.
+    /// writes nothing and says how to ask. The recorded `init-*` scenarios hold the CLI to the
+    /// lines byte for byte (ADR 0046).
     #[test]
     fn init_at_the_top_of_a_repository_writes_nothing_and_says_how_to_ask() {
         let (_dir, root) = a_repo("git@github.com:acme/widget.git");

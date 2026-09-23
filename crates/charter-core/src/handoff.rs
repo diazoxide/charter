@@ -52,8 +52,8 @@
 //! a chat it did not. The printed-command path writes nothing: Python's writes (the workspace,
 //! its vision, the todo) all come *after* the frame check. The app path writes only the
 //! workspace, when the call creates one; the todo, the dispatch tally and the arrival mark
-//! Python writes after its open have no counterpart here, and the differential declares that
-//! (`tests/differential/run.py`, `HANDOFF_WRITES_NOTHING_AFTER_THE_OPEN`).
+//! Python writes after its open have no counterpart here, and the recorded scenario declares
+//! that (`handoff-inside-the-app-opens-the-chat-there-and-writes-nothing`, ADR 0046).
 
 use std::fmt::Write as _;
 

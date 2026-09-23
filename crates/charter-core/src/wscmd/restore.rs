@@ -51,9 +51,9 @@
 //! 2.50.1: `config remote.origin.url` gives the HTTPS URL, `get-url` gives `file:///…`).
 //! [`crate::gitpolicy::forge_for`] reads `get-url`, so the same rewrite that makes the fetch
 //! local makes the origin a host charter cannot place, and the row is skipped on both sides.
-//! The two are mutually exclusive by construction — the same trap
-//! `tests/differential/run.py`'s `_forge_trap` exists to catch one level up, for the plane's
-//! own push. So the scenarios cover the decisions (which rows are refused, which are skipped,
+//! The two are mutually exclusive by construction — the same trap the differential's
+//! `_forge_trap` existed to catch one level up, for the plane's own push (see
+//! `planegit::origin_https`). So the scenarios cover the decisions (which rows are refused, which are skipped,
 //! which branch is checked out, what is said and in what order) and the pull's own wiring is
 //! pinned by the unit tests at the bottom of this file, against a local bare remote.
 

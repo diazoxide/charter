@@ -76,6 +76,8 @@ pointer here rather than merged there.
 
 ## What it does not settle
 
-The Python charter is still this app's differential oracle in CI (spec decision 14). Where that
-oracle is fetched from, and whether it can be a published release instead of a commit, is its
-own question and is not answered here. This record only moves the documents.
+The Python charter was still this app's differential oracle in CI (spec decision 14) when this
+was written. Where that oracle is fetched from was left open here; [ADR
+0046](0046-the-python-oracle-is-frozen-into-recorded-fixtures.md) answered it by retiring the
+oracle: its answers are recorded fixtures now, and nothing fetches it. This record only moves the
+documents.

@@ -3,8 +3,8 @@
 //! `commands_workspace.py` and `commands_persona.py`, with their output byte for byte.
 //!
 //! **What an agent reads is the contract.** `charter recall` runs at session start and on
-//! demand, and whatever consumes it parses these exact lines; the differential harness
-//! (`tests/differential/run.py`) compares them with Python's.
+//! demand, and whatever consumes it parses these exact lines; the recorded scenarios
+//! (`recall-*`, ADR 0046) hold them to Python's.
 //!
 //! Two things this binary does not do, and says so where a command meets them:
 //!

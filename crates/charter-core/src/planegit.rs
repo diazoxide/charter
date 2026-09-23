@@ -159,10 +159,11 @@ impl PushResult {
 /// (its module docs say why), so `~/.gitconfig`'s rewrite reaches every git call charter
 /// makes. It cannot be measured by looking at argv either — the rewrite happens inside git.
 ///
-/// `tests/differential/run.py` therefore measures what `origin` resolves to before it runs
-/// the command, and fails any scenario whose plane has a stand-in forge beside it and an
-/// origin that came back `file://` without the scenario saying it meant that
-/// (`local_origin_why`). Read that check before writing a new forge scenario.
+/// The differential therefore measured what `origin` resolved to before it ran the command,
+/// and failed any scenario whose plane had a stand-in forge beside it and an origin that came
+/// back `file://` without the scenario saying it meant that. Its scenarios are recorded now
+/// (ADR 0046) and their setups cannot move; a NEW forge scenario has to make the same check by
+/// hand: key `url.<local>.insteadOf` on the HTTPS base and leave `origin` in the SSH form.
 pub fn origin_https(root: &Path) -> Option<String> {
     let url = git::run(root, &["remote", "get-url", "origin"], git::READ)
         .ok()
