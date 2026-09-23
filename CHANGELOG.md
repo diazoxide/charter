@@ -11,6 +11,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-23
+
 ### Added
 
 - charter is a desktop app for macOS and Linux. A window holds your projects as tabs, each
@@ -75,12 +77,20 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The `charter` command ships inside the app, so hooks and the Bash guard answer without a
   Python install. ([#168](https://github.com/diazoxide/charter-app/pull/168),
   [#181](https://github.com/diazoxide/charter-app/pull/181))
-- Not merged yet: the personas panel opens a statistics view with a chart, drawn by an approved
-  extension that charter runs for one question at a time. A tab can hold a view like this, not
-  only a chat. ([#212](https://github.com/diazoxide/charter-app/pull/212))
+- A tab can hold a view, not only a chat. A persona opens as its own tab: what it is for, its
+  tools and vault, and its memories, searchable. An approved extension can add a view of its
+  own. The first is persona statistics, with charts of each persona's memories, which charter
+  asks one question at a time and only when you open it. ([#212](https://github.com/diazoxide/charter-app/pull/212))
+- The view tabs you had open come back at the next launch, and wait for a click before an
+  extension is asked anything.
+  ([#212](https://github.com/diazoxide/charter-app/pull/212))
 - The palette can put the app's own `charter` on your terminal's `PATH` on macOS: **Install
   `charter` command in PATH** links `/usr/local/bin/charter` to it, and never replaces a
-  `charter` something else put there. ([#221](https://github.com/diazoxide/charter-app/pull/221))
+  `charter` something else put there. ([#219](https://github.com/diazoxide/charter-app/pull/219))
+- A chat opens knowing who it is: the persona you picked, what it remembers, and the
+  workspace's todos arrive with its first message. The guards on reading a vault, on writing
+  into charter's own state, and on sending a sub-agent run in the app's own `charter`.
+  ([#220](https://github.com/diazoxide/charter-app/pull/220))
 
 ### Changed
 
@@ -88,11 +98,17 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   plugin with charter's hooks, its Bash guard and its skills, and loads it into each chat it
   starts, for that chat alone. The chat turns the Python charter's plugin off for itself, and
   finds the app's own `charter` first on its `PATH`. A chat starts offline.
-  ([#221](https://github.com/diazoxide/charter-app/pull/221))
+  ([#219](https://github.com/diazoxide/charter-app/pull/219))
 - The light and dark themes are data files, and the window and the terminal are both drawn from
   them. ([#144](https://github.com/diazoxide/charter-app/pull/144))
-- Not merged yet: the terminal follows a theme switch while it is open, and the window's layout
-  lives in a file you can edit by hand.
+- The terminal follows a theme switch while it is open. The window's layout lives in
+  `charter/layout.json`, which you can edit by hand, and it is in place before the first
+  frame is drawn. ([#215](https://github.com/diazoxide/charter-app/pull/215))
+- About Charter tells this app's own story: its version and what that version brought.
+  ([#215](https://github.com/diazoxide/charter-app/pull/215))
+- The region toggles sit at the left end of the status line. The context gauge floats over its
+  pane rather than taking a row from it, and a very light line divides one tab from the next.
+  ([#214](https://github.com/diazoxide/charter-app/pull/214))
 - The project, workspace and chat strips nest, and tabs that do not fit collapse into a
   *N more* button instead of scrolling. ([#139](https://github.com/diazoxide/charter-app/pull/139),
   [#171](https://github.com/diazoxide/charter-app/pull/171))
@@ -112,10 +128,11 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A macOS build is ad-hoc signed when no Apple Developer ID is set up. The first install needs
   one command, and the release page says which.
   ([#201](https://github.com/diazoxide/charter-app/pull/201))
-- Not merged yet: `charter version` prints the app's own version. A plane pinned to a release
+- `charter version` prints the app's own version. A plane pinned to a release
   of the Python charter is reported as that older line, not as drift. `charter doctor` and
   every other message stop sending you to the Python charter, and `charter docs show`
-  describes this app. ([#219](https://github.com/diazoxide/charter-app/pull/219))
+  describes this app. ([#219](https://github.com/diazoxide/charter-app/pull/219),
+  [#223](https://github.com/diazoxide/charter-app/pull/223))
 
 ### Fixed
 
@@ -127,9 +144,12 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - A chat started from an app opened in Finder finds `charter` and its harness.
   ([#135](https://github.com/diazoxide/charter-app/pull/135),
   [#168](https://github.com/diazoxide/charter-app/pull/168))
+- An extension's program that crashes is reported with its exit status and its last words,
+  not as a lost connection. ([#217](https://github.com/diazoxide/charter-app/pull/217))
 - A slow `git` is no longer reported as a broken repository.
   ([#44](https://github.com/diazoxide/charter-app/pull/44))
 - No program charter starts can hold a chat's terminal open after the chat ends.
   ([#105](https://github.com/diazoxide/charter-app/pull/105))
 
-[Unreleased]: https://github.com/diazoxide/charter-app/commits/main
+[Unreleased]: https://github.com/diazoxide/charter-app/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/diazoxide/charter-app/releases/tag/v0.1.0
