@@ -9,7 +9,8 @@ Driving a browser splits cleanly in two, and only one half is charter's.
 | How to drive a page — snapshots, clicking, network mocking, tracing | Playwright |
 | Where credentials come from, and how parallel workers stay isolated | charter |
 
-Charter ships the `charter:browser` skill for its half and **none** of Playwright's pages.
+The Python charter shipped the `charter:browser` skill for its half and **none** of
+Playwright's pages. This app's plugin, `charter-app`, does not carry a browser skill yet.
 `@playwright/cli` is Apache-2.0 and charter is MIT: redistributing the generated reference
 would put a second licence, with its attribution obligations, into every wheel — for content
 charter neither wrote nor maintains. It would also pin a pre-1.0 package that publishes
@@ -75,9 +76,9 @@ are Playwright's, and `install` is the only supported way to change them.
 ## Credentials
 
 The bridge itself — `charter secret exec --dotenv`, one session per worker, and the failure
-modes that silently produce a bogus login — lives in the `charter:browser` skill, which
-ships with the plugin and so versions with the CLI rather than with a plane's copy of it.
-Your harness loads it by name; `charter doctor` reports it missing. For the vault side of
+modes that silently produce a bogus login — lived in the Python charter's `charter:browser`
+skill. The app's own plugin does not carry it yet, and a chat the app starts turns the Python
+charter's plugin off, so an app chat has no browser skill until one ships in the bundle. For the vault side of
 it, see [docs/secrets.md](secrets.md).
 ## Sessions belong to a version
 
