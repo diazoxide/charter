@@ -874,11 +874,14 @@ export function PlaneView({
   // Which piece the chat in front sits in. `worktree_of_chat` is path arithmetic plus one
   // git listing, asked only when the directory in front changes — never per keystroke, and
   // never for a palette that is not open.
+  //
+  // The plane travels with the directory (charter-app#127): the answer is about a piece of
+  // THIS project, and the core used to derive the plane by walking up from `frontCwd` alone.
   useEffect(() => {
     if (frontCwd === null) return;
     let gone = false;
     void commands
-      .worktreeOfChat(frontCwd)
+      .worktreeOfChat(plane, frontCwd)
       .then((answer) => {
         if (gone) return;
         setLocated({
@@ -894,7 +897,7 @@ export function PlaneView({
     return () => {
       gone = true;
     };
-  }, [frontCwd, relocate]);
+  }, [frontCwd, plane, relocate]);
 
   // Only an answer about the directory in front. Nothing is cleared when the focus moves —
   // clearing state from inside an effect is a render the window does not need, and a stale

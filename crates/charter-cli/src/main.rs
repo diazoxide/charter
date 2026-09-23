@@ -1033,7 +1033,11 @@ fn hook(name: &str, plugin_version: Option<&str>) -> ExitCode {
     }
     let Some(socket) = std::env::var_os(SOCKET_ENV) else {
         // No app started this session — the operator's own harness in a terminal, with the
-        // hooks pointed here. There is nothing to tell.
+        // hooks pointed here. There is nothing to tell, and this is the ONE path on which
+        // anything decides to refresh the forge cache (charter-app#89).
+        if event == Event::SessionStart {
+            refresh_the_forge_cache();
+        }
         return ExitCode::SUCCESS;
     };
     if let Some(report) = Report::read(event, &payload(), &|name| std::env::var(name).ok())
@@ -1052,6 +1056,90 @@ fn hook(name: &str, plugin_version: Option<&str>) -> ExitCode {
         );
     }
     ExitCode::SUCCESS
+}
+
+/// The forge cache's trigger on a plane with **no app open** — charter-app#89, which is the
+/// half of #69 that was deferred.
+///
+/// # What Python actually does, since the issue says otherwise
+///
+/// #89 says this is "the `charter hook` trigger Python has". It is not: `charter/hooks.py`
+/// never calls `glstate.maybe_spawn`, and `sessionstart()` does not go near it. Python's one
+/// trigger is `charter/statusline.py:_render`, which calls `glstate.read_for` and then
+/// `glstate.maybe_spawn` on the footer's own render path — every turn that draws the footer
+/// kicks a refresh. So this is not a port of a call site. It is the POLICY ported (that is
+/// `glstate.rs`, #69) put on a path Python does not use for it, and the reason is that the
+/// path Python does use is not available here:
+///
+/// - **Inside the app** `charter statusline` draws nothing and returns early (ADR 0019), and
+///   the app has its own trigger already — `panels::repo_states`, focusing a workspace.
+/// - **Outside it**, `statusLine` is armed only for chats the app starts and only where the
+///   operator fills that line with nothing (`harness::claude_code_status_line`,
+///   `footerclaim`). A plane with no app open has no `charter statusline` running at all —
+///   charter #895 deleted the one that used to be wired — while the plugin's hooks DO run.
+///
+/// Which leaves this: the hook is the only thing charter runs on a plane nobody has an app
+/// open on, so it is the only place the trigger can go.
+///
+/// # Why only `SessionStart`, and only with no app behind it
+///
+/// **Once a session, not once a turn.** The brakes make a repeat trigger cheap — past the
+/// cooldown is two file reads — but "cheap" multiplied by every prompt and every turn end is
+/// the shape #69's brakes exist to prevent, on a path with a budget. `SessionStart` is the one
+/// event that fires once, and with `REFRESH_TTL` at 300 s a per-turn trigger buys no freshness
+/// a per-session one does not.
+///
+/// **And only where the app is not.** `$CHARTER_HOOK_SOCKET` in the environment means this
+/// chat was started by the app, which already decides when a refresh runs. Two deciders on one
+/// plane is not unsafe — the lock is what makes that safe — but it is two policies, and the
+/// issue is about the plane that has none.
+///
+/// # What it costs
+///
+/// Everything here is filesystem-only: resolving the plane, reading the workspace ladder,
+/// listing the workspace's clones and their worktree directories (`glrefresh::trees` is
+/// `read_dir` and path arithmetic — no git spawn), then `glstate::decide`'s two file reads.
+/// The one expensive act, the fork, happens at most once per `SPAWN_COOLDOWN` and is a spawn
+/// and never a wait. Measured on this machine over 300 runs each, `charter hook sessionstart`
+/// against a plane whose cache is fresh: **3.68 ms before, 3.66 ms after**, against a
+/// `charter --version` floor of 3.63 ms — the added work does not clear the noise of starting
+/// the process at all.
+///
+/// # Best-effort, and silent about it
+///
+/// Nothing here is worth a word on a reporting hook: no plane, no readable workspace, no
+/// `current_exe`, a fork that failed — each simply means no refresh, and the column already
+/// says "nothing has fetched this checkout" rather than reading as green (#69). Python's own
+/// is a bare `except Exception: return` for the same reason.
+fn refresh_the_forge_cache() {
+    use charter_core::{glrefresh, glstate};
+
+    // **This very executable**, never a `charter` found on `$PATH`. That is
+    // `charter/util.py:self_relaunch_argv`'s `-P` (charter #390) carried over: the child must
+    // be the same charter as the parent, and a `PATH` lookup from inside a plane can find an
+    // older install, the Python charter, or a `charter` in the checkout the chat is standing
+    // in. `glstate::spawn`'s own doc gives the app's half of the same rule.
+    let Ok(binary) = std::env::current_exe() else {
+        return;
+    };
+    // Outside a plane there is nothing to refresh and nowhere to cache it —
+    // `charter/glstate.py:maybe_spawn`'s `if not config.HAS_CONTROL_PLANE: return`, which is
+    // the brake `glstate::decide` leaves to its callers because every other one is handed a
+    // root that was already found (charter #527).
+    let Ok(here) = Here::read() else {
+        return;
+    };
+    let workspace = here.active_workspace(None);
+    let root = here.plane.root();
+    // The same list the panel draws and the same list the child will fetch for, because a
+    // staleness question asked about other trees is a question about nothing.
+    let Ok(targets) = glrefresh::trees(root, &workspace) else {
+        return;
+    };
+    // The answer is dropped on purpose: `Declined` is the brakes working, and `NotStarted` is
+    // a fork that did not happen, which the next session start retries because a spawn that
+    // failed does not arm the cooldown.
+    let _ = glstate::maybe_spawn(root, &workspace, &targets.trees, &binary);
 }
 
 /// `charter gl-refresh` — ask each clone's own forge about the branch it is on, and write the

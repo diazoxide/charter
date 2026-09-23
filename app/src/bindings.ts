@@ -360,14 +360,14 @@ export const commands = {
 	 *  nothing; the one git call is the listing, made once per repo and only for chats that are
 	 *  in a piece at all.
 	 */
-	worktreeOfChat: (cwd: string) => typedError<{
+	worktreeOfChat: (plane: PlaneId, cwd: string) => typedError<{
 	workspace: string,
 	repo: string,
 	piece: string,
 	branch: string | null,
 	wired: boolean,
 	stale: boolean,
-} | null, string>(__TAURI_INVOKE("worktree_of_chat", { cwd })),
+} | null, string>(__TAURI_INVOKE("worktree_of_chat", { plane, cwd })),
 	/**  This workspace's pieces for one repo. */
 	worktreeList: (plane: PlaneId, workspace: string, repo: string) => typedError<Piece[], string>(__TAURI_INVOKE("worktree_list", { plane, workspace, repo })),
 	/**
