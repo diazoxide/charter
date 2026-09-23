@@ -6,6 +6,7 @@ mod alerts;
 mod chats;
 mod doctor;
 mod extensions;
+mod handoff;
 mod hooks;
 mod lifecycle;
 mod opener;
@@ -1286,16 +1287,26 @@ pub fn run() {
             // The registry is managed BEFORE a plane is opened, because opening one starts
             // programs, and a program that dies at once tells the board, which tells the
             // window, which asks this registry what the chat is called.
-            app.manage(Planes::telling(
-                {
+            app.manage(
+                Planes::telling(
+                    {
+                        let window = app.handle().clone();
+                        std::sync::Arc::new(move |moved: Moved| told(&window, moved))
+                    },
+                    binary,
+                    // Resolved once, here, like the plane: it is an environment ladder, and a
+                    // second reader of it is a second answer to where this machine's store is.
+                    charter_core::machine::config_root(),
+                )
+                // A chat a handoff opened goes to the window, which files it on its workspace's
+                // strip without taking the front (`handoff::Arrived`).
+                .telling_arrivals({
                     let window = app.handle().clone();
-                    std::sync::Arc::new(move |moved: Moved| told(&window, moved))
-                },
-                binary,
-                // Resolved once, here, like the plane: it is an environment ladder, and a
-                // second reader of it is a second answer to where this machine's store is.
-                charter_core::machine::config_root(),
-            ));
+                    std::sync::Arc::new(move |arrived: handoff::Arrived| {
+                        let _ = window.emit(handoff::ARRIVED, &arrived);
+                    })
+                }),
+            );
 
             // The working directory, resolved ONCE, to decide which plane the first window
             // opens. Everything after this names its plane; nothing asks the working

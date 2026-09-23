@@ -6,6 +6,7 @@ import {
   focusPane,
   noTabs,
   openTab,
+  openTabBehind,
   panesOf,
   selectTab,
   showWorkspace,
@@ -502,5 +503,23 @@ describe("a pin on the strip", () => {
 
     expect(tabsIn(tabs, "alpha", oneWorkspace)).toEqual([1, 2, 3, 4]);
     expect(closeTab(selectTab(tabs, 2), 2, oneWorkspace).inFront).toBe(1);
+  });
+});
+
+describe("a tab a handoff opened (charter-app#204)", () => {
+  it("goes on the strip without taking the front from the chat being read", () => {
+    const reading = openTab(noTabs(), 1, "1");
+
+    const after = openTabBehind(reading, 7, "handoff from 1");
+
+    expect(after.inFront).toBe(reading.inFront);
+    expect(panesOf(after, after.order[1])).toEqual([{ pane: 2, session: 7 }]);
+    expect(after.byId[after.order[1]].chat).toBe("handoff from 1");
+  });
+
+  it("takes the front of a window with nothing in front, where there is nothing to interrupt", () => {
+    const after = openTabBehind(noTabs(), 7, "handoff from 1");
+
+    expect(after.inFront).toBe(after.order[0]);
   });
 });
